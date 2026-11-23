@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
-import { harness } from "./cloud-fixtures.mjs";
+import { accountId, commit, context, harness } from "./cloud-fixtures.mjs";
+import { fleetPlan } from "./cloud-contract.mjs";
 import { digest } from "./cloud-local.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
@@ -73,6 +74,88 @@ async function stoppedUpload(t, flags) {
   return h;
 }
 
+async function interruptedFirstUpload(t) {
+  const group = "json-api", h = harness(t, { fleetGroup: group, fleetSlot: "json-api--r21", missingUnit: true, deleteLost: true });
+  const single = { group, checkout: h.repo, indexSha256: "b".repeat(64) };
+  const fleet = join(dirname(h.base), "fleet-r21.json");
+  writeFileSync(fleet, JSON.stringify(fleetPlan({ round: "r21", commit, token: "f".repeat(16), tokens: { [group]: "1".repeat(16) },
+    sshKey: "42", provider: { accountId, context } }, undefined, undefined, { stagedPlacement: true, single })));
+  h.flags.hook = (binary) => { if (binary === "scp") throw Object.assign(new Error("lost upload reply"), { controlUncertain: true }); };
+  await assert.rejects(h.task({ checkFleetAdmission: () => [] }, { collect: undefined, detach: true, group, fleet,
+    commit, sshKey: "42", accountId, context }).launch(), /lost upload reply/);
+  delete h.flags.hook;
+  const ledger = h.saved().control.ledger;
+  assert.deepEqual(ledger.map(r => [r.request.invocation.channel, r.localTerminal, r.code]),
+    [["ssh", true, 0], ["ssh", true, 0], ["sftp", false, undefined]]);
+  const key = join(h.temp, "independently-verified-key");
+  writeFileSync(key, readFileSync(join(h.local, "known_hosts")));
+  const collect = () => h.task({ unusedBootstrapApproval: { reservationSha256: digest(readFileSync(h.statePath)),
+    knownHostsSha256: digest(readFileSync(key)) } }, { unusedBootstrapKnownHosts: key }).collect();
+  await assert.rejects(collect);
+  // Model the existing operator custody handoff only after this synthetic transport is gone.
+  unlinkSync(join(h.local, "operation.lock")); unlinkSync(join(h.base, ".groups-launch.lock"));
+  return { h, collect, ledger, key };
+}
+
+function neverWrittenProof(h, ledger) {
+  const s = h.saved();
+  return { schema: "benchmark-unused-host/v1", hostId: s.id, unit: s.unit, unused: true, observedAtMs: Date.now(),
+    drainedReceipts: ledger.slice(0, 2).map(r => digest(r.request.invocation.id)),
+    refusedUpload: { invocationId: ledger[2].request.invocation.id, jobPresent: false, failureSha256: digest("failed before registration") } };
+}
+
+function unusedPlan(h, key) {
+  const run = (binary, args, timeout = 60000, allowFail) => {
+    assert.equal(binary, "git");
+    return args[0] === "show" ? { status: 0, stdout: readFileSync(resolve(args[1].slice(41)), "utf8").replaceAll("\r\n", "\n") }
+      : h.run(binary, args, timeout, allowFail);
+  };
+  return productionPlan({ round: "r21", stateDir: h.base, collect: true, unusedBootstrapKnownHosts: key }, { repo: h.repo, run });
+}
+
+test("an unacknowledged first job upload retires only after a fresh never-written proof", async (t) => {
+  const { h, collect, ledger, key } = await interruptedFirstUpload(t);
+  const s = h.saved(), preview = await unusedPlan(h, key);
+  assert.deepEqual(preview.missing, []);
+  assert.equal(preview.subject.reservationSha256, digest(readFileSync(h.statePath)));
+  assert.deepEqual(preview.subject.recovery, { measuredCommit: s.commit, hostId: s.id, ip: s.ip, knownHostsSha256: s.launchHostKeySha256,
+    policy: "unacknowledged-first-upload-never-written-only" });
+  h.flags.unusedProof = neverWrittenProof(h, ledger);
+  const before = h.calls.length;
+  await assert.rejects(collect, /deletion acknowledgement lost/);
+  assert.equal(await collect(), 1); assert.equal(h.deletes, 1);
+  assert.deepEqual(h.saved().control.ledger, ledger); assert.ok(h.saved().destroyedAt);
+  assert.equal(h.saved().validation, undefined);
+  assert.deepEqual(h.calls.slice(before).filter(([b]) => ["scp", "ssh"].includes(b)).map(([b]) => b), ["ssh"]);
+  assert.deepEqual(h.calls.slice(before).filter(a => a[2] === "droplet" && a[3] === "delete").map(a => a.slice(1, 6)),
+    [["compute", "droplet", "delete", s.id, "--force"]]);
+});
+
+test("first upload recovery refuses changed custody or incomplete evidence without deletion", async (t) => {
+  for (const mode of ["source", "target", "launch-key", "job", "outer-lock", "fleet-lock", "receipt", "invocation", "failure", "present"]) {
+    const { h, collect, ledger, key } = await interruptedFirstUpload(t);
+    if (mode === "source") h.flags.wrongHead = true;
+    if (mode === "target") h.change(s => { s.control.ledger[2].request.invocation.requestSha256 = digest("different SFTP target"); });
+    if (mode === "launch-key") {
+      writeFileSync(key, "different key"); writeFileSync(join(h.local, "known_hosts"), readFileSync(key));
+    }
+    if (mode === "job") writeFileSync(join(h.local, "job.sh"), "different job");
+    if (mode === "outer-lock") writeFileSync(join(dirname(dirname(h.base)), ".continuation-operation.lock"), "original", { flag: "wx" });
+    if (mode === "fleet-lock") writeFileSync(join(dirname(h.base), ".fleet-operation.lock"), "original", { flag: "wx" });
+    const proof = neverWrittenProof(h, ledger);
+    if (mode === "receipt") proof.drainedReceipts.pop();
+    if (mode === "invocation") proof.refusedUpload.invocationId = ledger[1].request.invocation.id;
+    if (mode === "failure") delete proof.refusedUpload.failureSha256;
+    if (mode === "present") proof.refusedUpload.jobPresent = true;
+    h.flags.unusedProof = proof;
+    const before = readFileSync(h.statePath), start = h.calls.length;
+    await assert.rejects(collect, undefined, mode);
+    assert.deepEqual(readFileSync(h.statePath), before, mode);
+    assert.equal(h.deletes, 0, mode); assert.equal(existsSync(join(h.local, "unused-host.json")), false, mode);
+    assert.equal(h.calls.slice(start).filter(([b]) => b === "ssh").length, ["receipt", "invocation", "failure", "present"].includes(mode) ? 1 : 0, mode);
+  }
+});
+
 test("settled bootstrap uploads retire only with fresh pinned drainage and never replay DELETE", async (t) => {
   const h = await stoppedUpload(t, { deleteLost: true });
   const ledger = h.saved().control.ledger;
@@ -105,12 +188,7 @@ test("settled bootstrap uploads retire only with fresh pinned drainage and never
 
 test("settled upload approval binds the exact measured checkout, reservation, host and key", async (t) => {
   const h = await stoppedUpload(t), s = h.saved(), key = join(h.local, "known_hosts");
-  const run = (binary, args, timeout = 60000, allowFail) => {
-    assert.equal(binary, "git");
-    return args[0] === "show" ? { status: 0, stdout: readFileSync(resolve(args[1].slice(41)), "utf8").replaceAll("\r\n", "\n") }
-      : h.run(binary, args, timeout, allowFail);
-  };
-  const plan = () => productionPlan({ round: "r21", stateDir: h.base, collect: true, unusedBootstrapKnownHosts: key }, { repo: h.repo, run });
+  const plan = () => unusedPlan(h, key);
   const preview = await plan();
   assert.deepEqual(preview.missing, []);
   assert.equal(preview.subject.reservationSha256, digest(readFileSync(h.statePath)));

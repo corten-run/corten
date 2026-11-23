@@ -483,6 +483,44 @@ apparatus is not a result. An old bound host without confirmed cleanup is shown
 as such. Continuation then requires the same provider account and still refuses
 create if the existing pre-create census finds any foreign benchmark host.
 
+**Starting a new campaign after external cleanup.** A failed upload may leave
+the old continuation locked even after an operator has proved its droplet was
+destroyed. Do not unlock it, change its native state, or count deletion as a
+result. Ordinarily continue in the same root. A reviewed, one-time operator
+handoff to a fresh root is possible only when the old campaign is over:
+
+1. Stop dispatch to the old root. Account for every slot, launch intent and
+   owner, including scheduled dispatches. No owner may still be able to send a
+   create or upload. A manifest alone is not a launch. An ambiguous create
+   with no bound provider ID must be reconciled, not skipped.
+2. In the original provider account, check all bound IDs, including renamed
+   hosts. Retain native deletion receipts or separately reviewed external
+   deletion evidence (exact-ID 404 and absence from the complete account
+   list). A lookup error, an outstanding job or an unknown owner stops the
+   handoff. Preserve the old root, its locks, failure artifacts and issue
+   history unchanged.
+3. Inventory every old standalone slot read-only: check its state, receipts,
+   archives and extracted evidence, including slots reported busy or awaiting
+   cleanup. A 404 proves nothing about saved results. If a slot contains a
+   verified or potentially recoverable result, or its evidence cannot be
+   classified, stop. The unchanged index cannot carry standalone results.
+4. Copy the index into an empty root. If an indexed checkout cannot replay
+   (including missing or mismatched dependencies at the right commit),
+   provide a separate clean worktree at the measured commit with its pinned
+   installs at `NEW_ROOT-checkouts/MEASURED_SHA`; leave old worktrees intact.
+   Run the read-only continuation report there. Require native replay of the
+   full roster: the same verified groups, measured commits and archive hashes
+   and exactly the expected missing groups, with no blocked or ambiguous row.
+   Exit 1 is expected with missing groups; it does not prove those conditions.
+   Keep old failed and never-launched attempts in the handoff inventory, not
+   as results in the new root.
+5. Record both roots, the last round used, the inventory and the evidence in
+   the operator handoff. Switch the single dispatch target only after review.
+   Use new round numbers above the old campaign and the normal reviewed
+   preparation and pre-create census. Never resume or collect an old attempt
+   through the new root. The failed rounds remain failures; the verified
+   groups keep their original measured commits.
+
 If a standalone group failed before native entry and its collector recorded the
 archive but not deletion, an unrelated group can use that same census. Its
 launch approval includes the stopped host's original ID: even a renamed or
@@ -638,7 +676,7 @@ node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE
 - Before provisioning, the ledger must be empty (including after readiness exhaustion) or
   contain only the unacknowledged sequence-zero, 30-second bootstrap SSH `true` request
   ([#1618 Benchmark r21: first catalog SSH setup has no completion receipt and leaves an unused droplet outside ordinary recovery](https://github.com/corten-run/corten/issues/1618)).
-- After an interrupted upload, this path applies only to reservations launched from a commit
+- After a locally acknowledged upload, this path applies only to reservations launched from a commit
   that includes this recovery. Use that exact measured checkout and the original state
   directory; a different checkout refuses before provider access, even if it is newer.
   Only the successful, locally terminal prefix of the fixed no-op, directory setup and
@@ -649,6 +687,15 @@ node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE
   and an empty log, and every original registered session and watcher drained with no foreign
   actor. It binds the matching receipt digests to the unused retirement record
   ([#1744 Benchmark r21: an unused catalog host with six settled bootstrap entries is outside ordinary retirement](https://github.com/corten-run/corten/issues/1744)).
+- If only the very first `job.sh` upload lacks a reply, the measured checkout can retire a host
+  with a launch-pinned key **only if the upload never wrote the file**. The probe must find
+  only the empty log, the two preceding terminal session receipts, and the exact upload
+  request whose watcher failed before registration. Its deadline must have passed; neither
+  original PID, connection, transfer server, watcher job, trigger, nor occupied control
+  cgroup may remain. A partial file, later request, or missing proof preserves the host.
+  This records an unused retirement, not a successful transfer, benchmark result, or
+  reconciliation of an already externally deleted host
+  ([#1977 JSON r61 loses acknowledgement of the first bootstrap upload and cannot retire the unused host through ordinary collection](https://github.com/corten-run/corten/issues/1977)).
 
 Ordinary `--collect` refuses these pending-bootstrap cases before sending SSH. The pinned probe
 never adds, acknowledges or retries a ledger request or starts a unit. A settled SSH refusal
@@ -659,8 +706,17 @@ The original local controller, provider worker, SSH and their descendants must b
 affirmatively accounted for and gone. No elapsed timeout, absent PID or saved state
 alone proves that. Preserve original locks and intents; the controller never clears
 or takes over an old lock. Only after that local proof may the operator archive and
-release the exclusive child and fleet locks under the existing custody policy. Keep
-the proof and original lock bytes outside the fleet and child state roots. Separately verify the SSH
+release the exclusive child and fleet locks under the existing custody policy.
+For an interrupted first upload in a single-group continuation, also account for
+the owner of the outer `.continuation-operation.lock`. It serializes all groups:
+stop dispatch to that root and verify the lock's group, owner and process tree
+against the original launch. Keep the unchanged lock bytes and proof outside
+all three state roots before releasing any identified lock for in-place recovery.
+If ownership is uncertain or any process can still act, leave the locks and host
+alone. This is not the fresh-root handoff described above: after external
+deletion the old locks stay in place and no collection is attempted.
+
+Separately verify the SSH
 host key against the exact provider/metadata identity and supply a local OpenSSH
 `known_hosts` file for that key; the controller passes a private snapshot of the
 approved bytes to SSH and never falls back to global host keys. The unused retirement
