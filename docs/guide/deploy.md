@@ -805,4 +805,11 @@ version=$(node -p 'require("@playwright/test/package.json").version') &&
     -f bench/workloads/test-tools.Dockerfile -t corten-evidence-tools .
 ```
 
-The Dockerfile has no default base image.
+The Dockerfile has no default base image. CI builds Git 2.56.1 from its
+[upstream release on kernel.org](https://www.kernel.org/pub/software/scm/git/), not from
+the Launchpad PPA or the runner's installation. It verifies the pinned archive SHA-256
+and the detached signature on the uncompressed tar from Junio Hamano's pinned release key.
+When updating Git, verify both, and update the source pin and final image version check
+together. The compiler and source stay in the build stage. The final image checks that
+a missing blob in a local partial clone cannot be fetched with `--no-lazy-fetch`, but
+can be fetched without it. This check needs neither a network nor a Docker socket.
