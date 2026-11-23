@@ -8023,7 +8023,7 @@ rules something out.
     of the body. Its instructions, by the probe under callgrind for bodies of 1 to 32 KiB (a table
     of records, prose, random text and one block repeated, 0.34 to 12.4 million a job, at most
     about 440 a byte of the body), have a part that does not grow with it; spread over its due, a body asked
-    for exactly that often spends at most 117 instructions an answer on its job (prose of 32 KiB:
+    for exactly that often spends at most 116 instructions an answer on its job (prose of 32 KiB:
     12,363,878 over 106,496), 0.46% of the 25,136 a page's answer given again took under
     callgrind, 45 at 1 KiB (a table: 509,048 over 11,264), and the faults, about 250 a job whatever
     the body, are spread over 11,264 answers or more. One asked for more spends less, and twice its
@@ -8038,7 +8038,21 @@ rules something out.
     ten times its due in a lifetime sends nine tenths of its browser answers in brotli 5. Every
     answer before the due writes the page's count, where the second answer had been the last to:
     callgrind counts that write's instructions, not what it costs where several cores answer
-    the same page. An eighth run is declared for the rule, its plan written before it runs:
+    the same page. Counted in process under callgrind as the sixth run's pair was (`a88a06aa8`
+    against `04530f7e0`, whose production sources are `a02c81e86`'s; rustc 1.100.0, valgrind
+    3.24.0, jemalloc 5.3.0 preloaded, the medians of three rounds, each URL new, the thread started
+    by the first URL's due answer): the first answer, which makes and keeps the page, took 264,406.5
+    user instructions against 264,365.2 (+40, +0.02%); the second, which now only counts, 24,953.8
+    against 24,930.1 (+24, +0.09%); the due answer, which queues the job, 25,274 against 24,599
+    (+675), and the one that also starts the thread 34,001 (+9,402, 8,580 of them starting it), the
+    new thread 45,712 before its first job; a job 1,533,477 and the thread's loop 155 more. Every
+    answer of URLs asked for exactly their due, 26,564 times, the rule's worst case for this page,
+    took 24,690.1 against 24,666.1 on the answering thread (+24, +0.10%), and the job spread over
+    them 57.7 more (0.23%), 0.33% in all; asked for one fewer, so that none is queued, 24,690.0
+    against 24,666.8 (+23, +0.10%). Each URL asked for its due was given its brotli 5 afterwards on
+    this change and none on main. Callgrind counts user space, so neither the faults nor the
+    thread's wake-up are in these. An eighth run is declared for the rule, its plan written before
+    it runs:
     this change's head against main's `04530f7e0` on such a host, with every turn on a newly
     started build, 100 pairs a workload and the margin of the runs before, a one-sided 95% bound
     under +1% in user plus kernel cycles a request, on `twice` as the seventh ran it (which the rule
@@ -8780,15 +8794,19 @@ rules something out.
     Last checked: 2026-11-23 for the seventh run's cycles and user first-level instruction-cache
     misses under load on `twice`, `593b92b01` against `a02c81e86` on a DigitalOcean c-8 (Xeon
     Platinum 8280, Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), every turn on a newly
-    started build, kept under the tag `evidence/ac43f8f0`, the miss the rule of a due answers; 2026-11-23
+    started build, kept under the tag `evidence/ac43f8f0`, the miss the due rule answers; 2026-11-23
     for a kept body's brotli 5 by its size, by a probe that encodes as `Level::Kept` does (brotli
     9.1.3, rustc 1.100.0 in rust:1-trixie), its instructions under callgrind (valgrind 3.24.0) for
     four kinds of body at nine sizes from 1 to 32 KiB and its page faults and times on a thread of
-    its own under jemalloc 5.3.0 and glibc's allocator on a workstation; 2026-11-23 for the sixth run's cycles and user first-level instruction-cache
-    misses under load, `593b92b01` against `a02c81e86` on a DigitalOcean c-8 (Xeon Platinum 8280,
-    Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), every turn on a newly started build,
-    kept under the tag `evidence/aed6638f`; 2026-11-23 for the instructions of the answer that
-    queues a kept page's brotli 5, of the job and of the thread's first start, under callgrind on a
+    its own under jemalloc 5.3.0 and glibc's allocator on a workstation; 2026-11-23 for the
+    instructions of the answers before, at and past a kept page's due, of its job and of the
+    thread's start, under callgrind on a workstation, `a88a06aa8` against `04530f7e0` (rustc
+    1.100.0, valgrind 3.24.0, jemalloc 5.3.0 preloaded, three rounds); 2026-11-23 for the sixth
+    run's cycles and user first-level instruction-cache misses under load, `593b92b01` against
+    `a02c81e86` on a DigitalOcean c-8 (Xeon Platinum 8280, Linux 6.12.117, rustc 1.100.0, jemalloc
+    5.3.0 preloaded), every turn on a newly started build, kept under the tag `evidence/aed6638f`;
+    2026-11-23 for the instructions of the answer that queues a kept page's brotli 5, of the job
+    and of the thread's first start, under callgrind on a
     workstation, `593b92b01` against `a02c81e86` (rustc 1.100.0, valgrind 3.24.0, jemalloc 5.3.0
     preloaded, three rounds); 2026-11-23 for the fifth run's cycles and user first-level
     instruction-cache misses under load, `a14a80294` against `fef1f83de` on such a host, every turn

@@ -174,7 +174,7 @@ pub(crate) const BROTLI_MAX: usize = 32 << 10;
 /// more cycles a request. Part of it does not grow with the body (brotli's tables, and about 250
 /// page faults a job under jemalloc), the rest grows with it, and an answer given again costs about
 /// 25,000 instructions whatever its size: for bodies of 1 to 32 KiB, one asked for exactly this
-/// often spends at most about 117 instructions an answer on its brotli (under 0.5%), and one asked
+/// often spends at most about 116 instructions an answer on its brotli (under 0.5%), and one asked
 /// for more spends less (`docs/design.md#choice-kept-pages`).
 #[cfg(feature = "compress")]
 pub(crate) const fn due(length: usize) -> u32 {
