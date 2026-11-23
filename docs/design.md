@@ -7943,10 +7943,32 @@ rules something out.
     the harness's own closure (it reads the answer's headers, and `HeaderMap::contains_key` is no
     longer inlined into it), with no function of Corten's differing. Under glibc's allocator the
     same builds count 197 more for the route that keeps nothing and 227 more for the write with no
-    store, in glibc's `_int_malloc` and `unlink_chunk`: the free lists the requests find differ with
-    what was allocated before them (the app's handle and the harness's own variables), so those are
-    not counted as this change's cost. Cycles were not measured: a kit for paired cycles on a quiet
-    host is prepared, not run.
+    store, in glibc's `_int_malloc` and `unlink_chunk`. What made that difference is not resolved:
+    that head also made the app's handle at startup in every app, and its harness differed from
+    main's. Counted again the same way for the code that would ship, `7673a36fe` (this change with
+    main merged, its handle made only when `App::kept` is called) against main's `fef1f83de` with
+    the same harness file less the write that names a page, with jemalloc: a kept page given again
+    13,211.8 against 13,211.9, a new URL made and kept 23,376.5 against 23,375.5, a write naming
+    nothing 12,215.0 against 12,215.0 and with no store 11,112.0 against 11,112.0, and a route that
+    keeps nothing 10,710.8 against 10,710.9; a write that names the kept page 12,856.0 (641.0 more
+    than the same write naming nothing) and with no store 11,380.6 (268.6 more). Under glibc the
+    requests that do not name one differ by at most 4.0 (the new URL; 2.0 for the route that keeps
+    nothing and for the write with no store), and naming costs 699.0 and, with no store, 263.6.
+    Paired cycles were measured for the first pair, base `83b3b8772` (main, whose `crates/` is
+    `7a275ef15`'s) against head `84de7c1e5` (this change's library apart from doc comments), on a
+    c-8 whose CPU is a Xeon Platinum 8280, 100 alternating pairs a workload of 3 s `wrk -t2 -c64`
+    turns, each on a fresh start, against a margin declared before the run, a one-sided 95% bound
+    on the median change under +1% with no floor ([Choice 71](#choice-layout-floor)'s fits neither
+    that CPU nor those workloads), kept under the tag `evidence/65749d73`. Three missed it: a write
+    naming the kept page (+2.64%) and the same with no store (+2.01%), which are what opting in
+    costs, and a write naming nothing with no store (+1.04%, its user instructions the same on both
+    sides), a miss whose cause the run did not resolve; under glibc that write's bound was +0.98%.
+    The others met it: a write naming nothing with a page kept elsewhere +0.46%, a kept page given
+    again -2.31%, a route that keeps nothing +0.29%, a new URL made and kept +0.09%. Those are that
+    pair's, not the code that would ship: main has since changed paths those requests run, and this
+    change no longer makes a handle in an app that does not ask for one. A kit for the same eight
+    workloads on the integrated pair, main `fef1f83de` against this change's head, is prepared and
+    not yet run.
     A body kept whatever its type and its build, with five file routes added to the catalog
     benchmark (`af70bde86`, this change's `86be6a024` with them, against `e133aae42`, main's
     `090b3048e` with them): the CSV above and a PNG of 8,000 bytes, of 1,024 bytes and of
@@ -8227,7 +8249,10 @@ rules something out.
 
     Last checked: 2026-11-22 for a change the app names (`KeptAnswers::changed`), by the tests
     beside it and, for what it costs a write that names one and the requests that do not, the
-    request-cost harness's counts under callgrind at `beea494fd` against `7a275ef15` (above);
+    request-cost harness's counts under callgrind at `7673a36fe` against `fef1f83de` and at
+    `beea494fd` against `7a275ef15`, and paired cycles of `84de7c1e5` against `83b3b8772` kept under
+    the tag `evidence/65749d73`, three of them over the margin (above; the integrated pair's cycles
+    are not yet measured);
     2026-11-22 for the cuts to a kept answer given again, `7794749ad` (main's
     `7a275ef15` with five file routes and a kept page in the catalog benchmark) and `0a2dc9b32`
     (this change's `a0267d8a6` with them), and for where the code sits `abbd6113f`, `9f628467d`
@@ -9321,7 +9346,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     lifetime the page was sent with ends, so after a change two instances can show a page up to
     a lifetime apart, as two edges of a CDN can. Reaching them takes a message between the
     instances (the app's own, or a feed on `corten-cluster` whose handler calls `changed` in
-    each) and the CDN's own purge, both of which differ by deploy. A page that must change
-    everywhere at once takes a short lifetime. Revisit when apps that run several instances
-    show they need one drop to reach all of them, and a channel the framework already has can
-    carry it.
+    each) and the CDN's own purge, both of which differ by deploy. A short lifetime bounds how
+    long a copy can stand after a change, but does not make the change show everywhere at once:
+    until it ends, instances and edges can still give the old page. A page that must never be
+    given from a stale copy is not kept anywhere: it is not `Public` (it goes out `private,
+    no-cache`), so no instance, CDN or proxy holds a copy to drop. Revisit when apps that run
+    several instances show they need one drop to reach all of them, and a channel the framework
+    already has can carry it.

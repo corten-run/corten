@@ -1646,7 +1646,9 @@ leaves the list kept, and so does a change made in another instance or by a scri
 app: the page shows it when its lifetime ends, which is what the lifetime says. Purging a
 CDN in front does not purge the app, which gives the CDN the kept page again with its `Age`.
 A request's own `Cache-Control: no-cache` (a hard reload) gets the kept page too: how long a
-page stands is the app's to say. Give a page whose changes must show at once a short lifetime.
+page stands is the app's to say. A short lifetime bounds how long a page can show what was there
+before a change; it does not make the change show in every instance and CDN edge at once. A page
+that must never be given from a stale copy is not `Public`, so nothing keeps it.
 
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
 counted is each page's key (its URL once, its `Host`, and its `Accept-Language` where the page
