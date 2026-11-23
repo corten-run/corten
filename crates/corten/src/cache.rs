@@ -149,9 +149,10 @@ impl Cache {
         }
     }
 
-    /// The header: a `public` one held by the thread while it runs a staged route's handler and
-    /// middleware ([`Staged`]), whose answer [`settle`] reads ([`Cache::held_header`]), and made for
-    /// the answer alone anywhere else, as an unstaged route's handler; `no-store`'s and
+    /// The header: a `public` one held by the thread while it polls a staged route's handler and
+    /// middleware ([`Staged`]), whose answer [`settle`] reads ([`Cache::held_header`]), and so for
+    /// whatever that poll runs inline, another router's unstaged route among it; made for the answer
+    /// alone anywhere else, as an unstaged route's handler its own lane polls; `no-store`'s and
     /// `immutable`'s, which are constants, without asking the thread.
     #[inline]
     fn value(self) -> HeaderValue {
@@ -184,8 +185,9 @@ impl Cache {
         .unwrap_or_else(|_| public(max_age, shared, stale, if_error))
     }
 
-    /// The header made for this answer alone, from a `Vec`: one no [`settle`] reads (an unstaged
-    /// route's answer's), so holding it would cost such an answer more and save it nothing.
+    /// The header made for this answer alone, from a `Vec`, outside a staged route's poll: one no
+    /// [`settle`] reads (an unstaged route's answer's), so holding it would cost such an answer more
+    /// and save it nothing.
     fn header(self) -> HeaderValue {
         let (max_age, shared, stale, if_error) = match self.kind {
             Kind::Public { max_age, shared, stale, if_error } => (max_age, shared, stale, if_error),
@@ -218,9 +220,11 @@ thread_local! {
 
 /// Held while a thread polls a staged route's handler and the app's middleware around it
 /// (`page::run`), whose answer [`settle`] reads: there [`Cache`] gives a `public` header the
-/// thread holds. Anywhere else, an unstaged route's handler among them ([`crate::route::Lane`],
-/// which pays nothing for this), the header is made for the answer alone ([`Cache::header`]) and
-/// the thread holds none of its bytes.
+/// thread holds. The flag is the poll's, not the route's: an unstaged route that such a handler or
+/// middleware has another router answer inline is polled within it, so its answer's header is held
+/// too, with the same text. Anywhere else, an unstaged route's handler polled by its own lane
+/// ([`crate::route::Lane`], which pays nothing for this) among them, the header is made for the
+/// answer alone ([`Cache::header`]) and the thread holds none of its bytes.
 pub(crate) struct Staged(bool);
 
 impl Staged {
@@ -1001,8 +1005,8 @@ mod tests {
         assert_eq!(Made::held(), HELD);
     }
 
-    /// Outside a staged route's handler (an unstaged one's), an answer's header has the same text
-    /// but is made for that answer alone: the thread holds none for its numbers. While a thread runs
+    /// Outside a staged route's poll (an unstaged one's lane), an answer's header has the same text
+    /// but is made for that answer alone: the thread holds none for its numbers. While a thread polls
     /// a staged one, it holds the header, and after, it makes each apart again.
     #[test]
     fn a_header_is_held_only_while_a_staged_handler_runs() {

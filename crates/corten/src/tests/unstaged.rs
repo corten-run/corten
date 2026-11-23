@@ -69,6 +69,12 @@ pub(super) mod unstaged_url {
 
     #[route("/staged-parks", get = staged_parks)]
     pub struct StagedParks;
+
+    #[route("/nested-figure", get = unstaged_nested_figure, unstaged)]
+    pub struct NestedFigure;
+
+    #[route("/asks-the-unstaged", get = staged_asks_the_unstaged)]
+    pub struct AsksTheUnstaged;
 }
 
 async fn unstaged_ping() -> &'static str {
@@ -212,6 +218,19 @@ async fn staged_parks() -> crate::Public<&'static str> {
     STAGED_PARKING.notify_one();
     STAGED_GO_ON.notified().await;
     crate::Public::new(std::time::Duration::from_secs(3_000_004), "staged, parked")
+}
+
+/// A figure for everyone, under numbers no other test's answer has, for a staged handler to ask for.
+async fn unstaged_nested_figure() -> crate::Public<&'static str> {
+    crate::Public::new(std::time::Duration::from_secs(3_000_005), "nested")
+}
+
+/// What the app's router sends for its unstaged figure, asked for from inside a staged handler.
+async fn staged_asks_the_unstaged() -> String {
+    let router = App::new(unstaged_url::router()).router();
+    let (status, headers, body) = call_with_any(router, "GET", "/nested-figure", &[]).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "nested"));
+    headers["cache-control"].to_str().unwrap().to_owned()
 }
 
 /// What the app's router sends for its `Public` page, asked for with a cookie and without, from
@@ -470,6 +489,24 @@ async fn an_unstaged_answer_made_while_a_staged_handler_waits_is_its_own() {
     assert_eq!((status, body.as_str()), (StatusCode::OK, "staged, parked"));
     assert_eq!(parked["cache-control"], "public, max-age=3000004");
     assert!(crate::cache::held(parks), "the staged answer made after its wait is held");
+}
+
+/// The thread holds what `Cache` makes for the whole of a staged route's poll, not for the route
+/// that makes it: an unstaged route that a staged handler has another router answer inline is
+/// polled within that poll, so its header is held, with the same text. Asked for directly, the
+/// same route's header is made for its answer alone, as before.
+#[tokio::test]
+async fn an_unstaged_answer_made_inside_a_staged_poll_is_held() {
+    let router = App::new(unstaged_url::router()).router();
+    let figure = crate::cache::Cache::public(std::time::Duration::from_secs(3_000_005));
+    let (status, headers, _) = call_with(router.clone(), "GET", "/nested-figure", None, None).await;
+    assert_eq!((status, &headers["cache-control"]), (StatusCode::OK, &"public, max-age=3000005".parse().unwrap()));
+    assert!(!crate::cache::held(figure), "asked for directly, it is made for its answer alone");
+    let (status, _, body) = call_with(router.clone(), "GET", "/asks-the-unstaged", None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "public, max-age=3000005"));
+    assert!(crate::cache::held(figure), "made inside the staged handler's poll, it is held");
+    let (_, headers, _) = call_with(router, "GET", "/nested-figure", None, None).await;
+    assert_eq!(headers["cache-control"], "public, max-age=3000005");
 }
 
 /// Beside an unstaged route every other route keeps its stages: an area's pages and its unknown URLs,
