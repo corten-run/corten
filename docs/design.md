@@ -8054,10 +8054,16 @@ rules something out.
     The thread's flag moved too (`03302804e`): it now says the thread is polling a staged
     route's handler and the app's middleware around it (`page::run`, which a page's dispatch
     and a JSON route's both go through), where a `Public` header is held, and the unstaged lane
-    neither reads nor writes it, an unstaged answer's header being made for it alone as before
-    (`a_header_is_held_only_while_a_staged_handler_runs`,
+    neither reads nor writes it, so an unstaged route's answer that its own lane polls has its
+    header made for it alone as before (`a_header_is_held_only_while_a_staged_handler_runs`,
     `an_unstaged_answer_made_while_a_staged_handler_waits_is_its_own`, and the unstaged route
-    asked for after a staged handler's panic). A staged `Public` header made outside that poll
+    asked for after a staged handler's panic). The flag is the poll's, not the route's: an
+    unstaged route that a staged handler or middleware has another router answer inline is
+    polled within the staged poll, and its header is held, with the same text
+    (`an_unstaged_answer_made_inside_a_staged_poll_is_held`, `672d2f05d`). Clearing the flag in
+    the lane would put a guard back on every unstaged poll to make that one answer's header
+    apart; its bytes, and what `settle` checks of an answer it settles, are the same either way,
+    so the lane is left as main's. A staged `Public` header made outside that poll
     (none in Corten; `seo`'s files are answered by typed routes) would be made apart and read
     by `settle`, as one written by hand is. Under [Choice 28](#choice-fixed-stages)'s harness
     written again (the same JSON answered in process by an `App` with the route unstaged, in the
@@ -8068,22 +8074,49 @@ rules something out.
     both with glibc), the staged route 11,830.3 against 11,831.3 (13,245.7 against 13,247.1),
     and the control 2,617.3 in both (3,084.8); with the flag in the lane (`314a20718`) the
     unstaged route took 3 more in each (6,581.3 and 6,625.3; 7,589.5 and 7,633.5).
-    The quiet-host run is declared before it runs, in place of the third, of one declared on
-    `e37a8b260` against `7e9a0c715`, and of one declared on `83819376a` against `fef1f83de`
-    before main changed the JSON writer and the flag moved (a result of that run is for that
-    pair alone): this change's code as of `03302804e` against `a02c81e86`, the `origin/main`
-    the branch merged, the seven answers above, those two, and an unstaged route whose handler
-    makes no `Public` header (the lane alone), every turn on a freshly started build,
-    100 pairs after one not recorded, passing when the one-sided 95% upper bound of the paired
-    change in user plus kernel cycles a request (the 59th of the 100 sorted changes) is under
-    +1% for every one of the ten; none is a negative control and no layout floor applies. Each
-    build's dependencies are fixed: its lock is the tree's with the probe's own package added,
-    every package from a registry the workspace lock's version and checksum, and it is built
-    with `--locked`. Before any request the build is checked to be the one its receipt records
+    The run declared on `83819376a`'s code against `fef1f83de`, before main changed the JSON
+    writer and the flag moved, ran (2026-11-23, a DigitalOcean c-8 of the second run's kind, Xeon
+    Platinum 8280, rustc 1.100.0; `7d7225f63`, whose code is `83819376a`'s, against `fef1f83de`;
+    every turn on a freshly started build, 100 recorded pairs a workload after one not recorded;
+    kept under the tag `evidence/264eec60`). **Its result, for that pair: the margin was not met
+    on five of its nine answers**, each on user instructions a request within 0.08% of main's at
+    the median of the pairs. The page for one visitor took 0.83% more cycles a request at that
+    median, bound 1.05% (instructions 0.05% fewer); the unstaged route with five policies 0.62%
+    more, bound 1.36%, and with one 0.61% more, bound 1.09% (instructions 0.05% more in each);
+    the short `NoStore` answer 0.74% more, bound 1.92% (0.08% more); and the immutable image 0.53%
+    more, bound 1.83% (0.02% more). The four that met it: the `Public` page in an app that keeps
+    none 0.55% fewer, bound 0.32% fewer, on 2.54% fewer instructions; a kept page 0.08% fewer,
+    bound 0.23% more, on 3.14% fewer; the page with five policies behind a middleware 1.04% fewer,
+    bound 0.78% fewer, on 5.27% fewer; and a kept page whose header is not held 0.52% more, bound
+    0.95%, on 0.02% fewer. Every counter ran all of every turn, no request failed in its 1,818
+    turns, and every turn's load was its workload's declared request; its diagnostic pass did not
+    run, its check not knowing the event by the name that host's perf printed. That run read one
+    build of each side, which does not tell where a build's code sat from what the change costs:
+    its misses stand as misses for that pair, are not shown to come from either, and decide
+    nothing for the code declared below.
+    The quiet-host run is declared again before it runs, in place of that one, the third, one
+    declared on `e37a8b260` against `7e9a0c715`, and one declared on `03302804e`'s code against
+    `a02c81e86` that did not run: this change's code as of `672d2f05d` against `04530f7e0`, the
+    `origin/main` the branch merged (whose code is `a02c81e86`'s; it changed only this
+    document), the seven answers above, the short `NoStore` answer and the immutable image, an
+    unstaged route whose handler makes no `Public` header (the lane alone), and the catalog
+    benchmark's record as JSON (a route of an API's module answering a record of the catalog's
+    fixture, `/api/catalog/record_7`, which `page::run` dispatches, marking each poll as staged
+    and putting the flag back, which card-market's item JSON above ran in 5 more instructions a
+    request), every turn on a freshly started build, 100 pairs after one not recorded, passing when
+    the one-sided 95% upper bound of the paired change in user plus kernel cycles a request (the
+    59th of the 100 sorted changes) is under +1% for every one of the eleven; none is a negative
+    control and no layout floor applies. Each side is one program serving all eleven with the
+    catalog benchmark's app's features (`json` beside the template's), and its dependencies are
+    fixed: its lock is the tree's with the probe's own package added, every package from a
+    registry the workspace lock's version and checksum, and it is built with `--locked`. Before
+    any request the build is checked to be the one its receipt records
     (each side's commit, locks and binary, by hash), and the bound is read only from that
     verified build and complete evidence: every one of the 100 pairs,
     one turn a build in the declared order, every counter at 100% running and recorded as its
-    turn's one reading, every turn's requests counted without an error, each pass's outcome
+    turn's one reading, every turn's requests counted without an error, every turn's load as
+    `wrk` reports it the workload's declared URL on its build's port from two threads on 64
+    connections for 3 s (reported as at least 3.00 s and under 3.30 s), each pass's outcome
     recorded once and the run's end; the margin is applied to the exact ratios, so a bound of
     exactly +1% is not under it. Before any pair, each declared request is fetched whole (curl's
     status and the `Content-Length`) from both builds, with the same status and headers but
@@ -8530,13 +8563,13 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
     answer that may be kept, which empties its store each time, so such a write should keep
-    its path to count by; the quiet-host run declared above, on `03302804e`'s code, finds the
-    one-sided 95% bound at +1% or more for any of its ten answers (the page for one visitor, the
+    its path to count by; the quiet-host run declared above, on `672d2f05d`'s code, finds the
+    one-sided 95% bound at +1% or more for any of its eleven answers (the page for one visitor, the
     `Public` page in an app that keeps none, a kept page, the page with five policies behind a
     middleware, the unstaged route with five policies and with one, a kept page whose header the
     thread does not hold, a short `NoStore` answer and a short `Public::immutable` image, each
     after its thread made four `Public` headers, and an unstaged route whose handler makes no
-    `Public` header); a measured app's `settle` finds a `Public`
+    `Public` header, and the catalog's record as JSON); a measured app's `settle` finds a `Public`
     header its thread does not hold (a kept page given on another worker, or one whose header
     the thread put out going through more than four sets of numbers) on a share of its answers
     that shows, since each such answer pays the look through the four on top of main's read; an app
@@ -8550,7 +8583,9 @@ rules something out.
     Last checked: 2026-11-23, `03302804e` and `314a20718` (main's `a02c81e86` merged)
     against `a02c81e86` with rustc 1.100.0: card-market's `corten::json` functions disassembled,
     its item JSON under callgrind as below, and [Choice 28](#choice-fixed-stages)'s unstaged
-    route under callgrind in a harness written again;
+    route under callgrind in a harness written again; 2026-11-23, the run declared on
+    `83819376a`'s code, `7d7225f63` against `fef1f83de` in cycles on a quiet cloud host as above,
+    kept under the tag `evidence/264eec60`;
     2026-11-22, under callgrind as below `83819376a` (main's `fef1f83de` merged)
     against `fef1f83de` with rustc 1.100.0, the nine answers (three rounds for the `NoStore`
     answer and the immutable image), and card-market's `corten::json` functions disassembled in
