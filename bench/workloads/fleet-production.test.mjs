@@ -238,7 +238,10 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     const check = events.find((row) => row.group === group && row.boundary === "ssh" &&
       row.options.input === `set -euo pipefail\n${bootstrapReadScript}\n`);
     const monitor = events.find((row) => row.group === group && row.boundary === "monitor");
-    const ordered = [capture, install, starts[0], check, monitor];
+    const status = events.find((row) => row.group === group && row.options?.input === `set -euo pipefail\n${unitQuery(saved)}\n`);
+    assert.equal(starts[0].quietMs, 0);
+    assert.equal(status.quietMs, 135000);
+    const ordered = [capture, install, starts[0], status, check, monitor];
     assert.ok(ordered.every((row, i) => row && (i === 0 || events.indexOf(ordered[i - 1]) < events.indexOf(row))));
     assert.ok(ordered.every((row) => row.argv.at(-2) === install.argv.at(-2)));
     assert.ok(events.indexOf(capture) < events.indexOf(uploads[0]));
@@ -261,6 +264,20 @@ test("captured production composition ignores arbitrary hints, binds POST identi
   assert.equal(events.filter((row) => row.method === "POST").length, 1);
   for (const group of groupNames.slice(1)) assert.equal(fs.existsSync(path.join(p.h.base, group)), false);
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
+});
+
+test("captured production cannot observe startup a second before the SSH-free window ends", { timeout: 30000 }, async (t) => {
+  const p = fixture(t, "short-clock");
+  assert.equal(await fleetMain(await p.prepare(), p.deps), 2);
+  const saved = p.saved(), events = p.events();
+  assert.equal(saved.status, "starting");
+  const remote = events.filter((row) => ["ssh", "sftp", "monitor"].includes(row.boundary));
+  const start = `set -euo pipefail\nsystemctl start ${saved.unit}\n`;
+  assert.equal(remote.filter((row) => row.options.input === start).length, 1);
+  assert.deepEqual(remote.slice(-2).map((row) => [row.options.input, row.quietMs]),
+    [[start, 0], [`set -euo pipefail\n${unitQuery(saved)}\n`, 134000]]);
+  assert.ok(!events.some((row) => row.boundary === "bootstrap-marker" || row.boundary === "monitor"));
+  assert.equal(events.filter((row) => row.method === "POST").length, 1);
 });
 
 function unusedRetirement(root, fleet, group) {

@@ -18,7 +18,11 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     const file = hostKeyFile(argv, "yes");
     if (file === known || fs.readFileSync(file, "utf8") !== launchKey) throw new Error("SSH must use the pinned launch key");
   };
-  let readiness = 0, installed = false, quietMs = 0;
+  let readiness = 0, installed = false, started = false, quietMs = 0;
+  let earlyWake = config.mode === "short-clock";
+  const requireDrained = () => {
+    if (!started || quietMs !== 135000) throw new Error("observation before post-start drain and proof");
+  };
   const spawn = (binary, argv, options) => {
     let input = options.input, reply = good;
     const readinessProbe = binary === "ssh" && argv.at(-1) === "/bin/bash -s";
@@ -35,7 +39,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
       const id = request.invocation.id;
       reply = (stdout = "", status = 0) => ({ ...good(stdout), status, stderr: `CORTEN_CONTROL ${id} ${"d".repeat(64)}\nCORTEN_RESULT ${id} ${status}\n` });
     }
-    record({ boundary: binary, argv, options: { cwd: options.cwd, shell: options.shell, windowsHide: options.windowsHide,
+    record({ boundary: binary, argv, ...(binary === "ssh" ? { quietMs } : {}), options: { cwd: options.cwd, shell: options.shell, windowsHide: options.windowsHide,
       timeout: options.timeout, maxBuffer: options.maxBuffer, input, stdio: options.stdio } });
     if (binary === "git") {
       if (argv[0] === "rev-parse") return good(argv[1] === "HEAD" ? config.commit : config.repo);
@@ -45,6 +49,12 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     }
     if (binary === "ssh") {
       const script = input.slice("set -euo pipefail\n".length, -1), saved = state();
+      if (script === `systemctl start ${saved.unit}`) {
+        if (!installed || started || saved.quietBootstrap !== "after-start") throw new Error("unexpected benchmark start");
+        started = true;
+        return reply();
+      }
+      if (installed || script === bootstrapReadScript || script.startsWith("systemctl show")) requireDrained();
       if (readinessProbe) {
         const file = hostKeyFile(argv, "accept-new");
         if (file !== known) throw new Error("unexpected launch SSH host-key file");
@@ -66,13 +76,10 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
         installed = true;
         return reply();
       }
-      if (script === `systemctl start ${saved.unit}`) {
-        if (quietMs !== 120000) throw new Error("benchmark started without quiet handoff");
-        return reply();
-      }
       if (script === "true" || script.includes("sha256sum --check --status") || script === ":") return reply();
     }
     if (binary === "sftp") {
+      if (installed) requireDrained();
       const [, from, to] = /^put "([^"]+)" "(\/bench\/[a-z0-9.-]+)"\n$/.exec(input);
       record({ boundary: "upload", from, to, content: fs.readFileSync(from, "utf8") });
       return reply();
@@ -81,6 +88,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
   };
   const streamSpawn = (binary, argv, options) => {
     if (binary !== "ssh" || options.shell !== false) throw new Error("unexpected monitor boundary");
+    requireDrained();
     requirePinnedKey(argv);
     const expected = JSON.parse(Buffer.from(argv.at(-1).split(" ").at(-1), "hex"));
     record({ boundary: "monitor", argv, options: { shell: options.shell, windowsHide: options.windowsHide } });
@@ -117,8 +125,12 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
   };
   return { repo: config.repo, spawn, streamSpawn,
     sleep: async (ms) => {
-      if (installed && quietMs < 120000 && ms === 1000) { quietMs += ms; return; }
-      if (config.mode !== "ssh-late" || readiness !== 1) throw new Error("unexpected synthetic sleep");
+      if (started && quietMs < 135000 && ms === 1000) {
+        if (earlyWake) earlyWake = false;
+        else quietMs += ms;
+        return;
+      }
+      if (installed || config.mode !== "ssh-late" || readiness !== 1) throw new Error("unexpected synthetic sleep");
     },
     providerFactory: ({ interrupted, createMode }) => {
       record({ boundary: "provider-factory" });
@@ -126,7 +138,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
         if (binary !== fs.realpathSync(process.execPath) || argv[0] !== "--input-type=module" || argv[1] !== "-"
           || argv[2] !== path.join(config.repo, "bench/workloads/cloud-provider-worker.mjs")) throw new Error("fixed provider launch required");
         const child = fork(path.join(config.repo, "bench/workloads/fleet-provider-test-worker.mjs"),
-          [["ssh-late", "owner-capture-fail", "independent-overlap"].includes(config.mode) ? "success" : config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
+          [["ssh-late", "short-clock", "owner-capture-fail", "independent-overlap"].includes(config.mode) ? "success" : config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
           { ...options, execArgv: [], env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=64 --max-semi-space-size=4" } });
         record({ boundary: "provider-child-start", pid: child.pid });
         const observe = (direction, message) => record({ boundary: "provider-ipc", direction,
