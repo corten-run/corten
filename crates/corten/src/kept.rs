@@ -162,12 +162,12 @@ static NOTICE: header::HeaderName = crate::page::NOTICE_HEADER;
 
 /// The ages, in seconds, whose `Age` is written without an allocation: those of up to four
 /// digits, two hours and three quarters.
-const AGES: u64 = 10_000;
+const AGES: u64 = 1_000;
 
 /// Every whole number under [`AGES`] in decimal, one after another (`0123456789101112`, on to
 /// `9999`): an `Age` is a slice of it.
 static DIGITS: &str = {
-    const LENGTH: usize = 10 + 90 * 2 + 900 * 3 + 9_000 * 4;
+    const LENGTH: usize = 10 + 90 * 2 + 900 * 3;
     static BYTES: [u8; LENGTH] = {
         let mut bytes = [0; LENGTH];
         let (mut at, mut number) = (0, 0);
@@ -175,8 +175,7 @@ static DIGITS: &str = {
             let mut place = match number {
                 0..10 => 1,
                 10..100 => 10,
-                100..1_000 => 100,
-                _ => 1_000,
+                _ => 100,
             };
             while place > 0 {
                 bytes[at] = b'0' + (number / place % 10) as u8;
@@ -202,8 +201,7 @@ fn age_value(seconds: u64) -> HeaderValue {
     let (digits, from, first) = match seconds {
         0..10 => (1, 0, 0),
         10..100 => (2, 10, 10),
-        100..1_000 => (3, 190, 100),
-        1_000..AGES => (4, 2_890, 1_000),
+        100..AGES => (3, 190, 100),
         _ => return HeaderValue::from(seconds),
     };
     let at = from + (seconds - first) as usize * digits;
