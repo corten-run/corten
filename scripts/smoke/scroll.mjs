@@ -125,6 +125,9 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
       await thank();
       const first = await back();
       check("a redirect to a place keeps its #id and scrolls to it", first && loads === 1, `${await page.evaluate(() => [location.href, scrollY])} loads ${loads}`);
+      // Scrolled by the browser's scroll to the fragment, which makes the place the page's target.
+      const target = () => page.evaluate(() => document.querySelector(":target")?.id ?? null);
+      check("the place a write's redirect names matches :target", (await target()) === "briefing", `${await target()}`);
       const brand = await page.evaluate(() => document.querySelector("header span")?.textContent);
       check("a write's page draws the layout again, in the same document", brand === "Watchlist, again" && (await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1)), brand ?? "");
       check("a write's page fetches the module preloads in its head", probed.length > 0, probed.join());
@@ -145,6 +148,9 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
       await thank();
       const second = await back();
       check("the same place again fetches the page again", second && loads === 2, `loads ${loads}`);
+      // Firefox's scroll to the fragment sets `:target` only the first time in a document.
+      if (engine === "firefox") skip("the same place again matches :target", "Firefox's NavigateEvent.scroll() sets it only for a document's first #fragment");
+      else check("the same place again matches :target", (await target()) === "briefing", `${await target()}`);
       check("both kept the document", await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1));
       check("a layout element the write did not change stays the same element", await page.evaluate(() => (/** @type {any} */ (document.querySelector("header"))).__same === 1));
       // A patch inside the header (a cart count) changes it from what the server drew, so the next

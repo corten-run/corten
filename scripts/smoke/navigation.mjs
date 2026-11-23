@@ -1301,6 +1301,101 @@ export async function currentLinks(browser, swaps, noSwaps) {
   }
 }
 
+export async function fragmentTargets(browser) {
+  // A page the runtime draws at a `#fragment` is scrolled there as a full load's is, by the
+  // browser's own scroll to the fragment: `:target` is its element, an `<a name>` is found as an id
+  // is, and the fragment is tried as written, then percent-decoded. A page without one starts at
+  // the top, not where the last one was scrolled. Read from inside the page, which Playwright's
+  // WebKit with the Navigation API needs (openWatchlist), so WebKit is checked too. The news page
+  // is given a named anchor and an id that needs decoding at the end of <main>, below a short
+  // window's fold.
+  const names = [
+    "a client navigation without a #fragment starts at the top",
+    "a client navigation to an #id scrolls to it and :target matches it",
+    "a client navigation to an <a name> scrolls to it and :target matches it",
+    "a percent-encoded #fragment finds the element its decoded text names",
+    "a link the server redirects keeps its #fragment, scrolled to on the redirect's page",
+  ];
+  const page = await browser.newPage({ viewport: { width: 360, height: 200 } });
+  await page.route(
+    (url) => url.pathname === "/news",
+    async (route) => {
+      // A page, whole or a navigation's; not a form's or a part's answer on the same path.
+      const asked = route.request().headers().corten;
+      if (route.request().method() !== "GET" || (asked && asked !== "nav")) return route.fallback();
+      // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+      const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+      const headers = res.headers();
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      // At the end of <main>: before its end tag in a whole page, and at the end of a navigation's
+      // answer, which ends with what <main> holds and has no <main> tag.
+      const anchors = '<p><a name="smoke-named">Named</a></p><p id="smoke-caf\u00e9">Decoded</p>';
+      const text = await res.text();
+      const body = text.includes("</main>") ? text.replace("</main>", `${anchors}</main>`) : text + anchors;
+      await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+    },
+  );
+  // A link the server redirects to the news page, as a guarded route does.
+  await page.route(
+    (url) => url.pathname === "/smoke-to-news",
+    (route) => route.fulfill({ status: 303, headers: { location: "/news" } }),
+  );
+  await page.goto(`${base}/news`);
+  if (!(await page.evaluate(() => "navigation" in window))) {
+    for (const name of names) skip(name, "no Navigation API: navigations are full page loads");
+    await page.close();
+    return;
+  }
+  const precommit = await page.evaluate(precommits);
+  const seen = await page.evaluate(async (precommit) => {
+    (/** @type {any} */ (window)).__marker = 1;
+    const drawn = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    /** @param {string} url */
+    const to = async (url) => {
+      const error = await (/** @type {any} */ (window)).navigation.navigate(url).finished.then(() => "", (/** @type {Error} */ e) => String(e));
+      await drawn();
+      const target = document.querySelector(":target");
+      const top = target?.getBoundingClientRect().top ?? -1;
+      return {
+        url: location.pathname + location.search + location.hash,
+        target: target ? target.id || `name=${target.getAttribute("name")}` : null,
+        // Layout in fractions of a pixel can leave the top a fraction above the scroll position.
+        inView: top > -1 && top < innerHeight,
+        y: Math.round(scrollY),
+        swapped: (/** @type {any} */ (window)).__marker === 1,
+        error,
+      };
+    };
+    scrollTo(0, document.documentElement.scrollHeight);
+    const before = Math.round(scrollY);
+    const top = { ...(await to("/news?mine=on")), before };
+    const id = await to("/news#briefing");
+    const named = await to("/news?mine=on#smoke-named");
+    const decoded = await to("/news#smoke-caf%C3%A9");
+    // A full load keeps the link's #fragment on the redirect's page, and so does the address
+    // where it waits for the answer.
+    const redirected = precommit ? await to("/smoke-to-news#briefing") : null;
+    return { top, id, named, decoded, redirected };
+  }, precommit);
+  const { top, id, named, decoded, redirected } = seen;
+  // Firefox's scroll() goes to a document's fragment only the first time, the #id here: the
+  // runtime scrolls to the later ones itself, which leaves `:target` unset.
+  const once = engine === "firefox";
+  /** @param {typeof id} step @param {string} want @param {boolean} [first] */
+  const at = (step, want, first = false) =>
+    step.swapped && step.inView && step.y > 0 && !step.error && (step.target === want || (once && !first && step.target === null));
+  check(names[0], top.swapped && top.before > 0 && top.y === 0 && !top.error, JSON.stringify(top));
+  check(names[1], at(id, "briefing", true), JSON.stringify(id));
+  check(names[2], at(named, "name=smoke-named"), JSON.stringify(named));
+  check(names[3], at(decoded, "smoke-caf\u00e9"), JSON.stringify(decoded));
+  if (redirected) check(names[4], redirected.url === "/news#briefing" && at(redirected, "briefing"), JSON.stringify(redirected));
+  else skip(names[4], "no precommitHandler: the runtime follows the redirect to fetch's address, which has no #fragment");
+  if (once) skip(":target after a document's first #fragment", "Firefox's NavigateEvent.scroll() sets it only for the first");
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  await page.close();
+}
+
 export async function earlyNavigation(browser) {
   // A navigation started before the first document has loaded is the browser's own: a script's
   // form submit (one made from on:connect) makes Chromium stop loading the document, and a page
