@@ -22,7 +22,8 @@ remain unchanged. V2 is a separate workload, with a new baseline, not a rewrite 
 - The upstream is Node's HTTP server, which answers with `Keep-Alive: timeout=5` and closes a
   connection idle that long (6 s on the pinned Node 26, with its 1 s buffer). A client that pools
   connections must not reuse one idle for 5 s or more: a request written as the upstream closes it
-  is lost in the send. The reqwest-based apps drop a connection idle for 4 s. Do not retry instead.
+  is lost in the send. The apps drop a connection idle for 4 s where their client keeps one longer
+  (bench/fullstack/README.md lists each). Do not retry instead.
 
 The complete numeric wire record (all keys required, empty arrays and nulls are meaningful):
 

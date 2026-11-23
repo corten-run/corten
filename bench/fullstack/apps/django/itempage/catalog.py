@@ -5,6 +5,8 @@ import os
 
 import requests
 
+from . import upstream
+
 
 @dataclass(frozen=True)
 class CatalogField:
@@ -60,7 +62,7 @@ class CatalogRecord:
 class CatalogSource:
     def __init__(self):
         self.base = os.environ.get("API_BASE", "http://localhost:8080").rstrip("/")
-        self.session = requests.Session()
+        self.session = upstream.session()
         self.fixture = None
         if os.environ.get("CATALOG_SOURCE") == "fixture":
             with open(os.environ.get("CATALOG_FIXTURE_PATH", "/fixtures/catalog.json"), encoding="utf-8") as file:

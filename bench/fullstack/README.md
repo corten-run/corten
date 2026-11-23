@@ -2132,7 +2132,21 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    connection cap (httpx's default keeps 20 idle and allows 100 in all), Phoenix's Req client uses
    a Finch pool of 1,024 connections to the item API, opened as needed (Req's own pool holds Finch's
    50 per host), and Drogon keeps one `HttpClient` (one connection) per request in flight on each
-   thread. Drogon also hands the fixture
+   thread. No app reuses a pooled upstream connection idle for 5 s: the item API and the catalog and
+   marketplace fixtures are Node HTTP servers that answer `Keep-Alive: timeout=5` and close an
+   idle connection after those 5 s plus Node's 1 s buffer, and a request written to a connection
+   as it closes is lost before the upstream sees it. Where a client's default keeps idle
+   connections longer, the app drops them after 4 s: reqwest (Corten, axum + Maud, topcoat,
+   Leptos), Go's transport (Gin), httpx (FastAPI, whose default is the advertised 5 s), .NET's
+   `SocketsHttpHandler` (both ASP.NET apps), urllib3 under `requests` (Django, which keeps a
+   connection until it sees the close), Finch (Phoenix, `conn_max_idle_time`) and Drogon's
+   clients. The JDK client (Spring) gets 1 s, since it drops an expired connection late (it reused
+   connections idle 6 s with 4 s set). Node's `fetch` (the JavaScript apps) and Rails'
+   `Net::HTTP` (2 s by default) already stay under 5 s, and Laravel's client opens a connection
+   per request. None of these adds a retry; Go's transport and the JDK client retry a request lost
+   on a reused connection on their own, which hides the loss without preventing it.
+   `node bench/fullstack/idle-close.mjs <image>` checks an image against an upstream that resets
+   any connection reused after 5 s idle. Drogon also hands the fixture
    parser's freed memory back to the system after loading (`malloc_trim`), so its memory with items
    in memory is the items' rather than the parser's peak, which the Rust apps avoid by parsing one
    item at a time. Drogon's JSON is JsonCpp's, Drogon's default, which writes 17 significant digits

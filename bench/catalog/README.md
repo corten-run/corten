@@ -32,11 +32,12 @@ pre-serialized body. No marketplace view-model conversion is in either path.
 The stand-in upstream is Node's HTTP server: it answers with `Keep-Alive: timeout=5` and, on the
 pinned Node 26, closes a connection idle for that 5 s keep-alive timeout plus Node's 1 s buffer
 (observed at 5,999 to 6,045 ms after the last answer). A pooled connection reused as it closes
-loses the request in the send, before the upstream's handler sees it. Every reqwest-based HTTP
-source (Corten, axum + Maud, topcoat, Leptos; catalog and marketplace) therefore drops a
-connection idle for 4 s, a second under what the upstream advertises; reqwest's default keeps
-one for 90 s. This is the pool policy alone: no retry, no cache, and still one upstream GET
-per record read.
+loses the request in the send, before the upstream's handler sees it. Every HTTP source
+therefore stops reusing a connection before it has been idle 5 s: the Corten app and every
+fullstack app whose client keeps idle connections longer (reqwest's default is 90 s) drops one
+idle for 4 s, a second under what the upstream advertises (the full-stack
+[Caveats](../fullstack/README.md#caveats), item 5, list each client's setting). This is the pool
+policy alone: no retry, no cache, and still one upstream GET per record read.
 
 The stand-in upstream alone pre-serializes and UTF-8 encodes its records at
 startup. Canonical record GETs reuse those bytes without URL parsing or an

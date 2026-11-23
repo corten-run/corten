@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <algorithm>
 #include <cstdlib>
 #include <memory>
 #include <utility>
@@ -40,6 +41,7 @@ struct Client
 {
     drogon::HttpClientPtr http;
     std::shared_ptr<Socket> socket;
+    std::chrono::steady_clock::time_point idleSince;
 };
 // Bound retained idle connections, not concurrent work. Every in-flight read owns one client;
 // no pipelined response or canceled read can become another request's response.
@@ -60,7 +62,10 @@ struct Read
         completed = true;
         loop->invalidateTimer(watch);
         if (result == Result::Ok && response && !response->ifCloseConnection() && idle.size() < 16)
+        {
+            client->idleSince = std::chrono::steady_clock::now();
             idle.push_back(std::move(client));
+        }
         else
         {
             client->socket->cancel();
@@ -80,6 +85,10 @@ void get(const drogon::HttpRequestPtr &caller, const std::string &prefix, const 
     read->caller = caller;
     read->done = std::move(done);
     read->loop = trantor::EventLoop::getEventLoopOfCurrentThread();
+    // Clients go idle in time order, so those past upstreamIdle are at the front.
+    const auto now = std::chrono::steady_clock::now();
+    idle.erase(idle.begin(), std::find_if(idle.begin(), idle.end(),
+                                          [&](const auto &client) { return now - client->idleSince < upstreamIdle; }));
     if (idle.empty())
     {
         read->client = std::make_shared<Client>();
