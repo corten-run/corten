@@ -8124,25 +8124,33 @@ rules something out.
     those the time or the process sets (`Date`, `Age`, a weak `ETag`) and the same body byte
     for byte. That declaration, on `672d2f05d`'s code against `04530f7e0` with one build of each
     side, is superseded and never ran: no result of it exists to pass or miss.
+    A declaration of the runs below on `a01dd5109` against `3d365370c` is superseded and never
+    ran: main then made `Cache::header` write its text at its own length and changed what a kept
+    answer holds (`14126d2a8`), so a result on that pair would not be of the code that merges.
     The run that decides this change is declared before it runs on the pair the branch would merge,
-    `a01dd5109` (the `origin/main` it merged, which added
-    [design Choice 72](#choice-placement-runs)) against `3d365370c`, whose change to `ascii.rs`,
-    `cache.rs` and `page.rs` is `672d2f05d`'s against its base byte for byte. Each of the eleven
-    answers above is a touched workload read across placements under
-    [Choice 72](#choice-placement-runs), by the plan of
+    `14126d2a8` (the `origin/main` it merged) against `6b6b38ef1`, whose change to `ascii.rs`,
+    `cache.rs` and `page.rs` is `672d2f05d`'s against its base but for the held header's text,
+    which takes main's bound on a header's length. All eleven answers above are held to the same
+    gate, read across placements under [Choice 72](#choice-placement-runs), the unstaged route
+    whose handler makes no `Public` header among them, though it runs no code the change touches,
+    and none of them named a negative control; by the plan of
     the workstation kit 1865p (each side compiled once and relinked at 30 pad sizes, 8 recorded
-    pairs a placement after one not recorded, every turn on a freshly started build, and each
-    workload's own A/A in the same run): it passes when the change's one-sided 95% upper bound
-    across placements is under +1% and its A/A resolves +1% both ways, every placement having
-    passed its binary, layout, answer, load, counter and server-log checks, the rotating routes'
-    own answers compared phase by phase from matched starts, and the bounds read from exact
-    ratios. Card-market's item page and item JSON under the catalog's `count.mjs`, which the
-    change also touches, are decided by a separate count of one build of each side, 30 pairs a
-    target, declared before it runs (kit 1865v4): no placement spread recorded in
-    [Choice 72](#choice-placement-runs)
+    pairs a placement after one not recorded, every turn on a freshly started build with its
+    counters enabled only while its load runs, and each workload's own A/A in the same run): it
+    passes when the change's one-sided 95% upper bound across placements is under +1% and its A/A
+    resolves +1% both ways, every placement having passed its binary, layout, answer, load,
+    counter and server-log checks, the rotating routes' own answers compared phase by phase from
+    matched starts, the report bound to the kit's declared plan and that run's own completed build,
+    layout and answer checks, and the bounds read from exact ratios. Card-market's item page and
+    item JSON under the catalog's `count.mjs`, which the change also touches, are decided by a
+    separate count of one build of each side, 30 pairs a target, declared before it runs (kit
+    1865v4), from each count's raw cycle totals and request count, over the declared item fixture
+    by hash, with every counter, user L1 instruction-cache misses among them, at 100% running: no
+    placement spread recorded in [Choice 72](#choice-placement-runs)
     applies to that program, request and protocol, so its bound under +1%, exact, is the
-    reading. Until both pass, this change does not merge. The misses of the run above stand for
-    its own pair and are not reread by either.
+    reading. Each run stops before its first request on a host where perf cannot count every
+    event it reads. Until both pass, this change does not merge. The misses of the run above
+    stand for its own pair and are not reread by either.
     Set aside, counted the same way on the unstaged route with
     five policies and with one, each against main: a thread that stops looking in its four
     after eight misses in a row, but for one call in 64, 10 more instructions and 517 fewer, with
@@ -8635,7 +8643,7 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
     answer that may be kept, which empties its store each time, so such a write should keep
-    its path to count by; the run declared above, `3d365370c` against `a01dd5109`, finds the
+    its path to count by; the run declared above, `6b6b38ef1` against `14126d2a8`, finds the
     one-sided 95% bound across placements at +1% or more, or an A/A it cannot resolve, for any of
     its eleven answers (the page for one visitor, the
     `Public` page in an app that keeps none, a kept page, the page with five policies behind a
