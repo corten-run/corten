@@ -141,6 +141,11 @@ jobs:
           node bench/fullstack/apps/fastapi/check-trace.mjs cb-catalog-fastapi after --regressions-only
       - name: Build and verify localized marketplace sources
         run: node bench/marketplace/run.mjs w1 --apps ${{ matrix.app }} --build --check-only
+      # The gate's script-free phone alert cases, repeated in both sources with exact POST,
+      # redirect, document and message checks (#1251). Its diagnostics upload with the results.
+      - name: Probe React Router script-free alert forms in both sources
+        if: matrix.app == 'react-router'
+        run: node bench/marketplace/alert-probe-run.mjs cb-marketplace-react-router 10 bench/marketplace/results/alert-probe
       - name: Qualify Next.js marketplace methods and alert writes in both sources
         if: matrix.app == 'nextjs'
         working-directory: bench/fullstack/apps/nextjs
@@ -201,6 +206,7 @@ jobs:
           path: |
             bench/catalog/results/c1/
             bench/marketplace/results/w1/
+            bench/marketplace/results/alert-probe/
             bench/fullstack/apps/fastapi/tests/results/
             bench/fullstack/apps/gin/production-results/
             bench/fullstack/apps/nextjs/work/bounded-qualification-fixture.json
