@@ -583,10 +583,12 @@ establish a general ranking.
       A run of K = 30 placements of R = 8 pairs, for the
       change and the A/A on `kept` and an A/A on `plain`, takes about 2 hours on a c-8 (the first
       run: 99 minutes of turns after 2 minutes of checks, besides setup and builds). That size is
-      the first run's, not one to assume: in the second run, where pairs spread 4.1% to 4.2%
-      against the first's 2.9% to 3.0%, one of two A/As of that size did not resolve, which the
-      Choice works out to be what that spread gives about half the time, so a plan takes K and R
-      from the spread of pairs on its own setup.
+      the first run's, not one to assume: in the second run one of two A/As of that size did not
+      resolve, its placement medians spreading 1.97% where the other's spread 1.17%, and the
+      Choice works out that 30 placements fail a reading more often than not at the first figure
+      and about one time in five at the first run's own. More placements is the remedy that does
+      not rest on where the spread comes from, so a plan with an A/A already read on its setup
+      and workload takes K from how far that A/A's placement medians spread.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
