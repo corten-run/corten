@@ -514,8 +514,9 @@ pub struct App<M = ()> {
     layout_reads: Vec<Arc<dyn crate::layout::Erased>>,
     /// How many bytes of `Public` answers the app keeps ([`App::kept_answers`]).
     kept: usize,
-    /// The handle to them a task holds ([`App::kept`]), given the store when the router is made.
-    keeping: crate::KeptAnswers,
+    /// The handle to them a task holds ([`App::kept`]): made when the app is first asked for it,
+    /// and given the store when the router is made. An app that is never asked makes none.
+    keeping: std::sync::OnceLock<crate::KeptAnswers>,
     middleware: M,
 }
 
@@ -649,7 +650,7 @@ impl App {
             access_log: false,
             layout_reads: Vec::new(),
             kept: crate::kept::BOUND,
-            keeping: crate::KeptAnswers::pending(),
+            keeping: std::sync::OnceLock::new(),
             middleware: (),
         }
     }
@@ -988,7 +989,13 @@ impl<M: Middleware> App<M> {
     /// made (by [`serve`], `App::router` or `App::test`), and does nothing before that or in an
     /// app that keeps nothing. It reaches this process's store alone.
     pub fn kept(&self) -> crate::KeptAnswers {
-        self.keeping.clone()
+        self.keeping.get_or_init(crate::KeptAnswers::pending).clone()
+    }
+
+    /// Whether the app was asked for its [`App::kept`] handle, and so made one.
+    #[cfg(test)]
+    pub(crate) fn has_kept_handle(&self) -> bool {
+        self.keeping.get().is_some()
     }
 
     /// The security policy (default [`Policy::new`]: same-origin everything).
@@ -1646,8 +1653,8 @@ impl<M: Middleware> App<M> {
         // with no route eligible to keep a page has none for a write to drop, so its writes are not
         // counted.
         shared.kept = if dev || !table.keeps() { None } else { crate::kept::Answers::new(self.kept) };
-        if let Some(answers) = &shared.kept {
-            self.keeping.set(answers);
+        if let (Some(answers), Some(keeping)) = (&shared.kept, self.keeping.get()) {
+            keeping.set(answers);
         }
         // An app whose areas and APIs have no middleware of their own runs the app's alone.
         let plain = scopes.prefixed.iter().all(|(_, scope)| scope.middleware.is_empty());

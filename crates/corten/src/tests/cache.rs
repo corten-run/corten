@@ -1587,6 +1587,38 @@ async fn a_job_outside_a_request_drops_a_page() {
     assert!(!given(router).await);
 }
 
+/// An app that is never asked for its `KeptAnswers` (`App::kept`) makes no handle for one,
+/// whatever it keeps, so nothing of the handle is made or run at startup or for its requests,
+/// which keep and drop pages as before. Asked once, it makes the one every later call shares.
+#[tokio::test]
+async fn an_app_never_asked_for_its_kept_answers_makes_no_handle() {
+    let runs = Runs::default();
+    for bound in [None, Some(0), Some(1 << 20)] {
+        let app = App::new(Routes::from(kept_routes(&runs)));
+        let app = match bound {
+            Some(bound) => app.kept_answers(bound),
+            None => app,
+        };
+        assert!(!app.has_kept_handle(), "{bound:?}");
+    }
+    let app = App::new(Routes::from(kept_routes(&runs)));
+    assert!(!app.has_kept_handle());
+    let router = app.router();
+    let given = |router: Router| async move { fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE) };
+    assert!(!given(router.clone()).await && given(router.clone()).await, "kept as before");
+
+    let app = App::new(Routes::from(kept_routes(&runs)));
+    let (first, second) = (app.kept(), app.kept());
+    assert!(app.has_kept_handle());
+    let router = app.router();
+    assert!(!given(router.clone()).await && given(router.clone()).await);
+    first.changed(&Root);
+    assert!(!given(router.clone()).await, "dropped through the first handle");
+    assert!(given(router.clone()).await);
+    second.changed(&Root);
+    assert!(!given(router).await, "and through the second: one handle");
+}
+
 /// A page whose handler was reading when the app said it changed may show what was there before:
 /// it is sent, and never given again, however its making and the call interleave. So the next
 /// request runs the handler, and that page is kept. Before the app counts writes by path (no
