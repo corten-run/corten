@@ -90,20 +90,25 @@ export async function choiceGroup(page, period, showing, tab) {
   check("Arrow Right moves and chooses", (await page.evaluate(() => document.activeElement?.textContent)) === "Month" && (await showing()) === "Average $11.95 this month.|Sold 14 this month." && !new URL(page.url()).searchParams.has("period"), page.url());
   await page.keyboard.press("ArrowUp");
   check("Arrow Up moves back", (await period("Week").getAttribute("aria-checked")) === "true");
-  // Every other key the group takes (the group has two options, so a step from an end wraps).
+  // Every other key the group takes. With three options a step the wrong way lands on another
+  // option, and Home and End are each pressed where neither arrow goes to the same one.
   const chosen = async (/** @type {string} */ name) => (await period(name).getAttribute("aria-checked")) === "true" && (await period(name).evaluate((r) => r === document.activeElement));
-  await page.keyboard.press("End");
-  check("End chooses the last option", await chosen("Month"));
-  await page.keyboard.press("Home");
-  check("Home chooses the first", await chosen("Week"));
   await page.keyboard.press("ArrowDown");
   check("Arrow Down moves on, as Arrow Right does", await chosen("Month"));
+  await page.keyboard.press("End");
+  check("End chooses the last option, and every part follows", (await chosen("Year")) && (await showing()) === "Average $11.40 this year.|Sold 96 this year." && new URL(page.url()).searchParams.get("period") === "year", `${await showing()} ${page.url()}`);
+  await page.keyboard.press("ArrowDown");
+  check("a step on from the last option wraps to the first", await chosen("Week"));
   await page.keyboard.press("ArrowLeft");
-  check("Arrow Left moves back, as Arrow Up does", await chosen("Week"));
+  check("and a step back from the first wraps to the last", await chosen("Year"));
   await page.keyboard.press("ArrowLeft");
-  check("a step back from the first option wraps to the last", await chosen("Month"));
-  await page.keyboard.press("ArrowRight");
-  check("and a step on from the last wraps to the first", await chosen("Week"));
+  check("Arrow Left moves back, as Arrow Up does", await chosen("Month"));
+  await page.keyboard.press("Home");
+  check("Home chooses the first", await chosen("Week"));
+  await page.keyboard.press("End");
+  check("End chooses the last from the first too", await chosen("Year"));
+  await page.keyboard.press("Home");
+  check("and Home the first from the last", await chosen("Week"));
   await period("Month").focus();
   await page.keyboard.press("Space");
   check("Space chooses the focused option, and every part follows", (await chosen("Month")) && (await showing()) === "Average $11.95 this month.|Sold 14 this month.", await showing());

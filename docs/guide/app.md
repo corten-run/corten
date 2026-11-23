@@ -723,11 +723,12 @@ not checked.
 An audit reads the page and presses no key. A widget's keys (a menu's or the tabs' arrow keys,
 Home, End, Escape) are a browser test's to press, with the browser's own keyboard (Playwright's
 `page.keyboard.press`), as [`examples/ui-gallery/smoke/`](../../examples/ui-gallery/smoke) does
-for every key corten-ui's widgets take. A checker that dispatches key events from a script in the
-page tests only what scripts do with them: what the browser does with a key itself (Escape
-closing a popover, Tab staying in a modal `<dialog>`) does not answer a dispatched event, so the
-platform's own elements read as broken. UI SDK's `checkPattern` is one (`@ui-sdk/core`
-0.1.0-beta.16, run on the ui-gallery's pages in Chromium 156 on 2026-11-23): it found no fault in
+for every key corten-ui's scripts handle and for Enter and Space on a menu's items. A checker
+that dispatches key events from a script in the page tests only what scripts do with them: what
+the browser does with a key itself (Escape closing a popover, Tab staying in a modal `<dialog>`)
+does not answer a dispatched event, so the platform's own elements read as broken. UI SDK's
+`checkPattern` is one (`@ui-sdk/core`
+0.1.0-beta.16, run on the ui-gallery's pages in Chromium 159 on 2026-11-23): it found no fault in
 corten-ui's tabs, choice group and combo box, and reported a popover menu that Escape does not
 close and a modal `<dialog>` that Tab leaves, neither of which a pressed key reproduces, and each
 `<details>` as no disclosure, for having no button with `aria-expanded`.

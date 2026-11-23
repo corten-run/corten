@@ -68,6 +68,8 @@ export async function menuButton(page, errors) {
   check("Arrow Up moves back, past a disabled item", (await focused()) === "Archive", await focused());
   await page.keyboard.press("End");
   check("End moves to the last item", (await focused()) === "Watch", await focused());
+  // Home from an item in the middle, where neither arrow goes to the first.
+  await page.keyboard.press("ArrowUp");
   await page.keyboard.press("Home");
   check("Home moves to the first", (await focused()) === "Help", await focused());
   await page.keyboard.press("Escape");
@@ -111,6 +113,26 @@ export async function menuButton(page, errors) {
   check("a form item posts and patches", true);
   await expanded("false");
   check("using an item closes the menu", (await trigger.getAttribute("aria-expanded")) === "false");
+  // Enter and Space on a focused item are the browser's click on it: the menu's keys (a letter
+  // moves to an item) must leave both alone.
+  await trigger.click();
+  await expanded("true");
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  const watched = await page.waitForFunction(() => document.querySelector("#menu-result")?.textContent === "Watching.", null, { timeout: 10_000 }).then(() => true, () => false);
+  await expanded("false");
+  check("Enter on a focused item uses it and closes the menu", watched, await page.locator("#menu-result").textContent());
+  await trigger.click();
+  await expanded("true");
+  await page.keyboard.press("r");
+  await page.keyboard.press("Space");
+  const renaming = await page
+    .waitForFunction(() => /** @type {HTMLDialogElement | null} */ (document.querySelector("dialog[aria-label='Rename the draft']"))?.open === true, null, { timeout: 10_000 })
+    .then(() => true, () => false);
+  check("Space on a focused item uses it and closes the menu", renaming && (await trigger.getAttribute("aria-expanded")) === "false", await focused());
+  // Closed whichever way the check went, so the checks after it start with nothing open.
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector("dialog[open]") && !document.querySelector("#actions")?.matches(":popover-open"));
   // An item is any element the app writes: here a command that opens a dialog.
   await trigger.click();
   await expanded("true");
