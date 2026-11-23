@@ -728,7 +728,10 @@ pub(crate) const PROBLEM: &str = "application/problem+json";
 /// `text/html` of `text/html; charset=utf-8`, with ASCII whitespace (the space and tab a header
 /// may have around it) trimmed. A header's text is ASCII, so no other whitespace can be there.
 pub(crate) fn media_type(value: &str) -> &str {
-    value.split_once(';').map_or(value, |(essence, _)| essence).trim_ascii()
+    // Byte by byte: a media type is a few bytes long, and `split_once` starts a search made for
+    // long text (147 instructions on `text/plain; charset=utf-8`).
+    let end = value.bytes().position(|b| b == b';').unwrap_or(value.len());
+    value[..end].trim_ascii()
 }
 
 pub(crate) fn is_plain_text(headers: &HeaderMap) -> bool {
