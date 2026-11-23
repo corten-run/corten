@@ -1234,11 +1234,12 @@ rules something out.
    buffers are past the 64 KiB the thread cache keeps and within 256 KiB. So the first condition
    below is met for a brotli page of that length, where the 64 KiB thread cache gains nothing
    over jemalloc's defaults. The Choice stands here on what that does not touch, the memory a
-   flood leaves (13 to 16 MiB against glibc's 406 to 455), and the limit itself is reopened in
+   flood leaves (13 to 16 MiB against glibc's 406 to 455), and the limit itself is taken up in a pull request
+   that is open and not merged,
    [#1979 Keep brotli's buffers for a long page with a 512 KiB jemalloc thread cache in the starter's image](https://github.com/corten-run/corten/pull/1979),
-   which measures brotli pages from 10 KB to 1 MB and the memory kept by limit, proposes 512 KiB,
-   and corrects the Dockerfiles' comments and the app guide's sentence with the setting they
-   describe. Since [Choice 73](#choice-request-gzip) a page up to 16 KiB goes to a client without
+   which proposes 512 KiB and would correct the Dockerfiles' comments and the app guide's
+   sentence with the setting they describe; until it merges those still say the 64 KiB thread
+   cache keeps brotli's buffers, which the probe above shows only for the shorter page. Since [Choice 73](#choice-request-gzip) a page up to 16 KiB goes to a client without
    zstd as libdeflate's gzip, which took no fault with any of the three, so the brotli pages
    this is about are those past 16 KiB and those of a client that accepts only brotli.
 
