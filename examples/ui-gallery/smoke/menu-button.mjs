@@ -58,6 +58,18 @@ export async function menuButton(page, errors) {
   check("a disabled item is passed over", (await page.evaluate(() => document.activeElement?.textContent)) === "Rename…");
   await page.keyboard.press("w");
   check("typing a letter moves to the item", (await page.evaluate(() => document.activeElement?.textContent)) === "Watch");
+  const focused = () => page.evaluate(() => document.activeElement?.textContent);
+  await page.keyboard.press("ArrowDown");
+  check("Arrow Down from the last item wraps to the first", (await focused()) === "Help", await focused());
+  await page.keyboard.press("ArrowUp");
+  check("Arrow Up from the first item wraps to the last", (await focused()) === "Watch", await focused());
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  check("Arrow Up moves back, past a disabled item", (await focused()) === "Archive", await focused());
+  await page.keyboard.press("End");
+  check("End moves to the last item", (await focused()) === "Watch", await focused());
+  await page.keyboard.press("Home");
+  check("Home moves to the first", (await focused()) === "Help", await focused());
   await page.keyboard.press("Escape");
   await expanded("false");
   check("Escape closes and returns focus", (await trigger.getAttribute("aria-expanded")) === "false" && (await page.evaluate(() => document.activeElement?.textContent)) === "More actions");
@@ -66,6 +78,16 @@ export async function menuButton(page, errors) {
   check("Arrow Up on the button opens at the last item", (await page.evaluate(() => document.activeElement?.textContent)) === "Watch");
   await page.keyboard.press("Escape");
   await expanded("false");
+  await page.keyboard.press("ArrowDown");
+  await expanded("true");
+  await page.keyboard.press("Tab");
+  await expanded("false");
+  // Where Tab lands is the browser's (WebKit passes over links), so only that it left the menu.
+  const left = await page.evaluate(() => {
+    const at = document.activeElement;
+    return !!at && at !== document.body && !at.closest("[data-scope=ui-menu-button]") && !document.querySelector("#actions")?.matches(":popover-open");
+  });
+  check("Tab closes the menu and moves on from it", left);
   await trigger.click();
   await expanded("true");
   const menuErrors = errors.length;

@@ -15,6 +15,15 @@ export async function tabs(page) {
   check("only the selected tab is in the tab order", (await page.$$eval('[role="tab"]', (t) => t.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "0,-1,-1");
   await page.keyboard.press("End");
   check("End selects the last", (await tab("Sales").getAttribute("aria-selected")) === "true");
+  const selected = async (/** @type {string} */ name) => (await tab(name).getAttribute("aria-selected")) === "true" && (await tab(name).evaluate((t) => t === document.activeElement));
+  await page.keyboard.press("Home");
+  check("Home selects the first", (await selected("Listings")) && page.url() === `${base}/`, page.url());
+  await page.keyboard.press("ArrowLeft");
+  check("Arrow Left from the first tab wraps to the last", await selected("Sales"));
+  await page.keyboard.press("ArrowLeft");
+  check("Arrow Left moves back and selects", (await selected("Offers")) && page.url().endsWith("/?tab=offers"), page.url());
+  // Back to the last tab, where the checks after these start.
+  await page.keyboard.press("End");
   // An Icon beside a tab's text, as beside a button's (#793).
   const tabIcon = await tab("Listings").evaluate(besideText);
   check("Tabs: an icon beside a tab's text is the kit's gap apart and on its middle", spacedLikeButton(tabIcon), JSON.stringify(tabIcon));
