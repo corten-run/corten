@@ -107,7 +107,10 @@ async fn one_shutdown_ends_a_server_served_per_core() {
         let mut answer = String::new();
         tokio::time::timeout(Duration::from_secs(5), slow.read_to_string(&mut answer)).await.expect("a slow request").unwrap();
         let thread = answer.rsplit("\r\n\r\n").next().unwrap();
-        assert!(answer.starts_with("HTTP/1.1 200") && thread.starts_with("corten-core-"), "a request in progress finishes: {answer}");
+        assert!(
+            answer.starts_with("HTTP/1.1 200") && thread.starts_with("corten-core-"),
+            "a request in progress finishes: {answer}"
+        );
         on.insert(thread.to_string());
     }
     assert!(cores == 1 || on.len() > 1, "16 requests on {cores} cores all ran on one: {on:?}");

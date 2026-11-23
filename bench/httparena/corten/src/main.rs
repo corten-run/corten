@@ -216,8 +216,6 @@ fn main() -> std::io::Result<()> {
             let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
             runtime.block_on(serve(acceptor, 1, false, app))
         }
-        other => Err(std::io::Error::other(format!(
-            "ARENA_MODE is {other}: it is percore-builtin, percore-by-hand or default"
-        ))),
+        other => Err(std::io::Error::other(format!("ARENA_MODE is {other}: it is percore-builtin, percore-by-hand or default"))),
     }
 }
