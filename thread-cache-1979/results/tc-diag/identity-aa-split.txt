@@ -1,0 +1,2 @@
+user: pairs 100, per-pair change median -2.03%, range -15.29% to +23.80%, one-sided 95% upper bound on the median -0.60% (the 59th of 100 sorted)
+kernel: pairs 100, per-pair change median -1.08%, range -10.29% to +13.17%, one-sided 95% upper bound on the median -0.37% (the 59th of 100 sorted)

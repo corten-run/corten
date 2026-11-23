@@ -1,0 +1,10 @@
+round 1 | 524288 | page 9793 bytes | sent 2250 bytes | 0.00 faults a request | 80 us CPU a request | rss 11012 kB | failed 0
+round 1 | 524288 | page 32501 bytes | sent 3981 bytes | 0.00 faults a request | 170 us CPU a request | rss 11144 kB | failed 0
+round 1 | 524288 | page 202041 bytes | sent 14054 bytes | 0.00 faults a request | 480 us CPU a request | rss 12676 kB | failed 0
+round 2 | 524288 | page 9793 bytes | sent 2250 bytes | 0.00 faults a request | 85 us CPU a request | rss 10876 kB | failed 0
+round 2 | 524288 | page 32501 bytes | sent 3981 bytes | 0.00 faults a request | 160 us CPU a request | rss 10976 kB | failed 0
+round 2 | 524288 | page 202041 bytes | sent 14054 bytes | 0.00 faults a request | 490 us CPU a request | rss 12908 kB | failed 0
+round 3 | 524288 | page 9793 bytes | sent 2250 bytes | 0.00 faults a request | 85 us CPU a request | rss 10944 kB | failed 0
+round 3 | 524288 | page 32501 bytes | sent 3981 bytes | 0.00 faults a request | 195 us CPU a request | rss 10972 kB | failed 0
+round 3 | 524288 | page 202041 bytes | sent 14054 bytes | 0.00 faults a request | 455 us CPU a request | rss 12556 kB | failed 0
+# faults4 done

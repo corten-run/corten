@@ -57,3 +57,21 @@ except), before each workload, and a workload whose answers differ otherwise is 
 
 Not planned under load: 512 KiB against 1 MiB directly; a client with gzip alone; pages past
 496 KB; more than one runtime.
+
+## Diagnostic for the uncompressed workload (in the description from 09:05:30 UTC; it began at 09:05:33)
+
+The miss on the uncompressed item page stands whatever this shows: nothing below is tested against
+a margin or replaces that result. It is run to say whether this protocol on this host can tell +1%
+on that workload.
+
+1. Two comparisons on the 9,793-byte page with `identity` under the second plan's protocol, 100
+   recorded pairs each after one that is not: 64 KiB against 512 KiB again; and 64 KiB against
+   64 KiB, the same setting under two labels.
+2. Reported for each: pairs, medians, range, the per-pair median change and its bound (the 59th of
+   100 sorted) for cycles, user cycles, kernel cycles and instructions.
+
+## Not planned
+
+The fault counts for 512 KiB with other encodings and the bursts of slow readers (`burst.sh`) were
+asked for by the second review, after every run above, and have no plan: they count faults and
+memory, claim no margin, and every row they wrote is kept.

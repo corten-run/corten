@@ -1,0 +1,10 @@
+round 1 | 65536 | before 7.9 | held a second before each hold ended 339.5 417.1 409.1 430.6 421.3 432.2 436.1 409.6 | as the last flood closed 285.1 | 35 s after 15.5 | answered 200 16000 of 16000, refused 0
+round 1 | 524288 | before 9.2 | held a second before each hold ended 338.9 418.1 424.6 421.9 444.0 440.8 441.2 441.1 | as the last flood closed 318.6 | 35 s after 54.3 | answered 200 16000 of 16000, refused 0
+round 1 | glibc | before 5.9 | held a second before each hold ended 334.8 419.3 460.7 484.7 500.6 509.9 526.5 530.6 | as the last flood closed 426.1 | 35 s after 426.1 | answered 200 16000 of 16000, refused 0
+round 2 | 65536 | before 7.8 | held a second before each hold ended 338.3 413.6 430.4 424.7 402.6 392.0 416.6 436.6 | as the last flood closed 228.6 | 35 s after 15.9 | answered 200 16000 of 16000, refused 0
+round 2 | 524288 | before 9.2 | held a second before each hold ended 339.0 424.7 434.1 437.3 437.8 431.1 429.8 457.1 | as the last flood closed 284.7 | 35 s after 40.1 | answered 200 16000 of 16000, refused 0
+round 2 | glibc | before 6.1 | held a second before each hold ended 335.3 422.0 452.7 467.5 505.5 513.0 518.7 524.1 | as the last flood closed 419.9 | 35 s after 419.9 | answered 200 16000 of 16000, refused 0
+round 3 | 65536 | before 8.1 | held a second before each hold ended 340.8 425.3 410.3 419.7 417.1 429.5 413.2 417.2 | as the last flood closed 183.5 | 35 s after 16.5 | answered 200 16000 of 16000, refused 0
+round 3 | 524288 | before 9.2 | held a second before each hold ended 339.1 418.7 441.0 443.4 431.0 492.7 461.5 449.3 | as the last flood closed 259.1 | 35 s after 48.1 | answered 200 16000 of 16000, refused 0
+round 3 | glibc | before 6.1 | held a second before each hold ended 335.2 414.9 448.7 467.0 481.9 491.4 496.1 503.3 | as the last flood closed 398.8 | 35 s after 399.0 | answered 200 16000 of 16000, refused 0
+# burst done

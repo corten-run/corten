@@ -1,7 +1,8 @@
 # corten-run/corten#1979: the starter image's jemalloc thread cache, the measurements
 
 What design Choice 23 (`docs/design.md#choice-jemalloc-image`) cites for the limit: the scripts
-as they were run and every result file. `plan.md` holds the two cycles runs' plans, each written before its run. The pull request first
+as they were run and every result file. `plan.md` holds the two cycles runs' plans and the
+diagnostic's, each written before its run. The pull request first
 set 1 MiB and, after its review asked what the caches keep, 512 KiB: the first cycles run is 64 KiB
 against 1 MiB and the second 64 KiB against 512 KiB.
 
@@ -32,7 +33,9 @@ labels of the author's machine, removed), not as a tool.
    `NS="400 800"`, `CONFS="65536 524288 1048576 2097152 4194304 8388608 glibc"` and
    `REQUESTS=600`); `faults-enc-gzipdeflateb.out` (`gzip, deflate, br, zstd`),
    `faults-enc-identity.out` and `faults-enc-gzip.out` (`faults6.sh` with `NS="1 20 160"`,
-   `CONFS="65536 1048576 glibc"` and `ENC` set). The settings a file ran are in its rows.
+   `CONFS="65536 1048576 glibc"` and `ENC` set); `faults-enc-512k-*.out` (the same three with
+   `CONFS="524288"`, run after the diagnostic by `after-diag.sh`). The settings a file ran are in
+   its rows.
 
 ## Cycles under load
 
@@ -43,10 +46,15 @@ reads a log: pairs, medians, best, ranges, the per-pair changes and the order-st
 `results/tc/*.log` are the first run's logs and `results/tc/*.txt` their readings with every
 per-pair change. `tc-pair2.sh` and `tc-run2.sh` are the second run's (64 KiB against 512 KiB, the
 answers compared but `Date` and `ETag`, a 495,521-byte page added): `results/tc2/`, read with
-`pairs.py <log> tc64k tc512k 1`. `tc-pair2.sh` is kept as it was for the diagnostic that followed
-(`tc-diag.sh`, the uncompressed workload again and 64 KiB against itself, kept under the tag
-`evidence/thread-cache-1979-diagnostic`): that run added the label `tc64kb`, a second name for the
-64 KiB setting, and changed nothing else.
+`pairs.py <log> tc64k tc512k 1`.
+
+`tc-diag.sh` is the diagnostic that followed the second run's missed margin: the uncompressed
+workload again (64 KiB against 512 KiB) and 64 KiB against itself under two labels, 100 pairs each.
+It tests nothing against a margin. `results/tc-diag/*.log` are its logs, `*.txt` their readings by
+`pairs.py` (`tc64k tc512k` and `tc64k tc64kb`), and `*-split.txt` the user and kernel per-pair
+changes, which `pairs.py` gives only for their sum (`diag-split.py`, run on the logs afterwards).
+`tc-pair2.sh` is as it ran in the diagnostic: the label `tc64kb`, a second name for the 64 KiB
+setting, was added to it after the second run, and nothing else in it changed.
 
 Each log's second line says `ANSWERS DIFFER` for the four compressed workloads: the script
 compared the two limits' answers byte for byte but `Date`, and the app's weak `ETag` differs
@@ -73,3 +81,11 @@ compressed workload of the first run, made after it.
    and the one-length run for 512 KiB, which `mem8.sh` left out. `results/mem-mix.out`.
 4. `idle.sh`: the CPU an app that has served no request takes in 60 s and its threads, three
    rounds. `results/idle.out` (64 KiB and 1 MiB) and `results/idle-512k.out`.
+5. `burst.sh` and `burst.py`: the app on eight CPUs with the nine-item fixture; eight floods of
+   2,000 connections that each ask for one of the nine pages with `identity` and read nothing for
+   5 s (a 4 KiB receive buffer, connected to the container's own address so no proxy stands
+   between), so the app holds what the sockets do not take; the cgroup's memory a second before
+   each hold ended, as the last flood closed and 35 s after; 64 KiB, 512 KiB and glibc, three
+   runs. `results/burst.out`. It ran after the diagnostic (`after-diag.sh`); a first start
+   without `ulimit -n 65536` stopped at the client's 1,024 open files before any flood and wrote
+   only row labels, which are not kept.
