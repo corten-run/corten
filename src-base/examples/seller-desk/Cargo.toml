@@ -1,0 +1,14 @@
+[package]
+name = "seller-desk"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "A seller's inventory desk: a client-heavy screen (selection, range select, filter, sort, inline edits, a confirm dialog, live stock levels) built with Corten's handlers, to find the API's gaps."
+
+[dependencies]
+corten = { package = "corten-run", path = "../../crates/corten", features = ["feed", "types"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

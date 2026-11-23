@@ -1,0 +1,13 @@
+checked write (jemalloc): base twice the same; head the same: HTTP/1.1 200 OK, body 5 bytes, sha256 d81c55f49c5bb0d36bc11e3966ec4efab66f8dfefbbc1761161ca9d230e5466a,  head's home after: kept
+write: warm-up took about 6 s a pair; 100 pairs should take about 11 minutes
+write: pair 10 of 100 done 05:39:09
+write: pair 20 of 100 done 05:40:11
+write: pair 30 of 100 done 05:41:14
+write: pair 40 of 100 done 05:42:16
+write: pair 50 of 100 done 05:43:18
+write: pair 60 of 100 done 05:44:21
+write: pair 70 of 100 done 05:45:23
+write: pair 80 of 100 done 05:46:25
+write: pair 90 of 100 done 05:47:28
+write: pair 100 of 100 done 05:48:30
+write: done, /m/1938c/results/cycles-write.csv

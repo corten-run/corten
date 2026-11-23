@@ -1,0 +1,13 @@
+checked kept (jemalloc): base twice the same; head the same: HTTP/1.1 200 OK, body 371 bytes, sha256 1cdb61b40a849cb6b07bdf053b0faad7288318bb0f8c6ae7b681bea02a25ae1f,  head's home after: kept
+kept: warm-up took about 6 s a pair; 100 pairs should take about 11 minutes
+kept: pair 10 of 100 done 06:10:28
+kept: pair 20 of 100 done 06:11:30
+kept: pair 30 of 100 done 06:12:33
+kept: pair 40 of 100 done 06:13:35
+kept: pair 50 of 100 done 06:14:37
+kept: pair 60 of 100 done 06:15:39
+kept: pair 70 of 100 done 06:16:42
+kept: pair 80 of 100 done 06:17:44
+kept: pair 90 of 100 done 06:18:46
+kept: pair 100 of 100 done 06:19:48
+kept: done, /m/1938c/results/cycles-kept.csv

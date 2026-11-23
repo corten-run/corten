@@ -1,0 +1,6 @@
+ALLOCATOR jemalloc NAMED true
+corten: listening on http://127.0.0.1:18382
+2026-11-23T05:16:33.283736Z  INFO corten: shutting down
+ALLOCATOR jemalloc NAMED true
+corten: listening on http://127.0.0.1:18382
+2026-11-23T05:16:39.426941Z  INFO corten: shutting down

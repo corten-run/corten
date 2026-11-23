@@ -1,0 +1,1562 @@
+//! Corten: a full-stack web framework for Rust. The server renders every screen with `html!`,
+//! the browser gets HTML plus a small runtime that runs the handlers the markup names, and live
+//! data flows as numbered patches over server-sent events.
+//!
+//! ```ignore
+//! use corten::prelude::*;
+//!
+//! #[tokio::main]
+//! async fn main() -> std::io::Result<()> {
+//!     corten::serve(App::new(url::router())).await
+//! }
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/", get = home)]
+//!     pub struct Home;
+//! }
+//!
+//! // What the route answers: a page (failures are the app's error page).
+//! async fn home(req: Req) -> HtmlResult {
+//!     req.page(html! { <Layout req={&req} title="Home"><h1>"Hello"</h1></Layout> })
+//! }
+//! ```
+//!
+//! A page request arrives in one of four [`Mode`]s and one handler answers all of them:
+//!
+//! | Mode | Sent by | Response |
+//! |---|---|---|
+//! | `Document` | the browser, first load or no JavaScript | the whole document: the app's layout with the page in it |
+//! | `Navigation` | the runtime, same-origin link click | `<title>`, the page's head tags and `<main>`'s children, swapped in |
+//! | `Action` | the runtime, `<form data-patch>` submit | fragments that replace elements with the same `id` |
+//! | `Data` | a native screen, an agent or a test, with `Accept: application/json` | the screen's data as JSON ([`Req::screen`]) |
+//!
+//! A handler's return type is what its route answers ([`answer`]): [`HtmlResult`] for a page,
+//! [`JsonResult<T>`] for JSON (every failure of the route is JSON too), [`Public`] around either
+//! for an answer a shared cache may keep. Who is asking is a [`Caller`], looked up only when a
+//! handler takes one. Routes that share a prefix and answer only JSON mount under [`App::api`];
+//! a part of the app with its own stylesheet or caller (an admin area, an account) is an
+//! [`Area`]. The app's own steps in every request are [`middleware`].
+//!
+//! [`App`] puts the production pieces around the app's routes with defaults: security headers
+//! and a CSP, a cross-site write check, error pages, versioned static files, cache headers
+//! ([`cache`]), health checks, compression (feature `compress`), and live reload under
+//! `corten dev`. A route that says `unstaged` is served outside them, for data that is the same
+//! for everyone who can reach it, at about what the router alone costs: it keeps the host check, `nosniff`, a sandbox, keeping an
+//! answer that sets a cookie out of shared caches and, under an API's prefix, the API's JSON
+//! failures.
+//!
+//! Modules: [`http`] (requests, responses and bodies), [`answer`] (what a route answers),
+//! [`caller`] (who is asking), [`middleware`], [`api`] (JSON-only routes), [`cache`] (HTTP caching), [`view`] (markup), [`script`]
+//! (handlers: behavior in the browser), [`style`] (component stylesheets and design tokens), [`route`] (typed links),
+//! [`i18n`] (typed messages), [`security`], [`assets`], [`pwa`], [`form`], [`seo`].
+//! Features: `json` (handler values, data screens), `feed` (live rows), `types` (TypeScript
+//! declarations from Rust types), `agent` (MCP tools), `compress`, `log` (a log subscriber in
+//! [`serve`]).
+
+// So the code `html!` generates (`::corten::view::...`) also compiles inside this crate.
+extern crate self as corten;
+
+/// What Corten's derives name in the code they generate, so an app needs no dependency of its own
+/// for it: serde, whose `Deserialize` `#[derive(Fields)]` and `#[derive(UrlValue)]` implement. Not
+/// a public API.
+#[doc(hidden)]
+pub mod __private {
+    pub use serde;
+}
+
+/// What `#[derive(ToJson)]` and `#[derive(FromJson)]` wrap their JSON Schema impls in: kept with
+/// the `types` feature, dropped without it. Not a public API.
+#[cfg(feature = "types")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __if_types {
+    ($($item:tt)*) => { $($item)* };
+}
+
+/// What `#[derive(ToJson)]` and `#[derive(FromJson)]` wrap their JSON Schema impls in: kept with
+/// the `types` feature, dropped without it. Not a public API.
+#[cfg(not(feature = "types"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __if_types {
+    ($($item:tt)*) => {};
+}
+
+/// What `#[derive(Fields)]` and `#[derive(UrlValue)]` wrap their `FromJson` impl in: kept with
+/// the `json` feature, dropped without it. Not a public API.
+#[cfg(feature = "json")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __if_json {
+    ($($item:tt)*) => { $($item)* };
+}
+
+/// What `#[derive(Fields)]` and `#[derive(UrlValue)]` wrap their `FromJson` impl in: kept with
+/// the `json` feature, dropped without it. Not a public API.
+#[cfg(not(feature = "json"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __if_json {
+    ($($item:tt)*) => {};
+}
+
+/// What `#[corten::routes(api = .., openapi = ..)]` builds its document in: the document with the
+/// `types` feature, an error that names the feature without it. Not a public API.
+#[cfg(feature = "types")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __openapi_document {
+    ($($document:tt)*) => { $($document)* };
+}
+
+/// What `#[corten::routes(api = .., openapi = ..)]` builds its document in: the document with the
+/// `types` feature, an error that names the feature without it. Not a public API.
+#[cfg(not(feature = "types"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __openapi_document {
+    ($($document:tt)*) => {
+        ::core::compile_error!("openapi = .. serves an OpenAPI document, built from the routes' JSON Schemas, so it needs corten's feature types: corten = { .., features = [\"types\"] }")
+    };
+}
+
+/// Live feeds (feature `feed`): everything [`corten_feed`] has (its crate page has the overview:
+/// routes, sync and authorization), and `#[derive(Row)]`. See the live-data guide.
+#[cfg(feature = "feed")]
+pub mod feed {
+    #[doc(inline)]
+    pub use corten_feed::*;
+    /// `#[derive(Row)]`: a row's [`Row::id`] is the field marked `#[row(id)]` (a
+    /// `String`, `Box<str>`, `&'static str`, `Cow<'static, str>`, `Arc<str>` with serde's `rc`
+    /// feature, or another type that derefs to `str`), so `Row` is the derive and the trait at
+    /// once, as serde's `Serialize` is. The row's `Clone` and `Serialize` stay in its derive list,
+    /// where Rust checks them and the trait's bounds. A struct row with named fields, keyed by one
+    /// of them, derives it; only a row the derive cannot express (such as an enum, a tuple struct,
+    /// a key made of several fields, or an `id` that does more than return a field) implements the
+    /// trait by hand. The derive reads the row's serde
+    /// attributes, not the id type's own `Serialize` and `Deserialize`: an id type that writes or
+    /// reads other than the text it derefs to is not checked, nor is a row whose `Serialize` or
+    /// `Deserialize` is not serde's derive. A generic row needs no bounds on its parameters: it is a `Row` for each type
+    /// argument that makes it `Clone`, `Serialize`, `Send`, `Sync` and `'static`, and a feed of
+    /// one that is not does not compile where it is built:
+    ///
+    /// ```
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Quote<P> {
+    ///     #[row(id)]
+    ///     ticker: String,
+    ///     price: P,
+    /// }
+    /// let feed = corten::feed::Feed::new([Quote { ticker: "ACME".into(), price: 1_u32 }]);
+    /// # let _ = feed;
+    /// ```
+    ///
+    /// ```compile_fail,E0277
+    /// # #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// # struct Quote<P> { #[row(id)] ticker: String, price: P }
+    /// // A `Cell` is not `Sync`, so this `Quote` is not a row.
+    /// let feed = corten::feed::Feed::new([Quote { ticker: "ACME".into(), price: std::cell::Cell::new(1_u32) }]);
+    /// ```
+    ///
+    /// ```
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[row(id)]
+    ///     ticker: String,
+    ///     price_cents: u32,
+    /// }
+    /// # use corten::feed::Row as _;
+    /// assert_eq!(Stock { ticker: "ACME".into(), price_cents: 1 }.id(), "ACME");
+    /// ```
+    ///
+    /// What does not compile, each for its own reason.
+    ///
+    /// No field marked:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { ticker: String, price_cents: u32 }
+    /// ```
+    ///
+    /// Two fields marked:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, #[row(id)] isin: String }
+    /// ```
+    ///
+    /// A field marked twice:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// An id that is not text:
+    ///
+    /// ```compile_fail,E0308
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] number: u64 }
+    /// ```
+    ///
+    /// An enum:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// enum Stock { Open { #[row(id)] ticker: String } }
+    /// ```
+    ///
+    /// A unit struct:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock;
+    /// ```
+    ///
+    /// A tuple struct, whose fields serde writes without names, so a script has no key to read
+    /// (one implements the trait by hand):
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock(#[row(id)] String, u32);
+    /// ```
+    ///
+    /// A `row` attribute other than `#[row(id)]` on a field:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, #[row(key)] isin: String }
+    /// ```
+    ///
+    /// A `row` attribute on the struct:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[row(id)]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// A row that is not `Sync` (a `Cell` in it):
+    ///
+    /// ```compile_fail,E0277
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, views: std::cell::Cell<u32> }
+    /// ```
+    ///
+    /// An id serde leaves out of the JSON, where a script and a replica read the key, or writes or
+    /// reads as other text than `id()` returns (`skip`, `skip_serializing`, `skip_serializing_if`,
+    /// `skip_deserializing`, `with`, `serialize_with`, `deserialize_with`, `flatten`), one
+    /// example each:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(skip)] ticker: String, price_cents: u32 }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(skip_serializing)] ticker: String, price_cents: u32 }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(skip_deserializing)] ticker: String, price_cents: u32 }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// mod upper {
+    ///     pub fn serialize<S: serde::Serializer>(id: &str, s: S) -> Result<S::Ok, S::Error> {
+    ///         s.serialize_str(&id.to_uppercase())
+    ///     }
+    /// }
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(with = "upper")] ticker: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// fn upper<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    ///     <String as serde::Deserialize>::deserialize(d).map(|id| id.to_uppercase())
+    /// }
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(deserialize_with = "upper")] ticker: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize)]
+    /// struct Key { ticker: String }
+    /// impl std::ops::Deref for Key {
+    ///     type Target = str;
+    ///     fn deref(&self) -> &str { &self.ticker }
+    /// }
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(flatten)] key: Key, price_cents: u32 }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[row(id)]
+    ///     #[serde(skip_serializing_if = "String::is_empty")]
+    ///     ticker: String,
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// fn upper<S: serde::Serializer>(id: &str, s: S) -> Result<S::Ok, S::Error> {
+    ///     s.serialize_str(&id.to_uppercase())
+    /// }
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(serialize_with = "upper")] ticker: String }
+    /// ```
+    ///
+    /// A row serde writes as another value (`into`, `transparent`), whose JSON has no id member:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize)]
+    /// struct Plain { n: u32 }
+    /// impl From<Stock> for Plain {
+    ///     fn from(s: Stock) -> Plain { Plain { n: s.n } }
+    /// }
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[serde(into = "Plain")]
+    /// struct Stock { #[row(id)] ticker: String, n: u32 }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[serde(transparent)]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// An id serde reads under another name than it writes it, which a replica would key the row
+    /// by:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[row(id)]
+    ///     #[serde(rename(deserialize = "name"))]
+    ///     ticker: String,
+    ///     #[serde(default)]
+    ///     name: String,
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// #[serde(rename_all(deserialize = "UPPERCASE"))]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// Or also under an `alias`, where a replica can find another member's value:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(alias = "symbol")] ticker: String, symbol: String }
+    /// ```
+    ///
+    /// Or reads as another value converted (`from`, `try_from`), so a replica's row can hold an id
+    /// other than the one its patches name:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Deserialize)]
+    /// struct Wire { ticker: String }
+    /// impl From<Wire> for Stock {
+    ///     fn from(w: Wire) -> Stock { Stock { ticker: w.ticker.to_uppercase() } }
+    /// }
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// #[serde(from = "Wire")]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Deserialize)]
+    /// struct Wire { ticker: String }
+    /// impl TryFrom<Wire> for Stock {
+    ///     type Error = String;
+    ///     fn try_from(w: Wire) -> Result<Stock, String> { Ok(Stock { ticker: w.ticker.to_uppercase() }) }
+    /// }
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// #[serde(try_from = "Wire")]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// Another member written under the id's key (a `rename`, the struct's `rename_all`, or its
+    /// `tag`), which a script would read in the id's place, a `rename` a `macro_rules!` passes in
+    /// included; a flattened field's members are not known when the derive runs, so one is not
+    /// checked:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, #[serde(rename = "ticker")] symbol: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[serde(rename_all = "camelCase")]
+    /// struct Stock { #[row(id)] #[serde(rename = "listedAs")] ticker: String, listed_as: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[serde(tag = "ticker")]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// macro_rules! stock {
+    ///     ($m:meta) => {
+    ///         #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    ///         struct Stock { #[row(id)] ticker: String, #[serde($m)] symbol: String }
+    ///     };
+    /// }
+    /// stock!(rename = "ticker");
+    /// ```
+    ///
+    /// Another member serde reads under the id's key (a `rename(deserialize = ..)` or an `alias`),
+    /// which a replica would read in the id's place:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[serde(rename(deserialize = "ticker"), default)]
+    ///     symbol: String,
+    ///     #[row(id)]
+    ///     #[serde(default)]
+    ///     ticker: String,
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, #[serde(alias = "ticker")] symbol: String }
+    /// ```
+    ///
+    /// Both sides are checked whether or not the row derives `Deserialize`, so a row that renames
+    /// its id for writing alone (`rename_all(serialize = ..)`) is refused too; `rename` or
+    /// `rename_all` without a side names both.
+    ///
+    /// The same rows with distinct keys compile:
+    ///
+    /// ```
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[serde(rename_all = "camelCase", tag = "kind")]
+    /// struct Stock { #[row(id)] #[serde(rename = "listedAs")] ticker: String, #[serde(rename = "symbol")] listed_as: String }
+    /// ```
+    ///
+    /// A `row` attribute on the struct that a `macro_rules!` passes in:
+    ///
+    /// ```compile_fail
+    /// macro_rules! row {
+    ///     ($(#[$m:meta])* $name:ident) => {
+    ///         #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    ///         $(#[$m])*
+    ///         struct $name { #[row(id)] ticker: String }
+    ///     };
+    /// }
+    /// row!(#[row(id)] Stock);
+    /// ```
+    ///
+    /// A row that is not `Serialize`:
+    ///
+    /// ```compile_fail,E0277
+    /// #[derive(Clone, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// A row that borrows, so is not `'static`:
+    ///
+    /// ```compile_fail,E0478
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock<'a> { #[row(id)] ticker: &'a str }
+    /// ```
+    ///
+    /// A row that is not `Clone`:
+    ///
+    /// ```compile_fail,E0277
+    /// #[derive(serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// A row that is not `Send` (a `MutexGuard` is `Sync` but not `Send`):
+    ///
+    /// ```compile_fail,E0277
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[row(id)]
+    ///     ticker: String,
+    ///     held: std::marker::PhantomData<std::sync::MutexGuard<'static, ()>>,
+    /// }
+    /// ```
+    pub use corten_macros::Row;
+}
+mod access;
+#[cfg(feature = "agent")]
+pub mod agent;
+mod ahead;
+pub mod answer;
+pub mod api;
+mod app;
+mod ascii;
+pub mod assets;
+mod body;
+pub mod cache;
+pub mod caller;
+mod client;
+#[cfg(feature = "compress")]
+pub mod compress;
+pub mod extract;
+pub mod form;
+mod handler;
+mod html;
+pub mod http;
+pub mod i18n;
+#[cfg(feature = "json")]
+pub mod json;
+mod kept;
+mod layout;
+mod listener;
+#[cfg(feature = "log")]
+mod log;
+pub mod middleware;
+#[cfg(feature = "types")]
+pub mod openapi;
+mod page;
+pub mod pwa;
+mod response;
+pub mod route;
+mod router;
+pub mod script;
+pub mod security;
+pub mod seo;
+mod signal;
+mod sse;
+pub mod style;
+mod task;
+pub mod testing;
+#[cfg(feature = "types")]
+pub mod types;
+pub mod upgrade;
+pub mod view;
+mod watch;
+
+use std::{
+    convert::Infallible,
+    sync::{Arc, LazyLock},
+};
+
+use ::http::{header, HeaderMap, HeaderValue, StatusCode};
+use futures_util::{Stream, StreamExt};
+
+use crate::{
+    response::{IntoResponse, Response},
+    sse::Event,
+};
+
+pub use ahead::Ahead;
+pub use answer::{
+    Answer, AnyAnswer, FileAnswer, ForAll, ForOne, HtmlResponse, HtmlResult, LiveResponse, Media, NoStore, PageOr, Patches,
+    Public, Relay, Screen,
+};
+#[cfg(feature = "json")]
+pub use answer::{JsonError, JsonResponse, JsonResult};
+pub use api::Api;
+pub use app::{listeners, serve, serve_on, serve_wrapped, serve_wrapped_with, App, Area};
+pub use caller::{Caller, Challenge, Identify, Refused};
+pub use client::{ClientIp, ClientZone, ConnectionInfo, PeerAddr};
+/// Form field names as constants: `#[derive(Fields)] struct AlertInput { email: String }`
+/// gives `AlertInput::FIELDS.email`, the [`FieldName`] `"email"` (serde `rename` and `rename_all`
+/// applied). Use them for `name=` in the form and in [`Errors::add`], and a renamed or misspelled
+/// field fails to compile instead of posting a field the handler never reads.
+///
+/// The derive also reads the form: it implements serde's `Deserialize` as serde's derive would
+/// from the same `#[serde(..)]`, so the names posted and the names read are one list and the
+/// struct derives nothing else for [`Form`]. With the `json` feature it is a
+/// [`FromJson`](json::FromJson) too, and with `types` it has its schema, so the same struct is
+/// a JSON body or an agent tool's input, and `FromJson` beside it is a second impl (E0119). A
+/// generic struct is one wherever its `Deserialize` applies (`Offer<u32>`), read by serde_json
+/// rather than Corten's reader. One whose
+/// fields borrow from the input (a `&'a str`, a `#[serde(borrow)]`) cannot be one, since
+/// `FromJson` reads owned values.
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[derive(Fields)]
+/// #[serde(rename_all = "camelCase")]
+/// struct Offer { item_id: String, #[serde(default)] gift: bool, note: Option<String> }
+///
+/// let read: Offer = corten::form::from_bytes(b"itemId=7&gift=on").unwrap();
+/// assert_eq!((read.item_id.as_str(), read.gift, read.note), ("7", true, None));
+/// assert_eq!(Offer::FIELDS.item_id.as_str(), "itemId");
+/// ```
+///
+/// A `#[serde(..)]` that reads in a way the derive does not follow does not compile; give such a
+/// field a type of its own that implements `Deserialize`:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// fn parse<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> { serde::Deserialize::deserialize(d) }
+///
+/// #[derive(Fields)]
+/// struct Offer { #[serde(deserialize_with = "parse")] cents: u32 }
+/// ```
+///
+/// Nor does one that reads the whole type another way, or a `borrow` of a lifetime the field does
+/// not have:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[derive(Fields)]
+/// #[serde(try_from = "String")]
+/// struct Offer { cents: u32 }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// use std::borrow::Cow;
+///
+/// #[derive(Fields)]
+/// struct Offer<'a, 'b> { #[serde(borrow = "'b")] note: Cow<'a, str>, other: Cow<'b, str> }
+/// ```
+///
+/// Deriving serde's `Deserialize` beside it is a second impl of the same trait:
+///
+/// ```compile_fail,E0119
+/// use corten::prelude::*;
+///
+/// #[derive(serde::Deserialize, Fields)]
+/// struct Offer { cents: u32 }
+/// ```
+pub use corten_macros::Fields;
+/// The app's shared state, split for handlers: each field gets a [`FromRef`] impl, so a handler
+/// takes the part it reads (`State<Market>`) while the routes share one struct
+/// (`#[corten::routes(state = Shared)]`, `App::new(url::router(shared))`). The impl clones the
+/// field, as one written by hand would, and holds where the field's type is `Clone` (a generic
+/// state's part only for the parameters that allow it). A field no handler takes alone is
+/// `#[from_ref(skip)]`. `corten::FromRef` is the derive and the trait at once, as serde's
+/// `Serialize` is.
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[derive(Clone)]
+/// struct Market(u32);
+/// #[derive(Clone)]
+/// struct Lists(&'static str);
+///
+/// #[derive(Clone, FromRef)]
+/// struct Shared {
+///     market: Market,
+///     pub lists: Lists,
+///     #[from_ref(skip)]
+///     secret: String,
+/// }
+///
+/// fn part<T: FromRef<Shared>>(shared: &Shared) -> T {
+///     T::from_ref(shared)
+/// }
+/// let shared = Shared { market: Market(7), lists: Lists("a"), secret: String::new() };
+/// assert_eq!(part::<Market>(&shared).0, 7);
+/// assert_eq!(part::<Lists>(&shared).0, "a");
+/// # let _ = &shared.secret;
+/// # async fn handler(State(market): State<Market>) -> String { market.0.to_string() }
+/// ```
+///
+/// Two fields of one type would make `State<T>` ambiguous, so they do not compile until one is
+/// skipped (the error names both fields):
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[derive(Clone, FromRef)]
+/// struct Shared {
+///     primary: String,
+///     replica: String,
+/// }
+/// ```
+///
+/// A skipped field gets no impl, so a second field of its type is allowed, and its type is not a
+/// part a handler can take:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[derive(Clone, FromRef)]
+/// struct Shared {
+///     primary: String,
+///     #[from_ref(skip)]
+///     replica: String,
+/// }
+/// let shared = Shared { primary: "p".into(), replica: "r".into() };
+/// assert_eq!(String::from_ref(&shared), "p");
+/// # let _ = shared.replica;
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[derive(Clone)]
+/// struct Keys(u8);
+///
+/// #[derive(Clone, FromRef)]
+/// struct Shared {
+///     name: String,
+///     #[from_ref(skip)]
+///     keys: Keys,
+/// }
+/// let shared = Shared { name: String::new(), keys: Keys(1) };
+/// let keys = Keys::from_ref(&shared);
+/// ```
+///
+/// A generic state, a bound with an associated type, and `Self` in a field all work:
+///
+/// ```
+/// use std::sync::Arc;
+/// use corten::prelude::*;
+///
+/// #[derive(Clone)]
+/// struct Part<T>(T);
+///
+/// #[derive(Clone, FromRef)]
+/// struct Shared<T: Iterator<Item = u8>, U> {
+///     iter: Arc<T>,
+///     part: Part<U>,
+///     next: Option<Arc<Self>>,
+/// }
+///
+/// let shared = Shared { iter: Arc::new([1u8].into_iter()), part: Part("x"), next: None };
+/// assert_eq!(Part::<&str>::from_ref(&shared).0, "x");
+/// assert!(Option::<Arc<Shared<_, &str>>>::from_ref(&shared).is_none());
+/// let _ = <Arc<std::array::IntoIter<u8, 1>>>::from_ref(&shared);
+///
+/// // `Self` in a parameter's bound, and a `where` with nothing in it.
+/// trait Wraps<S> {}
+/// #[derive(Clone)]
+/// struct Inner;
+/// impl<S> Wraps<S> for Inner {}
+/// #[derive(Clone, FromRef)]
+/// struct Bound<T: Wraps<Self>> where { part: Arc<T> }
+/// let bound = Bound { part: Arc::new(Inner) };
+/// let _ = <Arc<Inner>>::from_ref(&bound);
+///
+/// // A parameter's default after an arrow in its bound.
+/// #[derive(Clone, FromRef)]
+/// struct Calls<F: Fn() -> u8 = fn() -> u8> { call: Arc<F> }
+/// let calls: Calls = Calls { call: Arc::new((|| 7) as fn() -> u8) };
+/// assert_eq!(<Arc<fn() -> u8>>::from_ref(&calls)(), 7);
+/// ```
+pub use corten_macros::FromRef;
+pub use form::{AnyStep, Bounds, Entry, Errors, FieldName, Files, Form, Refusal, SubmitKey, Upload, UploadError, Within};
+pub use handler::FromRef;
+pub use html::escape;
+#[cfg(feature = "json")]
+pub use json::{FromJson, Json, ToJson};
+pub use kept::KeptAnswers;
+pub use layout::{later, Later, LayoutRead};
+pub use listener::Listener;
+pub use middleware::{Middleware, Next};
+#[cfg(feature = "json")]
+pub use page::JsonLd;
+pub use page::{
+    Action, Corten, DrawnPatch, ErrorPageFn, Failure, FormPatch, Mode, Nav, NavLink, NavLinks, NavTarget, NavTo, Notice,
+    ReadAgain, ReadAgainFrom, ReadAgainWithoutJavaScript, ReadNow, Req, MODE_HEADER,
+};
+pub use route::{routes, Elsewhere, Href, Local, Methods, OnSite, Params, ParamsRejection, Prefix, Route, Routes, UrlValue};
+pub use router::Router;
+pub use script::{event, Handler, Ref, Script};
+pub use signal::{Abort, Shutdown, Signal};
+pub use style::Style;
+pub use view::{component, html, raw, Document, Patch, Render, Rendered};
+
+/// What a component sends to the browser: its handlers' script (`#[component(js)]` or
+/// [`script::script!`]), its stylesheet (`#[component(css)]`, or a token file's), its view class
+/// (`#[component(view)]`), or the class of a typed event ([`script::event`]).
+///
+/// Each such component has one, named like the component (`OfferList`, a constant next to the
+/// struct `OfferList`). A library lists its own, `pub const COMPONENTS: &[Component] = &[Button,
+/// Dialog];`, and the app passes every list to [`App::components`]: the scripts are served and
+/// preloaded where they are used, the stylesheets joined, in order, into one file, and the events
+/// served as `corten/events`.
+#[derive(Clone, Copy, Debug)]
+pub struct Component {
+    /// The component's Rust name, `"OfferList"`.
+    pub name: &'static str,
+    pub script: Option<Script>,
+    pub style: Option<Style>,
+    pub event: Option<script::EventDef>,
+    pub view: Option<script::ViewDef>,
+    /// A static of the component's own, beside the symbols that take its names for the whole
+    /// program: a program that uses the component loads them, so a namesake in another crate
+    /// fails to link on every platform and profile. Written by the macros.
+    #[doc(hidden)]
+    pub anchor: &'static u8,
+}
+
+/// What most files need: `use corten::prelude::*;`.
+pub mod prelude {
+    pub use crate::{
+        component,
+        extract::State,
+        html,
+        i18n::Messages as _,
+        later, raw,
+        route::{delete, get, post, put},
+        script::{el, refs, Handler, Ref},
+        style::ClassList,
+        view::Id,
+        AnyStep, Api, App, Area, Bounds, Caller, Challenge, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files,
+        Form, FromRef, HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Patches, Public,
+        ReadAgain, Refused, Render, Req, Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
+    };
+    #[cfg(feature = "json")]
+    pub use crate::{FromJson, Json, JsonLd, JsonResult, ToJson};
+}
+
+/// The runtime, embedded so apps never copy it: `js/corten.js` minified by `scripts/build-js.mjs`
+/// (`npm run check` fails if it is stale), so the documented source costs the browser nothing.
+pub const RUNTIME_JS: &str = include_str!("../js/dist/corten.js");
+
+/// The reads of the parts a page waits for (`ReadAgain::now`): `js/part.js` minified by
+/// `scripts/build-js.mjs`, served beside the runtime at [`part_path`] and loaded only by a page
+/// that draws such a part.
+pub(crate) const PART_JS: &str = include_str!("../js/dist/part.js");
+
+/// The runtime's checks under `corten dev` (`js/dev.js`), served at `/corten/dev.js` by a dev
+/// server only.
+pub(crate) const DEV_JS: &str = include_str!("../js/dev.js");
+/// The runtime's `data-on` parser (`js/on.js`), which `dev.js` imports, at `/corten/on.js`.
+pub(crate) const DEV_ON_JS: &str = include_str!("../js/on.js");
+/// How the runtime finds a form field a handler is given (`js/field.js`), which `dev.js` imports,
+/// at `/corten/field.js`.
+pub(crate) const DEV_FIELD_JS: &str = include_str!("../js/field.js");
+
+/// FNV-1a, 64 bit: a stable content hash for versioned URLs (not for security).
+pub(crate) mod fnv {
+    pub const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    pub const fn extend(mut hash: u64, bytes: &[u8]) -> u64 {
+        let mut i = 0;
+        while i < bytes.len() {
+            hash ^= bytes[i] as u64;
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+            i += 1;
+        }
+        hash
+    }
+    pub const fn hash(bytes: &[u8]) -> u64 {
+        extend(OFFSET, bytes)
+    }
+}
+
+const CLIENT_HASH: u64 = fnv::extend(fnv::hash(RUNTIME_JS.as_bytes()), PART_JS.as_bytes());
+static CLIENT_VERSION: LazyLock<String> = LazyLock::new(|| format!("{:012x}", CLIENT_HASH >> 16));
+static RUNTIME_URL: LazyLock<String> = LazyLock::new(|| format!("/corten/{}/corten.js", runtime_version()));
+static PART_URL: LazyLock<String> = LazyLock::new(|| format!("/corten/{}/part.js", runtime_version()));
+
+/// Content hash of the client code Corten serves; it changes whenever the runtime does.
+pub fn runtime_version() -> &'static str {
+    &CLIENT_VERSION
+}
+
+/// URL the runtime is served from by [`routes`]: `/corten/{version}/corten.js`, cached forever.
+pub fn runtime_path() -> &'static str {
+    &RUNTIME_URL
+}
+
+/// URL of the part module ([`PART_JS`]), beside the runtime, which imports it from there:
+/// `/corten/{version}/part.js`, cached forever.
+pub(crate) fn part_path() -> &'static str {
+    &PART_URL
+}
+
+/// The import map's JSON: `corten`, `corten/events` (the app's typed events) when `events` is the
+/// URL of their module, `corten/views` (the app's view classes) when `views` is, and each of
+/// Corten's modules the app's scripts import (`corten/keys`, `corten/read`) at its URL in `own`.
+pub(crate) fn import_map(events: Option<&str>, views: Option<&str>, own: &[(&str, String)]) -> String {
+    let events = events.map(|url| format!(r#","corten/events":"{url}""#)).unwrap_or_default();
+    let views = views.map(|url| format!(r#","corten/views":"{url}""#)).unwrap_or_default();
+    let own: String = own.iter().map(|(specifier, url)| format!(r#","{specifier}":"{url}""#)).collect();
+    format!(r#"{{"imports":{{"corten":"{}"{events}{views}{own}}}}}"#, runtime_path())
+}
+
+/// Streams fragments to `<corten-live src="...">` as server-sent events. Each item is applied like a
+/// form patch: top-level elements replace the elements with the same `id`. In debug builds a
+/// fragment with a top-level element the browser would drop (no id, or text outside an element)
+/// panics, naming it.
+///
+/// An item is rendered HTML (a `String`), or a [`Fragment`] that also carries the app's cursor
+/// after it, so a reconnect resumes there ([`LiveSince`]).
+///
+/// When `fragments` ends, the element closes its connection instead of reconnecting, so a stream
+/// of one item is a part of the page sent when it is ready. When the server shuts down the stream
+/// ends without that, and the browser reconnects (to another instance, or this one restarted).
+///
+/// A fragment is text, so it carries no note of a form's new submit key (`SubmitKey::field`) it
+/// holds, and the stream's headers go out before it is rendered: Corten cannot make the stream
+/// private as it makes a page that draws one. A stream that may draw a key is never
+/// [`crate::Public`], says `Cache-Control: private` itself (written by a middleware of its area,
+/// [`crate::Area::middleware`]; its default `no-cache` is not enough for a CDN that ignores it),
+/// and has no CDN caching header, or every visitor a shared cache gives it to sends the same key.
+/// Under `corten dev`, a stream whose headers as sent have no plain `private` or carry a CDN's
+/// own caching header (`CDN-Cache-Control`, `Surrogate-Control`, ...) is logged when a fragment it
+/// gives draws a key, in its stream or as the item becomes a [`Fragment`].
+pub fn live<S>(fragments: S) -> LiveResponse
+where
+    S: Stream + Send + 'static,
+    S::Item: Into<Fragment>,
+{
+    let patches = fragments.map(|fragment| {
+        let Fragment { html, cursor } = fragment.into();
+        // A top-level element without an id would be dropped in the browser: a bug in the view.
+        #[cfg(debug_assertions)]
+        if let Some(problem) = crate::html::patch_problem(&html) {
+            panic!("corten: a live fragment's top-level {problem}, so the browser would drop it: give each top-level element a #[derive(Id)] id the page has");
+        }
+        #[cfg(debug_assertions)]
+        if let Some(problem) = crate::html::patch_parse_checked(&html, &"a live fragment") {
+            panic!("corten: the browser would lose part of a live fragment: {problem}. {}", crate::html::PATCH_PARSE_HELP);
+        }
+        // Room for the event's fields, `data: ` and a line feed for about ten lines of the fragment
+        // (most are one), so the event is written into one buffer without growing it.
+        let room = 13 + cursor.as_ref().map_or(0, |cursor| cursor.len() + 5) + html.len() + 70 + 1;
+        let event = Event::with_capacity(room).event("patch");
+        match cursor {
+            Some(cursor) => event.id(&cursor),
+            None => event,
+        }
+        .data(&html)
+    });
+    #[cfg(debug_assertions)]
+    let shared = LiveShared::default();
+    #[cfg(debug_assertions)]
+    let patches = shared.clone().watch(patches);
+    // An event with no data is never dispatched, so `end` carries some.
+    let end = futures_util::stream::once(async { Event::new().event("end").data("end") });
+    let res = unbuffered(sse::response(patches.chain(end).take_until(draining())));
+    #[cfg(debug_assertions)]
+    let res = {
+        let mut res = res;
+        res.extensions_mut().insert(shared);
+        res
+    };
+    LiveResponse(res)
+}
+
+/// In a debug build under `corten dev`: the path of a [`live`] stream whose headers as sent let a
+/// shared cache keep it ([`cache::sent_shared`]), which the stream logs when a fragment it gives
+/// draws a form's new submit key. A fragment is text, rendered after the headers went out, so
+/// [`cache::settle`] cannot keep it private as it does a page that draws one.
+#[cfg(debug_assertions)]
+#[derive(Clone, Default)]
+pub(crate) struct LiveShared(std::sync::Arc<std::sync::OnceLock<String>>);
+
+#[cfg(debug_assertions)]
+impl LiveShared {
+    /// Notes `path` on a live stream's answer whose headers, after [`cache::settle`], let a shared
+    /// cache keep it.
+    pub(crate) fn note(res: &Response, path: &str) {
+        if let Some(shared) = res.extensions().get::<LiveShared>() {
+            if cache::sent_shared(res.headers()) {
+                let _ = shared.0.set(path.to_string());
+            }
+        }
+    }
+
+    /// `patches`, logging once a submit key drawn in the polls that give a patch: where
+    /// `live_watch`'s view, a stream's `map` and an item's conversion to a [`Fragment`] render. A
+    /// key drawn by a stream that then ends gave no fragment, and is not logged.
+    fn watch<S: Stream + Send + 'static>(self, patches: S) -> impl Stream<Item = S::Item> + Send + 'static {
+        let mut patches = Box::pin(patches);
+        let (mut drew, mut logged) = (false, false);
+        futures_util::stream::poll_fn(move |cx| {
+            let outer = crate::form::DREW_KEY.replace(false);
+            let polled = patches.as_mut().poll_next(cx);
+            drew |= crate::form::DREW_KEY.replace(outer);
+            if let std::task::Poll::Ready(patch) = &polled {
+                if std::mem::take(&mut drew) && patch.is_some() && !logged {
+                    if let Some(path) = self.0.get() {
+                        logged = true;
+                        tracing::warn!("corten: {path} went out where a shared cache may keep it (no plain `private` in its Cache-Control, or a CDN's own caching header), but a live fragment it gave draws a form's new submit key (SubmitKey::field), and each visitor needs a key of their own: a fragment carries no mark, so the stream went out as it was; give a stream that draws a key Cache-Control: private and no CDN caching header, and never Public");
+                    }
+                }
+            }
+            polled
+        })
+    }
+}
+
+/// A [`live`] stream of one value that changes (the last trade, a count, a status), kept in a
+/// `tokio::sync::watch` channel: `view` renders it and `cursor` names the version it is, so a
+/// page already showing the current one (`since`, [`LiveSince`]) gets nothing until the next
+/// change, and one that is behind gets the current value first. Values the browser missed in
+/// between are skipped: it only ever needs the latest. The stream ends when the channel's sender
+/// is dropped. Each change is cloned out for each page before it renders, so the sender never
+/// waits on a render; a large value goes in an `Arc`. `view` runs for each page, as what a page
+/// is sent may depend on its request; a part that is the same on every page is rendered once by
+/// the task that sends the value, sent with it (`(cursor, Arc<value>, Arc<str>)`), and `view`
+/// copies it out, while the page renders its own from the value (see the live data guide).
+///
+/// ```
+/// use corten::{prelude::*, LiveResponse, LiveSince};
+/// use tokio::sync::watch;
+///
+/// #[derive(Id)]
+/// struct LastTradeId;
+///
+/// #[component]
+/// fn LastTrade(text: &str) -> impl Patch {
+///     html! { <p id={LastTradeId}>{text}</p> }
+/// }
+///
+/// // The trade count and the last trade's text.
+/// async fn trades(State(trades): State<watch::Receiver<(u64, String)>>, since: LiveSince) -> LiveResponse {
+///     corten::live_watch(trades, since, |(n, _)| *n, |(_, text)| LastTrade { text }.to_html())
+/// }
+/// ```
+pub fn live_watch<T, K, C, V>(mut values: tokio::sync::watch::Receiver<T>, since: LiveSince, cursor: C, view: V) -> LiveResponse
+where
+    T: Clone + Send + Sync + 'static,
+    K: ToString,
+    C: Fn(&T) -> K + Send + 'static,
+    V: Fn(&T) -> String + Send + 'static,
+{
+    // Marked seen here, so a receiver cloned from one that never read (kept in the app's state)
+    // or a value sent since it subscribed is not sent again to a page that shows it.
+    let current = cursor(&values.borrow_and_update()).to_string();
+    if since.0.as_deref() != Some(current.as_str()) {
+        values.mark_changed();
+    }
+    live(futures_util::stream::unfold((values, cursor, view), |(mut values, cursor, view)| async move {
+        values.changed().await.ok()?;
+        // Copied out, so the sender never waits on a render.
+        let value = values.borrow_and_update().clone();
+        Some((Fragment::new(view(&value)).cursor(cursor(&value).to_string()), (values, cursor, view)))
+    }))
+}
+
+/// One item of a [`live`] stream: rendered HTML, and the app's cursor after it.
+///
+/// The cursor is the point in the app's own data this fragment brings the page to (a version,
+/// a sequence number, a realtime stream's position); Corten only carries it. It is sent as the
+/// event's `id`, so a browser that reconnects sends it back as `Last-Event-ID`, which
+/// [`LiveSince`] reads.
+///
+/// ```
+/// let fragment = corten::Fragment::new("<p id=\"n\">3</p>".into()).cursor(42.to_string());
+/// ```
+pub struct Fragment {
+    html: String,
+    cursor: Option<String>,
+}
+
+impl Fragment {
+    pub fn new(html: String) -> Self {
+        Fragment { html, cursor: None }
+    }
+
+    /// The app's cursor after this fragment. A cursor cannot hold a line break or a NUL, which
+    /// would end the event: that panics in debug builds, and in release the fragment is sent
+    /// without its cursor (logged), so a reconnect draws the part again.
+    pub fn cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.cursor = event_cursor(cursor.into(), "live fragment");
+        self
+    }
+}
+
+/// `cursor`, unless it holds a line break or NUL, which would end the event: that panics in debug
+/// builds, and in release it is dropped (logged), so the event keeps the cursor before it and a
+/// reconnect resumes from there, sending this event again.
+fn event_cursor(cursor: String, of: &str) -> Option<String> {
+    if cursor.contains(['\n', '\r', '\0']) {
+        let message = format!("corten: a {of}'s cursor holds a line break or NUL: {cursor:?}");
+        if cfg!(debug_assertions) {
+            panic!("{message}");
+        }
+        tracing::error!("{message}");
+        return None;
+    }
+    Some(cursor)
+}
+
+/// An event stream that asks a proxy in front of the app to pass each event on as it is written:
+/// nginx holds a stream it buffers (or gzips) until the buffer fills, and reads
+/// `X-Accel-Buffering: no` per response (and does not send it on to the browser). Only event
+/// streams carry it, so no other answer pays for it.
+pub(crate) fn unbuffered(mut res: Response) -> Response {
+    res.headers_mut().insert(http::HeaderName::from_static("x-accel-buffering"), HeaderValue::from_static("no"));
+    res
+}
+
+impl From<String> for Fragment {
+    fn from(html: String) -> Self {
+        Fragment::new(html)
+    }
+}
+
+/// Where a [`live`] stream resumes: the cursor of the last event the client received, from
+/// `Last-Event-ID` when it reconnects, or else the `since` query parameter on the first
+/// connection: the one the page gave its element, `<corten-live src={..} since={cursor}>`.
+/// `None` when there is neither, and the handler draws the part as it is now.
+///
+/// A handler sends what changed after the cursor, or nothing until the next change when the
+/// cursor is current, so a page view or a reconnect costs no extra read or render.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LiveSince(pub Option<String>);
+
+/// A feed's cursor ([`feed::Since`]), read by [`feed::Since::read`].
+#[cfg(feature = "feed")]
+impl<S: Send + Sync> crate::extract::FromRequestParts<S> for corten_feed::Since {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> std::result::Result<Self, Self::Rejection> {
+        Ok(corten_feed::Since::read(parts))
+    }
+}
+
+impl<S: Send + Sync> crate::extract::FromRequestParts<S> for LiveSince {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> std::result::Result<Self, Self::Rejection> {
+        let header =
+            parts.headers.get("last-event-id").and_then(|v| v.to_str().ok()).filter(|v| !v.is_empty()).map(str::to_string);
+        let query = || {
+            form_urlencoded::parse(parts.uri.query()?.as_bytes())
+                .find(|(key, _)| key == "since")
+                .map(|(_, value)| value.into_owned())
+                .filter(|value| !value.is_empty())
+        };
+        Ok(LiveSince(header.or_else(query)))
+    }
+}
+
+/// Set when the process starts shutting down; open live streams end on it.
+static DRAINING: LazyLock<tokio::sync::watch::Sender<bool>> = LazyLock::new(|| tokio::sync::watch::channel(false).0);
+
+/// Resolves once [`shutdown_signal`] has fired.
+async fn draining() {
+    let _ = DRAINING.subscribe().wait_for(|draining| *draining).await;
+}
+
+/// The runtime's route, at [`runtime_path`], and its part module's, at [`part_path`], versioned
+/// and cached forever.
+pub(crate) fn runtime_routes() -> router::Table {
+    router::Table::new()
+        .route(runtime_path(), router::get(|headers: HeaderMap| async move { RUNTIME.respond(&headers) }))
+        .route(part_path(), router::get(|headers: HeaderMap| async move { PART.respond(&headers) }))
+}
+
+const JS: &str = "text/javascript; charset=utf-8";
+
+/// A script Corten serves from memory, at a versioned URL.
+struct Served {
+    source: &'static str,
+    #[cfg(feature = "compress")]
+    packed: std::sync::OnceLock<compress::Precompressed>,
+}
+
+static RUNTIME: Served = Served::new(RUNTIME_JS);
+static PART: Served = Served::new(PART_JS);
+
+impl Served {
+    const fn new(source: &'static str) -> Self {
+        Served {
+            source,
+            #[cfg(feature = "compress")]
+            packed: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn respond(&self, headers: &HeaderMap) -> Response {
+        let head = [(header::CONTENT_TYPE, HeaderValue::from_static(JS)), (header::CACHE_CONTROL, assets::IMMUTABLE)];
+        #[cfg(feature = "compress")]
+        {
+            let packed = self.packed.get_or_init(|| compress::Precompressed::new(self.source.as_bytes().into(), JS));
+            let (body, coding) = packed.pick(headers);
+            let mut res = (head, body).into_response();
+            compress::encoded_headers(res.headers_mut(), JS, coding);
+            res
+        }
+        #[cfg(not(feature = "compress"))]
+        {
+            let _ = headers;
+            (head, self.source).into_response()
+        }
+    }
+}
+
+/// `GET /health/live` (the process answers) and `GET /health/ready` (`ready` says it can serve:
+/// database reachable, feeds loaded). Both answer `no-store` plain text.
+pub(crate) fn health<F, Fut>(ready: F) -> router::Table
+where
+    F: Fn() -> Fut + Clone + Send + Sync + 'static,
+    Fut: std::future::Future<Output = bool> + Send,
+{
+    let answer = |ok: bool| {
+        let status = if ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+        (status, [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))], if ok { "ok" } else { "unavailable" })
+            .into_response()
+    };
+    router::Table::new().route("/health/live", router::get(move || async move { answer(true) })).route(
+        "/health/ready",
+        router::get(move || {
+            let ready = ready.clone();
+            async move { answer(ready().await) }
+        }),
+    )
+}
+
+/// A result whose error is Corten's [`Error`], for the code a handler calls: any
+/// `std::error::Error` converts with `?` and becomes a 500. A handler itself returns what it
+/// answers: [`HtmlResult`] is this with the answer in it, and [`JsonResult`]'s error, a
+/// [`JsonError`], takes this one with `?` (and the input's field errors too). It is not in
+/// the prelude, so `Result` in an app is the standard one:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// fn count(text: &str) -> corten::Result<u32> {
+///     Ok(text.parse::<u32>()?)
+/// }
+///
+/// fn parse(text: &str, field: FieldName<u32>, errors: &mut Errors) -> Result<u32, ()> {
+///     text.parse().map_err(|_| errors.add(field, "Enter a whole number."))
+/// }
+/// ```
+///
+/// A bare `corten::Result` names no answer, so it is not a handler's type:
+///
+/// ```compile_fail
+/// async fn page() -> corten::Result {
+///     Ok(())
+/// }
+/// ```
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Whether the app has asked to stop ([`shutdown`]).
+static ASKED: LazyLock<tokio::sync::watch::Sender<bool>> = LazyLock::new(|| tokio::sync::watch::channel(false).0);
+
+/// Begins the graceful shutdown a signal begins ([`shutdown_signal`]): the app's
+/// [tasks](App::task) and work handlers finish ([`Signal::finish`]) are told to stop, live streams
+/// end, the listeners close, requests in progress finish (a connection still answering once the
+/// longer of [`App::shutdown_grace`] and its request's deadline has passed is closed), and [`serve`]
+/// returns once the tasks and that work have too (or the grace has passed). For a process with
+/// no signal to send it: a route a supervisor calls (whose answer is sent, as a request in
+/// progress, before its connection closes), a task that decides the app is done, or a service
+/// on Windows started without a console. A second call, or a signal after it, changes nothing.
+///
+/// It is process-wide and cannot be undone: it stops every [`serve`] in the process, including
+/// one started after the call. A test binary that runs a route calling it stops every other test's
+/// server too, so such a route is tested with the call behind something the test replaces.
+///
+/// ```
+/// use corten::{http::StatusCode, prelude::*};
+///
+/// async fn stop(/* Caller<Supervisor> */) -> StatusCode {
+///     corten::shutdown();
+///     StatusCode::ACCEPTED
+/// }
+/// # let _: Methods = post(stop);
+/// ```
+pub fn shutdown() {
+    ASKED.send_replace(true);
+}
+
+/// Resolves when the process is asked to stop (Ctrl-C; `SIGTERM` from a container runtime on
+/// Unix; Ctrl-Break, closing the console or the system shutting down on Windows) or the app asks
+/// ([`shutdown`]), after ending every open [`live`] stream and live feed stream (feature `feed`)
+/// so a graceful shutdown is not held open by them. [`serve`] uses it; an app that serves its
+/// router another way (hyper's own connection loop) stops accepting when it resolves, and then
+/// runs no [`App::task`], and work handlers finish ([`Signal::finish`]) is not told of
+/// shutdown or waited for.
+pub async fn shutdown_signal() {
+    use futures_util::future::select;
+    let interrupt = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    // What Windows sends a console process: Ctrl-Break (how a supervisor stops a process group),
+    // the console closing, and the system shutting down. Windows ends the process a few seconds
+    // after the console closes, whatever is still running.
+    #[cfg(windows)]
+    let terminate = async {
+        use tokio::signal::windows;
+        let close = async {
+            match windows::ctrl_close() {
+                Ok(mut close) => close.recv().await,
+                Err(_) => std::future::pending().await,
+            }
+        };
+        let shutdown = async {
+            match windows::ctrl_shutdown() {
+                Ok(mut shutdown) => shutdown.recv().await,
+                Err(_) => std::future::pending().await,
+            }
+        };
+        let interrupt = async {
+            match windows::ctrl_break() {
+                Ok(mut interrupt) => interrupt.recv().await,
+                Err(_) => std::future::pending().await,
+            }
+        };
+        select(std::pin::pin!(close), select(std::pin::pin!(shutdown), std::pin::pin!(interrupt))).await;
+    };
+    #[cfg(not(any(unix, windows)))]
+    let terminate = std::future::pending::<()>();
+    let asked = async {
+        let _ = ASKED.subscribe().wait_for(|asked| *asked).await;
+    };
+    select(std::pin::pin!(asked), select(std::pin::pin!(interrupt), std::pin::pin!(terminate))).await;
+    tracing::info!("corten: shutting down");
+    DRAINING.send_replace(true);
+    #[cfg(feature = "feed")]
+    corten_feed::drain();
+}
+
+/// An error that ends the request with a status (500 unless set). The message is logged with
+/// `tracing` and never sent to the browser (except under `corten dev`); the app's error page is
+/// what the user sees. A handler that answers in a shape of its own reads the message with
+/// `Display` (`error.to_string()`) and the status with [`Error::status_code`]. The message is the
+/// log's, written for the app's developers: it can name a 5xx's internals, or a cause a
+/// [`Error::with_status`] hid (a [`Refused`] answered as a 404 still says `refused: 403
+/// Forbidden`), so sending it, in a body of the app's own or written into markup (`{error}`),
+/// is the app's choice, made where it knows the error is meant for the client.
+#[derive(Debug)]
+pub struct Error {
+    status: StatusCode,
+    source: Box<dyn std::error::Error + Send + Sync>,
+}
+
+impl Error {
+    pub fn new(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+        Error { status: StatusCode::INTERNAL_SERVER_ERROR, source: error.into() }
+    }
+
+    /// An error with a specific status, for example 409 for a write that lost a race (404 is
+    /// [`Error::not_found`]): `return Err(Error::status(StatusCode::CONFLICT))` (in a JSON handler,
+    /// `Err(Error::status(..))?` or `.into()`, since its error is a [`JsonError`]). A permission
+    /// check refuses with [`Refused`] instead (`Err(Refused::forbidden())?`), so the error page
+    /// treats it as the request's fault.
+    pub fn status(status: StatusCode) -> Self {
+        Error { status, source: status.canonical_reason().unwrap_or("error").into() }
+    }
+
+    /// 404, for a record that is not there: `load(id).await?.ok_or_else(Error::not_found)?`. The
+    /// most common status a handler sets, so it has a name; others are [`Error::status`]. Its
+    /// message is `Not Found`; for a JSON client that should read a specific one,
+    /// `Error::new("no item 7").with_status(StatusCode::NOT_FOUND)`.
+    ///
+    /// ```
+    /// use corten::{http::StatusCode, Error};
+    ///
+    /// fn find(id: u32) -> corten::Result<&'static str> {
+    ///     let name = [(7, "Ada")].into_iter().find(|(n, _)| *n == id).map(|(_, name)| name);
+    ///     name.ok_or_else(Error::not_found)
+    /// }
+    /// # use corten::http::IntoResponse;
+    /// assert_eq!(find(8).unwrap_err().into_response().status(), StatusCode::NOT_FOUND);
+    /// ```
+    pub fn not_found() -> Self {
+        Error::status(StatusCode::NOT_FOUND)
+    }
+
+    /// The same error with another status: `Error::new("no item 7").with_status(StatusCode::NOT_FOUND)`.
+    /// A JSON client (an [`App::api`] route, or a request for `application/json`) gets a 4xx
+    /// error's message, so give it one written for the client; the error page never shows it. On a
+    /// handler's [`Refused`], another status makes it a plain failure at that status.
+    pub fn with_status(mut self, status: StatusCode) -> Self {
+        self.status = status;
+        self
+    }
+
+    /// The status of the answer the error makes: 500 for [`Error::new`] and an error converted
+    /// with `?`, the one given to [`Error::status`] or [`Error::with_status`], a [`Refused`]'s own
+    /// (a sign-in's 401, which a browser is then sent to sign in from as a redirect). Named apart
+    /// from [`Error::status`], which makes an error.
+    ///
+    /// ```
+    /// use corten::{http::StatusCode, Error};
+    ///
+    /// let missing = Error::new("no item 7").with_status(StatusCode::NOT_FOUND);
+    /// assert_eq!(missing.status_code(), StatusCode::NOT_FOUND);
+    /// assert_eq!(missing.to_string(), "no item 7");
+    /// ```
+    pub fn status_code(&self) -> StatusCode {
+        self.status
+    }
+}
+
+/// The error's message, as it is logged: the source's own `Display`.
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.source, f)
+    }
+}
+
+impl<E: std::error::Error + Send + Sync + 'static> From<E> for Error {
+    fn from(error: E) -> Self {
+        Error::new(error)
+    }
+}
+
+/// The error it holds, with its causes and without its status, so a stream of
+/// `corten::Result<Bytes>` is a [`Media::stream`]'s chunks and logs as the error itself. A
+/// handler passes a `corten::Error` on with `?`, which keeps its status: `Error::new` on one
+/// makes it a 500, and a [`Refused`] in it a plain failure.
+impl From<Error> for Box<dyn std::error::Error + Send + Sync> {
+    fn from(error: Error) -> Self {
+        error.source
+    }
+}
+
+/// A handler refuses the request as an extractor does: `Err(Refused::forbidden())?` (or
+/// `.into()`). It is answered as a [`Caller`]'s refusal is: the error page for a browser, at the
+/// refusal's status (a sign-in is a redirect, a 429 carries `Retry-After`, a 401 its challenge in
+/// `WWW-Authenticate`), and the page treats it
+/// as the request's fault, so it draws the layout's reads ([`LayoutRead`]) as for a 404. A plain
+/// `Error::status(StatusCode::FORBIDDEN)` stays a failure that may be the app's own (a service
+/// that is down answered with a 4xx), which starts none.
+///
+/// ```
+/// use corten::{http::StatusCode, prelude::*};
+///
+/// fn owned(owner: u64, user: u64) -> corten::Result<()> {
+///     if owner != user {
+///         Err(Refused::forbidden())?;
+///     }
+///     Ok(())
+/// }
+/// # use corten::http::IntoResponse;
+/// assert_eq!(owned(1, 2).unwrap_err().into_response().status(), StatusCode::FORBIDDEN);
+/// ```
+impl From<Refused> for Error {
+    fn from(refused: Refused) -> Self {
+        Error { status: refused.status(), source: Box::new(caller::AsError(refused)) }
+    }
+}
+
+/// Marks a response as a failure, so the app renders its error page. Carries the message, which
+/// only an app in dev mode shows.
+#[derive(Clone)]
+pub(crate) struct Failed(pub Arc<str>);
+
+impl IntoResponse for Error {
+    fn into_response(self) -> Response {
+        match self.source.downcast::<caller::AsError>() {
+            // A handler's refusal (`From<Refused>`): answered as an extractor's is.
+            Ok(refused) if refused.0.status() == self.status => refused.into_response(),
+            // `with_status` gave it another status, which is answered as a plain failure's is,
+            // telling a client only the refusal's own message: without one, the new status's
+            // reason, so a 404 that hides a record does not say it was a 403. The log has the cause.
+            Ok(refused) if refused.message().is_some() => Error { status: self.status, source: refused }.answer(),
+            Ok(refused) => {
+                let reason = self.status.canonical_reason().unwrap_or("Error");
+                Error { status: self.status, source: refused }.answer_saying(Arc::from(reason))
+            }
+            Err(source) => {
+                // A second error that carries headers should share one mechanism with `Refused`
+                // and `WrongVersion`, not add another downcast here. Another status (a 404 that
+                // hides the socket, a 500) drops them, as a re-statused `Refused` drops its own.
+                let wrong_version = matches!(self.status, StatusCode::BAD_REQUEST | StatusCode::UPGRADE_REQUIRED)
+                    && source.is::<upgrade::WrongVersion>();
+                let mut res = Error { status: self.status, source }.answer();
+                if wrong_version {
+                    upgrade::WrongVersion::headers(self.status, res.headers_mut());
+                }
+                res
+            }
+        }
+    }
+}
+
+impl Error {
+    fn answer(self) -> Response {
+        let detail = Arc::from(self.source.to_string());
+        let keeps_detail = cfg!(debug_assertions) && self.source.is::<page::Unserved>();
+        let mut res = self.answer_saying(detail);
+        if keeps_detail {
+            res.extensions_mut().insert(page::KeepsDetail);
+        }
+        res
+    }
+
+    /// The failure's answer, logged with its source and telling a client `detail`.
+    fn answer_saying(self, detail: Arc<str>) -> Response {
+        // As an error, not its `Display`, so the log names each cause under it (a reset connection
+        // under "error sending request"), as `error.sources`.
+        let error: &(dyn std::error::Error + 'static) = &*self.source;
+        if self.status.is_server_error() {
+            tracing::error!(status = self.status.as_u16(), error, "corten: request failed");
+        } else {
+            tracing::debug!(status = self.status.as_u16(), error, "corten: request refused");
+        }
+        let mut res = (self.status, self.status.canonical_reason().unwrap_or("Error")).into_response();
+        res.extensions_mut().insert(Failed(detail));
+        res
+    }
+}
+
+#[cfg(test)]
+mod tests;
+
+/// The README and the guides as doctests: `cargo test` compiles every `rust` block in them that
+/// is not marked `ignore`, so the documented examples cannot drift from the API.
+#[cfg(all(doctest, feature = "json"))]
+mod doc_examples {
+    #[doc = include_str!("../../../README.md")]
+    struct Readme;
+    #[doc = include_str!("../../../docs/guide/app.md")]
+    struct App;
+    #[doc = include_str!("../../../docs/guide/cancellation.md")]
+    struct Cancellation;
+    #[doc = include_str!("../../../docs/guide/getting-started.md")]
+    struct GettingStarted;
+    #[doc = include_str!("../../../docs/guide/scripts.md")]
+    struct Scripts;
+    // Its examples are feeds.
+    #[cfg(feature = "feed")]
+    #[doc = include_str!("../../../docs/guide/live-data.md")]
+    struct LiveData;
+    #[doc = include_str!("../../../docs/guide/requests-and-forms.md")]
+    struct RequestsAndForms;
+    #[doc = include_str!("../../../docs/guide/styles.md")]
+    struct Styles;
+    #[doc = include_str!("../../../docs/guide/type-safety.md")]
+    struct TypeSafety;
+    #[doc = include_str!("../../../docs/guide/ui.md")]
+    struct Ui;
+    #[doc = include_str!("../../../docs/guide/views.md")]
+    struct Views;
+}
+
+/// Runs `render` with `slot` holding `Some(start)` and returns what it returned and what the slot
+/// held after. The slot's earlier value is put back even if `render` panics: a handler's panic is
+/// caught and the thread renders on, so a slot left set would gather every later render's notes.
+pub(crate) fn gather<S: 'static, T>(
+    slot: &'static std::thread::LocalKey<std::cell::RefCell<Option<S>>>,
+    start: S,
+    render: impl FnOnce() -> T,
+) -> (T, Option<S>) {
+    struct Restore<S: 'static>(&'static std::thread::LocalKey<std::cell::RefCell<Option<S>>>, Option<Option<S>>);
+    impl<S> Drop for Restore<S> {
+        fn drop(&mut self) {
+            if let Some(earlier) = self.1.take() {
+                self.0.with(|s| *s.borrow_mut() = earlier);
+            }
+        }
+    }
+    let mut restore = Restore(slot, Some(slot.with(|s| s.replace(Some(start)))));
+    let value = render();
+    let gathered = slot.with(|s| s.replace(restore.1.take().expect("set above")));
+    (value, gathered)
+}

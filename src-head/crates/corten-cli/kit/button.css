@@ -1,0 +1,56 @@
+/* corten ui {{version}}: button */
+/* The classes of the <button> or <a> the app writes. */
+.button {
+  display: inline-flex; align-items: center; justify-content: center; gap: .5rem; box-sizing: border-box;
+  font: inherit; font-size: var(--control-font-size); font-weight: 500; line-height: 1.25rem;
+  /* A label wider than the room wraps between words and the button grows, so a narrow page does
+     not scroll sideways (WCAG reflow); a one-line label keeps the size's height. A row that shrinks
+     to its content keeps each word whole. */
+  text-align: center; text-wrap: balance; overflow-wrap: break-word;
+  border: 1px solid transparent; border-radius: calc(var(--radius) - 2px);
+  cursor: pointer; text-decoration: none; transition: background-color .15s, color .15s, border-color .15s;
+}
+.button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.button:disabled, .button[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+/* The runtime marks the button that sent a form, or the link that started a navigation,
+   aria-busy until its answer is drawn: a ring after the label, in the text's color (the
+   system's under forced colors), turning unless the user asks for less motion. */
+.button[aria-busy="true"] { cursor: progress; }
+/* An icon button has room for one mark: the ring takes the icon's place (its name, an
+   aria-label or a visually hidden text, stays). */
+.icon[aria-busy="true"] > svg { display: none; }
+.button[aria-busy="true"]::after {
+  content: ""; flex: none; box-sizing: border-box; width: 1em; height: 1em;
+  border: 2px solid currentColor; border-inline-end-color: transparent; border-radius: 50%;
+}
+/* Forced colors would draw every side, a closed ring that shows no turn: the text's color is
+   already the system's. */
+@media (forced-colors: active) { .button[aria-busy="true"]::after { forced-color-adjust: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  .button[aria-busy="true"]::after { animation: button-busy .8s linear infinite; }
+  @keyframes button-busy { to { rotate: 1turn; } }
+}
+.primary { background: var(--primary); color: var(--primary-foreground); }
+.primary:hover { background: color-mix(in oklab, var(--primary) 88%, var(--foreground)); }
+.secondary { background: var(--secondary); color: var(--secondary-foreground); }
+.secondary:hover { background: color-mix(in oklab, var(--secondary) 92%, var(--foreground)); }
+.outline { background: var(--background); color: var(--foreground); border-color: var(--input); }
+.outline:hover, .ghost:hover { background: var(--accent); color: var(--accent-foreground); }
+.ghost { background: transparent; color: var(--foreground); }
+/* A tone's fill, mixed toward the page's text on hover. */
+.info { background: var(--info); color: var(--info-foreground); }
+.info:hover { background: color-mix(in oklab, var(--info) 88%, var(--foreground)); }
+.success { background: var(--success); color: var(--success-foreground); }
+.success:hover { background: color-mix(in oklab, var(--success) 88%, var(--foreground)); }
+.warning { background: var(--warning); color: var(--warning-foreground); }
+.warning:hover { background: color-mix(in oklab, var(--warning) 88%, var(--foreground)); }
+.destructive { background: var(--destructive); color: var(--destructive-foreground); }
+.destructive:hover { background: color-mix(in oklab, var(--destructive) 88%, var(--foreground)); }
+.link { background: none; color: var(--primary); text-underline-offset: 4px; }
+.link:hover { text-decoration: underline; }
+/* The block padding is what one line leaves of the size's height, so one line is that height at any
+   size a theme or density sets, and only a label that wraps grows the button. */
+.sm { min-height: var(--control-height-sm); padding: max(0px, (var(--control-height-sm) - 1.25rem) / 2 - 1px) var(--control-padding); font-size: .8125rem; }
+.md { min-height: var(--control-height); padding: max(0px, (var(--control-height) - 1.25rem) / 2 - 1px) 1rem; }
+.lg { min-height: var(--control-height-lg); padding: max(0px, (var(--control-height-lg) - 1.25rem) / 2 - 1px) 1.5rem; }
+.icon { flex: none; width: var(--control-height); height: var(--control-height); padding: 0; }

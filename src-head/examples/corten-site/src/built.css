@@ -1,0 +1,30 @@
+/* Built: the standards under a part of the page, as tags riveted to its foot. */
+.built {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem 0.75rem;
+  margin-top: 1.4rem;
+  padding-top: 0.95rem;
+  border-top: 1px solid color-mix(in srgb, var(--bone) 14%, transparent);
+  font-size: 0.8125rem;
+  line-height: 1.3;
+}
+
+.lead {
+  color: var(--bone-dim);
+}
+
+.names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.name {
+  padding: 0.2rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--ember) 45%, transparent);
+  color: var(--bone);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}

@@ -1,0 +1,9 @@
+ALLOCATOR glibc NAMED false
+corten: listening on http://127.0.0.1:18381
+2026-11-23T05:16:39.495226Z  INFO corten: shutting down
+ALLOCATOR glibc NAMED false
+corten: listening on http://127.0.0.1:18381
+2026-11-23T05:16:39.581246Z  INFO corten: shutting down
+ALLOCATOR glibc NAMED false
+corten: listening on http://127.0.0.1:18381
+2026-11-23T05:16:42.658808Z  INFO corten: shutting down

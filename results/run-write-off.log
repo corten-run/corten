@@ -1,0 +1,13 @@
+checked write-off (jemalloc): base twice the same; head the same: HTTP/1.1 200 OK, body 5 bytes, sha256 d81c55f49c5bb0d36bc11e3966ec4efab66f8dfefbbc1761161ca9d230e5466a,  head's home after: none kept
+write-off: warm-up took about 6 s a pair; 100 pairs should take about 11 minutes
+write-off: pair 10 of 100 done 05:49:38
+write-off: pair 20 of 100 done 05:50:40
+write-off: pair 30 of 100 done 05:51:42
+write-off: pair 40 of 100 done 05:52:44
+write-off: pair 50 of 100 done 05:53:46
+write-off: pair 60 of 100 done 05:54:47
+write-off: pair 70 of 100 done 05:55:49
+write-off: pair 80 of 100 done 05:56:51
+write-off: pair 90 of 100 done 05:57:52
+write-off: pair 100 of 100 done 05:58:54
+write-off: done, /m/1938c/results/cycles-write-off.csv

@@ -1,0 +1,8 @@
+@media (--sm) {
+    .a { color: red }
+}
+@position-try --above { top: 0 }
+.a { position-try: --above }
+@media not (--md) {
+    .a { color: blue }
+}

@@ -1,0 +1,13 @@
+/m/1938c/results/cycles-write-off.csv: 100 pairs; the one-sided 95% upper bound is the 59th smallest change
+| per request | base median | head median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cycles user+kernel | 37909 | 38110 | +0.78% | +1.02% | -16.16% to +11.30% |
+| cycles user | 15363 | 15588 | +1.43% | +2.30% | -20.02% to +13.31% |
+| cycles kernel | 22476 | 22573 | +0.53% | +1.11% | -14.28% to +9.91% |
+| instructions user | 19165.2 | 19165.4 | +0.00% | +0.00% | -0.10% to +0.11% |
+| L1 icache misses user (diagnostic) | 1912.9 | 1982.0 | +3.41% | +3.76% | -5.29% to +9.31% |
+base: median requests/s 81213, server busy 98.3% of the turn (task-clock), failed requests 0
+head: median requests/s 80271, server busy 98.3% of the turn (task-clock), failed requests 0
+cycles margin (bound on user+kernel change under +1%): NOT met (+1.02%)
+instructions:u per request (medians): 19165.2 -> 19165.4 (+0.2); bound on the change +0.00%
+JSON {"file":"/m/1938c/results/cycles-write-off.csv","pairs":100,"boundRank":59,"measures":{"cycles user+kernel":{"base":37908.60744463665,"head":38109.548449392816,"change":0.007768598321158393,"bound":0.010227342272248308,"min":-0.16156096496558547,"max":0.11298656219596759},"cycles user":{"base":15362.716766882739,"head":15588.10097547108,"change":0.014326709816181227,"bound":0.022994976394372646,"min":-0.20024689828111075,"max":0.133116074334386},"cycles kernel":{"base":22476.393219993486,"head":22573.43033256793,"change":0.0052581966609664965,"bound":0.011096822963884367,"min":-0.1428080906263588,"max":0.09914764069698534},"instructions user":{"base":19165.198480985404,"head":19165.409770231738,"change":0.000009803846821920814,"bound":0.00002432414061237509,"min":-0.0010135917773739234,"max":0.0011040176579215633},"L1 icache misses user (diagnostic)":{"base":1912.918339911743,"head":1982.0374446628027,"change":0.034055533516464065,"bound":0.03760738050342338,"min":-0.05293140125693818,"max":0.09307098052980378}},"baseRequestsPerSecond":81212.84208491514,"baseServerBusy":0.9832594559941387,"baseFailures":0,"headRequestsPerSecond":80270.78761154856,"headServerBusy":0.9829591999357364,"headFailures":0,"cyclesMarginMet":false}

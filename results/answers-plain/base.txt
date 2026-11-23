@@ -1,0 +1,13 @@
+HTTP/1.1 200 OK
+content-type: text/plain; charset=utf-8
+content-security-policy: default-src 'self'; script-src 'self' 'sha256-nTNh/j5EVR4pQkMgDuFT9GSiOyFTeTGtewV4aHnYbhI='; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+x-frame-options: DENY
+cross-origin-opener-policy: same-origin
+cache-control: private, no-cache
+vary: accept-encoding
+content-length: 4
+
+body 4 bytes, sha256 4a33eacd5fa65f2b2e2871cd131286b53c415b131666d71173bb6e3fe59361b3
+home after: kept

@@ -1,0 +1,31 @@
+/* Foot: the links out, set on the bar's steel so they read the same under every page. */
+.foot {
+  position: relative;
+  display: grid;
+  gap: 1.25rem;
+  padding: clamp(2rem, 5vw, 3.5rem) var(--gutter) clamp(2.5rem, 6vw, 4rem);
+  background: var(--ink);
+  border-top: 1px solid color-mix(in srgb, var(--bone) 14%, transparent);
+}
+
+.ways {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem clamp(1.25rem, 3vw, 2.5rem);
+}
+
+.ways a {
+  padding: 0.35rem 0;
+  color: var(--bone);
+  text-decoration-color: color-mix(in srgb, var(--bone) 40%, transparent);
+}
+
+.ways a:hover {
+  color: var(--ember);
+}
+
+.small {
+  max-width: 46rem;
+  color: var(--bone-dim);
+  font-size: 0.875rem;
+}

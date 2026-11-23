@@ -1,0 +1,30 @@
+[package]
+name = "card-market"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "A marketplace item page on Corten with the production pieces on: CSP, versioned assets, PWA, i18n, compression, MCP tools."
+
+[dependencies]
+corten = { package = "corten-run", path = "../../crates/corten", features = ["json", "agent", "compress"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+reqwest = { version = "0.13", default-features = false }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["raw_value"] }
+# Already in Corten's tree: the CSP reports the browser sends are logged.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+[features]
+# The browser test's own routes and its count of requests (src/smoke.rs), for `cargo clippy` and
+# `cargo test --all-features`. Its image turns them on with `CARD_MARKET_SMOKE=1` (build.rs).
+smoke = []
+
+[dev-dependencies]
+# Only for the `render_cost`, `route_loop` and `tool_cost` benchmarks, which time requests through
+# the router itself, beside axum alone; the tests send theirs with `app.test()`.
+http-body = "1"
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+# Only `route_loop`'s `bare-json`: the same handler on axum's router alone, to measure what
+# Corten's costs around it. Not Corten's dependency; none of axum's features.
+axum = { version = "0.8", default-features = false }

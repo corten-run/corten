@@ -1,0 +1,7 @@
+@scope (body) {
+    .list {
+        @scope (main) {
+            p { outline: solid; }
+        }
+    }
+}

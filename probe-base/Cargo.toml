@@ -1,0 +1,26 @@
+[package]
+name = "p1938c-base"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "base"
+path = "src/main.rs"
+
+# Features of corten: the template's (the defaults, and compress). The probe's own `named` is on
+# for head only (see src/main.rs); it changes one handler and nothing else.
+[features]
+# Base has no KeptAnswers: the feature is off.
+named = []
+
+[dependencies]
+corten = { package = "corten-run", path = "../src-base/crates/corten", features = ["compress"] }
+tokio = { version = "1", features = ["macros", "rt"] }
+
+# The repository's release profile.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[workspace]

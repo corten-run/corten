@@ -1,0 +1,16 @@
+[package]
+name = "ui-gallery"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "corten-ui's components on one screen, a seller's draft listing for a card, styled by a small design system, with a browser smoke test."
+
+[dependencies]
+corten = { package = "corten-run", path = "../../crates/corten", features = ["zones"] }
+corten-ui = { path = "../../crates/corten-ui" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# compress: a test reads the kit's stylesheet as the server compresses it.
+corten = { package = "corten-run", path = "../../crates/corten", features = ["types", "compress"] }

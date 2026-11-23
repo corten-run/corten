@@ -1,0 +1,13 @@
+checked named (jemalloc): base twice the same; head the same but /home dropped by its write, by design: HTTP/1.1 200 OK, body 5 bytes, sha256 d81c55f49c5bb0d36bc11e3966ec4efab66f8dfefbbc1761161ca9d230e5466a,  head's home after: not kept
+named: warm-up took about 7 s a pair; 100 pairs should take about 12 minutes
+named: pair 10 of 100 done 05:18:14
+named: pair 20 of 100 done 05:19:17
+named: pair 30 of 100 done 05:20:19
+named: pair 40 of 100 done 05:21:21
+named: pair 50 of 100 done 05:22:24
+named: pair 60 of 100 done 05:23:26
+named: pair 70 of 100 done 05:24:28
+named: pair 80 of 100 done 05:25:31
+named: pair 90 of 100 done 05:26:33
+named: pair 100 of 100 done 05:27:36
+named: done, /m/1938c/results/cycles-named.csv

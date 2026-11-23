@@ -1,0 +1,42 @@
+## pair w1 base
+# started on Mon Nov 23 05:16:59 2026
+
+4925917696,,cycles:u,3000282500,100.00,,
+4606376835,,cycles:k,3000282500,100.00,,
+5350268960,,instructions:u,3000282500,100.00,1.09,insn per cycle
+3000.28,msec,task-clock,3000282500,100.00,0.987,CPUs utilized
+537342797,,L1-icache-load-misses,3000282500,100.00,,
+Running 3s test @ http://127.0.0.1:18381/home?t=0&n=1
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.17ms  200.38us   5.95ms   93.18%
+    Req/Sec    27.47k   617.08    29.30k    85.00%
+  163828 requests in 3.03s, 220.30MB read
+Requests/sec:  54037.49
+Transfer/sec:     72.66MB
+RESULT 163828 0 0 0 0 0
+LAST 1 81935
+LAST 2 81957
+kept: /home?t=1&n=2 and /home?t=1&n=81835 (thread's last n 81935)
+kept: /home?t=2&n=2 and /home?t=2&n=81857 (thread's last n 81957)
+## pair w1 head
+# started on Mon Nov 23 05:17:02 2026
+
+4770830601,,cycles:u,2999247963,100.00,,
+4604615375,,cycles:k,2999282453,100.00,,
+5317442869,,instructions:u,2999303257,100.00,1.11,insn per cycle
+2999.32,msec,task-clock,2999319671,100.00,0.990,CPUs utilized
+531959338,,L1-icache-load-misses,2999327674,100.00,,
+Running 3s test @ http://127.0.0.1:18382/home?t=0&n=1
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.18ms  205.89us   6.26ms   93.51%
+    Req/Sec    27.27k   607.21    28.05k    78.33%
+  162661 requests in 3.02s, 218.73MB read
+Requests/sec:  53808.45
+Transfer/sec:     72.36MB
+RESULT 162661 0 0 0 0 0
+LAST 1 81366
+LAST 2 81359
+kept: /home?t=1&n=2 and /home?t=1&n=81266 (thread's last n 81366)
+kept: /home?t=2&n=2 and /home?t=2&n=81259 (thread's last n 81359)

@@ -1,0 +1,13 @@
+checked named-off (jemalloc): base twice the same; head the same: HTTP/1.1 200 OK, body 5 bytes, sha256 d81c55f49c5bb0d36bc11e3966ec4efab66f8dfefbbc1761161ca9d230e5466a,  head's home after: none kept
+named-off: warm-up took about 6 s a pair; 100 pairs should take about 11 minutes
+named-off: pair 10 of 100 done 05:28:44
+named-off: pair 20 of 100 done 05:29:46
+named-off: pair 30 of 100 done 05:30:48
+named-off: pair 40 of 100 done 05:31:49
+named-off: pair 50 of 100 done 05:32:51
+named-off: pair 60 of 100 done 05:33:53
+named-off: pair 70 of 100 done 05:34:54
+named-off: pair 80 of 100 done 05:35:56
+named-off: pair 90 of 100 done 05:36:58
+named-off: pair 100 of 100 done 05:38:00
+named-off: done, /m/1938c/results/cycles-named-off.csv
