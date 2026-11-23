@@ -486,12 +486,16 @@ establish a general ranking.
       a touched request's cycles by up to about 4% either way, so a single build of each side can
       pass or miss +1% by where the linker put the code. Where that Choice records a placement
       spread for the workload (the lowest and highest placement median of its A/A across
-      placements), a single-build bound that, less +1%, lands inside that spread does not decide
-      the workload, a pass as much as a miss: the pull request reports it as "inside the placement
-      spread: not decided", which does not pass, and reads the workload across placements in a run
-      whose plan is written before that run. A single-build bound outside the spread, and any
-      single-build bound on a workload with no recorded spread, is the reading, so a change whose
-      reading placement cannot flip keeps the cheaper run. The plan states:
+      placements, as the Choice prints them to two decimals, for the probe program, workload and
+      host type the Choice names), a single-build bound that, less +1%, lands inside that spread,
+      either end included, does not decide the workload, a pass as much as a miss: the pull
+      request reports it as "inside the placement spread: not decided", which does not pass, and
+      reads the workload across placements in a run whose plan is written before that run. A
+      single-build bound outside the spread, and any single-build bound on a workload with no
+      recorded spread, is the reading by this rule, not because placement is shown unable to move
+      it. A workload with no single-build bound (a run that failed, too few pairs) does not pass,
+      as before, and a control the plan declared keeps
+      [design Choice 71](docs/design.md#choice-layout-floor)'s rule. The plan states:
 
       1. Placements: each side is compiled once, and its K placements are that build's final link
          run again with one more object, a function of a declared size that nothing calls (a pad),
@@ -504,14 +508,18 @@ establish a general ranking.
          functions and the pad, the pad first, every function moved and every pair of neighbours
          still next to each other in order; that each has a SHA-256 no other binary has; and that
          each answers the workload's requests as the unpadded binary does (status, headers but
-         `Date`, and body).
+         `Date`, and body, with only the values the plan names as drawn per process masked, as
+         `Age` and a keyed `ETag` are).
       2. Pairs: R recorded pairs per placement after one that is not, every turn on a freshly
          started build, as above, so a placement and a process start are told apart.
       3. The statistic: per placement, the median of its R per-pair changes in user plus kernel
          cycles per request; across placements, the median of the K placement medians and its
          one-sided 95% upper bound, the j-th smallest of them, j the smallest rank with
          P(Binomial(K, 1/2) >= j) <= 5% (the 20th of 30, as the 59th of 100 is for pairs). K is
-         one that has such a rank, at least 5.
+         one that has such a rank, at least 5. Its 95% is nominal: it holds if the placement
+         medians are independent draws with a common median, and the plan's pads are a declared,
+         phase-balanced set rather than a random sample of the builds a change can land in, so
+         the bound reads the change across those placements, not across every placement.
       4. Resolution: the same run reads main against main on the workload with the same K, R and
          statistic, main with pad p_i against main with pad q_i from a second list of sizes, no
          size in both lists. That A/A's bound is what the run can resolve, and its lowest and
@@ -524,7 +532,8 @@ establish a general ranking.
       fewer than R valid pairs, leaves its comparison with no bound, which does not pass; no
       placement is rerun, replaced or dropped for its result. A layout floor never applies to a
       workload read across placements. A single-build run stays valid, and binding for each
-      workload its plan read that way whose bound lands outside the recorded spread: a placement
+      workload its plan read that way whose bound lands outside the recorded spread (a control
+      keeps [design Choice 71](docs/design.md#choice-layout-floor)'s rule): a placement
       run declared after it does not clear such a miss. The benefit side may use the same protocol
       if the plan declares it, with its smallest worthwhile reduction, before the run: a CPU-cost
       win then needs the change's upper bound across placements at or below minus that reduction,

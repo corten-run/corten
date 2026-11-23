@@ -8231,7 +8231,12 @@ rules something out.
     size where 36,000 bytes count and its answers are kept for under 16 minutes 39 seconds,
     so the table of ages should be of three digits; or the rule for a touched request comes
     to tell where a build's code sits from what the change costs, so an older answer's
-    digits written to a buffer can be read again.
+    digits written to a buffer can be read again. That rule is now
+    [design Choice 72](#choice-placement-runs) (2026-11-23); the buffer (`b0bc7ae32`) has not
+    been read under it, and stays not made until a run across placements reads a kept answer
+    past the table, as
+    [#1983 An older kept answer's Age written to a buffer missed the cycle margins on single builds; read it across placements](https://github.com/corten-run/corten/issues/1983)
+    asks.
 
     Last checked: 2026-11-22 for the forms of a kept answer's `Age`, `48df6c67c`, `c25d263a9`,
     `77dde53d6` and `09cddd7f1` (this choice's `0a2dc9b32` with each form and the benchmark's
@@ -8549,7 +8554,10 @@ rules something out.
     request; across placements the median of the K medians and its distribution-free one-sided
     95% upper bound, the j-th smallest with j the smallest rank whose binomial tail is at most 5%
     (the 20th of 30); and main with pad p_i against main with pad q_i from a second list, read the
-    same way, as what the run can resolve. A bound under +1% with a resolved A/A meets the margin;
+    same way, as what the run can resolve. The bound's 95% is nominal: the order statistic's
+    coverage holds for independent placement medians with a common median under no change, and
+    the pads are a declared, phase-balanced set, not a random draw of the placements builds land
+    in, so the bound speaks for those placements. A bound under +1% with a resolved A/A meets the margin;
     an A/A at or above +1% is not resolved, which does not pass. The benefit side may use the
     protocol when the plan declares it and its smallest worthwhile reduction before the run.
 
@@ -8563,7 +8571,12 @@ rules something out.
     the pull request reads that workload across placements, under a plan written before that run.
     A single-build bound outside the spread, or on a workload with no recorded spread, is the
     reading, and a placement run declared after it does not clear its miss. So a change whose
-    single-build reading no placement could flip keeps the cheaper run. Recorded spreads: `plain` -2.42% to +2.92% and
+    single-build reading this rule leaves decided keeps the cheaper run. That is a rule, not a
+    proof: the spread is the lowest and highest of 30 noisy placement medians on one host and one
+    commit, and pads may understate what real changes do (Stands on, bet), so a bound outside it
+    is binding by policy, not shown immune to placement. A recorded spread applies to the probe
+    program, the workload's request and configuration and the host type it was measured with,
+    read to its two printed decimals, either end inside. Recorded spreads: `plain` -2.42% to +2.92% and
     `kept` -2.98% to +3.33% (the first run's A/As below: main `a02c81e86`, a c-8, 2026-11-23,
     tag `evidence/ee7b0b41`).
 
@@ -8586,7 +8599,9 @@ rules something out.
     binary's function symbols and the pad, the pad at the start of `.text`, every function moved,
     every pair of neighbours still next to each other in order and a SHA-256 of its own; that one
     pad relinked twice is one binary; and that every placement answers `GET /private` and the kept
-    `GET /page` as its unpadded binary does (status, headers but `Date`, body). In a local
+    `GET /page` as its unpadded binary does (status, headers but `Date`, body), with the
+    values of `Age` and of the `ETag` (keyed per process) masked, which the kit's `mask.sed`
+    names; a later plan names any value it masks, and masks none it could compare. In a local
     container dry run at `a02c81e86` with rustc 1.100.0 and LLD 23.1.5 (no counters, so no timing),
     each side's relink without a pad was byte-identical to cargo's binary, each side's compile gave
     the same SHA-256 as an earlier one, and 20 placements (five pads each for main's two sides,
@@ -8605,12 +8620,12 @@ rules something out.
     (2.85%). Both resolve +1%.
     [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
     on `kept`: -0.07%, bound +0.28%, placement medians from
-    -3.06% to +3.49%, user instructions -1.52% at every placement, so it **meets +1%** read across
+    -3.06% to +3.49%, user instructions -1.52% (placement medians -1.53% to -1.52%), so it **meets +1%** read across
     placements, where its single-build run missed. Main's unpadded build against eight padded ones
     on `kept`: the padded ones cost a median 2.14% fewer cycles (-3.19% to +0.19%; 7 of 8 fewer,
     two-sided sign test p = 0.070), which eight placements do not resolve either way; it is near
     the Revisit-when on the unpadded build below, so a later run reads more of them. The three
-    comparisons' turns took 99 minutes and the diagnostic's 8 more.
+    comparisons' turns took 99 minutes and the diagnostic's about 9 more.
 
     Not chosen: a seeded shuffle of the function order (LLD's `--shuffle-sections`, this Choice's
     first version), since in the dry run's placement of main with seed 1 all 3,404 functions moved,
@@ -8650,7 +8665,8 @@ rules something out.
     read across placements, not at one; relinking the same objects with a pad changes placement
     alone, as the byte-identical answers, the unchanged symbol set and the kept neighbours check;
     a bound inside the spread is one placement could move across the margin, and one outside it is
-    not; and the order statistic's coverage holds for any distribution of placement medians); bet
+    not; and the order statistic's coverage holds for any distribution of placement medians that are
+    independent with a common median, which a declared set of pads assumes and does not show); bet
     (moving the whole of the code by declared offsets varies placement about as much as real
     changes do, though a real change moves only the code after it and by sizes no plan chose, so
     two functions' distance apart, which a pad keeps, can change too; an A/A that resolves under
@@ -8671,7 +8687,11 @@ rules something out.
     run's, so the protocol could be the rule rather than an option; or the release binary's own
     placement is asked to be checked.
 
-    Last checked: 2026-11-23, the dry run of kit 1965 at `a02c81e86` in a Debian 13 container with
+    Last checked: 2026-11-22 for the source pads of each side of
+    [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
+    and main against main (`abbd6113f`, `9f628467d` and `ba72c5f23`, tag
+    `evidence/cheaper-ask-1925`, as [design Choice 70](#choice-kept-pages) records them);
+    2026-11-23, the dry run of kit 1965 at `a02c81e86` in a Debian 13 container with
     rustc 1.100.0 and LLD 23.1.5, and its run on a c-8 the same day (main `a02c81e86`, base `bd6b7741f`, head
     `5a22836fc`, rustc 1.100.0 with LLD 23.1.5, Linux 6.12.117, tag `evidence/ee7b0b41`).
 
