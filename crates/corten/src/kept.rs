@@ -2729,7 +2729,11 @@ mod tests {
             } else {
                 assert_eq!(promotion(), due - 1, "{length}");
                 ask("gzip, deflate, br, zstd", Coding::Zstd);
-                assert_eq!((asked.get(), promotion()), (1, 0), "{length}: asked on its due answer, refused, and counted from none");
+                assert_eq!(
+                    (asked.get(), promotion()),
+                    (1, 0),
+                    "{length}: asked on its due answer, refused, and counted from none"
+                );
             }
             crate::compress::QUEUEING.take();
         }
