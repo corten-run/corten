@@ -331,10 +331,14 @@ keeps a bounded diagnostic (case, POST chain, document requests, ready state, me
 document tail) for each failure. Its containers and network carry the run's owner label and
 are removed by the IDs their creation returned after confirming that label; a removal that
 fails or an owner that cannot be confirmed fails the run, and `cleanup.json` records the
-outcome. The app and upstream join the network by its ID. Extra `--label` values may not use
-the owner key or its prefix. A create that returns neither an ID nor the daemon's refusal is
-looked for by a label of its own for up to 10 seconds at teardown; if nothing appears, its
-cleanup is reported unconfirmed and the run fails, since Docker may still make it.
+outcome. The app and upstream join the network by its ID. Extra `--label` keys may not be the
+owner key `run.corten.marketplace.alert-probe` or a key in its dot-delimited namespace
+(`run.corten.marketplace.alert-probe.*`); other keys, even with the same literal prefix, are
+ordinary. A create that returns no ID, whatever its error (a daemon error can follow a create
+the daemon already made), is looked for by a label of its own for up to 10 seconds at teardown,
+each lookup cut to the time left; if nothing appears, its cleanup is reported unconfirmed and
+the run fails, since Docker may still make it. A failed lookup is reported and does not stop
+the sweep by the owner label.
 `--deadline` bounds the whole run: work stops starting two minutes before it, leaving that
 time for the app logs, removal and `cleanup.json`. Catalog Contract runs it for React Router
 at 10 iterations per source, including after a failed marketplace gate that built the image,

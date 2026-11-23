@@ -24,6 +24,8 @@ const commandTimeout = 30_000;
 export const teardownReserve = 120;
 // How long teardown looks for what an unacknowledged create made before calling its cleanup unconfirmed.
 export const reconcileWindow = 10_000;
+// The end of that window, in ms, kept for its last lookup.
+const lastLook = 250;
 // The probe's own budget leaves this long for its browser, its result and the container's exit.
 const attachMargin = 120;
 
@@ -37,14 +39,13 @@ export const docker = async (args, { timeout = commandTimeout, combined = false 
   if (run.status !== 0) throw Object.assign(new Error(`${what}: exit ${run.status}\n${(run.stderr || run.stdout).slice(-4096)}`), { status: run.status });
   return combined ? run.stdout + run.stderr : run.stdout.trim();
 };
-// The daemon answered and refused, so Docker made nothing. Any other failure leaves the outcome unknown.
-export const refusedByDaemon = (error) => Number.isInteger(error?.status) && error.status !== 0 && /Error response from daemon/.test(error.message);
 const ids = (text) => text.split("\n").map((line) => line.trim()).filter(Boolean);
 const brief = (error) => String(error?.message ?? error).slice(0, 2048);
 
 // Labels from the caller go on every resource. Docker keeps a key's last value, so a caller label
-// with the owner or attempt key would take the resource out of this run's ownership checks and
-// label scans; it is refused before any Docker command.
+// with the owner key or a key in its dot-delimited namespace (`${ownerKey}.*`, which holds the
+// attempt key) would take the resource out of this run's ownership checks and label scans; it is
+// refused before any Docker command. Other keys, even with the same literal prefix, are ordinary.
 export function callerLabels(labels) {
   assert.ok(Array.isArray(labels) && labels.length % 2 === 0, "labels are --label KEY=VALUE pairs");
   for (let i = 0; i < labels.length; i += 2) {
@@ -67,10 +68,11 @@ export function runClock({ total = Infinity, reserve = teardownReserve, now = Da
 // a resource is registered only by the immutable ID its create returned, and every inspect, log
 // read and removal goes through that ID after confirming this run's owner label. A name is never
 // proof of ownership. A removal that fails, or an owner that cannot be confirmed, stays pending,
-// is retried once at teardown and fails the teardown. A create that was not acknowledged (no ID and
-// no refusal from the daemon) is looked for at teardown by its attempt label within a bounded
-// window; what it made is removed by label-confirmed ID, and if nothing appears its cleanup is
-// reported unconfirmed and fails the teardown, since Docker may still make it.
+// is retried once at teardown and fails the teardown. A create that did not return an ID was not
+// acknowledged, whatever its error: an error from the daemon can follow a create it already made.
+// It is looked for at teardown by its attempt label within a bounded window; what it made is removed
+// by label-confirmed ID, and if nothing appears its cleanup is reported unconfirmed and fails the
+// teardown, since Docker may still make it.
 export function ownedResources({ docker, runId, labels = [], timeout = commandTimeout, clock = runClock(), window = reconcileWindow }) {
   const owner = ["--label", `${ownerKey}=${runId}`], extra = callerLabels(labels);
   const pending = new Map();
@@ -91,16 +93,17 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
     return info;
   };
   const inspect = async (call, id) => confirm("container", JSON.parse(await call(["container", "inspect", id]))[0], id);
-  const list = async (kind, filter) => ids(await clean(kind === "network" ? ["network", "ls", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]
+  const list = async (kind, filter, call = clean) => ids(await call(kind === "network" ? ["network", "ls", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]
     : ["ps", "-a", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]));
-  // A create is acknowledged by the ID it returns or by the daemon's refusal. Without either (its
-  // deadline, a lost connection) Docker may still make the resource, even after teardown has looked,
-  // so the attempt is kept for teardown to account for.
+  // A create is acknowledged only by the ID it returns. Without one (an error, even from the daemon,
+  // a deadline, a lost connection) Docker may have made the resource or may still make it, even
+  // after teardown has looked, so the attempt is kept for teardown to account for. Only a create
+  // that was never sent is left out.
   async function create(kind, command, name) {
     const label = `${attemptKey}=${runId}-${++attempts}`;
     let id;
     try { id = await work(command([...owner, "--label", label, ...extra])); } catch (error) {
-      if (error.sent !== false && !refusedByDaemon(error)) record.unacknowledged.push({ kind, name, label, error: brief(error) });
+      if (error.sent !== false) record.unacknowledged.push({ kind, name, label, error: brief(error) });
       throw error;
     }
     if (!/^[0-9a-f]{64}$/.test(id)) {
@@ -146,18 +149,28 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
       for (const id of pendingOf("container")) await remove(id);
       const label = `label=${ownerKey}=${runId}`;
       const searched = Math.max(0, Math.min(window, Math.floor(clock.cleanup())));
+      // An unacknowledged create may still be under way in the daemon: look for each by its own
+      // label until it appears or the window ends, so what it made is removed below with the rest.
+      // Each lookup is cut to the time left in the window, whose last quarter second is kept for the
+      // final lookup. A failed lookup ends the search and is kept; the owner-label sweep below does
+      // not depend on it.
+      const end = clock.now() + searched;
+      const look = within(() => Math.min(clock.cleanup(), end - clock.now()));
       try {
-        // An unacknowledged create may still be under way in the daemon: look for each by its own
-        // label until it appears or the window ends, so what it made is removed below with the rest.
         const missing = () => record.unacknowledged.filter((attempt) => !attempt.ids);
-        for (const end = clock.now() + searched; ;) {
+        const open = () => end - clock.now() >= 1;
+        while (missing().length && open()) {
           for (const attempt of missing()) {
-            const found = await list(attempt.kind, `label=${attempt.label}`);
+            if (!open()) break;
+            const found = await list(attempt.kind, `label=${attempt.label}`, look);
             if (found.length) attempt.ids = found;
           }
-          if (!missing().length || clock.now() >= end) break;
-          await clock.sleep(Math.min(500, end - clock.now()));
+          const last = end - Math.min(lastLook, searched / 2);
+          if (!missing().length || clock.now() >= last) break;
+          await clock.sleep(Math.min(500, last - clock.now()));
         }
+      } catch (error) { fail(`unacknowledged creates labelled ${attemptKey}`, error); }
+      try {
         for (const id of await list("container", label)) await remove(id, { recovered: !pending.has(id) });
       } catch (error) { fail(`containers labelled ${record.ownerLabel}`, error); }
       for (const id of pendingOf("network")) await remove(id);
@@ -174,7 +187,7 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
       const gone = new Set([...record.removed, ...record.recovered].map((entry) => entry.id));
       for (const attempt of record.unacknowledged) {
         attempt.outcome = !attempt.ids ? "unconfirmed" : attempt.ids.every((id) => gone.has(id)) ? "removed" : "not removed";
-        if (!attempt.ids) fail(`${attempt.kind} ${attempt.name} (${attempt.label})`, `its create was not acknowledged and nothing with that label appeared in ${searched} ms; Docker may still make it, so its cleanup is unconfirmed`);
+        if (!attempt.ids) fail(`${attempt.kind} ${attempt.name} (${attempt.label})`, `its create was not acknowledged and nothing with that label was found in ${searched} ms; Docker may still make it, so its cleanup is unconfirmed`);
       }
       record.complete = record.failures.length === 0;
       return record;

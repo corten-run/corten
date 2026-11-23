@@ -11,9 +11,10 @@ import { probeAlerts } from "./alert-probe.mjs";
 import { records } from "./fixtures.mjs";
 
 // An in-memory Docker daemon for the probe runner's ownership and teardown. faults[command] may throw
-// before or after the daemon acts, to model a failed command or a lost acknowledgement, or ("late")
-// time out with the daemon acting only when the test calls docker.land(). Each command takes 10 ms
-// of the fake clock; a fault may spend more.
+// before or after the daemon acts, to model a failed command or a lost acknowledgement, or leave the
+// daemon acting only when the test calls docker.land(): "late" times out, "late-error" answers with a
+// daemon error as if the upstream response was lost after the create was dispatched. Each command
+// takes 10 ms of the fake clock; a fault may spend more.
 function fakeDocker({ faults = {} } = {}) {
   const containers = new Map(), networks = new Map(), calls = [], late = [], time = { t: 0 };
   const id = () => randomBytes(32).toString("hex");
@@ -69,8 +70,9 @@ function fakeDocker({ faults = {} } = {}) {
     const fault = faults[args[0] === "network" || args[0] === "container" ? `${args[0]} ${args[1]}` : args[0]];
     const outcome = fault?.(args, docker.state, opts, time) ?? "run";
     if (outcome instanceof Error) throw outcome;
-    if (outcome === "late") {
+    if (outcome === "late" || outcome === "late-error") {
       late.push(() => act(args, docker.results));
+      if (outcome === "late-error") throw Object.assign(new Error(`docker ${args[0]} ${args[1]}: exit 1\nError response from daemon: Bad Gateway`), { status: 1 });
       time.t += opts.timeout;
       throw new Error(`docker ${args[0]} ${args[1]}: timeout after ${opts.timeout} ms`);
     }
@@ -130,17 +132,20 @@ test("alert probe runner removes what it created, each by ID after confirming it
   checkCalls(docker);
 });
 
-test("a name collision with a foreign container is refused and the foreign container is not removed", async (t) => {
+test("a name collision with a foreign container is refused and the foreign container is never touched", async (t) => {
   const docker = fakeDocker();
   const foreign = { id: randomBytes(32).toString("hex"), name: "alert-probe-test-fixture", labels: { other: "owner" }, args: [] };
   docker.containers.set(foreign.id, foreign);
   const outcome = await probeRun(t, docker);
   assert.equal(outcome.passed, false);
   assert.match(outcome.errors.join("\n"), /fixture: [^]*Error response from daemon: Conflict[^]*already in use/);
-  assert.deepEqual(outcome.cleanup.unacknowledged, [], "the daemon's refusal acknowledges the create");
+  // An error from the daemon is not proof the create had no effect: it is looked for by its own
+  // label, which the foreign container does not carry, and its cleanup stays unconfirmed.
+  assert.deepEqual(outcome.cleanup.unacknowledged.map((e) => [e.kind, e.name, e.outcome]), [["container", "alert-probe-test-fixture", "unconfirmed"]]);
   assert.ok(docker.containers.has(foreign.id), "the foreign container survives");
   assert.ok(!docker.calls.some(({ args }) => args.includes(foreign.id)), "the run never inspected, logged or removed it");
-  assert.equal(outcome.cleanup.complete, true, "nothing this run created remains");
+  assert.equal(outcome.cleanup.complete, false);
+  assert.deepEqual(outcome.cleanup.remaining, { containers: [], networks: [] }, "nothing this run acknowledged remains");
   assert.ok(!outcome.cleanup.created.some((e) => e.name === foreign.name));
   // Asked directly to remove the foreign ID, the owner check refuses and the refusal fails teardown.
   const owned = ownedResources({ docker, runId: "alert-probe-test" });
@@ -206,9 +211,11 @@ test("a create whose acknowledgement never came is not proven cleaned up by an e
   assert.match(attempt.label, new RegExp(`^${attemptKey.replaceAll(".", "\\.")}=alert-probe-test-\\d+$`));
   assert.ok(outcome.cleanup.failures.some((f) => f.resource.includes(attempt.label) && /cleanup is unconfirmed/.test(f.error)));
   assert.match(outcome.errors.join("\n"), /teardown failed/);
-  // It looked for the attempt's own label for the whole window, and never by name.
+  // It looked for the attempt's own label across the window (its last quarter second kept for the
+  // final lookup), and never by name.
   const looks = docker.calls.filter(({ args }) => args.includes(`label=${attempt.label}`));
-  assert.ok(looks.length > 1 && looks.at(-1).at - looks[0].at >= 1900, "the window is searched, not a single scan");
+  assert.ok(looks.length > 1 && looks.at(-1).at - looks[0].at >= 1700, "the window is searched, not a single scan");
+  for (const { at, timeout } of looks) assert.ok(at + timeout <= looks[0].at + 2000, "each lookup ends inside the window");
   docker.land();
   assert.equal(docker.networks.size, 1, "the network does land later, as the receipt warned");
   checkCalls(docker);
@@ -229,14 +236,81 @@ test("a late create that lands within the window is found by its own label and r
   checkCalls(docker);
 });
 
-test("a refused create is acknowledged: nothing is left to look for", async (t) => {
+test("a create answered with a daemon error is not acknowledged: what it makes late is still accounted for", async (t) => {
+  // The daemon made the network but its answer was lost upstream and came back as an HTTP error;
+  // the network becomes visible only after teardown has looked.
+  const after = fakeDocker({ faults: { "network create": () => "late-error" } });
+  const unseen = await probeRun(t, after);
+  assert.equal(unseen.passed, false);
+  assert.match(unseen.errors.join("\n"), /Error response from daemon: Bad Gateway/);
+  assert.equal(unseen.cleanup.complete, false, "a daemon error does not prove the create had no effect");
+  assert.deepEqual(unseen.cleanup.unacknowledged.map((e) => [e.kind, e.name, e.outcome]), [["network", "alert-probe-test-net", "unconfirmed"]]);
+  assert.ok(after.calls.some(({ args }) => args.includes(`label=${unseen.cleanup.unacknowledged[0].label}`)), "it was looked for by its own label");
+  after.land();
+  assert.equal(after.networks.size, 1, "the network does land later, as the receipt warned");
+  // Visible within the window: found by its label and removed by ID.
+  let looks = 0;
+  const within = fakeDocker({ faults: {
+    "network create": () => "late-error",
+    "network ls": (args, { land }) => { if (args.some((arg) => arg.startsWith(`label=${attemptKey}=`)) && ++looks === 2) land(); },
+  } });
+  const found = await probeRun(t, within);
+  assert.equal(found.passed, false);
+  assert.deepEqual(found.cleanup.unacknowledged.map((e) => [e.kind, e.outcome]), [["network", "removed"]]);
+  assert.equal(found.cleanup.complete, true);
+  assert.equal(within.networks.size, 0);
+  checkCalls(within);
+});
+
+test("a refused create leaves a foreign resource with its name alone", async (t) => {
   const docker = fakeDocker();
   docker.networks.set("f".repeat(64), { id: "f".repeat(64), name: "alert-probe-test-net", labels: {} });
   const outcome = await probeRun(t, docker);
   assert.equal(outcome.passed, false);
-  assert.deepEqual(outcome.cleanup.unacknowledged, []);
-  assert.equal(outcome.cleanup.complete, true);
+  assert.deepEqual(outcome.cleanup.unacknowledged.map((e) => [e.kind, e.outcome]), [["network", "unconfirmed"]]);
+  assert.equal(outcome.cleanup.complete, false);
   assert.ok(docker.networks.has("f".repeat(64)), "the foreign network survives");
+  assert.ok(!docker.calls.some(({ args }) => args.includes("f".repeat(64))), "the run never inspected or removed it");
+});
+
+test("each label lookup ends inside the reconcile window, and the receipt's window is the one searched", async (t) => {
+  // Every lookup for the attempt's label hangs until its own deadline.
+  const docker = fakeDocker({ faults: {
+    "network create": () => "late",
+    "network ls": (args, _, opts, time) => {
+      if (!args.some((arg) => arg.startsWith(`label=${attemptKey}=`))) return "run";
+      time.t += opts.timeout;
+      return new Error(`docker network ls: timeout after ${opts.timeout} ms`);
+    },
+  } });
+  const outcome = await probeRun(t, docker, { window: 2000 });
+  const looks = docker.calls.filter(({ args }) => args.some((arg) => arg.startsWith(`label=${attemptKey}=`)));
+  assert.ok(looks.length >= 1);
+  const start = looks[0].at, end = start + 2000;
+  for (const { at, timeout } of looks) assert.ok(at + timeout <= end, `a lookup at ${at} ms with ${timeout} ms could outlast the window ending at ${end} ms`);
+  // Teardown goes on to its owner-label sweep as soon as the window is over.
+  const sweep = docker.calls.find(({ args, at }) => at > start && args[0] === "ps" && args.includes(`label=${ownerKey}=alert-probe-test`));
+  assert.ok(sweep && sweep.at <= end + 10, `the sweep started at ${sweep?.at} ms, after the ${end} ms window end`);
+  assert.equal(outcome.cleanup.complete, false);
+  assert.ok(outcome.cleanup.failures.some((f) => /in 2000 ms/.test(f.error)));
+  checkCalls(docker);
+});
+
+test("a failed label lookup is kept, and the owner-label sweep still removes containers before networks", async (t) => {
+  // The upstream is made but its acknowledgement is lost; the one lookup for its attempt label fails.
+  const docker = fakeDocker({ faults: {
+    create: (args) => args[2] === "alert-probe-test-upstream" ? "lose" : "run",
+    ps: (args) => args.some((arg) => arg.startsWith(`label=${attemptKey}=`)) ? new Error("docker ps: exit 1\nCannot connect to the Docker daemon") : "run",
+  } });
+  const outcome = await probeRun(t, docker);
+  assert.equal(outcome.passed, false);
+  assert.ok(outcome.cleanup.failures.some((f) => /Cannot connect to the Docker daemon/.test(f.error)), "the lookup error is kept");
+  assert.deepEqual(outcome.cleanup.recovered.map((e) => e.kind), ["container"], "the owner-label sweep found the container");
+  assert.deepEqual(outcome.cleanup.remaining, { containers: [], networks: [] });
+  assert.equal(docker.containers.size + docker.networks.size, 0);
+  assert.equal(docker.calls.filter(({ args }) => args[0] === "network" && args[1] === "rm").length, 1, "the network was removed once, after its container");
+  assert.equal(outcome.cleanup.complete, false, "the attempt's own lookup failed, so its cleanup is not confirmed");
+  checkCalls(docker);
 });
 
 test("caller labels cannot set the owner or attempt key, and are refused before any Docker command", async (t) => {
@@ -260,14 +334,16 @@ test("caller labels cannot set the owner or attempt key, and are refused before 
 
 test("ordinary caller labels go on every resource after one owner label", async (t) => {
   const docker = fakeDocker();
-  const outcome = await probeRun(t, docker, { labels: ["--label", "ci.run=123", "--label", "ci.job=parity"] });
+  // Keys outside the owner key's dot-delimited namespace are ordinary, even with the same literal prefix.
+  const outside = [`${ownerKey}suffix=x`, `${ownerKey}-other=y`];
+  const outcome = await probeRun(t, docker, { labels: ["--label", "ci.run=123", "--label", "ci.job=parity", ...outside.flatMap((label) => ["--label", label])] });
   assert.equal(outcome.passed, true, outcome.errors.join("\n"));
   const creates = docker.calls.filter(({ args }) => args[0] === "create" || args.slice(0, 2).join(" ") === "network create");
   assert.equal(creates.length, 6);
   for (const { args } of creates) {
     const labels = args.flatMap((arg, i) => (args[i - 1] === "--label" ? [arg] : []));
     assert.deepEqual(labels.filter((label) => label.startsWith(`${ownerKey}=`)), [`${ownerKey}=alert-probe-test`]);
-    assert.ok(labels.includes("ci.run=123") && labels.includes("ci.job=parity"));
+    for (const label of ["ci.run=123", "ci.job=parity", ...outside]) assert.ok(labels.includes(label), label);
   }
   assert.equal(docker.containers.size + docker.networks.size, 0);
   checkCalls(docker);
