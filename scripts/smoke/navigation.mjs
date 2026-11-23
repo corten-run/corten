@@ -1319,7 +1319,14 @@ export async function fragmentTargets(browser) {
     "a replace to the #fragment of an element outside <main>, already :target, scrolls to it again",
     "a #fragment with a malformed escape finds what a full load finds",
     "a #fragment that is not UTF-8 once decoded finds what a full load finds",
+    "a #fragment that starts with an escaped U+FEFF finds the id that keeps it, not the one without",
+    "a #fragment that is one id as written and another decoded finds the one as written",
   ];
+  // Two spellings of one fragment, each an id, far enough apart that one is out of view when the
+  // other is in it: the one HTML finds, and the one it would find if it dropped a leading U+FEFF
+  // or decoded before trying the fragment as written.
+  const apart = `<p>${"<br>".repeat(24)}</p>`;
+  const spellings = `<p id="smoke-bom">BOM dropped</p>${apart}<p id="\ufeffsmoke-bom">BOM kept</p>${apart}<p id="smoke-%41">As written</p>${apart}<p id="smoke-A">Decoded</p>`;
   const open = async () => {
     const page = await browser.newPage({ viewport: { width: 360, height: 200 } });
     await page.route(
@@ -1336,44 +1343,49 @@ export async function fragmentTargets(browser) {
         // At the end of <main>: before its end tag in a whole page, and at the end of a navigation's
         // answer, which ends with what <main> holds and has no <main> tag. The id after <main> is in
         // the whole page only.
-        const anchors = '<p><a name="smoke-named">Named</a></p><p id="smoke-caf\u00e9">Decoded</p><p id="caf\u00e9%xx">Malformed</p><p id="bad\ufffd">Not UTF-8</p>';
+        const anchors = `<p><a name="smoke-named">Named</a></p><p id="smoke-caf\u00e9">Decoded</p><p id="caf\u00e9%xx">Malformed</p><p id="bad\ufffd">Not UTF-8</p>${spellings}`;
         const text = await res.text();
         const body = text.includes("</main>") ? text.replace("</main>", `${anchors}</main><p id="smoke-outside">Outside</p>`) : text + anchors;
         await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
       },
     );
-    // A link the server redirects to the news page, as a guarded route does.
-    await page.route(
-      (url) => url.pathname === "/smoke-to-news",
-      (route) => route.fulfill({ status: 303, headers: { location: "/news" } }),
-    );
     await page.addInitScript(() => {
       const w = /** @type {any} */ (window);
-      /** Where the page is, what `:target` is, and whether the element `place` selects is in view. @param {string} [place] */
-      w.__at = (place) => {
+      /**
+       * Where the page is, what `:target` is, and whether the elements `place` and `other` select are in view.
+       * @param {string} [place] @param {string} [other]
+       */
+      w.__at = (place, other) => {
         const target = document.querySelector(":target");
-        const top = (place && document.querySelector(place)?.getBoundingClientRect().top) ?? -1;
+        // Layout in fractions of a pixel can leave the top a fraction above the scroll position.
+        const shown = (/** @type {string | undefined} */ selector) => {
+          const top = (selector && document.querySelector(selector)?.getBoundingClientRect().top) ?? -1;
+          return top > -1 && top < innerHeight;
+        };
         return {
           url: location.pathname + location.search + location.hash,
           target: target ? target.id || `name=${target.getAttribute("name")}` : null,
-          // Layout in fractions of a pixel can leave the top a fraction above the scroll position.
-          inView: top > -1 && top < innerHeight,
+          inView: shown(place),
+          otherInView: shown(other),
           y: Math.round(scrollY),
           swapped: w.__marker === 1,
           error: "",
         };
       };
       w.__drawn = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
-      /** @param {string} url @param {string} [place] a selector for the element the fragment names @param {"push" | "replace"} [history] */
-      w.__to = async (url, place, history = "push") => {
+      /**
+       * @param {string} url @param {string} [place] a selector for the element the fragment names
+       * @param {"push" | "replace"} [history] @param {string} [other] a selector for one it must not be at
+       */
+      w.__to = async (url, place, history = "push", other) => {
         const error = await w.navigation.navigate(url, { history }).finished.then(() => "", (/** @type {Error} */ e) => String(e));
         await w.__drawn();
-        return { ...w.__at(place), error };
+        return { ...w.__at(place, other), error };
       };
     });
     return page;
   };
-  /** @typedef {{ url: string, target: string | null, inView: boolean, y: number, swapped: boolean, error: string }} Step */
+  /** @typedef {{ url: string, target: string | null, inView: boolean, otherInView: boolean, y: number, swapped: boolean, error: string }} Step */
   let page = await open();
   await page.goto(`${base}/news`);
   if (!(await page.evaluate(() => "navigation" in window))) {
@@ -1396,9 +1408,10 @@ export async function fragmentTargets(browser) {
     /** @type {Step} */
     const decoded = await w.__to("/news#smoke-caf%C3%A9", '[id="smoke-caf\u00e9"]');
     // A full load keeps the link's #fragment on the redirect's page, and so does the address
-    // where it waits for the answer.
+    // where it waits for the answer: /account sends someone signed out to the stocks page with a
+    // 303, which draws its picks at the end of its <main>.
     /** @type {Step | null} */
-    const redirected = precommit ? await w.__to("/smoke-to-news#briefing", "#briefing") : null;
+    const redirected = precommit ? await w.__to("/account#picks", "#picks") : null;
     return { top, id, named, decoded, redirected };
   }, precommit);
   await page.close();
@@ -1413,7 +1426,7 @@ export async function fragmentTargets(browser) {
   check(names[1], at(id, "briefing", true), JSON.stringify(id));
   check(names[2], at(named, "name=smoke-named"), JSON.stringify(named));
   check(names[3], at(decoded, "smoke-caf\u00e9"), JSON.stringify(decoded));
-  if (redirected) check(names[4], redirected.url === "/news#briefing" && at(redirected, "briefing"), JSON.stringify(redirected));
+  if (redirected) check(names[4], redirected.url === "/#picks" && at(redirected, "picks"), JSON.stringify(redirected));
   else skip(names[4], "no precommitHandler: the runtime follows the redirect to fetch's address, which has no #fragment");
   if (once) skip(":target after a document's first #fragment", "Firefox's NavigateEvent.scroll() sets it only for the first");
 
@@ -1468,6 +1481,37 @@ export async function fragmentTargets(browser) {
     const found = full.target === want && full.inView;
     const same = found ? at(client, want) : client.swapped && !client.error && client.inView === full.inView && client.target === full.target;
     check(names[index], same, `${found ? "found by a full load" : "not found by a full load, so compared with it"}: ${JSON.stringify({ full, client })}`);
+  }
+
+  // HTML keeps a leading U+FEFF a fragment decodes to, and tries the fragment as written before
+  // decoded. Each fragment here has both spellings on the page: a client navigation must be at the
+  // one HTML names, whether the browser's scroll or the runtime's found it, and not at the other.
+  // A full load's result is in the detail only.
+  for (const [index, fragment, want, other] of /** @type {const} */ ([
+    [8, "%EF%BB%BFsmoke-bom", "\ufeffsmoke-bom", "smoke-bom"],
+    [9, "smoke-%41", "smoke-%41", "smoke-A"],
+  ])) {
+    const [place, wrong] = [`[id="${want}"]`, `[id="${other}"]`];
+    page = await open();
+    await page.goto(`${base}/news#${fragment}`);
+    await page.evaluate(() => /** @type {any} */ (window).__drawn());
+    /** @type {Step} */
+    const full = await page.evaluate(([place, wrong]) => /** @type {any} */ (window).__at(place, wrong), [place, wrong]);
+    await page.close();
+    page = await open();
+    await page.goto(`${base}/news`);
+    /** @type {Step} */
+    const client = await page.evaluate(
+      async ([fragment, place, wrong]) => {
+        const w = /** @type {any} */ (window);
+        w.__marker = 1;
+        scrollTo(0, 0);
+        return w.__to(`/news?mine=on#${fragment}`, place, "push", wrong);
+      },
+      [fragment, place, wrong],
+    );
+    await page.close();
+    check(names[index], at(client, want) && !client.otherInView, JSON.stringify({ client, full }));
   }
 }
 

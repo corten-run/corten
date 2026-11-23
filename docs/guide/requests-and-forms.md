@@ -2223,12 +2223,13 @@ own scroll to the fragment once the new page is drawn (the Navigation API's
 highlights when linked to), an `<a name>` anchor is found as an `id` is, the fragment is
 percent-decoded as HTML decodes it, and a page without a place starts at its top. Back and
 forward put back the scroll position instead, and a `data-keep-place` navigation keeps it.
-Firefox (159) may skip that scroll, as it does after a document's first fragment scroll (a full
-load's included): the runtime then scrolls to the element itself, so the page is still at it, but
-`:target` may match nothing, or still match an element the swap left in place (outside
-`<main>`). A section that must show when linked to does not rely on `:target` alone there. The
-runtime fetches the page again even when only the `#id` differs from the address, since the
-write may have changed it.
+Firefox (159) may skip that scroll on a client swap, or leave `:target` unset or still on an
+element the swap left in place (outside `<main>`). The runtime then scrolls to the element itself
+when it is shown, but without the browser's step that first reveals a target inside a hidden
+ancestor (`hidden="until-found"`), which a full load at that address takes: such a target stays
+hidden. A section that must show when linked to does not rely on `:target` or
+`hidden="until-found"` alone there. The runtime fetches the page again even when only the `#id`
+differs from the address, since the write may have changed it.
 A client navigation the server sends to a place gets `corten-location` instead of a 303,
 because `fetch` follows a redirect but drops its fragment, and so does the whole page the
 runtime fetches after a write (`corten: page`), so a page a write leads to that sends the browser
