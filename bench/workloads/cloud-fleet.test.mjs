@@ -8,9 +8,9 @@ import { join, resolve } from "node:path";
 import * as contract from "./cloud-contract.mjs";
 import { host as catalogHost } from "../catalog/droplet-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
-import { accountId, archive, commit, context, harness, metadata, syntheticInspection, syntheticPlacement } from "./cloud-fixtures.mjs";
+import { accountId, archive, campaign, commit, context, harness, metadata, subject, syntheticDelivery, syntheticInspection, syntheticPlacement } from "./cloud-fixtures.mjs";
 import { campaignOutcome, controllerState, parseDropletArgs } from "./cloud-options.mjs";
-import { bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
+import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { digest } from "./cloud-local.mjs";
 import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
@@ -543,6 +543,114 @@ test("first official group waits for the bound common bootstrap marker, not nati
   assert.equal(saved.fullGroupQualified, false); assert.equal(h.creates, 1);
   assert.equal(h.calls.filter((c) => c[0] === "ssh" && c.at(-1).startsWith("if test ! -e /bench/bootstrap-ready.json")).length, 2);
 });
+
+const bootId = "12345678-90ab-cdef-1234-567890abcdef";
+function offlineFixture(t, { lost = false, group = "localized-marketplace" } = {}) {
+  const h = harness(t, { active: true }), values = input();
+  values.provider = { accountId, context }; values.tokens = { [group]: values.tokens[group] };
+  const fleet = contract.fleetPlan(values, at, "sfo3", { stagedPlacement: true,
+    single: { group, indexSha256: "1".repeat(64), checkout: h.repo, offlineHandoff: true } });
+  const path = join(h.temp, "offline-fleet.json");
+  writeFileSync(path, JSON.stringify(fleet));
+  let seals = 0;
+  const run = (bin, args, timeout, allowed, expiry, registration) => {
+    assert.ok(!registration?.stream, "no workstation lease may be registered");
+    if (bin === "ssh" && args.at(-1) === bootstrapReadScript + "\ncat /proc/sys/kernel/random/boot_id")
+      return { status: 0, stdout: `${JSON.stringify(bootstrapMarker(h.saved()))}\n${bootId}\n` };
+    if (registration?.request?.seal) { seals++; if (lost) return { status: 255, stdout: "", stderr: "" }; }
+    return h.run(bin, args, timeout, allowed, expiry, registration);
+  };
+  const options = { collect: undefined, detach: true, commit, sshKey: "42", accountId, context, group, fleet: path };
+  const launch = () => h.task({ run, checkFleetAdmission: () => [] }, options).launch();
+  return { h, run, group, launch, get seals() { return seals; } };
+}
+
+test("offline launch acknowledges a handoff, not a timed result; reconnection still requires exact terminal replay", async (t) => {
+  const f = offlineFixture(t), { h, run, group } = f;
+  const launched = await f.launch();
+  assert.equal(f.seals, 1);
+  assert.equal(launched.status, "running");
+  assert.equal(launched.validation, undefined);
+  assert.equal(launched.fullGroupQualified, false);
+  assert.equal(launched.control.monitor, undefined);
+  assert.deepEqual(launched.control.sealed, ["bootstrap"]);
+  assert.equal(launched.bootstrapReady.bootId, bootId);
+  assert.match(contract.bootstrapWorkspaceScript(launched), /SSH_CONNECTION/);
+  assert.ok(remoteFiles(launched)["job.sh"].includes(contract.verifySshIngress));
+  assert.match(remoteFiles(launched)[launched.unit], /ExecStopPost=-\/usr\/bin\/timeout -k 5 15 \/usr\/sbin\/nft delete table inet corten_bench_native\n/);
+  assert.ok(!existsSync(join(h.local, "operation.lock")));
+  const collect = (inspect) => h.task({ run, inspect }).collect();
+  // A live audit/preparation wait cannot start a collection ledger or download.
+  const rows = launched.control.ledger.length;
+  assert.equal(await collect(() => assert.fail("a live unit has no terminal replay")), 3);
+  assert.equal(h.saved().control.ledger.length, rows);
+  assert.equal(h.deletes, 0);
+  h.flags.active = false; h.flags.expired = true; // Reconnect after systemd discarded exit metadata.
+  // Even the otherwise-valid shape of older native evidence cannot qualify.
+  const legacy = { ...syntheticInspection("blocked"), schema: "benchmark-isolated-group-campaign-inspection/v1",
+    selection: launched.selection, groups: [] };
+  await assert.rejects(collect(async () => legacy), /native campaign validation unavailable or invalid/);
+  assert.ok(h.saved().archiveSha256 && h.saved().evidenceSha256); assert.equal(h.deletes, 0);
+  assert.ok(h.calls.some((c) => c[0] === "ssh" && c.at(-1).includes(bootId) && c.at(-1).includes("CORTEN_IDLE")));
+  // Synthetic replay seam tests only custody dispatch, never the native verifier.
+  const patched = { ...legacy, offlineTerminal: { hostname: launched.name, bootId, token: launched.token,
+    bootstrapSealSha256: digest(JSON.stringify(launched.control.ledger.at(-1).request.seal)) } };
+  assert.equal(launched.group, group);
+  h.flags.busyHost = true;
+  await assert.rejects(collect(async () => patched), /terminal archive or idle-host proof unavailable/);
+  assert.equal(h.deletes, 0);
+  h.flags.busyHost = false;
+  assert.equal(await collect(async () => patched), 1);
+  assert.equal(h.deletes, 1); assert.ok(h.saved().destroyedAt);
+  assert.equal(h.saved().fullGroupQualified, false);
+});
+
+test("a lost offline final acknowledgement never authorizes another launch or collection", async (t) => {
+  const f = offlineFixture(t, { lost: true }), { h } = f;
+  await assert.rejects(f.launch(), (error) => error.controlTreeUncertain === true);
+  assert.equal(f.seals, 1); assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+  assert.deepEqual(h.saved().control.sealed, []);
+  assert.ok(existsSync(join(h.local, "operation.lock")));
+  assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
+  await assert.rejects(h.task().collect(), { code: "EEXIST" });
+  await assert.rejects(f.launch());
+  assert.equal(h.creates, 1);
+});
+
+test("pre-create census cannot overlap an offline handoff with another benchmark host", async (t) => {
+  const f = offlineFixture(t), { h } = f;
+  const peer = plan(), row = peer.jobs.find(({ group }) => group === "json-api");
+  h.hosts([{ ...droplet(row, 999), ip: "192.0.2.99" }]);
+  await assert.rejects(f.launch(), /foreign benchmark host blocks fleet launch/);
+  assert.equal(h.creates, 0);
+  assert.equal(h.saved().createIntentAt, undefined);
+  const offline = h.saved().fleet;
+  assert.throws(() => contract.assertFleetCensus([], offline, undefined, [state(peer, row.group)]), /requires no live peer/);
+  assert.throws(() => contract.assertFleetCensus([], peer, undefined, [state(offline, f.group)]), /cannot authorize a parallel host/);
+});
+
+for (const group of ["json-api", "mixed-production"]) {
+  test("offline audit uses an independently approved, separately sealed delivery: " + group, async (t) => {
+    const f = offlineFixture(t, { group }), { h, run } = f;
+    await f.launch();
+    const path = join(h.temp, "review.json"), bytes = JSON.stringify(syntheticDelivery(group));
+    writeFileSync(path, bytes);
+    const before = digest(readFileSync(h.statePath));
+    const options = { collect: undefined, deliverAudit: path, auditGroup: group, campaign, approveSubject: subject };
+    await assert.rejects(h.task({ run, authorizeAudit: async () => ({ reservationSha256: before, deliverySha256: "0".repeat(64) }) }, options)
+      .deliverAudit(), /locked audit delivery changed/);
+    assert.equal(h.saved().auditIntents, undefined);
+    const approved = h.task({ run, authorizeAudit: async () => ({ reservationSha256: before, deliverySha256: digest(bytes) }) }, options);
+    assert.equal(await approved.deliverAudit(), 3);
+    const saved = h.saved(), epoch = "audit-" + group;
+    assert.deepEqual(saved.control.sealed, ["bootstrap", epoch]);
+    assert.ok(saved.control.ledger.filter(({ request }) => request.epoch === epoch).some(({ request }) => request.invocation.channel === "sftp"));
+    assert.equal(saved.auditIntents[group].sha256, digest(bytes));
+    assert.equal(saved.validation, undefined);
+    assert.equal(f.seals, 2);
+    assert.equal(h.deletes, 0);
+  });
+}
 
 test("dedicated startup starts once, then leaves the host's idle check free of root SSH", async (t) => {
   for (const mode of ["quiet", "busy", "cancelled-before-start", "cancelled-after-start", "install-failed"]) {

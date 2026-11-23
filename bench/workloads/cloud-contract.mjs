@@ -101,7 +101,8 @@ function fleetHost(region, regions = fleetRegions) {
 function fleetSelection(single) {
   const current = selection();
   if (!single) return current;
-  exact(single, ["group", "indexSha256", "checkout"]);
+  exact(single, ["group", "indexSha256", "checkout", ...(single.offlineHandoff === undefined ? [] : ["offlineHandoff"])]);
+  if (single.offlineHandoff !== undefined) assert.equal(single.offlineHandoff, true, "offline handoff marker");
   assert.ok(groupNames.includes(single.group), "unknown independent group");
   full(single.indexSha256, /[a-f0-9]{64}/, "continuation index digest");
   full(single.checkout, /[^\r\n\0]{1,4096}/, "measured checkout");
@@ -202,7 +203,9 @@ export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, st
 }
 export function assertFleetCensus(droplets, plan, remainingRegion, peers = []) {
   validateLaunchFleet(plan); assert.ok(Array.isArray(droplets));
+  if (plan.single?.offlineHandoff) assert.deepEqual(peers, [], "offline handoff requires no live peer");
   const peerRows = new Set(peers.map((s) => {
+    assert.ok(!s.fleet.single?.offlineHandoff, "offline handoff cannot authorize a parallel host");
     assert.ok(plan.single && s.fleet.single?.indexSha256 === plan.single.indexSha256
       && s.group !== plan.single.group && s.provider.accountId === plan.provider.accountId,
       "peer belongs to a different reservation or account");
@@ -277,7 +280,11 @@ export function validateState(s, round, options) {
   if (s.benchPackage !== undefined) assert.equal(s.benchPackage, true, "bench package marker");
   // Saved reservations without this marker must regenerate the original job.
   if (s.quietBootstrap !== undefined)
-    assert.ok([true, "after-start", "prelogin"].includes(s.quietBootstrap) && dedicated && s.control?.monitor, "quiet bootstrap requires a supervised group");
+    assert.ok([true, "after-start", "prelogin"].includes(s.quietBootstrap) && dedicated
+      && (s.control?.monitor || s.fleet.single?.offlineHandoff), "quiet bootstrap requires a registered group");
+  if (s.fleet?.single?.offlineHandoff && (s.control || s.status !== "reserved"))
+    assert.ok(s.control && !s.control.monitor && s.quietBootstrap === "prelogin",
+    "offline handoff requires the prelogin policy and no monitor");
   date(s.createdAt);
   assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected", "retired"].includes(s.status));
   if (["preparing", "starting", "running", "collected", "retired"].includes(s.status)) assert.ok(s.id && s.ip, "owned host identity missing");
@@ -535,7 +542,7 @@ const dedicatedWorkspaceSha256 = createHash("sha256").update(`set -euo pipefail\
 // of the inspecting controller. Historical uploaded job bytes stay the same.
 export function bootstrapWorkspaceScript(s, { launch = false } = {}) {
   const row = s.control?.ledger[1];
-  return s.group && s.control?.monitor && (launch || (row?.localTerminal === true && row.code === 0
+  return s.group && (s.control?.monitor || s.fleet?.single?.offlineHandoff) && (launch || (row?.localTerminal === true && row.code === 0
     && row.request.sequence === 1 && row.request.epoch === "bootstrap" && !row.request.seal
     && row.request.invocation.channel === "ssh" && row.request.invocation.deadlineMs === 60000
     && row.request.invocation.requestSha256 === dedicatedWorkspaceSha256))
@@ -836,7 +843,7 @@ Wants=network-online.target
 [Service]
 Type=exec
 ExecStart=/bin/bash /bench/job.sh
-WorkingDirectory=/bench
+${s.fleet?.single?.offlineHandoff ? "ExecStopPost=-/usr/bin/timeout -k 5 15 /usr/sbin/nft delete table inet corten_bench_native\n" : ""}WorkingDirectory=/bench
 Delegate=cpu cpuset memory pids
 DelegateSubgroup=supervisor
 Restart=no
