@@ -1,2 +1,2 @@
-- A kept page or body holds its headers as a list of its own size, not a copy of the whole header map: under jemalloc a kept page of 6,124 bytes takes 536 fewer bytes of memory, and a page kept with room runs about 1% fewer instructions.
-  ([#1824 A Public page asked for once costs 44% more cycles than the same page not kept](https://github.com/corten-run/corten/issues/1824))
+- A kept page or body holds its headers as a list of their own size, not a copy of the handler's header map, and its `Cache-Control` at its own length, so each answer the store keeps takes less of the process's memory. What counts against `App::kept_answers` and what a visitor receives are unchanged
+  ([#1824 A Public page asked for once costs 44% more cycles than the same page not kept](https://github.com/corten-run/corten/issues/1824)).
