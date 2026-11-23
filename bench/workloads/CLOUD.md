@@ -934,7 +934,10 @@ data, never traverses it, and opens the canonical instance and every ancestor
 without following links. `/var/lib/cloud/data/instance-id` must be a single-link
 regular file containing the exact host ID, with at most one final newline;
 `user-data.txt` in the canonical instance must be present, single-link, regular
-and empty. Descriptor and path identities are checked before and after reading,
+and empty on historical hosts. Only a new `quietBootstrap: "prelogin"` reservation
+requires the exact source-fixed boot data instead. Its unused-host and failed-setup
+probes also bind those bytes to the canonical instance; missing or different data
+never proves retirement. Descriptor and path identities are checked before and after reading,
 and must remain unchanged when quiescence is checked again in each capture,
 rehash and fence invocation. Missing, foreign or relative selectors and linked,
 special or replaced canonical paths refuse custody; this exception never permits
@@ -1450,11 +1453,18 @@ other user process from native cleanup evidence.
 
 On dedicated group hosts, the benchmark and Docker run as system services.
 Root SSH still needs a normal logind session, but not a separate user manager.
-For new dedicated reservations, the controller installs a runtime systemd
-drop-in with the job unit and waits for systemd to reload it. The drop-in skips
-new starts of `user@0.service` while the host's control binding exists. It does not stop
-the current manager or change SSH or PAM. For new reservations
-(`quietBootstrap: "after-start"`), the last login before the drain starts the
+For new dedicated reservations (`quietBootstrap: "prelogin"`), the provider sends
+one fixed cloud-config in the create body, not caller-supplied user data. Its
+`bootcmd` writes a root-only drop-in for `user@0.service` under `/run`. The
+condition skips activation while the drop-in itself exists, even before the
+first root login. The hook does not create a control binding.
+With the genuine guardian binding in place, guarded install checks the boot
+file's bytes, type, ownership and mode, atomically replaces it with the condition
+on the binding, and reloads systemd. Neither condition stops an existing
+manager or changes SSH, PAM or session ownership.
+
+Both this handoff and the preceding `"after-start"` handoff keep the same
+quiet interval. The last login before the drain starts the
 unit. After that start is acknowledged, the controller opens no SSH session for
 135 seconds: two minutes for natural drain, then the existing 15-second idle
 check. The service uses its own monotonic exec-start timestamp for the window.
@@ -1467,9 +1477,15 @@ manager processes, not why the process changed. Active followed by inactive
 with main PID zero is the expected drain, not evidence of reactivation.
 The job checks the installed and effective policy and requires an inactive
 manager with no main PID before cloud-init and again before native entry.
+New jobs also count UID 0 logind sessions at the early gate: a held login
+is refused even if it never started a manager. The service logs the count,
+monotonic sample time and presence of root's linger file, not session identities.
+The final gate permits the registered monitor's session; all existing ownership
+and process checks still apply. A linger file alone does not explain an active manager.
 A late early proof fails rather than admitting a sample from after polling
 could resume. Nothing retries the start, stops the manager or suppresses a failure.
-Saved `quietBootstrap: true` jobs retain the original check immediately after
+Saved `"after-start"` jobs retain the drop-in installed after login and their
+original job bytes. Saved `quietBootstrap: true` jobs retain the original check immediately after
 unit start; jobs without the marker retain their drain check near native entry.
 The run log records which property it is querying and the observed state and
 main PID, so a busy manager can be distinguished from a stalled query.
@@ -1482,11 +1498,16 @@ Use the production guarded upload/install/start and first status request. In the
 rehearsal job keep the generated supervisor, drain and both idle checks; replace
 the provisioning and workload body with a bounded stand-in. Record the rehearsal
 diff, image and controller commit. Do not register it as benchmark evidence.
-On a clean boot require both checks to pass and use boot-relative journal and
-guarded SSH timestamps to verify the first status login followed the early proof.
-On a second clean boot retain a fixture-owned root login with its active manager
-*before* installing the policy: the early check must fail before provisioning,
-with no second start. Bound each rehearsal to ten minutes, preserve the small
+Supply the exact create payload on both hosts. On the clean boot require proof
+from the installed image (including cloud-init, SSH service/socket aliases and
+boot-relative journal times) that the boot policy was loaded before first
+authentication. Upstream [cloud-init unit ordering](https://github.com/canonical/cloud-init/blob/24.1/systemd/cloud-init.service.tmpl)
+alone is not that proof. Require both idle gates and verify the first status login
+followed the early proof. On the second boot hold an identified fixture-owned
+UID 0 SSH session across the early check. Even with an inactive manager and PID
+zero the service must report the root session and refuse before provisioning. A
+preexisting active manager must never be stopped. Do not infer that the negative
+worked just from a failure or timeout. Bound each rehearsal to ten minutes, preserve the small
 logs and source hashes, then remove the VM and its disks and confirm absence.
 An ambiguous or failed result stops the rollout. Even a passing rehearsal needs
 one separately approved real group to pass the unchanged pre-timing gate and

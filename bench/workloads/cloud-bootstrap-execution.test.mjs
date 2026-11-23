@@ -4,7 +4,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { bootstrapWorkspaceScript, fleetPlan, installBenchmarkUnit, remoteFiles, reservation } from "./cloud-contract.mjs";
+import { parse } from "yaml";
+import { bootstrapWorkspaceScript, fleetPlan, installBenchmarkUnit, preloginUserData, remoteFiles, reservation } from "./cloud-contract.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { digest } from "./cloud-local.mjs";
 import { remoteFiles as productionFiles } from "./cloud-remote.mjs";
@@ -277,7 +278,8 @@ function executeRootManager(t, script, { mode = "drain", marker = true, prior, q
   symlinkSync("/bin/bash", join(bin, "bash"));
   symlinkSync("/usr/bin/mkdir", join(bin, "mkdir"));
   symlinkSync("/usr/bin/cmp", join(bin, "cmp"));
-  const afterStart = quiet?.quietBootstrap === "after-start";
+  const prelogin = quiet?.quietBootstrap === "prelogin", afterStart = prelogin || quiet?.quietBootstrap === "after-start";
+  for (const binary of ["mv", "stat"]) symlinkSync("/usr/bin/" + binary, join(bin, binary));
   if (afterStart) writeFileSync(join(bin, "python3"), `#!/usr/bin/python3 -I
 import os, sys, time
 assert sys.argv[1:3] == ["-I", "-c"]
@@ -294,6 +296,13 @@ exec(source)
   else symlinkSync("/usr/bin/python3", join(bin, "python3"));
   writeFileSync(join(bin, "busctl"), `#!/bin/sh
 set -eu
+if test "$*" = "--json=short call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListSessions"; then
+  echo ListSessions >> trace
+  if test "$MODE" = unknown-sessions; then exit 1; fi
+  if test "$MODE" = held-session; then echo '{"type":"a(susso)","data":[[["7",0,"root","","/session/7"]]]}'
+  else echo '{"type":"a(susso)","data":[[]]}'; fi
+  exit
+fi
 test "$*" = "--json=short get-property org.freedesktop.systemd1 /org/freedesktop/systemd1/unit/user_400_2eservice org.freedesktop.systemd1.Unit Conditions"
 echo Conditions >> trace
 if test "$MODE" = shadowed; then trigger=true; else trigger=false; fi
@@ -351,13 +360,16 @@ exec "$@"
     "late-shadowed": "export MODE=shadowed\n" };
   const drain = afterStart ? script.slice(script.indexOf("bootstrap_stage=root-manager-drain\n"), script.indexOf("bootstrap_stage=root-manager-idle\n"))
     : mode === "drain" ? ": > drained\n" : "";
-  const shell = quiet ? install + drain + stages[0] + (late[mode] ?? "") + stages[1]
+  const boot = prelogin && mode !== "missing-boot" ? parse(preloginUserData).bootcmd[0] +
+    (mode === "wrong-boot" ? 'echo foreign > "$DROPIN"\n' : "") : "";
+  const shell = quiet ? boot + install + drain + stages[0] + (late[mode] ?? "") + stages[1]
     : stages.join("");
   // Run only the extracted root-manager stages and policy installation.
   // Redirect their paths into the fixture except the literal condition.
   assert.doesNotMatch(shell, /\/(?:usr\/)?(?:s?bin|etc)\//);
   const result = spawnSync("/bin/bash", ["-c", "set -Eeuo pipefail\n" +
-    shell.replace(/(?<!!)\/run\//g, "./run/") + "printf 'NATIVE_ENTRY_REACHED\\n'\n"], {
+    shell.replace(/(?<!!)\/run\//g, "./run/").replaceAll("/var/lib/systemd/linger/root", "./linger-root")
+      .replace("= 0:0:600:1", `= ${process.getuid()}:${process.getgid()}:600:1`) + "printf 'NATIVE_ENTRY_REACHED\\n'\n"], {
     cwd: root, env: { PATH: bin, LANG: "C", MODE: mode, DROPIN: "." + dropin, BINDING: binding },
     encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024,
   });
@@ -368,7 +380,7 @@ exec "$@"
   const handoffQueries = afterStart ? [`show ${quiet.unit} --property=ExecMainStartTimestampMonotonic --value`,
     "show user@0.service --all --property=ActiveState,MainPID,ActiveEnterTimestampMonotonic"] : [];
   assert.ok(calls.every((call) => handoffQueries.includes(call)
-    || /^(daemon-reload|timeout (120|15)|Conditions|sleep 1|show user@0\.service --property=(ActiveState|MainPID) --value)$/.test(call)), calls.join("\n"));
+    || /^(daemon-reload|timeout (120|15)|Conditions|ListSessions|sleep 1|show user@0\.service --property=(ActiveState|MainPID) --value)$/.test(call)), calls.join("\n"));
   return { ...result, calls, contents: existsSync(path) ? readFileSync(path, "utf8") : null };
 }
 
@@ -443,6 +455,34 @@ test("post-start idle evidence distinguishes natural drain, persistent manager a
   assert.equal(missing.status, 1);
   assert.match(missing.stderr, /missing unit start time/);
   assert.equal(missing.stdout, "");
+});
+
+test("prelogin condition precedes guardian custody; both idle gates survive the atomic switch", {
+  skip: process.platform !== "linux",
+}, (t) => {
+  const quiet = { ...ingressState(), quietBootstrap: "prelogin" }, job = productionFiles(quiet)["job.sh"];
+  const config = parse(preloginUserData);
+  assert.deepEqual(Object.keys(config), ["bootcmd"]);
+  assert.equal(config.bootcmd.length, 1);
+  assert.match(config.bootcmd[0], /ConditionPathExists=!\/run\/systemd\/system\/user@0\.service\.d\/90-corten-benchmark\.conf/);
+  assert.doesNotMatch(config.bootcmd[0], /binding\.json|systemctl (?:stop|mask|restart)/);
+  for (const mode of ["drain", "missing-boot", "wrong-boot", "busy", "held-session", "unknown-sessions", "late-busy", "late-shadowed"]) {
+    const result = executeRootManager(t, job, { mode, quiet });
+    assert.equal(result.status === 0, mode === "drain", mode + ": " + result.stderr);
+    assert.equal(result.stdout.includes("NATIVE_ENTRY_REACHED"), mode === "drain");
+    if (mode === "drain") {
+      assert.equal(result.contents, policy);
+      assert.equal(result.calls.filter(s => s === "ListSessions").length, 2);
+    }
+    if (mode === "busy" || mode === "held-session") {
+      assert.match(result.stderr, /monotonic-us=\d+ root-sessions=[01] linger-file=0/);
+      assert.equal(result.calls.filter(s => s === "ListSessions").length, 1, "refuse before provisioning");
+    }
+    if (mode === "held-session") assert.match(result.stderr, /MainPID=0[\s\S]*root-sessions=1[\s\S]*root-manager: root session before provisioning/);
+  }
+  const unbound = executeRootManager(t, job, { quiet, marker: false });
+  assert.notEqual(unbound.status, 0);
+  assert.equal(unbound.contents, "[Unit]\nConditionPathExists=!" + dropin + "\n");
 });
 
 test("new dedicated setup requires an intact handoff and idle manager at both gates", {

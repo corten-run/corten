@@ -50,7 +50,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     if (binary === "ssh") {
       const script = input.slice("set -euo pipefail\n".length, -1), saved = state();
       if (script === `systemctl start ${saved.unit}`) {
-        if (!installed || started || saved.quietBootstrap !== "after-start") throw new Error("unexpected benchmark start");
+        if (!installed || started || saved.quietBootstrap !== "prelogin") throw new Error("unexpected benchmark start");
         started = true;
         return reply();
       }
