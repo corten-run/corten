@@ -1373,8 +1373,9 @@ async fn named_three_times(names: usize, thin: bool) -> bool {
 /// The most names a map holds: `http` grows one no further, and its `reserve` and `insert`
 /// panic past them.
 fn most_names() -> usize {
+    let name = |n: usize| header::HeaderName::from_bytes(format!("x-{n}").as_bytes()).unwrap();
     let mut map = HeaderMap::new();
-    while map.try_append(header::HeaderName::from_bytes(format!("x-{}", map.len()).as_bytes()).unwrap(), HeaderValue::from(0)).is_ok() {}
+    while map.try_append(name(map.len()), HeaderValue::from(0)).is_ok() {}
     map.keys_len()
 }
 
