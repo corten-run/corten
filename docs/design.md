@@ -8019,16 +8019,21 @@ rules something out.
     space, does not see.
     So the job is queued by a count that makes it pay for itself in the workload that triggers it
     (`kept::due`): 8,192 answers to clients that rank brotli first, and three more for each byte
-    of the body. Its instructions, by the probe under callgrind for bodies of 1 to 32 KiB (a table
-    of records, prose, random text and one block repeated, 0.34 to 12.4 million a job, at most
-    about 440 a byte of the body), have a part that does not grow with it; spread over its due, a body asked
-    for exactly that often spends at most 116 instructions an answer on its job (prose of 32 KiB:
-    12,363,878 over 106,496), 0.46% of the 25,136 a page's answer given again took under
-    callgrind, 45 at 1 KiB (a table: 509,048 over 11,264), and the faults, about 250 a job whatever
-    the body, are spread over 11,264 answers or more. One asked for more spends less, and twice its
-    due half. Taken at the seventh run's rate of 1.42 cycles for each instruction a job adds, about
-    2.1 million cycles a job of 6 KB (an estimate), the job adds about 80 cycles to each of a 6,124-
-    byte page's 26,564 answers, about 0.2% of the 48,000 or so a request took in the sixth run.
+    of the body. Its instructions, counted by the probe under callgrind for 36 bodies (four kinds, a
+    table of records, prose, random text and one block repeated, at nine sizes from 1 to 32 KiB,
+    each encoded once before the count), were 342,886 to 12,363,878 a job and 48.5 to 497.1 a byte
+    of the body (the most for the table of 1 KiB: 509,048 over 1,024), a part of them not growing
+    with it. Spread over its due, the job of a body asked for exactly that often took at most 116.10
+    instructions for each of its answers among those 36 (prose of 32 KiB: 12,363,878 over 106,496),
+    0.462% of the 25,136 a page's answer given again took under callgrind, and 45.19 at 1 KiB (the
+    table: 509,048 over 11,264); the faults, about 250 a job whatever the body, are spread over
+    11,264 answers or more. That is the most among the bodies measured, averaged over a copy's whole
+    count: a body of another kind may take more, and over a span shorter than the count the job's
+    cost lands at once, when it runs, not spread. One asked for more spends less, and twice its due
+    half. As an estimate and not a bound, taken at the seventh run's rate of 1.42 cycles for each
+    instruction a job adds, about 2.1 million cycles a job of 6 KB, the job adds about 80 cycles to
+    each of a 6,124-byte page's 26,564 answers, about 0.2% of the 48,000 or so a request took in the
+    sixth run.
     What it gives up: a page asked for fewer times than its due in one lifetime (a page made again,
     by a write or at the end of its lifetime, counts from none) never gets its brotli 5 and keeps
     the zstd 1 it had before this change, and one asked for more gets it only after its due: at
@@ -8037,7 +8042,7 @@ rules something out.
     ten times its due in a lifetime sends nine tenths of its browser answers in brotli 5. Every
     answer before the due writes the page's count, where the second answer had been the last to:
     callgrind counts that write's instructions, not what it costs where several cores answer
-    the same page. Counted in process under callgrind as the sixth run's pair was (`a88a06aa8`
+    the same page; the eighth run's `hot`, below, is declared for that, on four cores of one host. Counted in process under callgrind as the sixth run's pair was (`a88a06aa8`
     against `04530f7e0`, whose production sources are `a02c81e86`'s; rustc 1.100.0, valgrind
     3.24.0, jemalloc 5.3.0 preloaded, the medians of three rounds, each URL new, the thread started
     by the first URL's due answer): the first answer, which makes and keeps the page, took 264,406.5
@@ -8055,10 +8060,20 @@ rules something out.
     this change's head against main's `04530f7e0` on such a host, with every turn on a newly
     started build, 100 pairs a workload and the margin of the runs before, a one-sided 95% bound
     under +1% in user plus kernel cycles a request, on `twice` as the seventh ran it (which the rule
-    gives no job), `churn`, in which every URL is new and asked for exactly its due, 26,564 times,
-    so that each URL's last answer queues its job, and the four workloads of the runs before
-    (`browser`, `gzip`, `refused`, `json-browser`), each warmed to its due. A bound at or over +1%
-    on any, or a run that cannot be used, blocks the merge. The first two runs on a quiet host did
+    gives no job); `churn`, in which every URL is new and asked for exactly its due, 26,564 times,
+    so that each URL's due answer queues its job, and once more, so that an answer given its brotli
+    5 shows a job that ended while the turn was counted; `hot`, the app on four CPUs with a worker
+    each and every URL new and asked for 16,384 times from all 64 connections at once, so that one
+    page's count is written on several cores before its due; and the four workloads of the runs
+    before (`browser`, `gzip`, `refused`, `json-browser`), each warmed to its due, all but `hot`
+    with the app on one CPU. `churn`'s turns of this change are usable only if each shows a job
+    ended on each of `wrk`'s two threads and, in all, at least half as many jobs for each answer as
+    when every answer is one of a URL asked for exactly its due, so its bound covers the rule's worst
+    case for that page diluted to no less than half, with the density each build reached reported;
+    a host too slow for that makes the run unusable. A first plan for this run counted the requests
+    sent where it meant the jobs done, which could have let a turn with no job pass, and had no
+    workload with more than one core; round 16 of the review found both before it ran. A bound at
+    or over +1% on any, or a run that cannot be used, blocks the merge. The first two runs on a quiet host did
     not count user first-level instruction-cache misses, which CONTRIBUTING.md asks for as a
     diagnostic when code is added or moved: each turn counted `cycles:u`, `cycles:k` and
     `instructions:u` alone,
@@ -8772,7 +8787,11 @@ rules something out.
     kept answer's brotli is seen delaying held values on the thread they share, or an app's kept
     bodies past 32 KiB are where most of its bytes go, so the bound on its brotli should move on a
     measurement of its own, or the eighth run's `churn`, or a profile of an app, shows a kept
-    body's job costing more than its due's answers can repay, so the count should grow, or a
+    body's job costing more than its due's answers can carry, so the count should grow, or a body
+    of a kind or size the probe did not count spends more than about 116 instructions an answer on
+    its job, so the count's terms should be drawn again, or a run on more cores than `hot`'s four,
+    or a profile of an app on many, shows the count's write costing answers to one page there, so
+    it should be written less often, or a
     measured app's kept pages rarely reach their due in a lifetime while most of its bytes go to
     browsers, so it should fall, or the job's part that does not grow with the body (brotli's
     tables and, under jemalloc, about 250 page faults a job) is made smaller, as by an encoder the
@@ -8794,9 +8813,13 @@ rules something out.
     Platinum 8280, Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), every turn on a newly
     started build, kept under the tag `evidence/ac43f8f0`, the miss the due rule answers; 2026-11-23
     for a kept body's brotli 5 by its size, by a probe that encodes as `Level::Kept` does (brotli
-    9.1.3, rustc 1.100.0 in rust:1-trixie), its instructions under callgrind (valgrind 3.24.0) for
-    four kinds of body at nine sizes from 1 to 32 KiB and its page faults and times on a thread of
-    its own under jemalloc 5.3.0 and glibc's allocator on a workstation; 2026-11-23 for the
+    9.1.3, rustc 1.100.0 in rust:1-trixie; the kit 1846r6's `local/encprobe`, `src/main.rs` sha256
+    9e718179fea91e808de7ff14306a541ca26b1ed2000f4ae6d6ffe1224fa6505e), its instructions under
+    callgrind (valgrind 3.24.0) for four kinds of body at nine sizes from 1 to 32 KiB (36 counts,
+    each the summary of one dump; recomputed for round 16: table 509,048 to 7,032,869, prose 436,630
+    to 12,363,878, random 430,361 to 5,346,977, repeat 342,886 to 1,588,910, at 1 and 32 KiB) and
+    its page faults and times on a thread of its own under jemalloc 5.3.0 and glibc's allocator on a
+    workstation; 2026-11-23 for the
     instructions of the answers before, at and past a kept page's due, of its job and of the
     thread's start, under callgrind on a workstation, `a88a06aa8` against `04530f7e0` (rustc
     1.100.0, valgrind 3.24.0, jemalloc 5.3.0 preloaded, three rounds); 2026-11-23 for the sixth
