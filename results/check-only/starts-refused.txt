@@ -1,0 +1,2 @@
+refused base: 1 of 1 starts: WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes; FENCE ok in 1
+refused head: 1 of 1 starts: WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes; FENCE ok in 1

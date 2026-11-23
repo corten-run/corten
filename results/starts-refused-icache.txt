@@ -1,0 +1,2 @@
+refused-icache base: 32 of 32 starts: WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes; FENCE ok in 32
+refused-icache head: 32 of 32 starts: WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes; FENCE ok in 32

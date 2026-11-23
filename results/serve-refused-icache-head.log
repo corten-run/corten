@@ -1,0 +1,128 @@
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1601 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1620 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1654 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 2012 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1600 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1928 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1643 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1652 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 2014 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1655 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1615 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1735 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1632 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1604 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1662 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1549 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1560 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 2019 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1723 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1622 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1609 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 2413 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1645 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 3 answers, 1510 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1668 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1666 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1633 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1579 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1611 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1826 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1720 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes
+ALLOCATOR jemalloc
+READY refused on 18082
+FENCE ok head: /mark br after 4 answers, 1578 us, no panic
+WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age 0, 1819 bytes

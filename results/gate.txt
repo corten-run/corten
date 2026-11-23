@@ -1,0 +1,29 @@
+browser (cycles, 100 pairs): usable true
+  cycles user+kernel a request: base 50231.71, head 49291.20; median change -1.96%, bound (rank 59) -1.72%, range -6.69% to +7.57%
+  instructions:u a request: base 30136.19, head 30128.23; median change -0.03%, bound (rank 59) -0.03%, range -0.15% to +0.10%
+  gate (usable, 100 pairs, bound under +1%): met
+gzip (cycles, 100 pairs): usable true
+  cycles user+kernel a request: base 49849.00, head 49126.61; median change -1.43%, bound (rank 59) -1.09%, range -4.58% to +4.65%
+  instructions:u a request: base 29563.48, head 29592.49; median change +0.03%, bound (rank 59) +0.03%, range -0.12% to +0.18%
+  gate (usable, 100 pairs, bound under +1%): met
+refused (cycles, 100 pairs): usable true
+  cycles user+kernel a request: base 50470.67, head 49681.42; median change -1.47%, bound (rank 59) -0.99%, range -25.53% to +10.71%
+  instructions:u a request: base 30145.75, head 30147.84; median change +0.04%, bound (rank 59) +0.04%, range -0.08% to +0.16%
+  gate (usable, 100 pairs, bound under +1%): met
+json-browser (cycles, 100 pairs): usable true
+  cycles user+kernel a request: base 48943.17, head 48051.63; median change -1.67%, bound (rank 59) -1.44%, range -7.38% to +10.66%
+  instructions:u a request: base 31154.62, head 31148.99; median change -0.03%, bound (rank 59) -0.02%, range -0.96% to +0.90%
+  gate (usable, 100 pairs, bound under +1%): met
+browser-icache (icache, 30 pairs): usable true
+  L1-icache-load-misses:u a request: base 2619.18, head 2698.71; median change +2.94%, bound (rank 20) +3.81%, range -4.69% to +7.75%
+  instructions:u a request: base 30168.73, head 30160.14; median change -0.03%, bound (rank 20) -0.03%, range -0.15% to +0.05%
+gzip-icache (icache, 30 pairs): usable true
+  L1-icache-load-misses:u a request: base 2625.55, head 2672.06; median change +1.71%, bound (rank 20) +2.46%, range -2.29% to +5.64%
+  instructions:u a request: base 29595.25, head 29603.83; median change +0.03%, bound (rank 20) +0.03%, range -0.12% to +0.18%
+refused-icache (icache, 30 pairs): usable true
+  L1-icache-load-misses:u a request: base 2615.70, head 2720.46; median change +3.58%, bound (rank 20) +5.00%, range -2.01% to +9.37%
+  instructions:u a request: base 30175.27, head 30193.38; median change +0.04%, bound (rank 20) +0.04%, range -0.09% to +0.17%
+json-browser-icache (icache, 30 pairs): usable true
+  L1-icache-load-misses:u a request: base 2795.65, head 2791.97; median change +0.43%, bound (rank 20) +0.97%, range -6.58% to +6.65%
+  instructions:u a request: base 31190.19, head 31179.34; median change -0.03%, bound (rank 20) -0.01%, range -0.95% to +0.91%
+pass 1 gate: met

@@ -1,0 +1,4 @@
+refused-icache (icache, 30 pairs): usable true
+  L1-icache-load-misses:u a request: base 2615.70, head 2720.46; median change +3.58%, bound (rank 20) +5.00%, range -2.01% to +9.37%
+  instructions:u a request: base 30175.27, head 30193.38; median change +0.04%, bound (rank 20) +0.04%, range -0.09% to +0.17%
+JSON {"workload":"refused-icache","kind":"icache","pairs":30,"boundRank":20,"usable":true,"problems":[],"L1-icache-load-misses:u":{"base":2615.695291403941,"head":2720.4626635489485,"change":0.0357670057543783,"bound":0.05003925848973245,"min":-0.02005030174731881,"max":0.09366343196985971},"instructions:u":{"base":30175.269591008455,"head":30193.37887886278,"change":0.0003706477874553249,"bound":0.00041655794020112324,"min":-0.0008728978765346618,"max":0.0016604204022934166}}

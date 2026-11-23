@@ -1,0 +1,5 @@
+gzip (cycles, 100 pairs): usable true
+  cycles user+kernel a request: base 49849.00, head 49126.61; median change -1.43%, bound (rank 59) -1.09%, range -4.58% to +4.65%
+  instructions:u a request: base 29563.48, head 29592.49; median change +0.03%, bound (rank 59) +0.03%, range -0.12% to +0.18%
+  gate (usable, 100 pairs, bound under +1%): met
+JSON {"workload":"gzip","kind":"cycles","pairs":100,"boundRank":59,"usable":true,"problems":[],"cycles user+kernel":{"base":49848.998331628725,"head":49126.61379211681,"change":-0.014292750753890526,"bound":-0.01090077731145056,"min":-0.045755542693622475,"max":0.04648755489627954},"instructions:u":{"base":29563.478375691993,"head":29592.493433526026,"change":0.0002982275245102528,"bound":0.0003102718449965458,"min":-0.0012184061906509447,"max":0.0018144295134439048},"met":true}

@@ -1,0 +1,22 @@
+== 1846r3 calibrate 04:22:12
+== 1846r3 check start 04:22:23
+== 1846r3 checks ok 04:22:25
+== browser start 04:22:25
+== browser ok 04:35:03
+== gzip start 04:35:03
+== gzip ok 04:47:40
+== refused start 04:47:40
+== refused ok 04:59:18
+== json-browser start 04:59:18
+== json-browser ok 05:11:56
+== browser-icache start 05:11:56
+== browser-icache ok 05:13:45
+== gzip-icache start 05:13:45
+== gzip-icache ok 05:15:34
+== refused-icache start 05:15:34
+== refused-icache ok 05:17:04
+== json-browser-icache start 05:17:04
+== json-browser-icache ok 05:18:53
+pass 1 gate: met (all four usable, bounds under +1%)
+every workload of both passes usable
+failed: none

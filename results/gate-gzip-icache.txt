@@ -1,0 +1,4 @@
+gzip-icache (icache, 30 pairs): usable true
+  L1-icache-load-misses:u a request: base 2625.55, head 2672.06; median change +1.71%, bound (rank 20) +2.46%, range -2.29% to +5.64%
+  instructions:u a request: base 29595.25, head 29603.83; median change +0.03%, bound (rank 20) +0.03%, range -0.12% to +0.18%
+JSON {"workload":"gzip-icache","kind":"icache","pairs":30,"boundRank":20,"usable":true,"problems":[],"L1-icache-load-misses:u":{"base":2625.550500672654,"head":2672.0565733258954,"change":0.0171438118960221,"bound":0.02460015090507861,"min":-0.02288803568999731,"max":0.05637493643263691},"instructions:u":{"base":29595.253762043205,"head":29603.827027324347,"change":0.0002560708266264866,"bound":0.0003053525428891035,"min":-0.0012330349833806764,"max":0.0018083991881128192}}

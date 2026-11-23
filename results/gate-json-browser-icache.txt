@@ -1,0 +1,4 @@
+json-browser-icache (icache, 30 pairs): usable true
+  L1-icache-load-misses:u a request: base 2795.65, head 2791.97; median change +0.43%, bound (rank 20) +0.97%, range -6.58% to +6.65%
+  instructions:u a request: base 31190.19, head 31179.34; median change -0.03%, bound (rank 20) -0.01%, range -0.95% to +0.91%
+JSON {"workload":"json-browser-icache","kind":"icache","pairs":30,"boundRank":20,"usable":true,"problems":[],"L1-icache-load-misses:u":{"base":2795.6523030959916,"head":2791.9686273693464,"change":0.004294288369533827,"bound":0.009702497145734457,"min":-0.0657840075989029,"max":0.06650611117298166},"instructions:u":{"base":31190.189298403624,"head":31179.34097980607,"change":-0.0002850845809215796,"bound":-0.00013758508693884064,"min":-0.009459509564243018,"max":0.009115171109007392}}
