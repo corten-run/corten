@@ -2224,7 +2224,10 @@ highlights when linked to), an `<a name>` anchor is found as an `id` is, the fra
 percent-decoded as HTML decodes it, focus moves to the element when it can take focus, and a page
 without a place starts at its top. A focus handler runs in that scroll, as on a full load: the
 runtime neither scrolls nor moves focus after it, and an address it changes
-(`history.replaceState`) ends the navigation there. Focus is then the Navigation API's to reset,
+(`history.replaceState`) ends the navigation there. The runtime sees that focus moved by a
+`focus` listener it adds in the capture phase on `window` for the length of the scroll; a page
+listener added there earlier that stops the event (`stopImmediatePropagation`) and puts focus back
+hides the move, and the runtime may then scroll to the element again. Focus is then the Navigation API's to reset,
 as after any navigation the runtime draws, unless it moved during the navigation (to the element,
 or by the user while the page loaded), which stays. For an element that cannot take focus (a
 heading), a full load starts the next Tab from it; after a client swap, Chromium (159) starts it
