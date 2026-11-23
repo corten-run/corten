@@ -88,18 +88,53 @@ backend.
    marked TODO. Corten offers nothing for it yet: building on a draft means rewriting with each
    revision (Values 2).
 
-   An app can offer a tool today from a function its component's markup calls, in the
-   `#[component(js)]` script, with `document.modelContext.registerTool(.., { signal })`, so the
-   tool goes away with the component. Nothing in Corten needs to change for that.
+   It was reviewed again on 2026-11-23 (Corten `14126d2a8`), when one of the conditions set for
+   that came true: a major agent calls it. ChatGPT's desktop app finds and calls a page's tools
+   in its built-in browser, those a script registers and those written as attributes on a form
+   ([Site tools](https://learn.chatgpt.com/docs/webmcp)). The rest stands as it was. The draft
+   of that day is still a Community Group report that is not on the Standards Track, and the
+   form attributes are not in it at all: `tooldescription`, `toolautosubmit`,
+   `toolparamdescription` and the submit event's `agentInvoked` and `respondWith()` occur nowhere
+   in its text, so they are what Chrome's build does. Chrome offers it to sites through an origin
+   trial (from 149) and Chromium has it off without a flag (159). Mozilla's position is neutral
+   ([mozilla/standards-positions#1412 WebMCP](https://github.com/mozilla/standards-positions/issues/1412))
+   and WebKit's is to oppose it
+   ([WebKit/standards-positions#670 WebMCP](https://github.com/WebKit/standards-positions/issues/670)).
+   So Corten still offers nothing of its own.
 
-   The part Corten would own is the declarative form, where an annotated `<form>` is the tool:
-   `html!` could write the tool's name and field descriptions from the form's
-   `#[derive(Fields)]` struct, with no script, and the agent would use the form's own path
-   (session cookie, same-origin check, `SubmitKey`, `req.invalid`). To settle then: whether the
-   agent gets the patch or the data-mode JSON back; the styling hooks the draft proposes for a
-   form an agent is filling (`:tool-form-active`, `:tool-submit-active`); and a smoke check in
-   a browser that has it. Revisit when the declarative section is written and a second engine
-   ships it, or a major agent calls it
+   What an app can do today was tried that day in Chromium 159 (Playwright 1.65.1's build,
+   started with `--enable-features=WebMCP`), on plain pages and on ui-gallery's forms:
+
+   1. A tool from script: a function its component's markup calls, in the `#[component(js)]`
+      script, calls `document.modelContext.registerTool(tool, { signal })`, so the tool goes
+      away with the component. On a plain page the tool was listed after the call, answered a
+      call with what its `execute` returned, and was gone once the signal aborted. Nothing in
+      Corten needs to change for that. TypeScript 7.0.2's DOM types have no `modelContext`, so
+      the script declares it or casts `document`.
+   2. A form as a tool: a `<form>` with `toolname` and `tooldescription`, which are plain
+      attributes to `html!`, is listed as a tool with no script. The browser writes the tool's
+      input schema from the form's own controls: each one's name and type, `required`, a
+      number's `min`, `max` and `step`, the choices of a select, of radios and of checkboxes of
+      one name with their labels, and each control's label as its description. A call fills the
+      controls and, when the form has `toolautosubmit`, sends it; without that the person
+      presses its button. A form the browser sends itself is an ordinary same-origin post, the
+      page it answers with is loaded, and the call's result is `null`.
+   3. A `data-patch` form is not to be a tool yet. The runtime takes its submit and sends the
+      write, and the browser then fails the agent's call ("Tool execution failed."; Chromium 156
+      gave the reason, "it called preventDefault() on the 'submit' event, without also calling
+      respondWith() with the tool result"). The write is made and the agent is told it failed.
+
+   The part Corten would own is smaller than first written, since the browser reads from the
+   form Corten already draws what `html!` was to write from its `#[derive(Fields)]` struct. What
+   is left: the runtime answering an agent's submit of a form it sends
+   (`event.respondWith(..)` when `event.agentInvoked`), with what the agent gets back still to
+   settle (the patch, the data-mode JSON, a refusal's field errors); the tool attributes as
+   typed names, so a typo does not compile; the styling hooks Chrome has for a form an agent is
+   filling (`:tool-form-active`, `:tool-submit-active`); and a smoke check in a browser that has
+   it. All of that would be written against one engine's build, which changed the error it gives
+   for the same failure between 156 and 159. Revisit when the draft specifies the form
+   attributes and the submit event's answer, or a second engine ships them, or an app needs a
+   `data-patch` form as a tool
    ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/corten-run/corten/issues/695);
    related:
    [#692 An MCP tool is a second handler next to its route, with its own auth closure instead of Identify, so each action is written once per surface and drifts](https://github.com/corten-run/corten/issues/692)).
