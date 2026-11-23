@@ -321,10 +321,11 @@ test("settled bootstrap probe requires exact requests, terminal watchers, dead s
   assert.equal(r.stdout.trim(), "drain fixtures passed");
 });
 
-function lostUploadState() {
-  const state = { ...firstGroupSetupState(), createIntentAt: "2026-11-18T00:00:00.000Z", status: "preparing", launchHostKeySha256: "e".repeat(64),
+function lostUploadState({ offline = false, prelogin = offline } = {}) {
+  const state = { ...firstGroupSetupState(offline), createIntentAt: "2026-11-18T00:00:00.000Z", status: "preparing", launchHostKeySha256: "e".repeat(64),
+    ...(prelogin ? { quietBootstrap: "prelogin" } : {}), ...(offline ? { gitSource: true } : {}),
     control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, sealed: [], ledger: [],
-      monitor: { schema: "benchmark-supervised-control/v1", id: "b".repeat(32), phase: "pending" } } };
+      ...(offline ? {} : { monitor: { schema: "benchmark-supervised-control/v1", id: "b".repeat(32), phase: "pending" } }) } };
   delete state.archiveSha256; delete state.evidenceSha256;
   for (const [binary, args, ms] of [["ssh", ["true"], 30000], ["ssh", [bootstrapWorkspaceScript(state, { launch: true })], 60000],
     ["scp", ["/fixture/job.sh", "root@192.0.2.10:/bench/job.sh"], 900000]]) {
@@ -333,18 +334,26 @@ function lostUploadState() {
   return state;
 }
 
-test("complete lost-upload guest stdout is accepted as unused retirement evidence", { skip: !available }, () => {
-  const state = { ...lostUploadState(), quietBootstrap: "prelogin" };
+for (const offline of [false, true]) test(`complete ${offline ? "offline" : "supervised"} lost-upload guest proof binds unused retirement`, { skip: !available }, () => {
+  const state = lostUploadState({ offline, prelogin: true });
   const script = unusedHostScript(state, { bootstrap: true }), at = 1000000;
   const requests = state.control.ledger.map(r => r.request);
   const guest = fileURLToPath(new URL("./test-fixtures/unused-upload-guest.py", import.meta.url));
-  const r = spawnSync(python, ["-I", guest], { input: JSON.stringify({ script, requests, guardianSource, preloginUserData,
-    hostId: state.id, unit: state.unit }), encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true });
+  const run = mode => spawnSync(python, ["-I", guest], { input: JSON.stringify({ script, requests, guardianSource, preloginUserData,
+    hostId: state.id, unit: state.unit, mode }), encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true });
+  const r = run("unused");
   assert.equal(r.error, undefined); assert.equal(r.status, 0, r.stderr + r.stdout);
   const record = unusedEvidence(r.stdout, state, script, at, at, state.launchHostKeySha256);
   assert.deepEqual(record.observation.refusedUpload, { invocationId: requests[2].invocation.id, jobPresent: false,
     failureSha256: digest('{"helperLine":318}\n') });
   verifyUnusedEvidence(record, state);
+  if (offline) for (const mode of ["job-present", "unknown-file", "remote-seal", "started", "different-user-data"]) {
+    const refusal = run(mode);
+    assert.equal(refusal.error, undefined);
+    assert.equal(refusal.status, 1, `${mode}: ${refusal.stderr} ${refusal.stdout}`);
+    assert.deepEqual(JSON.parse(refusal.stdout), { schema: "benchmark-unused-host/v1", unused: false }, mode);
+    assert.throws(() => unusedEvidence(refusal.stdout, state, script, at, at, state.launchHostKeySha256), { name: "AssertionError" });
+  }
 });
 
 test("lost first upload requires an absent job and a dead, unregistered transfer on the bound guest", { skip: !available }, () => {
@@ -537,10 +546,14 @@ test("setup evidence binds expected exit, fixed script, preserved hashes and bou
   assert.equal(setupEvidence(proof, state, script, 1, 985000, 1015000).exitCode, 1);
 });
 
-function firstGroupSetupState() {
+function firstGroupSetupState(offline = false) {
+  const single = offline ? { group: "json-api", checkout: fileURLToPath(new URL("../..", import.meta.url)),
+    indexSha256: "b".repeat(64), offlineHandoff: true } : undefined;
   const fleet = fleetPlan({ round: "r21", commit, token: "f".repeat(16), sshKey: "42",
     provider: { accountId: "user:synthetic", context: "synthetic-control" },
-    tokens: Object.fromEntries(selection().groups.map(({ group }, index) => [group, (index + 1).toString(16).padStart(16, "0")])) }, "2026-11-15T12:00:00.000Z");
+    tokens: Object.fromEntries(selection().groups.filter(({ group }) => !single || group === single.group)
+      .map(({ group }, index) => [group, (index + 1).toString(16).padStart(16, "0")])) },
+    "2026-11-15T12:00:00.000Z", undefined, single ? { stagedPlacement: true, single } : undefined);
   const { group, token } = fleet.jobs[0];
   return { ...reservation({ round: "r21", commit, token, group, fleet }), id: "123", ip: "192.0.2.10", status: "running",
     archiveSha256: "a".repeat(64), evidenceSha256: "b".repeat(64) };

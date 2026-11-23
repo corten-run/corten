@@ -745,10 +745,15 @@ function replayFailedNativeRetirement(local, state, expectedSha256, readGrouped)
   return record;
 }
 
-function unusedBootstrapState(state) {
+function unusedBootstrapState(state, interrupted = false) {
   const c = state.control;
+  const pending = c?.monitor?.phase === "pending" && !c.monitor.registrationSha256;
+  // Offline launch has no monitor by design. Admit only this exact interrupted
+  // first-upload prefix, never an unmonitored no-op or settled prefix.
+  const offline = interrupted && state.fleet?.single?.offlineHandoff === true
+    && state.quietBootstrap === "prelogin" && c?.monitor === undefined;
   return !!(state.id && state.ip && state.createIntentAt && c?.helperSha256 === guardianSha256
-    && c.monitor?.phase === "pending" && !c.monitor.registrationSha256 && !c.sealed.length
+    && (pending || offline) && !c.sealed.length
     && (state.status === "preparing" ? !state.deletionIntentAt : state.status === "retired" && state.retirement?.kind === "unused")
     && ["bootstrapReady", "preBootstrapTerminal", "auditIntent", "auditIntents", "archiveSha256", "evidenceSha256", "extractionAttempts",
       "evidence", "evidenceOutcome", "exitCode", "validation", "collectedAt", "mixedCancellation"].every((key) => state[key] === undefined));
@@ -774,7 +779,7 @@ export function interruptedFirstUpload(state, local) {
 }
 
 function uploadPrefix(state, local, interrupted) {
-  if (!unusedBootstrapState(state)) return false;
+  if (!unusedBootstrapState(state, interrupted)) return false;
   const { ledger } = state.control;
   if (ledger.length < 3 || ledger.length > 8) return false;
   const ssh = (script, deadline = 60000) => ["ssh", deadline, digest("set -euo pipefail\n" + script + "\n")];

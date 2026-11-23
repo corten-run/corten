@@ -110,6 +110,19 @@ test("a proved sleeping post-terminal udev worker can settle; the first after st
   assert.throws(() => verifySettledHostBoundary(baseline, first, settled, undefined), /terminal clock/);
 });
 
+test("an offline udev settle uses only its own bounded monotonic observations", () => {
+  const { baseline, first, settled, terminal } = udevBoundaries();
+  for (const observation of [baseline, first, settled]) {
+    observation.offlineMonoNs = observation.controlApparatus.sample.monoNs;
+    delete observation.controlApparatus;
+  }
+  assert.equal(udevSettleCandidates(baseline, first, terminal), null, "old replay cannot substitute offline clocks");
+  assert.deepEqual(verifySettledHostBoundary(baseline, first, settled, terminal, "post-terminal", true).settledUdevWorkers,
+    [{ pid: 62274, startTicks: "209603" }]);
+  settled.offlineMonoNs = first.offlineMonoNs;
+  assert.throws(() => verifySettledHostBoundary(baseline, first, settled, terminal, "post-terminal", true), /bounded monotonic interval/);
+});
+
 test("only JSON preparation can settle a worker born before the terminal cutoff, strictly after the baseline", () => {
   const { baseline, first, settled, terminal } = udevBoundaries();
   const preparation = udevSettlePolicy("json-api", "prepare");
