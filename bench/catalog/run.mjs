@@ -89,10 +89,10 @@ const ownedByRun = (labels) => labels?.[label] === runId;
 // A failed bounded command saves its receipt BEFORE owned cleanup removes the container.
 // `verified` is the one ownership check that command relied on; the receipt never re-resolves the name.
 // Saving and reporting it are best effort: they never replace or clear the failure itself.
-async function saveReceipt(path, stage, name, error, verified) {
+async function saveReceipt(path, stage, name, error, verified, fresh = false) {
   try {
     if (typeof verified === "function") verified = await verified();
-    writeFileSync(path, JSON.stringify(await failureReceipt(docker, { stage, container: name, error, verified, owned: ownedByRun }), null, 2));
+    writeFileSync(path, JSON.stringify(await failureReceipt(docker, { stage, container: name, error, verified, owned: ownedByRun, fresh }), null, 2));
     log(`${stage} failure receipt: ${path}`);
   } catch (e) { try { log(`${stage} failure receipt not saved: ${e?.message ?? e}`); } catch {} }
 }
@@ -101,8 +101,9 @@ async function saveReceipt(path, stage, name, error, verified) {
 async function startApp(args, name, receipt) {
   try { return await owned(["run", "-d", ...args], name, { receipt: true }); }
   catch (e) {
-    // Nothing checked this container before its start failed, so the receipt's check is the only one.
-    await saveReceipt(receipt, "app start", name, e, () => ownedContainer((args) => docker(args, { cleanup: true, timeout: 10000 }), name, ownedByRun));
+    // Nothing checked this container before its start failed, so the receipt's check is the only
+    // one, and its inspect snapshot is the receipt's state (`fresh`): nothing is inspected twice.
+    await saveReceipt(receipt, "app start", name, e, () => ownedContainer((args) => docker(args, { cleanup: true, timeout: 10000 }), name, ownedByRun), true);
     throw e;
   }
 }

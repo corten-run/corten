@@ -197,29 +197,41 @@ and finish times; from Docker events since one minute before the command, each e
 and time. It keeps no health-check output, labels or other event attributes. For a missing or
 foreign container (application, startup or upstream) it keeps the command's own evidence and
 the refusal and queries nothing; if the verified container has gone by the time of the
-receipt, it records that and queries nothing else. Each probe has a 10-second bound and a probe
-failure is recorded in the receipt. Saving the receipt is best effort and never replaces the
+receipt, it records that and queries nothing else. A detached start has no earlier check, so
+its receipt's one ownership check is also its state: that inspect is not repeated. Each probe
+has a 10-second bound and a probe failure is recorded in the receipt. An output write error
+after another stop was accepted is recorded as `outputError` and does not change the stop's
+outcome. Saving the receipt is best effort and never replaces the
 failure, which still fails the run; nothing is retried and no command deadline changes.
 Receipts cover the detached parity and preflight starts and these log collections, not the
 measured cold-start create and start. Commands in a timed phase, such as k6's `docker start
--a`, take no receipt and do no receipt work: no lifetime record or clock, no hashing, and no
-listener beyond their output and their close.
+-a`, take no receipt and do no receipt work: no lifetime record or clock, no receipt byte
+count, no hashing, and no listener beyond their output and their close.
 A command succeeds only once its Docker client has exited and both of its pipes have closed,
 so its output is complete, and nothing stopped it: a command stopped at its deadline or by an
 interrupt fails whatever its exit code, cleanup commands included, and the first stop reason
-decides which (an interrupt followed by the deadline stays an interrupt). On Linux the stop
-sends SIGTERM to the client's process group and, two seconds later, SIGKILL while the group is
-still the client's, so a member that ignores SIGTERM dies even after the client has exited and
-even when it holds no pipe; the command settles only after that. A process or group ID is the
-client's only while Node has not reaped the client, or, for the group, while every probe since
-then finds it, so nothing is signalled for a client that had already exited before the stop or
-for a group that has gone (a numeric ID can be reused). On Windows `taskkill /T` stops the
-client's tree within three seconds; it is not run for a client that has already exited, and if
-it fails or stalls the client itself is killed and the helper's exit is recorded. A process
-that left the group (a new session) or the `taskkill` tree can still hold a pipe after the
-client exits. The runner does not stop such a process: five seconds after the stop it stops
-reading, so the command settles as a failure that says its pipes were released without end of
-file, instead of waiting forever.
+decides which (an interrupt followed by the deadline stays an interrupt).
+On Linux the client leads its own process group, and the runner signals that group only while
+the client has not exited: Node has not reaped it, so its PID, which is the group's ID, is still
+reserved. The stop sends SIGTERM to the group and, two seconds later if the client is still
+running, SIGKILL. Once the client has exited the group is never signalled again, because a
+successful probe cannot tell the original group from a new one that took its number. This is a
+deliberate rule: a group member that ignores SIGTERM and outlives the client is not killed. If
+it holds a pipe, the runner releases the pipes at the bound and fails the command, recording
+that the client exited while its output stayed open. Owned Docker containers are still removed
+independently, so this does not leave a browser or k6 container behind. Nothing is signalled
+for a client that had already exited before the stop.
+On Windows tree cleanup is best effort: `taskkill /T /F` receives a bare PID and gets three
+seconds to stop the client's tree. It is not run for a client that has already exited, and it
+is abandoned at 4.75 seconds. If it fails, cannot start or takes longer than three seconds,
+whatever its exit code, a client still running is killed through its own handle, and the
+helper's outcome is recorded.
+A process that left the group (a new session) or the `taskkill` tree, or a group member that
+outlived the client, can still hold a pipe after the client exits. The runner does not stop
+such a process: five seconds after the stop it stops reading, so the command settles as a
+failure that says its pipes were released without end of file, instead of waiting forever. A
+client that is somehow still running then is left running, no longer holding the runner, and
+the failure says so.
 Startup failures include the container's actual exit state and application log. A checker
 failure without a valid record-response failure receipt retains its original diagnostic
 (including browser/style assertions), rather than replacing it with a missing-file error.

@@ -273,6 +273,8 @@ function verifyStall(stall, summary, folder, { journal, stallDeadlines }) {
   const removal = find(Math.max(state, events), (args) => args[0] === "rm" && args.at(-1) === id);
   assert.ok(state >= 0 && events >= 0 && removal > Math.max(state, events), JSON.stringify(journal));
   assert.equal(journal.filter((args) => args[0] === "events").length, 1, "exactly one receipt was taken");
+  // A detached start's receipt reuses its one ownership check's snapshot: the container is never inspected by ID.
+  if (stall.command === "run") assert.equal(journal.filter((args) => args[0] === "inspect" && args.at(-1) === id).length, 0, JSON.stringify(journal));
   if (stall.command === "logs") {
     const logs = journal.filter((args) => args[0] === "logs");
     assert.ok(logs.length > 0 && logs.every((args) => /^[0-9a-f]{64}$/.test(args[1])), JSON.stringify(logs));

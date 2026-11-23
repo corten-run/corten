@@ -30,7 +30,7 @@ export function commandOutput({ file, capture = true, receipt = false } = {}) {
     };
   };
   const stdout = tail(capture ? 8 * 1024 * 1024 : 65536), stderr = tail(65536);
-  // Every byte a write call accepted, including those before a failed write.
+  // With `receipt` only: every byte a write call accepted, including those before a failed write.
   let written = 0, writeError, closed = false;
   const append = (chunk, buffer) => {
     if (closed) throw new Error("command output already closed");
@@ -40,8 +40,9 @@ export function commandOutput({ file, capture = true, receipt = false } = {}) {
     if (fd !== null) {
       let offset = 0;
       try {
-        while (offset < data.length) { const n = writeSync(fd, data, offset, data.length - offset); offset += n; written += n; }
-      } catch (e) { writeError = e; throw e; }
+        while (offset < data.length) offset += writeSync(fd, data, offset, data.length - offset);
+      } catch (e) { if (receipt) written += offset; writeError = e; throw e; }
+      if (receipt) written += offset;
     }
     buffer.add(data);
   };
@@ -66,6 +67,7 @@ export function commandOutput({ file, capture = true, receipt = false } = {}) {
     stderr: (chunk) => append(chunk, stderr),
     result: () => capture ? stdout.text().trim() : "",
     diagnostic: () => stderr.text() || stdout.text(),
+    receiptBytes: () => start === null ? null : written,
     segment,
     close() { if (!closed) { closed = true; if (fd !== null) closeSync(fd); } },
   };
@@ -79,53 +81,54 @@ const exited = (child) => child.exitCode !== null || child.signalCode !== null;
 // Stops a command client once, and resolves with what it did inside the stop bound (before
 // `releaseMs`); it never rejects. It stops command clients, not browser descendants: browsers
 // run ONLY in owned containers, which the runner removes even when their docker client exited.
-// A numeric ID is the client's only while it is reserved: an exited client's PID or empty
-// group's ID can name another process, so nothing is signalled for a client already reaped.
-// On Linux the client leads its own process group: SIGTERM, then SIGKILL after `graceMs` while
-// the group is still the client's, so a member that ignores SIGTERM dies even after the client
-// exited; it resolves once the group is gone or at the bound. After the client is reaped the
-// group stays the client's only while every probe finds it: a missing or foreign group (ESRCH,
-// EPERM) is never signalled again. On Windows `taskkill /T` stops the client's tree, bounded by
-// `helperMs`; if the helper fails, stalls or cannot start, the client is killed through its own
-// handle. A process that left the group (a new session) or the tree is out of reach; see
-// commandRunner. The options other than `cwd` exist for tests.
-export function killCommand(child, { cwd, platform = process.platform, graceMs = 2000, pollMs = 100, helperMs = 3000,
+// The group rule (Linux): the client leads its own process group, whose numeric ID is the
+// client's PID. That ID is provably the client's group ONLY while Node has not reaped the
+// client: an unreaped leader, even a zombie, keeps the number reserved. Once the client is
+// reaped, a successful probe cannot tell the original group from a new one that took its
+// number, so the group is never signalled again. So: SIGTERM to the group, and SIGKILL after
+// `graceMs`, both only while the client is unreaped; it resolves when the client exits or at
+// the bound. A group member that ignores SIGTERM after the client has exited is not killed:
+// if it holds a pipe, commandRunner releases the pipes at the bound and fails the command,
+// recording that the client exited while its output stayed open. Owned Docker containers are
+// removed independently, so this leaves no browser or k6 container behind. If the group signal
+// fails while the client is unreaped, only the client is stopped, through its own handle.
+// Windows tree cleanup is best effort: `taskkill /T` receives a bare PID, gets `helperMs` to
+// stop the client's tree, and is abandoned at the bound; whenever it fails, cannot start or
+// crosses `helperMs`, whatever its exit code, a still-live client is killed through its own
+// handle. Nothing is signalled for a client already reaped. A process that left the group (a new
+// session) or the tree is out of reach; see commandRunner. Options other than `cwd` are for tests.
+export function killCommand(child, { cwd, platform = process.platform, graceMs = 2000, helperMs = 3000,
   boundMs = releaseMs - 250, taskkill = (pid) => ["taskkill.exe", ["/PID", String(pid), "/T", "/F"]] } = {}) {
   const method = platform === "win32" ? "taskkill" : "process group";
   if (!child.pid) return Promise.resolve({ method, end: "no process" });
   if (exited(child)) return Promise.resolve({ method, end: "the client had already exited; nothing signalled" });
-  return platform === "win32" ? stopTree(child, { cwd, helperMs, boundMs, taskkill }) : stopGroup(child, { graceMs, pollMs, boundMs });
+  return platform === "win32" ? stopTree(child, { cwd, helperMs, boundMs, taskkill }) : stopGroup(child, { graceMs, boundMs });
 }
 
-function stopGroup(child, { graceMs, pollMs, boundMs }) {
+function stopGroup(child, { graceMs, boundMs }) {
   const record = { method: "process group", term: null, kill: null, end: null }, group = -child.pid;
-  // A failed group signal while the client is unreaped is unexpected: from then on only the
-  // client is stopped, through its handle, which Node never signals once it has reaped it.
+  // Each signal is sent in the same synchronous step as the check that the client is unreaped,
+  // so Node cannot reap it in between. A failed group signal while the client is unreaped is
+  // unexpected: from then on only the client is stopped, through its own handle.
   let owned = true;
   try { process.kill(group, "SIGTERM"); record.term = "sent"; }
   catch (e) { owned = false; record.term = e?.code ?? "error"; child.kill("SIGTERM"); }
-  const began = performance.now();
   return new Promise((resolve) => {
-    const done = (end) => { record.end = end; resolve(record); };
-    const step = () => {
-      const late = performance.now() - began >= graceMs;
-      if (!owned) {
-        if (exited(child)) return done("the client exited; the group was not signalled");
-        if (late && record.kill === null) { child.kill("SIGKILL"); record.kill = "client"; }
-      } else {
-        if (exited(child)) {
-          try { process.kill(group, 0); }
-          catch (e) { return done(e?.code === "ESRCH" ? "group gone" : `group no longer the client's (${e?.code ?? "error"})`); }
-        }
-        if (late && record.kill === null) {
-          try { process.kill(group, "SIGKILL"); record.kill = "sent"; }
-          catch (e) { return done(e?.code === "ESRCH" ? "group gone" : `group no longer the client's (${e?.code ?? "error"})`); }
-        }
-      }
-      if (performance.now() - began >= boundMs) return done("bound reached");
-      setTimeout(step, pollMs);
+    let grace, bound;
+    const done = (end) => {
+      if (record.end !== null) return;
+      record.end = end; clearTimeout(grace); clearTimeout(bound); child.removeListener("exit", reaped); resolve(record);
     };
-    setTimeout(step, pollMs);
+    const reaped = () => done("the client exited; its group is not signalled again");
+    if (exited(child)) return reaped();
+    child.once("exit", reaped);
+    grace = setTimeout(() => {
+      if (exited(child)) return reaped();
+      if (!owned) { child.kill("SIGKILL"); record.kill = "client"; return; }
+      try { process.kill(group, "SIGKILL"); record.kill = "sent"; }
+      catch (e) { record.kill = e?.code ?? "error"; owned = false; child.kill("SIGKILL"); }
+    }, graceMs);
+    bound = setTimeout(() => done(exited(child) ? "the client exited; its group is not signalled again" : "bound reached; the client was still running"), boundMs);
   });
 }
 
@@ -137,7 +140,8 @@ function stopTree(child, { cwd, helperMs, boundMs, taskkill }) {
       if (finished) return;
       finished = true; clearTimeout(limit); clearTimeout(cap);
       record.helper = { ...result, stalled };
-      if (result.exitCode !== 0 && !exited(child)) { child.kill("SIGKILL"); record.kill = "client"; }
+      // A helper that crossed its budget did not stop the tree in time, whatever its exit code.
+      if ((result.exitCode !== 0 || stalled) && !exited(child)) { child.kill("SIGKILL"); record.kill = "client"; }
       resolve(record);
     };
     try {
@@ -157,13 +161,17 @@ function stopTree(child, { cwd, helperMs, boundMs, taskkill }) {
 // command the runner stopped (deadline, interrupt, output error) or whose pipes it had to
 // release fails, whatever its exit code or `cleanup`; `cleanup` only lets it start after
 // an interrupt. The first stop reason the runner accepts decides the outcome. A failure
-// carries `exit` (the stable outcome other evidence checks). A stopped command settles only
-// after its stop has (killCommand), inside the stop bound.
+// carries `exit` (the stable outcome other evidence checks); an output error after another
+// stop was accepted is kept as `outputError` and does not change it. A stopped command settles
+// only after its stop has (killCommand), inside the stop bound. At the bound the runner releases
+// the pipes and, if the client is still running, unreferences it so it no longer holds the
+// runner, records that it survived, and fails.
 // With `receipt`, a failure also carries `lifetime`: when the client was spawned, first
 // and last wrote, exited, closed each pipe and was stopped, in milliseconds after spawn,
-// what the stop did, and, after the file is closed, the bytes this command appended and
-// their hash. Without `receipt` (every timed-phase command) it keeps no lifetime and adds no
-// listener beyond its output and its close: each chunk costs what it did before receipts.
+// what the stop did, whether the client had exited when its pipes were released, and, after
+// the file is closed, the bytes this command appended and their hash. Without `receipt` (every
+// timed-phase command) it keeps no lifetime, no receipt byte count and adds no listener beyond
+// its output and its close: each chunk costs what it did before receipts.
 export function commandRunner({ cwd, interrupted = () => false, killOptions = {} } = {}) {
   const running = new Set();
   async function command(binary, args, { timeout = 30000, file, capture = true, cleanup = false, receipt = false } = {}) {
@@ -179,9 +187,9 @@ export function commandRunner({ cwd, interrupted = () => false, killOptions = {}
     const origin = receipt ? performance.now() : 0, at = () => Math.round(performance.now() - origin);
     const lifetime = receipt ? { command: [binary, ...args.slice(0, 3)], spawnedAt: new Date().toISOString(), timeoutMs: timeout, pid: child.pid ?? null,
       stdout: { bytes: 0, firstMs: null, lastMs: null, closedMs: null }, stderr: { bytes: 0, firstMs: null, lastMs: null, closedMs: null },
-      exitMs: null, exitCode: null, exitSignal: null, closeMs: null, stopped: null, stoppedMs: null, releasedMs: null, kill: null, file: null,
-      settledMs: null } : null;
-    let reason = null, exitedAtStop = false, released = false, settled = false, escalation = null;
+      exitMs: null, exitCode: null, exitSignal: null, closeMs: null, stopped: null, stoppedMs: null, releasedMs: null, clientAtRelease: null, kill: null,
+      file: null, settledMs: null } : null;
+    let reason = null, exitedAtStop = false, released = false, survived = false, settled = false, escalation = null;
     let ioError, release, timer, settleNow;
     // Idempotent, and the first accepted reason decides the outcome: a later deadline, interrupt
     // or output error neither signals again, restarts the grace, nor changes the outcome.
@@ -191,12 +199,15 @@ export function commandRunner({ cwd, interrupted = () => false, killOptions = {}
       if (lifetime) { lifetime.stopped = why; lifetime.stoppedMs = at(); }
       escalation = killCommand(child, { cwd, ...killOptions });
       // A process that inherited the client's pipes (outside its process group or
-      // taskkill tree) keeps them open after the client exits, so `close` may never
-      // come. Stop reading after a bounded grace; the command still fails. Such an
-      // escaped process is not stopped here: only a container the runner owns is removed.
+      // taskkill tree, or a group member that outlived the client) keeps them open after the
+      // client exits, so `close` may never come. Stop reading after a bounded grace; the
+      // command still fails. Such a process is not stopped here: only a container the runner
+      // owns is removed. A client its stop did not end is left running, unreferenced.
       release = setTimeout(() => {
-        released = true; if (lifetime) lifetime.releasedMs = at();
+        released = true; survived = !exited(child);
+        if (lifetime) { lifetime.releasedMs = at(); lifetime.clientAtRelease = survived ? "running" : "exited"; }
         child.stdout.destroy(); child.stderr.destroy();
+        if (survived) child.unref();
         settleNow({ code: child.exitCode, signal: child.signalCode });
       }, releaseMs);
     };
@@ -238,14 +249,19 @@ export function commandRunner({ cwd, interrupted = () => false, killOptions = {}
     if (escalation) { const stopped = await escalation; if (lifetime) lifetime.kill = stopped; }
     if (failure === undefined) {
       try {
-        if (ioError) throw ioError;
+        // An output error that was itself the stop is the failure; after another accepted stop it is secondary.
+        if (ioError && (reason === "output error" || reason === null)) throw ioError;
         const expired = reason === "deadline", interruption = reason === "interrupt", runInterrupted = interrupted() && !cleanup;
         if (code !== 0 || reason !== null || released || runInterrupted) {
-          // Exited before the stop: the client finished but a pipe was still held open.
-          const held = exitedAtStop ? `; the client exited ${child.exitCode ?? child.signalCode}${lifetime ? ` at ${lifetime.exitMs} ms` : ""} but its output stayed open` : "";
-          const forced = released ? `; its pipes were released${lifetime ? ` at ${lifetime.releasedMs} ms` : ""} without end of file` : "";
+          // The client finished, before the stop or before the release, but a pipe was still held open.
+          const held = exitedAtStop || (released && !survived)
+            ? `; the client exited ${child.exitCode ?? child.signalCode}${lifetime ? ` at ${lifetime.exitMs} ms` : ""} but its output stayed open` : "";
+          const forced = released ? `; its pipes were released${lifetime ? ` at ${lifetime.releasedMs} ms` : ""} without end of file${survived
+            ? " while the client was still running; it was left running" : ""}` : "";
           const error = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${expired ? `timeout after ${timeout} ms` : `exit ${code}`}${interruption ? "; interrupted" : ""}${held}${forced}\n${output.diagnostic()}`);
-          error.exit = { code, signal, expired, interrupted: interruption || (reason === null && runInterrupted) }; throw error;
+          error.exit = { code, signal, expired, interrupted: interruption || (reason === null && runInterrupted) };
+          if (ioError) error.outputError = firstLine(ioError);
+          throw error;
         }
         result = output.result();
       } catch (error) { failure = error ?? new Error(`${binary}: failed`); }
@@ -315,20 +331,22 @@ function eventOf(line, id) {
 // result); the receipt never resolves the name again. For a refusal it keeps the command's own
 // evidence and that refusal and queries nothing. For a verified ID it reads that ID only, and
 // only while it is still this run's: allowlisted inspect state and its events' actions and
-// times; if the ID is gone it records that and queries nothing else. Each probe is bounded and
-// read-only; a probe failure is recorded in the receipt, never thrown.
-export async function failureReceipt(docker, { stage, container, error, verified, owned }) {
+// times; if the ID is gone it records that and queries nothing else. With `fresh` (a detached
+// start, whose only check is the one taken for this receipt) that check's inspect snapshot is the
+// state, and it is not inspected again. Each probe is bounded and read-only; a probe failure is
+// recorded in the receipt, never thrown.
+export async function failureReceipt(docker, { stage, container, error, verified, owned, fresh = false }) {
   const lifetime = error?.lifetime ?? null;
   const receipt = { schema: "catalog-command-failure/v1", stage, container, id: verified?.id ?? null, recordedAt: new Date().toISOString(),
-    error: firstLine(error), exit: error?.exit ?? null, outputCloseError: error?.outputCloseError ?? null, lifetime,
-    refusal: null, inspect: null, events: null, diagnosticErrors: [] };
+    error: firstLine(error), exit: error?.exit ?? null, outputError: error?.outputError ?? null, outputCloseError: error?.outputCloseError ?? null,
+    lifetime, refusal: null, inspect: null, events: null, diagnosticErrors: [] };
   if (!verified?.id) {
     receipt.refusal = verified?.refusal ?? "not verified";
     if (verified?.problem) receipt.diagnosticErrors.push(verified.problem);
     return receipt;
   }
   const probe = (args) => docker(args, { cleanup: true, timeout: 10000 });
-  const found = await ownedContainer(probe, container, owned, { id: verified.id });
+  const found = fresh && verified.info ? verified : await ownedContainer(probe, container, owned, { id: verified.id });
   if (found.problem) receipt.diagnosticErrors.push(found.problem);
   if (!found.id) { receipt.refusal = found.refusal; return receipt; }
   receipt.inspect = { id: found.id, restartCount: found.info.RestartCount ?? null, state: stateOf(found.info.State) };
