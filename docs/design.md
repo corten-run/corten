@@ -8050,7 +8050,8 @@ rules something out.
     callgrind counts that write's instructions, not what it costs where several cores answer
     the same page; the eighth run's `hot`, below, runs the app on four cores of one host under
     two independent streams of requests that share their URLs' order, which permits but does not
-    verify writes to one page's count from different cores or at once. Counted in process under callgrind as the sixth run's pair was (`a88a06aa8`
+    verify writes to one page's count from different cores or at once. Counted in process under
+    callgrind as the sixth run's pair was (`a88a06aa8`
     against `04530f7e0`, whose production sources are `a02c81e86`'s; rustc 1.100.0, valgrind
     3.24.0, jemalloc 5.3.0 preloaded, the medians of three rounds, each URL new, the thread started
     by the first URL's due answer): the first answer, which makes and keeps the page, took 264,406.5
@@ -8065,7 +8066,8 @@ rules something out.
     this change and none on main. Callgrind counts user space, so neither the faults nor the
     thread's wake-up are in these. An eighth run is declared for the rule, its plan written before
     it runs:
-    this change's head against main's `04530f7e0` on such a host, with every turn on a newly
+    this change's head, with main merged, against main's `14126d2a8` (declared first against
+    `04530f7e0`, and again for the merged pair in round 18) on such a host, with every turn on a newly
     started build, 100 pairs a workload and the margin of the runs before, a one-sided 95% bound
     under +1% in user plus kernel cycles a request, on `twice` as the seventh ran it (which the rule
     gives no job); `churn`, in which every URL is new and asked for exactly its due, 26,564 times,
@@ -8097,7 +8099,8 @@ rules something out.
     whose gaps pass 25 ms from `enable` sent to `wrk`'s start or from `wrk`'s end to `disable`
     acknowledged (round 18), and what the server does in them, a job the load queued among it, is
     counted with the load. Every timed answer must be a `200`: the scripts count any other
-    status themselves, since `wrk` counts one as an error only above 399 (round 18). A first plan for this run counted the requests
+    status themselves, since `wrk` counts one as an error only above 399 (round 18). A first plan
+    for this run counted the requests
     sent where it meant the jobs done, which could have let a turn with no job pass, and had no
     workload with more than one core; round 16 of the review found both before it ran. A bound at
     or over +1% on any, or a run that cannot be used, blocks the merge. The first two runs on a quiet host did
