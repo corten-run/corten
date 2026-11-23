@@ -856,6 +856,49 @@ async fn a_public_answer_takes_a_header_and_is_still_compressed() {
     assert_eq!(res.headers()["link"], "</check>; rel=\"canonical\"");
 }
 
+/// A staged `Public` page that the app's middleware turns into a failure gets the error page in
+/// its place, and that page goes out `private, no-cache` on one line: the `public` header the
+/// page's answer held is not carried onto it, and no second line is added beside it.
+#[tokio::test]
+async fn a_public_page_a_middleware_turns_into_a_failure_gets_the_error_page_and_one_private_line() {
+    struct Unavailable;
+
+    impl crate::Middleware for Unavailable {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let res = next.run(req).await;
+            assert_eq!(res.status(), StatusCode::OK);
+            assert_eq!(res.headers()[header::CACHE_CONTROL], "public, max-age=60", "the page's own answer is Public");
+            let (mut parts, _) = res.into_parts();
+            parts.status = StatusCode::SERVICE_UNAVAILABLE;
+            crate::response::Response::from_parts(parts, Body::empty())
+        }
+    }
+
+    let minute = Duration::from_secs(60);
+    let routes = Table::new().route(
+        "/",
+        get(move |req: Req| async move { Public::new(minute, req.test_page_for("Page", html! { <p>"the page"</p> })) }),
+    );
+    for keeps in [true, false] {
+        let app = App::new(Routes::from(routes.clone()))
+            .error_page(|_: Failure, req: Req| async move { req.test_page("Unavailable", html! { <p>"replaced"</p> }) }, ())
+            .middleware(Unavailable);
+        let router = if keeps { app.router() } else { app.kept_answers(0).router() };
+        // Twice: where the app keeps answers, the second is given the kept page in the handler's
+        // place; either way it is made while this thread holds the page's header.
+        for asked in 0..2 {
+            let res = router.clone().oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE, "kept: {keeps}, {asked}");
+            let lines: Vec<_> =
+                res.headers().get_all(header::CACHE_CONTROL).iter().map(|v| v.to_str().unwrap().to_owned()).collect();
+            assert_eq!(lines, ["private, no-cache"], "kept: {keeps}, {asked}: {:?}", res.headers());
+            let body = crate::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+            let body = std::str::from_utf8(&body).unwrap();
+            assert!(body.contains("<p>replaced</p>") && !body.contains("the page"), "kept: {keeps}, {asked}: {body}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_page_get_needs_an_explicit_coding_for_an_unrequested_tag() {
     let router = App::new(Routes::from(self::routes())).router();
