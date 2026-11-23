@@ -494,7 +494,7 @@ built in its build image, run on its run image and not from an image `docker bui
 `compress`, by the Dockerfile's `cargo build --release --locked` and by
 `corten build --locked --profile-from sh train.sh` in its place, with the script above (500
 requests for the home page); run on `debian:trixie-slim` with jemalloc preloaded and the
-image's settings, as root, the two binaries in one container with `perf` and `wrk`. The home
+image's settings at that commit (a 64 KiB thread cache), as root, the two binaries in one container with `perf` and `wrk`. The home
 page is 1,274 bytes, and 649 in zstd, which the app chose from a browser's codings. The app on
 one CPU, `wrk` with 64 connections on three others, 10 rounds in which the two builds took
 turns, on a desktop with other work running; medians are the sixth of the ten:
@@ -763,6 +763,10 @@ produces framework timings.
 Before reserving a new grouped fleet, its [placement preflight](../../bench/workloads/CLOUD.md#dedicated-group-hosts)
 checks the provider's size and region listings for all required hosts. The
 reservation fixes those locations; create never tries a different region.
+
+New guest reservations use the [pinned upstream Git verifier](../../bench/workloads/CLOUD.md#public-source-permissions)
+before checkout, without relying on Launchpad. A failed verification or Git
+capability check is a setup failure, not benchmark evidence.
 
 For a partial round, the [independent group procedure](../../bench/workloads/CLOUD.md#independent-group-continuation)
 replays completed results from their original evidence and reserves only the

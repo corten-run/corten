@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { globSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { parse } from "yaml";
+import { teardownReserve } from "../bench/marketplace/alert-probe-run.mjs";
 import { sourceRoots } from "../bench/workloads/isolated/contract.mjs";
 import { eventPaths, selectEvidence, selectKernel, selectScope } from "./benchmark-scope.mjs";
 
@@ -118,9 +119,11 @@ function parityEntries(app) {
     const command = run.replaceAll("${{ matrix.app }}", app);
     const entries = [...command.matchAll(/(?:^|\s)(bench\/[^\s]+\.mjs)(?=\s|$)/g)].map(([, path]) => path);
     if (!entries.length || !condition) return entries;
-    const single = /^matrix\.app == '([^']+)'$/.exec(condition);
+    // A diagnostic that also runs after an earlier step failed: its app selection is the same.
+    const selection = /^always\(\) && (matrix\.app == '[^']+') && \((?:steps\.[\w-]+\.outcome == '(?:success|failure)'(?: \|\| )?)+\)$/.exec(condition)?.[1] ?? condition;
+    const single = /^matrix\.app == '([^']+)'$/.exec(selection);
     if (single) return single[1] === app ? entries : [];
-    const multiple = /^contains\(fromJSON\('([^']+)'\), matrix\.app\)$/.exec(condition);
+    const multiple = /^contains\(fromJSON\('([^']+)'\), matrix\.app\)$/.exec(selection);
     assert.ok(multiple, "trace new parity condition: " + condition);
     return JSON.parse(multiple[1]).includes(app) ? entries : [];
   }))];
@@ -136,6 +139,108 @@ test("every local module used by Catalog parity selects each consuming matrix ap
     }
   }
   assert.deepEqual(missing, [], "unselected Catalog parity inputs");
+});
+
+// The probe step's condition, for one matrix app and gate outcome. Only the expression's own
+// operators and these three operands are allowed; anything new must be traced here.
+function probeRuns(condition, app, gate) {
+  const js = condition.replaceAll("always()", "true").replaceAll("matrix.app", JSON.stringify(app))
+    .replaceAll("steps.marketplace.outcome", JSON.stringify(gate)).replaceAll("==", "===");
+  assert.match(js, /^(?:true|"[\w-]+"|'[\w-]+'|===|&&|\|\||[()\s])+$/, "trace new probe condition: " + condition);
+  return Function(`return ${js}`)();
+}
+
+function probeStep() {
+  const steps = workflow.jobs.parity.steps;
+  const gate = steps.findIndex((step) => step.id === "marketplace");
+  const probe = steps.findIndex((step) => step.run?.includes("bench/marketplace/alert-probe-run.mjs"));
+  const upload = steps.findIndex((step) => step.uses?.startsWith("actions/upload-artifact"));
+  // The results directory, named once in the script and passed to the runner as "$results".
+  const results = /^\s*results=(\S+)$/m.exec(steps[probe].run)?.[1] ?? /alert-probe-run\.mjs \S+ \d+ (\S+)/.exec(steps[probe].run)?.[1];
+  return { steps, gate, probe, upload, results, ...steps[probe] };
+}
+
+test("the React Router alert probe diagnoses a failed gate without hiding it, and ends inside its step", () => {
+  const { steps, gate, probe, upload, results, if: condition, run, env, "timeout-minutes": minutes } = probeStep();
+  assert.ok(gate >= 0 && gate < probe && probe < upload);
+  // A failed gate fails the job: no step or job in parity may turn a failure into a pass.
+  assert.equal(workflow.jobs.parity["continue-on-error"], undefined);
+  assert.deepEqual(steps.filter((step) => step["continue-on-error"] !== undefined).map((step) => step.name), []);
+  // It runs for React Router after the gate passed or failed, and not after cancellation or a skip.
+  for (const app of allApps) for (const outcome of ["success", "failure", "cancelled", "skipped"])
+    assert.equal(probeRuns(condition, app, outcome), app === "react-router" && ["success", "failure"].includes(outcome), `${app} ${outcome}`);
+  // The only way past it without the probe is a gate that failed before building the image; how the
+  // step tells that apart from a failed image check is run below.
+  assert.equal(env.GATE, "${{ steps.marketplace.outcome }}");
+  // Its receipts and diagnostics upload whatever the outcome.
+  const node = run.trim().split("\n").at(-1).trim();
+  assert.match(node, /^node bench\/marketplace\/alert-probe-run\.mjs cb-marketplace-react-router \d+ "\$results" /);
+  assert.ok(results);
+  assert.equal(steps[upload].if, "always()");
+  assert.ok(steps[upload].with.path.split("\n").includes(`${results}/`));
+  // The image check is bounded (its timeout plus the kill grace), and with Node's own deadline and
+  // half a minute for Node to start and exit, ends inside the step timeout. The deadline is longer
+  // than the cleanup it reserves plus one source's budget.
+  const deadline = Number(/--deadline (\d+)/.exec(node)?.[1]), budget = Number(/--budget (\d+)/.exec(node)?.[1]);
+  const [, kill, limit] = /\btimeout -k (\d+) (\d+) docker image inspect\b/.exec(run) ?? [];
+  const check = Number(kill) + Number(limit);
+  assert.ok(check > 0, "the image check must be bounded by timeout -k");
+  assert.ok(check + deadline + 30 <= minutes * 60, `the ${check} s image check and --deadline ${deadline} must leave half a minute of the ${minutes}-minute step timeout`);
+  assert.ok(deadline > teardownReserve + budget, `--deadline ${deadline} must leave the cleanup reserve and one probe budget`);
+});
+
+// The step's script under bash as Actions runs it (`bash -e`), with stub `docker` and `node` on
+// PATH: bash itself off Windows, WSL's bash on Windows when it is installed.
+function stepShell() {
+  const wsl = process.platform === "win32";
+  const present = wsl ? spawnSync("wsl.exe", ["-e", "bash", "-c", "true"], { timeout: 30_000 }) : spawnSync("bash", ["-c", "true"]);
+  if (present.status !== 0) return null;
+  const path = wsl ? (p) => p.replace(/^([A-Za-z]):[\\/]/, (_, drive) => `/mnt/${drive.toLowerCase()}/`).replaceAll("\\", "/") : (p) => p;
+  return (script, results, { gate, docker }) => {
+    const dir = mkdtempSync(join(tmpdir(), "probe-step-"));
+    try {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "docker"), [
+        "#!/bin/sh", 'echo "docker $*" >> calls.log', 'case "$FAKE_DOCKER" in',
+        "  present) echo sha256:0123 ;;",
+        '  absent) echo "Error response from daemon: No such image: cb-marketplace-react-router:latest" >&2; exit 1 ;;',
+        '  error) echo "Error response from daemon: Bad Gateway" >&2; exit 1 ;;',
+        "  hang) exec sleep 30 ;;", "esac", ""].join("\n"), { mode: 0o755 });
+      writeFileSync(join(bin, "node"), '#!/bin/sh\necho "node $*" >> calls.log\n', { mode: 0o755 });
+      writeFileSync(join(dir, "step.sh"), script);
+      const command = ["env", "-i", `PATH=${path(bin)}:/usr/bin:/bin`, `GATE=${gate}`, `FAKE_DOCKER=${docker}`, "bash", "-e", path(join(dir, "step.sh"))];
+      const started = Date.now();
+      const run = spawnSync(wsl ? "wsl.exe" : command[0], wsl ? ["-e", ...command] : command.slice(1), { cwd: dir, encoding: "utf8", timeout: 60_000 });
+      const read = (file) => { try { return readFileSync(join(dir, file), "utf8"); } catch { return null; } };
+      return { status: run.status, output: run.stdout + run.stderr, ms: Date.now() - started,
+        calls: (read("calls.log") ?? "").split("\n").filter(Boolean), preflight: read(join(results, "preflight.log")) };
+    // WSL can hold the directory for a moment after its bash exits.
+    } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }
+  };
+}
+const shell = stepShell();
+
+test("the probe step skips only an image the failed gate did not build, and fails on a failed or stalled image check", { skip: !shell && "no bash to run the step" }, () => {
+  const { run, results } = probeStep();
+  // The stalled check runs with a one-second bound in place of the step's, which the test above reads.
+  const short = run.replace(/\btimeout -k \d+ \d+ docker/, "timeout -k 1 1 docker");
+  for (const [gate, docker, status, commands, preflight] of [
+    ["success", "error", 0, ["node"], null],
+    ["failure", "present", 0, ["docker", "node"], null],
+    ["failure", "absent", 0, ["docker"], null],
+    ["failure", "error", 1, ["docker"], /exit 1\b[^]*Bad Gateway/],
+    ["failure", "hang", 1, ["docker"], /exit 124\b/],
+  ]) {
+    const outcome = shell(docker === "hang" ? short : run, results, { gate, docker });
+    const what = `gate ${gate}, image check ${docker}: ${outcome.output}`;
+    assert.equal(outcome.status, status, what);
+    assert.deepEqual(outcome.calls.map((call) => call.split(" ")[0]), commands, what);
+    if (commands.includes("node")) assert.match(outcome.calls.at(-1), new RegExp(` ${results} .*--deadline \\d+$`), what);
+    if (preflight) assert.match(outcome.preflight ?? "", preflight, what);
+    else assert.equal(outcome.preflight, null, what);
+    if (docker === "hang") assert.ok(outcome.ms < 20_000, `the stalled check ended after ${outcome.ms} ms`);
+  }
 });
 
 test("Evidence covers every real source-custody root and its descendants", () => {

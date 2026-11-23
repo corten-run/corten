@@ -437,7 +437,10 @@ establish a general ranking.
       1. CPU: Xeon Platinum 8358, one thread a core.
       2. Kernel: Linux 6.12.117 (Debian's `6.12.117+deb13-amd64`).
       3. Allocator: jemalloc 5.3.0 by `LD_PRELOAD=libjemalloc.so.2`, with
-         `MALLOC_CONF=background_thread:true,tcache_max:65536` exactly.
+         `MALLOC_CONF=background_thread:true,tcache_max:65536` exactly: the starter image's
+         setting when the floor was measured. The image now sets 512 KiB
+         ([design Choice 23](docs/design.md#choice-jemalloc-image)), and a run with that has no
+         recorded floor.
       4. Pinning: the server on one CPU, the load on two others and the driver and `perf` on a
          fourth, all four distinct.
       5. Build: rustc 1.100.0 and LLD 23.1.5; the probe built as the receipt's `build.sh` builds it,
@@ -494,9 +497,11 @@ establish a general ranking.
       A/A across placements, as the Choice prints them to two decimals) and the setup it was
       measured on. A spread applies only to a run that matches that setup in each of: the probe
       program and its features, the workload's request and the configuration it is sent to, the
-      allocator and its settings, the turn protocol (every turn on a freshly started build, the
+      allocator, its settings and any other library preloaded beside it, the turn protocol (every
+      turn on a freshly started build, the
       server, the load and the driver with `perf` each pinned to CPUs of their own, `wrk -t2 -c64`
-      and 3 s turns) and the CPU model (a Xeon Platinum 8358 for the spreads recorded so far). A
+      and 3 s turns) and the CPU model (each recorded spread names its own: a Xeon Platinum 8358
+      for the first run's two, an 8280 for the second's one). A
       run that differs in any has no recorded spread for the workload
       until a placement run on its setup records one. The test is one: a single-build bound's
       distance from its threshold (the bound less +1% for the margin; the bound plus the smallest
@@ -576,10 +581,19 @@ establish a general ranking.
       11th of 30) above it in both readings, and the A/A resolved as above: a run whose A/A is
       not resolved establishes no win either. The reading measures the change across the plan's
       placements, not the release binary, which has a placement of its own: the unpadded build,
-      which no comparison the gate reads includes (the first run read it only in a diagnostic).
+      which no comparison the gate reads includes (the two runs so far read it only in a
+      diagnostic).
       A run of K = 30 placements of R = 8 pairs, for the
       change and the A/A on `kept` and an A/A on `plain`, takes about 2 hours on a c-8 (the first
-      run: 99 minutes of turns after 2 minutes of checks, besides setup and builds).
+      run: 99 minutes of turns after 2 minutes of checks, besides setup and builds). That size is
+      the first run's, not one to assume: in the second run one of two A/As of that size did not
+      resolve, its placement medians spreading 1.97% where the other's spread 1.17%, and the
+      Choice works out, on a model of its own, that an A/A of 30 placements fails one of its two
+      readings more often than not at the first figure and about one time in five at the first
+      run's own. This rule sets no size. More placements narrow the bound wherever the spread
+      comes from, and a plan with an A/A already read on its setup and workload can take K from
+      that calculation at that A/A's spread; a plan with none has no such figure, and its A/A
+      may not resolve.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,

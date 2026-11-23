@@ -401,8 +401,12 @@ export async function verifyCollectedGroup(fleet, group, { inspect, start, detai
   const outcome = !s.destroyedAt || !s.deletionIntentAt ? "cleanup-pending" : report.status === "verified" ? "verified" : report.status;
   const row = { group, outcome, id: s.id, host: s.host,
     hardwareEvidence: { artifact: `${group}/groups-${round}/${s.evidence}/host.txt`, sha256: fileHash(join(job.local, s.evidence, "host.txt")) },
-    nativeTimingEvidence: { artifact: `${group}/groups-${round}/${s.evidence}/campaign`, archiveTreeSha256: report.archiveTreeSha256,
-      scope: "saved-native-journal-and-raw-timings-not-cross-host-comparable" },
+    ...(report.offlineAuditExpired ? { offlineAuditExpired: report.offlineAuditExpired,
+      nativeFailureEvidence: { artifact: `${group}/groups-${round}/${s.evidence}/campaign`, archiveTreeSha256: report.archiveTreeSha256,
+        scope: "audit-expired-before-timing" } } : {
+      nativeTimingEvidence: { artifact: `${group}/groups-${round}/${s.evidence}/campaign`, archiveTreeSha256: report.archiveTreeSha256,
+        scope: "saved-native-journal-and-raw-timings-not-cross-host-comparable" } }),
+    ...(report.offlineIngress ? { offlineIngress: report.offlineIngress } : {}),
     recordedTimes: { reservationCreatedAt: s.createdAt, collectedAt: s.collectedAt, ...(s.destroyedAt ? { destroyedAt: s.destroyedAt } : {}) },
     timeScope: "reservation-and-collection-not-provider-billing-or-benchmark-elapsed", ...hashes,
     campaignSha256: report.campaignSha256, sourceSha256: report.sourceSha256,

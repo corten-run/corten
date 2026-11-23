@@ -191,6 +191,73 @@ Application logs preserve both stdout and stderr directly in each raw `app.log`,
 output larger than the command's bounded in-memory diagnostic tail. Command deadlines and
 log-collection failures remain explicit failures; incomplete logs are not silently accepted.
 This does not disable native access logging or change measured application settings.
+When a detached app start or an application, startup or upstream log collection fails or
+reaches its deadline, the runner saves a `catalog-command-failure/v1` receipt before it removes
+the owned container: `app-start.failure.json` in the source or preflight folder, or
+`<log>.failure.json` beside the partial log. A failed detached start (`docker run -d`) writes only
+its receipt, with no log file: that command collects no logs. When a started app later fails its
+startup check (not running, or no published port), the runner collects its logs into
+`<container>-startup-<attempt>.log`, numbered per attempt, and a failure of that collection
+writes `<container>-startup-<attempt>.log.failure.json` beside it. The receipt records the
+Docker client's lifetime in milliseconds after spawn (first and last output on each pipe, client
+exit, each pipe's close, when and why the runner stopped it, and what the stop signalled), and the
+offset, bytes and SHA-256 of what the log collection appended, hashed from the closed file. A
+container is read only when Docker names it exactly and it carries this run's label. Each command makes that
+check once, and its receipt is bound to the result: a log collection reads logs by the ID it
+resolved, and its receipt reads that same ID, never the name again. From `docker inspect` it
+keeps the restart count and the state's status, running flag, exit code, OOM flag and start
+and finish times; from Docker events since one minute before the command, each event's action
+and time. It keeps no health-check output, labels or other event attributes. For a missing or
+foreign container (application, startup or upstream) it keeps the command's own evidence and
+the refusal and queries nothing; if the verified container has gone by the time of the
+receipt, it records that and queries nothing else. A detached start has no earlier check, so
+its receipt's one ownership check is also its state: that inspect is not repeated. Each probe
+has a 10-second bound and a probe failure is recorded in the receipt. An output write error
+after another stop was accepted is recorded as `outputError` and does not change the stop's
+outcome. A Docker client that cannot be started fails with Node's spawn error (its `exit` has no
+code or signal) unless a stop was accepted first; then that stop decides and the spawn error is
+recorded as `spawnError`. Saving the receipt is best effort and never replaces the
+failure, which still fails the run; nothing is retried and no command deadline changes.
+Receipts cover the detached parity and preflight starts and these log collections, not the
+measured cold-start create and start. Commands in a timed phase, such as k6's `docker start
+-a`, take no receipt and do no receipt work: no lifetime record or clock, no receipt byte
+count, no hashing, and no listener beyond their output, error and close. Their command path is
+still not the one before receipts: each output chunk also passes an earlier-write-error check
+and a receipt flag test, and command setup and settlement changed. Their timing effect has not
+been measured.
+A command succeeds only once its Docker client has exited and both of its pipes have closed,
+so its output is complete, and nothing stopped it: a command stopped at its deadline or by an
+interrupt fails whatever its exit code, cleanup commands included, and the first stop reason
+decides which (an interrupt followed by the deadline stays an interrupt).
+On Linux the client leads its own process group, and the runner signals that group only while
+the client has not exited: Node has not reaped it, so its PID, which is the group's ID, is still
+reserved. The stop sends SIGTERM to the group and, two seconds later if the client is still
+running, SIGKILL. Each signal is checked and sent from an event-loop callback of its own, never
+from the code that requested the stop: libuv reaps every exited child in one batch before it
+reports any of their exits, so a stop requested from one client's exit callback could otherwise
+see another client as unreaped after it was reaped. Once the client has exited the group is
+never signalled again, because a successful probe cannot tell the original group from a new
+one that took its number. This is a deliberate rule: a group member that ignores SIGTERM and
+outlives the client is not killed. If it holds a pipe, the runner releases the pipes at the
+bound and fails the command, recording
+that the client exited while its output stayed open. Owned Docker containers are still removed
+independently, so this does not leave a browser or k6 container behind. Nothing is signalled
+for a client that had already exited before the stop.
+On Windows tree cleanup is best effort: `taskkill /T /F` receives a bare PID and gets three
+seconds to stop the client's tree. It is not run for a client that has already exited, and it
+is abandoned at 4.75 seconds. If it fails, cannot start or takes longer than three seconds,
+whatever its exit code, a client still running is killed through its own handle, and the
+helper's outcome is recorded.
+A signal that fails (to the group, to the client's own handle, or the helper's own kill) is
+recorded and never ends the stop early: the first stop reason still decides the outcome, the
+pipes are still released at the bound, and a helper still running then is abandoned without
+holding the runner.
+A process that left the group (a new session) or the `taskkill` tree, or a group member that
+outlived the client, can still hold a pipe after the client exits. The runner does not stop
+such a process: five seconds after the stop it stops reading, so the command settles as a
+failure that says its pipes were released without end of file, instead of waiting forever. A
+client that is somehow still running then is left running, no longer holding the runner, and
+the failure says so.
 Startup failures include the container's actual exit state and application log. A checker
 failure without a valid record-response failure receipt retains its original diagnostic
 (including browser/style assertions), rather than replacing it with a missing-file error.
@@ -542,7 +609,9 @@ The runner uses a version-matched Playwright container for browser checks. Remov
 container also removes detached browser processes after a timeout or interruption. To exercise
 that Linux cleanup regression locally, run `CATALOG_DOCKER_TESTS=1 node --test
 bench/catalog/cleanup.test.mjs` in a shell that supports this environment-variable syntax (or
-set the variable separately in PowerShell). The ordinary harness tests do not require Docker.
+set the variable separately in PowerShell). The same variable runs the failure receipt's probes
+against a real container in `bench/catalog/output.test.mjs`. The ordinary harness tests do not
+require Docker.
 
 The opt-in native Gin permission regression builds the real Dockerfile from a Linux
 0700-directory/0600-file context and generates fixtures under umask 0077. It retains the

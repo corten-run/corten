@@ -60,7 +60,9 @@ mod tests {
    `addScriptTag` or a CSP bypass (the page requires Trusted Types), then read `violations` and
    `incomplete` from `axe.run()`. `html!` already refuses a name on an element with no role
    (`aria-label` on a bare `<span>`, or on an `<a>` whose `href` is an `Option`); name those by
-   text in a `VisuallyHidden` span instead.
+   text in a `VisuallyHidden` span instead. An audit presses no key: press a widget's keys with
+   the browser's keyboard (`page.keyboard.press`), not with events a script in the page
+   dispatches, which the platform's own elements (a popover, a modal `<dialog>`) do not answer.
    After a link or form the runtime follows (with the Navigation API), the address changes before
    the new page is drawn: wait for something on the new page, not only `page.waitForURL`.
 5. A test that needs a database: code that writes takes the connection (`&mut PgConnection`),
