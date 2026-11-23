@@ -7478,7 +7478,7 @@ rules something out.
     ([#1793 A kept page is compressed at the level a per-request answer is](https://github.com/corten-run/corten/issues/1793)).
     The request that makes the copy is still a visitor's, so nothing more is made on it, and the
     encoding costs the server's CPU wherever it runs, so it is made only for a page asked for
-    often enough to repay it (the seventh run, below): the page's compressed answers to clients
+    often enough to spread that cost thin (the seventh run, below): the page's compressed answers to clients
     that rank brotli first or tie it for first are counted, and while the app prepares the one
     that makes the page's due, 8,192 and three more for each byte of its body (`kept::due`;
     26,564 for a page of 6,124 bytes, 106,496 at 32 KiB), before it looks for that answer's own
@@ -8017,9 +8017,10 @@ rules something out.
     KiB: as `corten new`'s Dockerfile runs an app, each job faults in about a megabyte of brotli's
     tables afresh, a cost that does not grow with the body and that callgrind, which counts user
     space, does not see.
-    So the job is queued by a count that makes it pay for itself in the workload that triggers it
+    So the job is queued only for a kept copy asked for often enough to spread its cost thin
     (`kept::due`): 8,192 answers to clients that rank brotli first, and three more for each byte
-    of the body. Its instructions, counted by the probe under callgrind for 36 bodies (four kinds, a
+    of the body. The count spreads the cost; the answers before it do not repay it, and a copy
+    asked for exactly its due pays for the encoding and never sends a smaller answer. Its instructions, counted by the probe under callgrind for 36 bodies (four kinds, a
     table of records, prose, random text and one block repeated, at nine sizes from 1 to 32 KiB,
     each encoded once before the count), were 342,886 to 12,363,878 a job and 48.5 to 497.1 a byte
     of the body (the most for the table of 1 KiB: 509,048 over 1,024), a part of them not growing
@@ -8042,7 +8043,9 @@ rules something out.
     ten times its due in a lifetime sends nine tenths of its browser answers in brotli 5. Every
     answer before the due writes the page's count, where the second answer had been the last to:
     callgrind counts that write's instructions, not what it costs where several cores answer
-    the same page; the eighth run's `hot`, below, is declared for that, on four cores of one host. Counted in process under callgrind as the sixth run's pair was (`a88a06aa8`
+    the same page; the eighth run's `hot`, below, compares answers on four cores of one host that
+    write one page's count, which permits but does not verify writes to the same count from
+    different cores. Counted in process under callgrind as the sixth run's pair was (`a88a06aa8`
     against `04530f7e0`, whose production sources are `a02c81e86`'s; rustc 1.100.0, valgrind
     3.24.0, jemalloc 5.3.0 preloaded, the medians of three rounds, each URL new, the thread started
     by the first URL's due answer): the first answer, which makes and keeps the page, took 264,406.5
@@ -8062,15 +8065,21 @@ rules something out.
     under +1% in user plus kernel cycles a request, on `twice` as the seventh ran it (which the rule
     gives no job); `churn`, in which every URL is new and asked for exactly its due, 26,564 times,
     so that each URL's due answer queues its job, and once more, so that an answer given its brotli
-    5 shows a job that ended while the turn was counted; `hot`, the app on four CPUs with a worker
-    each and every URL new and asked for 16,384 times from all 64 connections at once, so that one
-    page's count is written on several cores before its due; and the four workloads of the runs
+    5 shows that job's encoding published while the turn was counted (published, not the job
+    returned: `Entry::make_brotli` puts the brotli in before it counts its size and unlocks the
+    store); `hot`, a four-CPU hot-load comparison, the app on four CPUs with a worker each and
+    every URL new and asked for 16,384 times from all 64 connections at once, answers that write
+    one page's count before its due, which permits but does not verify writes to the same count
+    from different cores; and the four workloads of the runs
     before (`browser`, `gzip`, `refused`, `json-browser`), each warmed to its due, all but `hot`
-    with the app on one CPU. `churn`'s turns of this change are usable only if each shows a job
-    ended on each of `wrk`'s two threads and, in all, at least half as many jobs for each answer as
+    with the app on one CPU. `churn`'s turns of this change are usable only if each shows an encoding
+    published on each of `wrk`'s two threads and, in all, at least half as many for each answer as
     when every answer is one of a URL asked for exactly its due, so its bound covers the rule's worst
     case for that page diluted to no less than half, with the density each build reached reported;
-    a host too slow for that makes the run unusable. A first plan for this run counted the requests
+    a host too slow for that makes the run unusable. Every turn counts from perf's acknowledgement
+    of `enable`, sent before `wrk` starts, to its acknowledgement of `disable`, sent after `wrk`
+    has exited, and a turn without both is refused, so the counted interval encloses the load
+    (round 17 of the review found the earlier fixed-length count did not show that). A first plan for this run counted the requests
     sent where it meant the jobs done, which could have let a turn with no job pass, and had no
     workload with more than one core; round 16 of the review found both before it ran. A bound at
     or over +1% on any, or a run that cannot be used, blocks the merge. The first two runs on a quiet host did

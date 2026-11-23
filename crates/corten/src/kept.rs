@@ -172,11 +172,13 @@ pub(crate) const BROTLI_MAX: usize = 32 << 10;
 /// The encoding runs on the server's own CPU, so moving it off the request does not make it free:
 /// queued by a page's second answer, it cost a workload whose every URL was asked for twice 110%
 /// more cycles a request. Part of it does not grow with the body (brotli's tables, and about 250
-/// page faults a job under jemalloc), the rest grows with it, and an answer given again costs about
-/// 25,000 instructions whatever its size: of the 36 bodies of 1 to 32 KiB a probe counted under
-/// callgrind, one asked for exactly this often spent at most about 116 instructions on its brotli
-/// for each of its answers, averaged over all of them (under 0.5%), and one asked for more spends
-/// less (`docs/design.md#choice-kept-pages`). A body or a spread of answers not measured may differ.
+/// page faults a job under jemalloc), the rest grows with it. Of the 36 bodies of 1 to 32 KiB a
+/// probe counted under callgrind, one asked for exactly this often spent at most about 116
+/// instructions on its brotli for each of its answers, averaged over all of them: under 0.5% of
+/// the about 25,000 an answer given again took on the 6,124-byte page measured, which an answer
+/// of another body need not take. One asked for more spends less, so the count spreads the cost
+/// thin; the answers before it do not repay it (`docs/design.md#choice-kept-pages`). A body or a
+/// spread of answers not measured may differ.
 #[cfg(feature = "compress")]
 pub(crate) const fn due(length: usize) -> u32 {
     if length > BROTLI_MAX {
