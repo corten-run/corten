@@ -8595,7 +8595,11 @@ rules something out.
     recorded spread, so its single-build bound is the reading, until a placement run on its setup
     records one. These are what decide which code a request runs, what else runs with it and what a
     placement costs on the CPU's caches and predictors; the kernel and toolchain are not among
-    them, as a policy choice (Stands on, bet). Recorded spreads: `plain` -2.42% to +2.92% and
+    them, as a policy choice (Stands on, bet). Only a complete, resolved A/A (both readings, below) records a
+    spread or replaces one, by a pull request that changes this Choice, and a run reads the spread
+    recorded here on `main` when its plan is declared, so a wider spread recorded after a miss
+    does not reopen it. The first run's spreads are recorded although its A/A was on main, not the
+    change's base (an exception, stated below). Recorded spreads: `plain` -2.42% to +2.92% and
     `kept` -2.98% to +3.33% (the first run's A/As below: main `a02c81e86`, 2026-11-23, tag
     `evidence/ee7b0b41`), for the probe program in that tag (the one
     [#1829 Run a kept page's handler once for requests that miss its copy together](https://github.com/corten-run/corten/pull/1829)
@@ -8633,16 +8637,18 @@ rules something out.
     weak `etag:` into fixed text; so it accepted any `Age`, and the answers it saved are the
     normalized ones. It is accepted for this receipt alone: each placement relinks the same objects
     with one function nothing calls, so no path that writes an answer changed; each of the 1,026
-    saved answers has a body exactly as long as its `content-length`, so no body line was dropped;
-    none carried an `ETag`; and every one of the 1,360 starts in the three `kept` comparisons logged
+    saved answers has a body of 6,125 bytes against a `content-length` of 6,124, ending in
+    `</html>` and one line feed the line-based pipeline adds, though the raw answers were not saved
+    to show no line was dropped; none carried an `ETag`; and every one of the 1,360 starts in the three `kept` comparisons logged
     the page kept by its warm-up at an `Age` of 0. A later plan masks no part of the body, masks
     only header values it names, and checks a value the workload depends on, such as `Age`,
     separately ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2).
 
     The tag keeps the run's results but not `build.sh`'s output, so the measured claims here are
     what those results hold. On a c-8 (Intel Xeon Platinum 8358, Debian 13, Linux 6.12.117,
-    2026-11-23), K = 30 and R = 8: the 120 placements' layouts have every function moved by exactly
-    its pad (408,360 of 408,360), every pair of neighbours kept (400,080 of 400,080), the pad first
+    2026-11-23), K = 30 and R = 8: the 120 placements' layouts have every function `layout.mjs` compares (a function symbol with
+    one name in both binaries once ThinLTO's suffixes are stripped) moved by exactly its pad
+    (408,360 of 408,360), every such pair of neighbours kept (400,080 of 400,080), the pad first
     in `.text` and the sections after it (`.data`, `.got`, `.bss` and the rest) moved by the pad
     as well; the 123 binaries have 123 distinct SHA-256s; all 120 placements answered as their
     unpadded binary, as that comparison read; and every one of the 1,772 turns had its counters at
@@ -8658,8 +8664,10 @@ rules something out.
     11 of 30 placement medians above zero, two-sided sign tests p = 0.362 and 0.200).
     [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
     on `kept`: -0.07%, bound +0.28%, placement medians from
-    -3.06% to +3.49%, user instructions -1.52% (placement medians -1.53% to -1.52%), so it **meets +1%** read across
-    placements, where its single-build run missed. Main's unpadded build against eight padded ones
+    -3.06% to +3.49%, user instructions -1.52% (placement medians -1.53% to -1.52%), a bound under +1% read across
+    placements, where its single-build run missed. That is a historical reading, not a pass under
+    the rule as it now stands: the run's A/A was not on the change's base, it did not count user
+    instruction-cache misses, and its plan gated no pull request. Main's unpadded build against eight padded ones
     on `kept`: the padded ones cost a median 2.14% fewer cycles (-3.19% to +0.19%; 7 of 8 fewer,
     two-sided sign test p = 0.070), which eight placements do not resolve either way; it is near
     the Revisit-when on the unpadded build below, so a later run reads more of them. The three

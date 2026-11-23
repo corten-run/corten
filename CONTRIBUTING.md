@@ -549,14 +549,18 @@ establish a general ranking.
          readings are what the run can resolve, and its lowest and highest placement median as
          recorded are the spread the Choice records for the workload. If either bound is at or
          above +1%, the workload is **not resolved**, and not resolved does not pass, whatever the
-         change's own bound.
+         change's own bound. Only a complete, resolved A/A records or replaces a spread, through a
+         pull request that changes the Choice; a run reads the spread recorded in the Choice on
+         `main` when its plan is declared, whatever a later run records.
 
       The margin stays +1% with no floor: the workload meets it when the change's bound across
       placements is under +1% and its A/A resolves. A placement that fails a check above, or has
       fewer than R valid pairs, leaves its comparison with no bound, which does not pass; no
       placement is rerun, replaced or dropped for its result. A layout floor never applies to a
       workload read across placements. A single-build run stays valid, and binding for each
-      workload its plan read that way whose bound lands outside the recorded spread (a control
+      workload its plan read that way whose bound, less +1% for the margin or plus the smallest
+      worthwhile reduction for a win, lands outside the recorded spread, or that has no spread that
+      applies (a control
       keeps [design Choice 71](docs/design.md#choice-layout-floor)'s rule): a placement
       run declared after it does not clear such a miss. The benefit side may use the same protocol
       if the plan declares it, with its smallest worthwhile reduction, before the run: a CPU-cost
