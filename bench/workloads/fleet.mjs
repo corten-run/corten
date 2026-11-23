@@ -496,6 +496,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       write(JSON.stringify(row)); return row;
     };
     const launching = options.detach || options["admit-remaining"];
+    const offline = repeated.fleet.manifest.single?.offlineHandoff === true;
     const admittedIds = new Set(), admittedIps = new Set(), supervised = new Map();
     const claimHost = (group, proof) => {
       if (!proof) return false;
@@ -537,7 +538,6 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
         const bootstrapReady = state?.bootstrapReady;
         const bootstrap = !first || bootstrapReady && /^[a-f0-9]{64}$/.test(bootstrapReady.sha256)
           && typeof bootstrapReady.observedAt === "string" && Number.isFinite(Date.parse(bootstrapReady.observedAt));
-        const offline = preview.fleet.manifest.single?.offlineHandoff;
         const retired = code === 1 && state?.status === "retired" && state.destroyedAt && ["unused", "setup-failed", "native-failed"].includes(state.retirement?.kind)
           && /^[a-f0-9]{64}$/.test(state.retirement.evidenceSha256);
         const consistent = saved?.outcome === "available" && (launching
@@ -594,7 +594,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
           const done = operate(job, stopped, watch ? (proof) => {
             if (!claimHost(job.group, proof)) stopped = "prior-admission-failed";
             ready.resolve();
-          } : manifest.single?.offlineHandoff ? undefined : continuation?.onReady,
+          } : offline ? undefined : continuation?.onReady,
           watch ? () => { stopped ??= "prior-admission-failed"; } : undefined).then((value) => {
             settled[i] = { status: "fulfilled", value };
             if (!["pending", "deferred", "verified"].includes(value.outcome)) stopped ??= "prior-admission-failed";

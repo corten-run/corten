@@ -353,6 +353,21 @@ test("offline handoff is selected only at fresh single-group prepare and bound i
   assert.deepEqual(p.children, []);
 });
 
+test("approved continuation dispatch selects the monitor callback from the locked handoff mode", async (t) => {
+  for (const offline of [false, true]) await t.test(offline ? "offline" : "supervised", async (t) => {
+    const p = continuationFixture(t), callbacks = [];
+    const args = ["r21", "--continuation-root", p.h.base, "--group", p.group, "--prepare", "--commit", commit,
+      "--ssh-key", "42", "--account-id", accountId, "--context", context];
+    assert.equal(await fleetMain(offline ? [...args, "--offline-handoff"] : args, p.deps), 3);
+    const approval = await p.preview("r21");
+    p.deps.main = async (_args, { onReady }) => { callbacks.push(typeof onReady); return 3; };
+    // Dispatch occurred, but the synthetic child produced no saved host state.
+    assert.equal(await p.detach("r21", approval), 2);
+    assert.deepEqual(callbacks, [offline ? "undefined" : "function"]);
+    assert.equal(p.output.at(-1).groups[0].error, "group-state-invalid");
+  });
+});
+
 test("continuation refuses a live staged remaining owner before it writes its intent", async (t) => {
   const p = continuationFixture(t), staged = fixture(t);
   const remaining = await staged.remaining(), lock = join(staged.h.base, ".fleet-operation.lock");
