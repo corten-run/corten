@@ -657,14 +657,16 @@ impl Precompressed {
         }
         let wait = if self.level == Level::Held { 1 } else { 0 };
         if self.reads.fetch_add(1, Ordering::Relaxed) >= wait && !self.started.swap(true, Ordering::AcqRel) {
-            let queued = match self.level {
-                // Files: as many as the app has, each once.
-                Level::Best => std::thread::Builder::new().spawn(job()).is_ok(),
-                // Held values: as many as the app's data, so one worker, a bounded queue.
-                _ => later(Turn::Held, job()).is_ok(),
+            let again = match self.level {
+                // Files: as many as the app has, each once, on a thread each: one not started now
+                // may be later.
+                Level::Best => std::thread::Builder::new().spawn(job()).is_err(),
+                // Held values: as many as the app's data, so one worker, a bounded queue. A later
+                // read asks again when it is full; with no thread to be had none would be taken,
+                // so `started` stays set and no later read asks or makes a job.
+                _ => later(Turn::Held, job()) == Err(Refused::Full),
             };
-            if !queued {
-                // Full, or no thread to be had: a later read asks again.
+            if again {
                 self.started.store(false, Ordering::Release);
             }
         }
@@ -1048,6 +1050,31 @@ mod tests {
         while Precompressed::stored_held(&held, Coding::Gzip).is_none() {
             assert!(std::time::Instant::now() < deadline, "the worker did not compress the value after a job panicked");
             std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// A held value's forms refused because the compression thread could not be started are not
+    /// asked for again: no thread will be had in this process, so no later read asks the queue or
+    /// makes a job. Refused by a full queue, they are asked for again by the next read.
+    #[cfg(feature = "json")]
+    #[test]
+    fn a_held_value_with_no_thread_to_be_had_is_not_asked_for_again() {
+        for (refused, asks) in [(Refused::NoThread, 1), (Refused::Full, 9)] {
+            let held = Arc::new(Precompressed::held(Bytes::from(format!("[{}]", "1,".repeat(2000) + "1"))));
+            let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+            let count = asked.clone();
+            QUEUEING.set(Some(Box::new(move |turn| {
+                assert_eq!(turn, Turn::Held);
+                count.set(count.get() + 1);
+                Err(refused)
+            })));
+            // The first read starts nothing; each of the nine after it may ask.
+            for _ in 0..10 {
+                assert!(Precompressed::stored_held(&held, Coding::Brotli).is_none());
+            }
+            QUEUEING.take();
+            assert_eq!(asked.get(), asks, "{refused:?}: the reads that asked the queue");
+            assert_eq!(held.started(), refused == Refused::NoThread, "{refused:?}");
         }
     }
 
