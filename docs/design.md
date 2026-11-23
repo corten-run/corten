@@ -8156,10 +8156,11 @@ rules something out.
     memory grew 7,267 to 7,269 bytes a page against 7,812 to 7,814, with 1.791 minor faults a
     page against 1.925, and 2,971 to 2,972 bytes a JSON body against 3,384. Under callgrind as
     above (rustc 1.100.0, jemalloc preloaded, three rounds of each, the order alternated; the
-    median, the rounds within 75 of it), a page made and kept with room ran 48,025 instructions a
-    request against 48,512, the JSON body 52,986 against 53,398, a kept page given again 17,877
-    against 17,873, a page not `Public` 33,876 against 33,877, and the store off 37,264
-    against 37,328. A kept answer given again copies its head out of the slice into a map with
+    median, the rounds within 75 of it but one of the JSON body's on the change, 145 under), at
+    `4e53ff290` against main's `04530f7e0` (whose runtime is `a02c81e86`'s), a page made and
+    kept with room ran 48,028 instructions a request against 48,515, the JSON body 53,016
+    against 53,452, a kept page given again 17,843 against 17,875, a page not `Public` 33,876
+    against 33,876, and the store off 37,264 against 37,326. A kept answer given again copies its head out of the slice into a map with
     room for its names (counted once each when it was kept) and those the stages add, as it
     copied it out of the map, and sends the same lines in the same order. A head of more than
     1,024 names is not kept, so that map with the stages' names stays far below the 24,576
@@ -8269,8 +8270,8 @@ rules something out.
     digits written to a buffer can be read again.
 
     Last checked: 2026-11-23 for what a kept answer holds, `23a98a7e9` against `a02c81e86`
-    under jemalloc 5.3.0 and callgrind (valgrind 3.19.0) with rustc 1.100.0, in a Debian 12
-    container; 2026-11-22 for the forms of a kept answer's `Age`, `48df6c67c`, `c25d263a9`,
+    under jemalloc 5.3.0, and for its instructions, `4e53ff290` against `04530f7e0` under
+    callgrind (valgrind 3.19.0), with rustc 1.100.0 in a Debian 12 container; 2026-11-22 for the forms of a kept answer's `Age`, `48df6c67c`, `c25d263a9`,
     `77dde53d6` and `09cddd7f1` (this choice's `0a2dc9b32` with each form and the benchmark's
     PNG kept for four hours), and for an older answer's, `9b0f2e6aa` (main's `fef1f83de` with
     the file routes and that lifetime) and `b0bc7ae32` (the buffer past the table on it, not
