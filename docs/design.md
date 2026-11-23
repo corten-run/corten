@@ -7945,15 +7945,49 @@ rules something out.
     workloads runs it on the timed request: each is given its kept answer in the handler's place,
     and the one handler of the four that writes JSON, `/records`, writes 24 pairs of strings, no
     integer, and runs only in the warm-up. This change merged with that main is still another
-    binary, which the fifth run did not time. The first two runs on a quiet host did not count
+    binary, which the fifth run did not time. A sixth run timed it, `593b92b01` against
+    `a02c81e86`, on 2026-11-23 on a DigitalOcean c-8 with a Xeon Platinum 8280 (Linux 6.12.117,
+    rustc 1.100.0, jemalloc 5.3.0 preloaded), with the fifth run's two passes, workloads, starts,
+    fence, panic checks and margin, set before it ran, and a validator that read a counter as
+    counted for all of a turn only at a running share of exactly 100%. Every workload of both
+    passes was usable, and the median change within a pair, its bound and range were: `browser`
+    -0.91% (bound -0.32%, -12.35% to +6.23%), `gzip` -0.87% (bound -0.67%, -7.40% to +5.72%),
+    `refused` -1.22% (bound -0.74%, -7.77% to +6.59%) and `json-browser` -1.20% (bound -0.91%,
+    -6.25% to +6.13%), with user instructions -0.03% to +0.04% at the median, so the gate declared
+    for it was met for those commits. Its second pass, a diagnostic held to no margin, counted
+    user first-level instruction-cache misses a request from base to head: `browser` 2,689.0 to
+    2,710.2 (+0.71% at the median a pair, bound +1.73%), `gzip` 2,660.3 to 2,684.5 (+0.48%, bound
+    +1.25%), `refused` 2,650.4 to 2,690.0 (+1.68%, bound +2.71%) and `json-browser` 2,866.4 to
+    2,796.1 (-2.19%, bound -1.29%). Its kit, results and receipts, each workload's per-pair
+    changes in its CSVs among them, are kept under the tag `evidence/aed6638f`. As declared, a bound
+    under +1% shows neither a lower cost nor what caused a difference: the instructions are flat,
+    so no speedup is claimed. Like every run before it, its turns begin after a warm-up that has
+    made each page's brotli 5, so they give answers again: none contains the answer that queues
+    the job or the thread's first start. Those were counted in process under callgrind instead,
+    on the sixth run's pair (`593b92b01` against `a02c81e86`, rustc 1.100.0, valgrind 3.24.0,
+    jemalloc 5.3.0 preloaded, the medians of three rounds that turned the builds' order about):
+    1,000 new URLs of a 6,124-byte `Public` page, each asked for twice in a row with a browser's
+    codings, a pause after each so that the thread made the job before the next URL, each
+    answer's coding and whether it was kept checked, and every page given its brotli 5 afterwards
+    on this change and none on main. The first answer, which makes and keeps the page, took
+    264,196 user instructions against 264,144 (+52); the second, which on this change queues the
+    job, 25,136 against 24,952 (+184, +0.74%). The one answer that starts the thread took 8,818
+    more than such an answer once it is started, 8,692 of them in starting it, and the new thread
+    46,775 before its first job. Each job took 1.50 million on the thread (1,497,636 to 1,498,110
+    across the nine processes of this change), the page's brotli 5 and its put, and the thread's
+    loop 151 more. Callgrind counts user
+    space alone: not the thread's creation or a wake-up in the kernel, nor any wait, nor what the
+    thread's work costs answers that share a CPU with it. So a page asked for exactly twice costs
+    this change about five times its two answers' instructions, on the thread; the bet that most
+    kept answers are read more than twice is what pays for it. The first two runs on a quiet host did not count
     user first-level instruction-cache misses, which CONTRIBUTING.md asks for as a diagnostic when
     code is added or moved: each turn counted `cycles:u`, `cycles:k` and `instructions:u` alone,
     so that no turn's counters were multiplexed and perf ran all three for the whole of every turn;
     the simulated instruction misses above (callgrind's, 1,811 against 1,798 an answer) are another
-    measure and do not stand in for them, and the third, fourth and fifth runs' second passes count
+    measure and do not stand in for them, and the third to sixth runs' second passes count
     them. Each workload's 100 per-pair changes in the first four runs are listed in the description of
     [#1846 Send a kept page in brotli 5, made off the request after its second answer](https://github.com/corten-run/corten/pull/1846),
-    and the fifth run's are in its results under its tag.
+    and the fifth and sixth runs' are in their results under their tags.
     The levels'
     bytes and instructions above are a probe's that compresses as `compress::encode` does, whose
     level-1 bytes matched the app's answers, on the catalog benchmark's ten record pages and
@@ -8668,12 +8702,15 @@ rules something out.
     to tell where a build's code sits from what the change costs, so an older answer's
     digits written to a buffer can be read again.
 
-    Last checked: 2026-11-23 for the fifth run's cycles and user first-level instruction-cache
-    misses under load, `a14a80294` against `fef1f83de` on a DigitalOcean c-8 (Xeon Platinum 8280,
+    Last checked: 2026-11-23 for the sixth run's cycles and user first-level instruction-cache
+    misses under load, `593b92b01` against `a02c81e86` on a DigitalOcean c-8 (Xeon Platinum 8280,
     Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), every turn on a newly started build,
-    kept under the tag `evidence/2cc9a0c8`, and for main's `a02c81e86` changing only the
-    JSON integer writer, which the run's probe source and `crates/corten/src/json.rs` show none of
-    its four workloads runs on the timed request; 2026-11-23 for how long a held value waits behind a kept page's whole job on a
+    kept under the tag `evidence/aed6638f`; 2026-11-23 for the instructions of the answer that
+    queues a kept page's brotli 5, of the job and of the thread's first start, under callgrind on a
+    workstation, `593b92b01` against `a02c81e86` (rustc 1.100.0, valgrind 3.24.0, jemalloc 5.3.0
+    preloaded, three rounds); 2026-11-23 for the fifth run's cycles and user first-level
+    instruction-cache misses under load, `a14a80294` against `fef1f83de` on such a host, every turn
+    on a newly started build, kept under the tag `evidence/2cc9a0c8`; 2026-11-23 for how long a held value waits behind a kept page's whole job on a
     quiet host, `76a9dc1e4` against `7a275ef15` on a DigitalOcean c-8 (Xeon Platinum 8280, Linux
     6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), kept under the tag `evidence/53fa534d`;
     2026-11-22 for the fourth run's cycles and user first-level instruction-cache misses under load,
