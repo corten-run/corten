@@ -8423,7 +8423,12 @@ rules something out.
     size where 36,000 bytes count and its answers are kept for under 16 minutes 39 seconds,
     so the table of ages should be of three digits; or the rule for a touched request comes
     to tell where a build's code sits from what the change costs, so an older answer's
-    digits written to a buffer can be read again.
+    digits written to a buffer can be read again. That rule is now
+    [design Choice 72](#choice-placement-runs) (2026-11-23); the buffer (`b0bc7ae32`) has not
+    been read under it, and stays not made until a run across placements reads a kept answer
+    past the table, as
+    [#1983 An older kept answer's Age written to a buffer missed the cycle margins on single builds; read it across placements](https://github.com/corten-run/corten/issues/1983)
+    asks.
 
     Last checked: 2026-11-22 for the forms of a kept answer's `Age`, `48df6c67c`, `c25d263a9`,
     `77dde53d6` and `09cddd7f1` (this choice's `0a2dc9b32` with each form and the benchmark's
@@ -8522,7 +8527,9 @@ rules something out.
     decisive for it before this exception existed or other evidence corroborates a regression. That
     accepts a residual risk on
     controls; it does not show they are unchanged, and a placement cost in the binary that ships is
-    still a cost. A workload the change touches keeps +1% with no floor, however flat its
+    still a cost, which no check here measures: the gate reads the change, and a release binary is
+    one placement of it ([design Choice 72](#choice-placement-runs)). A workload the change touches
+    keeps +1% with no floor, however flat its
     instructions, since a change to the data a request reads, its allocation, the kernel's work or
     its waiting can cost cycles on the same instructions; so does a workload not named before the
     run, and the affected-route, memory and waiting measurements are required as before. This
@@ -8603,7 +8610,12 @@ rules something out.
 
     A layout floor never applies to the benefit side: these runs measured how far placement raised
     cycles on one route, not how far it can lower them, so a floor cannot establish a CPU-cost win.
-    The CPU-win rule in Pull requests decides wins as before.
+    The CPU-win rule in Pull requests decides wins as before. Nor does a floor apply to a workload
+    read across placements ([design Choice 72](#choice-placement-runs)), whose own A/A says what
+    the run resolves; this Choice's floor and its calibration are for single-build runs, whose
+    protocol that Choice leaves as it was except for a touched workload with a recorded placement
+    spread, where a single-build bound whose distance from its threshold is inside the spread, by
+    that Choice's one test, no longer decides it, for the margin or for a win.
 
     The runs: one host with nothing else running (Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD
     23.1.5 and the repository's release profile, jemalloc 5.3.0 preloaded), every binary built there
@@ -8707,6 +8719,250 @@ rules something out.
     `wrk` 4.1.0 and Debian's libjemalloc2 5.3.0. The host's own record gives the CPU model, topology
     and versions, but not the droplet size and region, which come from the account that made it and
     which a later calibration records with the rest.
+
+72. <a id="choice-placement-runs"></a>**A touched workload may be read across placements the run's
+    plan declares, each side compiled once and relinked with a never-called pad of a declared size
+    first in its code, and must be when a single build's distance from its threshold lands inside the placement
+    spread.** The
+    paired-cycle gate reads one build of each side
+    ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2), and builds of one commit whose code sits at
+    different places have differed in a touched request's cycles by more than its +1% margin:
+    [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
+    removed about 500 user instructions a kept request and missed +1% on one build, while builds of
+    each side with a block of 40 to 40,000 bytes no request runs, ten placements a case on two
+    hosts, each one start, put it at 1.3% fewer cycles on a kept page at the mean (from 5.1% fewer
+    to 3.3% more by placement) and 0.9% and 0.3% fewer on two kept files (to 6.8% fewer and 3.8%
+    more), and main against main with those blocks ran from 4.5% fewer to 4.0% more
+    ([design Choice 70](#choice-kept-pages), tag `evidence/cheaper-ask-1925`); each of those was
+    one start, so they are differences observed, not what placement alone moves; the A/As below,
+    every turn a fresh start, give the spreads observed under that protocol, which still hold some
+    of a start's own variation. A change of a few
+    hundred instructions on a touched request passes or misses by where its code landed, and a floor
+    ([design Choice 71](#choice-layout-floor)) is not the answer there, for that Choice's reason: a
+    touched workload can cost cycles on flat instructions. So a run's plan may declare, before the
+    run, that a touched workload is read across placements, and the gate then reads it as Pull
+    requests says: each side compiled once; K placements of it from its captured final link run
+    again with one more object, a function of p bytes that nothing calls, placed first in `.text`
+    by `-Wl,--symbol-ordering-file`, so every other function moves by p in the default order with
+    its neighbours, the sizes listed in the plan and spread across the phases of a 64-byte line and
+    a 4 KiB page up to about 40,000 bytes, as #1955's blocks were; base with pad p_i against head
+    with pad p_i; R recorded pairs per placement after one that is not, every turn on a fresh
+    start; per placement the median of its per-pair changes in user plus kernel cycles per
+    request; across placements the median of the K medians and its distribution-free one-sided
+    95% upper bound, the j-th smallest with j the smallest rank whose binomial tail is at most 5%
+    (the 20th of 30); and, as what the run can resolve, an A/A of the change's base against itself
+    with the change comparison's build, probe and load inputs, as
+    [design Choice 71](#choice-layout-floor)'s same-run control is built: base with pad p_i
+    against base with pad q_i from a second list, read the same way and again with the two lists'
+    labels swapped. The bound's 95% is nominal: the order statistic's
+    coverage holds for independent placement medians with a common median under no change, and
+    the pads are a declared, phase-balanced set, not a random draw of the placements builds land
+    in, so the bound speaks for those placements. A bound under +1% with a resolved A/A meets the margin;
+    an A/A whose bound is at or above +1% in either reading is not resolved, which does not pass.
+    The two readings use the same pairs, so the second costs no turns: nothing makes the
+    placements of one list as fast as those of the other, and a list that ran faster would make
+    one reading's bound look resolved while raising the other's. The benefit side may use the
+    protocol when the plan declares it and its smallest worthwhile reduction before the run.
+
+    When it is required. A placement run costs about two hours of a c-8 for one workload's change
+    and A/A beside an A/A on `plain`, against about 35 minutes for three single-build comparisons
+    of 100 pairs ([design Choice 71](#choice-layout-floor)'s runs), so it is not the rule for every
+    change. Each placement run's A/A records the workload's
+    placement spread here, its lowest and highest placement median. One test decides:
+    a single-build bound's distance from its threshold (the bound less +1% for the margin, the
+    bound plus the smallest worthwhile reduction for a CPU-cost win) is inside the spread when it is
+    at or above its lowest and at or below its highest. Inside does not decide the workload, a pass
+    as much as a miss and a win no more than a loss, since the build's own placement could account
+    for the whole distance either way; the pull request reads that workload across placements,
+    under a plan written before that run. Outside, or with no recorded spread for the run's setup,
+    the single-build bound is the reading, and a placement run declared after it does not clear
+    its miss.
+    Item 2's other requirements, user L1 instruction-cache misses when a change adds or moves code
+    among them, apply to a run read across placements as to any other. So a change whose
+    single-build reading this rule leaves decided keeps the cheaper run. That is a rule, not a
+    proof: the spread is the lowest and highest of 30 noisy placement medians on one host and one
+    commit, and pads may understate what real changes do (Stands on, bet), so a bound outside it
+    is binding by policy, not shown immune to placement. A recorded spread is read to its two
+    printed decimals, either end inside, and applies only to a run that matches the setup it was
+    measured on in each of: the probe program and its features; the workload's request and the
+    configuration it is sent to; the allocator and its settings; the turn protocol (every turn on a
+    freshly started build, the server, load and `perf` each pinned apart, `wrk -t2 -c64` and 3 s
+    turns); and the CPU model. A run that differs in any, such as a c-8 with a Xeon Platinum 8168
+    or 8280, which [design Choice 71](#choice-layout-floor) records c-8s have also had, has no
+    recorded spread, so its single-build bound is the reading, until a placement run on its setup
+    records one. These are what decide which code a request runs, what else runs with it and what a
+    placement costs on the CPU's caches and predictors; the kernel and toolchain are not among
+    them, as a policy choice (Stands on, bet). Only a complete, resolved A/A (both readings, below) records a
+    spread or replaces one, by a pull request that changes this Choice, and a run reads the spread
+    recorded here on `main` when its plan is declared, so a wider spread recorded after a miss
+    does not reopen it. The first run's spreads are recorded although its A/A was on main, not the
+    change's base (an exception, stated below). Recorded spreads: `plain` -2.42% to +2.92% and
+    `kept` -2.98% to +3.33% (the first run's A/As below: main `a02c81e86`, 2026-11-23, tag
+    `evidence/ee7b0b41`), for the probe program in that tag (the one
+    [#1829 Run a kept page's handler once for requests that miss its copy together](https://github.com/corten-run/corten/pull/1829)
+    was measured with, features `json` and `compress`); `plain` a `GET /private` to its `plain`
+    configuration and `kept` a `GET /page` to its `hit` configuration, warmed twice before the
+    port opens; jemalloc 5.3.0 by `LD_PRELOAD` with
+    `MALLOC_CONF=background_thread:true,tcache_max:65536`; every turn on a freshly started build,
+    the server on one CPU, the load on two others and the driver and `perf` on a fourth,
+    `wrk -t2 -c64` and 3 s turns; and a Xeon Platinum 8358.
+
+    What ships is one placement. A release binary is one draw of where the linker put the code, and
+    the next change to anything before a function moves it again, so the placement a change lands in
+    is not the change's to choose or keep; a gate that charged the change for that draw would be
+    measuring the draw. Read across placements, the gate measures the change, and what the binary
+    that ships pays for its placement stays a cost no check here measures:
+    [design Choice 71](#choice-layout-floor) says so for its controls, and this Choice does not add
+    a release-against-release check, which would need its own A/A across placements of two releases
+    and is a separate question. Base and head with one pad are not one layout: they hold different
+    code, so the same pad is the same offset applied to each side's own default layout, which is
+    what a pull request's two builds are, and the A/A's two lists of sizes give its two sides
+    placement differences of the same kind. One run also reads main's unpadded build against eight
+    of its padded ones, a diagnostic of where the build that ships sits among them.
+
+    The kit for the first run, with its `margin.md`, scripts, sources and results, is tag
+    `evidence/ee7b0b41`. Before any turn its `build.sh` stops unless each side's captured link run
+    again without a pad is byte-identical to cargo's binary, every placement has the same set of
+    function names as that binary (names once ThinLTO's suffixes are stripped) and the pad, the
+    pad at the start of `.text`, and every function whose name occurs once in both binaries moved,
+    each pair of neighbours of those at distinct addresses still next to each other in order, one pad relinked twice is one
+    binary and every binary has a SHA-256 of its own; its `verify.sh` then compares every
+    placement's answers to `GET /private` and the kept `GET /page` with its unpadded binary's.
+    That comparison is weaker than Pull requests now asks, as
+    [design Choice 71](#choice-layout-floor)'s receipt's was: it removed carriage returns, dropped
+    every line beginning `Date:` in any case, and applied the kit's `mask.sed` to the whole
+    `curl -i` output, body included, which turns a line that is exactly an `age:` of digits or a
+    weak `etag:` into fixed text; so it accepted any `Age`, and the answers it saved are the
+    normalized ones. It is accepted for this receipt alone: each placement relinks the same objects
+    with one function nothing calls, so no path that writes an answer changed; each of the 1,026
+    saved answers has a body of 6,125 bytes against a `content-length` of 6,124, ending in
+    `</html>` and one line feed the line-based pipeline adds, though the raw answers were not saved
+    to show no line was dropped; none carried an `ETag`; and every one of the 1,360 starts in the three `kept` comparisons logged
+    the page kept by its warm-up at an `Age` of 0. A later plan masks no part of the body, masks
+    only header values it names, and checks a value the workload depends on, such as `Age`,
+    separately ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2).
+
+    The tag keeps the run's results but not `build.sh`'s output, so the measured claims here are
+    what those results hold. On a c-8 (Intel Xeon Platinum 8358, Debian 13, Linux 6.12.117,
+    2026-11-23), K = 30 and R = 8: the 120 placements' layouts have every function `layout.mjs` compares (a function symbol with
+    one name in both binaries once ThinLTO's suffixes are stripped) moved by exactly its pad
+    (408,360 of 408,360), every such pair of neighbours kept (400,080 of 400,080), the pad first
+    in `.text` and the sections after it (`.data`, `.got`, `.bss` and the rest) moved by the pad
+    as well; the 123 binaries have 123 distinct SHA-256s; all 120 placements answered as their
+    unpadded binary, as that comparison read; and every one of the 1,772 turns had its counters at
+    100% and no `wrk` error. The local container dry run before it, at `a02c81e86` with rustc
+    1.100.0 and LLD 23.1.5 and no counters, relinked and checked 20 placements in 24 seconds and
+    verified them in 18, as the tag's `margin.md` records; its other output is not in the tag.
+    Main against main on `plain`: median of placement medians +0.23%,
+    bound +0.92%, placement medians from -2.42% to +2.92%, t bound +0.61%, their standard deviation
+    1.48% against 1.34% that a median of 8 pairs would have from the pairs' own spread (3.03%)
+    alone; on `kept`: -0.49%, bound +0.02%, -2.98% to +3.33%, t bound +0.05%, 1.44% against 1.26%
+    (2.85%). Both resolve +1%, and still do read with the lists' labels swapped, as the rule now
+    asks: bounds of +0.38% on `plain` and +0.90% on `kept` (recomputed from the tag's CSVs; as recorded, 18 and
+    11 of 30 placement medians above zero, 12 and 19 with the labels swapped, two-sided sign tests
+    p = 0.362 and 0.200).
+    [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
+    on `kept`: -0.07%, bound +0.28%, placement medians from
+    -3.06% to +3.49%, user instructions -1.52% (placement medians -1.53% to -1.52%), a bound under +1% read across
+    placements, where its single-build run missed. That is a historical reading, not a pass under
+    the rule as it now stands: the run's A/A was not on the change's base, it did not count user
+    instruction-cache misses, and its plan gated no pull request. Main's unpadded build against eight padded ones
+    on `kept`: the padded ones cost a median 2.14% fewer cycles (-3.19% to +0.19%; 7 of 8 fewer,
+    two-sided sign test p = 0.070), which eight placements do not resolve either way; it is near
+    the Revisit-when on the unpadded build below, so a later run reads more of them. The three
+    comparisons' turns took 99 minutes and the diagnostic's about 9 more.
+    Two limits of this run against the rule as now written: its A/As were main `a02c81e86` against
+    itself, not the change's base `bd6b7741f`, so they calibrate the protocol on another commit
+    than the one the change comparison built; and it counted no user L1 instruction-cache misses,
+    which item 2 asks for when a change adds or moves code, as that pull request's does.
+
+    Not chosen: a seeded shuffle of the function order (LLD's `--shuffle-sections`, this Choice's
+    first version), since in that plan's container dry run seed 1 on main moved all 3,404
+    functions to a new order and kept 5 of 3,335 pairs of neighbours next to each other (as the
+    tag's `margin.md` records): it replaces the default order no real build changes, could make
+    every placement slower than a real build in a way an A/A cannot see (both sides pay it), and
+    gives base and head with
+    one seed different permutations; placements from source pads, a block of declared sizes in the
+    source, as
+    [#1965 The cycle gate reads one build, and one build's placement moves a touched request's cycles by up to 4% either way](https://github.com/corten-run/corten/issues/1965)
+    proposed and that pull request's run did, since each pad is a separate compile of each side,
+    about two minutes a build where a relink and its checks take about a second, and a pad in the
+    source moves only what follows it, by an amount inlining and alignment decide, where one at the
+    start of `.text` moves each function by an amount the run checks is exactly its size; the protocol for every change, at
+    more than three times a single-build run's cost, for readings no placement could flip as well
+    as those it could; a placement run only after a single-build miss, which reads a
+    miss again and never a pass, though a lucky placement passes a real cost as easily as an
+    unlucky one blocks a free change; the mean across placements with a Student t bound as the
+    gate's statistic, which assumes the placement medians are near normal, which nothing measured
+    shows, and lets one unlucky placement move the bound as far as it is from the rest (reported
+    as a diagnostic); more pairs on one build, since more pairs narrow the bound around that
+    build's own placement offset, not toward the change
+    ([design Choice 71](#choice-layout-floor)'s measured +1.16% offset on an A/A); builds that pin
+    placement, by function alignment or a fixed link order, which gate a binary no app builds and
+    leave the change's cost at the pinned placement alone; gating the release binary instead,
+    against the previous release, which measures every change since that release together and
+    cannot attribute a cost to one pull request; a recorded A/A reused across runs, since the
+    run's own A/A is what says its host and protocol resolve +1%; the A/A read once, with its
+    lists as declared, since a list whose placements ran faster would make its bound look
+    resolved; a sign test on the A/A's placement medians instead of the second reading, which
+    counts their direction and not their size, so it turns away an A/A whose medians all lean a
+    hair one way and passes one with a few large leans; and the A/A run again with its lists
+    swapped, which measures the same pairs of binaries in the same alternating order and so adds
+    turns without adding a reading.
+
+    Stands on: measured (the five pad builds of each side of that pull request above and main
+    against main with the same pads, one run on two cloud machines, one start a placement, recorded
+    in [design Choice 70](#choice-kept-pages); and the first placement run above, tag
+    `evidence/ee7b0b41`, its A/As on main rather than the change's base, its answers compared after
+    its kit's normalization, which this Choice accepts for that receipt alone); platform (LLD
+    places the sections of the symbols an ordering file names
+    first in their output section and the rest in their default order, rustc 1.100.0 puts each
+    function in its own `.text` section, aligns them to 16 bytes and links through LLD 23 on Linux
+    by default; LLD aligns each input section to its own alignment, so a pad does not by itself
+    move every function by exactly its size; the run checks each function's shift rather than
+    assuming it, and the first run measured exactly the pad for every function it compared);
+    reasoned (a release binary's placement moves with every later change, so a change's cost is
+    read across placements, not at one; relinking the same objects with a pad changes placement
+    alone, as the answers, the unchanged symbol set and the kept neighbours check; a bound inside
+    the spread is one the build's own placement could account for, by the spread one run measured;
+    the A/A read with its lists' labels swapped takes away any advantage one list's placements
+    gave its bound, since both readings use the same pairs; and the order statistic's coverage
+    holds for any distribution of placement medians that are
+    independent with a common median, which a declared set of pads assumes and does not show); bet
+    (moving the whole of the code by declared offsets varies placement about as much as real
+    changes do, though a real change moves only the code after it and by sizes no plan chose, so
+    two functions' distance apart, which a pad keeps, can change too; an A/A that resolves under
+    pads may understate a spread that comes from that; and a spread measured on one setup holds
+    for another kernel or toolchain with the same CPU model, allocator, protocol and code); value
+    (Fast, and proven fast: a touched
+    request's cost is read from the change, not from where one build put it; Verified, not
+    assumed: the run's own A/A says whether it can resolve +1%, and a run that cannot does not
+    pass, README Values).
+
+    Revisit when: the first run's A/A on a workload does not resolve +1% at K = 30, which asks for
+    more placements or pairs, or another reading; a placement run's change and a single-build run
+    on the same commits disagree past their bounds often enough to show the pads' placements are not
+    those real builds land in, or that two functions' distance apart matters; the unpadded build
+    sits clearly above or below its padded ones, so the pads move cost as well as spreading it;
+    rustc stops emitting a section per function or aligning functions to 16 bytes, the gate's
+    linker is not LLD, or LLD stops placing an ordering file's sections first; a recorded spread
+    is so wide that most single-build readings land inside it, so the protocol is the rule in
+    practice, or so narrow that none do; a placement run with another kernel or toolchain on an
+    otherwise matching setup records a spread wider than the one here, so they belong among what a
+    spread must match; a run's time across placements falls to a single-build
+    run's, so the protocol could be the rule rather than an option; or the release binary's own
+    placement is asked to be checked.
+
+    Last checked: 2026-11-22 for the source pads of each side of
+    [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
+    and main against main (`abbd6113f`, `9f628467d` and `ba72c5f23`, tag
+    `evidence/cheaper-ask-1925`, as [design Choice 70](#choice-kept-pages) records them);
+    2026-11-23, the dry run of kit 1965 at `a02c81e86` in a Debian 13 container with
+    rustc 1.100.0 and LLD 23.1.5, and its run on a c-8 the same day (main `a02c81e86`, base `bd6b7741f`, head
+    `5a22836fc`, rustc 1.100.0 with LLD 23.1.5, Linux 6.12.117, tag `evidence/ee7b0b41`);
+    2026-11-23, the A/As' bounds with their lists' labels swapped, the saved answers' body
+    lengths, the warm-up `Age`s, the layouts' section shifts and the binaries' SHA-256s, read
+    from that tag's results at `ee7b0b417`.
 
 ## Rules
 
