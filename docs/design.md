@@ -1355,11 +1355,18 @@ rules something out.
    there lets a later run under another protocol stand in for the one that missed
    ([Choice 70](#choice-kept-pages) says of its own rerun that it is another protocol, not a
    repeat, and does not clear the first run's misses, and took it as the merge gate "as a
-   judgment, not a result of either run"). So this Choice does not say the limit is carried.
-   Whether the second run is taken as the gate despite the first plan is such a judgment; it is
-   the maintainer's, to be recorded on the pull request, and until it is this change does not
-   merge. What can be
-   said for taking it: the first protocol was shown, by its own same-setting diagnostic, unable
+   judgment, not a result of either run"). So no run here carries the limit by the rules.
+   Whether the later runs are taken as the gate despite the first plan is such a judgment, and
+   it is the maintainer's. The maintainer was asked on 2026-11-23, after the third run, with
+   the first run's miss, the later runs' bounds on the uncompressed page and the review's
+   finding that only the maintainer's decision could do it, whether the second and third
+   declared runs are taken as the merge gate, and answered yes; the pull request records the
+   question and the answer. So, as a judgment and not a result of any run, those two runs are
+   the merge gate for the uncompressed page. The first run's miss is not cleared: it stays here
+   as a bound of 1.98% more by a protocol that read one setting as 1.56% apart from itself, and
+   a later run that can tell 1% and shows the page costing more reopens this Choice (Revisit
+   when). What can be
+   said for taking them: the first protocol was shown, by its own same-setting diagnostic, unable
    to tell 1% on the workload it missed; most of its turn-to-turn spread was found to come from
    the published port and was removed before the second plan was written, by turns of one
    setting; and the second plan could not count a comparison whose own same-setting reading did
@@ -1440,7 +1447,9 @@ rules something out.
    may keep); bet (an app's image is Debian with that package; a page compressed per request is
    seldom past 200 KB, where this limit stops holding every buffer; an app's container has room for
    what its threads' caches keep, 3 to 5 MiB a CPU here; enough of an app's long pages go to a
-   client without zstd, which gets brotli, to be worth that memory); reasoned (an image package
+   client without zstd, which gets brotli, to be worth that memory; the first declared run's
+   miss on the uncompressed page was its protocol's spread and not a cost of this limit, which
+   the maintainer took as a judgment on the two later runs and no rule clears); reasoned (an image package
    binds only the image, where a `#[global_allocator]` crate compiles C into every build).
 
    Revisit when: an app is measured to hold more than 5 MiB a CPU at rest above what it holds with a
