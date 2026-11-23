@@ -1753,8 +1753,10 @@ rules something out.
     is drawn. In this Choice's own harness (step 2's, ported to the API of today's `App`), against
     axum's router at `7e897bd68` in the same container, the PR's head counts a page's `404` at
     17,417 against axum's 19,980 and an API's `404` at 11,932 against 14,101 (main `a138e2391`:
-    16,284 and 11,128), a page 12,991 and an API request 11,882 against 21,222 and 15,726: still
-    fewer than axum's on every request step 2 measured, so Revisit when is not met.
+    16,284 and 11,128), a page 12,991, one with a middleware 13,208, an API request 11,882 and an
+    unstaged route 6,474 against 21,216, 21,465, 15,726 and 8,479: fewer than axum's on each of
+    these, so Revisit when is not met by them. Card-market's item page and its JSON, which step 2
+    also counted, were not counted again.
 
     Stands on: platform (RFC 9110 9.1: an origin server SHOULD answer `501` to a method it does
     not recognize or implement, and every server implements `GET` and `HEAD`; 15.5.6: `405` is
@@ -2027,7 +2029,8 @@ rules something out.
     the app's error page, and the plain page at round 11's head, with and without the error page
     taking the failed answer's map, against main `a138e2391` (three rounds alternating the
     builds, every run within 2 of the others), and by function; 2026-11-22, a page's and an API's
-    `404`, a page and an API request in step 2's harness at that head and that main against axum's router
+    `404`, a page with and without a middleware, an API request and an unstaged route in step 2's
+    harness at that head and that main against axum's router
     at `7e897bd68` (jemalloc, three rounds alternating the three builds, every run within 16 of
     the others).
 
