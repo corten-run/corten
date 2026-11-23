@@ -185,7 +185,7 @@ impl Cache {
         .unwrap_or_else(|_| public(max_age, shared, stale, if_error))
     }
 
-    /// The header made for this answer alone, from a `Vec`, outside a staged route's poll: one no
+    /// The header made for this answer alone, outside a staged route's poll: one no
     /// [`settle`] reads (an unstaged route's answer's), so holding it would cost such an answer more
     /// and save it nothing.
     fn header(self) -> HeaderValue {
@@ -194,10 +194,16 @@ impl Cache {
             Kind::NoStore => return NO_STORE,
             Kind::Immutable => return crate::assets::IMMUTABLE,
         };
-        let mut text = Vec::with_capacity(96);
+        // Written here and copied into a value of its own length: one allocation, where a vector
+        // with room is two (its bytes, and what shares them), and a kept answer holds the room
+        // for as long as it is kept (docs/design.md#choice-kept-pages).
+        let mut text = [0; LONGEST];
+        let mut at = 0;
         let mut push = |name: &str, n: u64| {
-            text.extend_from_slice(name.as_bytes());
-            text.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
+            for part in [name.as_bytes(), crate::ascii::digits(n, &mut [0; 20])] {
+                text[at..at + part.len()].copy_from_slice(part);
+                at += part.len();
+            }
         };
         push("public, max-age=", max_age);
         if let Some(shared) = shared {
@@ -209,9 +215,13 @@ impl Cache {
         if if_error > 0 {
             push(", stale-if-error=", if_error);
         }
-        HeaderValue::from_maybe_shared(bytes::Bytes::from(text)).expect("digits are a valid header")
+        HeaderValue::from_bytes(&text[..at]).expect("digits are a valid header")
     }
 }
+
+/// The longest `Cache-Control` a [`Cache`] writes: each of its four names with a number of
+/// twenty digits, the most a `u64` has.
+const LONGEST: usize = "public, max-age=, s-maxage=, stale-while-revalidate=, stale-if-error=".len() + 4 * 20;
 
 thread_local! {
     /// Whether this thread is running a staged route's handler and middleware ([`Staged`]).
@@ -288,7 +298,7 @@ fn held_alone(lines: &header::OccupiedEntry<'_, HeaderValue>) -> bool {
 /// a `Vec`, `Bytes` allocates that count beside the text, or on the first clone when the text
 /// fills the `Vec`.)
 fn public(max_age: u64, shared: Option<u64>, stale: u64, if_error: u64) -> HeaderValue {
-    let mut text = Text { len: 0, bytes: [0; Text::LONGEST] };
+    let mut text = Text { len: 0, bytes: [0; LONGEST] };
     let mut push = |name: &str, n: u64| {
         text.push(name.as_bytes());
         text.push(crate::ascii::digits_inlined(n, &mut [0; 20]));
@@ -309,14 +319,10 @@ fn public(max_age: u64, shared: Option<u64>, stale: u64, if_error: u64) -> Heade
 /// A `public` header's text ([`public`]).
 struct Text {
     len: usize,
-    bytes: [u8; Text::LONGEST],
+    bytes: [u8; LONGEST],
 }
 
 impl Text {
-    /// Every directive [`public`] writes, each with a `u64`'s 20 digits.
-    const LONGEST: usize =
-        "public, max-age=".len() + ", s-maxage=".len() + ", stale-while-revalidate=".len() + ", stale-if-error=".len() + 4 * 20;
-
     fn push(&mut self, part: &[u8]) {
         self.bytes[self.len..self.len + part.len()].copy_from_slice(part);
         self.len += part.len();
@@ -1156,6 +1162,12 @@ mod tests {
         assert_eq!(Cache::public(minute).stale_if_error(Duration::ZERO).header(), "public, max-age=60", "0 is left out");
         assert_eq!(Cache::no_store().stale_if_error(day).header(), "no-store");
         assert_eq!(Cache::immutable().stale_if_error(day).header(), "public, max-age=31536000, immutable");
+        // The longest it writes, every number twenty digits, fills what it is written in.
+        let most = Duration::from_secs(u64::MAX);
+        let longest = Cache::public(most).shared(most).stale_while_revalidate(most).stale_if_error(most).header();
+        let n = u64::MAX;
+        let text = format!("public, max-age={n}, s-maxage={n}, stale-while-revalidate={n}, stale-if-error={n}");
+        assert_eq!((longest.to_str().ok(), text.len()), (Some(text.as_str()), LONGEST));
     }
 
     #[test]

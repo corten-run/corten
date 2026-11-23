@@ -35,7 +35,8 @@
 //! not the one for `/items`. The headers are compared as they were sent, so `fr` and `fr-FR`
 //! each have a copy. An answer is
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
-//! and no value made for this request alone, and varies on nothing but what the key covers.
+//! and no value made for this request alone, varies on nothing but what the key covers, and has
+//! at most [`NAMES`] header names.
 //!
 //! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`), text or a file (`Media`,
 //! a sitemap or `robots.txt` of [`crate::seo`]) is kept the same
@@ -87,8 +88,8 @@
 //! is how stale the app said the page may be. Off under `corten dev`,
 //! and in an app with no route that keeps a page, whose writes are then not counted. The
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
-//! the compressed forms made for it, with an allowance for what holds them; the body, the key
-//! and each compressed form are held in allocations of their own size
+//! the compressed forms made for it, with an allowance for what holds them; the body, the key,
+//! the head's lines and each compressed form are held in allocations of their own size
 //! (`tests/kept_memory.rs` holds the count to what the allocator is asked for). The key is
 //! built when an answer is kept, so a miss that is not kept never builds it ([`Key`]).
 //!
@@ -134,11 +135,11 @@ const SHARE: usize = 8;
 /// place of the oldest.
 const COPIES: usize = 8;
 
-/// What an entry counts for beside its key, its headers and its bytes: itself, its header map
-/// and its places in the maps.
+/// What an entry counts for beside its key, its headers and its bytes: itself and its places in
+/// the maps.
 const OVERHEAD: usize = 1024;
 
-/// What a header counts for beside its name and value: its place in the header map.
+/// What a header counts for beside its name and value: its place in the head's lines.
 const HEADER: usize = 112;
 
 /// An entry's size once it is no longer kept: nothing made for it counts from then on.
@@ -150,9 +151,12 @@ const GONE: usize = usize::MAX;
 /// it would any other.
 const ADDED: usize = 12;
 
-/// The most names a kept answer's head is given that room beside. One with more is copied as it
-/// is, so no head is too large for the map the room asks for.
-const ROOMY: usize = 64;
+/// The most names a kept answer's head has: one with more is its handler's to answer for every
+/// request. Far more than a page's, and few enough that a map of them with room for [`ADDED`]
+/// more, and what crowding makes `http` grow it to, stays far below the most a map holds (24,576
+/// names in `http` 1.5, past which making or filling one panics), so a request given a kept
+/// answer adds its `Age` and the stages their headers as they would to its handler's.
+pub(crate) const NAMES: usize = 1024;
 
 /// `Last-Event-ID`, held once: a comparison with a name that is not the `http` crate's own
 /// would make the name each time.
@@ -213,16 +217,26 @@ fn age_value(seconds: u64) -> HeaderValue {
     HeaderValue::from_static(&DIGITS[at..at + digits])
 }
 
-/// A copy of a kept answer's `head`, each line where it was, with room for [`ADDED`] more
-/// names: a copy made by `clone` holds its lines in a vector as long as they are, which grows on
-/// the first name a stage adds. (A head with more than four lines beyond the first of their
-/// names pays for this copy once more than for a `clone`, as the map's room for those is not
-/// asked for.)
-fn with_room(head: &HeaderMap) -> HeaderMap {
-    if head.keys_len() > ROOMY {
-        return head.clone();
-    }
-    let mut copy = HeaderMap::with_capacity(head.keys_len() + ADDED);
+/// A kept answer's head: its lines in the order its map gave them, each name as many times as it
+/// has values, in one allocation of their number. A copy of the handler's map would hold its
+/// table of places beside the lines and the room it grew to, as long as the answer is kept: 576
+/// bytes of jemalloc's for a page's four lines, where these take 320 (docs/design.md#choice-kept-pages).
+/// A request given the answer makes a map of them all the same ([`with_room`]).
+type Head = Box<[(header::HeaderName, HeaderValue)]>;
+
+/// The lines of `headers`, in the order a map made of them again gives them back.
+fn head_of(headers: &HeaderMap) -> Head {
+    let mut lines = Vec::with_capacity(headers.len());
+    lines.extend(headers.iter().map(|(name, value)| (name.clone(), value.clone())));
+    lines.into_boxed_slice()
+}
+
+/// A map of a kept answer's `head`, whose map had `names` names (at most [`NAMES`]), each line
+/// where it was, with room for [`ADDED`] more names: a map made just large enough grows on the
+/// first name a stage adds, and moves its lines. The room is for names and not lines, since a
+/// name's second and later values are held beside the map's table.
+fn with_room(head: &[(header::HeaderName, HeaderValue)], names: usize) -> HeaderMap {
+    let mut copy = HeaderMap::with_capacity(names + ADDED);
     for (name, value) in head {
         copy.append(name.clone(), value.clone());
     }
@@ -638,7 +652,10 @@ pub(crate) struct Entry {
     made: Instant,
     /// Its lifetime, in seconds.
     lifetime: u64,
-    head: HeaderMap,
+    head: Head,
+    /// How many names `head` has, each counted once: what its map is made with room for
+    /// ([`with_room`]). At most [`NAMES`].
+    names: u16,
     cache: crate::cache::Typed,
     style: Option<crate::security::StyleBlock>,
     body: Bytes,
@@ -941,7 +958,9 @@ impl Answers {
             inner.slots.push(None);
         }
         inner.slots[slot] = Some(entry.clone());
-        inner.at.entry(entry.hash).or_default().push(entry.clone());
+        // Room for this copy alone: most URLs are kept for one `Host` and one way of asking, and
+        // a list made by `push` has room for four, 32 bytes of jemalloc's where this takes 8.
+        inner.at.entry(entry.hash).or_insert_with(|| Vec::with_capacity(1)).push(entry.clone());
         store.bytes.fetch_add(entry.size.load(Ordering::Acquire), Ordering::AcqRel);
         store.make_room(&mut inner, &entry);
         entry
@@ -1103,7 +1122,7 @@ impl<'a> Asked<'a> {
             self.signal.ask_language();
         }
         let mut res = Response::new(Body::from(entry.body.clone()));
-        let mut head = with_room(&entry.head);
+        let mut head = with_room(&entry.head, entry.names.into());
         // So a cache after this one, the browser's too, does not start the lifetime over.
         head.insert(header::AGE, age_value(age));
         *res.headers_mut() = head;
@@ -1186,6 +1205,7 @@ impl Missed {
             || res.headers().contains_key(header::CONTENT_ENCODING)
             || res.headers().contains_key(header::CONTENT_RANGE)
             || res.headers().contains_key(header::ETAG)
+            || res.headers().keys_len() > NAMES
             || self.nonce.as_ref().is_some_and(|slot| slot.taken().is_some())
             || self.signal.as_ref().is_none_or(crate::Signal::is_personal)
             // Made over a time longer than it lasts: it would never be given.
@@ -1235,7 +1255,9 @@ impl Missed {
             data,
             made,
             lifetime,
-            head: parts.headers.clone(),
+            head: head_of(&parts.headers),
+            // At most `NAMES`, as checked above.
+            names: parts.headers.keys_len() as u16,
             cache,
             style,
             body: body.clone(),
@@ -1438,6 +1460,17 @@ mod tests {
         headers.iter().collect()
     }
 
+    /// An entry and the two counts its `Arc` adds fit jemalloc's class of 448 bytes (the
+    /// template's allocator), as they do since its head is a list of lines and not a map: a field
+    /// that takes them past it costs every kept answer the next class, 64 bytes more
+    /// (docs/design.md#choice-kept-pages). A test and not a check when the crate compiles, which
+    /// a release of `http` or `bytes` that an app's lock takes could fail.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn an_entry_fits_jemallocs_class_of_448_bytes() {
+        assert!(std::mem::size_of::<Entry>() + 16 <= 448, "{}", std::mem::size_of::<Entry>());
+    }
+
     #[test]
     fn a_kept_head_is_copied_line_for_line_with_room_for_what_the_stages_add() {
         // Made as a page's head is, with room in its table that a `clone` has as well.
@@ -1457,11 +1490,14 @@ mod tests {
         head.remove("link");
         head.append("link", HeaderValue::from_static("</a.css>; rel=preload; as=style"));
         head.append("link", HeaderValue::from_static("</b.js>; rel=modulepreload"));
-        let mut copy = with_room(&head);
+        // Kept as its lines alone, in the map's order, and made a map of again line for line.
+        let kept = head_of(&head);
+        assert_eq!(kept.len(), head.len());
+        let mut copy = with_room(&kept, head.keys_len());
         assert_eq!(lines(&copy), lines(&head));
         // As many more names as the stages add, and the map is the size it was made, with each
-        // line where it was put: the vector a `clone` holds them in grows on the first of these
-        // and moves them, which the size of the map's table does not show.
+        // line where it was put: the vector a map just large enough holds them in grows on the
+        // first of these and moves them, which the size of the map's table does not show.
         let first = |copy: &HeaderMap| std::ptr::from_ref(&copy[header::CONTENT_TYPE]);
         let (room, at) = (copy.capacity(), first(&copy));
         assert!(room >= head.keys_len() + ADDED, "{room}");
@@ -1475,23 +1511,43 @@ mod tests {
         assert_eq!(first(&copy), at);
         assert_eq!(lines(&copy)[..head.len()], lines(&head)[..]);
 
-        // A head of more names than is given room, with two lines of one, is copied as it is: the
-        // copy is the size of the map it was copied from, which was made larger than the room.
-        let mut large = HeaderMap::with_capacity(4 * ROOMY);
-        for name in 0..=ROOMY {
+        // A head of many names, with two lines of one, is given room for all of its names too.
+        let mut large = HeaderMap::with_capacity(256);
+        for name in 0..=128 {
             large.append(header::HeaderName::from_bytes(format!("x-{name}").as_bytes()).unwrap(), HeaderValue::from(name));
         }
         large.append("x-0", HeaderValue::from_static("again"));
-        let roomy = HeaderMap::<HeaderValue>::with_capacity(ROOMY + ADDED).capacity();
-        assert!(large.capacity() > roomy, "{} {roomy}", large.capacity());
-        let copy = with_room(&large);
+        let copy = with_room(&head_of(&large), large.keys_len());
         assert_eq!(lines(&copy), lines(&large));
-        assert_eq!(copy.capacity(), large.capacity());
-        // And the largest that is given room has that room and no more.
-        large.remove("x-1");
-        let copy = with_room(&large);
-        assert_eq!(lines(&copy), lines(&large));
-        assert_eq!(copy.capacity(), roomy);
+        assert_eq!(copy.capacity(), HeaderMap::<HeaderValue>::with_capacity(129 + ADDED).capacity());
+    }
+
+    #[test]
+    fn the_most_names_kept_and_the_stages_fit_a_map_grown_as_far_as_crowding_grows_one() {
+        // `http` grows a crowded map while it has at most five places a name, so to at most ten:
+        // a kept head of the most names with the stages' never asks for a map past the most it
+        // holds (making a map larger than that panics).
+        assert!(HeaderMap::<HeaderValue>::with_capacity(10 * (NAMES + ADDED)).capacity() >= 10 * (NAMES + ADDED));
+        assert!(u16::try_from(NAMES).is_ok());
+    }
+
+    #[test]
+    fn a_kept_head_of_few_names_and_many_values_is_given_room_for_its_names() {
+        // Four names and 64 lines, as a page with many `Link`s has: a name's second and later
+        // values are held beside the map's table, so they need no room in it.
+        let mut head = HeaderMap::new();
+        for (name, value) in
+            [("content-type", "text/html; charset=utf-8"), ("vary", "corten, accept"), ("corten-shell", "f2858fac99b1c5e6")]
+        {
+            head.append(header::HeaderName::from_static(name), HeaderValue::from_static(value));
+        }
+        for at in 0..61 {
+            head.append(header::LINK, HeaderValue::from(at));
+        }
+        assert_eq!((head.keys_len(), head.len()), (4, 64));
+        let copy = with_room(&head_of(&head), head.keys_len());
+        assert_eq!(lines(&copy), lines(&head));
+        assert_eq!(copy.capacity(), HeaderMap::<HeaderValue>::with_capacity(4 + ADDED).capacity());
     }
 
     #[test]
@@ -1582,7 +1638,8 @@ mod tests {
             data: false,
             made: Instant::now(),
             lifetime,
-            head: HeaderMap::new(),
+            head: Head::default(),
+            names: 0,
             cache: crate::cache::Typed::for_test(),
             style: None,
             body: Bytes::from(vec![b'x'; body]),

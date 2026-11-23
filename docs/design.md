@@ -7280,9 +7280,9 @@ rules something out.
     from the path as it was matched), with no cookie but the time zone's, no `Authorization`, no
     caller read by a middleware and no body. The answer must be a `200` of a known size with a
     lifetime that sets no cookie, drew neither the request's nonce nor a value made for this
-    request, varies on nothing else, and carries exactly the marks a page is known to carry: one
-    added later that this code does not know is not replayed by mistake, the page is simply not
-    kept.
+    request, varies on nothing else, has at most 1,024 header names, and carries exactly the
+    marks a page is known to carry: one added later that this code does not know is not
+    replayed by mistake, the page is simply not kept.
 
     While the store has room every such answer is kept, the first time it is made. Once it is
     full (the bytes kept within an eighth of the bound, which is the largest answer that is
@@ -7839,7 +7839,7 @@ rules something out.
     four that thread made one for (a fifth puts the oldest out, whose header is made again when
     it is asked for), in place of one made for each answer. A header is made, new or again,
     with its text and the count of its references in one allocation. Made from a `Vec`, as
-    main makes it, `Bytes` allocates that count beside the text, or at its first clone when
+    main made it then, `Bytes` allocates that count beside the text, or at its first clone when
     the text fills the `Vec` (96 bytes), so a header the thread and the answer both hold would
     have allocated once more than main's for each one made again. Earlier, at `4827fa33b`
     against `564034b86` with one set of numbers, the skip was 669 of the `Public` page's
@@ -7877,7 +7877,8 @@ rules something out.
     references costs (the miss made four more than main's answer), and nothing here explains
     the kernel's 4.16%. An unstaged route's answer now has its header made as main makes it, and
     held by nothing (`a5577a2eb`): while a thread runs an unstaged route's handler
-    (`route::Lane`), `Cache` makes it from a `Vec` and the mark held none of its bytes; a
+    (`route::Lane`), `Cache` makes it as main does (from a `Vec` then; written at its own length
+    since main's `14126d2a8`, below) and the mark held none of its bytes; a
     request the handler has an app's router answer meanwhile is settled by reading its header,
     as one written by hand is. Counted the same way, `a5577a2eb` against `a0eeeacca`: the
     unstaged route with five policies took 13,490 instructions against 13,538 and with one
@@ -8145,7 +8146,7 @@ rules something out.
     Set aside, counted the same way on the unstaged route with
     five policies and with one, each against main: a thread that stops looking in its four
     after eight misses in a row, but for one call in 64, 10 more instructions and 517 fewer, with
-    7.5 and 4.2 more data reads missed; each header made from a `Vec` as main makes it and held
+    7.5 and 4.2 more data reads missed; each header made from a `Vec` as main made it then and held
     as before, 388 more and 523 fewer, its first clone allocating its count of references; eight
     held, 541 and 549 fewer, the five then never missing, which only moves the miss to a ninth
     set of numbers; and no mark on an unstaged answer, 316 and 315 fewer, which would send a
@@ -8486,9 +8487,62 @@ rules something out.
     what it adds (402 finding the answer and making its head, 212 reading the request, 155
     reading `Accept`, 131 the URL's hash) against about as many in what the handler and its
     answer would have taken, and the rest in no one place.
+    What a kept answer holds beside its body was cut next (`23a98a7e9` against main's
+    `a02c81e86`), after
+    [#1824 A `Public` page asked for once costs 44% more cycles than the same page not kept](https://github.com/corten-run/corten/issues/1824)
+    found a page kept with room paying about 0.95 kernel cycles a byte of new memory under
+    jemalloc. Counted by an allocator that records what each request leaves allocated, under
+    jemalloc 5.3.0 with each size as `malloc_usable_size` gives it, a page of 6,124 bytes kept
+    with room held 7,648 bytes in 11 allocations: the body 6,144, its entry 640 (520 asked), a
+    copy of the header map 576 (its slots 448 and its index 128), a 96-byte buffer behind
+    `Cache-Control`, the key 48, the URL's list of copies 32, the header values' shared counts
+    96 and the shell's key 16. Its head is now kept as a slice of its lines (320 for four), the
+    entry fits jemalloc's class of 448 (a test holds it there on 64-bit targets),
+    `Cache-Control` is written at its own length (32) and a URL's list starts with room for one
+    copy (8): 7,112 bytes in 10, 536 fewer, and 2,824 against 3,232 for a JSON body of 1,999
+    bytes, 408 fewer. A request that keeps a page makes 39 calls to the allocator against 40,
+    and one given a kept page 22 in both. Over 40,000 such pages in one process its resident
+    memory grew 7,267 to 7,269 bytes a page against 7,812 to 7,814, with 1.791 minor faults a
+    page against 1.925, and 2,971 to 2,972 bytes a JSON body against 3,384. Under callgrind as
+    above (rustc 1.100.0, jemalloc preloaded, three rounds of each, the order alternated; the
+    median, the rounds within 75 of it but one of the JSON body's on the change, 145 under), at
+    `4e53ff290` against main's `04530f7e0` (whose runtime is `a02c81e86`'s), a page made and
+    kept with room ran 48,028 instructions a request against 48,515, the JSON body 53,016
+    against 53,452, a kept page given again 17,843 against 17,875, a page not `Public` 33,876
+    against 33,876, and the store off 37,264 against 37,326. A kept answer given again copies its head out of the slice into a map with
+    room for its names (counted once each when it was kept) and those the stages add, as it
+    copied it out of the map, and sends the same lines in the same order. A head of more than
+    1,024 names is not kept, so that map with the stages' names stays far below the 24,576
+    `http` 1.5 holds, past which making or filling one panics, and an answer given again has the
+    room its handler's had. At 0.95 kernel cycles a byte the bytes saved would be worth about 509
+    kernel cycles a page kept with room and 388 a JSON body, an estimate from that rate, not a
+    saving the run below verified. Their cycles were measured on
+    2026-11-23 (run b21, kept under the tag `evidence/611749e1`): `d3bb2e0e4` against main's
+    `04530f7e0`, rustc 1.100.0 with jemalloc 5.3.0 preloaded, on a cloud host with eight
+    dedicated CPUs (Xeon Platinum 8280, Debian 13, Linux 6.12.117) that ran nothing else, 100
+    alternated pairs of 3-second `wrk` turns for each of four workloads, each turn on a fresh
+    start, held to a margin set before the run: the one-sided 95% bound on the median per-pair
+    change in user and kernel cycles a request strictly under 1% more. All four met it, the
+    median and the bound: a page kept with room 1.98% fewer (1.30% fewer), a kept page given
+    again 2.71% fewer (1.96%), a page not `Public` 1.94% fewer (1.59%) and the JSON body kept
+    with room 1.45% fewer (0.99%), on 0.51%, 0.13%, 0.00% and 0.36% fewer user instructions.
+    The kernel ran 478 fewer cycles a page kept with room (bound 309) against the 509 expected,
+    and 201 fewer a JSON body (bound 12) against 388, with resident memory 543 and 420 bytes
+    fewer a request. Those are differences between these two binaries on that host, not a
+    saving in cycles shown to be the cut's: the page not `Public` keeps nothing and ran the
+    same instructions, yet 1.94% fewer cycles, as much as the kept pages moved, so one build of
+    each side differs by about what is measured (as where the code sits did above), though the
+    run does not show that placement caused it either. What it shows is that on that host,
+    for these two binaries, all four one-sided bounds met the +1% margin set before the run.
+    How much more a `Public` page's first ask costs than the
+    same page not kept, which the issue asks, stays open: the cut takes 536 of the bytes it
+    holds, not that cost.
     Not measured: a file kept for a handler that reads it from a disk, a database or a store
     of objects, where the read is what a kept file saves; a body between 1,024 and 8,000
-    bytes, under 1,024 or over 1 MiB; a store that kept pictures or downloads fill, where
+    bytes in cycles against its handler (the 1,999-byte JSON body above was measured in cycles
+    only against main, for the cut of what it holds), under 1,024 or over 1 MiB; a head of many names or many values of one name (a page
+    with dozens of `Link`s), whose map a kept answer given again makes with room for its names,
+    beside the four lines measured; a store that kept pictures or downloads fill, where
     pages are turned out for them; a picture asked for with `gzip` alone; a request with a
     cookie for a body route in a build without `compress`, which now passes the stage that
     asks; the kernel's part of the price with no coding on a load whose threads do not sleep;
@@ -8592,7 +8646,10 @@ rules something out.
     for card-market's item page or item JSON; a measured app's `settle` finds a `Public`
     header its thread does not hold (a kept page given on another worker, or one whose header
     the thread put out going through more than four sets of numbers) on a share of its answers
-    that shows, since each such answer pays the look through the four on top of main's read; an app
+    that shows, since each such answer pays the look through the four on top of main's read;
+    a kept answer given again with a head of many names or many values
+    of one name is measured costing more than its handler's map cost to clone, so the head
+    should be held as a map past some size; an app
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see; an app's binary is held to a
     size where 36,000 bytes count and its answers are kept for under 16 minutes 39 seconds,
@@ -8605,7 +8662,12 @@ rules something out.
     [#1983 An older kept answer's Age written to a buffer missed the cycle margins on single builds; read it across placements](https://github.com/corten-run/corten/issues/1983)
     asks.
 
-    Last checked: 2026-11-23, `03302804e` and `314a20718` (main's `a02c81e86` merged)
+    Last checked: 2026-11-23 for the cycles of the cut of what a kept answer holds, `d3bb2e0e4`
+    against `04530f7e0` on the Xeon Platinum 8280 with jemalloc 5.3.0, kept under the tag
+    `evidence/611749e1`; 2026-11-23 for what a kept answer holds, `23a98a7e9` against `a02c81e86`
+    under jemalloc 5.3.0, and for its instructions, `4e53ff290` against `04530f7e0` under
+    callgrind (valgrind 3.19.0), with rustc 1.100.0 in a Debian 12 container;
+    2026-11-23, `03302804e` and `314a20718` (main's `a02c81e86` merged)
     against `a02c81e86` with rustc 1.100.0: card-market's `corten::json` functions disassembled,
     its item JSON under callgrind as below, and [Choice 28](#choice-fixed-stages)'s unstaged
     route under callgrind in a harness written again; 2026-11-23, the run declared on

@@ -1336,6 +1336,116 @@ async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
     assert_eq!(runs.count(), ran + 1);
 }
 
+/// A `Public` body whose head has `names` names: `Public`'s own and as many of `x-0`, `x-1`, ..
+/// as make up the rest. An app's handler cannot name that many (`Public::header` takes a name a
+/// type gives), so the route is made by hand as a `Public` body's is.
+#[derive(Clone)]
+struct Named {
+    names: usize,
+    runs: Runs,
+}
+
+impl crate::handler::Handler<(), ()> for Named {
+    fn keeps(&self) -> Option<crate::kept::Shape> {
+        Some(crate::kept::Shape::Body)
+    }
+
+    fn call(self, _: Request, _: ()) -> impl std::future::Future<Output = crate::response::Response> + Send + 'static {
+        self.runs.ran();
+        async move {
+            let mut res = Public::new(Duration::from_secs(60), "named ".repeat(300)).into_response();
+            let headers = res.headers_mut();
+            for n in 0.. {
+                if headers.keys_len() >= self.names {
+                    break;
+                }
+                headers.append(header::HeaderName::from_bytes(format!("x-{n}").as_bytes()).unwrap(), HeaderValue::from(n));
+            }
+            res
+        }
+    }
+}
+
+/// Asks for a `Named` route of `names` names three times, with a middleware that takes 64 of
+/// them off after the handler when `thin` (as an app's may), checking each answer; returns
+/// whether the answer was kept, which says how the second and third were checked.
+async fn named_three_times(names: usize, thin: bool) -> bool {
+    /// Takes 64 of the names off after the handler.
+    struct Thin;
+
+    impl crate::Middleware for Thin {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            for n in 0..64 {
+                res.headers_mut().remove(format!("x-{n}").as_str());
+            }
+            res
+        }
+    }
+    let runs = Runs::default();
+    let routes = Table::new().route("/", crate::router::get(Named { names, runs: runs.clone() })).route(
+        "/held",
+        crate::router::get(|signal: crate::Signal| async move {
+            signal.shared().and_then(|shared| shared.kept.as_ref()).map_or(0, |kept| kept.bytes()).to_string()
+        }),
+    );
+    let app = App::new(Routes::from(routes)).kept_answers(1 << 30);
+    let router = if thin { app.middleware(Thin).router() } else { app.router() };
+    let held = || async { String::from_utf8(fetch(&router, "GET", "/held", &[]).await.2.to_vec()).unwrap() != "0" };
+    let lines = |headers: &HeaderMap| {
+        headers.iter().filter(|(name, _)| *name != header::AGE).map(|(n, v)| (n.clone(), v.clone())).collect::<Vec<_>>()
+    };
+    let (status, first, body) = fetch(&router, "GET", "/", &[]).await;
+    assert!(status == StatusCode::OK && runs.count() == 1, "{names}: {status}");
+    let kept = held().await;
+    for again in 2..=3 {
+        let (status, headers, same) = fetch(&router, "GET", "/", &[]).await;
+        assert_eq!((status, &same), (StatusCode::OK, &body), "{names}");
+        // Every line but `Age` as the first answer had it, in its order.
+        assert!(lines(&headers) == lines(&first), "{names}");
+        if kept {
+            assert!(headers.contains_key(header::AGE) && runs.count() == 1, "{names}: given again");
+        } else {
+            assert!(!headers.contains_key(header::AGE) && runs.count() == again, "{names}: the handler's");
+        }
+        assert_eq!(held().await, kept, "{names}: kept as it was");
+    }
+    kept
+}
+
+/// The most names a map holds: `http` grows one no further, and its `reserve` and `insert`
+/// panic past them.
+fn most_names() -> usize {
+    let name = |n: usize| header::HeaderName::from_bytes(format!("x-{n}").as_bytes()).unwrap();
+    let mut map = HeaderMap::new();
+    while map.try_append(name(map.len()), HeaderValue::from(0)).is_ok() {}
+    map.keys_len()
+}
+
+/// A head of the most names a kept answer has (`crate::kept::NAMES`) is kept and given again as
+/// it was made; one of more is its handler's for every request.
+#[tokio::test]
+async fn a_kept_answers_head_has_at_most_its_names() {
+    assert!(named_three_times(crate::kept::NAMES, false).await);
+    assert!(!named_three_times(crate::kept::NAMES + 1, false).await);
+}
+
+/// A head of as many names as the security headers (seven, with no `Vary` and no HSTS) have room
+/// beside on the handler's answer is the handler's for every request: given again, its `Age`
+/// took the room they need, and the request panicked.
+#[tokio::test]
+async fn a_head_near_the_most_names_a_map_holds_is_not_given_again_without_room_for_the_stages() {
+    assert!(!named_three_times(most_names() - 7, false).await);
+}
+
+/// A head of the most names a map holds, which no answer given again has room beside for its
+/// `Age`, is not kept (a middleware of the app's makes room for the stages after it): it was
+/// kept again by every request that could not be given it.
+#[tokio::test]
+async fn a_head_that_could_not_be_given_again_is_not_kept_again_by_every_request() {
+    assert!(!named_three_times(most_names(), true).await);
+}
+
 /// While the store has room a page is kept the first time it is made. Once it is full, keeping
 /// one drops another, so a page is kept from the second time its URL is asked for and a URL
 /// asked for once takes no page's room.
