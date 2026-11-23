@@ -8047,36 +8047,54 @@ rules something out.
     than 2 hours 46 minutes old.
     It was read again once [design Choice 72](#choice-placement-runs) gave a reading that tells
     a build's placement from what a change costs
-    ([#1983 An older kept answer's Age written to a buffer missed the cycle margins on single builds; read it across placements](https://github.com/corten-run/corten/issues/1983)),
-    written again on main `14126d2a8` (`8d02090bf`) under a plan posted on the issue before the
-    run (tag `evidence/ca2af2ab`; the results are tag `evidence/0c0c599c`), and is still not
-    made. Under callgrind as above, on that main with the file routes and the four-hour lifetime
-    (`a03547c3c`) and with the buffer on it (`149e0f5b4`), the kept PNG at 10,005 seconds took
-    37,908 instructions where it took 38,396 and made 26 allocations where it made 27, the
-    allocator's count 5,765 where 6,322 and the rest 32,143 where 32,075, each rounded; under
-    ten seconds it took 37,371 against 37,379, the PNG of 1,024 bytes 37,293 against 37,316 and
-    a kept page 41,050 against 41,050. Across placements, on a c-8 with a Xeon Platinum 8280 and
-    Linux 6.12.117, the first placement run's probe program with a route for that PNG, jemalloc
-    as there, 30 placements of 8 recorded pairs for each comparison and every turn on a freshly
-    started build: a start keeps the answer with its first request, and for the answer past the
-    table a preloaded library then moves the start's monotonic clock on 10,005 seconds, so that
-    each of the 1,080 starts of those two comparisons sent an `Age` of 10005 before its turn and
-    of 10010 at most after it, its handler run once, where the 1,080 starts of the other two
-    sent 0 to 3. No placement failed, every counter ran the whole of every turn and no request
+    ([#1983 An older kept answer's Age written to a buffer missed the cycle margins on single builds; read it across placements](https://github.com/corten-run/corten/issues/1983)):
+    the form was written again on main `14126d2a8` (`8d02090bf`) and read in a run whose plan
+    was posted on the issue before it (tag `evidence/ca2af2ab`; the results are tag
+    `evidence/0c0c599c`), and it is still not made. The misses above stand as they were read: a
+    placement run declared after a single-build miss does not clear it
+    ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2). The plan read this run as a
+    change of its own, on a later main, which this Choice's Revisit entry and the issue asked
+    for, and left it to a reviewer to hold otherwise; since the run did not pass, whether a pass
+    could have made the form against that sentence was not decided, and a plan for another
+    reading puts it to its reviewer first. Under callgrind as above (one build and one count of
+    each, where two counts of one build have differed by 256 on this request), on that main
+    with the file routes and the four-hour lifetime (`a03547c3c`) and with the buffer on it
+    (`149e0f5b4`), the kept PNG at 10,005 seconds took 37,908 instructions where it took 38,396
+    and made 26 allocations where it made 27, the allocator's count 5,765 where 6,322 and the
+    rest 32,143 where 32,075, each rounded; under ten seconds it took 37,371 against 37,379,
+    the PNG of 1,024 bytes 37,293 against 37,316 and a kept page 41,050 against 41,050. Across
+    placements, on a c-8 with a Xeon Platinum 8280 and Linux 6.12.117, the first placement
+    run's probe program with a route for that PNG, jemalloc as there, 30 placements of 8
+    recorded pairs for each comparison and every turn on a freshly started build: a start keeps
+    the answer with its first request, and for the answer past the table a preloaded library
+    then moves the start's monotonic clock on by 10,005 seconds, so that each of the 1,080
+    starts of those two comparisons sent an `Age` of 10005 before its turn and 10010 after it,
+    its handler run once, where each of the 1,080 starts of the other two sent 0 before and 3
+    after. No placement failed, every counter ran the whole of every turn and no request
     failed. On the answer past the table the base against itself read -0.44% in cycles with a
     bound of +0.79%, and +0.45% with a bound of +1.03% with its lists' labels swapped, so the
     run does not resolve +1% there, and the buffer read +0.40% with a bound of +1.10% (user
-    +0.74%, kernel +0.39%; 2,213.1 user instruction-cache misses a request against 2,196.5),
-    which does not pass, and would have missed had the base's reading resolved. Its user
-    instructions read +0.04%, with both one-sided bounds at +0.04% and 22,591 a request against
-    22,582 at the builds' medians, where the base against itself read +0.00%: with jemalloc and
-    64 connections the buffer saves no instructions, and the 488 fewer under callgrind are the
-    557 fewer of glibc's allocator for the second allocation less the 68 more the buffer runs
-    outside it. On the answer in the table, which takes 22,381 instructions and whose `Age` the
-    buffer does not make, the base against itself read +0.46% with a bound of +0.85%, and -0.45%
-    with a bound of +0.14% swapped, which resolves, and the buffer read +0.03% with a bound of
-    +0.65%, which meets +1%. The plan made the form only if both answers met +1%, so it is not
-    made. The run's limits: a clock moved on is not an answer that has sat in memory for 2 hours
+    +0.74%, kernel +0.39%; 2,213.1 user instruction-cache misses a request against 2,196.5,
+    each build's median over its 240 recorded turns), which does not pass, and would have
+    missed had the base's reading resolved. Its user instructions read +0.04%, with both
+    one-sided bounds at +0.04% and 22,591 a request against 22,582 at those medians, where the
+    base against itself read +0.00%: with jemalloc and 64 connections the buffer ran no fewer
+    instructions. Callgrind's 488 fewer are 557 fewer in glibc's allocator, with one `malloc`
+    fewer, and 68 more outside it (each rounded, so the parts come to one more), on one
+    connection; the single-build run above, of the benchmark's program with glibc's allocator
+    and 64 connections, read 27 to 51 fewer. So neither count under load found what callgrind
+    counts, with either allocator, and what the load, the allocator and the program each take
+    from it was not separated. On the answer in the table, which takes 22,381 instructions at
+    those medians and whose `Age` the buffer does not make, the base against itself read +0.46%
+    with a bound of +0.85%, and -0.45% with a bound of +0.14% swapped, which resolves, and the
+    buffer read +0.03% with a bound of +0.65%, which meets +1%. The plan made the form only if
+    both answers met +1%, each with its base's reading resolved, and callgrind counted at least
+    100 instructions and one allocation fewer at 10,005 seconds with the answer under ten
+    seconds within 16; the last held and the first did not, so it is not made. That the base's
+    reading did not resolve past the table is what 30 placements of 8 pairs give about half the
+    time at the spread this host's pairs had, as [design Choice 72](#choice-placement-runs)
+    works out, and not something that answer was shown to cause. The run's limits: a clock
+    moved on is not an answer that has sat in memory for 2 hours
     46 minutes; every reading of the clock by either build went through the library; Corten's
     connection watch, whose own coarse clock a step leaves behind until its next tick, closed
     connections opened in the first second after a step in the kit's container test, so a turn
@@ -8328,12 +8346,20 @@ rules something out.
     (`8d02090bf`, above;
     [#1983 An older kept answer's Age written to a buffer missed the cycle margins on single builds; read it across placements](https://github.com/corten-run/corten/issues/1983)):
     the run did not resolve +1% on an answer past the table, the buffer's bound there was over
-    it, and with jemalloc it ran no fewer instructions. So what would have it read again is now
-    an app found giving answers that old with an allocator that charges for the second
-    allocation as glibc's does, and a run declared with more placements or pairs than the 30 of
-    8 that did not resolve that answer.
+    it, and under load it ran no fewer instructions with jemalloc and 27 to 51 fewer with
+    glibc's allocator. So what would have it read again is now both of these together: an app
+    found giving answers that old, with a count under its own load and allocator that shows the
+    buffer saving what callgrind counts; and a run sized to resolve that answer, which 30
+    placements of 8 pairs did not and at that host's spread would not about half the time
+    ([design Choice 72](#choice-placement-runs) gives sizes that would).
 
-    Last checked: 2026-11-23 for the cycles of the cut of what a kept answer holds, `d3bb2e0e4`
+    Last checked: 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
+    against `14126d2a8` on the Xeon Platinum 8280 with jemalloc 5.3.0, rustc 1.100.0 and Linux
+    6.12.117, the plan under the tag `evidence/ca2af2ab` and the results under
+    `evidence/0c0c599c`, and for its instructions, `149e0f5b4` against `a03547c3c` under
+    callgrind (valgrind 3.19.0, glibc 2.36) with rustc 1.99.1 in a Debian 12 container, kept
+    under the tag `evidence/149e0f5b`; 2026-11-23 for the cycles of the cut of what a kept
+    answer holds, `d3bb2e0e4`
     against `04530f7e0` on the Xeon Platinum 8280 with jemalloc 5.3.0, kept under the tag
     `evidence/611749e1`; 2026-11-23 for what a kept answer holds, `23a98a7e9` against `a02c81e86`
     under jemalloc 5.3.0, and for its instructions, `4e53ff290` against `04530f7e0` under
@@ -8692,10 +8718,12 @@ rules something out.
     is binding by policy, not shown immune to placement. A recorded spread is read to its two
     printed decimals, either end inside, and applies only to a run that matches the setup it was
     measured on in each of: the probe program and its features; the workload's request and the
-    configuration it is sent to; the allocator and its settings; the turn protocol (every turn on a
+    configuration it is sent to; the allocator, its settings and any other library preloaded
+    beside it; the turn protocol (every turn on a
     freshly started build, the server, load and `perf` each pinned apart, `wrk -t2 -c64` and 3 s
-    turns); and the CPU model. A run that differs in any, such as a c-8 with a Xeon Platinum 8168
-    or 8280, which [design Choice 71](#choice-layout-floor) records c-8s have also had, has no
+    turns); and the CPU model. A run that differs in any, such as `plain` or `kept` on a c-8 with
+    a Xeon Platinum 8168 or 8280, which [design Choice 71](#choice-layout-floor) records c-8s
+    have also had, has no
     recorded spread, so its single-build bound is the reading, until a placement run on its setup
     records one. These are what decide which code a request runs, what else runs with it and what a
     placement costs on the CPU's caches and predictors; the kernel and toolchain are not among
@@ -8717,8 +8745,9 @@ rules something out.
     for that tag's probe program (the first run's with a route for a PNG of 8,000 bytes kept for
     four hours, features `json` and `compress`); a `GET /picture.png` with
     `Accept-Encoding: identity` and `Accept: */*` to its `old` configuration, the answer kept by
-    the start's first request and under 16 seconds old; jemalloc as above, with that tag's clock
-    library preloaded after it and never signalled; the same turn protocol; and a Xeon Platinum
+    the start's first request and under 16 seconds old (0 to 3 in the run); jemalloc as above,
+    with that tag's clock library preloaded after it and never signalled, which a run preloads
+    too if it is to match; the same turn protocol; and a Xeon Platinum
     8280. Its A/A on that request with the answer 10,005 seconds old did not resolve, so it
     records none.
 
@@ -8732,8 +8761,9 @@ rules something out.
     and is a separate question. Base and head with one pad are not one layout: they hold different
     code, so the same pad is the same offset applied to each side's own default layout, which is
     what a pull request's two builds are, and the A/A's two lists of sizes give its two sides
-    placement differences of the same kind. One run also reads main's unpadded build against eight
-    of its padded ones, a diagnostic of where the build that ships sits among them.
+    placement differences of the same kind. Each run so far also reads an unpadded build (main's,
+    then the change's base's) against eight of its padded ones, the same eight sizes both times, a
+    diagnostic of where the build that ships sits among them.
 
     The kit for the first run, with its `margin.md`, scripts, sources and results, is tag
     `evidence/ee7b0b41`. Before any turn its `build.sh` stops unless each side's captured link run
@@ -8804,7 +8834,7 @@ rules something out.
     neighbours kept (301,590 of 301,590), the 92 binaries have 92 distinct SHA-256s, all 90
     placements answered as their unpadded binary, and each of the 2,304 starts had its counters
     at 100%, no `wrk` error and an `Age` in its range before and after its turn. Base against
-    base on `young`, a kept PNG under 16 seconds old: median of placement medians +0.46%, bound
+    base on `young`, a kept PNG 0 to 3 seconds old: median of placement medians +0.46%, bound
     +0.85%, placement medians from -2.26% to +2.22%, t bound +0.78%, their standard deviation
     1.17% against 1.86% that a median of 8 pairs would have from the pairs' own spread (4.19%)
     alone; with the labels swapped a bound of +0.14%, so it resolves +1% (19 of 30 placement
@@ -8813,19 +8843,30 @@ rules something out.
     with the labels swapped a bound of +1.03%, so it does not resolve +1%, the first A/A at
     K = 30 the second reading turns away (14 of 30 above zero, p = 0.856). The pairs' own spread
     is 4.1% to 4.2% here where the first run's was 2.9% to 3.0%, on another request and another
-    CPU model. The change on `young`: +0.03%, bound +0.65%, which meets +1%; on `old`: +0.40%,
-    bound +1.10%, not resolved, which does not pass. The base's unpadded build against eight
-    padded ones on `old`: the padded ones cost a median 1.30% fewer cycles (-1.88% to -0.13%; 8
-    of 8 fewer, two-sided sign test p = 0.008) and missed the instruction cache 2.11% more. With
-    the first run's 7 of 8 that is 15 of 16 padded builds under their unpadded one, on two
-    mains, two requests and two CPU models, which is the Revisit-when on the unpadded build
-    below;
+    CPU model, and at that spread this size does not resolve about half the time whatever the
+    answer: of 200,000 seeded draws of 30 normal placement medians with a common median of zero,
+    one of the two readings is at or over +1% in 44% of them at a standard deviation of 1.80%,
+    in 48% at 1.86% and in 55% at 1.97%, against 5% at the 1.17% `young` measured and 8% to 21%
+    at the first run's 1.26% to 1.48%. On that model, and if placement adds nothing to what the
+    pairs spread, 30 placements of 32 pairs (0.93%) or 60 of 16 (1.31%) fail in under 1% of
+    draws and 100 of 8 in 1.1%, three to four times this run's turns. So K = 30 of R = 8 is
+    the first run's size and not one to assume: a plan takes its size from the spread of pairs
+    on its own setup. The change on `young`: +0.03%, bound +0.65%, which meets +1%; on `old`:
+    +0.40%, bound +1.10%, not resolved, which does not pass. The base's unpadded build against
+    eight padded ones on `old`: the padded ones cost a median 1.30% fewer cycles (-1.88% to
+    -0.13%; 8 of 8 fewer, two-sided sign test p = 0.008) and missed the instruction cache 2.11%
+    more. With the first run's 7 of 8 that is 15 of 16 padded builds under their unpadded one,
+    the same eight pad sizes both times, on two mains, two requests and two CPU models, which
+    meets the Revisit-when on the unpadded build as it was first written;
     [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
-    asks what the pad itself changes. Both sides of a comparison are padded, so it moves no
-    reading here. The four comparisons' turns took 164 minutes and the diagnostic's 13 more. Two
-    limits of this run: the clock library every server was started with, which a spread recorded
-    from it carries as part of its setup; and the logins for a line of status while it ran,
-    about once a minute for its first 70 minutes and every five after.
+    asks what the pad itself changes. The Choice stands through it on this: the gate reads a
+    change as the difference of two builds with one pad, so what a pad takes from both alike
+    leaves that reading where it was. That it is alike on a base and its head is not measured,
+    since both diagnostics read one side alone, and is now among the bets below. The four
+    comparisons' turns took 164 minutes and the diagnostic's 13 more. Two limits of this run: the
+    clock library every server was started with, which a run preloads too if it is to match the
+    spread recorded from it; and the logins for a line of status while it ran, about once a
+    minute for its first 70 minutes and every five after.
 
     Not chosen: a seeded shuffle of the function order (LLD's `--shuffle-sections`, this Choice's
     first version), since in that plan's container dry run seed 1 on main moved all 3,404
@@ -8863,9 +8904,11 @@ rules something out.
 
     Stands on: measured (the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
-    in [design Choice 70](#choice-kept-pages); and the first placement run above, tag
+    in [design Choice 70](#choice-kept-pages); the first placement run above, tag
     `evidence/ee7b0b41`, its A/As on main rather than the change's base, its answers compared after
-    its kit's normalization, which this Choice accepts for that receipt alone); platform (LLD
+    its kit's normalization, which this Choice accepts for that receipt alone; and the second
+    above, tags `evidence/ca2af2ab` and `evidence/0c0c599c`, the first under the rule as written,
+    one of its two A/As resolved); platform (LLD
     places the sections of the symbols an ordering file names
     first in their output section and the rest in their default order, rustc 1.100.0 puts each
     function in its own `.text` section, aligns them to 16 bytes and links through LLD 23 on Linux
@@ -8883,18 +8926,29 @@ rules something out.
     (moving the whole of the code by declared offsets varies placement about as much as real
     changes do, though a real change moves only the code after it and by sizes no plan chose, so
     two functions' distance apart, which a pad keeps, can change too; an A/A that resolves under
-    pads may understate a spread that comes from that; and a spread measured on one setup holds
+    pads may understate a spread that comes from that; whatever a pad itself takes from a
+    build's cycles (padded builds read under their unpadded one in 15 of 16), it takes from both
+    sides of a comparison alike; and a spread measured on one setup holds
     for another kernel or toolchain with the same CPU model, allocator, protocol and code); value
     (Fast, and proven fast: a touched
     request's cost is read from the change, not from where one build put it; Verified, not
     assumed: the run's own A/A says whether it can resolve +1%, and a run that cannot does not
     pass, README Values).
 
-    Revisit when: the first run's A/A on a workload does not resolve +1% at K = 30, which asks for
-    more placements or pairs, or another reading; a placement run's change and a single-build run
+    Revisit when: a run's A/A on a workload does not resolve +1% at a size its plan took from the
+    spread of pairs on its setup, which asks for another reading (this entry first named an A/A
+    not resolving at K = 30, which asks for more placements or pairs; the second run's on `old`
+    did not, at a spread where that size fails about half the time, so the Choice stands with
+    the sizes worked out above, and a run that does not resolve does not pass); a placement run's
+    change and a single-build run
     on the same commits disagree past their bounds often enough to show the pads' placements are not
-    those real builds land in, or that two functions' distance apart matters; the unpadded build
-    sits clearly above or below its padded ones, so the pads move cost as well as spreading it;
+    those real builds land in, or that two functions' distance apart matters; a pad is found to
+    take more from one side of a comparison than from the other, a base against its head or one
+    list of pads against the other, so the difference of two padded builds is not the change's
+    (this entry first named the unpadded build sitting clearly above or below its padded ones,
+    which the two runs' diagnostics now show, above;
+    [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
+    is to measure it);
     rustc stops emitting a section per function or aligning functions to 16 bytes, the gate's
     linker is not LLD, or LLD stops placing an ordering file's sections first; a recorded spread
     is so wide that most single-build readings land inside it, so the protocol is the rule in
@@ -8913,7 +8967,11 @@ rules something out.
     `5a22836fc`, rustc 1.100.0 with LLD 23.1.5, Linux 6.12.117, tag `evidence/ee7b0b41`);
     2026-11-23, the A/As' bounds with their lists' labels swapped, the saved answers' body
     lengths, the warm-up `Age`s, the layouts' section shifts and the binaries' SHA-256s, read
-    from that tag's results at `ee7b0b417`.
+    from that tag's results at `ee7b0b417`; 2026-11-23, the second run on a c-8 (base
+    `14126d2a8`, head `8d02090bf`, rustc 1.100.0 with LLD 23.1.5, Linux 6.12.117, a Xeon Platinum
+    8280, its plan under the tag `evidence/ca2af2ab` and its results under `evidence/0c0c599c`),
+    and the share of draws in which an A/A of each size does not resolve, worked out the same
+    day from the spreads in those results at `0c0c599cb` and in the first run's.
 
 ## Rules
 

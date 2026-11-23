@@ -494,9 +494,11 @@ establish a general ranking.
       A/A across placements, as the Choice prints them to two decimals) and the setup it was
       measured on. A spread applies only to a run that matches that setup in each of: the probe
       program and its features, the workload's request and the configuration it is sent to, the
-      allocator and its settings, the turn protocol (every turn on a freshly started build, the
+      allocator, its settings and any other library preloaded beside it, the turn protocol (every
+      turn on a freshly started build, the
       server, the load and the driver with `perf` each pinned to CPUs of their own, `wrk -t2 -c64`
-      and 3 s turns) and the CPU model (a Xeon Platinum 8358 for the spreads recorded so far). A
+      and 3 s turns) and the CPU model (each recorded spread names its own: a Xeon Platinum 8358
+      for the first run's two, an 8280 for the second's one). A
       run that differs in any has no recorded spread for the workload
       until a placement run on its setup records one. The test is one: a single-build bound's
       distance from its threshold (the bound less +1% for the margin; the bound plus the smallest
@@ -576,10 +578,15 @@ establish a general ranking.
       11th of 30) above it in both readings, and the A/A resolved as above: a run whose A/A is
       not resolved establishes no win either. The reading measures the change across the plan's
       placements, not the release binary, which has a placement of its own: the unpadded build,
-      which no comparison the gate reads includes (the first run read it only in a diagnostic).
+      which no comparison the gate reads includes (the two runs so far read it only in a
+      diagnostic).
       A run of K = 30 placements of R = 8 pairs, for the
       change and the A/A on `kept` and an A/A on `plain`, takes about 2 hours on a c-8 (the first
-      run: 99 minutes of turns after 2 minutes of checks, besides setup and builds).
+      run: 99 minutes of turns after 2 minutes of checks, besides setup and builds). That size is
+      the first run's, not one to assume: in the second run, where pairs spread 4.1% to 4.2%
+      against the first's 2.9% to 3.0%, one of two A/As of that size did not resolve, which the
+      Choice works out to be what that spread gives about half the time, so a plan takes K and R
+      from the spread of pairs on its own setup.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
