@@ -2073,7 +2073,10 @@ async fn per_core_holds_the_whole_server_to_max_connections() {
     let (addr, stop, server) = served_per_core(App::new(routes).header_timeout(None).max_connections(1)).await;
     let mut held = tokio::net::TcpStream::connect(addr).await.unwrap();
     held.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
-    assert_eq!(read_answer(&mut held).await.1, "hi");
+    // Whichever core it came to: with the place taken before the accept, a core it did not come
+    // to holds the place, and this one is never answered.
+    let first = tokio::time::timeout(Duration::from_secs(5), read_answer(&mut held)).await;
+    assert_eq!(first.expect("the first connection was never served").1, "hi");
     // Sixteen more, which the system spreads over the cores' listeners.
     let waiting: Vec<_> = (0..16).map(|_| tokio::spawn(raw_get(addr, "/", ""))).collect();
     tokio::time::sleep(Duration::from_millis(300)).await;
