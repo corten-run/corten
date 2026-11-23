@@ -500,21 +500,27 @@ mod layout_reads {
         }
     }
 
-    /// A `no_store` page whose body fails as it is read to be filled: the failure sent in its place
-    /// is kept by no cache either, whatever the app's middleware makes of its caching headers.
+    /// A page whose body fails as it is read to be filled: the failure sent in its place keeps the
+    /// page's marks, whatever the app's middleware makes of its caching headers. A `NoStore` page's
+    /// is kept by no cache, and one that is no handler's own (marked `cache::Unshared`, as a
+    /// refusal's page is) by no shared cache.
     #[tokio::test]
-    async fn a_no_store_page_that_cannot_be_read_to_be_filled_stays_no_store() {
+    async fn a_page_that_cannot_be_read_to_be_filled_keeps_its_marks() {
         for cache in [None, Some("public, max-age=60"), Some("private, max-age=60")] {
-            let routes = Table::new().route("/broken-secret", get(|req: Req| async move { NoStore(breaks_secret(req).await) }));
+            let routes = Table::new()
+                .route("/broken-secret", get(|req: Req| async move { NoStore(breaks_secret(req).await) }))
+                .route("/broken-refusal", get(|req: Req| async move { crate::cache::unshared(breaks_secret(req).await) }));
             let router = App::new(Routes::from(routes))
                 .layout_read(CartCount::default())
                 .layout_read(SignedIn)
                 .middleware(crate::tests::cache::CdnRecaches(cache))
                 .router();
-            let (status, headers, body) = call_with(router, "GET", "/broken-secret", None, None).await;
-            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{cache:?}: {body}");
-            let wrong = crate::tests::cache::kept_from_cdns(&headers, "private, no-store");
-            assert!(wrong.is_empty(), "{cache:?}: a no_store page's failure, open to a cache: {wrong:?}");
+            for (path, sent) in [("/broken-secret", "private, no-store"), ("/broken-refusal", "private, no-cache")] {
+                let (status, headers, body) = call_with(router.clone(), "GET", path, None, None).await;
+                assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path} {cache:?}: {body}");
+                let wrong = crate::tests::cache::kept_from_cdns(&headers, sent);
+                assert!(wrong.is_empty(), "{path} {cache:?}: the failure in the page's place, open to a cache: {wrong:?}");
+            }
         }
     }
 
