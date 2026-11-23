@@ -548,6 +548,61 @@ benchmark host, a lost lease or changed peer refuses dispatch, not cleanup.
 An earlier controller that did not record peer leases cannot be treated as a
 running peer. Never clear a lock or recreate a group to force overlap.
 
+### Offline handoff
+
+For a **new single-group continuation attempt**, add `--offline-handoff` to
+the `--prepare` command above. Follow with the ordinary detach preview and
+exact approval; the prepared manifest binds the mode in both approvals. It
+cannot be added on detach, applied to an existing reservation, or used alongside
+a live peer. The attempt remains unresolved for further admission until terminal
+custody. The default path still uses the monitored lease.
+
+Wait for detach to return 3 with the child's `handoff: "acknowledged"`. This
+means the launcher pinned the host key and boot, and durably recorded the
+successful bootstrap seal. Native entry still waits for the sealed SSH/SFTP
+epoch to drain. At this point the systemd guest can proceed without the
+workstation; this receipt is not a native start, timed result, publication
+qualification, or cleanup proof. Do not repeat an unacknowledged launch.
+
+During every native phase an additional boot-local nftables rule on the guest
+blocks even the allowed peer's SSH packets. The existing owner ingress policy
+still drops other peers. A valid phase retains unchanged rule readbacks and a
+closed guardian window. Fresh TCP SYNs dropped before `sshd` within the guest's
+8-packet burst and 8/minute rate are recorded separately and do not invalidate
+a phase. Excess probes, other SSH packets at the fence, a changed rule, or an
+actual unexpected login/guardian intrusion still refuse the phase. The fence
+reopens at phase end; the service's stop hook removes it on an interrupted
+phase. There is no status listener.
+
+After reconnecting, use the existing [read-only owned-host observation](#independent-native-audits)
+(steps 2 and 3) to discover readiness without estimating duration. Use
+`ConnectionAttempts=1` and `ConnectTimeout=3`, at most one observation every
+two minutes, not a continuous poll;
+serialize it with audit delivery and collection. Connection refusal/timeout
+means no observation, not “active” or “terminal”; do not attempt a transfer.
+If the exact unit is active, inspect only the latest journal status for the
+matching review wait. If the exact unit is terminal, use separate collection
+approval. A connect-only check is not an observation of either state, and
+there is no safe permission to open other SSH sessions when it succeeds.
+
+JSON still stops after preparation, and mixed still stops before its build,
+for [the independent native audit](#independent-native-audits). Use the existing
+fixed read-only export only at that group's audit wait, drain/close the export
+sessions, and separately approve delivery. The guest waits for the delivered
+audit epoch to drain, replays the exact receipt set and subject, then decides
+whether timing is eligible. A disconnection can delay delivery or collection;
+it cannot open either audit gate.
+
+After expected completion, reconnect and preview then approve the **separate
+child** collection command below with the measured checkout. A live or
+unreachable unit is not terminal. Collection requires the pinned host/boot,
+unchanged unit and archive, current quiescence, native replay and a fresh
+pre-delete proof. Missing terminal evidence, an uncertain final bootstrap
+acknowledgement, or an incomplete archive can require operator custody; none is
+permission to delete or relaunch. The unit's 48-hour runtime limit bounds guest
+work, not billing: the guest holds no provider credential, does not destroy
+itself, and there is no independent provider-side billing watchdog.
+
 For collection or audit delivery use the ordinary per-host commands at the
 measured checkout. For the first attempt use state root
 `ABSOLUTE_ROOT/json-api/json-api`. For a retry use the reported `attemptRoot`
@@ -1745,10 +1800,14 @@ access, not a new approval mechanism or permission to launch/deliver/delete.
    forwarding or multiplexing, and the same controlled environment as the existing
    transport. Do not export credentials, process environments or raw image `Env`.
    Missing host-key/ownership evidence stops this procedure, not a first-contact
-   accept or a switch to another host.
+   accept or a switch to another host. For offline handoff, require the launch
+   key file to match the saved `launchHostKeySha256`.
 3. Through that bounded read-only SSH session, save `systemctl show` for the exact
    saved unit with `Id`, `LoadState`, `FragmentPath`, `ActiveState`, `Restart`,
-   `MainPID`, `ExecMainCode` and `ExecMainStartTimestamp`. Require the expected
+   `MainPID`, `ExecMainCode` and `ExecMainStartTimestamp`. For offline status
+   discovery, also read `SubState`, `Job` and `ControlPID`; use the same
+   `cloud-sealed-collection.mjs::sealedUnit` predicate as collection. A terminal
+   observation ends discovery, not the collection checks. For audit export require the expected
    loaded unit/path, `Restart=no`, active state and nonzero MainPID. Read
    `/bench/bootstrap-ready.json` and `/bench/campaign/.host-attempt.json` to obtain
    the exact campaign ID. In that campaign directory identify the **latest**

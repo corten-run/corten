@@ -66,6 +66,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     replace(staging, statePath); syncDirectory(local);
   };
   const save = () => { check(); writeState(state); };
+  const offlineBootstrapAck = () => state.control.sealed.includes("bootstrap")
+    && acknowledgedBootstrapSeal(state.control.ledger.filter(({ request }) => request.epoch === "bootstrap"));
   let launchPeers;
   // Cancellation forbids further work, not recording how the owned monitor ended.
   // Record only the ending and, if cancellation beat the live-state write,
@@ -293,6 +295,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const requireActiveStartup = async (message) => {
     const { stdout } = await ssh(unitQuery(state));
     if (!terminalUnit(stdout, state)) return;
+    if (state.fleet?.single?.offlineHandoff) assert.fail(message);
     // An acknowledged start and positive terminal observation, not an SSH
     // failure or missing monitor. Keep the original output and its ledger row.
     state.preBootstrapTerminal = { hostId: state.id, ip: state.ip, monitorId: state.control.monitor.id,
@@ -354,9 +357,29 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.equal(controlEpoch, epoch);
     const rows = state.control.ledger.filter((r) => r.request.epoch === epoch);
     assert.ok(rows.length > 0 && rows.every((r) => r.localTerminal), "unsettled local control ledger");
+    const offlineBootstrap = epoch === "bootstrap" && state.fleet?.single?.offlineHandoff;
+    const previous = preserveOperationLock;
+    if (offlineBootstrap) preserveOperationLock = true;
     sealing = rows.map((r) => r.request.invocation);
-    try { await ssh(":"); } finally { sealing = undefined; }
-    if (epoch === "bootstrap" && renameBootstrapSeal) await publishBootstrapSeal(remaining);
+    try { await ssh(":"); }
+    catch (error) {
+      if (offlineBootstrap) throw Object.assign(new Error("offline bootstrap seal unacknowledged; preserve host and custody", { cause: error }),
+        { controlTreeUncertain: true });
+      throw error;
+    } finally { sealing = undefined; }
+    if (offlineBootstrap) {
+      // There is no foreground monitor that could resolve a publication gap.
+      // A host may already be progressing; do not release custody until the
+      // exact successful final request and the published local seal agree.
+      try {
+        assert.ok(acknowledgedBootstrapSeal(state.control.ledger), "explicit successful bootstrap seal required");
+        state.control.sealed.push(epoch); save();
+      } catch (error) {
+        throw Object.assign(new Error("offline bootstrap seal publication uncertain; preserve host and custody", { cause: error }),
+          { controlTreeUncertain: true });
+      }
+      preserveOperationLock = previous;
+    } else if (epoch === "bootstrap" && renameBootstrapSeal) await publishBootstrapSeal(remaining);
     else { state.control.sealed.push(epoch); save(); }
     controlEpoch = "collection";
   }
@@ -370,13 +393,21 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     for (;;) {
       remaining();
       await requireActiveStartup("first group ended before common bootstrap admission; collect its evidence");
-      const result = await ssh(bootstrapReadScript, Math.min(30000, remaining()), true);
+      const offline = state.fleet?.single?.offlineHandoff;
+      const observation = offline ? bootstrapReadScript + "\ncat /proc/sys/kernel/random/boot_id" : bootstrapReadScript;
+      const result = await ssh(observation, Math.min(30000, remaining()), true);
       remaining();
       if (result.status === 0 && !result.error) {
         assert.ok(Buffer.byteLength(result.stdout) <= 1024, "bounded bootstrap marker required");
-        assert.deepEqual(JSON.parse(result.stdout), bootstrapMarker(state), "common bootstrap identity differs");
+        let marker = result.stdout, bootId;
+        if (offline) {
+          const parts = /^(.*\n)([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\n$/.exec(marker);
+          assert.ok(parts, "bootstrap marker and host boot identity required");
+          [, marker, bootId] = parts;
+        }
+        assert.deepEqual(JSON.parse(marker), bootstrapMarker(state), "common bootstrap identity differs");
         if (state.group !== undefined && state.group === state.fleet.jobs[0].group) {
-          state.bootstrapReady = { sha256: digest(result.stdout), observedAt: new Date().toISOString() }; save();
+          state.bootstrapReady = { sha256: digest(marker), observedAt: new Date().toISOString(), ...(offline ? { bootId } : {}) }; save();
         }
         if (state.control?.monitor) {
           assert.equal(state.control.monitor.phase, "pending");
@@ -436,6 +467,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     let report;
     let outcome;
     try {
+      if (state.fleet?.single?.offlineHandoff) assert.ok(offlineBootstrapAck(), "offline bootstrap acknowledgement missing");
       report = await inspectCampaign(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }), {
         ...(options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect }),
         interrupted, preserveLock: () => { preserveOperationLock = true; },
@@ -751,7 +783,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false, benchPackage: true,
           ...(fleet ? { quietBootstrap: "prelogin" } : {}),
           control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
-            monitor: { schema: "benchmark-supervised-control/v1", id: randomBytes(16).toString("hex"), phase: "pending" } } };
+            ...(fleet?.single?.offlineHandoff ? {} :
+              { monitor: { schema: "benchmark-supervised-control/v1", id: randomBytes(16).toString("hex"), phase: "pending" } }) } };
         controlEpoch = "bootstrap";
         durable(statePath, `${JSON.stringify(state, null, 2)}\n`);
         return await locked(async () => {
@@ -891,7 +924,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           if (state.archiveSha256) assert.equal(state.archiveSha256, options.exitArchiveSha256);
           assert.equal(digest(regular(statePath)), recoveryApproval.reservationSha256, "locked r21 reservation changed");
         }
-        const sealed = state.control?.monitor?.phase === "closed";
+        const offline = state.fleet?.single?.offlineHandoff;
+        const offlineAck = offline && offlineBootstrapAck();
+        if (offline) assert.ok(offlineAck, "offline handoff not acknowledged; preserve host");
+        const sealed = state.control?.monitor?.phase === "closed" || offlineAck;
         const groupedCandidate = !options.r21MeasuredCheckout && state.status === "running" && groupedFailureCandidate(state);
         if (groupedCandidate && failedMonitorRecovery) assert.ok(state.launchHostKeySha256, "no launch-established host key; preserve host");
         const grouped = groupedCandidate && state.launchHostKeySha256
@@ -900,13 +936,25 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         const query = unitQuery(state) + " --all --property=Job --property=SubState --property=ControlPID";
         if (sealed || grouped) {
           if (sealed) assert.ok(!existsSync(join(base, ".groups-launch.lock")), "child launch custody still held");
-          const { terminal, registration } = grouped ?? (await import("./cloud-control-stream.mjs")).sealedMonitor(local, state);
+          const { terminal, registration } = offline ? {} :
+            grouped ?? (await import("./cloud-control-stream.mjs")).sealedMonitor(local, state);
           if (options.r21MeasuredCheckout) {
             assert.equal(terminal.campaign, recoveryApproval.campaign); assert.equal(terminal.sealSha256, recoveryApproval.sealSha256);
           }
           const unitSha256 = digest(remoteFiles(state)[state.unit]);
-          idleScript = (pack, stamp) => idleArchiveScript(state, registration.host.bootId, unitSha256, { pack, stamp, completedOnly: !!groupedCandidate });
+          idleScript = (pack, stamp) => idleArchiveScript(state, offline ? state.bootstrapReady.bootId : registration.host.bootId,
+            unitSha256, { pack, stamp, completedOnly: !!groupedCandidate || !!offline });
           inspectUnit = async () => {
+            if (offline) {
+              // An audit-wait unit permits logins but its guardian rejects
+              // collection while native ownership is live. Make one read-only,
+              // pinned precheck before creating any collection ledger row.
+              const probe = await usingLaunchHostKey((opts) =>
+                execute("ssh", [...opts, `root@${state.ip}`, query], 20000, true));
+              if (probe.status === 255 && !probe.error && !probe.signal) return false;
+              assert.ok(probe.status === 0 && !probe.error && !probe.signal, "unit query refused");
+              if (!sealedUnit(probe.stdout, state)) return false;
+            }
             const result = await ssh(query, 60000, true);
             assert.ok(result.status === 0 && !result.error, "unit query refused");
             return sealedUnit(result.stdout, state);
@@ -938,7 +986,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
         }
         if (setupCandidate && state.evidence) checkSetupCustody(setupExit());
-        assert.ok(state.control?.monitor || !state.control?.sealed.includes("bootstrap"),
+        assert.ok(offlineAck || state.control?.monitor || !state.control?.sealed.includes("bootstrap"),
           "terminal status unavailable without SSH intrusion; preserve host; registered native collection needs an approved observation protocol");
         assert.ok(state.createIntentAt, "no create intent; reservation requires operator inspection");
         bind(await own());
@@ -1093,11 +1141,21 @@ else ${pack}; fi` : pack, 11 * 60000);
       }
       return locked(async () => {
         assert.ok(state.id && state.ip && !state.deletionIntentAt && !state.collectedAt && ["starting", "running"].includes(state.status), "live owned campaign required");
+        const offline = state.fleet?.single?.offlineHandoff;
+        let expectedDelivery;
+        if (offline) {
+          assert.ok(offlineBootstrapAck());
+          assert.equal(typeof authorizeAudit, "function", "offline audit publication requires locked approval");
+          const approved = await authorizeAudit(); check();
+          assert.equal(digest(regular(statePath, 1024 * 1024)), approved.reservationSha256, "locked audit reservation changed");
+          expectedDelivery = approved.deliverySha256;
+        }
         const { group, prefix } = auditProtocol(options.auditGroup);
         controlEpoch = `audit-${group}`;
         if (state.group !== undefined) assert.equal(group, state.group, "audit delivery belongs to a different group host");
         assert.ok(!state.auditIntents?.[group] && !(group === "json-api" && state.auditIntent), "audit delivery already attempted; inspect, never repeat");
         const bytes = regular(resolve(options.deliverAudit), 16 * 1024 ** 2), intent = auditDelivery(bytes, options);
+        if (offline) assert.equal(intent.sha256, expectedDelivery, "locked audit delivery changed");
         assert.equal(await unit(), false, "terminal campaign cannot accept delivery");
         assert.equal((await ssh(auditScript(state, intent))).stdout.trim(), intent.subjectSha256);
         durable(join(local, `${prefix}-audit-delivery.json`), bytes);

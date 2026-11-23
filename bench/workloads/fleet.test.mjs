@@ -337,6 +337,22 @@ function continuationFixture(t) {
   return { ...p, group, old, next, manifest, index, prepare, preview, detach, history };
 }
 
+test("offline handoff is selected only at fresh single-group prepare and bound in detach preview", async (t) => {
+  const p = continuationFixture(t);
+  const configure = ["--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context, "--offline-handoff"];
+  const prepare = ["r21", "--continuation-root", p.h.base, "--group", p.group, ...configure];
+  assert.throws(() => parseFleetArgs(["r21", "--fleet-root", p.h.base, ...configure]), /single-group preparation/);
+  assert.throws(() => parseFleetArgs(["r21", "--continuation-root", p.h.base, "--group", p.group, "--detach", "--offline-handoff"]),
+    /single-group preparation/);
+  assert.equal(await fleetMain(prepare, p.deps), 3);
+  const saved = readFleet(p.old, "r21");
+  assert.equal(saved.manifest.single.offlineHandoff, true);
+  assert.ok(!existsSync(join(p.old, "launch-intent.json")));
+  assert.ok(await p.preview("r21"));
+  assert.deepEqual(p.output.at(-1).subject.fleet.single, saved.manifest.single);
+  assert.deepEqual(p.children, []);
+});
+
 test("continuation refuses a live staged remaining owner before it writes its intent", async (t) => {
   const p = continuationFixture(t), staged = fixture(t);
   const remaining = await staged.remaining(), lock = join(staged.h.base, ".fleet-operation.lock");
