@@ -515,7 +515,9 @@ pub struct App<M = ()> {
     /// How many bytes of `Public` answers the app keeps ([`App::kept_answers`]).
     kept: usize,
     /// The handle to them a task holds ([`App::kept`]): made when the app is first asked for it,
-    /// and given the store when the router is made. An app that is never asked makes none.
+    /// and given the store when the router is made. An app that is never asked allocates no
+    /// handle and adds no check to a request: it holds this lock empty, made with the app and
+    /// read once as the router is made.
     keeping: std::sync::OnceLock<crate::KeptAnswers>,
     middleware: M,
 }

@@ -1588,8 +1588,8 @@ async fn a_job_outside_a_request_drops_a_page() {
 }
 
 /// An app that is never asked for its `KeptAnswers` (`App::kept`) makes no handle for one,
-/// whatever it keeps, so nothing of the handle is made or run at startup or for its requests,
-/// which keep and drop pages as before. Asked once, it makes the one every later call shares.
+/// whatever it keeps (it holds an empty lock, which making the router reads once), and its
+/// requests keep and drop pages as before. Asked once, it makes the one every later call shares.
 #[tokio::test]
 async fn an_app_never_asked_for_its_kept_answers_makes_no_handle() {
     let runs = Runs::default();
@@ -1666,6 +1666,119 @@ async fn a_page_made_while_the_app_said_it_changed_is_not_given_after() {
         let (_, headers, _) = fetch(&router, "GET", "/slow", &[]).await;
         assert!(runs.count() == 2 && headers.contains_key(header::AGE), "counted={counted}: and that one is kept");
     }
+}
+
+/// A whole body of a known length that waits, once it is first read, until it is let go: an
+/// answer whose making passed every check and is still being read.
+struct Held {
+    body: bytes::Bytes,
+    read: Option<tokio::sync::oneshot::Sender<()>>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl http_body::Body for Held {
+    type Data = bytes::Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<bytes::Bytes>, Self::Error>>> {
+        let held = self.get_mut();
+        if let Some(read) = held.read.take() {
+            let _ = read.send(());
+        }
+        if held.body.is_empty() {
+            return std::task::Poll::Ready(None);
+        }
+        std::task::ready!(std::future::Future::poll(std::pin::Pin::new(&mut held.release), cx)).ok();
+        std::task::Poll::Ready(Some(Ok(http_body::Frame::data(std::mem::take(&mut held.body)))))
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.body.len() as u64)
+    }
+}
+
+/// Text for everyone in a body of any kind, kept as the text answers are.
+struct HeldText(Response);
+
+impl IntoResponse for HeldText {
+    fn into_response(self) -> Response {
+        self.0
+    }
+}
+
+impl crate::Answer for HeldText {
+    const FORMAT: crate::answer::Format = crate::answer::Format::Html;
+    const WHOLE: crate::answer::sealed::Whole = crate::answer::sealed::Whole(true);
+    type Inputs = crate::answer::AnyInputs;
+    type Rows = crate::answer::NotAFeed;
+    type Kind = AnyAnswer;
+}
+
+impl crate::answer::ForEveryone for HeldText {
+    type Named = Self;
+
+    fn for_all(self) -> Self {
+        self
+    }
+}
+
+impl crate::answer::Shareable for HeldText {
+    type ForAll = Self;
+}
+
+/// An answer whose making passed its checks before the app said its page changed, and was kept
+/// after a fresh one was: the fresh one stays, and is given, and the older one is sent and not
+/// kept.
+#[tokio::test]
+async fn an_answer_made_before_a_change_does_not_take_a_fresh_one_s_place() {
+    #[derive(crate::Route)]
+    #[route("/held")]
+    struct HeldAt;
+    let runs = Runs::default();
+    let (read, was_read) = tokio::sync::oneshot::channel();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let parked = std::sync::Arc::new(std::sync::Mutex::new(Some((read, released))));
+    let counted = runs.clone();
+    let text = move || {
+        counted.ran();
+        let parked = parked.lock().unwrap().take();
+        async move {
+            let mut res = match parked {
+                Some((read, release)) => {
+                    Response::new(Body::new(Held { body: "old ".repeat(400).into(), read: Some(read), release }))
+                }
+                None => Response::new(Body::from("new ".repeat(400))),
+            };
+            res.headers_mut().insert(header::CONTENT_TYPE, http::HeaderValue::from_static("text/plain; charset=utf-8"));
+            Public::new(Duration::from_secs(60), HeldText(res))
+        }
+    };
+    let app = App::new(Routes::from(Table::new().route("/held", crate::route::get(text).0)));
+    let kept = app.kept();
+    let router = app.router();
+    let old = tokio::spawn({
+        let router = router.clone();
+        async move { fetch(&router, "GET", "/held", &[]).await }
+    });
+    // Its answer may be kept and its path was not written to: it is being read to be kept.
+    was_read.await.unwrap();
+    kept.changed(&HeldAt);
+    let (_, headers, body) = fetch(&router, "GET", "/held", &[]).await;
+    assert!(runs.count() == 2 && !headers.contains_key(header::AGE) && body.starts_with(b"new "), "made after the change");
+    let (_, headers, body) = fetch(&router, "GET", "/held", &[]).await;
+    assert!(runs.count() == 2 && headers.contains_key(header::AGE) && body.starts_with(b"new "), "and kept");
+    release.send(()).unwrap();
+    let (status, headers, body) = old.await.unwrap();
+    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE) && body.starts_with(b"old "), "the older one is sent");
+    let (_, headers, body) = fetch(&router, "GET", "/held", &[]).await;
+    assert!(
+        runs.count() == 2 && headers.contains_key(header::AGE) && body.starts_with(b"new "),
+        "the fresh one stays: {} runs, {headers:?}",
+        runs.count()
+    );
 }
 
 /// The app's saying a page changed drops every copy kept at its path: one for each `Host`, each

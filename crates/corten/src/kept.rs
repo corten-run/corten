@@ -908,8 +908,11 @@ impl Answers {
         Some((entry.clone(), age))
     }
 
-    /// Keeps `entry`, in the place of the copy it stands for, and makes room for it.
-    fn keep(&self, make: impl FnOnce(Place) -> Entry) -> Arc<Entry> {
+    /// Keeps `entry`, in the place of the copy it stands for, and makes room for it; none when a
+    /// write to its path, or the app's saying it changed, was counted since its request read the
+    /// path's count. Checked under the lock every entry is kept under: an answer made before such
+    /// a write that is kept only after a newer one was does not take the newer one's place.
+    fn keep(&self, make: impl FnOnce(Place) -> Entry) -> Option<Arc<Entry>> {
         let store = &*self.0;
         let mut inner = store.inner.write().unwrap_or_else(PoisonError::into_inner);
         let slot = inner.free.pop().unwrap_or(inner.slots.len());
@@ -918,6 +921,14 @@ impl Answers {
             #[cfg(feature = "compress")]
             store: Arc::downgrade(&self.0),
         }));
+        // Each copy kept read its path's counts before this check, so while this one stands
+        // none it may take the place of read them after a write this one missed.
+        if !entry.written.stands(store) {
+            if slot < inner.slots.len() {
+                inner.free.push(slot);
+            }
+            return None;
+        }
         let now = Instant::now();
         let copies = inner.at.get(&entry.hash).map(Vec::as_slice).unwrap_or_default();
         // The copies this one takes the place of: the one asked the same way, and those that no
@@ -947,7 +958,7 @@ impl Answers {
         inner.at.entry(entry.hash).or_default().push(entry.clone());
         store.bytes.fetch_add(entry.size.load(Ordering::Acquire), Ordering::AcqRel);
         store.make_room(&mut inner, &entry);
-        entry
+        Some(entry)
     }
 
     /// A request that may change what its path shows is about to reach its handler. `signal` is
@@ -1413,7 +1424,8 @@ impl Missed {
         // An answer that may be kept: writes are counted by path from here on, whether or not
         // this one is kept, so an app whose writes never pause still comes to keep its pages.
         answers.counts();
-        // A write while the handler read: the page may show what was there before.
+        // A write while the handler read: the page may show what was there before. Checked again
+        // as it is kept, for one while its body was read.
         if !self.written.stands(&answers.0) {
             return res;
         }
@@ -1431,7 +1443,7 @@ impl Missed {
         let body = Bytes::copy_from_slice(&body);
         let key = Key::new(self.at.as_str(), self.host.as_ref(), sent);
         let Missed { hash, data, asked: made, written, mut told, .. } = self;
-        let entry = answers.keep(|place| Entry {
+        let kept = answers.keep(|place| Entry {
             key,
             hash,
             place,
@@ -1450,9 +1462,11 @@ impl Missed {
             used: AtomicBool::new(false),
             size: AtomicUsize::new(size),
         });
-        told.1 = true;
-        // This answer's tag and compression are the kept one's first.
-        parts.extensions.insert(Kept(entry));
+        if let Some(entry) = kept {
+            told.1 = true;
+            // This answer's tag and compression are the kept one's first.
+            parts.extensions.insert(Kept(entry));
+        }
         Response::from_parts(parts, Body::from(body))
     }
 }
@@ -1910,7 +1924,7 @@ mod tests {
         assert!(answers.find("/p", Some(&last), None, false).is_none(), "the path written, whatever the query");
         assert!(answers.find("/q?x=2", None, None, false).is_none(), "and the path it redirects to");
         assert!(answers.find("/made/1", None, None, false).is_none(), "and the one it says it made, named with this host");
-        answers.keep(read_before);
+        assert!(answers.keep(read_before).is_none(), "what was read before the write is not kept");
         assert!(answers.find("/q", None, None, false).is_none(), "what was read before the write does not stand");
         assert!(answers.find("/other", None, None, false).is_some());
         answers.keep(entry(&answers, "/p", Some("h7.example"), 60, 10));
@@ -2179,6 +2193,27 @@ mod tests {
         assert_eq!(answers.bytes(), 20 + OVERHEAD, "the one past its lifetime went when the URL was kept again");
     }
 
+    /// An answer whose request read the path's count before the app said the page changed, kept
+    /// after one made since: it is not kept, and the newer one stays in its place.
+    #[test]
+    fn an_answer_read_before_a_change_does_not_take_a_newer_one_s_place() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        // Two slots, both free.
+        for at in ["/a", "/b"] {
+            let kept = answers.keep(entry(&answers, at, None, 60, 10)).expect("kept");
+            answers.0.drop_entry(&mut answers.0.inner.write().unwrap_or_else(PoisonError::into_inner), &kept);
+        }
+        let before = entry(&answers, "/p", None, 60, 10);
+        answers.changed(b"/p");
+        answers.keep(entry(&answers, "/p", None, 60, 20)).expect("made after the change");
+        assert!(answers.keep(before).is_none(), "read before the change");
+        assert_eq!(answers.find("/p", None, None, false).expect("the newer one stays").0.body.len(), 20);
+        assert_eq!(answers.bytes(), 20 + OVERHEAD);
+        // The slot it was given is free again, for the next.
+        answers.keep(entry(&answers, "/q", None, 60, 30)).expect("kept");
+        assert_eq!(answers.0.inner.read().unwrap_or_else(PoisonError::into_inner).slots.len(), 2);
+    }
+
     /// Two URLs with the same hash share a place in the table and are told apart by the URL each
     /// copy holds: neither is found for the other, takes the other's place or goes with it, and
     /// the copies one URL keeps are counted, and give way, among its own.
@@ -2187,7 +2222,7 @@ mod tests {
         let answers = Answers::new(1 << 20).expect("a bound");
         let keep = |at: &str, body| {
             let make = entry(&answers, at, None, 60, body);
-            answers.keep(move |place| Entry { hash: 7, ..make(place) })
+            answers.keep(move |place| Entry { hash: 7, ..make(place) }).expect("kept")
         };
         let a = keep("/a", 10);
         keep("/b", 20);
@@ -2206,7 +2241,7 @@ mod tests {
         let answers = Answers::new(1 << 20).expect("a bound");
         let keep = |at: &str, host, body| {
             let make = entry(&answers, at, host, 60, body);
-            answers.keep(move |place| Entry { hash: 7, ..make(place) })
+            answers.keep(move |place| Entry { hash: 7, ..make(place) }).expect("kept")
         };
         let hosts: Vec<&'static str> = (0..=COPIES).map(|n| &*Box::leak(format!("h{n}.example").into_boxed_str())).collect();
         keep("/b", None, 20);
@@ -2264,7 +2299,7 @@ mod tests {
     #[test]
     fn a_kept_answer_s_hash_and_coded_bytes_are_made_once() {
         let answers = Answers::new(1 << 20).expect("a bound");
-        let kept = answers.keep(entry(&answers, "/p", None, 60, 2000));
+        let kept = answers.keep(entry(&answers, "/p", None, 60, 2000)).expect("kept");
         let mut extensions = http::Extensions::new();
         extensions.insert(Kept(kept.clone()));
         let key = std::hash::RandomState::new();
@@ -2309,8 +2344,8 @@ mod tests {
         use crate::compress::Coding;
         let size = 1000 + OVERHEAD;
         let answers = Answers::new(size * 2 + 100).expect("a bound");
-        let first = answers.keep(entry(&answers, "/a", None, 60, 1000));
-        let second = answers.keep(entry(&answers, "/b", None, 60, 1000));
+        let first = answers.keep(entry(&answers, "/a", None, 60, 1000)).expect("kept");
+        let second = answers.keep(entry(&answers, "/b", None, 60, 1000)).expect("kept");
         assert_eq!(answers.bytes(), size * 2);
         let mut extensions = http::Extensions::new();
         extensions.insert(Kept(second.clone()));
