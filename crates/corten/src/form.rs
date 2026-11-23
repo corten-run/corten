@@ -547,7 +547,8 @@ pub enum FormRejection {
     Body(BodyRejection),
     /// The fields did not fit the type: a value of the wrong kind, a missing field, a field sent
     /// twice. Its status and text, and whether the extractor made it (`true`) or the app, with
-    /// [`FormRejection::new`] (`false`). Matched with `..`: `FormRejection::Invalid(status, text, ..)`.
+    /// [`FormRejection::new`] (`false`). Outside Corten it is matched by field, with `..`:
+    /// `FormRejection::Invalid { 0: status, 1: text, .. }`.
     #[non_exhaustive]
     Invalid(StatusCode, String, bool),
 }
@@ -561,7 +562,7 @@ impl FormRejection {
     /// use corten::{form::FormRejection, http::StatusCode};
     ///
     /// let mine = FormRejection::new(StatusCode::UNPROCESSABLE_ENTITY, "pick a size");
-    /// assert!(matches!(mine, FormRejection::Invalid(StatusCode::UNPROCESSABLE_ENTITY, _, false, ..)));
+    /// assert!(matches!(mine, FormRejection::Invalid { 0: StatusCode::UNPROCESSABLE_ENTITY, 2: false, .. }));
     /// ```
     pub fn new(status: StatusCode, text: impl Into<String>) -> Self {
         FormRejection::Invalid(status, text.into(), false)
