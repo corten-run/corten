@@ -4,9 +4,10 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { accountId, commit, context, harness } from "./cloud-fixtures.mjs";
 import { fleetPlan } from "./cloud-contract.mjs";
+import { controlRequest } from "./cloud-control-runtime.mjs";
 import { digest } from "./cloud-local.mjs";
 import { productionPlan } from "./cloud-production.mjs";
-import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
+import { interruptedFirstUpload as eligibleFirstUpload, unusedEvidence, unusedHostScript, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 test("a reconciled allocation is recovery evidence, not successful create completion", async (t) => {
   for (const failure of [{ createRejected: true }, { createLost: true }]) {
@@ -74,13 +75,17 @@ async function stoppedUpload(t, flags) {
   return h;
 }
 
-async function interruptedFirstUpload(t) {
+async function interruptedFirstUpload(t, { offline = false, localUncertain = !offline } = {}) {
   const group = "json-api", h = harness(t, { fleetGroup: group, fleetSlot: "json-api--r21", missingUnit: true, deleteLost: true });
-  const single = { group, checkout: h.repo, indexSha256: "b".repeat(64) };
+  const single = { group, checkout: h.repo, indexSha256: "b".repeat(64), ...(offline ? { offlineHandoff: true } : {}) };
   const fleet = join(dirname(h.base), "fleet-r21.json");
   writeFileSync(fleet, JSON.stringify(fleetPlan({ round: "r21", commit, token: "f".repeat(16), tokens: { [group]: "1".repeat(16) },
     sshKey: "42", provider: { accountId, context } }, undefined, undefined, { stagedPlacement: true, single })));
-  h.flags.hook = (binary) => { if (binary === "scp") throw Object.assign(new Error("lost upload reply"), { controlUncertain: true }); };
+  // In the offline recovery test the synthetic local worker is known closed,
+  // but it never delivered a result for the remote upload.
+  h.flags.hook = (binary) => {
+    if (binary === "scp") throw Object.assign(new Error("lost upload reply"), localUncertain ? { controlUncertain: true } : {});
+  };
   await assert.rejects(h.task({ checkFleetAdmission: () => [] }, { collect: undefined, detach: true, group, fleet,
     commit, sshKey: "42", accountId, context }).launch(), /lost upload reply/);
   delete h.flags.hook;
@@ -89,11 +94,16 @@ async function interruptedFirstUpload(t) {
     [["ssh", true, 0], ["ssh", true, 0], ["sftp", false, undefined]]);
   const key = join(h.temp, "independently-verified-key");
   writeFileSync(key, readFileSync(join(h.local, "known_hosts")));
-  const collect = () => h.task({ unusedBootstrapApproval: { reservationSha256: digest(readFileSync(h.statePath)),
-    knownHostsSha256: digest(readFileSync(key)) } }, { unusedBootstrapKnownHosts: key }).collect();
-  await assert.rejects(collect);
-  // Model the existing operator custody handoff only after this synthetic transport is gone.
-  unlinkSync(join(h.local, "operation.lock")); unlinkSync(join(h.base, ".groups-launch.lock"));
+  const collect = (unusedBootstrapApproval = { reservationSha256: digest(readFileSync(h.statePath)),
+    knownHostsSha256: digest(readFileSync(key)) }) => h.task({ unusedBootstrapApproval }, { unusedBootstrapKnownHosts: key }).collect();
+  if (localUncertain) {
+    const calls = h.calls.length;
+    await assert.rejects(collect);
+    assert.equal(h.calls.length, calls);
+    assert.ok(existsSync(join(h.local, "operation.lock")) && existsSync(join(h.base, ".groups-launch.lock")));
+    // Legacy supervised fixture only: model the separately proved operator custody handoff.
+    if (!offline) { unlinkSync(join(h.local, "operation.lock")); unlinkSync(join(h.base, ".groups-launch.lock")); }
+  }
   return { h, collect, ledger, key };
 }
 
@@ -129,6 +139,95 @@ test("an unacknowledged first job upload retires only after a fresh never-writte
   assert.deepEqual(h.calls.slice(before).filter(([b]) => ["scp", "ssh"].includes(b)).map(([b]) => b), ["ssh"]);
   assert.deepEqual(h.calls.slice(before).filter(a => a[2] === "droplet" && a[3] === "delete").map(a => a.slice(1, 6)),
     [["compute", "droplet", "delete", s.id, "--force"]]);
+});
+
+test("offline first upload uses the approved unused receipt and exact-ID deletion without a monitor or final seal", async (t) => {
+  const { h, collect, ledger, key } = await interruptedFirstUpload(t, { offline: true });
+  const s = h.saved();
+  assert.equal(s.status, "preparing"); assert.equal(s.fleet.single.offlineHandoff, true);
+  assert.equal(s.quietBootstrap, "prelogin");
+  assert.equal(s.control.monitor, undefined); assert.deepEqual(s.control.sealed, []);
+  assert.equal(s.bootstrapReady, undefined);
+  assert.equal(s.launchHostKeySha256, digest(readFileSync(key)));
+  assert.deepEqual(h.calls.filter(([b]) => b === "scp").map(call => call.slice(-2)), [[join(h.local, "job.sh"), `root@${s.ip}:/bench/job.sh`]]);
+  assert.equal(h.calls.some(([b, ...args]) => b === "ssh" && args.at(-1).includes("systemctl start")), false);
+  await assert.rejects(h.task().collect(), /offline handoff not acknowledged/);
+  const preview = await unusedPlan(h, key);
+  assert.deepEqual(preview.missing, []);
+  assert.equal(preview.subject.reservationSha256, digest(readFileSync(h.statePath)));
+  assert.deepEqual(preview.subject.recovery, { measuredCommit: s.commit, hostId: s.id, ip: s.ip, knownHostsSha256: s.launchHostKeySha256,
+    policy: "unacknowledged-first-upload-never-written-only" });
+
+  const approve = ({ subject }) => ({ reservationSha256: subject.reservationSha256, knownHostsSha256: subject.recovery.knownHostsSha256 });
+  h.flags.unusedProof = neverWrittenProof(h, ledger);
+  h.flags.hook = (binary, args) => {
+    if (binary === "ssh") {
+      assert.ok(args.includes("StrictHostKeyChecking=yes"));
+      assert.equal(args.at(-1), unusedHostScript(s, { bootstrap: true }));
+    }
+    if (binary === "doctl" && args[2] === "delete") {
+      const saved = h.saved(), bytes = readFileSync(join(h.local, "unused-host.json"));
+      assert.equal(saved.retirement.evidenceSha256, digest(bytes));
+      assert.deepEqual(JSON.parse(bytes).observation, h.flags.unusedProof);
+      verifyUnusedEvidence(JSON.parse(bytes), saved);
+    }
+  };
+  const before = h.calls.length;
+  await assert.rejects(collect(approve(preview)), /deletion acknowledgement lost/);
+  assert.ok(h.saved().deletionIntentAt); assert.equal(h.saved().destroyedAt, undefined);
+  await assert.rejects(collect(approve(preview)), /reservation changed/);
+  assert.equal(await collect(approve(await unusedPlan(h, key))), 1);
+  const retired = h.saved();
+  assert.equal(retired.status, "retired"); assert.equal(retired.retirement.kind, "unused"); assert.ok(retired.destroyedAt);
+  assert.deepEqual(retired.control.ledger, ledger);
+  for (const field of ["archiveSha256", "validation", "exitCode", "collectedAt"]) assert.equal(retired[field], undefined, field);
+  assert.deepEqual(h.calls.slice(before).filter(([b]) => ["scp", "ssh"].includes(b)).map(([b]) => b), ["ssh"]);
+  assert.deepEqual(h.calls.slice(before).filter(a => a[2] === "droplet" && a[3] === "delete").map(a => a.slice(1, 6)),
+    [["compute", "droplet", "delete", s.id, "--force"]]);
+});
+
+test("offline first upload refuses unresolved original local custody", async (t) => {
+  const { h } = await interruptedFirstUpload(t, { offline: true, localUncertain: true });
+  assert.equal(h.deletes, 0);
+});
+
+test("offline first upload refuses other lifecycle states and unexpected custody", async (t) => {
+  const { h, collect, ledger, key } = await interruptedFirstUpload(t, { offline: true });
+  h.flags.unusedProof = neverWrittenProof(h, ledger);
+  const original = readFileSync(h.statePath), calls = h.calls.length;
+  const rejected = [
+    s => { delete s.fleet.single.offlineHandoff; delete s.quietBootstrap; },
+    s => { delete s.quietBootstrap; },
+    s => { s.control.ledger.length = 0; },
+    s => { Object.assign(s.control.ledger[2], { localTerminal: true, code: 0 }); },
+    s => {
+      const invocations = s.control.ledger.map(r => r.request.invocation);
+      s.control.ledger.push({ request: controlRequest(s, "ssh", [":"], 60000, "bootstrap", invocations), localTerminal: false });
+    },
+    s => { s.control.sealed.push("bootstrap"); },
+    s => { s.status = "starting"; },
+  ];
+  for (const change of rejected) {
+    writeFileSync(h.statePath, original);
+    h.change(change);
+    assert.equal(eligibleFirstUpload(h.saved(), h.local), false);
+    await assert.rejects(unusedPlan(h, key));
+    await assert.rejects(collect());
+  }
+  writeFileSync(h.statePath, original);
+  writeFileSync(join(dirname(dirname(h.base)), ".continuation-operation.lock"), "original");
+  await assert.rejects(collect(), /continuation custody remains/);
+  assert.equal(readFileSync(join(dirname(dirname(h.base)), ".continuation-operation.lock"), "utf8"), "original");
+  // Test a separate fixture so the original continuation lock is never removed.
+  const extra = await interruptedFirstUpload(t, { offline: true });
+  const extraState = readFileSync(extra.h.statePath), extraCalls = extra.h.calls.length;
+  writeFileSync(join(extra.h.local, "unrecognized"), "preserve");
+  await assert.rejects(extra.collect(), /unexpected local bootstrap custody/);
+  assert.deepEqual(readFileSync(extra.h.statePath), extraState);
+  assert.equal(extra.h.calls.length, extraCalls); assert.equal(extra.h.deletes, 0);
+  assert.deepEqual(readFileSync(h.statePath), original);
+  assert.deepEqual(h.calls.slice(calls).filter(([binary]) => binary !== "git"), []);
+  assert.equal(h.deletes, 0); assert.equal(existsSync(join(h.local, "unused-host.json")), false);
 });
 
 test("first upload recovery refuses changed custody or incomplete evidence without deletion", async (t) => {

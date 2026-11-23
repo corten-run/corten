@@ -13,6 +13,7 @@ from types import SimpleNamespace as NS
 from unittest.mock import patch
 
 case = json.load(sys.stdin)
+mode = case["mode"]
 header, body = case["script"].split(" <<'CORTEN_UNUSED_HOST'\n")
 program, end = body.rsplit("\nCORTEN_UNUSED_HOST", 1)
 args = shlex.split(header)
@@ -119,6 +120,11 @@ for i, request in enumerate(requests):
     for prefix, value in records.items():
         put(root / (prefix + "-" + invocation["id"] + ".json"), encoded(value))
 
+if mode == "job-present": put("/bench/job.sh", b"partial")
+if mode == "unknown-file": put("/bench/unknown")
+if mode == "remote-seal": put(root / "seal-bootstrap.json", b"{}")
+if mode == "different-user-data": put(instance + "/user-data.txt", b"unrecognized")
+
 
 def run(command, **options):
     assert options["timeout"] == 5
@@ -133,7 +139,8 @@ def run(command, **options):
         values = dict(Id=unit, LoadState="not-found" if benchmark else "loaded", MainPID="0", ControlPID="0",
                       ActiveState="failed" if failed else "inactive", SubState="failed" if failed else "dead",
                       Restart="no", NRestarts="0", Job="", Triggers="", TriggeredBy="", FragmentPath="",
-                      ExecMainStartTimestampMonotonic="0", ExecMainCode="1", ExecMainStatus="254" if failed else "0")
+                      ExecMainStartTimestampMonotonic="1" if benchmark and mode == "started" else "0",
+                      ExecMainCode="1", ExecMainStatus="254" if failed else "0")
         out = "\n".join(k+"="+values[k] for k in (a.split("=", 1)[1] for a in command if a.startswith("--property=")))
     return NS(returncode=0, stdout=out if options.get("text") else out.encode())
 

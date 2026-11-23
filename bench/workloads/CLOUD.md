@@ -732,8 +732,10 @@ receipt and intent. It never overwrites unknown evidence, treats an old observat
 as current permission or repeats a saved deletion intent.
 
 Use the child collector's opt-in `--collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE`
-for a bound `preparing` host with a pending unregistered monitor and no seal. Preview and approve
-the exact pinned collection action with the same flag and absolute state root.
+for a bound `preparing` host with no seal and a pending unregistered monitor, or the exact
+interrupted first upload below in an offline-handoff reservation with prelogin policy and
+no monitor. Preview and approve the exact pinned collection action with the same flag and
+absolute state root.
 
 ```sh
 node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE_ROOT --collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE --print-approval
@@ -760,8 +762,10 @@ node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE
   request whose watcher failed before registration. Its deadline must have passed; neither
   original PID, connection, transfer server, watcher job, trigger, nor occupied control
   cgroup may remain. A partial file, later request, or missing proof preserves the host.
-  This records an unused retirement, not a successful transfer, benchmark result, or
-  reconciliation of an already externally deleted host
+  An unknown **final bootstrap seal** is not a first-upload failure. The same refusal
+  applies to ordinary unmonitored reservations and to offline reservations at any other
+  bootstrap step. This records an unused retirement receipt, not a native archive,
+  successful transfer, benchmark result, or reconciliation of an already externally deleted host
   ([#1977 JSON r61 loses acknowledgement of the first bootstrap upload and cannot retire the unused host through ordinary collection](https://github.com/corten-run/corten/issues/1977)).
 
 Ordinary `--collect` refuses these pending-bootstrap cases before sending SSH. The pinned probe
