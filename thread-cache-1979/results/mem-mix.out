@@ -1,0 +1,17 @@
+# items and their pages' bytes: item_1 9793; item_3 12177; item_5 14501; item_10 20464; item_20 32504; item_40 56524; item_80 104624; item_160 202047; item_400 495527; 
+mixed | round 1 | 65536 | threads 14 | MiB memory.current (anon): before 9.1 (6.8) | as the load ended 29.7 (27.4) | 35 s after 14.5 (11.9) | failed 0
+mixed | round 1 | 524288 | threads 14 | MiB memory.current (anon): before 10.5 (8.3) | as the load ended 57.5 (55.0) | 35 s after 38.1 (35.9) | failed 0
+mixed | round 1 | 1048576 | threads 14 | MiB memory.current (anon): before 9.5 (7.6) | as the load ended 83.7 (81.1) | 35 s after 51.6 (49.0) | failed 0
+mixed | round 1 | glibc | threads 10 | MiB memory.current (anon): before 6.0 (4.8) | as the load ended 34.6 (32.8) | 35 s after 34.1 (32.8) | failed 0
+202,041 bytes | round 1 | 524288 | threads 14 | MiB memory.current (anon): before 10.7 (8.6) | as the load ended 23.3 (20.6) | 35 s after 22.0 (20.3) | failed 0
+mixed | round 2 | 65536 | threads 14 | MiB memory.current (anon): before 9.1 (6.8) | as the load ended 31.0 (28.7) | 35 s after 14.2 (12.1) | failed 0
+mixed | round 2 | 524288 | threads 14 | MiB memory.current (anon): before 9.6 (7.3) | as the load ended 57.1 (54.5) | 35 s after 40.1 (37.7) | failed 0
+mixed | round 2 | 1048576 | threads 14 | MiB memory.current (anon): before 10.3 (7.9) | as the load ended 88.8 (85.9) | 35 s after 53.3 (51.0) | failed 0
+mixed | round 2 | glibc | threads 10 | MiB memory.current (anon): before 6.5 (4.8) | as the load ended 34.9 (33.0) | 35 s after 34.5 (33.0) | failed 0
+202,041 bytes | round 2 | 524288 | threads 14 | MiB memory.current (anon): before 10.8 (8.6) | as the load ended 23.5 (21.3) | 35 s after 22.8 (20.3) | failed 0
+mixed | round 3 | 65536 | threads 14 | MiB memory.current (anon): before 8.8 (6.7) | as the load ended 29.1 (26.5) | 35 s after 14.5 (12.2) | failed 0
+mixed | round 3 | 524288 | threads 14 | MiB memory.current (anon): before 9.8 (7.9) | as the load ended 56.5 (54.2) | 35 s after 38.0 (35.3) | failed 0
+mixed | round 3 | 1048576 | threads 14 | MiB memory.current (anon): before 9.8 (7.5) | as the load ended 87.9 (85.6) | 35 s after 54.5 (51.9) | failed 0
+mixed | round 3 | glibc | threads 10 | MiB memory.current (anon): before 6.1 (4.6) | as the load ended 35.1 (33.6) | 35 s after 35.3 (33.6) | failed 0
+202,041 bytes | round 3 | 524288 | threads 14 | MiB memory.current (anon): before 10.8 (8.6) | as the load ended 23.8 (21.5) | 35 s after 22.5 (20.3) | failed 0
+# mem-mix done

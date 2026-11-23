@@ -1,0 +1,4 @@
+round 1 | 524288 | 44 ms CPU in 60 s | threads 6
+round 2 | 524288 | 44 ms CPU in 60 s | threads 6
+round 3 | 524288 | 45 ms CPU in 60 s | threads 6
+# idle done

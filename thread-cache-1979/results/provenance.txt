@@ -1,0 +1,10 @@
+# On the host, after the runs: is the measured image a build of bcf4aa073?
+# The image was built by `docker build` from `git archive bcf4aa073` of the host's clone; Docker
+# reports its creation as 00:15 UTC, earlier than that build ran (02:21 UTC), because every layer
+# came from the builder's cache of an earlier build with the same sources.
+
+# The archive's tree against the commit (git --work-tree=<tree> diff --stat bcf4aa073 -- .): no difference.
+
+# A new build of that tree, and the measured image, sha256sum /app/server:
+d836c38c3926411dc94ef217a35518868a98b45a61873464c55f2b3e36ff1fdc  /app/server   (corten-card-market-base, the measured image)
+d836c38c3926411dc94ef217a35518868a98b45a61873464c55f2b3e36ff1fdc  /app/server   (a build of the bcf4aa073 tree made after the runs)

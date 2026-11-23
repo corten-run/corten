@@ -1,0 +1,7 @@
+round 1 | 65536 | 44 ms CPU in 60 s | threads 6
+round 1 | 1048576 | 45 ms CPU in 60 s | threads 6
+round 2 | 65536 | 45 ms CPU in 60 s | threads 6
+round 2 | 1048576 | 45 ms CPU in 60 s | threads 6
+round 3 | 65536 | 46 ms CPU in 60 s | threads 6
+round 3 | 1048576 | 44 ms CPU in 60 s | threads 6
+# idle done

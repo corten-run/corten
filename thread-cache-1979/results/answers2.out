@@ -1,0 +1,5 @@
+n20 | br | headers but Date and ETag: same (18 lines, content-encoding: br) | body as sent: same (4440 bytes) | body decoded: same (32501 bytes) | etags etag: W/"4ddbf5d90b119faf" and etag: W/"8d79a32ead5fa4d7"
+n160 | br | headers but Date and ETag: same (18 lines, content-encoding: br) | body as sent: same (18428 bytes) | body decoded: same (202041 bytes) | etags etag: W/"42cda0cc5d640a69" and etag: W/"101e043b7e3f17b2"
+n1 | br | headers but Date and ETag: same (18 lines, content-encoding: br) | body as sent: same (2475 bytes) | body decoded: same (9793 bytes) | etags etag: W/"fc3ab4c7be642ff5" and etag: W/"fc3e56cd95859c89"
+n1 | gzip, deflate, br, zstd | headers but Date and ETag: same (18 lines, content-encoding: zstd) | body as sent: same (2250 bytes) | body decoded: same (9793 bytes) | etags etag: W/"22e7666ec756ff09" and etag: W/"5a1cc26b197ff2d6"
+# answers done

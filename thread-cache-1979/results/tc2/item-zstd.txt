@@ -1,0 +1,11 @@
+# 08:39:53 n1 enc=gzip, deflate, br, zstd pairs=61 load=1.28
+# answers identical but Date and ETag (3357 bytes, HTTP/1.1 200 OK)
+# done 08:51:50
+pairs used: 60 (skipped the first 1); pairs with failed requests or a counter under 100%: none
+user+kernel cycles/request: before median 218,074 best 211,729 range 211,729-247,728; after median 218,310 best 210,773 range 210,773-245,082
+user cycles/request: before median 158,665 best 153,863 range 153,863-182,713; after median 158,716 best 153,214 range 153,214-181,475
+kernel cycles/request: before median 59,760 best 57,271 range 57,271-65,015; after median 59,634 best 57,559 range 57,559-63,607
+user instructions/request: before median 346,398 best 346,177 range 346,177-346,503; after median 346,410 best 346,129 range 346,129-346,474
+total: per-pair change median +0.05%, range -13.64% to +11.43%, one-sided 95% upper bound on the median +0.73% (the 37th of 60 sorted); pairs lower in B: 30 of 60
+instr: per-pair change median +0.00%, range -0.08% to +0.07%, one-sided 95% upper bound on the median +0.01% (the 37th of 60 sorted); pairs lower in B: 26 of 60
+per-pair total changes: -1.05 -6.38 -0.37 +0.38 +2.70 +0.61 -3.13 +0.57 -4.14 -13.64 -5.43 +2.47 +0.40 -2.40 -1.28 +9.13 -0.71 -8.39 +6.51 +2.09 -0.63 +1.52 +11.43 +0.20 -0.94 -6.40 -4.81 -1.11 +6.70 -0.10 -3.64 +1.87 -0.45 -3.70 +1.87 +1.41 +0.95 -0.35 -0.47 +2.19 -1.19 -1.27 +2.97 -8.36 -4.46 +0.73 +2.49 -6.10 +0.79 +5.17 +1.30 -0.44 +0.75 +0.50 -9.38 +2.49 +5.96 -3.10 +5.31 +4.79

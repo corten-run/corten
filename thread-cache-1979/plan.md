@@ -1,6 +1,8 @@
-# The cycles run's plan, written before the run
+# The cycles runs' plans, each written before its run
 
-As it stood in corten-run/corten#1979's description before the run started.
+As they stood in corten-run/corten#1979's description before each run started.
+
+## First plan: 64 KiB against 1 MiB (in the description from 05:39 UTC; the run began at 06:01)
 
 The change is one line of the image's environment, so both sides are the same binary
 (card-market's image built at `bcf4aa073`), run with
@@ -35,3 +37,23 @@ client with gzip alone, pages past 202 KB, and more than one runtime.
 Planned after this plan and before either ran: the memory with eight CPUs
 (`mem8.sh`), and three more flood runs of the 64 KiB and the 1 MiB limit, asked for because one
 of the first three runs at 1 MiB held 220 MiB at its highest where the others held 194 to 202.
+
+## Second plan: 512 KiB against 64 KiB (in the description from 07:55 UTC; the run began at 08:03)
+
+Written after the first run (64 KiB against 1 MiB) and its review were read, and after the first
+two rounds of the mixed-length memory probe (`mem-mix.sh`), which is why the limit became 512 KiB.
+The same image and protocol as the first plan's items 4 and 5, with these differences: the settings
+are `tcache_max:65536` and `tcache_max:524288`; the answers are compared byte for byte but `Date`
+and `ETag` (the app's weak tag differs between any two starts, which the first plan did not
+except), before each workload, and a workload whose answers differ otherwise is not counted.
+
+1. Reduction claimed, 5% as before, 40 recorded pairs after one that is not, each: the 32,501-byte
+   page with `br`; the 202,041-byte page with `br`; and the 495,521-byte page with `br`, where
+   512 KiB still takes 11 faults a request against 161.
+2. No regression, held to +1%, 60 recorded pairs after one that is not, each: the 9,793-byte page
+   with `br`, with `gzip, deflate, br, zstd` and with `identity`.
+3. A reduction that is not established is not claimed; a no-regression margin that is not met stops
+   the change.
+
+Not planned under load: 512 KiB against 1 MiB directly; a client with gzip alone; pages past
+496 KB; more than one runtime.

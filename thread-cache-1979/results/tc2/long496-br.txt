@@ -1,0 +1,11 @@
+# 08:19:46 n400 enc=br pairs=41 load=1.50
+# answers identical but Date and ETag (42534 bytes, HTTP/1.1 200 OK)
+# done 08:27:57
+pairs used: 40 (skipped the first 1); pairs with failed requests or a counter under 100%: none
+user+kernel cycles/request: before median 8,500,170 best 8,193,480 range 8,193,480-8,760,985; after median 7,769,051 best 7,518,343 range 7,518,343-8,257,193
+user cycles/request: before median 7,463,048 best 7,200,518 range 7,200,518-7,683,987; after median 7,425,648 best 7,184,697 range 7,184,697-7,895,350
+kernel cycles/request: before median 1,032,748 best 983,707 range 983,707-1,085,644; after median 344,958 best 328,946 range 328,946-381,189
+user instructions/request: before median 19,355,362 best 18,802,157 range 18,802,157-20,116,928; after median 19,232,607 best 18,814,733 range 18,814,733-19,953,463
+total: per-pair change median -8.48%, range -13.88% to -1.13%, one-sided 95% upper bound on the median -7.58% (the 26th of 40 sorted); pairs lower in B: 40 of 40
+instr: per-pair change median -0.56%, range -6.36% to +4.53%, one-sided 95% upper bound on the median -0.24% (the 26th of 40 sorted); pairs lower in B: 27 of 40
+per-pair total changes: -5.15 -5.70 -9.32 -9.72 -6.13 -7.58 -9.76 -12.47 -9.53 -8.91 -4.60 -7.41 -10.61 -7.80 -3.25 -12.25 -5.65 -8.94 -6.41 -12.17 -8.90 -11.86 -6.55 -10.11 -8.42 -8.33 -9.17 -6.51 -3.09 -8.45 -9.86 -6.65 -9.28 -13.88 -6.69 -10.50 -9.75 -8.24 -8.52 -1.13
