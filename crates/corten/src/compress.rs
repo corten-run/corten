@@ -544,11 +544,18 @@ fn no_transform(line: &HeaderValue) -> bool {
     *line != crate::cache::PRIVATE && line.to_str().is_ok_and(|line| line.contains("no-transform"))
 }
 
-/// Adds `accept-encoding` to `Vary`, so a cache keeps one copy per coding.
+/// Adds `accept-encoding` to `Vary`, so a cache keeps one copy per coding. A page's own line
+/// (`page::VARY`, `page::VARY_LANGUAGE`) does not name it, and every page has one: a line is
+/// compared with those before it is split.
 pub(crate) fn vary(headers: &mut HeaderMap) {
+    let page = |line: &&HeaderValue| {
+        let line = line.as_bytes();
+        line == crate::page::VARY.as_bytes() || line == crate::page::VARY_LANGUAGE.as_bytes()
+    };
     let already = headers
         .get_all(header::VARY)
         .iter()
+        .filter(|line| !page(line))
         .filter_map(|v| v.to_str().ok())
         .any(|v| v.split(',').map(str::trim_ascii).any(|f| f.eq_ignore_ascii_case("accept-encoding") || f == "*"));
     if !already {

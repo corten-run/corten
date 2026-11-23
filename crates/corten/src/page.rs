@@ -66,9 +66,9 @@ pub(crate) const PLAIN_NOTICE_COOKIE: &str = "corten-notice";
 const NOTICE_MAX: usize = 500;
 
 /// Responses depend on the mode header and, for [`Mode::Data`], on `Accept`.
-const VARY: &str = "corten, accept";
+pub(crate) const VARY: &str = "corten, accept";
 /// The same, for an answer whose locale follows `Accept-Language`.
-const VARY_LANGUAGE: &str = "corten, accept, accept-language";
+pub(crate) const VARY_LANGUAGE: &str = "corten, accept, accept-language";
 
 /// Settles the answer's dependency on `Accept-Language` as it leaves the app, whatever made it: a
 /// page, JSON, a redirect, the error page, or a middleware that read messages after `next` or put
