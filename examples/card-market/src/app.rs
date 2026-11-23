@@ -660,7 +660,7 @@ mod tests {
     const API_KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(5);
 
     /// What the item API double did, in order.
-    #[derive(Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq)]
     enum Seen {
         Answered,
         /// A request arrived on a connection idle for `API_KEEP_ALIVE`, and met the close.
@@ -669,42 +669,98 @@ mod tests {
 
     /// The item API's idle close, made certain: a request that arrives on a connection idle for
     /// `API_KEEP_ALIVE` or more is dropped unread, which resets the connection, and nothing answers
-    /// it. Any other request gets one bare item, and the connection stays open.
-    fn closing_api() -> (String, std::sync::Arc<std::sync::Mutex<Vec<Seen>>>) {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let at = format!("http://{}", listener.local_addr().unwrap());
-        let seen = std::sync::Arc::<std::sync::Mutex<Vec<Seen>>>::default();
-        let log = seen.clone();
-        std::thread::spawn(move || {
-            for socket in listener.incoming() {
-                let (mut socket, log) = (socket.unwrap(), log.clone());
-                std::thread::spawn(move || {
-                    let body = r#"{"catalog_item_id":"item_1","title":"Item one","market_summary":null}"#;
-                    let mut answered: Option<std::time::Instant> = None;
-                    // Until the client closes the connection.
-                    while matches!(socket.peek(&mut [0]), Ok(1)) {
-                        if answered.is_some_and(|at| at.elapsed() >= API_KEEP_ALIVE) {
-                            return log.lock().unwrap().push(Seen::ClosedIdle);
+    /// it. Any other request gets one bare item, and the connection stays open. Each answer is
+    /// logged before it is written, and [`ClosingApi::stop`] joins every thread before the log is
+    /// read, so the log is complete when the test inspects it.
+    struct ClosingApi {
+        at: String,
+        stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        accepting: Option<std::thread::JoinHandle<()>>,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<Seen>>>,
+    }
+
+    /// How often a connection's thread, waiting for a request, checks whether the double is stopping.
+    const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+    impl ClosingApi {
+        fn start() -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let at = format!("http://{}", listener.local_addr().unwrap());
+            let seen = std::sync::Arc::<std::sync::Mutex<Vec<Seen>>>::default();
+            let stopping = std::sync::Arc::<std::sync::atomic::AtomicBool>::default();
+            let (log, stop) = (seen.clone(), stopping.clone());
+            let accepting = std::thread::spawn(move || {
+                let mut connections = Vec::new();
+                while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((socket, _)) => {
+                            let (log, stop) = (log.clone(), stop.clone());
+                            connections.push(std::thread::spawn(move || serve_item(socket, &log, &stop)));
                         }
-                        let mut head = Vec::new();
-                        while !head.ends_with(b"\r\n\r\n") {
-                            let mut byte = [0];
-                            socket.read_exact(&mut byte).unwrap();
-                            head.push(byte[0]);
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(5))
                         }
-                        let length = body.len();
-                        let answer = format!(
-                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {length}\r\nkeep-alive: timeout=5\r\n\r\n{body}"
-                        );
-                        socket.write_all(answer.as_bytes()).unwrap();
-                        answered = Some(std::time::Instant::now());
-                        log.lock().unwrap().push(Seen::Answered);
+                        Err(error) => panic!("accept: {error}"),
                     }
-                });
+                }
+                for connection in connections {
+                    connection.join().expect("an item API connection thread panicked");
+                }
+            });
+            Self { at, stopping, accepting: Some(accepting), seen }
+        }
+
+        /// Stops accepting, waits for every connection's thread to end (each checks within
+        /// [`POLL`]), and returns everything the double did.
+        fn stop(mut self) -> Vec<Seen> {
+            self.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.accepting.take().unwrap().join().expect("the item API's accept thread panicked");
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    impl Drop for ClosingApi {
+        fn drop(&mut self) {
+            self.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn serve_item(mut socket: std::net::TcpStream, log: &std::sync::Mutex<Vec<Seen>>, stopping: &std::sync::atomic::AtomicBool) {
+        use std::io::{ErrorKind, Read, Write};
+        let waiting = |error: &std::io::Error| matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut);
+        let stopped = || stopping.load(std::sync::atomic::Ordering::SeqCst);
+        socket.set_nonblocking(false).unwrap();
+        socket.set_read_timeout(Some(POLL)).unwrap();
+        let body = r#"{"catalog_item_id":"item_1","title":"Item one","market_summary":null}"#;
+        let mut answered: Option<std::time::Instant> = None;
+        loop {
+            // Until the client closes the connection or the double stops.
+            match socket.peek(&mut [0]) {
+                Ok(1) => {}
+                Err(error) if waiting(&error) && !stopped() => continue,
+                _ => return,
             }
-        });
-        (at, seen)
+            if answered.is_some_and(|at| at.elapsed() >= API_KEEP_ALIVE) {
+                return log.lock().unwrap().push(Seen::ClosedIdle);
+            }
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                match socket.read(&mut byte) {
+                    Ok(1) => head.push(byte[0]),
+                    Err(error) if waiting(&error) && !stopped() => {}
+                    other => panic!("the request head ended early: {other:?}"),
+                }
+            }
+            let length = body.len();
+            let answer = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {length}\r\nkeep-alive: timeout=5\r\n\r\n{body}"
+            );
+            log.lock().unwrap().push(Seen::Answered);
+            socket.write_all(answer.as_bytes()).unwrap();
+            answered = Some(std::time::Instant::now());
+        }
     }
 
     /// An item page read after its connection to the item API sat idle past the API's keep-alive
@@ -713,14 +769,14 @@ mod tests {
     #[tokio::test]
     async fn an_item_page_after_the_apis_keep_alive_does_not_reuse_its_closed_connection() {
         assert!(crate::source::UPSTREAM_IDLE < API_KEEP_ALIVE);
-        let (at, seen) = closing_api();
+        let api = ClosingApi::start();
         let keys = Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" };
-        let app = super::app_with(Source::api(&at), keys, WRITES_PER_MINUTE).test();
+        let app = super::app_with(Source::api(&api.at), keys, WRITES_PER_MINUTE).test();
         let item = items::Item { id: "item_1", view: ItemQuery { offers: None } };
         assert_eq!(app.get(&item).await.status(), StatusCode::OK);
         tokio::time::sleep(API_KEEP_ALIVE + std::time::Duration::from_millis(250)).await;
         let status = app.get(&item).await.status();
-        let seen = seen.lock().unwrap();
+        let seen = api.stop();
         assert_eq!((status, &seen[..]), (StatusCode::OK, &[Seen::Answered, Seen::Answered][..]));
     }
 

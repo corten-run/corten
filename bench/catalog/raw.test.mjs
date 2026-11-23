@@ -20,11 +20,11 @@ import { inspectNative } from "../workloads/isolated/native-replay.mjs";
 import { sampleStats, summarizeSamples } from "./stats.mjs";
 import { validateSaved } from "./verify.mjs";
 import { k6Image, k6Provenance } from "../load-tool.mjs";
-import { collectTimedPhase, readTimedLoad, verifyTimedPhase } from "./timed.mjs";
+import { collectTimedPhase, readFailureClasses, readTimedLoad, verifyTimedPhase } from "./timed.mjs";
 import { composePhase } from "../workloads/isolated/composition.mjs";
 import { latestStableSchema } from "../workloads/latest-stable.mjs";
 import { loadSummary, timedFixture } from "./timed-fixture.mjs";
-import { requestOutcome } from "./load-outcome.js";
+import { failureClass, requestOutcome } from "./load-outcome.js";
 
 // Synthetic verifier fixtures, never measured performance or qualification receipts.
 function fixture(passes = 1) {
@@ -512,41 +512,35 @@ test("timed parser rejects unclassified/content failures and contradictory count
   assert.throws(() => readTimedLoad(loadSummary({ invalid: 1 })), /corrupt response/);
 });
 
-test("timed parser splits HTTP errors by status, still reads legacy series, and never a mixture", () => {
-  const statuses = { http_429: 1, http_502: 2, http_503: 3, http_5xx: 4 };
-  const split = readTimedLoad(loadSummary({ httpErrors: 10, statuses }));
-  const legacy = readTimedLoad(loadSummary({ httpErrors: 10, legacy: true }));
-  assert.deepEqual(split, legacy);
+test("timed parser checks failure classes when a producer wrote them and reads the same metrics either way", () => {
+  const classes = { http_429: 1, http_502: 2, http_503: 3, http_5xx: 4 };
+  const split = readTimedLoad(loadSummary({ httpErrors: 10, classes }));
+  assert.deepEqual(split, readTimedLoad(loadSummary({ httpErrors: 10 })));
   assert.equal(split.httpErrors, 10); assert.equal(split.failed, 10); assert.equal(split.outcome, "failed");
-  assert.deepEqual(readTimedLoad(loadSummary({ timeouts: 6 })), readTimedLoad(loadSummary({ timeouts: 6, legacy: true })));
-  for (const mutate of [
-    (s) => { s.metrics.catalog_http_errors = { count: 10 }; },
-    (s) => { delete s.metrics.catalog_http_503; },
-    (s) => { delete s.metrics.catalog_transport_errors; },
-    (s) => { s.metrics.catalog_http_502.count--; },
-    (s) => { s.metrics.catalog_http_5xx.count++; },
-    (s) => { s.metrics.catalog_http_429.count = -1; },
-  ]) { const summary = loadSummary({ httpErrors: 10, statuses }); mutate(summary); assert.throws(() => readTimedLoad(summary)); }
-  for (const mutate of [(s) => { s.metrics.catalog_http_502 = { count: 0 }; }, (s) => { s.metrics.catalog_transport_errors = { count: 0 }; }]) {
-    const summary = loadSummary({ httpErrors: 10, legacy: true }); mutate(summary);
-    assert.throws(() => readTimedLoad(summary), /missing or mixed/);
-  }
-  assert.throws(() => readTimedLoad(loadSummary({ transport: 1 })), /transport error without an app response/);
-  assert.throws(() => readTimedLoad(loadSummary({ invalid: 1, legacy: true })), /corrupt response/);
+  assert.deepEqual(readFailureClasses(loadSummary({ httpErrors: 10, classes }), { http_errors: 10, invalid_responses: 0 }),
+    { ...classes, transport: 0, other: 0 });
+  // No class series: a run without failures, or a producer from before the split. Unknown, not zero.
+  assert.equal(readFailureClasses(loadSummary({ httpErrors: 10 }), { http_errors: 10, invalid_responses: 0 }), null);
+  assert.deepEqual(readTimedLoad(loadSummary()), readTimedLoad(loadSummary({ classes: {} })));
+  for (const bad of [{ ...classes, http_502: 1 }, { ...classes, http_5xx: 5 }, { ...classes, http_429: 0 }, { ...classes, http_503: -1 },
+    { ...classes, other: 1 }, { http_502: 10, transport: 0 }])
+    assert.throws(() => readTimedLoad(loadSummary({ httpErrors: 10, classes: bad })), /failure class/);
+  assert.throws(() => readTimedLoad(loadSummary({ invalid: 1, classes: { transport: 1 } })), /k6 transport error without an app response/);
+  assert.throws(() => readTimedLoad(loadSummary({ invalid: 1, classes: { other: 1 } })), /corrupt response/);
+  assert.throws(() => readTimedLoad(loadSummary({ invalid: 1 })), /corrupt response/);
 });
 
 test("timed request classification does not turn bad content types or arbitrary transport errors into target outcomes", () => {
   const response = (status, type = "text/html", error_code = 0) => ({ status, headers: { "Content-Type": type }, error_code });
   assert.equal(requestOutcome(response(200), "page"), "successes");
   assert.equal(requestOutcome(response(0, "", 1050), "page"), "timeouts");
-  for (const [status, outcome] of [[429, "http_429"], [500, "http_5xx"], [502, "http_502"], [503, "http_503"], [504, "http_5xx"]])
-    for (const type of ["text/html", "application/json", "application/problem+json", "text/plain", ""])
-      for (const target of ["page", "json"]) assert.equal(requestOutcome(response(status, type), target), outcome);
-  for (const r of [response(200, "application/json"), response(404), response(302), response(0, "")])
+  for (const status of [429, 500, 502, 503, 504]) for (const type of ["text/html", "application/json", "application/problem+json", "text/plain", ""])
+    for (const target of ["page", "json"]) assert.equal(requestOutcome(response(status, type), target), "http_errors");
+  for (const r of [response(200, "application/json"), response(404), response(302), response(0, "", 1000), response(0, "", 1210)])
     assert.equal(requestOutcome(r, "page"), "invalid_responses");
-  // A transport error is told apart, and a replay still refuses it as a target outcome.
-  assert.equal(requestOutcome(response(0, "", 1000), "page"), "transport_errors");
-  assert.throws(() => readTimedLoad(loadSummary({ transport: 1 })), /transport error/);
+  // A k6 transport error is told apart from another invalid response, and a replay still refuses both.
+  assert.equal(failureClass(response(0, "", 1210)), "transport");
+  assert.equal(failureClass(response(0, "", 1020)), "other");
 });
 
 test("timed HTTP error accounting retains errors whose media type differs from a successful page", () => {

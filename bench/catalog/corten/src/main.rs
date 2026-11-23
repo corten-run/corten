@@ -163,49 +163,82 @@ mod tests {
         ClosedByClient,
     }
 
+    type Log = Arc<std::sync::Mutex<Vec<(u128, usize, Seen)>>>;
+
     /// The fixture's idle close, made deterministic. The fixture closes a connection that has been
     /// idle for its keep-alive timeout; a request written to it in that instant never reaches its
     /// handler. Here every request that arrives on a connection idle for at least
     /// [`FIXTURE_KEEP_ALIVE`] meets that close: the connection is dropped with the request unread,
     /// which resets it, and nothing answers. A request on a fresh or recently used connection is
-    /// answered with `body`, and the connection kept open.
+    /// answered with `body`, and the connection kept open. Each answer is logged before it is
+    /// written, and [`ClosingUpstream::stop`] joins every thread before the log is read, so the log
+    /// is complete when the test inspects it.
     struct ClosingUpstream {
         at: String,
         started: std::time::Instant,
-        seen: Arc<std::sync::Mutex<Vec<(u128, usize, Seen)>>>,
+        stopping: Arc<std::sync::atomic::AtomicBool>,
+        accepting: Option<std::thread::JoinHandle<()>>,
+        seen: Log,
     }
 
     impl ClosingUpstream {
         fn start(body: &'static str) -> Self {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
             let at = format!("http://{}", listener.local_addr().unwrap());
-            let (started, seen) = (std::time::Instant::now(), Arc::new(std::sync::Mutex::new(Vec::new())));
-            let log = seen.clone();
-            std::thread::spawn(move || {
-                for (connection, socket) in listener.incoming().enumerate() {
-                    let log = log.clone();
-                    std::thread::spawn(move || serve(socket.unwrap(), connection, body, started, &log));
+            let (started, seen, stopping) =
+                (std::time::Instant::now(), Log::default(), Arc::<std::sync::atomic::AtomicBool>::default());
+            let (log, stop) = (seen.clone(), stopping.clone());
+            let accepting = std::thread::spawn(move || {
+                let mut connections = Vec::new();
+                while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((socket, _)) => {
+                            let (log, stop, connection) = (log.clone(), stop.clone(), connections.len());
+                            connections.push(std::thread::spawn(move || serve(socket, connection, body, started, &log, &stop)));
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(5))
+                        }
+                        Err(error) => panic!("accept: {error}"),
+                    }
+                }
+                for connection in connections {
+                    connection.join().expect("an upstream connection thread panicked");
                 }
             });
-            Self { at, started, seen }
+            Self { at, started, stopping, accepting: Some(accepting), seen }
         }
 
         fn now(&self) -> u128 {
             self.started.elapsed().as_millis()
         }
 
-        fn seen(&self) -> Vec<(u128, usize, Seen)> {
+        /// Stops accepting, waits for every connection's thread to end (each checks within
+        /// [`POLL`]), and returns everything the upstream did.
+        fn stop(mut self) -> Vec<(u128, usize, Seen)> {
+            self.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.accepting.take().unwrap().join().expect("the upstream's accept thread panicked");
             self.seen.lock().unwrap().clone()
         }
+    }
 
-        /// The connections that answered a `line` request.
-        fn connections(&self, line: &str) -> Vec<usize> {
-            let answered = Seen::Answered(line.into());
-            let mut found: Vec<usize> = self.seen().into_iter().filter_map(|(_, c, s)| (s == answered).then_some(c)).collect();
-            found.sort_unstable();
-            found.dedup();
-            found
+    impl Drop for ClosingUpstream {
+        fn drop(&mut self) {
+            self.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
         }
+    }
+
+    /// How often a connection's thread, waiting for a request, checks whether the upstream is stopping.
+    const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+    /// The connections that answered a `line` request.
+    fn connections(seen: &[(u128, usize, Seen)], line: &str) -> Vec<usize> {
+        let answered = Seen::Answered(line.into());
+        let mut found: Vec<usize> = seen.iter().filter_map(|(_, c, s)| (*s == answered).then_some(*c)).collect();
+        found.sort_unstable();
+        found.dedup();
+        found
     }
 
     fn serve(
@@ -214,15 +247,22 @@ mod tests {
         body: &str,
         started: std::time::Instant,
         log: &std::sync::Mutex<Vec<(u128, usize, Seen)>>,
+        stopping: &std::sync::atomic::AtomicBool,
     ) {
-        use std::io::{Read, Write};
+        use std::io::{ErrorKind, Read, Write};
         let record = |seen| log.lock().unwrap().push((started.elapsed().as_millis(), connection, seen));
+        let waiting = |error: &std::io::Error| matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut);
+        let stopped = || stopping.load(std::sync::atomic::Ordering::SeqCst);
         record(Seen::Accepted);
-        socket.set_read_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
+        socket.set_nonblocking(false).unwrap();
+        socket.set_read_timeout(Some(POLL)).unwrap();
         let mut answered: Option<std::time::Instant> = None;
         loop {
-            if !matches!(socket.peek(&mut [0]), Ok(1)) {
-                return record(Seen::ClosedByClient);
+            match socket.peek(&mut [0]) {
+                Ok(1) => {}
+                Err(error) if waiting(&error) && !stopped() => continue,
+                Err(error) if waiting(&error) => return,
+                _ => return record(Seen::ClosedByClient),
             }
             if let Some(idle) = answered.map(|at| at.elapsed()).filter(|idle| *idle >= FIXTURE_KEEP_ALIVE) {
                 return record(Seen::ClosedIdle(idle.as_millis()));
@@ -230,15 +270,18 @@ mod tests {
             let mut head = Vec::new();
             while !head.ends_with(b"\r\n\r\n") {
                 let mut byte = [0];
-                socket.read_exact(&mut byte).unwrap();
-                head.push(byte[0]);
+                match socket.read(&mut byte) {
+                    Ok(1) => head.push(byte[0]),
+                    Err(error) if waiting(&error) && !stopped() => {}
+                    other => panic!("the request head ended early: {other:?}"),
+                }
             }
             let line = String::from_utf8(head).unwrap().lines().next().unwrap().to_string();
             let length = body.len();
+            record(Seen::Answered(line));
             write!(socket, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {length}\r\nkeep-alive: timeout=5\r\n\r\n{body}")
                 .unwrap();
             answered = Some(std::time::Instant::now());
-            record(Seen::Answered(line));
         }
     }
 
@@ -266,17 +309,17 @@ mod tests {
         let sent = upstream.now();
         let reused = unbounded.get(&control).send().await;
         let answer = app.get(&page).await;
-        let (seen, line) = (upstream.seen(), "GET /catalog/records/record_1 HTTP/1.1");
+        let (seen, line) = (upstream.stop(), "GET /catalog/records/record_1 HTTP/1.1");
         let closed = |connections: Vec<usize>| {
             seen.iter().filter(|(at, c, s)| connections.contains(c) && matches!(s, Seen::ClosedIdle(_)) && *at >= sent).count()
         };
         assert!(reused.is_err(), "the upstream did not close an idle connection: {seen:?}");
-        assert_eq!(closed(upstream.connections("GET /catalog/records/control HTTP/1.1")), 1, "{seen:?}");
+        assert_eq!(closed(connections(&seen, "GET /catalog/records/control HTTP/1.1")), 1, "{seen:?}");
         assert_eq!(answer.status(), StatusCode::OK, "sent at {sent} ms; upstream: {seen:?}");
-        assert_eq!(closed(upstream.connections(line)), 0, "{seen:?}");
+        assert_eq!(closed(connections(&seen, line)), 0, "{seen:?}");
         let answers = seen.iter().filter(|(_, _, s)| *s == Seen::Answered(line.into())).count();
         assert_eq!(
-            (answers, upstream.connections(line).len()),
+            (answers, connections(&seen, line).len()),
             (2, 2),
             "one upstream request per page, on a new connection: {seen:?}"
         );

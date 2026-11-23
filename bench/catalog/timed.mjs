@@ -31,13 +31,25 @@ export function timedContainerEvidence(info) {
     mounts: info.Mounts.map(({ Type, Source, Destination, RW }) => ({ Type, Source, Destination, RW })).sort((a, b) => a.Destination.localeCompare(b.Destination)) };
 }
 
-// The producer's request outcomes (load-outcome.js, which a replay does not load). A summary has
-// either these series or, from a producer before the HTTP failures were split, the legacy four;
-// never a mixture. Each request is in exactly one.
-export const timedOutcomes = Object.freeze(["successes", "timeouts", "http_429", "http_502", "http_503", "http_5xx",
-  "transport_errors", "invalid_responses"]);
-const legacyOutcomes = ["successes", "timeouts", "http_errors", "invalid_responses"];
-const httpOutcomes = ["http_429", "http_502", "http_503", "http_5xx"];
+// The producer's failure classes (load-outcome.js, which a replay does not load). Only a failed
+// request adds to its class's `catalog_failed_<class>` series, so a run without failures has none,
+// and neither does a summary from the producer before the split: absence alone is not a count.
+// When any series is present, the four HTTP classes must account for every HTTP error and
+// `transport` and `other` for every invalid response, exactly, each present series with at least
+// one request. Without any, the split is unknown (null), never zero.
+export const timedFailureClasses = Object.freeze(["http_429", "http_502", "http_503", "http_5xx", "transport", "other"]);
+const httpClasses = ["http_429", "http_502", "http_503", "http_5xx"];
+
+export function readFailureClasses(summary, { http_errors: httpErrors, invalid_responses: invalid }) {
+  const metric = (name) => summary?.metrics?.[name]?.values ?? summary?.metrics?.[name];
+  const present = timedFailureClasses.filter((name) => metric(`catalog_failed_${name}`) !== undefined);
+  if (!present.length) return null;
+  const classes = Object.fromEntries(timedFailureClasses.map((name) => [name, present.includes(name) ? metric(`catalog_failed_${name}`)?.count : 0]));
+  assert.ok(present.every((name) => count(classes[name]) && classes[name] > 0), "timed failure class count missing");
+  assert.equal(httpClasses.reduce((sum, name) => sum + classes[name], 0), httpErrors, "timed failure classes differ from HTTP errors");
+  assert.equal(classes.transport + classes.other, invalid, "timed failure classes differ from invalid responses");
+  return classes;
+}
 
 export function readTimedLoad(summary) {
   const metric = (name) => summary?.metrics?.[name]?.values ?? summary?.metrics?.[name];
@@ -45,15 +57,10 @@ export function readTimedLoad(summary) {
   assert.ok(count(requests?.count) && requests.count > 0 && finite(requests.rate) && requests.rate > 0, "timed requests missing");
   for (const key of ["avg", "p(50)", "p(95)", "p(99)", "max"]) assert.ok(finite(duration?.[key]), "timed latency missing");
   assert.ok(duration.avg <= duration.max && duration["p(50)"] <= duration["p(95)"] && duration["p(95)"] <= duration["p(99)"] && duration["p(99)"] <= duration.max, "timed latency order differs");
-  const legacy = metric("catalog_http_errors") !== undefined, names = legacy ? legacyOutcomes : timedOutcomes;
-  for (const name of new Set([...legacyOutcomes, ...timedOutcomes]))
-    assert.equal(metric(`catalog_${name}`) !== undefined, names.includes(name), "timed request classification missing or mixed");
-  const counts = Object.fromEntries(names.map((name) => [name, metric(`catalog_${name}`)?.count]));
+  const counts = Object.fromEntries(["successes", "timeouts", "http_errors", "invalid_responses"].map((name) => [name, metric(`catalog_${name}`)?.count]));
   assert.ok(Object.values(counts).every(count), "timed request classification missing");
-  if (!legacy) {
-    assert.equal(counts.transport_errors, 0, "timed request ended in a transport error without an app response");
-    counts.http_errors = httpOutcomes.reduce((sum, name) => sum + counts[name], 0);
-  }
+  const classes = readFailureClasses(summary, counts);
+  assert.equal(classes?.transport ?? 0, 0, "timed request ended in a k6 transport error without an app response");
   assert.equal(counts.invalid_responses, 0, "unclassified or corrupt response");
   const errors = counts.timeouts + counts.http_errors;
   assert.equal(counts.successes + errors, requests.count, "request classifications do not cover requests");

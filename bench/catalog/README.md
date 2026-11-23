@@ -31,13 +31,18 @@ pre-serialized body. No marketplace view-model conversion is in either path.
 
 The stand-in upstream is Node's HTTP server: it answers with `Keep-Alive: timeout=5` and, on the
 pinned Node 26, closes a connection idle for that 5 s keep-alive timeout plus Node's 1 s buffer
-(observed at 5,999 to 6,045 ms after the last answer). A pooled connection reused as it closes
-loses the request in the send, before the upstream's handler sees it. Every HTTP source
-therefore stops reusing a connection before it has been idle 5 s: the Corten app and every
-fullstack app whose client keeps idle connections longer (reqwest's default is 90 s) drops one
-idle for 4 s, a second under what the upstream advertises (the full-stack
-[Caveats](../fullstack/README.md#caveats), item 5, list each client's setting). This is the pool
-policy alone: no retry, no cache, and still one upstream GET per record read.
+(observed at 5,999 to 6,045 ms after the last answer). A read written to a pooled connection as
+the upstream closes it can fail in the send, before the upstream's handler sees it. That is a
+possible mechanism for a failed upstream read, reproduced here only against a test double that
+closes at 5 s; it is not a diagnosis of the saved r21 catalog or r27 marketplace failures, whose
+cause remains unattributed. Every HTTP source avoids it by not reusing a connection idle 4 s, a
+second under what the upstream advertises: the Corten app and every fullstack app whose client
+would keep idle connections longer (reqwest's default is 90 s). Spring is the exception at 1 s,
+since the JDK client drops an expired connection late, and Drogon and Django check the idle time
+when they take a connection from the pool, so an expired one is skipped at checkout rather than
+closed at 4 s. The full-stack [Caveats](../fullstack/README.md#caveats), item 5, list each
+client's setting. This is the pool policy alone: no retry, no cache, and still one upstream GET
+per record read.
 
 The stand-in upstream alone pre-serializes and UTF-8 encodes its records at
 startup. Canonical record GETs reuse those bytes without URL parsing or an
@@ -378,19 +383,24 @@ pass or unsuccessful request is filtered or retried. Request settings, CPU and
 memory budgets, duration, warmup, fixed rate and pass count are unchanged.
 
 The k6 producer adds exhaustive counters for successful responses, request
-timeouts (native error code 1050), HTTP 429, 502, 503 and other 5xx responses, k6
-transport errors (status 0 with another k6 error code) and invalid/unclassified
-responses. A success is decided by the first test; only a failure is split further.
-HTTP errors may use a different representation, such as Problem JSON
-or plain text, but remain failed requests, never successful pages; their sum is the
-phase's `httpErrors`. Transport errors, other status codes and incorrect content types
-on 200 responses are not completed target outcomes: a replay still refuses such a phase,
-naming a transport error apart from an invalid response. Each active VU initializes all
-eight counter series with zero once, then increments only the request's classified
-outcome. This retains zero-valued categories without eight counter updates on every
-request. Summaries from the producer before this split carry the four series
-`successes`, `timeouts`, `http_errors` and `invalid_responses` instead, and replay to the
-same metrics; a summary with both kinds of series is refused. Counts,
+timeouts (native error code 1050), HTTP 429/5xx responses, and invalid/unclassified
+responses. HTTP errors may use a different representation, such as Problem JSON
+or plain text, but remain failed requests, never successful pages. Unknown transport
+errors, other status codes and incorrect content types on 200 responses are not
+completed target outcomes. Each active VU initializes all four counter series with
+zero once, then increments only the request's classified outcome. This retains
+zero-valued categories without four counter updates on every request. A failed
+request also adds one to its class: `catalog_failed_http_429`, `_http_502`,
+`_http_503` and `_http_5xx` split the HTTP errors, and an invalid response is
+`_transport` (k6 got no response for a network reason: a non-TCP network, TCP, TLS or
+HTTP/2 error code) or `_other` (a generic, invalid-URL, DNS, blocked-host or
+response-decompression error code, another status or a wrong content type). A success
+never reaches that classification, and no class series is initialized, so a run
+without failures emits exactly the samples it did before the split; k6 reports only
+series that received a sample. A replay reads the classes when any is present, requires
+them to account exactly for the HTTP errors and invalid responses, and names a transport
+error when it refuses a phase; without any (no failures, or a producer from before the
+split) the split is unknown, and the phase replays to the same metrics either way. Counts,
 root checks, rates, completed iterations and all three threshold results must
 agree exactly. Existing full page/JSON content and browser correctness gates
 remain mandatory; timed requests still discard bodies and check status/type,
