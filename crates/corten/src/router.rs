@@ -10,8 +10,9 @@
 //! without the body; a method the route has no handler for is a `405` whose `Allow` names those
 //! it has, and one no route in the app has a handler for is a `501` (RFC 9110 9.1; axum's router
 //! answered it `405`); a `HEAD` says the length its `GET` has (`Content-Length`, which the server
-//! writes for any other answer from its body's size); and a `2xx` to `CONNECT` has no body. A
-//! request's handler is boxed once, and so are the stages around it.
+//! writes for any other answer from its body's size); and a `2xx` to `CONNECT` has no body,
+//! `Content-Length` or `Transfer-Encoding`. A request's handler is boxed once, and so are the
+//! stages around it.
 //!
 //! [matchit]: https://docs.rs/matchit
 
@@ -113,31 +114,51 @@ impl Endpoint for Giving {
     }
 }
 
-/// A handler whose answer is a page that is the same for everyone (`Public`): a kept answer is
-/// given in its place, and the one it makes is kept ([`crate::kept`]). Its page is filled here,
-/// as [`crate::middleware`] would after it, so what is kept is the page as it leaves the route.
+/// A handler whose answer is the same for everyone (`Public`), a page or a whole body: a kept
+/// answer is given in its place, and the one it makes is kept ([`crate::kept`]). A page is filled
+/// here, as [`crate::middleware`] would after it, so what is kept is the page as it leaves the
+/// route.
 struct Keeping {
+    shape: crate::kept::Shape,
+    /// Of a route of whole bodies: whether any of the answers it made last was kept.
+    unkept: Option<Arc<crate::kept::Unkept>>,
     inner: Route,
 }
 
 impl Endpoint for Keeping {
     #[inline]
     fn call(&self, req: Request) -> Answering {
+        // A route none of whose bodies is kept (each too small, most often) is its handler's, as
+        // it was before the app kept bodies.
+        if self.unkept.as_ref().is_some_and(|route| route.leaves()) {
+            return self.inner.call(req);
+        }
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
-        let Some(asked) = crate::kept::Asked::of(&req) else { return self.inner.call(req) };
+        let Some(asked) = crate::kept::Asked::of(&req, self.shape) else { return self.inner.call(req) };
         if let Some(kept) = asked.find() {
+            if let Some(route) = &self.unkept {
+                route.found();
+            }
             return Box::pin(std::future::ready(kept));
         }
         // In a full store a URL not asked for before is the handler's as any other request.
-        let Some(missed) = asked.missed(&req) else { return self.inner.call(req) };
+        let Some(missed) = asked.missed(&req, self.unkept.clone()) else { return self.inner.call(req) };
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
         let answer = self.inner.call(req);
         Box::pin(async move {
-            let res = answer.await;
+            // An answer with a form's new submit key is this request's alone. A page's render
+            // marks one it drew (`cache::Unrepeatable`); markup rendered any other way (into
+            // JSON, text or a file, or to a string the page then
+            // holds as markup) has no mark to carry, so the handler is watched for one being
+            // drawn.
+            let (res, drew_key) = crate::form::watched(answer).await;
             let res = match here {
                 Some(here) => here.fill(res).await,
                 None => res,
             };
+            if drew_key {
+                return res;
+            }
             missed.keep(res).await
         })
     }
@@ -277,10 +298,12 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
         let keeps = handler.keeps();
         Slot::Unbound(Arc::new(move |state| {
             let handled: Route = Arc::new(Handled { handler: handler.clone(), state, types: PhantomData });
-            if keeps {
-                Arc::new(Keeping { inner: handled })
-            } else {
-                handled
+            match keeps {
+                Some(shape) => {
+                    let unkept = (shape == crate::kept::Shape::Body).then(Default::default);
+                    Arc::new(Keeping { shape, unkept, inner: handled })
+                }
+                None => handled,
             }
         }))
     }
@@ -388,7 +411,7 @@ pub(crate) struct MethodSet<S = ()> {
     /// The page's named posts (`post(hold) = ..`), each chosen by the `do` of the post's
     /// address ([`Chooser`]).
     actions: Vec<(&'static str, Slot<S>)>,
-    /// One of its handlers answers with a page the app keeps (`Public`, [`Keeping`]).
+    /// One of its handlers answers with a page or a body the app keeps (`Public`, [`Keeping`]).
     keeps: bool,
 }
 
@@ -419,7 +442,7 @@ impl<S> Default for MethodSet<S> {
 impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
     fn on<H: Handler<T, S>, T: 'static>(mut self, at: usize, handler: H) -> Self {
         assert!(self.slots[at].is_none(), "corten: a route has two handlers for {}", NAMES[at]);
-        self.keeps |= handler.keeps();
+        self.keeps |= handler.keeps().is_some();
         self.slots[at] = Some(Slot::handler(handler));
         let names: &[&'static str] = if at == GET { &["GET", "HEAD"] } else { &NAMES[at..=at] };
         if let Allow::Methods(allowed) = &mut self.allow {
@@ -436,7 +459,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
     /// (its answer still says, in `Allow`, the methods the route has).
     pub(crate) fn fallback<H: Handler<T, S>, T: 'static>(mut self, handler: H) -> Self {
         assert!(self.fallback.is_none(), "corten: a route has two handlers for any method");
-        self.keeps |= handler.keeps();
+        self.keeps |= handler.keeps().is_some();
         self.fallback = Some(Slot::handler(handler));
         self
     }
@@ -637,8 +660,8 @@ impl<S: Clone + Send + Sync + 'static> Table<S> {
         self
     }
 
-    /// Whether a route's answer is a page the app keeps (`Public`): an app with none has no page
-    /// a write could drop, so it counts no writes ([`crate::kept`]).
+    /// Whether a route's answer is one the app keeps (`Public`: a page or a whole body): an app
+    /// with none has nothing a write could drop, so it counts no writes ([`crate::kept`]).
     pub(crate) fn keeps(&self) -> bool {
         self.routes.iter().any(|placed| placed.methods.keeps)
     }
@@ -886,7 +909,8 @@ impl Dispatch {
 
 /// What the router does to every answer on its way out, as HTTP has it: a `405`'s `Allow`; and,
 /// outside every layer, no body for a `HEAD`, which keeps the length its `GET` would say when
-/// the body's is known, nor for a `2xx` to `CONNECT`.
+/// the body's is known, nor for a `2xx` to `CONNECT`, which loses its `Content-Length` and
+/// `Transfer-Encoding` too.
 ///
 /// The length of any other answer is left to the server, which writes it from the body's exact
 /// size into the head it sends (hyper 1.12's HTTP/1 encoder, `content-length: 0` included where
@@ -926,12 +950,14 @@ impl Fix {
         use http_body::Body as _;
         if self.method == Asked::Connect && res.status().is_success() {
             // RFC 9110 9.3.6: a `2xx` to `CONNECT` switches the connection to a tunnel, so it has no
-            // content. Its headers are left as they are, as axum left them.
-            let headers = res.headers();
-            if headers.contains_key(header::CONTENT_LENGTH)
-                || headers.contains_key(header::TRANSFER_ENCODING)
-                || res.body().size_hint().lower() != 0
-            {
+            // content, and a server must not send `Content-Length` or `Transfer-Encoding` in it.
+            // hyper refuses to send a head with either (hyper 1.12's HTTP/1 encoder), which would
+            // close the connection with no answer at all (#1915), so both go with the body. Its
+            // other headers are left as they are.
+            let headers = res.headers_mut();
+            let length = headers.remove(header::CONTENT_LENGTH).is_some();
+            let chunked = headers.remove(header::TRANSFER_ENCODING).is_some();
+            if length || chunked || res.body().size_hint().lower() != 0 {
                 res = res.map(|_| Body::empty());
             }
             return res;

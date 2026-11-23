@@ -158,9 +158,15 @@ before consuming its intent and before the first create. Remaining admission
 and its children recheck only the exact `c-8` placement bound into the reviewed
 remaining approval. Those checks refuse a missing pair; they never substitute
 another region after approval.
-`fleet-placement-preflight-failed` means the saved account
-or placement could not be verified; inspect both listings rather than editing the
-manifest. An acknowledged catalog HTTP denial or a fully received but invalid
+`fleet-placement-preflight-failed: STAGE` identifies the failed placement check:
+transport construction or close, either account read or identity check, catalog read or
+validation, the checkpoint before region selection, or region selection itself.
+The first account read also starts the worker and waits for its handshake:
+`first-account-read-or-worker-start` does not mean a request was sent. Only a safe
+provider code and HTTP status may follow the stage, with fixed flags if transport
+close also failed or custody is uncertain. No account data or response body is
+printed. Inspect the failed check rather than editing any manifest. An
+acknowledged catalog HTTP denial or a fully received but invalid
 listing stops without a create and releases settled locks. A truncated response,
 timeout or disconnected worker does not establish settlement; the lock stays.
 An already recorded launch intent still cannot be replayed. Each child has an
@@ -168,7 +174,8 @@ independent state directory, operation lock, private credential worker and remot
 systemd unit.
 Every group in the roster uses the same commit. Merge the repairs needed by
 the entire round before preparing it: the first group's results cannot be
-carried into a new reservation for a different commit.
+carried into a new fleet reservation for a different commit. Use an
+[independent continuation](#independent-group-continuation) instead.
 
 Admission is staged, not a simultaneous fleet allocation. The first `--detach`
 approval launches only the first complete registry group. Untouched groups remain
@@ -272,15 +279,32 @@ If native validation finished but sealing or later collection failed, raw
 exit 2 permits custody only. The collector keeps both archives, leaves the host
 in place and returns 3. It does not create a retirement intent.
 
+On Windows, after SSH acknowledges the bootstrap seal, the controller can
+briefly retry a local rename that reports `EPERM`. It rechecks the same staged
+file, canonical state and owner locks before retrying. It never repeats SSH or
+uses an abandoned temporary file, and stops on cancellation or deadline.
+If the monitor already settled with a terminal receipt, the controller can
+record it from the unchanged canonical ledger. A later collection still
+requires the normal closure, lease and remote checks. If the filesystem also
+refuses the final state replacement, the staged files and owner locks stay in
+place and ordinary collection can still refuse. Do not promote either stage.
+
 Use the per-child command above if an invalid monitor left locks behind. The
-original operation and launch locks remain unchanged. Collection requires
+foreground controller writes the invalid status without reusing an interrupted
+state write's temporary file. If the bootstrap seal completed just before that
+write failed, it recognizes the acknowledgement from the saved invocation
+ledger, not from the temporary file. Neither fact proves the remote job ended.
+The original operation and launch locks remain unchanged. Collection requires
 local stream closure, lease expiry and an absent original owner PID. It uses
 the separate stream recovery lock and checks the registered boot and exact
 started unit. Read-only fleet inspection can verify a saved retirement behind
 those retained child locks, but not while their owner or a recovery collector
-may still be active. An unchanged root batch lock with a dead owner is reported
-as retained, not as changed evidence. A live, unrecognized or changing root
-lock is busy. Inspection never clears a lock or makes a locked fleet complete.
+may still be active. A root batch lock whose owner is gone is reported as
+retained, not as changed evidence. On Windows, reports can also replay when
+the OS proves the process now using that PID started after the unchanged lock
+was written. This does not authorize admission, collection or deletion. A
+live, unrecognized or changing root lock is busy. Inspection never clears a
+lock or makes a locked fleet complete.
 Live or uncertain
 custody is preserved. The shared failed-native procedure below checks the
 download, rehashes the remote data, renews the idle-host proof and records a
@@ -430,6 +454,143 @@ authorization, rate-limit, network, timeout and malformed-response errors never 
 Account/context checks still surround provider commands. Initial allocation and
 unbound recovery require a complete census.
 
+## Independent Group Continuation
+
+For an incomplete round, retain the original fleet and use a separate physical
+continuation root outside the checkout. Its `index.json` is an array of original
+fleet references. Each reference names an absolute fleet root, the original
+round and commit, a clean checkout at that commit with its original npm installs,
+and the reviewed SHA-256 of `results.tgz` for every verified replayed group in
+that fleet. Use `[]` when starting without retained evidence. For example:
+
+```json
+[{"root":"/bench-state/original","checkout":"/src/measured","round":"r24","commit":"MEASURED_SHA","archives":{"catalog-page":"REVIEWED_ARCHIVE_SHA256"}}]
+```
+
+Use an unmodified index and the same continuation root for the entire set. The
+report replays each original attempt, checks the successful archives, the
+extracted trees against the pinned archive bytes and confirmed deletion, and
+verifies each group against its original contract and roster. It does not use a
+cached report as evidence. A changed current contract does not invalidate the
+original result or make it eligible to rerun in this root. The report shows the
+measured contract and roster, with `matchesCurrentContract: false` when they
+differ from today's matchup. The measured
+commits must be ancestors of the report checkout, but groups need not have the
+same commit, date, framework versions or host. Preserve target failures (including
+comparison-ineligibility) in verified group results; a failed or incomplete
+apparatus is not a result. An old bound host without confirmed cleanup is shown
+as such. Continuation then requires the same provider account and still refuses
+create if the existing pre-create census finds any foreign benchmark host.
+
+If a standalone group failed before native entry and its collector recorded the
+archive but not deletion, an unrelated group can use that same census. Its
+launch approval includes the stopped host's original ID: even a renamed or
+retagged host still present in the account prevents creation. An active cleanup
+blocks admission. This does not retire or retry the failed group, or publish a result.
+
+When retrying a group on a new host, a proved Windows PID reuse on a destroyed
+host does not make its old monitor active again. Preparation reads the original
+retirement evidence and rechecks the unchanged locks; it never removes them or
+authorizes collection or deletion on the old host.
+
+When the launcher checkout advances or a measured checkout moves, use the
+optional sibling directory `ABSOLUTE_ROOT-checkouts/MEASURED_SHA` for that
+commit's clean worktree. Here `MEASURED_SHA` is the full 40-character Git commit.
+The replay first uses that path when present, otherwise the saved checkout
+(`checkout` for an indexed fleet, the launch checkout for a new group). Install
+the measured checkout's pinned root and bench dependencies there. Replay checks
+HEAD and the original dependency pins and bytes; it does not rewrite a reservation
+or measure the group again.
+
+```sh
+node bench/workloads/group-continuation.mjs --continuation-root ABSOLUTE_ROOT
+node bench/workloads/fleet.mjs NEW_ROUND --continuation-root ABSOLUTE_ROOT --group json-api --prepare --commit MERGED_SHA --ssh-key KEY --account-id ACCOUNT --context CONTEXT
+node bench/workloads/fleet.mjs NEW_ROUND --continuation-root ABSOLUTE_ROOT --group json-api --detach --print-approval
+node bench/workloads/fleet.mjs NEW_ROUND --continuation-root ABSOLUTE_ROOT --group json-api --detach --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
+```
+
+The first command is read-only and providerless (`0` all groups verified, `1`
+incomplete, `2` invalid). Its `eligibleToRun` is a local selection, not provider
+availability or authorization. You do not have to run the full report before
+starting the next group. Prepare, preview and launch check whether the **selected
+group** can run and whether any existing host conflicts with that launch. A
+saved result keeps its group off the launch list; it does not certify the
+result for publication. For example, starting marketplace does not require
+reopening the catalog page's results archive. Run the full report before
+publishing: it checks each group's evidence at the commit it actually measured.
+
+Prepare reads provider placement but does not allocate. The selected group runs the normal
+staged first-host checks, native phases and terminal monitor. For JSON that
+includes its prepare and timing phases and the independently reviewed audit
+between them. There is no extra setup host and no `--admit-remaining` action.
+The continuation does not grant approval; the existing exact merged-source,
+native readiness, independent review and operator approval requirements apply.
+
+If prepare or detach refuses before writing intent, `fleet-operation-failed`
+can name the failing stage: `continuation-admission` (including custody and
+eligibility), `prepare-reservation`, `initial-plan` or `locked-plan` (including exact approval checks),
+or `final-pre-intent-recheck`. These labels identify the check, not its cause or
+whether locks were released. Placement keeps its separate
+`fleet-placement-preflight-failed: STAGE` diagnostic. Inspect saved intent and custody
+before deciding what to do next; an unlabeled failure does not establish that
+intent was never written.
+
+Different groups can run concurrently in the same continuation root. Prepare
+and allocation are serialized through a shared lock. As soon as the launched
+host has sealed bootstrap, entered the native campaign and renewed its
+registered supervisor lease, the shared lock is released. Leave that detach
+process running: it still owns its host monitor and attempt lock. Use a separate
+terminal for the next group's normal prepare and exact approval. The preview
+binds any running peers; the create census rechecks their signed-in account,
+owned identities, tags, addresses and placements. The exact target placement
+and free account capacity still have to pass. An unknown or unconfirmed
+benchmark host, a lost lease or changed peer refuses dispatch, not cleanup.
+An earlier controller that did not record peer leases cannot be treated as a
+running peer. Never clear a lock or recreate a group to force overlap.
+
+For collection or audit delivery use the ordinary per-host commands at the
+measured checkout. For the first attempt use state root
+`ABSOLUTE_ROOT/json-api/json-api`. For a retry use the reported `attemptRoot`
+plus the group name, for example `ABSOLUTE_ROOT/json-api--r26/json-api`.
+Collect a terminal host with its own approval and existing custody checks; it
+does not wait for a sibling's measurement or deletion.
+There is no automatic retry. After a proven `not-created` attempt or confirmed
+retirement without a verified result, the report marks that group `retryable`.
+Repeat the same prepare, preview and approved detach commands in the **same
+root** with a higher round for that group. This appends a reservation without
+reusing a consumed intent, rewriting old attempt bytes or changing any
+prepared sibling. Do not move attempts to a new index or root. An ambiguous or
+active attempt is refused; leave its evidence and locks in place and use the
+existing recovery procedure. Run the report after collection to select another
+missing group.
+
+If the operator independently confirmed external deletion of a standalone host
+whose setup stopped before native entry, continue with the same commands, a
+higher round, and a different reviewed merged commit. The report shows
+`setup-failed-needs-census` when the original terminal observation, launch
+intent, nonzero setup exit and campaign-free archive are preserved and no owner
+lock remains. This is local eligibility, not a retirement receipt or a result.
+The new reservation leaves the old attempt untouched. Its approval binds the
+old host ID and evidence; immediately before create, the worker checks the
+old ID is absent from the full census in the same account (even if the host was
+renamed), and rechecks the original locks and evidence. Do not interpret prepare
+or preview as proof of provider absence.
+
+If a standalone group was prepared but never launched, use the same prepare
+command in the same continuation root with an explicitly higher round and a
+different measured commit. This works only when the previous slot physically
+contains its one original manifest and nothing else: no intent, lock, child
+state, receipts or other files. Prepare only reads provider placement and leaves
+the old bytes and verified groups intact. Once the new attempt is prepared,
+only its round can be previewed or launched; an older approval cannot dispatch.
+
+The report is an index of independently publishable group results, with each
+group's actual round, commit, dates, archive, attempts and `baseEffectiveOptions`.
+Those options describe the base binding; for JSON, actual prepare and timing
+options are in the verified per-phase campaign artifacts. Link
+each group to its original measurement. It is not a single-revision baseline or
+evidence for a speed comparison across groups or revisions.
+
 ## Failed Allocation Retirement
 
 A known semantic create refusal is returned as failure without poisoning a settled
@@ -545,6 +706,23 @@ observations or a running unit preserves the host. Fleet output reports
 without another DELETE. Native-started jobs use the separate collection and
 custody paths above. No retirement path can delete a running benchmark.
 
+For failure before monitor registration, `setup-watcher-proof-missing` means
+the preserved archive already records a watcher failure. `setup-host-proof-refused`
+means the registered terminal host query had an acknowledged nonzero exit, or
+exited zero but returned unusable proof. In the latter case the ledger retains
+code zero and records the proof rejection separately. Neither is a retirement receipt. Do not repeat collection to try
+to replace the missing proof. A missing transport acknowledgement remains
+uncertain. If cancellation leaves an acknowledged exit zero without a proof
+decision, the operation lock stays in place. Do not clear the locks or fill in
+a ledger result.
+
+For operator cleanup, bind the saved reservation to the exact account and numeric
+host ID. Independently establish the identity of the host, a terminal unit with
+no queued jobs or live benchmark work, and an intact archive matching the saved
+hash before authorizing any removal. If the host is already absent, do not
+delete again. Keep the operator decision and exact-ID absence confirmation
+separate from native state; neither qualifies the group or authorizes a retry.
+
 The common-bootstrap marker precedes native entry. It is not native evidence or
 a reason to strand a terminal host whose entry failed before writing any data.
 If the job writes its exit marker before publishing its first campaign state,
@@ -585,6 +763,23 @@ commit must descend from that source and pass the existing fresh merged-main
 proof. Preview and exact approval bind both source identities, exact reservation
 bytes, original evidence hashes, physical state root and fixed custody roots.
 This exception does not permit a source override for collection, audit or launch.
+
+An independent group can also fail after the wrapper invokes native entry but
+before it saves a campaign plan. In this case ordinary collection preserves the
+wrapper archive; it cannot produce a benchmark result. Use a separate
+`--retire-failed-native --print-approval` from a clean, merged descendant. The
+preview must bind the consumed launch intent, reservation, launch key, registered
+boot, original archive and extraction, and the output roots for the measured
+group. The measured registry and remote-job definitions must still match.
+
+This path requires a revoked monitor with a settled local owner, wrapper exit
+2, an empty archived campaign directory, and the final failure line from the
+measured job's native-entry command. An empty directory **alone** is not proof
+that the application wrote nothing. Before retiring the exact host, the
+controller checks the unit is idle, saves the campaign and native output roots
+(including evidence of absence), verifies the local copies, and checks the
+host and roots again. A changed or live host is retained. Neither the wrapper
+archive nor the later capture qualifies the group or supplies timing results.
 
 The shared `cloud-retirement.mjs:failedNativePolicy` allowlist also admits only the
 exact `catalog-page` attempt measured at
@@ -739,7 +934,10 @@ data, never traverses it, and opens the canonical instance and every ancestor
 without following links. `/var/lib/cloud/data/instance-id` must be a single-link
 regular file containing the exact host ID, with at most one final newline;
 `user-data.txt` in the canonical instance must be present, single-link, regular
-and empty. Descriptor and path identities are checked before and after reading,
+and empty on historical hosts. Only a new `quietBootstrap: "prelogin"` reservation
+requires the exact source-fixed boot data instead. Its unused-host and failed-setup
+probes also bind those bytes to the canonical instance; missing or different data
+never proves retirement. Descriptor and path identities are checked before and after reading,
 and must remain unchanged when quiescence is checked again in each capture,
 rehash and fence invocation. Missing, foreign or relative selectors and linked,
 special or replaced canonical paths refuse custody; this exception never permits
@@ -774,6 +972,9 @@ Existing locks are never taken over or cleared by recovery.
 The saved measured commit and failure evidence remain unchanged; no validation,
 successful exit or collection result is invented. Fleet inspection reports
 `native-failed-retired` or `cleanup-pending`, never a qualified baseline.
+For the destroyed r27 and r41 marketplace hosts, replay uses the original
+per-locale roster to regenerate the three custody scripts and check their saved
+hashes. That roster cannot authorize a reservation, launch or live custody check.
 
 After independent review and merge, an operator previews the exact action with:
 
@@ -1252,14 +1453,65 @@ other user process from native cleanup evidence.
 
 On dedicated group hosts, the benchmark and Docker run as system services.
 Root SSH still needs a normal logind session, but not a separate user manager.
-During provisioning, a runtime systemd drop-in skips new starts of
-`user@0.service` while the host's control binding exists. It does not stop
-the current manager or change SSH or PAM. Before publishing the bootstrap
-marker, the job waits up to two minutes for the manager to exit naturally.
+For new dedicated reservations (`quietBootstrap: "prelogin"`), the provider sends
+one fixed cloud-config in the create body, not caller-supplied user data. Its
+`bootcmd` writes a root-only drop-in for `user@0.service` under `/run`. The
+condition skips activation while the drop-in itself exists, even before the
+first root login. The hook does not create a control binding.
+With the genuine guardian binding in place, guarded install checks the boot
+file's bytes, type, ownership and mode, atomically replaces it with the condition
+on the binding, and reloads systemd. Neither condition stops an existing
+manager or changes SSH, PAM or session ownership.
+
+Both this handoff and the preceding `"after-start"` handoff keep the same
+quiet interval. The last login before the drain starts the
+unit. After that start is acknowledged, the controller opens no SSH session for
+135 seconds: two minutes for natural drain, then the existing 15-second idle
+check. The service uses its own monotonic exec-start timestamp for the window.
+The before-drain and after-drain snapshots record the manager's active state,
+main PID and monotonic activation time, not the time of either sample. A delayed
+job can take both samples back-to-back. Without boot-relative journal times for
+both samples, their spacing is unknown; do not infer what happened across the
+two-minute window. Two active samples with different nonzero PIDs show different
+manager processes, not why the process changed. Active followed by inactive
+with main PID zero is the expected drain, not evidence of reactivation.
+The job checks the installed and effective policy and requires an inactive
+manager with no main PID before cloud-init and again before native entry.
+New jobs also count UID 0 logind sessions at the early gate: a held login
+is refused even if it never started a manager. The service logs the count,
+monotonic sample time and presence of root's linger file, not session identities.
+The final gate permits the registered monitor's session; all existing ownership
+and process checks still apply. A linger file alone does not explain an active manager.
+A late early proof fails rather than admitting a sample from after polling
+could resume. Nothing retries the start, stops the manager or suppresses a failure.
+Saved `"after-start"` jobs retain the drop-in installed after login and their
+original job bytes. Saved `quietBootstrap: true` jobs retain the original check immediately after
+unit start; jobs without the marker retain their drain check near native entry.
 The run log records which property it is querying and the observed state and
 main PID, so a busy manager can be distinguished from a stalled query.
 If it stays busy the group fails setup, without terminating anyone's work.
 The normal login inventory and registered-monitor checks still apply.
+
+Before using this handoff across groups, rehearse on a disposable Ubuntu 24.04
+VM with the target image's systemd, sshd, PAM and logind settings, not a container.
+Use the production guarded upload/install/start and first status request. In the
+rehearsal job keep the generated supervisor, drain and both idle checks; replace
+the provisioning and workload body with a bounded stand-in. Record the rehearsal
+diff, image and controller commit. Do not register it as benchmark evidence.
+Supply the exact create payload on both hosts. On the clean boot require proof
+from the installed image (including cloud-init, SSH service/socket aliases and
+boot-relative journal times) that the boot policy was loaded before first
+authentication. Upstream [cloud-init unit ordering](https://github.com/canonical/cloud-init/blob/24.1/systemd/cloud-init.service.tmpl)
+alone is not that proof. Require both idle gates and verify the first status login
+followed the early proof. On the second boot hold an identified fixture-owned
+UID 0 SSH session across the early check. Even with an inactive manager and PID
+zero the service must report the root session and refuse before provisioning. A
+preexisting active manager must never be stopped. Do not infer that the negative
+worked just from a failure or timeout. Bound each rehearsal to ten minutes, preserve the small
+logs and source hashes, then remove the VM and its disks and confirm absence.
+An ambiguous or failed result stops the rollout. Even a passing rehearsal needs
+one separately approved real group to pass the unchanged pre-timing gate and
+reach registration on the merged source before fan-out.
 
 On a newly allocated supervised dedicated group host, the controller's guarded
 workspace command captures the IPv4 peer of its authenticated OpenSSH
@@ -1356,7 +1608,7 @@ campaign is:
 | localized-marketplace | 512 MiB cumulative reads, 32 MiB/read, 25,000 physical entries; not a whole-tree byte ceiling (`marketplace/saved-files.mjs`) | 0.5 GiB |
 | mixed-production | 1 GiB total, 256 MiB/file, 100,000 entries (`mixed-production/verify.mjs`) | 1 GiB |
 | fullstack-browser | 1 GiB total, 256 MiB/file, 50,100 nodes (`fullstack-browser/verify.mjs`) | 1 GiB |
-| client-heavy | 2 GiB total, 80,000 entries, 128 MiB ordinary files, one admitted browser blob up to 512 MiB, 1 GiB unique blobs (`client-heavy/verify-v2.mjs`) | 2 GiB |
+| client-heavy | 2 GiB total, 80,000 entries, 128 MiB ordinary files, admitted executables up to 192 MiB for Node and 512 MiB for the browser, 1 GiB unique blobs (`client-heavy/verify-v2.mjs`) | 2 GiB |
 | live-delivery | No whole-tree byte/count ceiling; individual gzip replay limits are not whole-tree limits (`isolated/adapters/live-delivery.mjs`) | 1 GiB |
 | recoverable-live | Uses the same live saved reader | 1 GiB |
 | hardening | 1 GiB total, 256 MiB/file, 100,000 entries (`isolated/adapters/hardening.mjs`) | 1 GiB |

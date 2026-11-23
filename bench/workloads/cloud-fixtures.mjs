@@ -70,9 +70,11 @@ export const metadata = () => [{ name: "run.log", body: "synthetic fake-only evi
 export function harness(t, flags = {}) {
   const temp = mkdtempSync(join(tmpdir(), "groups-cloud-test-"));
   t.after(() => { assert.ok(temp.startsWith(join(tmpdir(), "groups-cloud-test-"))); rmSync(temp, { recursive: true, force: true }); });
-  const repo = join(temp, "repo"), base = flags.fleetGroup === undefined ? join(temp, "control") : join(temp, "control", flags.fleetGroup);
+  const repo = join(temp, "repo"), base = flags.stateRoot
+    ?? (flags.fleetGroup === undefined ? join(temp, "control") : join(temp, "control", flags.fleetGroup));
   const round = flags.round ?? "r21", local = join(base, `groups-${round}`), statePath = join(local, "state.json");
-  mkdirSync(repo); mkdirSync(flags.fleetGroup === undefined ? base : join(temp, "control"));
+  mkdirSync(repo);
+  if (!flags.stateRoot) mkdirSync(flags.fleetGroup === undefined ? base : join(temp, "control"));
   const hostId = flags.hostId ?? "123";
   let s = { ...reservation({ round, commit, token: flags.token ?? "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
     status: "running", id: hostId, ip: "192.0.2.10", provider: { accountId, context }, fullGroupQualified: false };
@@ -121,7 +123,7 @@ export function harness(t, flags = {}) {
         assert.ok(saved.deletionIntentAt && (saved.retirement?.kind === "unused" ? saved.retirement.evidenceSha256
           : saved.archiveSha256 && saved.evidenceSha256)); assert.equal(saved.fullGroupQualified, false);
         if (flags.deleteError) throw new Error("fake deletion error");
-        if (!flags.deleteUnconfirmed) droplets = [];
+        if (!flags.deleteUnconfirmed) droplets = droplets.filter((d) => String(d.id) !== hostId);
         if (flags.deleteLost) throw new Error("fake deletion acknowledgement lost"); return flags.deleteRejected ? { ...good(), status: 1 } : good();
       }
     }

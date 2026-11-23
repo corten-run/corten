@@ -1,11 +1,11 @@
 // Retirement evidence is separate from benchmark qualification. No operations on import.
 import assert from "node:assert/strict";
-import { lstatSync, readdirSync } from "node:fs";
+import { lstatSync, opendirSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { digest, evidenceEnvelope, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
-import { bootstrapWorkspaceScript, savedLoadLayout, savedPlacement, stagedFleet } from "./cloud-contract.mjs";
+import { bootstrapWorkspaceScript, preloginUserData, savedLoadLayout, savedPlacement, stagedFleet } from "./cloud-contract.mjs";
 import { sealedMonitor, settledMonitor } from "./cloud-control-stream.mjs";
 import { quote } from "./cloud-transport.mjs";
 import { guardianSha256, guardianSource } from "./cloud-control-runtime.mjs";
@@ -111,21 +111,28 @@ export function launchHostKey(local, state) {
   return key;
 }
 
-export function retainedInvalidOwner(local, state) {
-  // Both locks belong to the original foreground controller, not to the
-  // separate recovery operation. Never take them over or treat a live or
-  // inaccessible PID (including a reused PID) as a settled owner.
-  const lock = JSON.parse(regular(join(local, "operation.lock"), 1024)), { pid } = lock;
+export function readRetainedInvalidLocks(local, state, read = regular) {
+  const lock = JSON.parse(read(join(local, "operation.lock"), 1024)), { pid } = lock;
   assert.deepEqual(Object.keys(lock).sort(), ["at", "pid"], "not an original operation lock");
   assert.equal(new Date(lock.at).toISOString(), lock.at, "invalid original operation lock time");
   assert.ok(Number.isSafeInteger(pid) && pid > 0, "invalid original operation lock");
-  assert.deepEqual(JSON.parse(regular(join(dirname(local), ".groups-launch.lock"), 1024)),
+  assert.deepEqual(JSON.parse(read(join(dirname(local), ".groups-launch.lock"), 1024)),
     { pid, round: state.round }, "retained launch lock differs");
+  return lock;
+}
+
+export function retainedInvalidOwner(local, state) {
+  // A reused PID is still busy for any operation with paid authority.
+  const { pid } = readRetainedInvalidLocks(local, state);
   try { process.kill(pid, 0); } catch (error) { if (error.code === "ESRCH") return false; }
   return true;
 }
 
 export function groupedFailure(local, state) {
+  return groupedFailureEvidence(local, state, () => assert.ok(!retainedInvalidOwner(local, state), "original monitor owner is still live or uncertain"));
+}
+
+function groupedFailureEvidence(local, state, settledOwner) {
   assert.ok(groupedFailureCandidate(state), "official dedicated reservation required");
   launchHostKey(local, state);
   const { registration, terminal } = state.control?.monitor?.phase === "closed" ? sealedMonitor(local, state) : settledMonitor(local, state);
@@ -133,7 +140,7 @@ export function groupedFailure(local, state) {
   assert.equal(registration.host.hostname, state.name, "registered host differs");
   if (terminal.kind === "invalid") {
     assert.ok(terminal.publicationRevoked === true && terminal.remoteTerminal === false, "invalid monitor publication not revoked");
-    assert.ok(!retainedInvalidOwner(local, state), "original monitor owner is still live or uncertain");
+    settledOwner();
   }
   const round = campaignRounds(state.round)[state.group];
   assert.ok(round, "unknown reserved group");
@@ -144,14 +151,54 @@ export function groupedFailure(local, state) {
     roots: ["/bench/campaign", ...Object.values(phases).map(path => `/bench/repo/${path}`)] };
 }
 
-export function failedNativeArchive(local, state, grouped) {
-  const roots = grouped?.roots ?? failedNativeRoots(state);
-  let retirementAllowed = true;
+function preplanGroup(local, state, readGrouped = groupedFailure) {
+  const grouped = readGrouped(local, state);
+  assert.ok(stagedFleet(state.fleet) && state.fleet.single?.group === state.group, "staged single-group reservation required");
+  assert.equal(grouped.terminal.kind, "invalid", "an archived campaign is required for a sealed result");
+  return { ...grouped, preplan: true };
+}
+
+function originalFailedWrapper(local, state) {
   assert.equal(fileHash(join(local, "results.tgz")), state.archiveSha256, "original failed archive changed");
   const extracted = join(local, state.evidence); physical(extracted);
   assert.equal(treeHash(extracted), state.evidenceSha256, "original failed extraction changed");
   assert.ok(regular(join(extracted, "exit-code"), 16).equals(Buffer.from("2\n")), "custody requires the saved failure exit, not a successful report");
   const folder = join(extracted, "campaign"); physical(folder);
+  return { extracted, folder };
+}
+
+function verifyPreplanArchive({ extracted, folder }, state) {
+  const dir = opendirSync(folder);
+  try { assert.ok(dir.readSync() === null, "preplan failure requires an empty archived campaign"); }
+  finally { dir.closeSync(); }
+  const job = remoteFiles(state)["job.sh"].split("\n");
+  const stage = job.lastIndexOf("bootstrap_stage=native-entry");
+  assert.ok(stage >= 0 && job[stage + 1]?.startsWith("node 'bench/workloads/isolated/campaign-entry.mjs' "), "native-entry source differs");
+  const line = Buffer.from(`benchmark job failed: stage=native-entry line=${stage + 2} exit=2\n`);
+  const log = regular(join(extracted, "run.log"));
+  const start = log.length - line.length;
+  assert.ok(start >= 0 && (start === 0 || log[start - 1] === 10) && log.subarray(start).equals(line), "source-bound final native-entry failure required");
+}
+
+export function groupedPreplanFailure(local, state) {
+  const grouped = preplanGroup(local, state);
+  verifyPreplanArchive(originalFailedWrapper(local, state), state);
+  return grouped;
+}
+
+export function failedNativeArchive(local, state, grouped) {
+  return failedNativeArchiveEvidence(local, state, grouped, groupedFailure);
+}
+
+function failedNativeArchiveEvidence(local, state, grouped, readGrouped) {
+  const roots = grouped?.roots ?? failedNativeRoots(state);
+  let retirementAllowed = true;
+  const wrapper = originalFailedWrapper(local, state), { folder } = wrapper;
+  if (grouped?.preplan === true) {
+    assert.ok(isDeepStrictEqual(grouped, preplanGroup(local, state, readGrouped)), "grouped preplan identity differs");
+    verifyPreplanArchive(wrapper, state);
+    return { roots, retirementAllowed };
+  }
   const names = readdirSync(folder), campaigns = names.filter((name) => new RegExp(`^${state.round}-[a-f0-9]{16}$`).test(name));
   assert.equal(campaigns.length, 1, "one original failed campaign required");
   assert.ok(names.every((name) => name === campaigns[0] || name === ".host-attempt.json"), "unknown campaign root");
@@ -227,6 +274,54 @@ export function failedNativeArchive(local, state, grouped) {
 
 // Only trusted controller code runs remotely. Native files are opened as data,
 // never imported, invoked, followed through links, or promoted to valid evidence.
+const inodeInfo = `def info(s):
+    return [s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns]`;
+const cloudInstanceProof = (prelogin) => `cloud_binding = None
+
+def cloud_instance():
+    global cloud_binding
+    assert re.fullmatch(r'[1-9][0-9]*', host_id)
+    descriptors, entries = [], []
+    def entry(parent, name, flags):
+        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        fd = os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        descriptors.append(fd)
+        assert info(before) == info(os.fstat(fd))
+        entries.append((parent, name, fd, info(before)))
+        return fd
+    def directory(parent, name):
+        return entry(parent, name, os.O_RDONLY | os.O_DIRECTORY)
+    def data(parent, name, limit):
+        fd = entry(parent, name, os.O_RDONLY)
+        s = os.fstat(fd)
+        assert stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and s.st_size <= limit
+        value = os.read(fd, limit + 1)
+        assert len(value) == s.st_size and info(s) == info(os.fstat(fd))
+        return value
+    try:
+        cloud = directory(None, '/')
+        for name in ['var', 'lib', 'cloud']:
+            cloud = directory(cloud, name)
+        # Read the one supported selector as data through its own pinned inode.
+        # Never traverse it, and never extend opened()'s no-symlink policy.
+        selector = entry(cloud, 'instance', os.O_PATH)
+        s = os.fstat(selector)
+        assert stat.S_ISLNK(s.st_mode) and s.st_nlink == 1
+        assert os.readlink('', dir_fd=selector) == '/var/lib/cloud/instances/' + host_id
+        instance = directory(directory(cloud, 'instances'), host_id)
+        instance_id = data(directory(cloud, 'data'), 'instance-id', 64)
+        assert instance_id in [host_id.encode('ascii'), (host_id + '\\n').encode('ascii')]
+        ${prelogin ? `assert hashlib.sha256(data(instance, 'user-data.txt', ${preloginUserData.length})).hexdigest() == '${digest(preloginUserData)}'` : "assert data(instance, 'user-data.txt', 0) == b''"}
+        for parent, name, fd, before in reversed(entries):
+            assert before == info(os.fstat(fd)) == info(os.stat(name, dir_fd=parent, follow_symlinks=False))
+        binding = [before for parent, name, fd, before in entries]
+        if cloud_binding is not None:
+            assert binding == cloud_binding
+        cloud_binding = binding
+    finally:
+        for fd in reversed(descriptors):
+            os.close(fd)`;
+
 export function failedNativeScript(state, captureSha256 = null, fence = null, grouped) {
   const roots = grouped?.roots ?? failedNativeRoots(state);
   assert.ok(captureSha256 === null || /^[a-f0-9]{64}$/.test(captureSha256));
@@ -252,8 +347,7 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
 def sha(data):
     return hashlib.sha256(data).hexdigest()
-def info(s):
-    return [s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns]
+${inodeInfo}
 def opened(path, flags=os.O_RDONLY):
     parts = path.split('/')
     assert parts[0] == '' and all(p not in ['', '.', '..'] for p in parts[1:])
@@ -290,51 +384,7 @@ def small(path, limit):
         return data
     finally:
         os.close(fd)
-cloud_binding = None
-
-def cloud_instance():
-    global cloud_binding
-    assert re.fullmatch(r'[1-9][0-9]*', host_id)
-    descriptors, entries = [], []
-    def entry(parent, name, flags):
-        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        fd = os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
-        descriptors.append(fd)
-        assert info(before) == info(os.fstat(fd))
-        entries.append((parent, name, fd, info(before)))
-        return fd
-    def directory(parent, name):
-        return entry(parent, name, os.O_RDONLY | os.O_DIRECTORY)
-    def data(parent, name, limit):
-        fd = entry(parent, name, os.O_RDONLY)
-        s = os.fstat(fd)
-        assert stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and s.st_size <= limit
-        value = os.read(fd, limit + 1)
-        assert len(value) == s.st_size and info(s) == info(os.fstat(fd))
-        return value
-    try:
-        cloud = directory(None, '/')
-        for name in ['var', 'lib', 'cloud']:
-            cloud = directory(cloud, name)
-        # Read the one supported selector as data through its own pinned inode.
-        # Never traverse it, and never extend opened()'s no-symlink policy.
-        selector = entry(cloud, 'instance', os.O_PATH)
-        s = os.fstat(selector)
-        assert stat.S_ISLNK(s.st_mode) and s.st_nlink == 1
-        assert os.readlink('', dir_fd=selector) == '/var/lib/cloud/instances/' + host_id
-        instance = directory(directory(cloud, 'instances'), host_id)
-        instance_id = data(directory(cloud, 'data'), 'instance-id', 64)
-        assert instance_id in [host_id.encode('ascii'), (host_id + '\\n').encode('ascii')]
-        assert data(instance, 'user-data.txt', 0) == b''
-        for parent, name, fd, before in reversed(entries):
-            assert before == info(os.fstat(fd)) == info(os.stat(name, dir_fd=parent, follow_symlinks=False))
-        binding = [before for parent, name, fd, before in entries]
-        if cloud_binding is not None:
-            assert binding == cloud_binding
-        cloud_binding = binding
-    finally:
-        for fd in reversed(descriptors):
-            os.close(fd)
+${cloudInstanceProof(state.quietBootstrap === "prelogin")}
 
 def command(args):
     r = subprocess.run(args, capture_output=True, text=True, timeout=5)
@@ -449,7 +499,7 @@ def inventory(path, key='', admitted=False):
 # Validate and hash every node's metadata before reading any evidence payload.
 all_roots = c['roots'] + ['/bench/run.log', '/bench/host.txt', '/bench/exit-code', '/bench/results.tgz']
 inventories = [inventory(path) for path in all_roots]
-assert inventories[0] is not None and all(rows is not None for rows in inventories[len(c['roots']):])
+assert ${grouped?.preplan === true ? "" : "inventories[0] is not None and "}all(rows is not None for rows in inventories[len(c['roots']):])
 metadata_bytes = encoded(inventories)
 metadata_sha = sha(metadata_bytes)
 def consume(path, row, callback):
@@ -571,7 +621,7 @@ export function failedNativeObservation(raw, state, startedAtMs, finishedAtMs, g
       assert.ok(Number.isSafeInteger(root.bytes) && root.bytes >= 0 && root.bytes <= evidenceEnvelope.content);
     }
   }
-  assert.equal(observation.roots[0].present, true);
+  if (grouped?.preplan !== true) assert.equal(observation.roots[0].present, true);
   assert.ok(observation.roots.slice(roots.length).every((root) => root.present));
   assert.ok(Number.isSafeInteger(startedAtMs) && Number.isSafeInteger(finishedAtMs) && finishedAtMs >= startedAtMs
     && finishedAtMs - startedAtMs <= 660000, "custody observation exceeded its local window");
@@ -598,12 +648,28 @@ export function verifyFailedNativeReservation(state, prior, grouped) {
 }
 
 export function verifyFailedNativeCustody(local, state, capture, grouped, requireRetirement = false) {
-  const { retirementAllowed } = failedNativeArchive(local, state, grouped);
+  return verifyFailedNativeCustodyEvidence(local, state, capture, grouped, requireRetirement, groupedFailure);
+}
+
+function verifyFailedNativeCustodyEvidence(local, state, capture, grouped, requireRetirement, readGrouped) {
+  const preplan = Object.hasOwn(capture, "scope");
+  if (preplan) assert.ok(capture.scope === "grouped-preplan", "unknown custody scope");
+  if (preplan && grouped === undefined) grouped = preplanGroup(local, state, readGrouped);
+  assert.equal(grouped?.preplan === true, preplan, "custody preplan scope differs");
+  const { retirementAllowed } = failedNativeArchiveEvidence(local, state, grouped, readGrouped);
   if (requireRetirement) assert.ok(retirementAllowed, "ambiguous native outcome permits custody only");
   assert.equal(capture.schema, "benchmark-failed-native-custody/v1");
   assert.equal(capture.measuredCommit, state.commit);
   assert.match(capture.controllerCommit, /^[a-f0-9]{40}$/);
-  assert.equal(capture.controllerCommit === state.commit, !!grouped, "custody controller scope differs");
+  assert.equal(capture.controllerCommit === state.commit, !!grouped && !preplan, "custody controller scope differs");
+  if (preplan) {
+    const expected = capture.launchIntentSha256;
+    assert.ok(Object.hasOwn(capture, "launchIntentSha256") && typeof expected === "string" && /^[a-f0-9]{64}$/.test(expected),
+      "preplan launch intent digest required");
+    // The capture binds the same raw fleet-root bytes as production approval.
+    const launch = join(dirname(dirname(local)), "launch-intent.json");
+    assert.equal(fileHash(launch, 1024 * 1024), expected, "preplan launch intent changed");
+  }
   assert.match(capture.reservationSha256, /^[a-f0-9]{64}$/);
   const original = regular(join(local, "failed-native-reservation.json"), 1024 * 1024);
   assert.equal(digest(original), capture.reservationSha256);
@@ -625,7 +691,8 @@ export function verifyFailedNativeCustody(local, state, capture, grouped, requir
   }
   for (const name of ["run.log", "host.txt", "exit-code"])
     assert.equal(fileHash(join(extracted, name)), fileHash(join(local, state.evidence, name)), "failed metadata changed");
-  assert.equal(treeHash(join(extracted, "campaign", "root-0")), treeHash(join(local, state.evidence, "campaign")), "original campaign changed before custody");
+  if (observation.roots[0].present)
+    assert.equal(treeHash(join(extracted, "campaign", "root-0")), treeHash(join(local, state.evidence, "campaign")), "original campaign changed before custody");
   if (!grouped && state.group === "mixed-production") {
     verifyMixedCancellation(local, state);
     assert.equal(capture.observation.roots[2].present, true, "remote cancellation intent missing");
@@ -646,16 +713,27 @@ export function verifyFailedNativeCustody(local, state, capture, grouped, requir
 }
 
 export function verifyFailedNativeRetirement(local, state, expectedSha256 = state.retirement.evidenceSha256) {
+  return replayFailedNativeRetirement(local, state, expectedSha256, groupedFailure);
+}
+
+export function verifyHistoricalFailedNativeRetirement(local, state, settledOwner) {
+  assert.ok(state.status === "retired" && state.destroyedAt && state.retirement.kind === "native-failed");
+  return replayFailedNativeRetirement(local, state, state.retirement.evidenceSha256,
+    (dir, saved) => groupedFailureEvidence(dir, saved, settledOwner));
+}
+
+function replayFailedNativeRetirement(local, state, expectedSha256, readGrouped) {
   const bytes = regular(join(local, "failed-native-host.json"));
   assert.match(expectedSha256, /^[a-f0-9]{64}$/);
   assert.equal(digest(bytes), expectedSha256, "failed-native retirement receipt changed");
   const record = JSON.parse(bytes);
   assert.deepEqual(Object.keys(record).sort(), ["capture", "confirmation", "finishedAtMs", "rehash", "schema", "scriptSha256", "startedAtMs"].sort());
   assert.equal(record.schema, "benchmark-failed-native-retirement/v1");
-  // Ordinary collection runs at the measured commit. The historical action
-  // requires a distinct, explicitly approved repair source.
-  const grouped = record.capture.controllerCommit === state.commit ? groupedFailure(local, state) : undefined;
-  verifyFailedNativeCustody(local, state, record.capture, grouped, true);
+  // The explicit scope distinguishes grouped successor custody from historical
+  // recovery; ordinary grouped receipts still replay at the measured commit.
+  const grouped = record.capture.scope === "grouped-preplan" ? preplanGroup(local, state, readGrouped)
+    : record.capture.controllerCommit === state.commit ? readGrouped(local, state) : undefined;
+  verifyFailedNativeCustodyEvidence(local, state, record.capture, grouped, true, readGrouped);
   assert.deepEqual(Object.keys(record.rehash).sort(), ["finishedAtMs", "observation", "scriptSha256", "startedAtMs"]);
   const rehash = failedNativeObservation(JSON.stringify(record.rehash.observation), state, record.rehash.startedAtMs, record.rehash.finishedAtMs, grouped);
   assert.equal(record.rehash.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256, null, grouped)));
@@ -765,6 +843,13 @@ const settledDrain = String.raw`def settled_receipts(root, binding, requests, g)
         assert not re.search(r'/session-[^/\n]+\.scope(?:/|\n)', cgroup)
     return digests`;
 
+// Use the same descriptor-bound instance-ID and user-data proof before
+// accepting a new host as unused or failed during setup.
+const preloginDataProof = `import re
+${inodeInfo}
+${cloudInstanceProof(true)}
+cloud_instance()`;
+
 export function unusedHostScript(state, { bootstrap = false, legacyTimestamp = false } = {}) {
   const settled = bootstrap && settledBootstrap(state), pristine = bootstrap && !settled;
   if (pristine) assert.ok(unusedBootstrap(state), "unused bootstrap proof requires pre-provisioning custody");
@@ -835,8 +920,8 @@ r = subprocess.run(['systemctl', 'list-jobs', '--no-legend', '--no-pager'], capt
 assert r.returncode == 0 and r.stdout.strip() == ''
 r = subprocess.run(['cloud-init', 'status', '--format', 'json'], capture_output=True, text=True, timeout=5)
 assert r.returncode == 0 and json.loads(r.stdout)['status'] == 'done'
-user_data = pathlib.Path('/var/lib/cloud/instance/user-data.txt')
-assert not user_data.exists() or user_data.stat().st_size == 0
+${state.quietBootstrap === "prelogin" ? preloginDataProof : `user_data = pathlib.Path('/var/lib/cloud/instance/user-data.txt')
+assert not user_data.exists() or user_data.stat().st_size == 0`}
 parent_pid = os.getppid()
 assert parent_pid > 1 and parent_pid != os.getpid()
 parent = pathlib.Path('/proc') / str(parent_pid)
@@ -1003,9 +1088,9 @@ r = subprocess.run(['systemctl', 'list-jobs', '--no-legend', '--no-pager'], capt
 assert r.returncode == 0 and r.stdout.strip() == ''
 r = subprocess.run(['cloud-init', 'status', '--format', 'json'], capture_output=True, text=True, timeout=5)
 assert r.returncode == 0 and json.loads(r.stdout)['status'] == 'done'
-user_data = pathlib.Path('/var/lib/cloud/instance/user-data.txt')
+${state.quietBootstrap === "prelogin" ? preloginDataProof : `user_data = pathlib.Path('/var/lib/cloud/instance/user-data.txt')
 if os.path.lexists(user_data):
-    regular(user_data, 0)
+    regular(user_data, 0)`}
 if os.path.lexists('/run/docker.sock') or os.path.lexists('/run/containerd/containerd.sock'):
     r = subprocess.run(['docker', 'ps', '--quiet', '--no-trunc'], capture_output=True, text=True, timeout=5)
     assert r.returncode == 0 and r.stdout.strip() == ''

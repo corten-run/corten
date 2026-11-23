@@ -345,7 +345,7 @@ impl<T: ToJson> IntoResponse for Json<T> {
     fn into_response(self) -> Response {
         let mut res = self.0.__into_response();
         // Room for the headers `App` adds too, so the map is allocated once.
-        res.headers_mut().reserve(12);
+        res.headers_mut().reserve(crate::response::APP_HEADERS);
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(crate::api::JSON));
         res
     }
@@ -391,6 +391,26 @@ pub trait ToJson {
     fn __well_formed() -> bool {
         false
     }
+
+    /// Whether [`Json`] of the type is a whole body the app keeps for a `Public` route
+    /// (`Answer::WHOLE`): every type's but [`Raw`]'s, which holds its compressed forms itself
+    /// where the build compresses, so its route is its handler's for every request, in every
+    /// build. Not a
+    /// public API: its type is one an app cannot name, as [`crate::Answer`]'s is.
+    ///
+    /// ```compile_fail,E0326
+    /// struct Mine;
+    ///
+    /// impl corten::ToJson for Mine {
+    ///     const __KEPT: bool = false;
+    ///
+    ///     fn write_json(&self, out: &mut Vec<u8>) {
+    ///         out.extend_from_slice(b"1");
+    ///     }
+    /// }
+    /// ```
+    #[doc(hidden)]
+    const __KEPT: crate::answer::sealed::Whole = crate::answer::sealed::Whole(true);
 
     /// The response [`Json`] sends, before its headers: the value written into a new vector, or
     /// for [`Raw`] the bytes it holds. Not a public API.
@@ -520,6 +540,11 @@ impl ToJson for Raw {
     fn write_json(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(self.as_bytes());
     }
+
+    // Where the build compresses, this holds its compressed forms itself, a mark a kept answer
+    // does not replay: its route is its handler's, in every build. Where the build does not, it
+    // holds none and is left out all the same (docs/design.md#choice-kept-pages).
+    const __KEPT: crate::answer::sealed::Whole = crate::answer::sealed::Whole(false);
 
     /// `Raw::new` parsed it.
     fn __well_formed() -> bool {
@@ -720,17 +745,27 @@ fn string(out: &mut Vec<u8>, s: &str) {
     out.push(b'"');
 }
 
-#[inline]
+/// A number's digits. One digit, as many of a document's counts are, is pushed where the field is
+/// written; a longer number is written by [`longer`].
+#[inline(always)]
 fn unsigned(out: &mut Vec<u8>, n: u64) {
-    // One or two digits, most of a document's counts: pushed with no buffer.
-    if n < 100 {
-        if n >= 10 {
-            out.push(b'0' + (n / 10) as u8);
-        }
-        out.push(b'0' + (n % 10) as u8);
-        return;
+    if n < 10 {
+        out.push(b'0' + n as u8);
+    } else {
+        longer(out, n);
     }
-    out.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
+}
+
+/// The digits of any number: two from the table of pairs, and any other count two per division.
+/// Out of line, so that [`unsigned`] is a compare and a push at each field.
+#[inline(never)]
+fn longer(out: &mut Vec<u8>, n: u64) {
+    if (10..100).contains(&n) {
+        let pair = n as usize * 2;
+        out.extend_from_slice(&crate::ascii::PAIRS[pair..pair + 2]);
+    } else {
+        out.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
+    }
 }
 
 #[inline]
@@ -1854,10 +1889,14 @@ mod tests {
             same(&n);
             same(&(n as f32));
         }
-        for n in [0, 1, 9, 10, 99, 100, 12_345, i64::MAX, i64::MIN] {
+        for n in [0, 1, 9, 10, 99, 100, 12_345, -1, -9, -10, -99, -100, i64::MAX, i64::MIN] {
             same(&n);
             same(&(n as u64));
             same(&(n as i8));
+            same(&(n as u16));
+            same(&(n as i32));
+            same(&(n as usize));
+            same(&(n as isize));
             same(&(n as u128));
             same(&(n as i128 * 1_000_000_000_000));
         }
@@ -1865,7 +1904,13 @@ mod tests {
         let mut by_id = HashMap::new();
         by_id.insert(7u32, "seven");
         by_id.insert(70, "seventy");
+        by_id.insert(7_000, "seven thousand");
         same(&by_id);
+        let mut by_change = BTreeMap::new();
+        by_change.insert(-100i64, "down");
+        by_change.insert(-7, "less");
+        by_change.insert(100, "up");
+        same(&by_change);
         let mut flags = BTreeMap::new();
         flags.insert(true, 'y');
         flags.insert(false, 'n');
@@ -1874,6 +1919,20 @@ mod tests {
         names.insert("a\"b".into(), vec![-1, 2]);
         same(&names);
         same(&serde_json::json!({ "id": "item_1", "price": 0.5, "tags": ["a", "<b>"], "none": null }));
+    }
+
+    /// `longer` writes any number, one digit too, though `unsigned` gives it none: every number to
+    /// four digits, then the last number of each count of digits and the first of the next, to
+    /// the longest.
+    #[test]
+    fn longer_writes_any_number() {
+        let ends = (1..20).flat_map(|digits| [10u64.pow(digits) - 1, 10u64.pow(digits)]).chain([u64::MAX]);
+        for n in (0..10_000).chain(ends) {
+            let mut out = Vec::new();
+            longer(&mut out, n);
+            assert_eq!(out, n.to_string().into_bytes());
+            same(&n);
+        }
     }
 
     /// The std types a schema is given for are written as serde writes them, alone and in a map.

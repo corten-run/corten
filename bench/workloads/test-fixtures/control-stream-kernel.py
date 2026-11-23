@@ -105,7 +105,10 @@ def emit(frame):
         if mode == 'namespace': rows[20]['net'] = '999'
         if mode == 'affinity': rows[20]['cpus'] = '0-1'
         if mode == 'unknown-login': add(999, 10, '/foreign.scope')
-        if mode != 'lost-lease': put('stream-state.json', {'kind': 'audit-ready', 'payload': {'campaign': campaign, 'group': 'json-api', 'subjectSha256': subject}})
+        if mode == 'failed-group':
+            # A failed timing group finishes without producing an audit subject.
+            put('stream-state.json', {'kind': 'seal', 'payload': {}})
+        elif mode != 'lost-lease': put('stream-state.json', {'kind': 'audit-ready', 'payload': {'campaign': campaign, 'group': 'json-api', 'subjectSha256': subject}})
     elif kind == 'challenge':
         if mode == 'exit-after-renewals' and frame['payload']['sequence'] == 3:
             data['/bench/exit-code'] = b'2\n'

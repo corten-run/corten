@@ -12,7 +12,7 @@ import { inspectLifetime, composeHostProof } from "./host-lifetime.mjs";
 import { commandResult, composePhase } from "./composition.mjs";
 import { registrySchema } from "../registry.mjs";
 import { alternateCampaignPlacements } from "./contract.mjs";
-import { verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
+import { udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -154,20 +154,23 @@ export async function validateCampaign(input) {
           const after = read(`${id}/${entry.path}/host-after.json`);
           const settlePath = `${entry.path}/host-after-settled.json`;
           if (subtree.entries.some((e) => e.path === settlePath)) {
+            const settlePolicy = status.executionVersion === 5 ? udevSettlePolicy(group, phase) : null;
             const lifetime = hostObservations.at(recorded.results.length - 1);
-            assert.ok(status.executionVersion === 5 && group === "localized-marketplace" && phase === "timing"
-              && recorded.results.length === recorded.invocations.length && lifetime?.status === "verified"
-              && lifetime.cleanupComplete && lifetime.terminalClock, "udev settle lacks sealed terminal marketplace lifetime");
+            assert.ok(settlePolicy && recorded.results.length === recorded.invocations.length && lifetime?.status === "verified"
+              && lifetime.cleanupComplete && lifetime.terminalClock, "udev settle lacks an eligible sealed terminal lifetime");
             const settled = read(`${id}/${settlePath}`);
             if (streamSeal) assert.ok(BigInt(settled.controlApparatus.sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
-            boundary = verifySettledHostBoundary(hostBefore, after, settled, lifetime.terminalClock);
+            boundary = verifySettledHostBoundary(hostBefore, after, settled, lifetime.terminalClock, settlePolicy);
           } else boundary = verifyHostBoundary(hostBefore, after);
         }
         catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
+        if (status.executionVersion === 5 && phase === "prepare" && replay.reviewNeeded)
+          assert.ok(boundary && isDeepStrictEqual(replay.reviewNeeded.cleanup, boundary), "JSON preparation cleanup boundary differs");
         if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }
       }
       const manifestEntry = subtree.entries.find((e) => e.path === `${entry.path}/native-manifest.json`);
-      if (!manifestEntry) {
+      // A move or manifest write alone does not advance an interrupted transfer.
+      if (!manifestEntry || (recorded.transferDestination && !recorded.sealed)) {
         assert.ok(!replay.completed.has(group) && replay.pending.some((p) => p.group === group && p.phase === phase), "completed native phase lacks sealed evidence");
         blockers.push(`${group}/${phase}: safe native collection incomplete`); continue;
       }
@@ -311,7 +314,11 @@ export async function validateCampaign(input) {
       uncollectedNativeRoots: replay.pending, archiveTreeSha256: snapshot.sha256,
       reservationSha256: digest(readRegular(join(folder, ".host-attempt.json"))) };
     if (complete) return { ...common, status: "verified" };
+    // A sealed group can precede a halted campaign. Check its full commitment
+    // above, but expose only dispositions until the whole archive is verified.
     return { ...common, status: replay.processFailure || status.outcomes.some((r) => r.outcome === "failed") ? "failed" : "blocked",
+      groups: verifiedGroups.map((group) => ({ ...group, appOutcomes: group.appOutcomes.map(({ app, outcome }) =>
+        ({ app, outcome, comparisonEligible: false })) })),
       round, commit, campaign: id, controllerReady: false, qualified: false, isolation: "unverified", blockers, diagnostics,
       collectionIntegrity: collectionEntry && !replay.incomplete && replay.pending.length === 0 ? "manifest-verified" : "unsealed-partial",
       commandLifecycle: replay.incomplete ? "incomplete-preserved" : "observed-terminal",

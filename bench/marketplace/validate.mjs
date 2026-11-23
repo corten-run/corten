@@ -7,9 +7,9 @@ import { memoryMiB, summarizeSamples } from "../catalog/stats.mjs";
 import { records } from "./fixtures.mjs";
 import { admitted } from "./feature-contract.mjs";
 import { qualificationValidator, validateSummary } from "./report.mjs";
-import { imageProvenance, inventory, loadPhases, parseArgs, passPlan, phaseEnd, readLoadSummary, readOutcome, resultSchema, roundIdentity, sources, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { imageProvenance, inventory, loadPhases, parseArgs, passPlan, phaseEnd, readLoadSummary, readOutcome, resultSchema, roundIdentity, sources, timedProfilesFor, upstreamErrors, v5Schema } from "./run-contract.mjs";
 import { validateLoadExecution } from "./load-evidence.mjs";
-import { evidenceVersion, k6Image, loadEnvironment, nodeImage, sourceTree, upstreamInterpretation } from "./raw-contract.mjs";
+import { evidenceVersion, k6Image, loadEnvironment, maxStatsSamples, nodeImage, producerSchema, sourceTree, upstreamInterpretation, validateLocaleCounters } from "./raw-contract.mjs";
 import { savedFiles } from "./saved-files.mjs";
 import { verifyK6Provenance } from "../load-tool.mjs";
 
@@ -55,7 +55,8 @@ function replay({ folder, round, commit }) {
   roundIdentity(round); assert.match(commit, /^[a-f0-9]{40}$/);
   const files = savedFiles(folder), s = files.json("summary.json");
   assert.equal(s.round, round, "wrong saved round"); assert.equal(s.commit, commit, "wrong saved commit");
-  assert.equal(s.schema, resultSchema, "saved replay requires the current native result format");
+  assert.ok([v5Schema, resultSchema].includes(s.schema), "saved replay requires a native raw result format");
+  const timedProfiles = timedProfilesFor(s.schema);
   assert.equal(s.evidenceVersion, evidenceVersion, "raw receipts absent or unsupported; summary-only evidence is not validated");
   assert.equal(s.split, undefined, "validate each native split part, not its merged summary");
   validateSummary(s);
@@ -82,6 +83,7 @@ function replay({ folder, round, commit }) {
   assert.match(s.runId, new RegExp(`^marketplace-${round}-[a-f0-9]{10}$`));
   const source = files.json("source.json");
   assert.deepEqual(source, { evidenceVersion, commit, tree: sourceTree(commit), dirty: false, finishedCommit: commit, finishedDirty: false });
+  assert.equal(s.schema, producerSchema(source.tree), "saved schema differs from the measured producer schema");
   const fixture = files.text("fixture.json");
   assert.equal(createHash("sha256").update(fixture).digest("hex"), s.fixtureSha256, "wrong saved fixture bytes");
   assert.deepEqual(JSON.parse(fixture), records(), "saved fixture differs from the workload");
@@ -268,8 +270,10 @@ function replay({ folder, round, commit }) {
         assert.deepEqual(k6.env, loadEnvironment(s, profile, phase, coldApp.name));
         assert.deepEqual(k6.cmd, ["run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/load.js"]);
         const k6Summary = files.json(`${base}/${phase}.json`);
-        validateLoadExecution({ load: k6, summary: k6Summary, clock: files.json(`${base}/${phase}-clock.json`), start, end, seconds: phase === "warmup" ? s.options.warmup : s.options.duration });
+        const clock = files.json(`${base}/${phase}-clock.json`), seconds = phase === "warmup" ? s.options.warmup : s.options.duration;
+        validateLoadExecution({ load: k6, summary: k6Summary, clock, start, end, seconds });
         const traffic = readLoadSummary(k6Summary);
+        validateLocaleCounters(profile, k6Summary.metrics, clock.testRunDurationMs, seconds, k6.env);
         const rawCounters = files.json(`${base}/${phase}-cpu.json`);
         const counted = Object.fromEntries(Object.keys(raw.before).filter((n) => raw.after[n] !== undefined).map((n) => [n, { usec: raw.after[n] - raw.before[n] }]));
         assert.deepEqual(rawCounters, counted, "saved CPU deltas differ from before/after counters");
@@ -322,7 +326,7 @@ function replay({ folder, round, commit }) {
             // Samples can burst beyond quota; only the whole host is a bound.
             const cpu = parseFloat(p.CPUPerc);
             assert.ok(Number.isFinite(cpu) && cpu <= onlineCpus.size * 100 + 0.005, "sampled CPU exceeds physical host capacity");
-            assert.ok(history[p.Name].length < 1000, "stats log exceeds sample bound");
+            assert.ok(history[p.Name].length < maxStatsSamples, "stats log exceeds sample bound");
             const c = p.Name === coldApp.name ? raw.app : raw.upstream, parts = p.MemUsage.split("/");
             assert.equal(parts.length, 2, "memory display missing its limit");
             const usage = displayedMemory(parts[0]), limit = displayedMemory(parts[1]), expected = c.memoryBytes / 2 ** 20;
@@ -333,7 +337,7 @@ function replay({ folder, round, commit }) {
           const stats = {};
           for (const name of participants) {
             const samples = sampled.samples[name];
-            assert.ok(Array.isArray(samples) && samples.length > 0 && samples.length <= 1000, "invalid/bounded stats history required");
+            assert.ok(Array.isArray(samples) && samples.length > 0 && samples.length <= maxStatsSamples, "invalid/bounded stats history required");
             assert.deepEqual(samples.map(({ cpu, mem }) => ({ cpu, mem })), history[name], "stats history differs from raw Docker samples");
             let last = start;
             for (const p of samples) { assert.ok(Number.isSafeInteger(p.t) && p.t >= last && p.t <= end && p.cpu >= 0 && p.mem > 0, "invalid stats clock/value"); last = p.t; }

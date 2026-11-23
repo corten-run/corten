@@ -1293,6 +1293,116 @@ async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
     assert_eq!(runs.count(), ran + 1);
 }
 
+/// A `Public` body whose head has `names` names: `Public`'s own and as many of `x-0`, `x-1`, ..
+/// as make up the rest. An app's handler cannot name that many (`Public::header` takes a name a
+/// type gives), so the route is made by hand as a `Public` body's is.
+#[derive(Clone)]
+struct Named {
+    names: usize,
+    runs: Runs,
+}
+
+impl crate::handler::Handler<(), ()> for Named {
+    fn keeps(&self) -> Option<crate::kept::Shape> {
+        Some(crate::kept::Shape::Body)
+    }
+
+    fn call(self, _: Request, _: ()) -> impl std::future::Future<Output = crate::response::Response> + Send + 'static {
+        self.runs.ran();
+        async move {
+            let mut res = Public::new(Duration::from_secs(60), "named ".repeat(300)).into_response();
+            let headers = res.headers_mut();
+            for n in 0.. {
+                if headers.keys_len() >= self.names {
+                    break;
+                }
+                headers.append(header::HeaderName::from_bytes(format!("x-{n}").as_bytes()).unwrap(), HeaderValue::from(n));
+            }
+            res
+        }
+    }
+}
+
+/// Asks for a `Named` route of `names` names three times, with a middleware that takes 64 of
+/// them off after the handler when `thin` (as an app's may), checking each answer; returns
+/// whether the answer was kept, which says how the second and third were checked.
+async fn named_three_times(names: usize, thin: bool) -> bool {
+    /// Takes 64 of the names off after the handler.
+    struct Thin;
+
+    impl crate::Middleware for Thin {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            for n in 0..64 {
+                res.headers_mut().remove(format!("x-{n}").as_str());
+            }
+            res
+        }
+    }
+    let runs = Runs::default();
+    let routes = Table::new().route("/", crate::router::get(Named { names, runs: runs.clone() })).route(
+        "/held",
+        crate::router::get(|signal: crate::Signal| async move {
+            signal.shared().and_then(|shared| shared.kept.as_ref()).map_or(0, |kept| kept.bytes()).to_string()
+        }),
+    );
+    let app = App::new(Routes::from(routes)).kept_answers(1 << 30);
+    let router = if thin { app.middleware(Thin).router() } else { app.router() };
+    let held = || async { String::from_utf8(fetch(&router, "GET", "/held", &[]).await.2.to_vec()).unwrap() != "0" };
+    let lines = |headers: &HeaderMap| {
+        headers.iter().filter(|(name, _)| *name != header::AGE).map(|(n, v)| (n.clone(), v.clone())).collect::<Vec<_>>()
+    };
+    let (status, first, body) = fetch(&router, "GET", "/", &[]).await;
+    assert!(status == StatusCode::OK && runs.count() == 1, "{names}: {status}");
+    let kept = held().await;
+    for again in 2..=3 {
+        let (status, headers, same) = fetch(&router, "GET", "/", &[]).await;
+        assert_eq!((status, &same), (StatusCode::OK, &body), "{names}");
+        // Every line but `Age` as the first answer had it, in its order.
+        assert!(lines(&headers) == lines(&first), "{names}");
+        if kept {
+            assert!(headers.contains_key(header::AGE) && runs.count() == 1, "{names}: given again");
+        } else {
+            assert!(!headers.contains_key(header::AGE) && runs.count() == again, "{names}: the handler's");
+        }
+        assert_eq!(held().await, kept, "{names}: kept as it was");
+    }
+    kept
+}
+
+/// The most names a map holds: `http` grows one no further, and its `reserve` and `insert`
+/// panic past them.
+fn most_names() -> usize {
+    let name = |n: usize| header::HeaderName::from_bytes(format!("x-{n}").as_bytes()).unwrap();
+    let mut map = HeaderMap::new();
+    while map.try_append(name(map.len()), HeaderValue::from(0)).is_ok() {}
+    map.keys_len()
+}
+
+/// A head of the most names a kept answer has (`crate::kept::NAMES`) is kept and given again as
+/// it was made; one of more is its handler's for every request.
+#[tokio::test]
+async fn a_kept_answers_head_has_at_most_its_names() {
+    assert!(named_three_times(crate::kept::NAMES, false).await);
+    assert!(!named_three_times(crate::kept::NAMES + 1, false).await);
+}
+
+/// A head of as many names as the security headers (seven, with no `Vary` and no HSTS) have room
+/// beside on the handler's answer is the handler's for every request: given again, its `Age`
+/// took the room they need, and the request panicked.
+#[tokio::test]
+async fn a_head_near_the_most_names_a_map_holds_is_not_given_again_without_room_for_the_stages() {
+    assert!(!named_three_times(most_names() - 7, false).await);
+}
+
+/// A head of the most names a map holds, which no answer given again has room beside for its
+/// `Age`, is not kept (a middleware of the app's makes room for the stages after it): it was
+/// kept again by every request that could not be given it.
+#[tokio::test]
+async fn a_head_that_could_not_be_given_again_is_not_kept_again_by_every_request() {
+    assert!(!named_three_times(most_names(), true).await);
+}
+
 /// While the store has room a page is kept the first time it is made. Once it is full, keeping
 /// one drops another, so a page is kept from the second time its URL is asked for and a URL
 /// asked for once takes no page's room.
@@ -1476,7 +1586,7 @@ async fn a_write_drops_the_pages_kept_at_its_path() {
 }
 
 /// What a write's handler finds: whether the app has a store of kept pages, and whether the
-/// write is counted for its path.
+/// write is counted, for its path or with the writes from before the app counts by path.
 async fn store_and_count(signal: crate::Signal) -> String {
     let store = signal.shared().is_some_and(|shared| shared.kept.is_some());
     format!("store={store} counted={}", signal.counts_a_write())
@@ -1512,6 +1622,16 @@ async fn only_an_app_with_a_public_page_counts_its_writes() {
     assert_eq!(write(off).await, "store=false counted=false", "an app that keeps none");
     let dev = App::new(Routes::from(edit().merge(kept_routes(&runs)))).dev(true).router();
     assert_eq!(write(dev).await, "store=false counted=false", "under corten dev");
+
+    // A `Public` whole body is kept from a size, in every build: an app whose only `Public`
+    // route answers one has a store, whether or not the body turns out large enough.
+    let words = || async { Public::new(Duration::from_secs(60), "words") };
+    let body = App::new(Routes::from(edit().route("/words", crate::route::get(words).0))).router();
+    assert_eq!(write(body).await, "store=true counted=true", "a Public body alone");
+    // A file is a whole body too, kept or not: which is known only as each is made.
+    let file = || async { Public::new(Duration::from_secs(60), crate::Media::new("image/png", &[0x89u8; 4][..])) };
+    let filed = App::new(Routes::from(edit().route("/mark.png", crate::route::get(file).0))).router();
+    assert_eq!(write(filed).await, "store=true counted=true", "a Public file alone");
 }
 
 static COUNTER_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -1654,7 +1774,8 @@ fn a_handler_s_inputs_say_whether_its_page_can_be_kept() {
 }
 
 /// A page whose handler was reading while a write to its path went through may show what was
-/// there before: it is sent, and not kept.
+/// there before: it is sent, and not kept. The write here is counted by its path, another page
+/// having been kept before it.
 #[tokio::test]
 async fn a_page_made_while_a_write_went_through_is_not_kept() {
     let (runs, written) = (Runs::default(), std::sync::Arc::new(tokio::sync::Notify::new()));
@@ -1669,8 +1790,12 @@ async fn a_page_made_while_a_write_went_through_is_not_kept() {
             Public::new(Duration::from_secs(60), req.test_page_for("Slow", html! { <p>"slow"</p> }))
         }
     };
-    let routes = Table::new().route("/", crate::route::get(page).0.post(|| async { StatusCode::NO_CONTENT }));
+    let other =
+        |req: Req| async move { Public::new(Duration::from_secs(60), req.test_page_for("Other", html! { <p>"other"</p> })) };
+    let how = |signal: crate::Signal| async move { signal.counted_as() };
+    let routes = Table::new().route("/", crate::route::get(page).0.post(how)).route("/other", crate::route::get(other).0);
     let router = App::new(Routes::from(routes)).router();
+    fetch(&router, "GET", "/other", &[]).await;
     let reading = tokio::spawn({
         let router = router.clone();
         async move { fetch(&router, "GET", "/", &[]).await }
@@ -1678,8 +1803,8 @@ async fn a_page_made_while_a_write_went_through_is_not_kept() {
     while runs.count() == 0 {
         tokio::task::yield_now().await;
     }
-    let (status, _, _) = fetch(&router, "POST", "/", &[("sec-fetch-site", "same-origin")]).await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, counted) = fetch(&router, "POST", "/", &[("sec-fetch-site", "same-origin")]).await;
+    assert_eq!((status, &counted[..]), (StatusCode::OK, &b"path"[..]));
     written.notify_one();
     let (status, headers, _) = reading.await.unwrap();
     assert!(status == StatusCode::OK && !headers.contains_key(header::AGE));
@@ -1687,6 +1812,175 @@ async fn a_page_made_while_a_write_went_through_is_not_kept() {
     assert!(runs.count() == 2 && !headers.contains_key(header::AGE), "made again after the write: {headers:?}");
     let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
     assert!(runs.count() == 2 && headers.contains_key(header::AGE), "and that one is kept");
+}
+
+/// An app counts its writes by path once it has made an answer it may keep. Until then a write
+/// reads nothing of its path and is counted with the others like it: an answer the app does not
+/// keep makes no counts, however often it is asked for, and a page whose handler read while such
+/// a write went through, at any path, is sent and not kept. Once the counts are there a write
+/// drops only what is kept at its own path.
+#[tokio::test]
+async fn a_write_is_counted_by_path_once_an_answer_may_be_kept() {
+    let same_origin = [("sec-fetch-site", "same-origin")];
+    let (runs, written) = (Runs::default(), std::sync::Arc::new(tokio::sync::Notify::new()));
+    let (counted, wait) = (runs.clone(), written.clone());
+    let page = move |req: Req| {
+        counted.ran();
+        let (first, wait) = (counted.count() == 1, wait.clone());
+        async move {
+            if first {
+                wait.notified().await;
+            }
+            Public::new(Duration::from_secs(60), req.test_page_for("Slow", html! { <p>"slow"</p> }))
+        }
+    };
+    // A body too small for any build to keep.
+    let words = || async { Public::new(Duration::from_secs(60), "words") };
+    let how = |signal: crate::Signal| async move { signal.counted_as() };
+    let routes = Table::new()
+        .route("/", crate::route::get(page).0)
+        .route("/words", crate::route::get(words).0)
+        .route("/items/{id}/edit", crate::router::post(how));
+    let router = App::new(Routes::from(routes)).router();
+    let write = |router: Router| async move {
+        let (status, _, body) = fetch(&router, "POST", "/items/7/edit", &same_origin).await;
+        assert_eq!(status, StatusCode::OK);
+        String::from_utf8(body.to_vec()).unwrap()
+    };
+    assert_eq!(write(router.clone()).await, "early", "nothing asked for yet");
+    for _ in 0..3 {
+        assert!(!fetch(&router, "GET", "/words", &[]).await.1.contains_key(header::AGE));
+    }
+    assert_eq!(write(router.clone()).await, "early", "an answer the app does not keep makes no counts");
+
+    let reading = tokio::spawn({
+        let router = router.clone();
+        async move { fetch(&router, "GET", "/", &[]).await }
+    });
+    while runs.count() == 0 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(write(router.clone()).await, "early", "a page asked for and not yet made makes none either");
+    written.notify_one();
+    let (status, headers, _) = reading.await.unwrap();
+    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE));
+    // The page was not kept, and it made the counts all the same: an app whose writes never
+    // pause would otherwise never come to count them by path.
+    assert_eq!(write(router.clone()).await, "path", "an answer that may be kept was made");
+    let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert!(runs.count() == 2 && !headers.contains_key(header::AGE), "its handler read across a write: {headers:?}");
+    assert_eq!(write(router.clone()).await, "path");
+    let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert!(runs.count() == 2 && headers.contains_key(header::AGE), "a write at another path leaves it: {headers:?}");
+
+    // An answer too large for the store makes no counts: none is made for what cannot be kept.
+    let small = kept_routes(&Runs::default()).route("/items/{id}/edit", crate::router::post(how));
+    let small = App::new(Routes::from(small)).kept_answers(4096).router();
+    fetch(&small, "GET", "/", &[]).await;
+    assert!(!fetch(&small, "GET", "/", &[]).await.1.contains_key(header::AGE), "larger than an eighth of the bound");
+    assert_eq!(write(small).await, "early");
+}
+
+/// A write that began before the app counted writes by path read nothing of its path, so its
+/// answer drops every page kept since it began, at whatever path. One that begins after is
+/// counted by its path and drops no other's.
+#[tokio::test]
+async fn a_write_from_before_the_counts_drops_every_page_kept_since() {
+    let (runs, writes, release) = (Runs::default(), Runs::default(), std::sync::Arc::new(tokio::sync::Notify::new()));
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move { Public::new(Duration::from_secs(60), req.test_page_for("Notes", html! { <p>"notes"</p> })) }
+    };
+    let (began, wait) = (writes.clone(), release.clone());
+    let slow = move || {
+        let (began, wait) = (began.clone(), wait.clone());
+        async move {
+            began.ran();
+            wait.notified().await;
+            StatusCode::NO_CONTENT
+        }
+    };
+    let routes = Table::new()
+        .route("/notes", crate::route::get(page.clone()).0)
+        .route("/list", crate::route::get(page).0)
+        .route("/save", crate::router::post(slow));
+    let router = App::new(Routes::from(routes)).router();
+    let kept = |path: &'static str| {
+        let router = router.clone();
+        async move { fetch(&router, "GET", path, &[]).await.1.contains_key(header::AGE) }
+    };
+    let save = || {
+        let router = router.clone();
+        async move { fetch(&router, "POST", "/save", &[("sec-fetch-site", "same-origin")]).await.0 }
+    };
+    let writing = tokio::spawn(save());
+    while writes.count() == 0 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!kept("/notes").await && kept("/notes").await && !kept("/list").await && kept("/list").await);
+    assert_eq!(runs.count(), 2);
+    release.notify_one();
+    assert_eq!(writing.await.unwrap(), StatusCode::NO_CONTENT);
+    assert!(!kept("/notes").await && !kept("/list").await, "what its handler may have changed is not known by path");
+    assert!(kept("/notes").await && kept("/list").await);
+    assert_eq!(runs.count(), 4);
+    // The next write to that path finds the counts.
+    release.notify_one();
+    assert_eq!(save().await, StatusCode::NO_CONTENT);
+    assert!(kept("/notes").await && kept("/list").await, "a write at another path");
+    assert_eq!(runs.count(), 4);
+}
+
+/// Work a write left behind (`signal.finish`) counts as the write was counted. One that began
+/// before the app counted writes by path, whose client then left, drops what was kept by the
+/// time its work ends, at whatever path.
+#[tokio::test]
+async fn work_left_by_a_write_from_before_the_counts_drops_what_was_kept_since() {
+    let (runs, writes, release) = (Runs::default(), Runs::default(), std::sync::Arc::new(tokio::sync::Notify::new()));
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move { Public::new(Duration::from_secs(60), req.test_page_for("Notes", html! { <p>"notes"</p> })) }
+    };
+    let (began, wait) = (writes.clone(), release.clone());
+    let slow = move |signal: crate::Signal| {
+        let (began, wait) = (began.clone(), wait.clone());
+        async move {
+            let work = move |_| async move {
+                began.ran();
+                wait.notified().await;
+            };
+            signal.finish(work).await;
+            StatusCode::NO_CONTENT
+        }
+    };
+    let routes = Table::new().route("/notes", crate::route::get(page).0).route("/save", crate::router::post(slow));
+    let router = App::new(Routes::from(routes)).router();
+    let kept = |router: Router| async move { fetch(&router, "GET", "/notes", &[]).await.1.contains_key(header::AGE) };
+
+    // The write begins before anything is asked for, and its client leaves.
+    let writing = tokio::spawn({
+        let router = router.clone();
+        async move { fetch(&router, "POST", "/save", &[("sec-fetch-site", "same-origin")]).await }
+    });
+    while writes.count() == 0 {
+        tokio::task::yield_now().await;
+    }
+    writing.abort();
+    assert!(writing.await.is_err_and(|ended| ended.is_cancelled()));
+    assert!(!kept(router.clone()).await && kept(router.clone()).await, "a page made after the client left is kept");
+    assert_eq!(runs.count(), 1);
+    // Its work runs to its end, and what it wrote since then counts.
+    release.notify_one();
+    let dropped = async {
+        while kept(router.clone()).await {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), dropped).await.expect("the work's end drops the page");
+    assert!(kept(router.clone()).await, "and the page made after it is kept");
+    assert_eq!(runs.count(), 2);
 }
 
 static SHELF_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -1737,8 +2031,10 @@ impl<S: Send + Sync> crate::extract::FromRequestParts<S> for Device {
 impl crate::answer::Anonymous for Device {}
 
 /// What is not kept: an answer that is not for everyone, sets a cookie, drew this request's
-/// nonce, failed, is not a page, has no lifetime or is too large for the bound; one whose handler
-/// takes an input of the app's own; and nothing in an app that keeps none, or under `corten dev`.
+/// nonce, failed, is not a page or a whole body (a status alone), is a body the app does not
+/// compress (a picture, a short text), has no lifetime or is
+/// too large for the bound; one whose handler takes an input of the app's own; and nothing in an
+/// app that keeps none, or under `corten dev`.
 #[tokio::test]
 async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
     use crate::route::get as typed;
@@ -1794,6 +2090,12 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
             .route("/now", typed(move |req: Req| async move { Public::new(Duration::ZERO, req.test_page_for("Now", home())) }).0)
             .route("/moved", typed(move |req: Req| async move { Public::new(minute, req.redirect(&Root)) }).0)
             .route("/text", typed(move || async move { Public::new(minute, "text") }).0)
+            .route("/long", typed(move || async move { Public::new(minute, "text ".repeat(300)) }).0)
+            .route(
+                "/file",
+                typed(move || async move { Public::new(minute, Ok::<_, Error>(Media::new("image/png", &[0x89u8; 2048][..]))) }).0,
+            )
+            .route("/status", typed(move || async move { Public::new(minute, StatusCode::OK) }).0)
             .route(
                 "/device",
                 typed(move |device: Device, req: Req| async move {
@@ -1807,6 +2109,29 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
                 typed(move |req: Req| async move {
                     let form = html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> };
                     Public::new(minute, req.test_page_for("Keyed", form))
+                })
+                .0,
+            )
+            .route(
+                "/placed",
+                typed(move |req: Req| async move {
+                    // Rendered to a string first, so the page's own render draws no key.
+                    let form =
+                        html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> }.to_html();
+                    Public::new(minute, req.test_page_for("Placed", html! { <div>{crate::view::raw(form)}</div> }))
+                })
+                .0,
+            )
+            .route(
+                "/recovered",
+                typed(move |req: Req| async move {
+                    // The same, with a page that fails rendered between the key and the page given.
+                    let form =
+                        html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> }.to_html();
+                    let page = req
+                        .page(Headless)
+                        .or_else(|_| req.test_page_for("Recovered", html! { <div>{crate::view::raw(form)}</div> }));
+                    Public::new(minute, page)
                 })
                 .0,
             )
@@ -1825,8 +2150,11 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
         ("/gone", "an error page"),
         ("/now", "no lifetime"),
         ("/moved", "a redirect"),
-        ("/text", "not a page"),
+        ("/text", "a whole body too small to keep"),
+        ("/status", "a status alone has no body to keep"),
         ("/keyed", "a submit key drawn for this request"),
+        ("/placed", "a submit key drawn before the page's render and placed in it as markup"),
+        ("/recovered", "a submit key drawn before a page whose render failed, placed in the page given instead"),
         ("/device", "an input of the app's own, which may read a header no key covers"),
         ("/missing", "no route"),
     ] {
@@ -1834,6 +2162,31 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
     }
     for uri in ["/", "/catalog", "/inputs"] {
         assert!(kept(router.clone(), uri).await, "{uri}");
+    }
+    // A whole body of a size worth keeping, whatever its type: text the app compresses where
+    // the build does, and a picture no build compresses.
+    for uri in ["/long", "/file"] {
+        assert!(kept(router.clone(), uri).await, "{uri}");
+    }
+    // The page that failed did fail, and each request's page has its own key.
+    let recovered =
+        |router: Router| async move { String::from_utf8(fetch(&router, "GET", "/recovered", &[]).await.2.to_vec()).unwrap() };
+    let (first, second) = (recovered(router.clone()).await, recovered(router.clone()).await);
+    assert!(first.contains("Recovered") && first.contains("<form") && first != second, "{first}\n{second}");
+
+    /// A document whose head has no `<Corten />`, which `html!` does not build: a page of it fails.
+    struct Headless;
+
+    impl Render for Headless {
+        fn render(&self, out: &mut String) {
+            out.push_str("<!DOCTYPE html><html><head><title>None</title></head><body><main></main></body></html>");
+        }
+    }
+
+    impl crate::view::Document for Headless {
+        fn render_part(&self, out: &mut String, _: crate::view::Part) {
+            self.render(out);
+        }
     }
     assert!(!kept(App::new(Routes::from(routes())).kept_answers(0).router(), "/").await, "an app that keeps none");
     assert!(!kept(App::new(Routes::from(routes())).dev(true).router(), "/").await, "under corten dev");
@@ -1975,6 +2328,87 @@ async fn a_kept_page_is_for_the_host_and_the_language_it_was_asked_in() {
         let (_, _, body) = fetch(&bare, "GET", "/", &[("accept-language", asked)]).await;
         assert!(String::from_utf8_lossy(&body).contains(word), "{asked}");
         assert_eq!(runs.count(), ran, "{asked}");
+    }
+}
+
+/// An `Accept-Language` a page does not vary on is neither held with it nor counted against its
+/// share of the bound, however long: with the least bound whose share holds the page asked for
+/// with none, it is kept when asked for with a long one too. A page that varies on the header is
+/// kept for it, and there the header counts: the long one takes it over that share.
+#[tokio::test]
+async fn an_accept_language_a_page_does_not_vary_on_does_not_count_against_it() {
+    crate::i18n::messages! { struct LongMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    /// Whether the page at `/` is kept, asked for twice with `language` (none when empty).
+    async fn kept(router: Router, language: &str) -> bool {
+        let asked: &[(&'static str, &str)] = if language.is_empty() { &[] } else { &[("accept-language", language)] };
+        fetch(&router, "GET", "/", asked).await;
+        fetch(&router, "GET", "/", asked).await.1.contains_key(header::AGE)
+    }
+    /// The least bound whose share (an eighth) holds the page asked for with no `Accept-Language`.
+    async fn least(app: impl Fn(usize) -> Router) -> usize {
+        let (mut low, mut high) = (0, 1 << 16);
+        assert!(kept(app(high * 8), "").await, "kept under a bound of {}", high * 8);
+        while low + 1 < high {
+            let mid = (low + high) / 2;
+            if kept(app(mid * 8), "").await {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        high * 8
+    }
+    // A browser's list is short; one this long is what a client can send.
+    let long = format!("en, {}", (0..80).map(|n| format!("x-{n:02};q=0.1")).collect::<Vec<_>>().join(", "));
+    let one = |bound| App::new(Routes::from(kept_routes(&Runs::default()))).kept_answers(bound).router();
+    let bound = least(one).await;
+    assert!(kept(one(bound), &long).await, "a page that does not vary on the header, under a bound of {bound}");
+
+    let page = |req: Req| async move {
+        let lang = req.lang();
+        Public::new(Duration::from_secs(60), req.test_page_for("Lang", html! { <p>"in "{lang}</p> }))
+    };
+    let two = |bound| {
+        App::new(Routes::from(Table::new().route("/", crate::route::get(page).0)))
+            .messages::<LongMsg>()
+            .kept_answers(bound)
+            .router()
+    };
+    let bound = least(two).await;
+    assert!(!kept(two(bound), &long).await, "a page that varies on the header is kept with it, and it counts");
+    assert!(kept(two(bound + long.len() * 8), &long).await, "and kept with the room for it");
+}
+
+/// A kept copy's URL counts once against its share of the bound: for the same page asked for at
+/// two URLs whose queries differ by `n` bytes, the least bound that keeps it differs by `n` bytes
+/// of its share (an eighth), `8 * n`. A URL counted twice, by the entry and by the table, would
+/// make it `16 * n`.
+#[tokio::test]
+async fn a_kept_url_counts_once_against_its_share_of_the_bound() {
+    /// Whether the page at `at` is kept under `bound`, asked for twice.
+    async fn kept(bound: usize, at: &str) -> bool {
+        let router = App::new(Routes::from(kept_routes(&Runs::default()))).kept_answers(bound).router();
+        fetch(&router, "GET", at, &[]).await;
+        fetch(&router, "GET", at, &[]).await.1.contains_key(header::AGE)
+    }
+    /// The least bound, a multiple of its share's eight, that keeps the page at `at`.
+    async fn least(at: &str) -> usize {
+        let (mut low, mut high) = (0, 1 << 16);
+        assert!(kept(high * 8, at).await, "kept at {at} under a bound of {}", high * 8);
+        while low + 1 < high {
+            let mid = (low + high) / 2;
+            if kept(mid * 8, at).await {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        high * 8
+    }
+    let short = least("/?q=a").await;
+    for n in [1, 37, 300] {
+        let at = format!("/?q=a{}", "b".repeat(n));
+        assert_eq!(least(&at).await - short, 8 * n, "a query {n} bytes longer");
     }
 }
 
@@ -2434,6 +2868,766 @@ async fn a_kept_page_keeps_the_hash_its_policy_allows_its_style_block_by() {
     assert!(styles.contains("'sha256-"), "the block's hash: {policy}");
     assert!(again.contains_key(header::AGE) && same == body, "the kept page");
     assert_eq!(again[header::CONTENT_SECURITY_POLICY], policy);
+}
+
+// ---- The whole bodies the app keeps: JSON, text and files ----
+
+/// Which answers may be kept as a whole body is known when the app compiles: JSON, text and a
+/// file, in a `Result` or not. A page is kept as a page, and a relay or a status is its
+/// handler's for every request.
+#[test]
+fn an_answer_s_type_says_whether_its_body_is_kept() {
+    use crate::answer::Answer;
+    fn whole<A: Answer>() -> bool {
+        A::WHOLE.0
+    }
+    assert!(whole::<String>() && whole::<&'static str>() && whole::<crate::Result<String>>());
+    assert!(whole::<Public<String>>() && whole::<Public<crate::Result<&'static str>>>());
+    #[cfg(feature = "json")]
+    assert!(whole::<Json<u32>>() && whole::<JsonResult<u32>>() && whole::<Public<JsonResult<u32>>>());
+    assert!(whole::<Media>() && whole::<crate::Result<Media>>() && whole::<Public<crate::Result<Media>>>());
+    assert!(
+        whole::<crate::seo::File>() && whole::<Public<crate::seo::File>>() && whole::<crate::Result<Public<crate::seo::File>>>()
+    );
+    assert!(!whole::<StatusCode>() && !whole::<NoStore<Media>>());
+    assert!(!whole::<crate::Relay>() && !whole::<HtmlResult>() && !whole::<Public<HtmlResult>>());
+    assert!(!whole::<NoStore<String>>(), "an answer no cache may store");
+    // Bytes the app holds keep their own compressed forms where the build compresses, and are
+    // left to their handler in every build.
+    #[cfg(feature = "json")]
+    assert!(!whole::<Json<crate::json::Raw>>());
+}
+
+/// A `Public` JSON answer and a `Public` text answer are made once for their lifetime, as a
+/// page is: the next request that shows nothing about who asks gets the same bytes with their
+/// age, with the tag and the coded bytes made once, and a write to the path drops them. A
+/// request that asks for JSON first is kept too, apart: its handler can read which client asked.
+/// Each body here is 1,024 bytes or more, which is what is kept.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_public_json_or_text_answer_is_kept_and_given_again() {
+    let minute = Duration::from_secs(60);
+    let (runs, texts, modes) = (Runs::default(), Runs::default(), Runs::default());
+    let (ran, text_ran, mode_ran) = (runs.clone(), texts.clone(), modes.clone());
+    let items = move || {
+        ran.ran();
+        async move { Public::new(minute, Ok::<_, JsonError>(Json(vec!["kept".repeat(300)]))) }
+    };
+    let text = move || {
+        text_ran.ran();
+        async move { Public::new(minute, "kept ".repeat(400)) }
+    };
+    // Says which client asked, as a handler that takes `Req` can.
+    let mode = move |req: Req| {
+        mode_ran.ran();
+        async move { Public::new(minute, Ok::<_, JsonError>(Json((req.mode == crate::Mode::Data, "mode ".repeat(300))))) }
+    };
+    let routes = Table::new()
+        .route("/items", crate::route::get(items).0.post(|| async { StatusCode::NO_CONTENT }))
+        .route("/text", crate::route::get(text).0)
+        .route("/mode", crate::route::get(mode).0);
+    let router = App::new(Routes::from(routes)).router();
+
+    let (status, first, body) = fetch(&router, "GET", "/items", &[]).await;
+    assert_eq!((status, runs.count()), (StatusCode::OK, 1));
+    assert_eq!(first[header::CONTENT_TYPE], "application/json");
+    assert_eq!(first[header::CACHE_CONTROL], "public, max-age=60");
+    assert!(!first.contains_key(header::AGE), "the handler's own answer: {first:?}");
+    let (status, mut again, same) = fetch(&router, "GET", "/items", &[]).await;
+    assert_eq!((status, runs.count()), (StatusCode::OK, 1), "the kept answer, not the handler");
+    assert_eq!(again.remove(header::AGE).expect("a kept answer says how old it is"), "0");
+    assert_eq!(again, first, "every other header as the handler's answer had it");
+    assert_eq!(same, body);
+
+    // A data client's request is another way of asking: kept, and apart.
+    let data = [("accept", "application/json")];
+    let (_, asked, same) = fetch(&router, "GET", "/items", &data).await;
+    assert!(runs.count() == 2 && !asked.contains_key(header::AGE) && same == body, "{asked:?}");
+    let (_, asked, same) = fetch(&router, "GET", "/items", &data).await;
+    assert!(runs.count() == 2 && asked.contains_key(header::AGE) && same == body, "{asked:?}");
+    // Outside an API the stages take a request for JSON first for one form of a page's URL, which
+    // they send for the browser alone. What is kept is the handler's answer, whose key knows the form.
+    assert_eq!(asked[header::CACHE_CONTROL], "private, max-age=60");
+    for _ in 0..2 {
+        let (_, _, plain) = fetch(&router, "GET", "/mode", &[]).await;
+        let (_, _, asked) = fetch(&router, "GET", "/mode", &data).await;
+        assert!(plain.starts_with(b"[false,") && asked.starts_with(b"[true,"), "each as its handler answered that client");
+    }
+    assert_eq!(modes.count(), 2, "one run for each way of asking");
+
+    // What the answer could differ for is the handler's, and takes no kept answer's place.
+    let mut ran = runs.count();
+    for asked in [
+        ("cookie", "session=abc"),
+        ("authorization", "Bearer t"),
+        ("corten", "page"),
+        ("corten-notice", "saved"),
+        ("last-event-id", "4"),
+        ("content-length", "0"),
+    ] {
+        let (_, headers, _) = fetch(&router, "GET", "/items", &[asked]).await;
+        ran += 1;
+        assert!(runs.count() == ran && !headers.contains_key(header::AGE), "{asked:?}");
+    }
+    let (_, headers, _) = fetch(&router, "HEAD", "/items", &[]).await;
+    assert!(runs.count() == ran + 1 && !headers.contains_key(header::AGE), "a HEAD is the handler's");
+    assert!(fetch(&router, "GET", "/items", &[]).await.1.contains_key(header::AGE));
+    // The time zone's cookie says where the visitor is, not who, and a `Public` answer is in UTC.
+    let zone = [("cookie", "corten-zone=America/Chicago")];
+    assert!(fetch(&router, "GET", "/items", &zone).await.1.contains_key(header::AGE) && runs.count() == ran + 1);
+    assert!(fetch(&router, "GET", "/items?page=2", &[]).await.1.get(header::AGE).is_none(), "another query is another answer");
+
+    // A write to the path drops every copy kept there.
+    let (status, _, _) = fetch(&router, "POST", "/items", &[("sec-fetch-site", "same-origin")]).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    for asked in [&[][..], &data[..]] {
+        assert!(!fetch(&router, "GET", "/items", asked).await.1.contains_key(header::AGE), "{asked:?}");
+        assert!(fetch(&router, "GET", "/items", asked).await.1.contains_key(header::AGE), "{asked:?}");
+    }
+
+    // Text, with the tag and the coded bytes made once (a coding asked for, so it is tagged).
+    let coded = [("accept-encoding", "gzip")];
+    let (_, first, body) = fetch(&router, "GET", "/text", &coded).await;
+    assert!(first[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/plain"), "{first:?}");
+    let (_, mut again, same) = fetch(&router, "GET", "/text", &coded).await;
+    assert_eq!(texts.count(), 1);
+    assert_eq!(again.remove(header::AGE).expect("kept"), "0");
+    assert!(again == first && same == body, "{again:?}");
+    let (_, _, third) = fetch(&router, "GET", "/text", &coded).await;
+    assert_eq!(third.as_ptr(), same.as_ptr(), "the bytes sent made once");
+    // Coded where the build compresses; as they are where it does not, and tagged either way.
+    assert_eq!(
+        first.get(header::CONTENT_ENCODING).map(HeaderValue::as_bytes),
+        cfg!(feature = "compress").then_some(&b"gzip"[..])
+    );
+    let tag = first[header::ETAG].to_str().unwrap();
+    let (status, _, none) = fetch(&router, "GET", "/text", &[("accept-encoding", "gzip"), ("if-none-match", tag)]).await;
+    assert!(status == StatusCode::NOT_MODIFIED && none.is_empty() && texts.count() == 1);
+}
+
+/// A whole body is kept from 1,024 bytes, in every build. One byte under, the route is its
+/// handler's for every request. A kept body is given to a request that accepts no coding too.
+#[tokio::test]
+async fn a_whole_body_is_kept_from_1024_bytes() {
+    let minute = Duration::from_secs(60);
+    let runs = Runs::default();
+    let (under, at) = (runs.clone(), runs.clone());
+    let under = move || {
+        under.ran();
+        async move { Public::new(minute, "a".repeat(1023)) }
+    };
+    let at = move || {
+        at.ran();
+        async move { Public::new(minute, "a".repeat(1024)) }
+    };
+    let routes = Table::new().route("/under", crate::route::get(under).0).route("/at", crate::route::get(at).0);
+    let router = App::new(Routes::from(routes)).router();
+    for (path, kept) in [("/under", false), ("/at", true)] {
+        for asked in [&[][..], &[("accept-encoding", "gzip")][..]] {
+            let before = runs.count();
+            let (_, first, body) = fetch(&router, "GET", path, asked).await;
+            let (_, again, same) = fetch(&router, "GET", path, asked).await;
+            // The first request of all is the handler's; where the body is kept, every one after.
+            assert_eq!(first.contains_key(header::AGE), kept && !asked.is_empty(), "{path} {asked:?}: {first:?}");
+            assert_eq!(again.contains_key(header::AGE), kept, "{path} {asked:?}: {again:?}");
+            assert_eq!(body, same, "{path} {asked:?}");
+            // One copy for both ways of asking: the second pair runs no handler where it is kept.
+            let ran = if !kept { 2 } else { usize::from(asked.is_empty()) };
+            assert_eq!(runs.count() - before, ran, "{path} {asked:?}");
+            #[cfg(feature = "compress")]
+            assert_eq!(again.contains_key(header::CONTENT_ENCODING), path == "/at" && !asked.is_empty(), "{path}: {again:?}");
+        }
+    }
+}
+
+/// A file is a whole body too. A sitemap and a `Media` are kept from 1,024 bytes, whatever
+/// the type (a CSV the app compresses, a picture no build does), and the kept one is sent with
+/// what its handler said of it: its type, its file name, how long caches keep it. A file under
+/// that size, one with a tag of its handler's own, one sent as a stream, which has no body to
+/// hold, and one at a URL that names its content (`Public::immutable`), which has no lifetime
+/// to keep it for, are their handlers' for every request.
+#[tokio::test]
+async fn a_file_is_kept_from_1024_bytes() {
+    use crate::seo;
+    let minute = Duration::from_secs(60);
+    let runs = Runs::default();
+    let csv = || "sku,qty\n".repeat(200);
+    let (sitemap, robots, cards, mark, picture, export) =
+        (runs.clone(), runs.clone(), runs.clone(), runs.clone(), runs.clone(), runs.clone());
+    let (paged, chart, tagged, crawlers, flaky) = (runs.clone(), runs.clone(), runs.clone(), runs.clone(), runs.clone());
+    let svg = || format!("<svg>{}</svg>", "<g/>".repeat(300));
+    // A file with a tag of its handler's own, which the app leaves as it is and does not keep.
+    struct ETag;
+    impl crate::answer::Header for ETag {
+        const NAME: &'static str = "etag";
+    }
+    let tagged = move || {
+        tagged.ran();
+        let file = crate::Media::new("text/csv", csv());
+        async move { Public::new(minute, file).header::<ETag>(HeaderValue::from_static("\"v1\"")) }
+    };
+    // A `robots.txt` large enough to keep.
+    let crawlers = move || {
+        crawlers.ran();
+        async move { seo::robots(&["/account/"; 120], None) }
+    };
+    // A file whose handler fails the first time it is asked.
+    let asked = Runs::default();
+    let flaky = move || {
+        flaky.ran();
+        asked.ran();
+        let failed = asked.count() == 1;
+        let file = if failed { Err(Error::not_found()) } else { Ok(crate::Media::new("text/csv", csv())) };
+        async move { Public::new(minute, file) }
+    };
+    // A sitemap's page, which may not be there: the answer `seo`'s own example gives.
+    let paged = move || {
+        paged.ran();
+        let urls = (0..40).map(|_| seo::SitemapUrl { loc: "https://example.com/cards/7", lastmod: None });
+        async move { Ok::<_, Error>(seo::sitemap(urls)) }
+    };
+    let chart = move || {
+        chart.ran();
+        async move { Public::new(minute, crate::Media::new("image/svg+xml", svg())) }
+    };
+    let sitemap = move || {
+        sitemap.ran();
+        async move { seo::sitemap((0..40).map(|_| seo::SitemapUrl { loc: "https://example.com/cards/7", lastmod: None })) }
+    };
+    let robots = move || {
+        robots.ran();
+        async move { seo::robots(&["/account/"], None) }
+    };
+    let cards = move || {
+        cards.ran();
+        async move { Public::new(minute, crate::Media::new("text/csv", csv()).attachment("cards.csv")) }
+    };
+    let mark = move || {
+        mark.ran();
+        async move { Public::immutable(crate::Media::new("image/svg+xml", svg())) }
+    };
+    let picture = move || {
+        picture.ran();
+        async move { Public::new(minute, crate::Media::new("image/png", vec![0x89; 4096])) }
+    };
+    // A picture one byte under the size a body is kept from.
+    let dot = runs.clone();
+    let dot = move || {
+        dot.ran();
+        async move { Public::new(minute, crate::Media::new("image/png", vec![0x89; 1023])) }
+    };
+    let export = move || {
+        export.ran();
+        let chunks = futures_util::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from(csv()))]);
+        async move { Public::new(minute, crate::Media::stream_sized("text/csv", csv().len() as u64, chunks)) }
+    };
+    let routes = Table::new()
+        .route("/sitemap.xml", crate::route::get(sitemap).0)
+        .route("/robots.txt", crate::route::get(robots).0)
+        .route("/sitemap/2.xml", crate::route::get(paged).0)
+        .route("/cards.csv", crate::route::get(cards).0.post(|| async { StatusCode::NO_CONTENT }))
+        .route("/chart.svg", crate::route::get(chart).0)
+        .route("/tagged.csv", crate::route::get(tagged).0)
+        .route("/crawlers/robots.txt", crate::route::get(crawlers).0)
+        .route("/flaky.csv", crate::route::get(flaky).0)
+        .route("/mark.svg", crate::route::get(mark).0)
+        .route("/picture.png", crate::route::get(picture).0)
+        .route("/dot.png", crate::route::get(dot).0)
+        .route("/export.csv", crate::route::get(export).0);
+    let router = App::new(Routes::from(routes)).router();
+    for (path, kept) in [
+        ("/sitemap.xml", true),
+        ("/robots.txt", false),
+        ("/sitemap/2.xml", true),
+        ("/cards.csv", true),
+        ("/chart.svg", true),
+        ("/tagged.csv", false),
+        ("/crawlers/robots.txt", true),
+        ("/mark.svg", false),
+        ("/picture.png", true),
+        ("/dot.png", false),
+        ("/export.csv", false),
+    ] {
+        let before = runs.count();
+        let (status, first, body) = fetch(&router, "GET", path, &[]).await;
+        let (_, again, same) = fetch(&router, "GET", path, &[]).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(again.contains_key(header::AGE), kept, "{path}: {again:?}");
+        assert_eq!(runs.count() - before, if kept { 1 } else { 2 }, "{path}");
+        assert_eq!(body, same, "{path}");
+        // Every header of the answer its handler made is on the kept one.
+        for (name, value) in first.iter().filter(|(name, _)| *name != header::DATE) {
+            assert!(again.get_all(name).iter().any(|sent| sent == value), "{path}: {name}: {value:?} in {again:?}");
+        }
+    }
+    let (_, cards, _) = fetch(&router, "GET", "/cards.csv", &[("accept-encoding", "gzip")]).await;
+    assert_eq!(cards[header::CONTENT_TYPE], "text/csv");
+    assert_eq!(cards[header::CONTENT_DISPOSITION], "attachment; filename=\"cards.csv\"");
+    assert_eq!(cards[header::CACHE_CONTROL], "public, max-age=60");
+    assert!(cards.contains_key(header::AGE), "{cards:?}");
+    #[cfg(feature = "compress")]
+    assert_eq!(cards[header::CONTENT_ENCODING], "gzip");
+    // A kept picture is given to a request that names a coding as it is, with a tag, and the
+    // tag answers `304` with no handler run: what keeping one is for, since its tag's hash is
+    // made for the kept copy and not for each such request.
+    let before = runs.count();
+    let (_, picture, _) = fetch(&router, "GET", "/picture.png", &[("accept-encoding", "gzip")]).await;
+    assert!(picture.contains_key(header::AGE) && !picture.contains_key(header::CONTENT_ENCODING), "{picture:?}");
+    let named = [("accept-encoding", "gzip"), ("if-none-match", picture[header::ETAG].to_str().unwrap())];
+    let (status, unchanged, none) = fetch(&router, "GET", "/picture.png", &named).await;
+    assert_eq!((status, none.len(), runs.count() - before), (StatusCode::NOT_MODIFIED, 0, 0));
+    // No coding makes a picture smaller, so neither answer varies on the codings asked for.
+    for headers in [&picture, &unchanged] {
+        let named =
+            headers.get_all(header::VARY).iter().any(|value| value.as_bytes().windows(15).any(|w| w == b"accept-encoding"));
+        assert!(!named, "{headers:?}");
+    }
+    // A file's key is its URL with its query, and a request with a cookie is its handler's.
+    let before = runs.count();
+    let (_, other, _) = fetch(&router, "GET", "/cards.csv?page=2", &[]).await;
+    let (_, again, _) = fetch(&router, "GET", "/cards.csv?page=2", &[]).await;
+    let (_, known, _) = fetch(&router, "GET", "/cards.csv", &[("cookie", "sid=1")]).await;
+    assert_eq!((other.contains_key(header::AGE), known.contains_key(header::AGE)), (false, false));
+    assert!(again.contains_key(header::AGE), "{again:?}");
+    assert_eq!(runs.count() - before, 2);
+    // A handler that failed is asked again, and what it then makes is kept.
+    let before = runs.count();
+    let (failed, first, _) = fetch(&router, "GET", "/flaky.csv", &[]).await;
+    let (made, second, _) = fetch(&router, "GET", "/flaky.csv", &[]).await;
+    let (_, third, _) = fetch(&router, "GET", "/flaky.csv", &[]).await;
+    assert_eq!((failed, made), (StatusCode::NOT_FOUND, StatusCode::OK));
+    assert_eq!((first.contains_key(header::AGE), second.contains_key(header::AGE)), (false, false));
+    assert!(third.contains_key(header::AGE), "{third:?}");
+    assert_eq!(runs.count() - before, 2);
+    let (_, mark, _) = fetch(&router, "GET", "/mark.svg", &[]).await;
+    assert_eq!(mark[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
+    assert_eq!(mark[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    // A file larger than an eighth of what the app keeps is its handler's, as a page that large
+    // is: a picture of 8,192 bytes where the app keeps 64 KiB (its headers count toward its size
+    // too, so it is over the eighth and under a quarter), beside one of 4,096 that is kept.
+    let sized = |length: usize| move || async move { Public::new(minute, crate::Media::new("image/png", vec![0x89; length])) };
+    let bounded =
+        Table::new().route("/large.png", crate::route::get(sized(8192)).0).route("/small.png", crate::route::get(sized(4096)).0);
+    let bounded = App::new(Routes::from(bounded)).kept_answers(64 * 1024).router();
+    for (path, kept) in [("/large.png", false), ("/small.png", true)] {
+        fetch(&bounded, "GET", path, &[]).await;
+        assert_eq!(fetch(&bounded, "GET", path, &[]).await.1.contains_key(header::AGE), kept, "{path}");
+    }
+    // A kept file is a kept answer in every other way: its tag answers `304`, a `HEAD` is its
+    // handler's, and a write to its path drops it.
+    {
+        let named = [("accept-encoding", "gzip"), ("if-none-match", cards[header::ETAG].to_str().unwrap())];
+        let before = runs.count();
+        let (status, unchanged, body) = fetch(&router, "GET", "/cards.csv", &named).await;
+        assert_eq!((status, body.len(), runs.count() - before), (StatusCode::NOT_MODIFIED, 0, 0), "{unchanged:?}");
+        let (status, head, _) = fetch(&router, "HEAD", "/cards.csv", &[]).await;
+        assert_eq!((status, head.contains_key(header::AGE), runs.count() - before), (StatusCode::OK, false, 1));
+        let (status, ..) = fetch(&router, "POST", "/cards.csv", &[("sec-fetch-site", "same-origin")]).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_, made, _) = fetch(&router, "GET", "/cards.csv", &[]).await;
+        assert_eq!((made.contains_key(header::AGE), runs.count() - before), (false, 2), "made again after the write");
+        let (_, kept, _) = fetch(&router, "GET", "/cards.csv", &[]).await;
+        assert_eq!((kept.contains_key(header::AGE), runs.count() - before), (true, 2), "and kept again");
+    }
+}
+
+/// A route whose bodies are all too small to keep stops asking the store after 64 in a row, and
+/// is its handler's as it was before the app kept bodies, but for about one request in 256,
+/// which asks as before: so a route whose bodies grew is found out, and kept again. A
+/// body large enough ends a run and so does one given from the store, so a route that answers
+/// both sizes keeps asking while one of those comes within each 64, also once its large bodies
+/// are all kept and only the small are made.
+#[tokio::test]
+async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let minute = Duration::from_secs(60);
+    let size = std::sync::Arc::new(AtomicUsize::new(8));
+    let runs = Runs::default();
+    let (ran, sized) = (runs.clone(), size.clone());
+    let body = move || {
+        ran.ran();
+        let size = sized.load(Ordering::Relaxed);
+        async move { Public::new(minute, "a".repeat(size)) }
+    };
+    let routes = Table::new().route("/body", crate::route::get(body).0);
+    let router = App::new(Routes::from(routes)).router();
+    let asked = |router: Router| async move { fetch(&router, "GET", "/body", &[]).await.1.contains_key(header::AGE) };
+    let other = |router: Router, n: usize| async move {
+        fetch(&router, "GET", &format!("/body?n={n}"), &[]).await.1.contains_key(header::AGE)
+    };
+    // This thread leaves 255 requests to their handlers before one asks, whatever it drew before.
+    crate::kept::Unkept::leaves_next(255);
+
+    // 63 small bodies and a large one: the run ended, and the large one is kept and given.
+    for _ in 0..63 {
+        assert!(!asked(router.clone()).await);
+    }
+    size.store(2048, Ordering::Relaxed);
+    assert!(!asked(router.clone()).await && asked(router.clone()).await, "kept, after 63 small bodies");
+    assert_eq!(runs.count(), 64);
+    // The large one ended the run: 63 more small bodies, at other URLs of the route so the kept
+    // body stands. The kept body given ends that run too, so after 63 more the route still
+    // asks, and a large body is kept.
+    size.store(8, Ordering::Relaxed);
+    for n in 0..63 {
+        assert!(!other(router.clone(), n).await);
+    }
+    assert!(asked(router.clone()).await, "the kept body, between two runs of small ones");
+    for n in 100..163 {
+        assert!(!other(router.clone(), n).await);
+    }
+    size.store(2048, Ordering::Relaxed);
+    assert!(!other(router.clone(), 50).await && other(router.clone(), 50).await, "the route still asks");
+    // 64 small bodies in a row follow.
+    size.store(8, Ordering::Relaxed);
+    for n in 200..264 {
+        assert!(!other(router.clone(), n).await);
+    }
+    // From here the store is left out: a large body is made for each request and not kept, and
+    // the one kept before is not given.
+    size.store(2048, Ordering::Relaxed);
+    let before = runs.count();
+    assert!(!other(router.clone(), 99).await && !other(router.clone(), 99).await, "the store is not asked");
+    assert!(!asked(router.clone()).await, "nor is the body kept before given");
+    assert_eq!(runs.count() - before, 3);
+    // Until the request this thread asks for: three were left above, so the 253rd from here
+    // asks, finds nothing, and its body is kept, which ends the run.
+    for left in 3..255 {
+        assert!(!other(router.clone(), 99).await, "left to the handler: request {left}");
+    }
+    assert!(!other(router.clone(), 99).await, "the one that asks: made by its handler, and kept");
+    assert!(other(router.clone(), 99).await, "given from here on");
+    assert!(asked(router.clone()).await, "as is the body kept before");
+
+    // The one that asks may find a body kept: that ends the run as well. 64 small bodies, 255
+    // requests left to the handler, and the next is given the kept body, as are those after it.
+    size.store(8, Ordering::Relaxed);
+    crate::kept::Unkept::leaves_next(255);
+    for n in 300..364 {
+        assert!(!other(router.clone(), n).await);
+    }
+    for left in 0..255 {
+        assert!(!asked(router.clone()).await, "left to the handler: request {left}");
+    }
+    assert!(asked(router.clone()).await, "the one that asks is given the kept body");
+    assert!(other(router.clone(), 50).await && asked(router.clone()).await, "and the route asks again");
+}
+
+/// An answer left out for another reason counts toward a route's run as one too small does: a
+/// route whose every body draws a form's submit key stops asking the store too, and one kept
+/// between ends that run as well.
+#[tokio::test]
+async fn a_route_none_of_whose_answers_is_kept_leaves_the_store_out_whatever_the_reason() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    const SUBMIT: crate::form::FieldName<crate::form::SubmitKey> = crate::form::FieldName::__new("submit");
+    let keyed = std::sync::Arc::new(AtomicBool::new(true));
+    let draws = keyed.clone();
+    let body = move || {
+        let keyed = draws.load(Ordering::Relaxed);
+        async move {
+            let field = if keyed { crate::form::SubmitKey::field(SUBMIT).to_html() } else { String::new() };
+            Public::new(Duration::from_secs(60), format!("{field}{}", "a".repeat(2048)))
+        }
+    };
+    let router = App::new(Routes::from(Table::new().route("/body", crate::route::get(body).0))).router();
+    let asked = |router: Router, n: usize| async move {
+        fetch(&router, "GET", &format!("/body?n={n}"), &[]).await.1.contains_key(header::AGE)
+    };
+    crate::kept::Unkept::leaves_next(255);
+    // 63 bodies with a key, each of a size the app keeps and none kept, and one without, which
+    // is: the route still asked.
+    for n in 0..63 {
+        assert!(!asked(router.clone(), n).await);
+    }
+    keyed.store(false, Ordering::Relaxed);
+    assert!(!asked(router.clone(), 100).await && asked(router.clone(), 100).await, "kept, after 63 with a key");
+    // 64 with a key in a row: the route leaves the store out, so a body it could keep is not.
+    keyed.store(true, Ordering::Relaxed);
+    for n in 200..264 {
+        assert!(!asked(router.clone(), n).await);
+    }
+    keyed.store(false, Ordering::Relaxed);
+    assert!(!asked(router.clone(), 300).await && !asked(router.clone(), 300).await, "the store is not asked");
+    assert!(!asked(router.clone(), 100).await, "nor is the body kept before given");
+}
+
+/// A kept answer in an API is the handler's part alone: what the API adds for the site that asks
+/// (`Access-Control-Allow-Origin`) is written for each request, so no site is sent another's.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_kept_api_answer_is_sent_with_each_request_s_own_cors() {
+    let runs = Runs::default();
+    let ran = runs.clone();
+    let rates = move || {
+        ran.ran();
+        // Of a size the app keeps.
+        async move { Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json(vec![1.5_f64; 400]))) }
+    };
+    struct Counted(Runs);
+
+    impl crate::Middleware for Counted {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            self.0.ran();
+            next.run(req).await
+        }
+    }
+
+    let requests = Runs::default();
+    let router = App::new(Routes::new())
+        .api::<ApiRoot>(|api| {
+            api.route::<ApiRates>(crate::route::get(rates).post(|| async { StatusCode::NO_CONTENT }))
+                .allow_origin("https://partner.example")
+                .middleware(Counted(requests.clone()))
+        })
+        .router();
+    let partner = [("origin", "https://partner.example")];
+    let allowed = |headers: &HeaderMap| headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).map(|v| v.to_str().unwrap().to_string());
+    let (status, first, body) = fetch(&router, "GET", "/api/rates", &partner).await;
+    let rates = format!("[{}]", vec!["1.5"; 400].join(","));
+    assert_eq!(
+        (status, &body[..], allowed(&first).as_deref()),
+        (StatusCode::OK, rates.as_bytes(), Some("https://partner.example"))
+    );
+    let (_, plain, same) = fetch(&router, "GET", "/api/rates", &[]).await;
+    assert!(plain.contains_key(header::AGE) && same == body, "{plain:?}");
+    assert_eq!(allowed(&plain), None, "not the first asker's");
+    let (_, other, _) = fetch(&router, "GET", "/api/rates", &[("origin", "https://other.example")]).await;
+    assert!(other.contains_key(header::AGE) && allowed(&other).is_none(), "{other:?}");
+    let (_, again, _) = fetch(&router, "GET", "/api/rates", &partner).await;
+    assert!(again.contains_key(header::AGE) && allowed(&again).as_deref() == Some("https://partner.example"), "{again:?}");
+    assert_eq!((runs.count(), requests.count()), (1, 4), "one run for all four, and the API's middleware met each");
+
+    // A data client, as an API's usually is: kept as its own way of asking, and for every cache.
+    let data = [("accept", "application/json"), ("origin", "https://partner.example")];
+    let (_, asked, same) = fetch(&router, "GET", "/api/rates", &data).await;
+    assert!(runs.count() == 2 && !asked.contains_key(header::AGE) && same == body, "{asked:?}");
+    let (_, asked, same) = fetch(&router, "GET", "/api/rates", &data).await;
+    assert!(runs.count() == 2 && asked.contains_key(header::AGE) && same == body, "{asked:?}");
+    assert_eq!(asked[header::CACHE_CONTROL], "public, max-age=60");
+    assert_eq!(allowed(&asked).as_deref(), Some("https://partner.example"));
+
+    // A write in the API drops what is kept at its path, both ways of asking.
+    let (status, _, _) = fetch(&router, "POST", "/api/rates", &[("sec-fetch-site", "same-origin")]).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!fetch(&router, "GET", "/api/rates", &[]).await.1.contains_key(header::AGE));
+    assert!(!fetch(&router, "GET", "/api/rates", &data).await.1.contains_key(header::AGE));
+    assert_eq!(runs.count(), 4);
+}
+
+/// A page route may answer a file in its page's place (`PageOr`), and a file of a known size is
+/// kept as the page would be. Markup in one that holds a form's new submit key was rendered with
+/// no page to mark it, so the handler is watched for the key being drawn, and it is not kept.
+#[tokio::test]
+async fn a_file_in_a_page_s_place_is_kept_as_the_page_unless_it_drew_a_submit_key() {
+    const SUBMIT: crate::form::FieldName<crate::form::SubmitKey> = crate::form::FieldName::__new("submit");
+    type FileOrPage = crate::PageOr<Media, crate::answer::ForAll>;
+    let minute = Duration::from_secs(60);
+    let runs = Runs::default();
+    let (file, keyed) = (runs.clone(), runs.clone());
+    let file = move || {
+        file.ran();
+        async move { Public::new(minute, Ok::<FileOrPage, Error>(Media::new("text/csv", "sku,qty\n").into())) }
+    };
+    let keyed = move || {
+        keyed.ran();
+        let form = html! { <form method="post">{crate::form::SubmitKey::field(SUBMIT)}</form> }.to_html();
+        async move { Public::new(minute, Ok::<FileOrPage, Error>(Media::new("text/html", form).into())) }
+    };
+    let routes = Table::new().route("/file", crate::route::get(file).0).route("/keyed", crate::route::get(keyed).0);
+    let router = App::new(Routes::from(routes)).router();
+    // A mark an earlier request left on the thread is no one's: the file is kept all the same.
+    let _ = crate::form::SubmitKey::field(SUBMIT).to_html();
+    for (path, kept) in [("/file", true), ("/keyed", false)] {
+        let before = runs.count();
+        let (status, _, body) = fetch(&router, "GET", path, &[]).await;
+        let (_, headers, again) = fetch(&router, "GET", path, &[]).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(headers.contains_key(header::AGE), kept, "{path}: {headers:?}");
+        assert_eq!(runs.count() - before, if kept { 1 } else { 2 }, "{path}");
+        assert_eq!(body == again, kept, "{path}: one key for each request");
+    }
+}
+
+/// A handler that waits moves between the runtime's threads, and a key it drew is seen on
+/// whichever thread ran that poll: no body with one is kept, and no two requests share a key.
+#[cfg(feature = "json")]
+#[test]
+fn a_submit_key_is_seen_wherever_the_handler_s_poll_ran() {
+    const SUBMIT: crate::form::FieldName<crate::form::SubmitKey> = crate::form::FieldName::__new("submit");
+    let runs = Runs::default();
+    let ran = runs.clone();
+    let keyed = move || {
+        ran.ran();
+        async move {
+            for _ in 0..8 {
+                tokio::task::yield_now().await;
+            }
+            let field = crate::form::SubmitKey::field(SUBMIT).to_html();
+            for _ in 0..8 {
+                tokio::task::yield_now().await;
+            }
+            // Of a size the app keeps, so the key is what keeps it out.
+            Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json((field, "keyed ".repeat(200)))))
+        }
+    };
+    let plain = || async { Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json("plain".repeat(300)))) };
+    // Four routes for the keyed bodies, 40 requests each: a route that made 64 answers in a row
+    // with none kept would leave the store out, and its handler would no longer be watched.
+    let routes = (0..4).fold(Table::new().route("/plain", crate::route::get(plain).0), |routes, n| {
+        routes.route(["/keyed/0", "/keyed/1", "/keyed/2", "/keyed/3"][n], crate::route::get(keyed.clone()).0)
+    });
+    let router = App::new(Routes::from(routes)).router();
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
+    runtime.block_on(async {
+        let mut bodies = std::collections::HashSet::new();
+        for _ in 0..40 {
+            let asked: Vec<_> = (0..8)
+                .map(|n| {
+                    let router = router.clone();
+                    let path = ["/keyed/0", "/plain", "/keyed/1", "/plain", "/keyed/2", "/plain", "/keyed/3", "/plain"][n];
+                    tokio::spawn(async move { fetch(&router, "GET", path, &[]).await })
+                })
+                .collect();
+            for (n, asked) in asked.into_iter().enumerate() {
+                let (_, headers, body) = asked.await.unwrap();
+                if n % 2 == 0 {
+                    assert!(!headers.contains_key(header::AGE), "a body with a key is not kept: {headers:?}");
+                    assert!(bodies.insert(body), "a key for each request");
+                }
+            }
+        }
+        assert_eq!(runs.count(), 160, "every request's own");
+    });
+}
+
+/// A kept body is for the language its handler read: the header is part of its key once the
+/// handler reads it (`req.t()`, `req.lang()`), in an app with messages, with a messages type
+/// that is not the app's, and with none. A body whose handler does not read it is one copy for
+/// every language.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_kept_body_is_for_the_language_its_handler_read() {
+    crate::i18n::messages! { struct BodyMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    crate::i18n::messages! { struct OtherMsg { "fr" => "src/i18n/fr.json", "en" => "src/i18n/en.json" } }
+    /// Each body is its word this many times: of a size the app keeps.
+    const REPEATED: usize = 600;
+    let minute = Duration::from_secs(60);
+    let runs = Runs::default();
+    let routes = || {
+        let (words, lang, other, same) = (runs.clone(), runs.clone(), runs.clone(), runs.clone());
+        let words = move |req: Req| {
+            words.ran();
+            async move {
+                let t: BodyMsg = req.t();
+                Public::new(minute, t.item_listings().to_string().repeat(REPEATED))
+            }
+        };
+        let lang = move |req: Req| {
+            lang.ran();
+            async move { Public::new(minute, Ok::<_, JsonError>(Json(req.lang().repeat(REPEATED)))) }
+        };
+        let other = move |req: Req| {
+            other.ran();
+            async move {
+                let t: OtherMsg = req.t();
+                Public::new(minute, t.item_listings().to_string().repeat(REPEATED))
+            }
+        };
+        let same = move || {
+            same.ran();
+            async move { Public::new(minute, "same".repeat(REPEATED)) }
+        };
+        Table::new()
+            .route("/words", crate::route::get(words).0)
+            .route("/lang", crate::route::get(lang).0)
+            .route("/other", crate::route::get(other).0)
+            .route("/same", crate::route::get(same).0)
+    };
+    let with = App::new(Routes::from(routes())).messages::<BodyMsg>().router();
+    let bare = App::new(Routes::from(routes())).router();
+    // Without `App::messages` the request's locale is "en" and no header is read for it.
+    for (app, paths) in [(&with, &["/words", "/lang", "/other"][..]), (&bare, &["/words", "/other"][..])] {
+        for path in paths {
+            let before = runs.count();
+            for (asked, word, ran) in [("fr", "Annonces", 1), ("en", "Listings", 2), ("fr", "Annonces", 2), ("en", "Listings", 2)]
+            {
+                let (_, headers, body) = fetch(app, "GET", path, &[("accept-language", asked)]).await;
+                let said = if *path == "/lang" { format!("\"{}\"", asked.repeat(REPEATED)) } else { word.repeat(REPEATED) };
+                assert_eq!(String::from_utf8_lossy(&body), said, "{path} asked in {asked}");
+                assert_eq!(runs.count() - before, ran, "{path} asked in {asked}");
+                // Made or given again, the answer says which header chose it.
+                let vary: Vec<_> = headers.get_all(header::VARY).iter().filter_map(|value| value.to_str().ok()).collect();
+                assert!(vary.iter().any(|value| value.contains("accept-language")), "{path} asked in {asked}: {vary:?}");
+            }
+        }
+        let before = runs.count();
+        for asked in ["fr", "en", "de"] {
+            let (_, headers, body) = fetch(app, "GET", "/same", &[("accept-language", asked)]).await;
+            assert_eq!(body.len(), 4 * REPEATED);
+            let named =
+                headers.get_all(header::VARY).iter().any(|value| value.as_bytes().windows(15).any(|w| w == b"accept-language"));
+            assert!(!named, "a body whose handler read no language names none");
+        }
+        assert_eq!(runs.count() - before, 1, "the header is not read, so one copy");
+    }
+}
+
+/// What is not kept of a route that answers JSON for everyone, each of a size the app keeps: a
+/// failure, JSON the app holds as bytes (it carries its own coded forms, a mark the store does
+/// not replay), and a body with a form's new submit key in markup its handler rendered, also
+/// where the handler waited after rendering it.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_json_answer_that_failed_or_is_one_request_s_alone_is_not_kept() {
+    const SUBMIT: crate::form::FieldName<crate::form::SubmitKey> = crate::form::FieldName::__new("submit");
+    let minute = Duration::from_secs(60);
+    let runs = Runs::default();
+    let (missing, raw, keyed, waited) = (runs.clone(), runs.clone(), runs.clone(), runs.clone());
+    let missing = move || {
+        missing.ran();
+        async move { Public::new(minute, Err::<Json<u32>, JsonError>(crate::Error::not_found().into())) }
+    };
+    let raw = move || {
+        raw.ran();
+        let held = crate::json::Raw::new(format!(r#"{{"ladders":"{}"}}"#, "rung ".repeat(300))).expect("JSON");
+        async move { Public::new(minute, Ok::<_, JsonError>(Json(held))) }
+    };
+    let keyed = move || {
+        keyed.ran();
+        async move {
+            Public::new(minute, Ok::<_, JsonError>(Json((crate::form::SubmitKey::field(SUBMIT).to_html(), "keyed ".repeat(200)))))
+        }
+    };
+    let waited = move |req: Req| {
+        waited.ran();
+        async move {
+            let field = req.rendered(crate::form::SubmitKey::field(SUBMIT)).into_string();
+            tokio::task::yield_now().await;
+            Public::new(minute, Ok::<_, JsonError>(Json((field, "keyed ".repeat(200)))))
+        }
+    };
+    let routes = Table::new()
+        .route("/missing", crate::route::get(missing).0)
+        .route("/raw", crate::route::get(raw).0)
+        .route("/keyed", crate::route::get(keyed).0)
+        .route("/waited", crate::route::get(waited).0);
+    let router = App::new(Routes::from(routes)).router();
+    for (path, status, kept) in [
+        ("/missing", StatusCode::NOT_FOUND, false),
+        ("/raw", StatusCode::OK, false),
+        ("/keyed", StatusCode::OK, false),
+        ("/waited", StatusCode::OK, false),
+    ] {
+        let before = runs.count();
+        let (first, _, body) = fetch(&router, "GET", path, &[]).await;
+        let (_, headers, again) = fetch(&router, "GET", path, &[]).await;
+        assert_eq!(first, status, "{path}");
+        assert_eq!(headers.contains_key(header::AGE), kept, "{path}: {headers:?}");
+        assert_eq!(runs.count() - before, if kept { 1 } else { 2 }, "{path}");
+        if path == "/keyed" || path == "/waited" {
+            assert!(body.len() > 60 && body != again, "{path}: a key for each request");
+        }
+    }
 }
 
 /// What settling a page's caching costs a request: `SETTLE_REQUESTS` (200) full-document `GET`s

@@ -102,6 +102,54 @@ pub trait Answer: IntoResponse + Sized {
     /// a page says `const PAGE: bool = true;` (or forwards its page's), or its route starts no read
     /// and its layout's places draw nothing.
     const PAGE: bool = false;
+    /// The answer is one whole body that only the handler's inputs decide (JSON, text, a file): what the
+    /// app keeps for a [`Public`] route from 1,024 bytes, as it keeps a page
+    /// ([`crate::kept`]). Not a public API:
+    /// its type is one an app cannot name, so an answer type of the app's own is never kept this way
+    /// (`Json` of a type of the app's is `Json`'s answer, kept under the checks every kept answer
+    /// passes).
+    ///
+    /// ```compile_fail,E0326
+    /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, AnyAnswer};
+    ///
+    /// struct Mine;
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn into_response(self) -> Response {
+    ///         "mine".into_response()
+    ///     }
+    /// }
+    ///
+    /// impl Answer for Mine {
+    ///     const FORMAT: Format = Format::Html;
+    ///     const WHOLE: bool = true;
+    ///     type Inputs = AnyInputs;
+    ///     type Rows = NotAFeed;
+    ///     type Kind = AnyAnswer;
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0603
+    /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, AnyAnswer};
+    ///
+    /// struct Mine;
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn into_response(self) -> Response {
+    ///         "mine".into_response()
+    ///     }
+    /// }
+    ///
+    /// impl Answer for Mine {
+    ///     const FORMAT: Format = Format::Html;
+    ///     const WHOLE: corten::answer::sealed::Whole = corten::answer::sealed::Whole(true);
+    ///     type Inputs = AnyInputs;
+    ///     type Rows = NotAFeed;
+    ///     type Kind = AnyAnswer;
+    /// }
+    /// ```
+    #[doc(hidden)]
+    const WHOLE: sealed::Whole = sealed::Whole(false);
     /// What a request from the runtime ([`crate::Mode::Action`]) or a script's read can get:
     /// [`Patches`] for `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), a patch
     /// whenever the runtime asked; [`Screen<T>`] for `HtmlResult<Screen<T>>` (and `Public<..>` or
@@ -684,6 +732,10 @@ pub(crate) mod sealed {
     /// inputs say yes.
     pub struct Keyed(pub(crate) bool);
 
+    /// What [`super::Answer::WHOLE`] says. Only Corten can name it, so only Corten's own answers
+    /// say yes.
+    pub struct Whole(pub(crate) bool);
+
     pub trait Kind {}
     impl Kind for AnyAnswer {}
     impl Kind for Patches {}
@@ -1001,18 +1053,12 @@ impl<A: Shareable> Shareable for std::result::Result<A, JsonError> {
 }
 
 #[cfg(feature = "json")]
-impl<T> Shareable for crate::Json<T>
-where
-    crate::Json<T>: IntoResponse,
-{
+impl<T: crate::json::ToJson> Shareable for crate::Json<T> {
     type ForAll = Self;
 }
 
 #[cfg(feature = "json")]
-impl<T> ForEveryone for crate::Json<T>
-where
-    crate::Json<T>: IntoResponse,
-{
+impl<T: crate::json::ToJson> ForEveryone for crate::Json<T> {
     type Named = Self;
 
     fn for_all(self) -> Self {
@@ -1339,17 +1385,16 @@ impl IntoResponse for JsonError {
 impl<A: Answer> Answer for std::result::Result<A, JsonError> {
     const FORMAT: Format = A::FORMAT;
     const PAGE: bool = A::PAGE;
+    const WHOLE: sealed::Whole = A::WHOLE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
     type Kind = AnyAnswer;
 }
 
 #[cfg(feature = "json")]
-impl<T> Answer for crate::Json<T>
-where
-    crate::Json<T>: IntoResponse,
-{
+impl<T: crate::json::ToJson> Answer for crate::Json<T> {
     const FORMAT: Format = Format::Json;
+    const WHOLE: sealed::Whole = T::__KEPT;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;
@@ -1358,6 +1403,7 @@ where
 impl<A: Answer> Answer for Result<A, Error> {
     const FORMAT: Format = A::FORMAT;
     const PAGE: bool = A::PAGE;
+    const WHOLE: sealed::Whole = A::WHOLE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
     type Kind = <A::Kind as KindOf<A>>::InResult;
@@ -1365,6 +1411,7 @@ impl<A: Answer> Answer for Result<A, Error> {
 
 impl Answer for &'static str {
     const FORMAT: Format = Format::Html;
+    const WHOLE: sealed::Whole = sealed::Whole(true);
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;
@@ -1372,6 +1419,7 @@ impl Answer for &'static str {
 
 impl Answer for String {
     const FORMAT: Format = Format::Html;
+    const WHOLE: sealed::Whole = sealed::Whole(true);
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;
@@ -1484,7 +1532,16 @@ impl Answer for Relay {
 /// which sends no `Cache-Control` unless the handler says one. At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
 /// keep it for a year, as Corten's own versioned files are; its handler cannot read who is asking,
-/// as any `Public` handler cannot.
+/// as any `Public` handler cannot. A [`Public::new`] one of 1,024 bytes or more, whatever its
+/// type (a CSV, an SVG, a PNG, a PDF), is kept by the app
+/// as `Public` text is, with its headers, and given again in the handler's place to a request
+/// that shows nothing about who asks, until its lifetime ends
+/// ([`App::kept_answers`](crate::App::kept_answers)): the app then holds a second copy of its
+/// bytes while it is kept, and makes its `ETag` once and not for each such request. Any other from such
+/// a route is the handler's for every request: a smaller one, a stream, an immutable one, one
+/// larger than an eighth of what the app keeps, and any from an unstaged route. One a page
+/// route answers in its page's place ([`PageOr`]) is kept as that page would be, also under
+/// 1,024 bytes.
 ///
 /// ```
 /// use corten::{prelude::*, Media};
@@ -1515,6 +1572,8 @@ impl Media {
         use http::header;
         use http::HeaderValue;
         let mut res = Response::new(crate::body::Body::from(bytes.into()));
+        // Room for the headers `App` adds too, so the map is allocated once.
+        res.headers_mut().reserve(crate::response::APP_HEADERS);
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
         Media(res)
     }
@@ -1621,6 +1680,8 @@ impl Media {
             }
         });
         let mut res = Response::new(crate::body::Body::from_stream(checked));
+        // Room for the headers `App` adds too, as `Media::new` leaves.
+        res.headers_mut().reserve(crate::response::APP_HEADERS);
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
         res.extensions_mut().insert(Streamed);
         Media(res)
@@ -1740,6 +1801,7 @@ impl IntoResponse for Media {
 
 impl Answer for Media {
     const FORMAT: Format = Format::Html;
+    const WHOLE: sealed::Whole = sealed::Whole(true);
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;
@@ -2301,6 +2363,7 @@ impl<A: Shareable> IntoResponse for Public<A> {
 impl<A: Answer + Shareable> Answer for Public<A> {
     const FORMAT: Format = A::FORMAT;
     const PAGE: bool = A::PAGE;
+    const WHOLE: sealed::Whole = A::WHOLE;
     type Inputs = AnonymousInputs;
     type Rows = A::Rows;
     type Kind = <A::Kind as KindOf<A>>::InPublic;
@@ -2621,7 +2684,7 @@ pub struct Endpoint<H, O> {
     pub(crate) answer: PhantomData<fn() -> O>,
     /// The answer is [`Public`] (its inputs are [`AnonymousInputs`]).
     pub(crate) shared: bool,
-    /// And each input is one the kept page's key covers ([`Anonymous::KEYED`]).
+    /// And each input is one the kept answer's key covers ([`Anonymous::KEYED`]).
     pub(crate) keyed: bool,
 }
 
@@ -2656,8 +2719,15 @@ where
 {
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
 
-    fn keeps(&self) -> bool {
-        self.shared && self.keyed && O::PAGE
+    fn keeps(&self) -> Option<crate::kept::Shape> {
+        if !(self.shared && self.keyed) {
+            return None;
+        }
+        if O::PAGE {
+            Some(crate::kept::Shape::Page)
+        } else {
+            O::WHOLE.0.then_some(crate::kept::Shape::Body)
+        }
     }
 
     #[inline]

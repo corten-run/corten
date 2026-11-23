@@ -1921,6 +1921,22 @@ mod layout_reads {
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
     }
 
+    /// A `Public` text answer in such an app has no places: it is kept as its handler gave it
+    /// and starts no read.
+    #[tokio::test]
+    async fn a_public_body_is_kept_in_an_app_with_layout_reads() {
+        let count = CartCount::default();
+        let words = || async { crate::Public::new(Duration::from_secs(60), "plain words ".repeat(100)) };
+        let routes = Table::new().route("/words", crate::route::get(words).0);
+        let router = App::new(Routes::from(routes)).layout_read(count.clone()).router();
+        let (_, first, body) = call_with(router.clone(), "GET", "/words", None, None).await;
+        let (_, again, same) = call_with(router, "GET", "/words", None, None).await;
+        assert!(!first.contains_key(http::header::AGE), "{first:?}");
+        assert!(again.contains_key(http::header::AGE), "{again:?}");
+        assert!(same == body && body == "plain words ".repeat(100), "{same}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
     #[tokio::test]
     async fn the_page_is_filled_before_the_app_s_middleware_sees_it() {
         let routes = Table::new().route(

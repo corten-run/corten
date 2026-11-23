@@ -53,7 +53,9 @@ idle limits there are the route's
 while it is open, so a route that accepts them ends idle ones (closing one that has sent no frame
 for a set time, and pinging one that only listens so its pongs count) and bounds how many it
 keeps, or idle sockets take the cap from every other request. A refused `CONNECT` is an answer
-like any other. A clock of the server's own checks the header timeout a few times a
+like any other. A `2xx` to `CONNECT` goes out with no body, `Content-Length` or
+`Transfer-Encoding`, whatever its route set, since RFC 9110 9.3.6 forbids them there. A clock of
+the server's own checks the header timeout a few times a
 second, so a connection closes within a tenth of the timeout of it (at most a second either way). It applies to `serve`, `serve_on` and `serve_wrapped` alike (where a TLS handshake's time counts toward it), on
 every listener. `App::send_timeout` (60 seconds unless set, nginx's `send_timeout`) bounds what
 comes after: a write that finds the connection's send buffer full may wait that long for room,
@@ -956,6 +958,27 @@ fewer), and the rest is axum's route lookup by id and its futures around the sta
 allocator every request in process costs 1,791 to 4,135 less. An unstaged route's checks have
 since moved from its handler to the router, which runs them around it, costing 71 to 86 more ([below](#a-route-outside-the-stages)).
 
+A text or bytes answer (`String`, `&'static str`, `Bytes`, a `Media`, a static file) used to
+make its header map with its `Content-Type`, with room for six headers, and the security headers
+grew it on every request. It now starts with room for twelve, as JSON's map already did (a
+page's starts with more): what the default policy leaves such an answer with, HSTS and a
+compressed body included (a header beyond those grows the map once, as before). The answer's media type is also read once
+where it was read twice. Counted with `crates/corten/tests/router_cost.rs` (callgrind, release
+build, in-process `oneshot`, the difference between 1,200 and 200 requests over 1,000, the
+median of three runs each, which differed by at most 2; before at `9201e6dd0` with the test as it is at the
+after commit, `89e1d0f16`):
+
+| Request | Before, glibc | After, glibc | Before, jemalloc | After, jemalloc |
+|---|---|---|---|---|
+| text from a route with a parameter | 13,045 | 12,600 | 11,475 | 10,675 |
+| text answering a `POST` | 13,734 | 13,122 | 11,851 | 11,057 |
+| unknown URL, HTML 404 page | 17,687 | 17,680 | 15,328 | 15,321 |
+| text from an [`unstaged`](#a-route-outside-the-stages) route (`ROUTER_TARGET=unstaged`) | 5,225 | 5,571 | 4,418 | 4,525 |
+
+The last row is the cost: an unstaged text answer gets the same room and holds three headers
+(its `Content-Type`, `nosniff` and `sandbox`), as an unstaged JSON answer already did, and the
+larger block is one glibc's thread cache does not hold.
+
 ## Your own middleware
 
 Every request goes through the same stages in the same order, outside in, each needing the one
@@ -985,7 +1008,7 @@ before it (a route that says `unstaged` goes through none;
    has answered. Either way the page is filled with their values before its answer goes back out
    through 5: a middleware sees the filled page, and the time it measures around `next`
    includes the reads' wait ([design Choice 20](../design.md#choice-layout-reads)).
-   A `Public` page the app has kept is given here in the handler's place
+   A `Public` page, JSON, text or file the app has kept is given here in the handler's place
    ([Caching](#the-pages-the-app-keeps)): stages 1 to 5 ran for the request as for any other,
    and 7 and 8 follow.
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
@@ -1506,8 +1529,8 @@ mistake, the runtime loads the URL as a whole page instead of swapping it in.
 
 ### The pages the app keeps
 
-The app is the first shared cache of its own `Public` pages. The whole document a `Public`
-page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
+The app is the first shared cache of its own `Public` pages, and of its `Public` JSON,
+text and files of 1,024 bytes or more (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
 such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
 the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
@@ -1537,10 +1560,10 @@ else a page could differ by, and the answer nothing made for one request:
 | | Kept and given again | The handler answers |
 |---|---|---|
 | the handler | takes only Corten's own inputs for a page | takes an extractor of the app's own |
-| the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
+| the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
-| what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key, a `Vary` of the app's own |
+| what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
@@ -1578,7 +1601,8 @@ wait for, a database whose readers lag its writer) can leave the page as it was 
 lifetime ends.
 
 Nothing else is meant to drop a page before its lifetime ends (a write to another path does
-once in 65,536 times, where two paths share a count). A write to another path does not drop the
+once in 65,536 times, where two paths share a count, and so does one that began before the app
+had made any answer it may keep, below). A write to another path does not drop the
 list, and neither does a change made outside a request to the app (a task, a script, another
 instance): the page shows it when its lifetime ends, which is what the lifetime says. Purging a
 CDN in front does not purge the app, which gives the CDN the kept page again with its `Age`.
@@ -1586,8 +1610,16 @@ A request's own `Cache-Control: no-cache` (a hard reload) gets the kept page too
 page stands is the app's to say. Give a page whose changes must show at once a short lifetime.
 
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
-counted is each page's key, headers and body and each compressed form made of it, with an
-allowance for what holds them. Past the bound, a page not read since room was last made goes
+counted is each page's key (its URL once, its `Host`, and its `Accept-Language` where the page
+varies on it), headers and body and each compressed form made of it, with an allowance for what
+holds them. The allowance is generous: in one measured example under jemalloc, the template's
+allocator, a kept page of 6,124 bytes with four header lines and no compressed form made took
+7,112 bytes of allocations (about 7,270 of resident memory) and counted for about 7,800
+([design Choice 70](../design.md#choice-kept-pages)); a page with more or longer headers, or
+with compressed forms, takes more. Earlier
+releases counted the URL twice, so under the same bound a page with a long
+URL near its share (an eighth of the bound) may now be kept where it was not, and the store
+reaches the point where it is full a little later. Past the bound, a page not read since room was last made goes
 first. With room, every page is kept the first time it is made. Once the kept pages are within
 an eighth of the bound, keeping one may drop another, so a page is kept only when its URL was
 asked for before: a crawler's first walk over more URLs than there is room for, or searches no
@@ -1599,14 +1631,65 @@ of a page's handler: in a full store the answer to the first request for a URL t
 not remember is not kept, whether the page is new, or was kept while there was room or before
 the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
-so a change shows on the next load. An app with no `Public` page keeps nothing whatever the
-bound, and its writes are not counted, so it pays nothing for pages it cannot keep. An app's tests keep pages as a deploy does (`App::test`,
+so a change shows on the next load. An app with no `Public` page and no `Public` JSON, text or file route keeps nothing whatever the
+bound, and its writes are not counted, so it pays nothing for pages it cannot keep; one whose `Public` JSON, text and files
+are all too small to keep, or streams or files at URLs that name their content, still holds a store, since a body's size is known only when it is made, and
+pays for no count by path: writes are counted by path from the first answer the app may keep,
+and until then all together, so a write that was under way when that first answer was made drops
+every answer kept by the time it ends, and so does work it left (`signal.finish`) each time
+some ends. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
 only in the instance that answered it, and a restart starts empty.
 
-`Public` text, JSON and `Media` are not kept, and neither is anything that is not `Public`: a
+A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way from
+a size: its whole body, when that is 1,024 bytes or more, whatever its type and whether or not the
+build has the `compress` feature, under every rule above and by the same key (the language too, where the
+handler reads it with `req.t()` or `req.lang()`), with, outside
+an API (whose answers are not tagged), the tag's hash made once, and each coding's bytes where the
+app compresses it. What it saves is the handler with what it
+reads, the writing of the JSON, the hash and the compression, and once kept it is given to a
+request that accepts no coding as well. That request gets no tag, so where its handler makes
+nothing a kept body costs it more than the handler would: in a build with `compress`, 1.3% more
+cycles for a file of 8,000 bytes and 3.0% more for one of 1,024 at the mean of five builds of the
+same code on two CPUs, and up to 7.8% more in one of the ten. A smaller body is its handler's for every request: the hash a kept body saves grows
+with its size, and the instructions asking for it costs do not
+([design Choice 70](../design.md#choice-kept-pages)). A route whose bodies are all under the size
+stops asking the store after 64 answers in a row of which none was kept (one left out for another
+reason, a failure or a form's submit key, counts too, so 64 failures in a row from a route with
+bodies kept make it leave as well), but for about one request in 256, so it
+costs a load and a draw more than it did before bodies were kept and is found out if its bodies grow; a route
+where fewer than about one request in twelve is for a body large enough leaves the store out more
+often than not. While it does, a body it kept earlier is made again for each request, and the kept
+one may be given after a newer one, within its lifetime. Such a route has one answer at its URL, where a page route has the
+document, its swap and its data, so a data client's request (`Accept: application/json` first) is
+kept too, as a copy apart from a request that does not ask for JSON first: a handler that takes
+`Req` can read which of the two asked. What an API adds for the site that asks
+(`Access-Control-Allow-Origin`) is written for each request and is no part of what is kept, so no
+site is sent another's. A write drops it as it drops a page: `PUT /api/items/7` drops what is
+kept for `GET /api/items/7`, and not the list at `/api/items`, which shows the change when its
+lifetime ends.
+
+A file (`Media`), a sitemap and `robots.txt` (`seo::File`) are kept as text is: from 1,024
+bytes, whatever the type, so a CSV, an SVG, a sitemap, a PNG or a PDF of that size is kept, with the headers
+its handler gave it (its type, its file name), and a short `robots.txt` or a small icon is its
+handler's for every request. A picture is kept as it is, since no coding makes it smaller: what
+keeping it saves is its handler and the hash of its `ETag`, which is otherwise made from the whole
+file for every request that names a coding, as every browser's does. A request with a cookie other than the time zone's, or with `Authorization`, is its handler's,
+as for a page: an app whose visitors carry a session, consent or analytics cookie gains this for
+those without one, for crawlers and for the caches in front. The app holds a second copy
+of a kept file's bytes while it is kept (past its lifetime too, until its room is needed), within what it keeps in all (`App::kept_answers`), so a
+file larger than an eighth of that (4 MiB unless set) is not kept. A few large files can fill
+what the app keeps and turn its pages out: eight near 4 MiB are the 32 MiB it keeps unless set,
+and each query string asked for is a copy of its own. Raise `kept_answers` for such an app, and
+send a large file that never changes at a URL that names its content. A file sent as a stream (`Media::stream`) has no body to hold, and
+one at a URL that names its content (`Public::immutable`) is left to the caches that keep it for
+a year, so neither is kept. A file of a known size that a page route answers in its page's place
+(`PageOr<Media>`) is kept as that page would be, also under 1,024 bytes.
+
+A relay, a live stream and a feed are not kept: each is its handler's for every request, and so
+is JSON the app holds as bytes (`Json<json::Raw>`), which already keeps its compressed forms where the build compresses and is left out in every build. Nothing that is not `Public` is kept either: a
 page for one visitor runs its handler for every request, because a key that had to cover the
 caller is where a mistake shows one user's page to another. Cache the data such a page reads in
 the app, where it knows when the data changes.
@@ -1614,7 +1697,7 @@ the app, where it knows when the data changes.
 A page route's answer to a `GET` or `HEAD` (the page, a navigation's swap, a patch read again, a
 data client's JSON, a `Media` file) carries a weak `ETag` made from the body it rendered, its type
 and its `corten-*` headers, and a request whose `If-None-Match` names it is answered `304 Not
-Modified`: the answer is still rendered (unless it is a page the app kept), but not compressed
+Modified`: the answer is still made (unless it is one the app kept), but not compressed
 or sent. The browser keeps a `private,
 no-cache` page and asks before reusing it, so this is what lets it reuse its copy: on a page loaded
 again by a typed URL or a link without the runtime (every browser), and on a reload and the

@@ -10,8 +10,8 @@ const freeze = (value) => {
 };
 const group = (title, popular, performant, capabilities, cases) => ({ title, popular, performant, capabilities, cases });
 const sources = ["fixture", "api"];
-const records = (payload, targets, localized = false) => sources.flatMap((source) => targets.flatMap((target) =>
-  (localized && target === "page" ? locales : [null]).map((locale) => ({
+const records = (payload, targets, pageLocales = [null]) => sources.flatMap((source) => targets.flatMap((target) =>
+  (target === "page" ? pageLocales : [null]).map((locale) => ({
     key: `${payload}-${source}-${locale ?? "neutral"}-${target}`, payload, source, locale, target,
   }))));
 
@@ -24,9 +24,10 @@ export const groups = freeze({
   "json-api": group("JSON API", ["aspnet", "fastapi", "express", "spring"], ["axum-maud", "drogon", "gin", "aspnet-aot"],
     ["typed-complete-schema", "numeric-json", "tested-errors", "fetch-parse-reserialize", "no-output-cache"],
     ["catalog-v1", "marketplace-v2"].flatMap((payload) => records(payload, ["json"]))),
-  "localized-marketplace": group("Localized marketplace", ["nextjs", "aspnet", "django"], ["topcoat", "leptos", "gin", "drogon"],
+  "localized-marketplace": { ...group("Localized marketplace", ["nextjs", "aspnet", "django"], ["topcoat", "leptos", "gin", "drogon"],
     ["complete-marketplace", "request-time-localization", "filter-sort", "valid-invalid-forms", "js-and-no-js", "bounded-production-http/v2"],
-    records("marketplace-v2", ["page", "json"], true)),
+    records("marketplace-v2", ["page", "json"], ["rotating"])),
+    parityCases: records("marketplace-v2", ["page", "json"], locales), nativeResultSchema: "marketplace-results/v6" },
   "mixed-production": group("Mixed production traffic", ["aspnet", "spring", "django", "express", "fastapi"], ["topcoat", "gin", "drogon"],
     ["localized-reads", "numeric-json", "listings", "accepted-rejected-writes", "write-readback", "slow-upstream", "bounded-production-http/v2"],
     sources.flatMap((source) => locales.map((locale) => ({ key: `${source}-${locale}-mix`, source, locale, target: "mix" })))),
@@ -59,6 +60,9 @@ export function campaignRounds(round) {
       : ["live-delivery", "recoverable-live"].includes(group) ? round : `w${n}`]));
 }
 export const jsonPreparationRound = (round) => `j${2 * Number(round.slice(1))}`;
+export const jsonPreparationInvocation = (round) => ({
+  executable: "node", argv: ["bench/json-api/run.mjs", jsonPreparationRound(round), "--group", "json-api", "--build", "--check-only"],
+});
 export function nativeArtifactRoot(group, round) {
   const directory = group === "catalog-page" ? "catalog" : group === "localized-marketplace" ? "marketplace" : group;
   return group === "client-heavy" ? `bench/client-heavy/work/${round}`

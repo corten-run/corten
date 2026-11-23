@@ -2690,6 +2690,20 @@ function posts(event) {
  */
 const sourceIn = (event, selector) => event.sourceElement instanceof Element && !!closestOf(event.sourceElement, selector);
 
+/**
+ * The element a page's `#fragment` names, found as HTML finds the one a full load scrolls to: an
+ * id, else an `<a name>`, as written, then percent-decoded. Decoded as HTML does, never throwing: a
+ * `%` without two hex digits stays as written, and bytes that are not UTF-8 read as U+FFFD.
+ * @param {string} fragment an address's, which is ASCII: the URL parser escapes every other character
+ */
+function fragmentOf(fragment) {
+  const find = (/** @type {string} */ name) =>
+    name ? (document.getElementById(name) ?? Array.from(document.getElementsByName(name)).find((el) => localNameOf(el) === "a")) : undefined;
+  // One character per byte: each escape's, and each ASCII character's own.
+  const bytes = fragment.replace(/%([\da-f]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+  return find(fragment) ?? find(new TextDecoder(undefined, { ignoreBOM: true }).decode(Uint8Array.from(bytes, (c) => c.charCodeAt(0))));
+}
+
 // Only this module has these symbol keys; another script's info has none of them.
 navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ event) => {
   // A script's history.pushState or replaceState (a tab that puts itself in the address) is the
@@ -2744,18 +2758,36 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
       event.intercept({ handler: () => visit(url, event.signal, redirected, false, undefined, undefined, written, through) });
       return;
     }
-    // A new page starts at its `#id`, else at the top. Scrolled here, not left to the browser:
-    // Chromium leaves a swapped page where the last one was scrolled, and Firefox does not scroll
-    // to an `#id` the address already had.
+    // A new page starts at its `#id`, else at the top, by the browser's own scroll to the fragment
+    // (`scroll()`), as a full load does: it makes the element `:target`, finds an `<a name>` too,
+    // moves focus to it when it can take focus, and reads the address the navigation committed (a
+    // redirect's). Focus is then the Navigation API's to reset, as for any navigation. Called here
+    // once the page is swapped in (`scroll: "manual"`), so what it did can be checked after it:
+    // Firefox's may neither scroll there nor set `:target` (as after a document's first fragment
+    // scroll, a full load's included), may scroll to the top instead, or keeps an element the swap
+    // left in place (outside `<main>`) as the target without scrolling to it again, so a changed
+    // position does not show where it went. Only a focus in it or a `:target` it set does; else the
+    // element is scrolled to here. A `focus` event, heard on the window before the element's own
+    // handlers (which may blur it again, so that no `focusin` follows), or another focused element
+    // after it, shows a focus whatever the page did next. Then the page's own code ran in it, and
+    // what it did stands: a scroll or a focus of its own, or a change to the address, which ends
+    // this navigation (its fragment is read before). `scroll()` may throw (a handler of the page's
+    // called it first), and the listener goes either way.
     const after = () => {
       if (event.signal.aborted) return;
-      let id = url.hash.slice(1);
+      const fragment = location.hash.slice(1);
+      const [was, focused] = [document.querySelector(":target"), document.activeElement];
+      let moved = false;
+      const move = () => (moved = true);
+      addEventListener("focus", move, true);
       try {
-        id = decodeURIComponent(id);
-      } catch {}
-      const at = id ? document.getElementById(id) : null;
-      if (at) elementOwn.scrollIntoView.call(at);
-      else scrollTo(0, 0);
+        event.scroll();
+      } finally {
+        removeEventListener("focus", move, true);
+      }
+      if (event.signal.aborted || !fragment || moved || focused !== document.activeElement) return;
+      const at = fragmentOf(fragment);
+      if (at && (at === was || document.querySelector(":target") !== at)) elementOwn.scrollIntoView.call(at);
     };
     interceptVisit(event, (precommit) => visit(url, event.signal, redirected, false, undefined, startedBy(event), written, through, precommit), after, { scroll: "manual" });
     return;
@@ -3413,6 +3445,7 @@ function liveStatus(el, status) {
   el.dispatchEvent(new Event("corten-status", { bubbles: true }));
 }
 
+/** The fields `<corten-live>` declares, writable. @typedef {{ source: EventSource | null, applied: Promise<void> }} LiveFields */
 customElements.define(
   "corten-live",
   class extends HTMLElement {
@@ -3433,7 +3466,9 @@ customElements.define(
       // reconnecting (the browser retries), closed (it gave up) or ended (the server finished), and
       // `stale-since` is when a live stream dropped, until it is live again. Each change of
       // `status` dispatches `corten-status`.
-      const source = (this.source = new EventSource(url));
+      // Its fields are written through `LiveFields`, not `this`: checked JavaScript takes a property a
+      // method sets first as declared (docs/design.md#choice-handlers-checked-where-called).
+      const source = (/** @type {LiveFields} */ (this).source = new EventSource(url));
       liveStatus(this, "connecting");
       source.addEventListener("open", () => {
         this.removeAttribute("stale-since");
@@ -3449,7 +3484,7 @@ customElements.define(
         // The origin the stream came from, after any redirect: another's fragment is not drawn, nor
         // an event a script dispatched.
         if (!event.isTrusted || origin !== location.origin) return console.error("corten: <corten-live> draws only fragments its stream brought from this origin, not", event.isTrusted ? origin : "an event a script dispatched");
-        this.applied = this.applied.then(() => apply(data, undefined, null)).catch(reportError);
+        /** @type {LiveFields} */ (this).applied = this.applied.then(() => apply(data, undefined, null)).catch(reportError);
       });
       // The server's stream finished: stay as it is instead of reconnecting.
       source.addEventListener("end", () => {

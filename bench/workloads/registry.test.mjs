@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import test from "node:test";
 import { contractSha256, definition, groupNames, groups, retainedFamilies, selectedApps, validateInventory } from "./registry.mjs";
 import { coverage } from "./evidence.mjs";
+import { resultSchema, timedProfilesFor, v5Schema } from "../marketplace/run-contract.mjs";
 import { groupApps, scheduledGroup } from "../marketplace/groups.mjs";
 import { parseDropletArgs, remoteFiles, nightly } from "../marketplace/droplet-contract.mjs";
 
@@ -41,10 +42,17 @@ test("hardening keeps both deployments and cannot reuse the old pressure workloa
 });
 
 test("locale/source/target work is explicit, numeric JSON is not repeated under locales", () => {
-  const pages = definition("localized-marketplace").cases;
-  assert.equal(pages.filter((c) => c.target === "page").length, 6);
-  assert.equal(pages.filter((c) => c.target === "json").length, 2);
-  assert.ok(pages.filter((c) => c.target === "json").every((c) => c.locale === null));
+  const group = "localized-marketplace", d = definition(group);
+  const nativeCases = (schema) => timedProfilesFor(schema).map((p) => ({ ...p, payload: "marketplace-v2", key: `marketplace-v2-${p.key}` }));
+  assert.equal(d.nativeResultSchema, resultSchema);
+  assert.deepEqual(d.cases, nativeCases(resultSchema));
+  assert.deepEqual(d.parityCases, nativeCases(v5Schema));
+  const measured = { app: "corten", case: "marketplace-v2-api-rotating-page", implementation: "implemented", parity: "passed",
+    measurement: "complete", reason: "synthetic test", artifact: "raw.json" };
+  const ledger = coverage(group, [measured]);
+  assert.equal(ledger.cells.length, selectedApps(group).length * 4);
+  assert.ok(ledger.cells.includes(measured));
+  assert.throws(() => coverage(group, [{ ...measured, case: "marketplace-v2-api-fr-FR-page" }]), /unknown case/);
   const json = definition("json-api").cases;
   assert.equal(json.length, 4);
   assert.equal(new Set(json.map((c) => c.payload)).size, 2);

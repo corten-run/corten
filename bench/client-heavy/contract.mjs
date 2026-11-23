@@ -3,9 +3,38 @@ import assert from "node:assert/strict";
 import { win32, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClientWorkload } from "../workloads/client.mjs";
+import { selectedApps } from "../workloads/registry.mjs";
 
 export const defaults = Object.freeze({ rows: 14, large: 110, append: 7, cards: 24, seed: 7,
   "cleanup-ms": 2000, "observation-ms": 100, "timeout-ms": 30000, cargo: "cargo" });
+export const comparisonProfile = "client-heavy-comparison-v1";
+const comparisonSizes = Object.freeze({ rows: 100, large: 1000, append: 100, cards: 200 });
+export const comparisonBlocks = 3;
+export function measurementOrder() {
+  const apps = selectedApps("client-heavy");
+  // The planned roster rotates evenly; skips need not preserve actual positions.
+  assert.equal(apps.length % comparisonBlocks, 0, "comparison needs equal planned rotation steps");
+  return Array.from({ length: comparisonBlocks }, (_, block) => {
+    const offset = block * apps.length / comparisonBlocks;
+    return [...apps.slice(offset), ...apps.slice(0, offset)];
+  });
+}
+
+// Accept only already replayed samples here, never a saved aggregate.
+export function summarizeActions(samples) {
+  assert.equal(samples.length, comparisonBlocks);
+  return samples[0].map(({ operation, kind }, index) => {
+    const times = samples.map((actions) => {
+      assert.equal(actions[index]?.operation, operation);
+      assert.equal(actions[index].kind, kind);
+      const ms = actions[index].elapsedMs;
+      assert.ok(Number.isFinite(ms) && ms >= 0);
+      return ms;
+    }).sort((a, b) => a - b);
+    const [minMs, medianMs, maxMs] = times;
+    return { operation, kind, medianMs, minMs, maxMs };
+  });
+}
 export const localRoot = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 // Compiler and runtime package entry points actually loaded by build.mjs. These
 // are dependency roots, not a statement that their installed closure is current.
@@ -23,9 +52,14 @@ export function options(args, root = localRoot, platform = process.platform) {
   const seen = new Set();
   for (let i = 0; i < rest.length; i += 2) {
     const key = rest[i].replace(/^--/, "");
-    assert.ok(rest[i].startsWith("--") && Object.hasOwn(values, key) && rest[i + 1] !== undefined && !seen.has(key), "unknown, missing or duplicate option");
+    assert.ok(rest[i].startsWith("--") && (Object.hasOwn(values, key) || key === "profile") && rest[i + 1] !== undefined && !seen.has(key), "unknown, missing or duplicate option");
     seen.add(key);
-    values[key] = ["out", "cargo"].includes(key) ? rest[i + 1] : Number(rest[i + 1]);
+    values[key] = ["out", "cargo", "profile"].includes(key) ? rest[i + 1] : Number(rest[i + 1]);
+  }
+  if (seen.has("profile")) {
+    assert.equal(values.profile, comparisonProfile, "unknown client-heavy profile");
+    assert.ok([...seen].every((key) => ["profile", "out"].includes(key)), "comparison profile does not allow workload or apparatus overrides");
+    Object.assign(values, comparisonSizes);
   }
   for (const key of ["cleanup-ms", "observation-ms", "timeout-ms"]) assert.ok(Number.isSafeInteger(values[key]) && values[key] > 0 && values[key] <= 120000, `invalid ${key}`);
   assert.ok(values["timeout-ms"] > values["observation-ms"] + values["cleanup-ms"], "journey timeout must exceed cleanup bounds");
@@ -33,6 +67,7 @@ export function options(args, root = localRoot, platform = process.platform) {
   const workload = createClientWorkload({ seed: values.seed, rowCount: values.rows, largeRowCount: values.large, appendCount: values.append, dashboardCount: values.cards });
   const out = path.resolve(root, values.out);
   return { round, out, cargo: values.cargo, timeoutMs: values["timeout-ms"], settings: { maxCleanupMs: values["cleanup-ms"], cleanupObservationMs: values["observation-ms"] }, workload,
+    ...(values.profile ? { measurementOrder: measurementOrder() } : {}),
     invocation: { argv: [...args], defaults: { ...defaults, out: path.join(root, "bench/client-heavy/work", round) }, effective: { ...values, out } } };
 }
 

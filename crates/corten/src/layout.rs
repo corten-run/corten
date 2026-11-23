@@ -882,7 +882,7 @@ impl StartHere {
         let mut personal = false;
         // A view that drew this request's submit key makes the page one no tag stands for
         // (`cache::Unrepeatable`), as the page's own render does.
-        crate::form::DREW_KEY.set(false);
+        let drawing = crate::form::Drawing::start();
         // The reads in are drawn from where they are and stay there, and the values the page gave
         // are kept beside them (`Here::given`), for an error page the app's middleware may still
         // make of this page, which draws them as this one does (#911); they live as long as the
@@ -929,7 +929,7 @@ impl StartHere {
             pending.signal.mark_personal();
         }
         let mut res = Response::from_parts(head, Body::from(out));
-        if crate::form::DREW_KEY.take() {
+        if drawing.drew() {
             res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         res

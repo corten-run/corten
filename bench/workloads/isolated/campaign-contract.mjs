@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
-import { alternateCampaignPlacements, bindExecution } from "./contract.mjs";
-import { campaignRounds, groupNames, jsonPreparationRound, nativeArtifactRoot } from "../registry.mjs";
+import { alternateCampaignPlacements, bindExecution, clientComparisonRecipe } from "./contract.mjs";
+import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationRound, nativeArtifactRoot } from "../registry.mjs";
 import { catalogFleetPlacement } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { parseArgs } from "../../json-api/contract.mjs";
@@ -37,15 +37,17 @@ export function bindGroupCampaign(input, mode = "dedicated") {
 }
 function bindNativeCampaign(input, order, schema, mode) {
   const rounds = campaignRounds(input.round);
+  const recipes = schema === groupCampaignSchema && order[0] === "client-heavy" && clientComparisonRecipe
+    ? { ...productionRecipes, "client-heavy": clientComparisonRecipe } : productionRecipes;
   const bindings = order.map((group) => bindExecution({ group, round: rounds[group], commit: input.commit,
-    recipe: productionRecipes[group], review: null }, mode));
+    recipe: recipes[group], review: null }, mode));
   const first = bindings[0];
   assert.ok(bindings.every((b) => b.sources.sha256 === first.sources.sha256), "source changed while binding campaign");
   const procedures = ["bench/catalog/README.md", "bench/json-api/README.md", "bench/marketplace/nightly.md",
     "bench/mixed-production/README.md", "bench/fullstack-browser/README.md", "bench/client-heavy/README.md",
     "bench/live/README.md", "bench/recoverable-live/README.md", "bench/hardening/README.md"]
     .map((path) => { const entry = first.sources.files.find((e) => e.path === path); assert.ok(entry, `missing procedure ${path}`); return entry; });
-  const body = { schema, ...input, bindings, procedures, recipes: productionRecipes,
+  const body = { schema, ...input, bindings, procedures, recipes,
     sourceSha256: first.sources.sha256, order: [...order], ready: false, executionAuthorized: false };
   return freeze({ ...body, campaignSha256: deploymentSha256(body) });
 }
@@ -75,11 +77,11 @@ export function jsonPhase(plan, phase, receiptPath) {
   const binding = plan.bindings.find((b) => b.request.group === "json-api");
   assert.ok(binding); assert.ok(["prepare", "timing"].includes(phase));
   const round = phase === "prepare" ? jsonPreparationRound(plan.round) : binding.request.round;
-  const argv = ["bench/json-api/run.mjs", round, "--group", "json-api"];
-  if (phase === "prepare") argv.push("--build", "--check-only");
-  else { assert.equal(typeof receiptPath, "string"); argv.push("--receipts", receiptPath); }
+  if (phase === "timing") assert.equal(typeof receiptPath, "string");
+  const invocation = phase === "prepare" ? jsonPreparationInvocation(plan.round)
+    : { executable: "node", argv: ["bench/json-api/run.mjs", round, "--group", "json-api", "--receipts", receiptPath] };
   return freeze({ ...binding, request: { ...binding.request, round },
-    execution: { ...binding.execution, invocation: { executable: "node", argv }, effectiveOptions: parseArgs(argv.slice(1)) },
+    execution: { ...binding.execution, invocation, effectiveOptions: parseArgs(invocation.argv.slice(1)) },
     validation: { ...binding.validation, artifactRoot: nativeArtifactRoot("json-api", round) } });
 }
 

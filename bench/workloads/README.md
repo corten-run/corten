@@ -56,6 +56,10 @@ Removing or retargeting it refuses remaining admission, even via the physical pa
 invocation's requested spelling still requires its own exact approval; consumed intents are
 never rewritten to repair path identity.
 
+For a partial round, use [independent group continuation](CLOUD.md#independent-group-continuation)
+to reference already verified group results and run only missing groups. Each
+result keeps its measured revision and evidence; the index is not a new fleet.
+
 The [client-heavy runner](../client-heavy/README.md) builds all selected native
 applications, observes their actual DOM and resources, and gates a separate
 measured journey on correctness. Its defaults are bounded local verification,
@@ -70,7 +74,12 @@ captures and validate its complete evidence before publishing comparative number
 
 The localized marketplace group is wired to the existing marketplace runner as an explicit
 `--group localized-marketplace` selection. Its exact-image feature qualification and complete
-browser/content gates remain mandatory. Both the localized and mixed groups check ordinary,
+browser/content gates remain mandatory. Timing has four cases: one page rotating through
+`en-US`, `fr-FR` and `de-DE`, and one locale-neutral JSON case, for each of fixture and API.
+Page throughput is for the mix, not for each locale. Parity still checks each locale separately
+in both sources, on desktop and mobile, with JavaScript on and off. The new group contract
+requires v6 results; the preceding bounded v5 contract retains its eight per-locale/JSON cases.
+Both the localized and mixed groups check ordinary,
 sequential HTTP requests before timing. Connection-flood resistance: not measured.
 Historical qualification does not admit an app to a new run. Candidates missing production parity stay in the
 report with their missing features and are not timed. The existing scheduled `production`

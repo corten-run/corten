@@ -1,6 +1,8 @@
 // Synthetic retained OS records test replay only, never real host qualification.
 import assert from "node:assert/strict";
-import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { closeSync, copyFileSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, posix, resolve, sep } from "node:path";
@@ -10,7 +12,9 @@ import { definition } from "../registry.mjs";
 import { browserCpus } from "../../fullstack-browser/contract.mjs";
 import { participantSnapshot, replayExecution } from "../../fullstack-browser/native-execution.mjs";
 import { composeHostProof, inspectLifetime, processIdentity, inspectBrowserParticipants, inspectLiveActors, resolveParticipantExecutables } from "./host-lifetime.mjs";
-import { executableIdentity, executableReference, hashExecutableDescriptor } from "./participant-executables.mjs";
+import { executableIdentity, executableReference, hashExecutableDescriptor, participantExecutables } from "./participant-executables.mjs";
+import { jsonPhase } from "./campaign-contract.mjs";
+import { reserveCompilerTarget, withCompilerTarget } from "../../client-heavy/compiler.mjs";
 
 const campaign = "r17-0123456789abcdef", command = 0, pid = 100;
 const binding = { request: { group: "client-heavy", round: "w17", commit: "a".repeat(40) }, resources: { app: null } };
@@ -44,6 +48,69 @@ test("deferred executable digest binds the original sampled inode and rejects mu
   } finally { closeSync(fd); }
 });
 
+for (const mode of ["campaign target seals then cleans", "old cleanup order fails", "campaign rejects changed bytes with mtime restored"]) test(`real inherited executable descriptor: ${mode}`, {
+  skip: process.platform !== "linux" && "requires Linux /proc executable descriptors", timeout: 15000,
+}, async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "isolated-inherited-executable-"));
+  t.after(() => { assert.ok(resolve(directory).startsWith(resolve(tmpdir()) + sep)); rmSync(directory, { recursive: true }); });
+  const target = join(directory, "target"), image = join(target, "image"), stamp = 1_700_000_000;
+  const owned = mode !== "old cleanup order fails" ? reserveCompilerTarget(target) : null;
+  if (owned) {
+    const [[key, value]] = Object.entries(owned.env);
+    const previous = process.env[key]; process.env[key] = value;
+    t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
+  }
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex"), pending = participantExecutables();
+  let fd, original, record;
+  try {
+    await withCompilerTarget(target, async () => {
+      copyFileSync("/bin/cat", image); utimesSync(image, stamp, stamp);
+      original = digest(readFileSync(image));
+      const child = spawn(image, [], { timeout: 5000 }), closed = once(child, "close");
+      try {
+        await once(child, "spawn");
+        record = pending.capture(child.pid); fd = openSync(`/proc/${child.pid}/exe`, "r");
+        child.stdin.end(); assert.deepEqual(await closed, [0, null]);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await closed;
+      }
+    });
+    assert.equal(existsSync(image), !!owned);
+    const { executableRef, executableIdentity: sampled } = record, changed = mode.startsWith("campaign rejects");
+    if (changed) {
+      const bytes = readFileSync(image); bytes[bytes.length - 1] ^= 1;
+      writeFileSync(image, bytes); utimesSync(image, stamp, stamp);
+    }
+    const actual = executableIdentity(fd);
+    assert.equal(digest(readFileSync(fd)) === original, !changed);
+    if (owned && !changed) {
+      const proof = pending.finish();
+      assert.deepEqual(proof.executables, [{ ref: executableRef, identity: sampled, sha256: original }]);
+      assert.equal(resolveParticipantExecutables(record, proof).executableSha256, original);
+    }
+    else {
+      assert.notEqual(actual.ctimeNs, sampled.ctimeNs);
+      assert.deepEqual({ ...actual, ctimeNs: sampled.ctimeNs }, sampled);
+      assert.throws(() => pending.finish(), { operation: "executable-hash-before", code: "identity-ctime", executableRef });
+    }
+  } finally {
+    pending.close(); if (fd !== undefined) closeSync(fd);
+    await owned?.close(true);
+  }
+  assert.equal(existsSync(target), false);
+});
+
+test("standalone compiler target is removed when the build throws", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "standalone-compiler-target-")), target = join(directory, "target");
+  t.after(() => { assert.ok(resolve(directory).startsWith(resolve(tmpdir()) + sep)); rmSync(directory, { recursive: true }); });
+  await assert.rejects(withCompilerTarget(target, () => {
+    writeFileSync(join(target, "scratch"), "generated");
+    throw new Error("test build failed");
+  }), { message: "test build failed" });
+  assert.equal(existsSync(target), false);
+});
+
 test("sealed deferred executable records replay without rewriting sample timestamps", (t) => {
   const f = browserFixture(t), entries = [];
   const samples = structuredClone(f.observation.samples), timestamps = samples.map((s) => s.at);
@@ -64,22 +131,22 @@ test("sealed deferred executable records replay without rewriting sample timesta
   assert.throws(f.replay);
   rmSync(path); assert.throws(f.replay, { code: "ERR_ASSERTION" });
 });
-function fixture(t, change = () => {}, bound = binding) {
+function fixture(t, change = () => {}, bound = binding, invoke = invocation, runResult = result) {
   const directory = mkdtempSync(join(tmpdir(), "isolated-host-replay-"));
   t.after(() => { assert.ok(resolve(directory).startsWith(resolve(tmpdir()) + sep)); rmSync(directory, { recursive: true }); });
   const ancestors = []; for (let p = parent; ; p = posix.dirname(p)) { ancestors.push(group(p)); if (p === "/") break; }
   const context = { schema: "benchmark-isolated-host-lifetime/v1", campaign, command, leaderPid: pid, parent, path,
-    ...bound.request, bindingSha256: deploymentSha256(bound), invocation, bootId: "boot", ancestors };
+    ...bound.request, bindingSha256: deploymentSha256(bound), invocation: invoke, bootId: "boot", ancestors };
   const processes = [[100, "node", "a", null], [101, "rustc", "c", null], [102, "chrome", "b", "--type=renderer"]]
     .map(([pid, name, hash, type]) => ({ stat: stat(pid, name), cgroup: `0::${path}\n`, executableSha256: hash.repeat(64), type }));
   const samples = [{ at: 0, groups: [group(path)], processes: [] }, { at: 50, groups: [group(path, [100, 101, 102])], processes },
     { at: 100, groups: [group(path)], processes: [] }];
-  const terminal = { terminal: true, attached: true, empty: true, samples: 3, observerError: null, command: result, bootId: "boot", ancestors };
+  const terminal = { terminal: true, attached: true, empty: true, samples: 3, observerError: null, command: runResult, bootId: "boot", ancestors };
   change({ context, samples, terminal });
   writeFileSync(join(directory, "binding.json"), JSON.stringify(context));
   writeFileSync(join(directory, "samples.jsonl"), samples.map((s) => JSON.stringify(s) + "\n").join(""));
   writeFileSync(join(directory, "terminal.json"), JSON.stringify(terminal));
-  return { directory, observation: () => inspectLifetime(bound, invocation, directory, { campaign, command, pid, result }) };
+  return { directory, observation: () => inspectLifetime(bound, invoke, directory, { campaign, command, pid, result: runResult }) };
 }
 
 function browserFixture(t, selectedApp = "app", isolated = false, workload = "fullstack-browser") {
@@ -481,7 +548,7 @@ test("actual inherited controls need no invented cap; terminal observations comp
   native.hostSubject.processWindows[0].endedAt = 40;
   assert.equal(composeHostProof(binding, native, observed).resources, "blocked");
 });
-test("only a verified marketplace lifetime exposes its sealed, same-boot terminal clock", (t) => {
+test("a verified marketplace lifetime still exposes its sealed, same-boot terminal clock", (t) => {
   const marketplace = { ...binding, request: { ...binding.request, group: "localized-marketplace" } };
   const clock = { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" };
   const withClock = ({ terminal }) => { terminal.terminalClock = clock; };
@@ -495,6 +562,30 @@ test("only a verified marketplace lifetime exposes its sealed, same-boot termina
     terminal.terminalClock = { ...clock, bootId: "other" };
   }, marketplace).observation());
   assert.throws(() => fixture(t, withClock).observation());
+});
+test("only the exact JSON preparation execution can expose a sealed JSON terminal clock", (t) => {
+  const plan = { round: "r17", bindings: [{ ...binding, request: { ...binding.request, group: "json-api", round: "j35" } }] };
+  const prepare = jsonPhase(plan, "prepare"), timing = jsonPhase(plan, "timing", "/bench/campaign/json-native-audits.json");
+  const execute = prepare.execution.invocation, prepareExit = { ...result, code: 1 };
+  const clock = { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" };
+  const withClock = ({ terminal }) => { terminal.terminalClock = clock; };
+  const inspect = (bound, invoke, change = withClock) => fixture(t, change, bound, invoke, prepareExit).observation();
+
+  const clean = inspect(prepare, execute);
+  assert.equal(clean.status, "verified");
+  assert.deepEqual(clean.terminalClock, clock);
+  assert.equal(inspect(prepare, execute, ({ terminal }) => {
+    withClock({ terminal }); terminal.empty = false;
+  }).terminalClock, undefined);
+  assert.equal(inspect(prepare, execute, () => {}).status, "verified", "old preparations never needed a clock");
+  const refused = /terminal clock not allowed for this invocation/;
+  assert.throws(() => inspect(timing, timing.execution.invocation), refused);
+  for (const generator of ["catalog", "marketplace"])
+    assert.throws(() => inspect(prepare, { executable: "node", argv: [`bench/${generator}/fixtures.mjs`] }), refused);
+  assert.throws(() => inspect(prepare, { ...execute, argv: [...execute.argv, "--check-only"] }), refused);
+  assert.throws(() => inspect({ ...prepare, execution: timing.execution }, execute), refused);
+  assert.throws(() => inspect(timing, { ...execute, argv: execute.argv.map((arg) => arg === "j34" ? "j35" : arg) }), refused);
+  assert.throws(() => inspect(prepare, execute, ({ terminal }) => { terminal.terminalClock = { ...clock, bootId: "other" }; }));
 });
 test("missing effective command controls cannot verify a client lifetime", (t) => {
   const f = fixture(t, ({ samples }) => {

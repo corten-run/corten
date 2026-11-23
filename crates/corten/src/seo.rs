@@ -1,6 +1,11 @@
 //! `robots.txt` and XML sitemaps, written as the search engine protocols define them. Each is the
 //! same for every crawler, so a handler returns it as it comes, `Public<seo::File>`, which shared
-//! caches keep for an hour:
+//! caches keep for an hour. So does the app, for one of 1,024 bytes or more, as it keeps any
+//! `Public` text
+//! ([`App::kept_answers`](crate::App::kept_answers)): a sitemap's handler then does not run for
+//! every crawler that asks without credentials, and a URL added since may wait that hour to show.
+//! `.shared(..)` on the answer says another time for shared caches and the app
+//! (`seo::sitemap(urls).shared(Duration::from_secs(60))`), and `App::kept_answers(0)` keeps none.
 //!
 //! ```
 //! use corten::{prelude::*, seo};
@@ -52,6 +57,7 @@ impl IntoResponse for File {
 
 impl Answer for File {
     const FORMAT: Format = Format::Html;
+    const WHOLE: crate::answer::sealed::Whole = crate::answer::sealed::Whole(true);
     type Inputs = AnyInputs;
     type Rows = crate::answer::NotAFeed;
     type Kind = crate::AnyAnswer;

@@ -12,26 +12,32 @@ const labels = {
 export const inventory = Object.fromEntries(Object.entries(allApps).filter(([, app]) => app.pages !== false)
   .map(([name, app]) => [name, { ...app, label: labels[name] ?? app.label }]));
 export { phases, sources, targets } from "../catalog/contract.mjs";
-// Saved-result schema: each app has exactly these eight runs/aggregate keys.
-// Each publishable key has three passes and fixed/sat64/sat256 phases. JSON has locale:null,
-// never an en-US/fr-FR/de-DE alias. Browser parity still covers all locales.
+// JSON is always locale-neutral. v6 rotates page locales within each load phase;
+// v3-v5 timed one whole phase per locale. Browser parity still covers every locale.
 // v3: a phase records what the app failed to serve (readOutcome) instead of failing the run.
 // v4: an app container that stops during a load phase is that app's recorded outcome
 // (run.stopped, appStop): the profile's later phases and passes do not run, so it can have fewer
 // than three passes, and each stage that lost a pass carries the stop (stageAggregate).
 // v5 adds named candidate cohorts and raw feature qualification before timing.
-export const resultSchema = "marketplace-results/v5";
+export const resultSchema = "marketplace-results/v6";
 // The schemas report.mjs and compare.mjs read. A v3 summary is read as a v4 one with no stop
 // records: under v3 an app that stopped failed the round, so a valid v3 round has none, and its
-// aggregates lack only the stopped field. New rounds are written as v5; groupless v4
+// aggregates lack only the stopped field. New rounds are written as v6; groupless v4
 // evidence retains its original full-inventory interpretation.
 export const v3Schema = "marketplace-results/v3";
 export const v4Schema = "marketplace-results/v4";
-export const readableSchemas = [v3Schema, v4Schema, resultSchema];
-export const timedProfiles = sources.flatMap((source) => [
-  ...locales.map((locale) => ({ key: `${source}-${locale}-page`, source, locale, target: "page" })),
+export const v5Schema = "marketplace-results/v5";
+export const readableSchemas = [v3Schema, v4Schema, v5Schema, resultSchema];
+const profiles = (pageLocales) => sources.flatMap((source) => [
+  ...pageLocales.map((locale) => ({ key: `${source}-${locale}-page`, source, locale, target: "page" })),
   { key: `${source}-neutral-json`, source, locale: null, target: "json" },
 ]);
+export const timedProfiles = profiles(["rotating"]);
+const legacyProfiles = profiles(locales);
+export function timedProfilesFor(schema) {
+  assert.ok(readableSchemas.includes(schema), "unknown marketplace result schema");
+  return schema === resultSchema ? timedProfiles : legacyProfiles;
+}
 export function roundIdentity(round) {
   assert.match(round ?? "", /^[rw][1-9]\d*$/, "round must be rN (N >= 17), or wN for development");
   const number = Number(round.slice(1));

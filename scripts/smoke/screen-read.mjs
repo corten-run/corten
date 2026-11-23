@@ -64,13 +64,13 @@ export async function screenRead(browser) {
       const settled = (p) =>
         p.then(
           () => "resolved",
-          (e) => (e instanceof ReadError ? `ReadError ${e.status}${e.redirected ? " redirected" : ""}` : e instanceof DOMException ? e.name : String(e)),
+          (e) => (e instanceof ReadError ? `${e.name} ${e.status}${e.redirected ? " redirected" : ""}` : e instanceof DOMException ? e.name : String(e)),
         );
       /** @param {Promise<unknown>} p */
       const cause = (p) =>
         p.then(
           () => "resolved",
-          (e) => (e instanceof ReadError ? `ReadError ${e.status} ${e.cause instanceof Error ? e.cause.name : String(e.cause)}` : String(e)),
+          (e) => (e instanceof ReadError ? `${e.name} ${e.status} ${e.cause instanceof Error ? e.cause.name : String(e.cause)}` : String(e)),
         );
       const missing = await settled(read(/** @type {any} */ ("/smoke/reading?missing=true")));
       const moved = await settled(read(/** @type {any} */ ("/smoke/reading?moved=true")));

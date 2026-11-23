@@ -44,9 +44,9 @@
 //! [`crate::live`] stream's fragments are text rendered after its headers went out, so they carry
 //! no such mark.
 //!
-//! The app is the first shared cache of its own `Public` pages: the whole document one made for a
-//! request without credentials is kept for its shared lifetime and given again in the handler's
-//! place ([`crate::App::kept_answers`], `docs/design.md#choice-kept-pages`), and goes out through
+//! The app is the first shared cache of its own `Public` pages, JSON, text and files: the whole document
+//! or body one made for a request without credentials is kept for its shared lifetime and given
+//! again in the handler's place ([`crate::App::kept_answers`], `docs/design.md#choice-kept-pages`), and goes out through
 //! the same checks as the handler's own answer.
 //!
 //! A `Public` handler cannot read a cookie or a header through an extractor of the app's own unless
@@ -155,10 +155,16 @@ impl Cache {
             Kind::NoStore => return NO_STORE,
             Kind::Immutable => return crate::assets::IMMUTABLE,
         };
-        let mut text = Vec::with_capacity(96);
+        // Written here and copied into a value of its own length: one allocation, where a vector
+        // with room is two (its bytes, and what shares them), and a kept answer holds the room
+        // for as long as it is kept (docs/design.md#choice-kept-pages).
+        let mut text = [0; LONGEST];
+        let mut at = 0;
         let mut push = |name: &str, n: u64| {
-            text.extend_from_slice(name.as_bytes());
-            text.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
+            for part in [name.as_bytes(), crate::ascii::digits(n, &mut [0; 20])] {
+                text[at..at + part.len()].copy_from_slice(part);
+                at += part.len();
+            }
         };
         push("public, max-age=", max_age);
         if let Some(shared) = shared {
@@ -170,9 +176,13 @@ impl Cache {
         if if_error > 0 {
             push(", stale-if-error=", if_error);
         }
-        HeaderValue::from_maybe_shared(bytes::Bytes::from(text)).expect("digits are a valid header")
+        HeaderValue::from_bytes(&text[..at]).expect("digits are a valid header")
     }
 }
+
+/// The longest `Cache-Control` a [`Cache`] writes: each of its four names with a number of
+/// twenty digits, the most a `u64` has.
+const LONGEST: usize = "public, max-age=, s-maxage=, stale-while-revalidate=, stale-if-error=".len() + 4 * 20;
 
 impl Cache {
     /// Sets the response's `Cache-Control` to this, as [`settle`] reads it.
@@ -398,7 +408,8 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
             PRIVATE
         }
     };
-    let typed = res.extensions().get::<Typed>().copied();
+    // A kept answer given again carries its mark with what was kept, not as an extension.
+    let typed = res.extensions().get::<Typed>().copied().or_else(|| crate::kept::Kept::typed(res.extensions()));
     let bug = if seen.nonce {
         Some("its HTML has this request's CSP nonce (req.nonce() in the layout, or a handler that takes Nonce)")
     } else if res
@@ -504,7 +515,7 @@ pub(crate) struct Unrepeatable;
 /// A page's `200` to a `GET` or `HEAD` with a weak `ETag` from its body and its `corten-*`
 /// headers, or `304 Not Modified` in its place when the request's `If-None-Match` (`has`, each
 /// line) names that tag. The tag is made from the answer this request would be sent (rendered
-/// for it, or the kept page given in its place, `crate::kept`), so a `304` says the
+/// for it, or the kept answer given in its place, `crate::kept`), so a `304` says the
 /// client's copy is what it would get now, whoever is asking. The runtime's headers count because
 /// a cache keeps a stored header the `304` does not send (RFC 9111 4.3.4): a copy that came with a
 /// notice or a place to go must not be reused for an answer without one. Weak, since the body is
@@ -847,6 +858,12 @@ mod tests {
         assert_eq!(Cache::public(minute).stale_if_error(Duration::ZERO).header(), "public, max-age=60", "0 is left out");
         assert_eq!(Cache::no_store().stale_if_error(day).header(), "no-store");
         assert_eq!(Cache::immutable().stale_if_error(day).header(), "public, max-age=31536000, immutable");
+        // The longest it writes, every number twenty digits, fills what it is written in.
+        let most = Duration::from_secs(u64::MAX);
+        let longest = Cache::public(most).shared(most).stale_while_revalidate(most).stale_if_error(most).header();
+        let n = u64::MAX;
+        let text = format!("public, max-age={n}, s-maxage={n}, stale-while-revalidate={n}, stale-if-error={n}");
+        assert_eq!((longest.to_str().ok(), text.len()), (Some(text.as_str()), LONGEST));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
-import { cpuSettings, passPlan, resultSchema, sources, stageAggregate, timedProfiles } from "./run-contract.mjs";
+import { cpuSettings, inventory, passPlan, resultSchema, sources, stageAggregate, timedProfilesFor } from "./run-contract.mjs";
 import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, produceBoundedQualification, qualification, qualificationSettings } from "./feature-contract.mjs";
 import { boundedQualificationProbes, qualificationProbes } from "./qualification-fixture.mjs";
 import { splitApps } from "./run-contract.mjs";
@@ -11,9 +11,10 @@ import { dirname, join } from "node:path";
 import { evidenceVersion, k6Image, loadEnvironment, nodeImage, upstreamInterpretation } from "./raw-contract.mjs";
 import { k6Provenance } from "../load-tool.mjs";
 
-export function summaryFixture(commit, { historical = false } = {}) {
+export function summaryFixture(commit, { historical = false, schema = resultSchema } = {}) {
   const apps = splitApps("production-performant", 3)[0];
-  const s = { schema: resultSchema, workload, round: "r17", runId: "marketplace-r17-0123456789", commit, dirty: false,
+  const timedProfiles = timedProfilesFor(schema);
+  const s = { schema, workload, round: "r17", runId: "marketplace-r17-0123456789", commit, dirty: false,
     finishedCommit: commit, finishedDirty: false, complete: true, checksPassed: true, failures: [], cleanupFailures: [],
     startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T02:00:00.000Z",
     options: { round: "r17", build: true, group: "production-performant", part: { index: 1, of: 3 }, apps, checkOnly: false, passes: 3, duration: 15, warmup: 10, rate: 150, startupTimeout: 120 },
@@ -25,7 +26,7 @@ export function summaryFixture(commit, { historical = false } = {}) {
       upstream: "Synthetic", cpuWindow: "Synthetic", coldClock: "Synthetic", featureProfile: historical ? featureProfile : boundedFeatureProfile,
       qualificationSettings: historical ? qualificationSettings : boundedQualificationSettings } };
   for (const app of apps) {
-    const a = s.apps[app] = { imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {},
+    const a = s.apps[app] = { label: inventory[app].label, imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {},
       qualification: Object.fromEntries(sources.map((source) => [source, historical ? qualification(qualificationProbes(), source)
         : produceBoundedQualification(boundedQualificationProbes(source), source)])) };
     for (const source of sources) a.checks[source] = { workload, source, jsonRecords: 500, pages: 264,
@@ -36,7 +37,7 @@ export function summaryFixture(commit, { historical = false } = {}) {
       const stats = { cpuUsec: 1000000, samples: 3, cpuAvgPct: 100, cpuMaxPct: 110, memAvgMiB: 10, memMaxMiB: 11 };
       a.runs[key] = [1, 2, 3].map((pass) => ({ pass, locale, complete: true, startedAt: "2026-01-01T00:01:00.000Z", finishedAt: "2026-01-01T00:04:00.000Z",
         cold: { containerStartedAt: "2026-01-01T00:02:00.000Z", first200At: "2026-01-01T00:02:01.000Z", first200MsFromContainerStart: 1000,
-          measuredBeforeReadinessOrWarmup: true, path: target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale}/item_1`, attempts: 1, bytes: 100, successfulRequestMs: 1 },
+          measuredBeforeReadinessOrWarmup: true, path: target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale === "rotating" ? locales[0] : locale}/item_1`, attempts: 1, bytes: 100, successfulRequestMs: 1 },
         warmup: { ...metric, requests: 1000 }, phases: Object.fromEntries(["fixed", "sat64", "sat256"].map((p) => [p, { ...metric, ...stats, perCpuSecond: 1500,
           upstream: source === "api" ? { ...stats, highCpu: true, interpretation: "single-process upstream; a busy API may be the throughput limit, not the app" } : null }])) }));
       a.phases[key] = Object.fromEntries(["fixed", "sat64", "sat256"].map((p) => [p, stageAggregate(a.runs[key], p, 3)]));
@@ -54,6 +55,7 @@ export function summaryFixture(commit, { historical = false } = {}) {
 
 export function writeSavedFixture(folder, commit, tree, options) {
   const s = summaryFixture(commit, options); s.evidenceVersion = evidenceVersion;
+  const timedProfiles = timedProfilesFor(s.schema);
   const { featureProfile: profile, qualificationSettings: settings } = s.measurement;
   s.tools.upstream.image = nodeImage;
   s.tools.k6 = k6Provenance({ Id: s.tools.k6.imageId, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" },
@@ -134,7 +136,11 @@ export function writeSavedFixture(folder, commit, tree, options) {
         write(`${base}/${phase}-clock.json`, { testRunDurationMs: elapsed });
         if (profile.source === "api") upstreamReads += count;
         const latency = { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 4 };
-        write(`${base}/${phase}.json`, { metrics: { http_reqs: { count, rate }, iterations: { count, rate },
+        const localeCounters = profile.locale !== "rotating" ? {} : Object.fromEntries(locales.map((locale, i) => {
+          const n = Math.floor(count / locales.length) + Number(i < count % locales.length);
+          return [`marketplace_locale_${locale.replace("-", "_")}`, { count: n, rate: n / (elapsed / 1000) }];
+        }));
+        write(`${base}/${phase}.json`, { metrics: { ...localeCounters, http_reqs: { count, rate }, iterations: { count, rate },
           vus_max: Object.fromEntries(["value", "min", "max"].map((key) => [key, phase === "fixed" ? 200 : Number(load.env.VUS)])), http_req_duration: latency, iteration_duration: latency,
           http_req_failed: { passes: 0, fails: count, value: 0 }, checks: { passes: count * 2, fails: 0, value: 1 } },
           root_group: { checks: { "marketplace status 200": { passes: count, fails: 0 }, "marketplace content type": { passes: count, fails: 0 } } } });

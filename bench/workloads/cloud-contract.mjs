@@ -27,7 +27,7 @@ export const stagedFleet = (fleet) => fleet?.schema === stagedFleetSchema;
 const createMode = (region) => region === host.region ? "dedicated" : `dedicated-${region}`;
 export function fleetCreateMode(group, fleet, remainingRegion) {
   if (group === "catalog-page") return catalogFleetPlacement.loadLayout;
-  return createMode(stagedFleet(fleet) ? fleetHost(remainingRegion).region : fleet.host.region);
+  return createMode(stagedFleet(fleet) && !fleet.single ? fleetHost(remainingRegion).region : fleet.host.region);
 }
 export function providerCreateHost(mode) {
   if (mode === "legacy" || mode === alternateFleetMode) return legacyHost;
@@ -65,8 +65,13 @@ const historicalSelections = new Set([
   "d9c74b1fee3f6d5c71cee7405b24db73da1ffbef8f0d00c66924ebf7b475a251", // Retained r21 fleets.
   "57bf46a0e3e03d8a48bdcca952b522c148d91a7892c74e6bfbe2e860b927e19a", // 19defc76, immediately before placement.
 ]);
-const historicalSelection = (selected) => selected && historicalSelections.has(digest(selected));
-function buildFleet(input, createdAt, schema, placement, selected) {
+// The standalone all-group host also used the pre-rotation registry. It is
+// readable for collection, not an additional fleet roster or a launch input.
+const historicalHostSelections = new Set([...historicalSelections,
+  "dbf01bfc107ae1bec0861900558613fe120c32ab2957b03e9e65f019739c6871", // 83b3b8772, per-locale marketplace timing.
+]);
+const historicalSelection = (selected, allowed = historicalSelections) => selected && allowed.has(digest(selected));
+function buildFleet(input, createdAt, schema, placement, selected, single) {
   exact(input, ["round", "commit", "token", "tokens", "provider", "sshKey"]);
   const { round, commit, token, tokens, provider, sshKey } = input;
   roundName(round); assert.ok(Number(round.slice(1)) >= 17, "official campaigns start at r17");
@@ -86,27 +91,52 @@ function buildFleet(input, createdAt, schema, placement, selected) {
   });
   assert.equal(new Set([token, ...jobs.map((row) => row.token)]).size, jobs.length + 1, "unique fleet/host tokens required");
   const body = { schema, round, commit, token, createdAt,
-    provider: { ...provider }, sshKey, host: { ...placement }, selection: selected, jobs };
+    provider: { ...provider }, sshKey, host: { ...placement }, selection: selected, jobs, ...(single ? { single } : {}) };
   return { ...body, fleetSha256: digest(body) };
 }
 function fleetHost(region, regions = fleetRegions) {
   assert.ok(regions.includes(region), "unsupported fleet region");
   return { ...host, region };
 }
-export function fleetPlan(input, createdAt = new Date().toISOString(), region = host.region, { stagedPlacement = false } = {}) {
-  return buildFleet(input, createdAt, stagedPlacement ? stagedFleetSchema : launchFleetSchema,
-    fleetHost(region, stagedPlacement ? fleetRegions : pinnedFleetRegions), selection());
+function fleetSelection(single) {
+  const current = selection();
+  if (!single) return current;
+  exact(single, ["group", "indexSha256", "checkout"]);
+  assert.ok(groupNames.includes(single.group), "unknown independent group");
+  full(single.indexSha256, /[a-f0-9]{64}/, "continuation index digest");
+  full(single.checkout, /[^\r\n\0]{1,4096}/, "measured checkout");
+  return { ...current, groups: current.groups.filter(({ group }) => group === single.group) };
 }
-export function validateFleet(plan) {
+export function fleetPlan(input, createdAt = new Date().toISOString(), region = host.region, { stagedPlacement = false, single } = {}) {
+  assert.ok(!single || stagedPlacement);
+  return buildFleet(input, createdAt, stagedPlacement ? stagedFleetSchema : launchFleetSchema,
+    fleetHost(region, stagedPlacement ? fleetRegions : pinnedFleetRegions), fleetSelection(single), single);
+}
+export function validateFleet(plan, { priorSelection = false } = {}) {
   assert.ok(plan && Array.isArray(plan.jobs), "complete fleet plan required");
   assert.ok([historicalFleetSchema, uniformFleetSchema, pinnedFleetSchema, launchFleetSchema, stagedFleetSchema].includes(plan.schema), "unknown fleet schema");
   const historical = plan.schema === historicalFleetSchema;
   if (historical) assert.ok(historicalSelection(plan.selection), "historical fleet selection differs");
+  if (Object.hasOwn(plan, "single")) assert.ok(stagedFleet(plan) && plan.single);
+  const current = fleetSelection(plan.single);
+  if (priorSelection && !historical) {
+    const stored = plan.selection;
+    exact(stored, ["schema", "groups"]); assert.equal(stored.schema, registrySchema);
+    assert.ok(Array.isArray(stored.groups) && stored.groups.length > 0 && stored.groups.length <= 32);
+    for (const row of stored.groups) {
+      exact(row, ["group", "contractSha256", "apps"]);
+      full(row.group, /[a-z][a-z0-9-]{0,63}/, "retained group"); full(row.contractSha256, /[a-f0-9]{64}/, "retained group contract");
+      assert.ok(Array.isArray(row.apps) && row.apps.length > 0 && row.apps.length <= 64 && row.apps.every((app) => typeof app === "string"));
+      assert.equal(new Set(row.apps).size, row.apps.length);
+    }
+    assert.equal(new Set(stored.groups.map(({ group }) => group)).size, stored.groups.length);
+    if (plan.single) assert.deepEqual(stored.groups.map(({ group }) => group), [plan.single.group]);
+  }
   const expected = buildFleet({ round: plan.round, commit: plan.commit, token: plan.token,
     tokens: Object.fromEntries(plan.jobs.map((row) => [row.group, row.token])), provider: plan.provider, sshKey: plan.sshKey },
     plan.createdAt, plan.schema, historical ? legacyHost : stagedFleet(plan) ? fleetHost(plan.host?.region)
       : plan.schema === launchFleetSchema ? fleetHost(plan.host?.region, pinnedFleetRegions) : host,
-    historical ? plan.selection : selection());
+    historical || priorSelection ? plan.selection : current, plan.single);
   assert.deepEqual(plan, expected, "fleet differs from complete fixed registry and owned hosts");
   return plan;
 }
@@ -119,7 +149,7 @@ export function requireStagedFleet(plan) {
   return validateFleet(plan);
 }
 // Only derive placement from a validated fleet, never from free-form launch options.
-const jobHost = (fleet, job, region) => job.host ?? (stagedFleet(fleet) ? fleetHost(region) : fleet.host);
+const jobHost = (fleet, job, region) => job.host ?? (stagedFleet(fleet) && !fleet.single ? fleetHost(region) : fleet.host);
 export const savedLoadLayout = (s) => s.fleet?.jobs.find((job) => job.group === s.group)?.loadLayout;
 export function savedPlacement(s) {
   if (s.fleet?.schema !== launchFleetSchema && !stagedFleet(s.fleet)) return;
@@ -127,7 +157,7 @@ export function savedPlacement(s) {
   if (mode !== "dedicated" && mode !== catalogFleetPlacement.loadLayout) return mode;
 }
 function reservationRegion(fleet, job, placement) {
-  if (!stagedFleet(fleet) || job.host) {
+  if (!stagedFleet(fleet) || job.host || fleet.single) {
     assert.equal(placement, undefined, "only a v5 remaining host has a placement binding");
     return;
   }
@@ -138,7 +168,7 @@ function reservationRegion(fleet, job, placement) {
 
 // Keep the wider catalog job fixed, and use one common region for all other jobs.
 // Both directional listings must agree for each candidate pair.
-export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, staged = false } = {}) {
+export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, staged = false, group } = {}) {
   const listed = (kind, slug, membership, optional) => {
     assert.ok(Array.isArray(catalog?.[kind]), "invalid fleet catalog listing");
     const rows = catalog[kind].filter((row) => row?.slug === slug);
@@ -158,7 +188,11 @@ export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, st
     assert.ok(inSize === inRegion, `fleet catalog listings disagree: ${size}/${region}`);
     return inSize && s.available && r.available;
   };
-  if (remainingOnly) assert.ok(staged || reservedRegion !== undefined, "remaining placement must already be reserved");
+  if (group === "catalog-page") {
+    assert.ok(available(catalogFleetPlacement.host), "fleet placement not advertised: c-16/sfo2");
+    return host.region; // The fixed catalog job carries its own c-16 placement.
+  }
+  if (remainingOnly || group !== undefined) assert.ok(staged || reservedRegion !== undefined, "remaining placement must already be reserved");
   else assert.ok(available(catalogFleetPlacement.host), "fleet placement not advertised: c-16/sfo2");
   const regions = staged ? fleetRegions : pinnedFleetRegions;
   const options = (reservedRegion === undefined ? regions : [reservedRegion]).filter((region) => available(fleetHost(region, regions)));
@@ -166,16 +200,26 @@ export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, st
     : `reserved fleet placement not advertised: c-8/${reservedRegion}`);
   return options[0];
 }
-export function assertFleetCensus(droplets, plan, remainingRegion) {
+export function assertFleetCensus(droplets, plan, remainingRegion, peers = []) {
   validateLaunchFleet(plan); assert.ok(Array.isArray(droplets));
+  const peerRows = new Set(peers.map((s) => {
+    assert.ok(plan.single && s.fleet.single?.indexSha256 === plan.single.indexSha256
+      && s.group !== plan.single.group && s.provider.accountId === plan.provider.accountId,
+      "peer belongs to a different reservation or account");
+    const d = ownedDroplet(droplets, s, { priorSelection: true });
+    assert.equal(d.networks.v4.filter((n) => n.type === "public").length, 1, "ambiguous peer public address");
+    return d;
+  }));
+  assert.equal(peerRows.size, peers.length, "duplicate peer host identity");
   const names = new Set(), ids = new Set();
   for (const d of droplets) {
     if (!d.name?.startsWith("corten-bench-groups-") && !d.tags?.includes(tags[0])) continue;
     const job = plan.jobs.find((row) => row.name === d.name);
-    assert.ok(job, "foreign benchmark host blocks fleet launch");
+    assert.ok(job || peerRows.has(d), "foreign benchmark host blocks fleet launch");
     full(String(d.id), /[1-9]\d*/, "droplet ID");
     assert.ok(!names.has(d.name) && !ids.has(String(d.id)), "duplicate fleet host identity");
     names.add(d.name); ids.add(String(d.id));
+    if (!job) continue; // Already bound to its exact owned state above.
     for (const tag of [...tags, job.tag]) assert.ok(d.tags?.includes(tag), "fleet ownership tag differs");
     const placement = jobHost(plan, job, remainingRegion);
     assert.equal(d.size_slug ?? d.size?.slug, placement.size); assert.equal(d.region?.slug, placement.region);
@@ -207,7 +251,7 @@ export function reservation(input, createdAt = new Date().toISOString()) {
 function groupSelection(fleet, group) {
   return { schema: fleet.selection.schema, groups: fleet.selection.groups.filter((row) => row.group === group) };
 }
-export function validateState(s, round) {
+export function validateState(s, round, options) {
   assert.ok(s && typeof s === "object" && !Array.isArray(s), "host state required");
   const dedicated = s.schema === "benchmark-dedicated-group-host/v1";
   assert.ok(dedicated || s.schema === "benchmark-group-host/v1");
@@ -218,7 +262,7 @@ export function validateState(s, round) {
   assert.equal(s.tag, `corten-bench-groups-run-${s.token}`);
   assert.equal(s.unit, `${s.name}.service`);
   if (dedicated) {
-    validateFleet(s.fleet); assert.equal(s.fleet.round, round); assert.equal(s.fleet.commit, s.commit);
+    validateFleet(s.fleet, options); assert.equal(s.fleet.round, round); assert.equal(s.fleet.commit, s.commit);
     const job = s.fleet.jobs.find((row) => row.group === s.group);
     assert.equal(job?.token, s.token, "host not reserved in fleet");
     assert.deepEqual(s.host, jobHost(s.fleet, job, reservationRegion(s.fleet, job, s.remainingPlacement)));
@@ -226,11 +270,14 @@ export function validateState(s, round) {
   } else {
     assert.deepEqual(s.host, legacyHost);
     assert.ok(!Object.hasOwn(s, "group") && !Object.hasOwn(s, "fleet") && !Object.hasOwn(s, "remainingPlacement"), "legacy host cannot select a group");
-    if (!historicalSelection(s.selection))
+    if (!historicalSelection(s.selection, historicalHostSelections))
       assert.deepEqual(s.selection, selection(), "complete current registry selection differs");
   }
   // Hosts launched since the bench package existed install it. Absent means the original job bytes.
   if (s.benchPackage !== undefined) assert.equal(s.benchPackage, true, "bench package marker");
+  // Saved reservations without this marker must regenerate the original job.
+  if (s.quietBootstrap !== undefined)
+    assert.ok([true, "after-start", "prelogin"].includes(s.quietBootstrap) && dedicated && s.control?.monitor, "quiet bootstrap requires a supervised group");
   date(s.createdAt);
   assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected", "retired"].includes(s.status));
   if (["preparing", "starting", "running", "collected", "retired"].includes(s.status)) assert.ok(s.id && s.ip, "owned host identity missing");
@@ -255,7 +302,8 @@ export function validateState(s, round) {
     assert.ok(s.control.sealed.every((e) => ["bootstrap", "audit-json-api", "audit-mixed-production"].includes(e)));
     const ids = new Set();
     for (const [sequence, row] of s.control.ledger.entries()) {
-      exact(row, ["request", "localTerminal", ...(row.localTerminal ? ["code"] : [])]);
+      exact(row, ["request", "localTerminal", ...(row.localTerminal ? ["code"] : []),
+        ...(row.setupProofRejected === undefined ? [] : ["setupProofRejected"])]);
       const request = row.request, invocation = request.invocation;
       exact(request, ["invocation", "helperSha256", "epoch", "sequence", ...(request.seal === undefined ? [] : ["seal"])]);
       exact(invocation, ["schema", "round", "commit", "token", "id", "channel", "purpose", "requestSha256", "deadlineMs"]);
@@ -270,6 +318,9 @@ export function validateState(s, round) {
       full(invocation.id, /[a-f0-9]{32}/, "control invocation"); assert.ok(!ids.has(invocation.id)); ids.add(invocation.id);
       assert.equal(typeof row.localTerminal, "boolean");
       if (row.localTerminal) assert.ok(Number.isInteger(row.code) && row.code >= 0 && row.code <= 255);
+      if (row.setupProofRejected !== undefined) assert.ok(row.setupProofRejected === true && row.localTerminal && row.code === 0
+        && s.preBootstrapTerminal && s.status === "starting" && s.evidence && sequence === s.control.ledger.length - 1
+        && request.epoch === "collection" && invocation.channel === "ssh", "invalid setup proof rejection");
       if (request.seal !== undefined) {
         assert.notEqual(request.epoch, "collection"); assert.equal(invocation.channel, "ssh");
         const expected = s.control.ledger.slice(0, sequence + 1).filter((r) => r.request.epoch === request.epoch)
@@ -303,8 +354,8 @@ export function validateState(s, round) {
   }
   return s;
 }
-export function ownedDroplet(droplets, s) {
-  validateState(s, s.round);
+export function ownedDroplet(droplets, s, options) {
+  validateState(s, s.round, options);
   assert.ok(Array.isArray(droplets));
   const matches = droplets.filter((d) => s.id ? String(d.id) === s.id : d.name === s.name && d.tags?.includes(s.tag));
   assert.equal(matches.length, 1, "owned droplet missing or ambiguous; preserve reservation");
@@ -526,30 +577,41 @@ test ! -L '${sshIngressSnapshot}'
 test -s '${sshIngressSnapshot}'
 ${listSshIngress} | cmp -s -- '${sshIngressSnapshot}' -`;
 
-// Fixed source-bound entry point. No caller-provided command or adapter filtering.
-export function remoteFiles(s) {
-  validateState(s, s.round);
-  const loadLayout = savedLoadLayout(s);
-  const placement = savedPlacement(s);
-  const sshIngress = bootstrapWorkspaceScript(s) === dedicatedWorkspace;
-  // Dedicated group runners are system services. Their root SSH sessions need
-  // logind scopes, not a user service manager. Leave any existing session alone.
-  const marker = s.group && s.control?.monitor ? `/run/corten-bench-control-${s.token}/binding.json` : null;
-  const loginPolicy = marker ? `bootstrap_stage=root-manager-policy
-test -f '${marker}'
+export const rootManagerDrainSeconds = 120;
+export const rootManagerCheckSeconds = 15;
+
+const rootManagerDropIn = "/run/systemd/system/user@0.service.d/90-corten-benchmark.conf";
+// Fixed create body, never caller-supplied cloud-init. Before the guardian
+// exists, the condition checks the drop-in itself. /run is private to this boot.
+export const preloginUserData = `#cloud-config
+bootcmd:
+  - |
+    set -eu
+    umask 077
+    d=/run/systemd/system/user@0.service.d
+    test ! -L "$d"
+    mkdir -p -- "$d"
+    dropin=${rootManagerDropIn}
+    test ! -e "$dropin" && test ! -L "$dropin" || exit 1
+    ( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${rootManagerDropIn}' > "$dropin" )
+    systemctl daemon-reload
+`;
+const rootManagerBinding = (s) => s.group && s.control?.monitor ? `/run/corten-bench-control-${s.token}/binding.json` : null;
+const rootManagerPolicy = (marker, prelogin = false) => `test -f '${marker}'
 test ! -L '${marker}'
-dropin=/run/systemd/system/user@0.service.d/90-corten-benchmark.conf
+dropin=${rootManagerDropIn}
 test ! -L /run/systemd/system/user@0.service.d
-mkdir -p -- /run/systemd/system/user@0.service.d
+${prelogin ? `test -f "$dropin" && test ! -L "$dropin" || exit 1
+test "$(stat -c '%u:%g:%a:%h' -- "$dropin")" = 0:0:600:1
+cmp -s -- "$dropin" <(printf '%s\\n' '[Unit]' 'ConditionPathExists=!${rootManagerDropIn}')
+test ! -e "$dropin.next" && test ! -L "$dropin.next" || exit 1
+( umask 077; set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${marker}' > "$dropin.next" )
+mv -T -- "$dropin.next" "$dropin"` : `mkdir -p -- /run/systemd/system/user@0.service.d
 test ! -e "$dropin"
 test ! -L "$dropin"
-( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${marker}' > "$dropin" )
-systemctl daemon-reload
-` : "";
-  const waitForIdleUserManager = marker ? `bootstrap_stage=root-manager-idle
-timeout 120 bash -ec '
-  while :; do
-    echo "root-manager: querying ActiveState" >&2
+( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${marker}' > "$dropin" )`}
+`;
+const observeRootManager = `    echo "root-manager: querying ActiveState" >&2
     state=$(systemctl show user@0.service --property=ActiveState --value)
     case "$state" in
       active|activating|deactivating|reloading|inactive|failed) ;;
@@ -558,7 +620,63 @@ timeout 120 bash -ec '
     echo "root-manager: ActiveState=$state; querying MainPID" >&2
     main_pid=$(systemctl show user@0.service --property=MainPID --value)
     [[ "$main_pid" =~ ^[0-9]{1,10}$ ]] || { echo "root-manager: invalid MainPID" >&2; exit 1; }
-    echo "root-manager: ActiveState=$state MainPID=$main_pid" >&2
+    echo "root-manager: ActiveState=$state MainPID=$main_pid" >&2`;
+
+export function installBenchmarkUnit(s) {
+  const install = `bash -n /bench/job.sh && bash -n /bench/pack.sh && install -m 644 /bench/${s.unit} /etc/systemd/system/${s.unit} && systemd-analyze verify /etc/systemd/system/${s.unit}`;
+  return s.quietBootstrap
+    ? `${install} || exit 1\n${rootManagerPolicy(rootManagerBinding(s), s.quietBootstrap === "prelogin")}systemctl daemon-reload`
+    : `${install} && systemctl daemon-reload`;
+}
+
+// Fixed source-bound entry point. No caller-provided command or adapter filtering.
+// Only file reconstruction for destroyed native failures needs the r27/r41
+// single-group roster. Do not admit it to reservation, launch or live custody.
+export function validateRemoteFileState(s) {
+  const priorSelection = s.status === "retired" && s.destroyedAt && s.retirement?.kind === "native-failed"
+    && s.schema === "benchmark-dedicated-group-host/v1" && s.fleet?.single?.group === "localized-marketplace"
+    && s.fleet.selection && digest(s.fleet.selection) === "b374b8f7bb9600efb0f06abc30dd08bbbaf97ef8fafb7e3858e83fd5d32570a8";
+  return validateState(s, s.round, { priorSelection });
+}
+
+export function remoteFiles(s) {
+  validateRemoteFileState(s);
+  const loadLayout = savedLoadLayout(s);
+  const placement = savedPlacement(s);
+  const sshIngress = bootstrapWorkspaceScript(s) === dedicatedWorkspace;
+  // Dedicated group runners are system services. Their root SSH sessions need
+  // logind scopes, not a user service manager. Leave any existing session alone.
+  const marker = rootManagerBinding(s);
+  const prelogin = s.quietBootstrap === "prelogin", afterStart = prelogin || s.quietBootstrap === "after-start";
+  // Type=exec acknowledges this unit after exec. Anchor the host deadline to
+  // that event, not to how long metadata collection or scheduling happened to take.
+  const drain = afterStart ? `bootstrap_stage=root-manager-drain
+sample_manager() {
+  echo "root-manager: $1" >&2
+  timeout 5 systemctl show user@0.service --all --property=ActiveState,MainPID,ActiveEnterTimestampMonotonic
+}
+start_us=$(timeout 5 systemctl show ${s.unit} --property=ExecMainStartTimestampMonotonic --value)
+[[ "$start_us" =~ ^[1-9][0-9]{0,19}$ ]] || { echo "root-manager: missing unit start time" >&2; exit 1; }
+sample_manager before-drain
+python3 -I -c 'import sys,time
+start = int(sys.argv[1])
+elapsed = time.monotonic_ns() // 1000 - start
+if elapsed < 0: sys.exit("invalid unit start time")
+time.sleep(max(0, ${rootManagerDrainSeconds} - elapsed / 1000000))' "$start_us"
+sample_manager after-drain
+` : "";
+  const checkWindow = afterStart ? `python3 -I -c 'import sys,time
+elapsed = time.monotonic_ns() // 1000 - int(sys.argv[1])
+if not ${rootManagerDrainSeconds * 1_000_000} <= elapsed < ${(rootManagerDrainSeconds + rootManagerCheckSeconds) * 1_000_000}:
+    sys.exit("root-manager: idle proof outside post-start quiet window")' "$start_us"
+` : "";
+  const loginPolicy = marker ? `bootstrap_stage=root-manager-policy
+${rootManagerPolicy(marker)}systemctl daemon-reload
+` : "";
+  const waitForIdleUserManager = marker ? `bootstrap_stage=root-manager-idle
+timeout ${rootManagerDrainSeconds} bash -ec '
+  while :; do
+${observeRootManager}
     case "$state" in
       inactive) test "$main_pid" = 0; break ;;
       failed) exit 1 ;;
@@ -566,6 +684,37 @@ timeout 120 bash -ec '
     esac
   done'
 ` : "";
+  const requireIdleUserManager = (stage) => `bootstrap_stage=${stage}
+timeout ${rootManagerCheckSeconds} bash -e -o pipefail -c '
+    test -f "$1" && test ! -L "$1" || exit 1
+    test -f "$2" && test ! -L "$2" || exit 1
+    cmp -s -- "$2" <(printf "%s\\n" "[Unit]" "$3")
+    # The condition must be mandatory (not a trigger), negated and in the loaded unit.
+    busctl --json=short get-property org.freedesktop.systemd1 /org/freedesktop/systemd1/unit/user_400_2eservice org.freedesktop.systemd1.Unit Conditions |
+      python3 -I -c "
+import json, sys
+reply = json.load(sys.stdin)
+expected = [\\"ConditionPathExists\\", False, True, sys.argv[1]]
+sys.exit(not (reply[\\"type\\"] == \\"a(sbbsi)\\" and any(row[:4] == expected for row in reply[\\"data\\"])))
+" "\${3#ConditionPathExists=!}" ||
+      { echo "root-manager: effective binding condition missing" >&2; exit 1; }
+${observeRootManager}
+${prelogin ? `    busctl --json=short call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListSessions |
+      python3 -I -c "
+import json, os, sys, time
+raw = sys.stdin.buffer.read(8193)
+assert len(raw) <= 8192
+reply = json.loads(raw)
+assert reply[\\"type\\"] == \\"a(susso)\\"
+sessions, = reply[\\"data\\"]
+assert isinstance(sessions, list) and all(len(s) == 5 and type(s[1]) is int for s in sessions)
+count = sum(s[1] == 0 for s in sessions)
+linger = os.path.exists(\\"/var/lib/systemd/linger/root\\")
+print(f\\"root-manager: monotonic-us={time.monotonic_ns() // 1000} root-sessions={count} linger-file={int(linger)}\\", file=sys.stderr)
+${stage === "root-manager-idle" ? 'if count: sys.exit(\\"root-manager: root session before provisioning\\")' : "# The registered monitor may now have a session."}"
+` : ""}    test "$state" = inactive && test "$main_pid" = 0
+' root-manager '${marker}' '${rootManagerDropIn}' 'ConditionPathExists=!${marker}'
+`;
   const pack = `#!/bin/bash
 set -euo pipefail
 cd /bench
@@ -585,9 +734,9 @@ bootstrap_stage=supervisor
 bootstrap_error() { local code=$?; trap - ERR; printf 'benchmark job failed: stage=%s line=%s exit=%s\\n' "$bootstrap_stage" "$1" "$code" >&2; return "$code"; }
 trap 'bootstrap_error "$LINENO"' ERR
 ${supervisorBootstrap(s.unit)}
-bootstrap_stage=cloud-init
+${drain}${s.quietBootstrap ? requireIdleUserManager("root-manager-idle") : ""}${checkWindow}bootstrap_stage=cloud-init
 timeout 900 cloud-init status --wait
-${loginPolicy}# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
+${s.quietBootstrap ? "" : loginPolicy}# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
 bootstrap_stage=firmware-mask
 systemctl mask --runtime --now fwupd.service fwupd-refresh.service fwupd-refresh.timer
 bootstrap_stage=package-services
@@ -675,7 +824,7 @@ done
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
 unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE
-${waitForIdleUserManager}${sshIngress ? `bootstrap_stage=ssh-ingress-verification
+${s.quietBootstrap ? requireIdleUserManager("root-manager-verification") : waitForIdleUserManager}${sshIngress ? `bootstrap_stage=ssh-ingress-verification
 ${verifySshIngress}
 ` : ""}bootstrap_stage=native-entry
 node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign${s.group === undefined ? "" : ` --group ${s.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}${placement ? ` --placement ${placement}` : ""}

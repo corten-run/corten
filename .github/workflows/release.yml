@@ -32,7 +32,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   version:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -69,8 +69,8 @@ jobs:
       matrix:
         include:
           # Linux binaries are static (musl), so they run on any distribution.
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04 }
-          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-26.04 }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-26.04-arm }
           - { target: x86_64-apple-darwin, os: macos-15 }
           - { target: aarch64-apple-darwin, os: macos-15 }
           - { target: x86_64-pc-windows-msvc, os: windows-2025 }
@@ -97,7 +97,7 @@ jobs:
   # the dependencies' build scripts) never hold an OIDC token. It checks out and builds nothing.
   attest:
     needs: binaries
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       id-token: write
@@ -116,7 +116,7 @@ jobs:
   # the SHA256SUMS the GitHub release attaches.
   verify-archives:
     needs: attest
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       attestations: read
@@ -152,7 +152,7 @@ jobs:
 
   publish:
     needs: [checks, version, binaries, verify-archives]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # Protect this environment in the repository settings; crates.io's trusted publisher names it.
     environment: release
     permissions:
@@ -180,7 +180,7 @@ jobs:
 
   github-release:
     needs: [version, verify-archives, publish]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:

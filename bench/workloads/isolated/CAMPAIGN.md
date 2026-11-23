@@ -111,14 +111,22 @@ Campaign rN maps to catalog cN, JSON prepare j(2N), JSON timing j(2N+1), marketp
 mixed/browser/client/hardening wN and live/recoverable rN. N is 17..1000000000. Existing
 native output for any reserved round prevents launch; there is no semantic retry.
 
+Both live runners write to their fixed native result roots. Once the command's terminal
+lifetime is proved, the campaign transfers only that round's result tree into the external
+phase archive and seals its manifest before rechecking the complete source checkout. The
+same intake retains failed-app output. Other tracked or untracked changes still block
+finalization. Historical result paths, standalone commands and the archive layout are unchanged.
+
 `campaign-contract.mjs` retains the complete registry and hashes the actual nine source
 procedure files alongside all measured sources. The production map uses native defaults
 except the existing marketplace-short-window, explicit native-feed-measure for both live
 groups and new mixed-production-measure. Mixed adds --measure --profile matched as the
 native README specifies. The older mixed-measure remains the default-profile recipe,
-unchanged. Numeric defaults come from native parsers, not new CLI constants. Browser,
-client and hardening retain their declared native bounded production procedures; this is
-not a claim that their measurements or proof are available. All need merged-source review.
+unchanged. Numeric defaults come from native parsers, not new CLI constants. Dedicated
+client-heavy campaigns bind `client-heavy-comparison-v1` from the measured source; the
+legacy full campaign retains client-heavy's single-sample diagnostic recipe. Browser
+and hardening keep their bounded production procedures. No recipe name establishes
+measurement or host proof. All need merged-source review.
 
 ## Durable evidence
 
@@ -175,11 +183,14 @@ For example, native client v2 intentionally exits 2 after a positive diagnostic 
 that exact source-defined exit is distinguished from cancellation, a fixture error or an
 unknown nonzero exit. No validator injection or selected-app filtering is permitted.
 
-Status includes uncollectedNativeRoots. A terminal command's entire native tree is copied
-even when subsequent host cleanup/source observations fail. If terminal ownership or safe
-copy cannot be established, the original root remains explicitly uncollected: the parent
-must retain the host for inspection/terminal-safe collection, not delete it merely because
-the campaign logs or partial archive were saved.
+Status includes uncollectedNativeRoots. A terminal command's entire native tree is collected
+even when subsequent host cleanup/source observations fail. The live reservation records both
+the checkout-relative original and the campaign-relative transferDestination before any move.
+Both remain pending until the durable phase seal; an interrupted transfer may have bytes at
+either path but cannot qualify. A staged seal left by a write failure is not a journal event.
+If terminal ownership or safe collection cannot be established,
+the parent must retain the host for inspection/terminal-safe collection, not delete it merely
+because the campaign logs or partial archive were saved.
 
 Host observations retain boot/host, CPU/memory/pressure/cgroup information, PID start
 identities and Docker container/network boundaries before/after each group. A new persistent
@@ -206,9 +217,11 @@ processes' own effective sets, including child cgroups. It does not claim a trac
 of every short-lived process. Mixed production shares the throughput roles for its
 measured stage only; its separate functional capture has no pinning proof.
 
-Hardening is blocked before create pending an isolated adapter for its existing
-benign service and dependency-recovery actors. This also blocks a bundled launch
-that includes the unsupported group. Connection-flood resistance: not measured.
+The fixed hardening adapter replays the bounded native service and dependency-recovery
+results. The isolated recipe requires the bound CPU gate and its declared budgets and
+CPU sets. A complete result still requires the native matrix, exact build archives,
+effective CPU and process receipts, and clean terminal boundaries. Passing replay does
+not authorize launch or establish a throughput ranking. Connection-flood resistance: not measured.
 
 ## Kernel lifetime observations
 
@@ -335,9 +348,21 @@ descriptors. Before/after descriptor identity must equal the original sampled id
 The helper must exit successfully within the existing 30-second bootstrap bound before
 finish returns or another command starts. Descriptor closure is unconditional. Unresolved,
 changed or unsealed hashes cannot qualify; `executables.json` binds the resolved digest
-to its sampled reference. Sample timestamps and the one-second gap gate are not rewritten
+to its sampled reference. When sealing fails, `terminal.json` distinguishes starting or
+running the helper, reading an inherited descriptor, rechecking its identity, and publishing
+the proof. An identity failure can name its sampled reference, not the executable path or
+arbitrary helper output. A ctime-only mismatch is still a failure, not proof of unlink.
+Sample timestamps and the one-second gap gate are not rewritten
 or relaxed. This post-sampling work is not benchmark timing and is not an OS authority
 claim by the saved JSON. The existing pre-gated bootstrap executable check is unchanged.
+
+For client-heavy, the campaign exclusively creates the native output's `.compiler` sibling
+and holds its directory descriptor. The gated builder checks that exact empty directory
+before using it as Cargo's fresh target. The campaign removes only its own target after
+descriptor sealing and terminal-empty cgroup cleanup, including a drained command whose
+native result or executable proof failed. An uncertain stop preserves the target. This
+scratch is outside the native and phase evidence trees. Standalone builds still exclusively
+create and remove their own target.
 
 `host-participant-linux.test.mjs` is a separate actual-kernel fixture, not a portable test
 or native-browser qualification. Its caller owns a fresh long-lived Node Docker container
@@ -370,17 +395,22 @@ or campaign readiness. The v2 native adapter/producer integration remains a sepa
 
 ## Post-command udev settle
 
-In supervised localized-marketplace timing only, a first-after inventory containing
-new sleeping children of the same baseline `systemd-udevd` can trigger one five-second wait
-and one more host observation after the marketplace command and its kernel observation are
-terminal. The Linux start ticks must place every new non-kernel identity strictly after the
-cutoff in the sealed command-lifetime record. Both the uptime and the monotonic apparatus
-samples must support the wait. Cancellation keeps the first-after inventory and skips the
-second census. Exact cgroup, parent PID/start identity and matching executable path,
-device and inode are required, not just the worker name. Saved replay checks all the sealed
-observations by the same rules. A worker or replacement still present, uncertain timing or
-ownership, a new login, benchmark process, or changed Docker baseline still stops sequencing. This does not rerun or
-alter a measured window, prove the host was quiet, or repair historical evidence.
+Supervised JSON preparation and localized-marketplace timing can take one additional
+host observation if the first-after inventory contains only new sleeping children of
+the same baseline `systemd-udevd`. The last command must have sealed terminal and empty
+lifetime evidence before the five-second wait begins. For untimed JSON preparation,
+the Linux start ticks must place each worker strictly after the pre-phase census
+cutoff. Marketplace timing still requires birth strictly after the sealed terminal
+cutoff; other timing phases do not use this rule.
+
+Both uptime and the monotonic apparatus samples must support the wait. Cancellation
+keeps the first-after inventory and skips the second census. Exact cgroup, parent
+PID/start identity and matching executable path, device and inode are required, not
+just the worker name. Saved replay uses the same rule and requires cleanup proof
+before accepting JSON audit readiness. A surviving or replacement worker, uncertain
+timing or ownership, a new login or benchmark process, or a changed Docker baseline
+still stops sequencing. This does not alter a measured window, prove the host was
+quiet, or repair historical evidence.
 
 ## Awaitable intrinsic API
 
@@ -396,6 +426,12 @@ selection shape, ordered groups, collectionIntegrity manifest-verified, commandL
 observed-terminal, empty uncollectedNativeRoots and blockers, archiveTreeSha256 and
 reservationSha256. Each group has group/outcome native-validated/bindingSha256/
 nativeManifestSha256 plus ordered appOutcomes entries {app,outcome,comparisonEligible}.
+For a verified dedicated client-heavy comparison only, eligible rows also
+carry a `comparison` with sample count, actual attempted order for each block,
+and per-action median/min/max milliseconds. Skips can leave order effects; the
+range is not a winner claim. Native replay ties all three measured blocks to
+the fixed recipe and host process windows. An unverified campaign exposes only
+dispositions, even if a group's comparison was sealed before the halt.
 Failed/unsupported apps remain comparison-ineligible. It has no qualified/controllerReady/
 deletion approval claim. The live controller separately establishes operator authorization,
 approved merged source, provider/unit ownership and exact unchanged archive-tree binding.
@@ -404,12 +440,10 @@ Native dispatcher imports are fixed: catalog verify.mjs validateSaved, JSON stri
 inspectJson/inspectEvidence, marketplace validate.mjs validateSaved (returns the replayed
 summary, not a status envelope), and the six fixed isolated adapters' inspectSaved. No
 caller supplies a verifier. Native assertions/diagnostics are reduced to fixed public codes.
-The current imported browser/client and live/recovery adapters still report genuine producer
-gaps. Mixed/hardening adapters and reviewed native proofs must be routed by their owners;
-their absence is not silently replaced by a summary-only pass. Full actual all-nine
-execution, renewed source/build audits and dependency proofs have not been performed by
-this checkpoint. The local delegated-Linux fixture exercises actual collector lifetimes,
-not a complete campaign or provider ownership.
+Missing or incomplete producer proof remains blocked; a summary alone is not a substitute
+for native replay. Full actual all-nine execution, renewed source/build audits and
+dependency proofs have not been performed by this checkpoint. The local delegated-Linux
+fixture exercises actual collector lifetimes, not a complete campaign or provider ownership.
 
 ## JSON build, audit wait, then timing
 

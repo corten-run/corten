@@ -1942,7 +1942,9 @@ profile picture (`examples/watchlist/src/account.rs`) does both.
 A file the user downloads names itself on its `Media`: `.attachment("shipments-2026-10-29.csv")`
 to save it, `.inline("packing-slips.pdf")` to show it where the browser can and save it under
 that name. It stays private unless the handler says `Public`, so a user's export is not cached
-for anyone else. Corten writes a name that is not plain ASCII as `filename*=UTF-8''..` (RFC 6266),
+for anyone else; one that is `Public` and 1,024 bytes or more (a CSV, a PDF, a picture) is also kept
+by the app and given again without its handler until its lifetime ends
+([the pages the app keeps](app.md#the-pages-the-app-keeps)). Corten writes a name that is not plain ASCII as `filename*=UTF-8''..` (RFC 6266),
 which browsers read, and a quote or line break in a name taken from user data cannot change the
 header. The browser still cleans the name it saves (a `/`, a `:`, a control character), and an
 empty name lets it name the file from the URL. Link to a download with `download`
@@ -2215,8 +2217,30 @@ on the page it is in (a validation summary's link to the field it names, a skip 
 `href={FeedbackId.fragment()}`, a bare `#feedback` written the same way: it is a jump within the
 document, never a request, so it is an attribute value and not an address `req.redirect` takes.
 The browser scrolls to a route's place after a full load and after the runtime's navigation
-alike; the runtime fetches the page again even when only the `#id` differs from the address,
-since the write may have changed it.
+alike. A link, a form or a redirect the runtime follows (a push or a replace) runs the browser's
+own scroll to the fragment once the new page is drawn (the Navigation API's
+`NavigateEvent.scroll()`), so the element matches `:target` either way (a section CSS shows or
+highlights when linked to), an `<a name>` anchor is found as an `id` is, the fragment is
+percent-decoded as HTML decodes it, focus moves to the element when it can take focus, and a page
+without a place starts at its top. A focus handler runs in that scroll, as on a full load: the
+runtime neither scrolls nor moves focus after it, and an address it changes
+(`history.replaceState`) ends the navigation there. The runtime sees that focus moved by a
+`focus` listener it adds in the capture phase on `window` for the length of the scroll; a page
+listener added there earlier that stops the event (`stopImmediatePropagation`) and puts focus back
+hides the move, and the runtime may then scroll to the element again. Focus is then the Navigation API's to reset,
+as after any navigation the runtime draws, unless it moved during the navigation (to the element,
+or by the user while the page loaded), which stays. For an element that cannot take focus (a
+heading), a full load starts the next Tab from it; after a client swap, Chromium (159) starts it
+at the top instead, because the reset comes after the scroll and no browser API moves that
+starting point. Back and forward put back the scroll position instead, and a `data-keep-place`
+navigation keeps it.
+Firefox (159) may skip that scroll on a client swap, or leave `:target` unset or still on an
+element the swap left in place (outside `<main>`). The runtime then scrolls to the element itself
+when it is shown, but without the browser's steps that first reveal a target inside a hidden
+ancestor (`hidden="until-found"`), focus it and start the next Tab from it, which a full load at
+that address takes: such a target stays hidden. A section that must show when linked to does not
+rely on `:target` or `hidden="until-found"` alone there. The runtime fetches the page again even
+when only the `#id` differs from the address, since the write may have changed it.
 A client navigation the server sends to a place gets `corten-location` instead of a 303,
 because `fetch` follows a redirect but drops its fragment, and so does the whole page the
 runtime fetches after a write (`corten: page`), so a page a write leads to that sends the browser

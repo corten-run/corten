@@ -344,8 +344,9 @@ test("dependency snapshot preserves actual bytes, excludes unused bin launchers 
 test("Git archive build and harness inputs replay committed bytes read-only, including root context files", async (t) => {
   const repository = fileURLToPath(new URL("../../", import.meta.url)), dir = join(root, "source"); mkdirSync(dir);
   const commit = sourceGit(repository, ["rev-parse", "HEAD"]).toString().trim(), files = committedInputs(repository, commit);
-  const context = await nativeBuildContext({ command: async (binary, args) => execFileSync(binary, args, { cwd: repository, windowsHide: true,
-    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" }, stdio: ["ignore", "pipe", "pipe"] }) }, dir, commit, "corten", files.map(({ path, sha256 }) => ({ path, sha256 })));
+  const io = { command: async (binary, args) => execFileSync(binary, args, { cwd: repository, windowsHide: true,
+    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" }, stdio: ["ignore", "pipe", "pipe"] }) };
+  const context = await nativeBuildContext(io, dir, commit, "corten", files.map(({ path, sha256 }) => ({ path, sha256 })));
   const lock = JSON.parse(readFileSync(join(dir, "corten-build-context/package-lock.json")));
   for (const name of ["@playwright/test", "playwright", "playwright-core"]) {
     const path = join(dir, "dependencies", name, "package.json"); mkdirSync(dirname(path), { recursive: true });
@@ -362,6 +363,31 @@ test("Git archive build and harness inputs replay committed bytes read-only, inc
     return t.skip("the current Git commit predates the v3 sources; positive replay requires a committed v3 checkout");
   }
   const before = savedFiles(dir); assert.deepEqual(verifyRunInputs(dir, summary), input); assert.deepEqual(savedFiles(dir), before);
+  await t.test("non-Corten Git context replays only the producer's exact archive bytes", async () => {
+    const app = "aspnet", prefix = `bench/fullstack/apps/${app}`;
+    const appFiles = files.filter((f) => f.path.startsWith(prefix + "/"));
+    const appContext = await nativeBuildContext(io, dir, commit, app, appFiles.map(({ path, sha256 }) => ({ path, sha256 })));
+    const appSource = digest(JSON.stringify(appFiles.map((f) => [f.path, f.sha256])));
+    const receipt = (context) => {
+      const appImage = image(2);
+      appImage.Config.Labels = { "run.corten.hardening.context": context.sha256, "run.corten.marketplace.commit": commit,
+        "run.corten.hardening.source": appSource };
+      return buildNativeImage(async (args) => args[0] === "build" ? "" : JSON.stringify([appImage]),
+        { context, runId, commit, source: appSource, tag: `${runId}-${app}`, files: appFiles });
+    };
+    const attempt = { ...summary, cells: [...summary.cells, { app, phase: "dependency-recovery", status: "observed" }],
+      builds: { ...summary.builds, [app]: await receipt(appContext) } };
+    assert.deepEqual(verifyRunInputs(dir, attempt), input);
+    const archive = join(dir, `${app}-build-context.tar`);
+    try {
+      // Same committed files, but a different tar timestamp and matching saved receipt.
+      const input = sourceGit(repository, ["archive", "--format=tar", "--mtime=2001-01-01T00:00:00Z", `${commit}:${prefix}`]);
+      const sha256 = digest(input); assert.notEqual(sha256, appContext.sha256);
+      writeFileSync(archive, input);
+      attempt.builds[app] = await receipt({ ...appContext, input, sha256 });
+      assert.throws(() => verifyRunInputs(dir, attempt), /native build-context archive differs from committed inputs/);
+    } finally { rmSync(archive); rmSync(join(dir, `${app}-build-context`), { recursive: true }); }
+  });
   assert.ok(files.some((f) => f.path === ".dockerignore"));
   const full = fixture(); Object.assign(full.summary, { commit, savedProofVersion, startedAt: "2000-01-01T00:00:00Z", finishedAt: "2100-01-01T00:00:00Z", builds: summary.builds });
   // Use the same retained application image identity as the actual-config vector.

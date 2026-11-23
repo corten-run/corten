@@ -31,6 +31,7 @@ const root = fileURLToPath(new URL("../../../", import.meta.url));
 // reviewed source pin; a missing/invalid dependency inside a present parser fails.
 const clientParser = existsSync(new URL("../../client-heavy/contract.mjs", import.meta.url))
   ? await import("../../client-heavy/contract.mjs") : null;
+export const clientComparisonRecipe = clientParser?.comparisonProfile;
 const git = (args, input) => execFileSync("git", args, { cwd: root, input, windowsHide: true,
   env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
   maxBuffer: 64 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] });
@@ -50,8 +51,8 @@ const exact = (value, keys, at) => {
 // below cannot silently survive a change to their actual default/CLI implementation.
 const snapshotPins = freeze({
   ...(!clientParser ? { "bench/client-heavy/run.mjs": "71fc21c81f109b4ae43eb6585c675fe3e9eb49fa526de57ab20e8d4f48edbb8e" } : {}),
-  // Native live adds explicit isolation and actor receipts; workload defaults are unchanged.
-  "bench/live/parity.mjs": "d02cefc6f8d44a5b8ab4f744232abbae996760df4906e8221c9a45c657428c59",
+  // Per-adapter Chromium and cancelled-prefix retention do not change native live CLI/defaults.
+  "bench/live/parity.mjs": "18423efd99b70e10af146801759958d5df954427a9b0d4cc3c05bcc8be399a5a",
 });
 const clientSourceRoots = Object.freeze([...(clientParser?.sourceRoots ?? [])]);
 export const sourceRoots = Object.freeze([...new Set(["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", ".dockerignore", ".gitignore",
@@ -110,6 +111,7 @@ export const recipes = freeze({
   "mixed-measure": ["mixed-production"],
   "mixed-production-measure": ["mixed-production"],
   "native-feed-measure": ["live-delivery", "recoverable-live"],
+  ...(clientComparisonRecipe ? { [clientComparisonRecipe]: ["client-heavy"] } : {}),
 });
 function request(value) {
   exact(value, ["group", "round", "commit", "recipe"], "request");
@@ -191,9 +193,14 @@ function native(group, round, recipe, reviewId) {
       defaults = { rows: d.rows, large: d.large, append: d.append, cards: d.cards, seed: d.seed, cleanupMs: d["cleanup-ms"],
         observationMs: d["observation-ms"], timeoutMs: d["timeout-ms"], cargo: d.cargo };
       args.push("--out", artifactRoot);
+      if (recipe === clientComparisonRecipe) args.push("--profile", clientComparisonRecipe);
       const actual = clientParser.options(args), value = actual.invocation.effective;
       effective = { rows: value.rows, large: value.large, append: value.append, cards: value.cards, seed: value.seed,
         cleanupMs: value["cleanup-ms"], observationMs: value["observation-ms"], timeoutMs: value["timeout-ms"], cargo: actual.cargo, out: artifactRoot };
+      if (actual.measurementOrder) {
+        Object.assign(effective, { profile: value.profile, measurementOrder: actual.measurementOrder });
+        changes.push({ profile: value.profile });
+      }
       settings = actual.workload;
     } else {
     defaults = { rows: 14, large: 110, append: 7, cards: 24, seed: 7, cleanupMs: 2000, observationMs: 100, timeoutMs: 30000, cargo: "cargo" };
