@@ -125,6 +125,33 @@ test("a successful or failing command keeps its existing result and exit shape",
   await assert.rejects(runner.command(...node("")), /catalog run interrupted/);
 });
 
+test("a client that exits while another process holds its output open still settles at its deadline", { timeout: 20000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "catalog-command-held-"));
+  const pidFile = join(dir, "holder.pid");
+  // The holder inherits the client's pipes and is detached (its own session on Linux,
+  // outside the taskkill tree once its parent exits on Windows), so stopping the
+  // client's process group cannot close them.
+  const holder = `require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setTimeout(()=>{},30000)`;
+  const client = `const c=require('child_process').spawn(process.execPath,['-e',${JSON.stringify(holder)}],{detached:true,stdio:['ignore','inherit','inherit']});c.unref();console.log('4f1c0ffee')`;
+  try {
+    // Not cwd: dir, so Windows can delete the folder while the holder is still exiting.
+    const { command } = commandRunner({ cwd: tmpdir() });
+    const began = Date.now();
+    const error = await failure(command(...node(client), { timeout: 3000 }));
+    assert.ok(Date.now() - began < 3000 + 7000, "settled within the deadline plus the stop grace");
+    assert.match(error.message, /: timeout after 3000 ms; the client exited 0 at \d+ ms but its output stayed open\n4f1c0ffee/);
+    assert.deepEqual(error.exit, { code: 0, signal: null, expired: true, interrupted: false });
+    const life = error.lifetime;
+    assert.equal(life.exitCode, 0); assert.ok(life.exitMs < life.stoppedMs, "the client exited before the deadline");
+    assert.equal(life.stdout.bytes, Buffer.byteLength("4f1c0ffee\n")); assert.ok(life.stdout.firstMs <= life.exitMs);
+    assert.equal(life.stopped, "deadline"); assert.ok(life.releasedMs >= life.stoppedMs, "the runner stopped reading the held pipes");
+    assert.ok(life.settledMs >= life.releasedMs);
+  } finally {
+    try { process.kill(Number(readFileSync(pidFile, "utf8"))); } catch {}
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("receipt probes are bounded and their failures are recorded, not thrown", async () => {
   const calls = [];
   const docker = async (args, opts) => {

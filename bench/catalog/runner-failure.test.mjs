@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -12,16 +12,22 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
 
 for (const [index, mode] of ["cached", "absent", "wrong platform", "daemon error", "registry error", "start error", "prepare timeout",
-  "app start stall", "app logs stall"].entries()) {
+  "app start stall", "app start held", "app logs stall"].entries()) {
   test(`runner upstream image: ${mode}`, () => run(mode, index));
 }
 
 // A real local client stands in for one Docker command: the deadline is shortened, but the
 // runner's own helper, receipt and cleanup run unchanged.
 const stalls = {
-  "app start stall": { command: "run", source: "fixture", receipt: "fixture/gin/app-start.failure.json", stage: "checks",
+  "app start stall": { command: "run", source: "fixture", receipt: "fixture/gin/app-start.failure.json", stage: "checks", ms: 1500,
     script: (name) => `console.log(${JSON.stringify(name)});setInterval(()=>{},1000)` },
-  "app logs stall": { command: "logs", source: "api", receipt: "api/gin/app.log.failure.json", stage: "app logs",
+  // The client prints the ID and exits 0, but a detached process it started still holds its pipes.
+  "app start held": { command: "run", source: "fixture", receipt: "fixture/gin/app-start.failure.json", stage: "checks", ms: 2500, held: true,
+    script: (name, pidFile) => {
+      const holder = `require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setTimeout(()=>{},30000)`;
+      return `const c=require('child_process').spawn(process.execPath,['-e',${JSON.stringify(holder)}],{detached:true,stdio:['ignore','inherit','inherit']});c.unref();console.log(${JSON.stringify(name)})`;
+    } },
+  "app logs stall": { command: "logs", source: "api", receipt: "api/gin/app.log.failure.json", stage: "app logs", ms: 1500,
     script: () => "process.stdout.write('[GIN] 200 | GET /catalog/record_1\\n'.repeat(2000));setInterval(()=>{},1000)" },
 };
 
@@ -32,6 +38,7 @@ function run(mode, index) {
   const hook = join(scratch, "docker.mjs");
   const timers = join(scratch, "upstream-timers.json");
   const journal = join(scratch, "docker-journal.json");
+  const holder = join(scratch, "holder.pid");
   const stall = stalls[mode];
   // Exercise the real runner's artifacts, gating and cleanup with external commands
   // and readiness replaced. No fake negative receipt makes the browser assertion pass.
@@ -45,15 +52,16 @@ import { records } from ${JSON.stringify(pathToFileURL(join(here, "fixtures.mjs"
 const spawn = cp.spawn, read = fs.readFileSync, containers = new Map();
 const imageId = 'sha256:' + 'a'.repeat(64);
 const upstreamImage = ${JSON.stringify(upstreamImage)}, mode = ${JSON.stringify(mode)};
-const stall = ${JSON.stringify(stall ? { command: stall.command, source: stall.source } : null)};
+const stall = ${JSON.stringify(stall ? { command: stall.command, source: stall.source, ms: stall.ms } : null)};
 const stallScript = ${stall ? stall.script.toString() : "null"};
+const holder = ${JSON.stringify(holder)};
 const journal = [], stallDeadlines = [];
 let stalled = false, stallTimer = false;
 const localPlatform = mode === 'wrong platform' ? 'linux/arm64' : ['absent', 'registry error'].includes(mode) ? null : 'linux/amd64';
 const deadlines = [], setTimer = globalThis.setTimeout;
 let upstreamCommand;
 globalThis.setTimeout = (callback, ms, ...args) => {
-  if (stallTimer) { stallDeadlines.push(ms); ms = 1500; stallTimer = false; }
+  if (stallTimer) { stallDeadlines.push(ms); ms = stall.ms; stallTimer = false; }
   if (upstreamCommand) {
     deadlines.push([upstreamCommand, ms]);
     if (upstreamCommand === 'create' && mode === 'prepare timeout') ms = 100;
@@ -84,7 +92,7 @@ cp.spawn = (binary, args, options) => {
     if (name === runId + '-gin' && source === stall.source) {
       stalled = true; stallTimer = true;
       if (stall.command === 'run') containers.set(name, { source }); // The daemon created it; its client stalls.
-      return spawn(process.execPath, ['-e', stallScript(name)], options);
+      return spawn(process.execPath, ['-e', stallScript(name, holder)], options);
     }
   }
   const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {};
@@ -178,6 +186,7 @@ syncBuiltinESMExports();
     assert.equal(summary.checksPassed, false);
     if (stall) verifyStall(stall, summary, folder, JSON.parse(readFileSync(journal, "utf8")));
   } finally {
+    if (existsSync(holder)) try { process.kill(Number(readFileSync(holder, "utf8"))); } catch {}
     assert.equal(dirname(folder), join(here, "results")); rmSync(folder, { recursive: true, force: true });
     assert.equal(dirname(scratch), tmpdir()); rmSync(scratch, { recursive: true, force: true });
   }
@@ -198,8 +207,15 @@ function verifyStall(stall, summary, folder, { journal, stallDeadlines }) {
   const life = receipt.lifetime;
   assert.equal(life.command[0], "docker"); assert.equal(life.timeoutMs, 30000); assert.equal(life.stopped, "deadline");
   assert.ok(life.stdout.bytes > 0 && life.stdout.firstMs !== null && life.stdout.lastMs <= life.stoppedMs, "output preceded the stall");
-  assert.ok(life.stoppedMs >= 1400 && life.exitMs >= life.stoppedMs && life.closeMs >= life.exitMs, "the client ran until stopped");
-  assert.ok(life.settledMs >= life.closeMs);
+  assert.ok(life.stoppedMs >= stall.ms - 100, "stopped at the deadline");
+  if (stall.held) {
+    assert.match(found[0].error, /timeout after 30000 ms; the client exited 0 at \d+ ms but its output stayed open/);
+    assert.equal(life.exitCode, 0); assert.ok(life.exitMs < life.stoppedMs, "the client exited before the deadline");
+    assert.ok(life.releasedMs >= life.stoppedMs && life.settledMs >= life.releasedMs, "the runner stopped reading the held pipes");
+  } else {
+    assert.ok(life.exitMs >= life.stoppedMs && life.closeMs >= life.exitMs && life.settledMs >= life.closeMs, "the client ran until stopped");
+    assert.equal(life.releasedMs, null);
+  }
   assert.deepEqual(receipt.diagnosticErrors, []);
   assert.equal(receipt.inspect.owned, true); assert.equal(typeof receipt.inspect.state.Running, "boolean");
   assert.equal(receipt.events.total, 1); assert.equal(receipt.events.recent[0].id, name);

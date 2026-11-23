@@ -65,10 +65,14 @@ export function killCommand(child, cwd) {
   force.unref();
 }
 
-// Bounded external commands. A failure carries `exit` (the stable outcome other
-// evidence checks) and `lifetime`: when the client was spawned, first and last wrote,
-// exited, closed each pipe and was stopped, in milliseconds after spawn, so a stalled
-// command shows which signal never arrived.
+// After a stop, how long the runner keeps reading pipes that another process holds open.
+export const releaseMs = 5000;
+
+// Bounded external commands. A command succeeds only on `close`: the client exited AND
+// both pipes reached end of file, so its output is complete. A failure carries `exit`
+// (the stable outcome other evidence checks) and `lifetime`: when the client was
+// spawned, first and last wrote, exited, closed each pipe and was stopped, in
+// milliseconds after spawn, so a stalled command shows which signal never arrived.
 export function commandRunner({ cwd, interrupted = () => false } = {}) {
   const running = new Set();
   async function command(binary, args, { timeout = 30000, file, capture = true, cleanup = false } = {}) {
@@ -79,12 +83,21 @@ export function commandRunner({ cwd, interrupted = () => false } = {}) {
     const child = spawn(binary, args, { cwd, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     const lifetime = { command: [binary, ...args.slice(0, 3)], spawnedAt, timeoutMs: timeout, pid: child.pid ?? null,
       stdout: { bytes: 0, firstMs: null, lastMs: null, closedMs: null }, stderr: { bytes: 0, firstMs: null, lastMs: null, closedMs: null },
-      exitMs: null, exitCode: null, exitSignal: null, closeMs: null, stopped: null, stoppedMs: null, file: null, settledMs: null };
+      exitMs: null, exitCode: null, exitSignal: null, closeMs: null, stopped: null, stoppedMs: null, releasedMs: null, file: null, settledMs: null };
     let killed = false;
     let ioError;
+    let release, settleNow;
     const stop = (reason) => {
       if (lifetime.stopped === null) { lifetime.stopped = reason; lifetime.stoppedMs = at(); }
       killCommand(child, cwd);
+      // A process that inherited the client's pipes (outside its process group or
+      // taskkill tree) keeps them open after the client exits, so `close` may never
+      // come. Stop reading after a bounded grace; the command still fails.
+      release ??= setTimeout(() => {
+        lifetime.releasedMs = at();
+        child.stdout.destroy(); child.stderr.destroy();
+        settleNow({ code: child.exitCode, signal: child.signalCode });
+      }, releaseMs);
     };
     const entry = { stop };
     running.add(entry);
@@ -100,22 +113,27 @@ export function commandRunner({ cwd, interrupted = () => false } = {}) {
     child.stderr.once("close", () => { lifetime.stderr.closedMs = at(); });
     child.once("exit", (code, signal) => { lifetime.exitMs = at(); lifetime.exitCode = code; lifetime.exitSignal = signal; });
     const timer = setTimeout(() => { killed = true; stop("deadline"); }, timeout);
-    const settle = () => { lifetime.file = output.written(); lifetime.settledMs = at(); return lifetime; };
+    // A copy: pipe events after a release must not change a receipt already taken.
+    const settle = () => { lifetime.file = output.written(); lifetime.settledMs = at(); return structuredClone(lifetime); };
     try {
       const { code, signal } = await new Promise((resolve, reject) => {
+        settleNow = resolve;
         child.on("error", reject);
         child.on("close", (code, signal) => { lifetime.closeMs = at(); resolve({ code, signal }); });
       });
       if (ioError) throw ioError;
       if (code !== 0 || killed || (interrupted() && !cleanup)) {
-        const failure = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${output.diagnostic()}`);
+        // Exit before the stop means the client finished but a pipe was still held open.
+        const held = lifetime.exitMs !== null && lifetime.stoppedMs !== null && lifetime.exitMs <= lifetime.stoppedMs
+          ? `; the client exited ${lifetime.exitCode ?? lifetime.exitSignal} at ${lifetime.exitMs} ms but its output stayed open` : "";
+        const failure = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}${held}\n${output.diagnostic()}`);
         failure.exit = { code, signal, expired: killed, interrupted: interrupted() && !cleanup }; throw failure;
       }
       return output.result();
     } catch (error) {
       if (error && typeof error === "object") error.lifetime ??= settle();
       throw error;
-    } finally { clearTimeout(timer); running.delete(entry); output.close(); }
+    } finally { clearTimeout(timer); clearTimeout(release); running.delete(entry); output.close(); }
   }
   return { command, interrupt() { for (const entry of running) entry.stop("interrupt"); } };
 }

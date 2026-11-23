@@ -190,6 +190,11 @@ and when and why the runner stopped it), the bytes and SHA-256 of what the log c
 wrote, the container's `docker inspect` state and its Docker events from one minute before the
 command. Each probe has a 10-second bound and a probe failure is recorded in the receipt. The
 failure still fails the run; nothing is retried and no command deadline changes.
+A command succeeds only once its Docker client has exited and both of its pipes have closed,
+so its output is complete. A process that inherited a pipe can hold it open after the client
+exits, beyond the reach of the runner's process-group or `taskkill` stop. The deadline still
+applies; five seconds after the stop the runner stops reading, so the command settles as a
+failure that says the client exited but its output stayed open, instead of waiting forever.
 Startup failures include the container's actual exit state and application log. A checker
 failure without a valid record-response failure receipt retains its original diagnostic
 (including browser/style assertions), rather than replacing it with a missing-file error.
