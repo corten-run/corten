@@ -8371,8 +8371,10 @@ rules something out.
     A declaration of the runs below on `a01dd5109` against `3d365370c` is superseded and never
     ran: main then made `Cache::header` write its text at its own length and changed what a kept
     answer holds (`14126d2a8`), so a result on that pair would not be of the code that merges.
+    One on `14126d2a8` against `6b6b38ef1` is superseded and never ran: main then gave the
+    images' jemalloc thread cache 512 KiB (`e19c25b5b`), which the catalog's image runs with.
     The run that decides this change is declared before it runs on the pair the branch would merge,
-    `14126d2a8` (the `origin/main` it merged) against `6b6b38ef1`, whose change to `ascii.rs`,
+    `e19c25b5b` (the `origin/main` it merged) against `213ac3e02`, whose change to `ascii.rs`,
     `cache.rs` and `page.rs` is `672d2f05d`'s against its base but for the held header's text,
     which takes main's bound on a header's length. All eleven answers above are held to the same
     gate, read across placements under [Choice 72](#choice-placement-runs), the unstaged route
@@ -8398,10 +8400,14 @@ rules something out.
     most 50 ms; a count's counters on the catalog app's cgroup must also have run for its CPU
     time over the load. A turn or count that does not show this is refused, and a qualification
     on the run's own host, which decides nothing, stops the run before its first deciding turn
-    unless every gap stays within 25 ms. Each run stops before its first request on a host where
-    perf cannot count every event it reads. Until both pass, this change does not merge.
+    unless every gap of every one of its turns is at most 50 ms and a stall it puts at each edge
+    is refused on that edge's gap. Each server runs with the allocator setting of the measured
+    trees' own card-market image, the same in both. Each run stops before its first request on
+    a host where perf cannot count every event it reads. Until both pass, this change does not
+    merge.
     Neither gate reads allocations or request times. The allocations and bytes a request on
-    card-market's item page and item JSON, counted in process for both sides of the pair, are in
+    card-market's item page and item JSON, counted in process for both sides of `14126d2a8`
+    against `6b6b38ef1` (whose change to `crates` is this pair's byte for byte), are in
     the pull request's description, and the same in both builds (27 allocations and 22,295 bytes
     a page request, 20 and 15,997 a JSON request, with the system allocator); the catalog run
     records k6's median and 99th-percentile latency over each counted load beside its counts,
@@ -8958,7 +8964,7 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
     answer that may be kept, which empties its store each time, so such a write should keep
-    its path to count by; the run declared above, `6b6b38ef1` against `14126d2a8`, finds the
+    its path to count by; the run declared above, `213ac3e02` against `e19c25b5b`, finds the
     one-sided 95% bound across placements at +1% or more, or an A/A it cannot resolve, for any of
     its eleven answers (the page for one visitor, the
     `Public` page in an app that keeps none, a kept page, the page with five policies behind a
@@ -8994,7 +9000,7 @@ rules something out.
 
     Last checked: 2026-11-23 for the allocations a request, `6b6b38ef1` against `14126d2a8` in
     process (a counting allocator over the system allocator, 2,000 requests a target) with rustc
-    1.99.1; 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
+    1.99.1, whose `crates` change is `213ac3e02`'s against `e19c25b5b` byte for byte; 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
     against `14126d2a8` on the Xeon Platinum 8280 with jemalloc 5.3.0, rustc 1.100.0 and Linux
     6.12.117, the plan under the tag `evidence/ca2af2ab` and the results under
     `evidence/0c0c599c`, and for its instructions, `149e0f5b4` against `a03547c3c` under
