@@ -2690,6 +2690,21 @@ function posts(event) {
  */
 const sourceIn = (event, selector) => event.sourceElement instanceof Element && !!closestOf(event.sourceElement, selector);
 
+/**
+ * The element a page's `#fragment` names, found as the browser finds the one it scrolls to: an id,
+ * else an `<a name>`, as written, then percent-decoded.
+ * @param {string} fragment
+ */
+function fragmentOf(fragment) {
+  const find = (/** @type {string} */ name) =>
+    name ? (document.getElementById(name) ?? Array.from(document.getElementsByName(name)).find((el) => localNameOf(el) === "a")) : undefined;
+  let decoded = fragment;
+  try {
+    decoded = decodeURIComponent(fragment);
+  } catch {}
+  return find(fragment) ?? find(decoded);
+}
+
 // Only this module has these symbol keys; another script's info has none of them.
 navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ event) => {
   // A script's history.pushState or replaceState (a tab that puts itself in the address) is the
@@ -2744,18 +2759,17 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
       event.intercept({ handler: () => visit(url, event.signal, redirected, false, undefined, undefined, written, through) });
       return;
     }
-    // A new page starts at its `#id`, else at the top. Scrolled here, not left to the browser:
-    // Chromium leaves a swapped page where the last one was scrolled, and Firefox does not scroll
-    // to an `#id` the address already had.
+    // A new page starts at its `#id`, else at the top, by the browser's own scroll to the fragment
+    // (`scroll()`), as a full load does: it makes the element `:target`, finds an `<a name>` too,
+    // and reads the address the navigation committed (a redirect's). Called here once the page is
+    // swapped in (`scroll: "manual"`), so the element can be checked after it: Firefox's goes to a
+    // document's fragment only the first time (a full load at one counts), and later neither
+    // scrolls there nor sets `:target`, so the element is scrolled to here, still without one.
     const after = () => {
       if (event.signal.aborted) return;
-      let id = url.hash.slice(1);
-      try {
-        id = decodeURIComponent(id);
-      } catch {}
-      const at = id ? document.getElementById(id) : null;
-      if (at) elementOwn.scrollIntoView.call(at);
-      else scrollTo(0, 0);
+      event.scroll();
+      const at = fragmentOf(location.hash.slice(1));
+      if (at && document.querySelector(":target") !== at) elementOwn.scrollIntoView.call(at);
     };
     interceptVisit(event, (precommit) => visit(url, event.signal, redirected, false, undefined, startedBy(event), written, through, precommit), after, { scroll: "manual" });
     return;

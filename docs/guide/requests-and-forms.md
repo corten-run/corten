@@ -2217,8 +2217,14 @@ on the page it is in (a validation summary's link to the field it names, a skip 
 `href={FeedbackId.fragment()}`, a bare `#feedback` written the same way: it is a jump within the
 document, never a request, so it is an attribute value and not an address `req.redirect` takes.
 The browser scrolls to a route's place after a full load and after the runtime's navigation
-alike; the runtime fetches the page again even when only the `#id` differs from the address,
-since the write may have changed it.
+alike: once the new page is drawn, the runtime has the browser run its own scroll to the fragment
+(the Navigation API's `NavigateEvent.scroll()`), so the element matches `:target` either way (a
+section CSS shows or highlights when linked to), an `<a name>` anchor is found as an `id` is, and a
+page without a place starts at its top. Firefox (159) does this only for the first place in a
+document, a full load's included: for a later one the runtime scrolls to the element itself and
+`:target` matches nothing, so a section that must show when linked to does not rely on `:target`
+alone there. The runtime fetches the page again even when only the `#id` differs from the
+address, since the write may have changed it.
 A client navigation the server sends to a place gets `corten-location` instead of a 303,
 because `fetch` follows a redirect but drops its fragment, and so does the whole page the
 runtime fetches after a write (`corten: page`), so a page a write leads to that sends the browser
