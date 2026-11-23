@@ -2221,21 +2221,23 @@ alike. A link, a form or a redirect the runtime follows (a push or a replace) ru
 own scroll to the fragment once the new page is drawn (the Navigation API's
 `NavigateEvent.scroll()`), so the element matches `:target` either way (a section CSS shows or
 highlights when linked to), an `<a name>` anchor is found as an `id` is, the fragment is
-percent-decoded as HTML decodes it, focus moves to the element when it can take focus, the next
-Tab otherwise goes on from it, and a page without a place starts at its top. A focus handler
-runs in that scroll, as on a full load; a scroll it makes is left alone, and an address it
-changes (`history.replaceState`) ends the navigation there. Back and forward put back the scroll
-position instead, and a `data-keep-place` navigation keeps it.
+percent-decoded as HTML decodes it, focus moves to the element when it can take focus, and a page
+without a place starts at its top. A focus handler runs in that scroll, as on a full load: the
+runtime neither scrolls nor moves focus after it, and an address it changes
+(`history.replaceState`) ends the navigation there. Focus is then the Navigation API's to reset,
+as after any navigation the runtime draws, unless it moved during the navigation (to the element,
+or by the user while the page loaded), which stays. For an element that cannot take focus (a
+heading), a full load starts the next Tab from it; after a client swap, Chromium (159) starts it
+at the top instead, because the reset comes after the scroll and no browser API moves that
+starting point. Back and forward put back the scroll position instead, and a `data-keep-place`
+navigation keeps it.
 Firefox (159) may skip that scroll on a client swap, or leave `:target` unset or still on an
 element the swap left in place (outside `<main>`). The runtime then scrolls to the element itself
 when it is shown, but without the browser's steps that first reveal a target inside a hidden
 ancestor (`hidden="until-found"`), focus it and start the next Tab from it, which a full load at
 that address takes: such a target stays hidden. A section that must show when linked to does not
-rely on `:target` or `hidden="until-found"` alone there. A fragment the new page has no element
-for moves focus off the link or button it was on, as a full load starts unfocused, but the next
-Tab may go on from where that control was, not from the top: no browser API moves that starting
-point except focus and the scroll to an element. The runtime fetches the page again even when
-only the `#id` differs from the address, since the write may have changed it.
+rely on `:target` or `hidden="until-found"` alone there. The runtime fetches the page again even
+when only the `#id` differs from the address, since the write may have changed it.
 A client navigation the server sends to a place gets `corten-location` instead of a 303,
 because `fetch` follows a redirect but drops its fragment, and so does the whole page the
 runtime fetches after a write (`corten: page`), so a page a write leads to that sends the browser
