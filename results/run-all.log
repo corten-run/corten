@@ -1,0 +1,6 @@
+== settings main PAIRS=100 WARMUP=1 TURN=3; check PAIRS=0 WARMUP=0; diagnostic ICACHE_PAIRS=30 TURN=1 WARMUP=0 05:07:06
+== check ok 05:07:08
+== main ok 06:53:21
+== diagnostic unavailable 06:53:21
+== done 06:53:21
+CHAIN-EXIT True

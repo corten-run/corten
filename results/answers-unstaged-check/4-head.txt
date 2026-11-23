@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+content-type: text/plain; charset=utf-8
+cache-control: public, max-age=2592003, s-maxage=2592000, stale-while-revalidate=1036800, stale-if-error=604800
+x-content-type-options: nosniff
+content-security-policy: sandbox
+content-length: 84
+
+{"route":"ridge-trail-7","open":true,"walkers":42,"updated":"2026-11-21T18:00:00Z"}

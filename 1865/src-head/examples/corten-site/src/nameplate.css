@@ -1,0 +1,81 @@
+/* Nameplate: a plate of weathered steel with the app's name struck into it. A fresh one
+   arrives hot and cools, so the reader sees which part of the page the answer replaced. */
+.nameplate {
+  position: relative;
+  min-height: 9rem;
+  padding: clamp(1.1rem, 2.4vw, 1.75rem);
+  background:
+    radial-gradient(140% 120% at 85% 0%, #a84c27 0%, transparent 55%),
+    linear-gradient(170deg, #8a3d20 0%, #5f2a18 78%);
+  box-shadow:
+    inset 0 0 0 1px rgb(0 0 0 / 35%),
+    inset 0 2px 0 rgb(255 205 160 / 22%),
+    0 1.5rem 3rem rgb(0 0 0 / 35%);
+  scroll-margin-top: 6rem;
+}
+
+.blank {
+  display: grid;
+  place-items: center;
+  min-height: 6.5rem;
+  color: var(--bone);
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-size: 1.5rem;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.struck {
+  display: grid;
+  gap: 0.6rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .struck {
+    animation: nameplate-cool 1400ms ease-out;
+  }
+}
+
+@keyframes nameplate-cool {
+  from {
+    filter: brightness(1.9) saturate(1.3);
+  }
+
+  to {
+    filter: none;
+  }
+}
+
+.name {
+  overflow-wrap: anywhere;
+  color: var(--bone);
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: clamp(2.6rem, 6vw, 5rem);
+  line-height: 0.9;
+  text-shadow: 0 -2px 0 rgb(0 0 0 / 55%);
+  text-transform: uppercase;
+}
+
+.marks {
+  color: var(--bone);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.run {
+  padding: 0.8rem 1rem;
+  overflow-x: auto;
+  background: color-mix(in srgb, var(--ink) 96%, transparent);
+  color: var(--bone);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.how {
+  color: var(--bone);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}

@@ -1,0 +1,159 @@
+checked 1 requests: same
+private: pair 10 of 100 done
+private: pair 20 of 100 done
+private: pair 30 of 100 done
+private: pair 40 of 100 done
+private: pair 50 of 100 done
+private: pair 60 of 100 done
+private: pair 70 of 100 done
+private: pair 80 of 100 done
+private: pair 90 of 100 done
+private: pair 100 of 100 done
+private: done, /m/1865/results/cycles-private.csv
+checked 1 requests: same
+off: pair 10 of 100 done
+off: pair 20 of 100 done
+off: pair 30 of 100 done
+off: pair 40 of 100 done
+off: pair 50 of 100 done
+off: pair 60 of 100 done
+off: pair 70 of 100 done
+off: pair 80 of 100 done
+off: pair 90 of 100 done
+off: pair 100 of 100 done
+off: done, /m/1865/results/cycles-off.csv
+checked 1 requests: same
+hit-check: done, /m/1865/results/cycles-hit-check.csv
+check-warm: hit-check: same:-: base - age 0 6124 bytes; head - age 0 6124 bytes
+checked 1 requests: same
+hit: pair 10 of 100 done
+hit: pair 20 of 100 done
+hit: pair 30 of 100 done
+hit: pair 40 of 100 done
+hit: pair 50 of 100 done
+hit: pair 60 of 100 done
+hit: pair 70 of 100 done
+hit: pair 80 of 100 done
+hit: pair 90 of 100 done
+hit: pair 100 of 100 done
+hit: done, /m/1865/results/cycles-hit.csv
+hit base: 'WARM hit:' in 102 of 102 starts
+hit head: 'WARM hit:' in 102 of 102 starts
+checked 5 requests: same
+staged-check: done, /m/1865/results/cycles-staged-check.csv
+staged-check base: 'ROTATION ok' in 1 of 1 starts
+staged-check head: 'ROTATION ok' in 1 of 1 starts
+checked 5 requests: same
+staged: pair 10 of 100 done
+staged: pair 20 of 100 done
+staged: pair 30 of 100 done
+staged: pair 40 of 100 done
+staged: pair 50 of 100 done
+staged: pair 60 of 100 done
+staged: pair 70 of 100 done
+staged: pair 80 of 100 done
+staged: pair 90 of 100 done
+staged: pair 100 of 100 done
+staged: done, /m/1865/results/cycles-staged.csv
+staged base: 'ROTATION ok' in 102 of 102 starts
+staged head: 'ROTATION ok' in 102 of 102 starts
+checked 5 requests: same
+unstaged-check: done, /m/1865/results/cycles-unstaged-check.csv
+unstaged-check base: 'ROTATION ok' in 1 of 1 starts
+unstaged-check head: 'ROTATION ok' in 1 of 1 starts
+checked 5 requests: same
+unstaged: pair 10 of 100 done
+unstaged: pair 20 of 100 done
+unstaged: pair 30 of 100 done
+unstaged: pair 40 of 100 done
+unstaged: pair 50 of 100 done
+unstaged: pair 60 of 100 done
+unstaged: pair 70 of 100 done
+unstaged: pair 80 of 100 done
+unstaged: pair 90 of 100 done
+unstaged: pair 100 of 100 done
+unstaged: done, /m/1865/results/cycles-unstaged.csv
+unstaged base: 'ROTATION ok' in 102 of 102 starts
+unstaged head: 'ROTATION ok' in 102 of 102 starts
+checked 1 requests: same
+unstaged-one-check: done, /m/1865/results/cycles-unstaged-one-check.csv
+unstaged-one-check base: 'ROTATION ok' in 1 of 1 starts
+unstaged-one-check head: 'ROTATION ok' in 1 of 1 starts
+checked 1 requests: same
+unstaged-one: pair 10 of 100 done
+unstaged-one: pair 20 of 100 done
+unstaged-one: pair 30 of 100 done
+unstaged-one: pair 40 of 100 done
+unstaged-one: pair 50 of 100 done
+unstaged-one: pair 60 of 100 done
+unstaged-one: pair 70 of 100 done
+unstaged-one: pair 80 of 100 done
+unstaged-one: pair 90 of 100 done
+unstaged-one: pair 100 of 100 done
+unstaged-one: done, /m/1865/results/cycles-unstaged-one.csv
+unstaged-one base: 'ROTATION ok' in 102 of 102 starts
+unstaged-one head: 'ROTATION ok' in 102 of 102 starts
+checked 1 requests: same
+fallback-check: done, /m/1865/results/cycles-fallback-check.csv
+check-warm: fallback-check: same:-: base - age 0 6124 bytes; head - age 0 6124 bytes
+fallback-check base: 'EVICT ok' in 1 of 1 starts
+fallback-check head: 'EVICT ok' in 1 of 1 starts
+checked 1 requests: same
+fallback: pair 10 of 100 done
+fallback: pair 20 of 100 done
+fallback: pair 30 of 100 done
+fallback: pair 40 of 100 done
+fallback: pair 50 of 100 done
+fallback: pair 60 of 100 done
+fallback: pair 70 of 100 done
+fallback: pair 80 of 100 done
+fallback: pair 90 of 100 done
+fallback: pair 100 of 100 done
+fallback: done, /m/1865/results/cycles-fallback.csv
+fallback base: 'EVICT ok' in 102 of 102 starts
+fallback head: 'EVICT ok' in 102 of 102 starts
+checked 1 requests: same
+nostore-check: done, /m/1865/results/cycles-nostore-check.csv
+nostore-check base: 'EVICT ok' in 1 of 1 starts
+nostore-check head: 'EVICT ok' in 1 of 1 starts
+nostore-check base: 'CONSTANT ok' in 1 of 1 starts
+nostore-check head: 'CONSTANT ok' in 1 of 1 starts
+checked 1 requests: same
+nostore: pair 10 of 100 done
+nostore: pair 20 of 100 done
+nostore: pair 30 of 100 done
+nostore: pair 40 of 100 done
+nostore: pair 50 of 100 done
+nostore: pair 60 of 100 done
+nostore: pair 70 of 100 done
+nostore: pair 80 of 100 done
+nostore: pair 90 of 100 done
+nostore: pair 100 of 100 done
+nostore: done, /m/1865/results/cycles-nostore.csv
+nostore base: 'EVICT ok' in 102 of 102 starts
+nostore head: 'EVICT ok' in 102 of 102 starts
+nostore base: 'CONSTANT ok' in 102 of 102 starts
+nostore head: 'CONSTANT ok' in 102 of 102 starts
+checked 1 requests: same
+immutable-check: done, /m/1865/results/cycles-immutable-check.csv
+immutable-check base: 'EVICT ok' in 1 of 1 starts
+immutable-check head: 'EVICT ok' in 1 of 1 starts
+immutable-check base: 'CONSTANT ok' in 1 of 1 starts
+immutable-check head: 'CONSTANT ok' in 1 of 1 starts
+checked 1 requests: same
+immutable: pair 10 of 100 done
+immutable: pair 20 of 100 done
+immutable: pair 30 of 100 done
+immutable: pair 40 of 100 done
+immutable: pair 50 of 100 done
+immutable: pair 60 of 100 done
+immutable: pair 70 of 100 done
+immutable: pair 80 of 100 done
+immutable: pair 90 of 100 done
+immutable: pair 100 of 100 done
+immutable: done, /m/1865/results/cycles-immutable.csv
+immutable base: 'EVICT ok' in 102 of 102 starts
+immutable head: 'EVICT ok' in 102 of 102 starts
+immutable base: 'CONSTANT ok' in 102 of 102 starts
+immutable head: 'CONSTANT ok' in 102 of 102 starts
+run-fresh: all nine done (PAIRS=100)

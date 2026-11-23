@@ -1,0 +1,4 @@
+ALLOCATOR jemalloc
+READY immutable on 18081
+EVICT ok immutable: /r/0 to /r/3 answered their own policies, in that order
+CONSTANT ok immutable: /i answered cache-control "public, max-age=31536000, immutable", 94 bytes, after the four

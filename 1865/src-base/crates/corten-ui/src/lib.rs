@@ -1,0 +1,476 @@
+//! Headless components for the widgets the browser has no element for. Each renders accessible
+//! markup on the server, works as plain HTML before its script loads, and ships no CSS: the
+//! design system styles it.
+//!
+//! | Component | Pattern | Without JavaScript |
+//! |---|---|---|
+//! | [`NumberField`] | a number input with decrease and increase buttons, press and hold | a native number input |
+//! | [`ComboBox`] | type to filter a list, pick one; the value is a native `<select>` | the `<select>` |
+//! | [`TabGroup`] | tabs with arrow keys; tabs can be links, and the address follows | links to each tab's page |
+//! | [`MenuButton`] | a button that opens a menu of the app's own items (links, form posts, dialog commands), arrow keys and typeahead | the menu opens (popover); items work |
+//! | [`Toaster`] | a live region an action's patch puts a message in; gone after a while, kept while read; its `failed` text when a submit gets no answer (`corten:error`) | the message is in the page the post answers with |
+//! | [`CopyButton`] | copies an element's text to the clipboard, says so politely, and tells the page ([`Copied`]) | no button; the text is on the page to select |
+//! | [`Tooltip`] | a short text beside a button or link on hover and keyboard focus (`interestfor`, `popover="hint"`), where the browser does not show one itself | Chromium shows it; elsewhere a screen reader still reads it |
+//! | [`PrintButton`] | opens the browser's print dialog; the page's print styles say what prints | no button; the browser's Print command prints the page |
+//! | [`RelativeTime`] | a time relative to now ("in 10 hours") that stays current, on one timer for the page | the time as the server wrote it |
+//! | [`LocalTime`] | a date in the visitor's zone on their first page too, before the browser has reported it to the server | the first page's date in UTC |
+//! | [`CheckboxGroup`] | checkboxes of one name of which one must be checked; the browser says so before sending | the form is sent, and the handler refuses it |
+//! | [`ChoiceGroup`] | one choice (a radio group) whose value shows and hides [`ShownFor`] parts anywhere on the page; options can be links, and the address follows | links to the page with each choice, where the server draws it |
+//! | [`RequiredWhen`] | fields required only for some values of another field, disabled for the rest | the fields are optional, and the handler checks the rule |
+//! | [`dialog::modal`] | a `<dialog>` the server draws `open` (a refused form) is modal: focus in it, the page behind inert | the dialog is open, not modal |
+//! | [`dialog::modalClosedBy`] | the same for a dialog the address opens (`?selected=it_1`), and a close request (Escape) goes to its close link's address | the dialog is open, and the link closes it |
+//! | [`dialog::failed`] | a `data-patch` submit in a dialog that got no answer (`corten:error`) is said in the dialog, by its own text, shown in a `role="alert"` region, not by the `Toaster` the dialog covers | the browser's error page |
+//! | [`rows::sort`], [`rows::sortByNumber`], [`rows::sortByText`] | a table's rows sorted in place by the column whose header link was clicked (the kit's `SortHeader`), by each cell's ref value, machine value or text | the link: the page the server sorts |
+//! | [`ordered::send`], [`ordered::link`] | a form (`on:submit`) or link (`on:connect`) elsewhere whose route reads a sorted table's order sends the order on screen (named by [`sorted`]) | the order the page was drawn with, which is the one on screen |
+//!
+//! Each is tested in Chromium, Firefox and WebKit (`examples/ui-gallery/smoke.mjs`).
+//!
+//! The sort handlers that take a ref check both the tag and the type of its value. A text ref
+//! cannot stand in for a numeric ref:
+//!
+//! ```compile_fail,E0271
+//! use corten::prelude::*;
+//! use corten_ui::rows;
+//!
+//! #[component]
+//! fn Prices() -> impl Render {
+//!     let (head, cell) = refs();
+//!     html! {
+//!         <table on:click={rows::sortByNumber(event, target, head, cell)}>
+//!             <thead ref={head}></thead>
+//!             <tbody><tr><td ref={cell.with("1200")}>"$12"</td></tr></tbody>
+//!         </table>
+//!     }
+//! }
+//! ```
+//!
+//! A text ref on a row instead of a cell cannot stand in for the cell's ref:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//! use corten_ui::rows;
+//!
+//! #[component]
+//! fn Dates() -> impl Render {
+//!     let (head, cell) = refs();
+//!     html! {
+//!         <table on:click={rows::sortByText(event, target, head, cell)}>
+//!             <thead ref={head}></thead>
+//!             <tbody><tr ref={cell.with("2026-10-30")}><td>"Oct 30"</td></tr></tbody>
+//!         </table>
+//!     }
+//! }
+//! ```
+//!
+//! The old call without the table's head does not compile:
+//!
+//! ```compile_fail,E0061
+//! use corten::prelude::*;
+//! use corten_ui::rows;
+//!
+//! let _ = html! { <a on:click={rows::sort(event, target)}>"Price"</a> };
+//! ```
+//!
+//! Reading sort routes checks both refs' values and tags. A route ref gives text, not a number:
+//!
+//! ```compile_fail,E0271
+//! use corten::prelude::*;
+//! use corten_ui::{ReadSortLinks, rows};
+//!
+//! #[component]
+//! fn Headers() -> impl Render {
+//!     let (up, down) = refs();
+//!     html! {
+//!         <thead on:ReadSortLinks={rows::read(event, up, down)}>
+//!             <tr><th><a ref={up.with(1)}>"Price"</a></th></tr>
+//!             <tr><th><a ref={down.with("/?sold=up")}>"Offers"</a></th></tr>
+//!         </thead>
+//!     }
+//! }
+//! ```
+//!
+//! The other address belongs to the link, not its table cell:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//! use corten_ui::{ReadSortLinks, rows};
+//!
+//! #[component]
+//! fn Headers() -> impl Render {
+//!     let (up, down) = refs();
+//!     html! {
+//!         <thead on:ReadSortLinks={rows::read(event, up, down)}>
+//!             <tr><th ref={up.with("/?sold=down")}>"Price"</th></tr>
+//!             <tr><th><a ref={down.with("/?sold=up")}>"Offers"</a></th></tr>
+//!         </thead>
+//!     }
+//! }
+//! ```
+//!
+//! Use the platform for everything else: `<dialog>` with `command="show-modal"` for dialogs and
+//! alert dialogs (with [`dialog::modal`] on one the server can draw open), `popover` for popovers and toggletips (`popovertarget`: shown on a click or
+//! tap), `<details name>` for accordions,
+//! `<select>` (styled with `appearance: base-select` where supported) for selects, native
+//! checkboxes, radios and `<input type="range">` for switches, toggle groups and sliders. A
+//! tooltip is the platform's too, `interestfor` on the control and a `popover="hint"`, which
+//! Chromium shows on hover and focus; [`Tooltip`] is that element with a script that shows it
+//! where the browser does not yet (Firefox and WebKit in November 2026), to go once they do.
+//!
+//! List the components once, with the app's own:
+//!
+//! ```ignore
+//! App::new(routes).components(&[theme::TOKENS, views::Field]).components(corten_ui::COMPONENTS)
+//! ```
+//!
+//! **Styling.** A design system wraps each component in its own element and styles the parts by
+//! role and state, which are the accessibility contract and so cannot drift from what assistive
+//! technology announces: `.field [role=option][aria-selected=true]`, `.field [role=tab][aria-selected=true]`,
+//! `.field button:disabled`. Each component's docs list its parts. Each component's root is a
+//! `div` (`[data-scope=ui-number-field]`) that holds its parts; the wrapper lays it out, as the
+//! flex container itself or with `display: contents` so the parts join the wrapper's layout
+//! (`order` places an adornment between them). Popups (`[popover]`) are in the top layer, and the script makes the control
+//! that opens each one its anchor; the design system places it with CSS anchor positioning,
+//! which the browser keeps in place on scroll and resize without script:
+//! `inset: auto; position-area: block-end span-inline-end; position-try-fallbacks: flip-block;
+//! min-width: anchor-size(width)`. Parts are hidden with the `hidden` attribute, and Corten's
+//! component stylesheet keeps them hidden over a role's `display` (it starts with
+//! `[hidden] { display: none !important }`, `hidden="until-found"` aside, and the same rule for a
+//! closed popover or `<dialog>`, so a popup's `display` shows it only while open). A design system
+//! styled only from the app's `static/style.css`, with no component stylesheet, adds those rules
+//! there, or sets a popup's `display` under `:popover-open` only.
+//!
+//! **Text.** Every label comes from the app, in the page's language; there is no English default
+//! except the `−` and `+` of [`NumberField`]'s buttons, which a design system replaces with
+//! icons.
+//!
+//! **Links** are typed routes (`&dyn corten::Href`): a tab cannot point at a URL the app does not
+//! route.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! use corten_ui::Tab;
+//!
+//! let tab = Tab { label: "Orders", panel: &"", link: Some(&"/orders") };
+//! ```
+//!
+//! **Dialogs the server draws open.** A form in a `<dialog>` that the server refuses comes back
+//! with the dialog drawn `open` when the answer is a whole page (a post without the runtime). The
+//! platform has no markup that opens a dialog as a modal, so `open` alone does not hold focus,
+//! make the page inert or show the backdrop. [`dialog::modal`] does, when the dialog joins the
+//! page (a load, a navigation or a patch); a dialog drawn closed is left closed:
+//!
+//! ```
+//! use corten::prelude::*;
+//! use corten_ui::dialog;
+//!
+//! #[derive(Id)]
+//! struct RenameId; // ui-rename: ids in this crate start with its prefix
+//!
+//! let refused = true;
+//! let html = html! {
+//!     <button type="button" command="show-modal" commandfor={RenameId}>"Rename"</button>
+//!     <dialog id={RenameId} open={refused} on:connect={dialog::modal(target)}>".."</dialog>
+//! }
+//! .to_html();
+//! assert!(html.contains(r#"<dialog id="ui-rename" open data-on='connect:ui.dialog.modal($t,{signal:$s})'>"#), "{html}");
+//! ```
+//!
+//! It takes the dialog itself, so on any other element it does not compile:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! use corten_ui::dialog;
+//!
+//! let html = html! { <div open on:connect={dialog::modal(target)}></div> };
+//! ```
+//!
+//! A `data-patch` submit in a modal dialog that gets no answer (`corten:error`) is said in the
+//! dialog, which covers the page's [`Toaster`] and makes it inert: [`dialog::failed`] is the
+//! dialog's handler for it, given the dialog's own text for it, drawn `hidden` inside a live
+//! region (`role="alert"`) that stays rendered, the pattern a screen reader announces (not tried with one). It shows it and keeps
+//! the toaster quiet; a dialog already closed when the failure comes leaves it to the toaster:
+//!
+//! ```
+//! use corten::prelude::*;
+//! use corten_ui::dialog;
+//!
+//! #[component]
+//! fn Rename() -> impl Render {
+//!     let said = refs();
+//!     html! {
+//!         <dialog on:connect={dialog::modal(target)} on:corten:error={dialog::failed(event, target, said)}>
+//!             <div role="alert"><p ref={said} hidden>"That did not go through. Check and try again."</p></div>
+//!             <form method="post" data-patch>".."</form>
+//!         </dialog>
+//!     }
+//! }
+//!
+//! let html = Rename {}.to_html();
+//! assert!(html.contains("corten:error:ui.dialog.failed($e,$t,@said)"), "{html}");
+//! ```
+//!
+//! The UI kit's `FailedAlert` is that region with the text in the destructive alert's look.
+//!
+//! It takes the dialog itself, so on any other element it does not compile (it would say nothing):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! use corten_ui::dialog;
+//!
+//! #[component]
+//! fn Rename() -> impl Render {
+//!     let said = refs();
+//!     html! {
+//!         <section on:corten:error={dialog::failed(event, target, said)}>
+//!             <div role="alert"><p ref={said} hidden>"That did not go through."</p></div>
+//!         </section>
+//!     }
+//! }
+//! ```
+//!
+//! **Dialogs the address opens.** A record shown beside its list (`/items?selected=it_1`) is a
+//! dialog the server draws `open` when the address names one, closed by a link to the address
+//! without it. Escape on a modal dialog closes it where the address cannot see, so a reload or a
+//! redraw would open it again. [`dialog::modalClosedBy`] makes it modal as [`dialog::modal`]
+//! does, and a close request (Escape, Android's Back, a click outside a `closedby="any"` dialog)
+//! goes to its close link's address without a new history entry (it does not click the link):
+//! back, when the entry before is that address, else in place of the dialog's entry (always so in
+//! a browser without the Navigation API, where Back after a dialog opened from the list shows the
+//! list once more). Attributes on the link (`data-reload`, `data-keep-place`, an `on:click`) do
+//! not apply. Android's Back on an open dialog cannot loop between the two:
+//!
+//! ```
+//! use corten::prelude::*;
+//! use corten_ui::dialog;
+//!
+//! #[derive(Route)]
+//! #[route("/items")]
+//! struct Items<'a> { selected: Option<&'a str> }
+//!
+//! #[component]
+//! fn ItemSheet<'a>(name: &'a str) -> impl Render {
+//!     let close = refs();
+//!     html! {
+//!         <dialog open aria-label={name} on:connect={dialog::modalClosedBy(target, close, signal)}>
+//!             <h2>{name}</h2>
+//!             <a ref={close} href={Items { selected: None }}>"Close"</a>
+//!         </dialog>
+//!     }
+//! }
+//!
+//! let html = ItemSheet { name: "Lamp" }.to_html();
+//! assert!(html.contains(r#"data-on='connect:ui.dialog.modalClosedBy($t,@close,$s)'"#), "{html}");
+//! ```
+//!
+//! The close is a link, put there by a ref, so a button (which changes no address) does not
+//! compile:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! use corten_ui::dialog;
+//!
+//! #[component]
+//! fn ItemSheet() -> impl Render {
+//!     let close = refs();
+//!     html! {
+//!         <dialog open on:connect={dialog::modalClosedBy(target, close, signal)}>
+//!             <button ref={close} type="button">"Close"</button>
+//!         </dialog>
+//!     }
+//! }
+//! ```
+
+use corten::{script::script, Component};
+
+mod checkbox_group;
+mod choice_group;
+mod combo_box;
+mod copy_button;
+mod local_time;
+mod menu_button;
+mod number_field;
+mod print_button;
+mod relative_time;
+mod required_when;
+mod tab_group;
+mod toaster;
+mod tooltip;
+
+pub use checkbox_group::CheckboxGroup;
+pub use choice_group::{ChoiceGroup, ChoiceOption, Chosen, ShownFor};
+pub use combo_box::{Choice, ComboBox, Picker};
+pub use copy_button::{Copied, CopyButton};
+pub use local_time::LocalTime;
+pub use menu_button::MenuButton;
+pub use number_field::{Number, NumberField, Step};
+pub use print_button::PrintButton;
+pub use relative_time::RelativeTime;
+pub use required_when::RequiredWhen;
+pub use tab_group::{Tab, TabGroup};
+pub use toaster::{Toast, ToastId, Toaster};
+pub use tooltip::Tooltip;
+
+script!(mod dialog_handlers = "dialog.js");
+
+/// Handlers for native dialogs the server draws open.
+pub mod dialog {
+    use corten::script::{__private::SignalKw, el::HTMLDialogElement, Arg, Bind};
+
+    pub use super::dialog_handlers::{failed, modalClosedBy, COMPONENT};
+
+    /// Makes a server-drawn open dialog modal on connect and focuses its first invalid field.
+    /// A patch that draws it closed restores opener focus where possible and dispatches one
+    /// `close` on the same-id replacement. A patch that removes it only restores focus, and
+    /// an open redraw carries the opener forward. Navigation and native closes are unchanged.
+    #[must_use]
+    pub fn modal(dialog: impl Arg<HTMLDialogElement>) -> impl Bind {
+        // Preserve modal(target) while passing the same element lifetime as the signal keyword.
+        super::dialog_handlers::modal(dialog, super::dialog_handlers::ModalLife { signal: SignalKw })
+    }
+}
+/// A sort or an ordered control asks the table's head for its current sort links
+/// (`on:ReadSortLinks={rows::read(event, up, down)}`).
+#[corten::event]
+pub struct ReadSortLinks {
+    /// Starts empty; the head's handler adds the current routes.
+    pub urls: Vec<String>,
+}
+
+script!(pub mod rows = "rows.js");
+script!(pub mod ordered = "ordered.js");
+
+#[test]
+fn ordered_can_be_registered_without_rows() {
+    let _ = corten::App::new(corten::Routes::new()).components(&[ordered::COMPONENT]).router();
+}
+
+/// The id of a sorted table, or of an element around it, as [`ordered`]'s `send` and `link`
+/// take it. A form or link outside the table's part whose route reads the table's order (a
+/// "Refresh" whose answer redirects back to the page) calls `ordered::send` (a form's
+/// `on:submit`) or `ordered::link` (a link's `on:connect`) with it, so what it sends or opens
+/// carries the order on screen. Each table is named by its `#[derive(Id)]` type, so a renamed
+/// table's id does not compile where a string would name nothing. The table's header links
+/// give their sort addresses to the head's [`rows::read`] handler.
+///
+/// ```
+/// use corten::prelude::*;
+/// use corten_ui::{ordered, sorted};
+///
+/// #[derive(Id)]
+/// struct SupplyId;
+///
+/// #[derive(Id)]
+/// struct ListingsId;
+///
+/// #[derive(Route)]
+/// #[route("/supply/refresh")]
+/// struct Refresh;
+///
+/// let html = html! {
+///     <form method="post" action={Refresh} on:submit={ordered::send(event, target, [sorted(&SupplyId), sorted(&ListingsId)])}>
+///         <button>"Refresh"</button>
+///     </form>
+/// }
+/// .to_html();
+/// assert!(html.contains(r#"send($e,$t,["ui-supply","ui-listings"])"#), "{html}");
+///
+/// let back = html! {
+///     <a href={Refresh} on:connect={ordered::link(target, [sorted(&SupplyId)], signal)}>"Previous page"</a>
+/// }
+/// .to_html();
+/// assert!(back.contains(r#"connect:ui.ordered.link($t,["ui-supply"],$s)"#), "{back}");
+/// ```
+///
+/// A string is not an id, and `send` is a form's handler:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// use corten_ui::ordered;
+///
+/// let html = html! { <form on:submit={ordered::send(event, target, ["ui-supply"])}></form> };
+/// ```
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// use corten_ui::{ordered, sorted};
+///
+/// #[derive(Id)]
+/// struct SupplyId;
+///
+/// #[derive(Route)]
+/// #[route("/supply")]
+/// struct Supply;
+///
+/// let html = html! { <a href={Supply} on:click={ordered::send(event, target, [sorted(&SupplyId)])}></a> };
+/// ```
+///
+/// It goes beside a form's own `on:submit` handler: an element takes several handlers for one
+/// event, run in the order written.
+///
+/// ```
+/// # use corten::prelude::*;
+/// # use corten_ui::{ordered, sorted};
+/// # #[derive(Id)]
+/// # struct SupplyId;
+/// # #[derive(Id)]
+/// # struct ListingsId;
+/// let two = html! {
+///     <form on:submit={ordered::send(event, target, [sorted(&SupplyId)])} on:submit={ordered::send(event, target, [sorted(&ListingsId)])}></form>
+/// }
+/// .to_html();
+/// assert!(two.contains(r#"submit:ui.ordered.send($e,$t,["ui-supply"]) submit:ui.ordered.send($e,$t,["ui-listings"])"#), "{two}");
+/// ```
+pub fn sorted(table: &impl corten::view::Id) -> corten::script::ElementId {
+    corten::script::ElementId::of(table)
+}
+// ChoiceGroup and ShownFor: one module, so a group reaches its parts without the page.
+script!(mod choice = "choice.js");
+
+/// Every component in this crate with a script, and the [`dialog`] and [`rows`] handlers, for
+/// `App::components`.
+pub const COMPONENTS: &[Component] = &[
+    NumberField,
+    ComboBox,
+    TabGroup,
+    MenuButton,
+    Toaster,
+    CopyButton,
+    PrintButton,
+    Tooltip,
+    RelativeTime,
+    LocalTime,
+    CheckboxGroup,
+    RequiredWhen,
+    choice::COMPONENT,
+    dialog::COMPONENT,
+    rows::COMPONENT,
+    ordered::COMPONENT,
+];
+
+/// A value a control of a field of type `F` sends: a value of the field's own type (its
+/// `UrlValue` enum, its number), or text for a text field (`String`) or a checkbox's `value` (a
+/// `bool` field, sent as `on` unless the box says otherwise). What [`Picker::new`] and
+/// [`RequiredWhen`] check their values against the field's name with.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a value the field reads (`{F}`)",
+    label = "a value of the field's own type",
+    note = "a field's values are its own type: `Kind::Partial` for `kind: Kind`, `42` for `line: i32`, or text for a text field or a checkbox"
+)]
+pub trait ValueOf<F> {}
+
+impl<V> ValueOf<V> for V {}
+impl ValueOf<String> for &str {}
+impl ValueOf<String> for &String {}
+impl ValueOf<bool> for &str {}
+
+/// `"true"` or `"false"`, for ARIA states, which are text.
+pub(crate) fn state(on: bool) -> &'static str {
+    if on {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+#[cfg(test)]
+mod tests;

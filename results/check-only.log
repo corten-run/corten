@@ -1,0 +1,37 @@
+checked 1 requests: same
+private: done, /m/1865/results/cycles-private.csv
+checked 1 requests: same
+off: done, /m/1865/results/cycles-off.csv
+checked 1 requests: same
+hit-check: done, /m/1865/results/cycles-hit-check.csv
+check-warm: hit-check: same:-: base - age 0 6124 bytes; head - age 0 6124 bytes
+checked 5 requests: same
+staged-check: done, /m/1865/results/cycles-staged-check.csv
+staged-check base: 'ROTATION ok' in 1 of 1 starts
+staged-check head: 'ROTATION ok' in 1 of 1 starts
+checked 5 requests: same
+unstaged-check: done, /m/1865/results/cycles-unstaged-check.csv
+unstaged-check base: 'ROTATION ok' in 1 of 1 starts
+unstaged-check head: 'ROTATION ok' in 1 of 1 starts
+checked 1 requests: same
+unstaged-one-check: done, /m/1865/results/cycles-unstaged-one-check.csv
+unstaged-one-check base: 'ROTATION ok' in 1 of 1 starts
+unstaged-one-check head: 'ROTATION ok' in 1 of 1 starts
+checked 1 requests: same
+fallback-check: done, /m/1865/results/cycles-fallback-check.csv
+check-warm: fallback-check: same:-: base - age 0 6124 bytes; head - age 0 6124 bytes
+fallback-check base: 'EVICT ok' in 1 of 1 starts
+fallback-check head: 'EVICT ok' in 1 of 1 starts
+checked 1 requests: same
+nostore-check: done, /m/1865/results/cycles-nostore-check.csv
+nostore-check base: 'EVICT ok' in 1 of 1 starts
+nostore-check head: 'EVICT ok' in 1 of 1 starts
+nostore-check base: 'CONSTANT ok' in 1 of 1 starts
+nostore-check head: 'CONSTANT ok' in 1 of 1 starts
+checked 1 requests: same
+immutable-check: done, /m/1865/results/cycles-immutable-check.csv
+immutable-check base: 'EVICT ok' in 1 of 1 starts
+immutable-check head: 'EVICT ok' in 1 of 1 starts
+immutable-check base: 'CONSTANT ok' in 1 of 1 starts
+immutable-check head: 'CONSTANT ok' in 1 of 1 starts
+run-fresh: all nine done (PAIRS=0)

@@ -1,0 +1,196 @@
+//! Byte-level pieces the HTML and JSON writers share: testing text for a byte to escape eight
+//! bytes at a time, integer digits two at a time, and a hash's hex digits. Safe Rust, no
+//! dependencies.
+
+const ONES: u64 = u64::from_ne_bytes([1; 8]);
+const HIGH: u64 = ONES << 7;
+
+/// Nonzero exactly when some byte of `x` is below `n` (n at most 128).
+#[inline(always)]
+fn below(x: u64, n: u8) -> u64 {
+    x.wrapping_sub(ONES * n as u64) & !x & HIGH
+}
+
+/// Nonzero exactly when some byte of `x` is `b`.
+#[inline(always)]
+fn has(x: u64, b: u8) -> u64 {
+    below(x ^ (ONES * b as u64), 1)
+}
+
+/// Some byte of `x` may be one HTML escapes: `&`, `'`, `<`, `>` or `"`. `| 5` turns `"` (0x22)
+/// and `&` (0x26) into `'` (0x27), and `| 2` turns `<` (0x3c) into `>` (0x3e), so two tests find
+/// all five. The first finds `#` (0x23) too, which is written as it is: a `#` only costs the
+/// byte-exact path.
+#[inline(always)]
+pub(crate) fn html(x: u64) -> bool {
+    (has(x | (ONES * 5), b'\'') | has(x | (ONES * 2), b'>')) != 0
+}
+
+/// Some byte of `x` is one JSON escapes: a control character, `"` or `\`.
+#[cfg(feature = "json")]
+#[inline(always)]
+pub(crate) fn json(x: u64) -> bool {
+    (below(x, 0x20) | has(x, b'"') | has(x, b'\\')) != 0
+}
+
+#[inline(always)]
+fn word(bytes: &[u8]) -> u64 {
+    u64::from_le_bytes(bytes.try_into().expect("eight bytes"))
+}
+
+#[inline(always)]
+fn half(bytes: &[u8]) -> u64 {
+    u32::from_le_bytes(bytes.try_into().expect("four bytes")) as u64
+}
+
+/// Whether `hit` finds a byte in `bytes`. Eight bytes per test; the last (or only) bytes are read
+/// overlapping, so a short string is one test, not a loop over its bytes. A string shorter than
+/// four is padded with spaces, which neither set has.
+#[inline(always)]
+pub(crate) fn any(bytes: &[u8], hit: impl Fn(u64) -> bool) -> bool {
+    let n = bytes.len();
+    if n >= 8 {
+        let mut i = 0;
+        while i + 8 < n {
+            if hit(word(&bytes[i..i + 8])) {
+                return true;
+            }
+            i += 8;
+        }
+        hit(word(&bytes[n - 8..]))
+    } else if n >= 4 {
+        hit(half(&bytes[..4]) | half(&bytes[n - 4..]) << 32)
+    } else if n > 0 {
+        hit(bytes[0] as u64 | (bytes[n / 2] as u64) << 8 | (bytes[n - 1] as u64) << 16 | (ONES * b' ' as u64) << 24)
+    } else {
+        false
+    }
+}
+
+pub(crate) const PAIRS: &[u8; 200] = b"0001020304050607080910111213141516171819\
+    2021222324252627282930313233343536373839\
+    4041424344454647484950515253545556575859\
+    6061626364656667686970717273747576777879\
+    8081828384858687888990919293949596979899";
+
+/// `PAIRS` as text, for a writer that appends to a `String`.
+const PAIRS_TEXT: &str = match std::str::from_utf8(PAIRS) {
+    Ok(text) => text,
+    Err(_) => panic!("PAIRS is ASCII digits"),
+};
+
+/// The two digits of `n` (below 100), `"07"` for 7.
+#[inline]
+pub(crate) fn pair(n: u8) -> &'static str {
+    let at = usize::from(n) * 2;
+    &PAIRS_TEXT[at..at + 2]
+}
+
+/// The decimal digits of `n`, written at the end of `buf`, two per division: the JSON writer's,
+/// which the compiler inlines as it judges.
+#[cfg(feature = "json")]
+#[inline]
+pub(crate) fn digits(n: u64, buf: &mut [u8; 20]) -> &[u8] {
+    digits_inlined(n, buf)
+}
+
+/// The decimal digits of `n`, written at the end of `buf`, inlined into every caller: a
+/// `Cache-Control` header's two writers in `cache`, either of which would otherwise stop the
+/// compiler inlining it into the other.
+#[inline(always)]
+pub(crate) fn digits_inlined(mut n: u64, buf: &mut [u8; 20]) -> &[u8] {
+    let mut i = buf.len();
+    while n >= 100 {
+        let pair = (n % 100) as usize * 2;
+        n /= 100;
+        i -= 2;
+        buf[i..i + 2].copy_from_slice(&PAIRS[pair..pair + 2]);
+    }
+    if n >= 10 {
+        let pair = n as usize * 2;
+        i -= 2;
+        buf[i..i + 2].copy_from_slice(&PAIRS[pair..pair + 2]);
+    } else {
+        i -= 1;
+        buf[i] = b'0' + n as u8;
+    }
+    &buf[i..]
+}
+
+/// `n` in 16 lowercase hex digits, as `{n:016x}` writes it, without the formatter: the shell key
+/// (in the head and its header), a layout read's mark, a notice's page and the ETags.
+#[inline]
+pub(crate) fn hex(n: u64, buf: &mut [u8; 16]) -> &str {
+    for (i, digit) in buf.iter_mut().enumerate() {
+        *digit = b"0123456789abcdef"[(n >> (60 - 4 * i) & 0xf) as usize];
+    }
+    std::str::from_utf8(buf).expect("hex digits are ASCII")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_every_escaped_byte_at_every_position_and_length() {
+        for len in 0..40 {
+            for at in 0..len {
+                for (special, hit) in [(b'&', html as fn(u64) -> bool), (b'\'', html), (b'<', html), (b'>', html), (b'"', html)] {
+                    let mut text = vec![b'a'; len];
+                    text[at] = special;
+                    assert!(any(&text, hit), "{len} {at} {}", special as char);
+                }
+            }
+            assert!(!any(&vec![b'a'; len], html));
+            // Bytes next to the special ones, and UTF-8, are not hits.
+            assert!(!any(&"%(;=?é日".repeat(len).into_bytes()[..len.min(7 * len)], html));
+        }
+    }
+
+    #[test]
+    fn the_html_test_finds_the_five_and_only_hash_besides() {
+        for b in 0..=255u8 {
+            let alone = u64::from_le_bytes([b, b'a', b'a', b'a', b'a', b'a', b'a', b'a']);
+            assert_eq!(html(alone), b"&'<>\"#".contains(&b), "{b:#x}");
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn finds_json_escapes() {
+        for len in 1..40 {
+            for at in 0..len {
+                for special in (0u8..0x20).chain(*b"\"\\") {
+                    let mut text = vec![b' '; len];
+                    text[at] = special;
+                    assert!(any(&text, json), "{len} {at} {special}");
+                }
+            }
+            assert!(!any("!#[]^~\u{7f}é".repeat(len).as_bytes(), json));
+        }
+    }
+
+    #[test]
+    fn digits_match_display() {
+        let mut buf = [0; 20];
+        for n in (0..2000).chain([9_999, 10_000, 99_999, 123_456_789, u32::MAX as u64, u64::MAX - 1, u64::MAX]) {
+            assert_eq!(digits_inlined(n, &mut buf), n.to_string().as_bytes());
+            #[cfg(feature = "json")]
+            assert_eq!(digits(n, &mut buf), n.to_string().as_bytes());
+        }
+    }
+
+    #[test]
+    fn pairs_are_two_digits() {
+        for n in 0..100u8 {
+            assert_eq!(pair(n), format!("{n:02}"));
+        }
+    }
+
+    #[test]
+    fn hex_matches_display() {
+        for n in (0..300).chain([0xabc_def0, u32::MAX as u64, 0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210, u64::MAX]) {
+            assert_eq!(hex(n, &mut [0; 16]), format!("{n:016x}"));
+        }
+    }
+}

@@ -1,0 +1,12 @@
+/m/target-1865/release/build/matchit/c21af1666ba9c8ee/out/matchit-c21af1666ba9c8ee.d: /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/lib.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/error.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/escape.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/params.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/router.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/tree.rs
+
+/m/target-1865/release/build/matchit/c21af1666ba9c8ee/out/libmatchit-c21af1666ba9c8ee.rlib: /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/lib.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/error.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/escape.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/params.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/router.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/tree.rs
+
+/m/target-1865/release/build/matchit/c21af1666ba9c8ee/out/libmatchit-c21af1666ba9c8ee.rmeta: /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/lib.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/error.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/escape.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/params.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/router.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/tree.rs
+
+/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/lib.rs:
+/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/error.rs:
+/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/escape.rs:
+/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/params.rs:
+/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/router.rs:
+/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.9.2/src/tree.rs:

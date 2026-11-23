@@ -1,0 +1,4 @@
+perf on this host did not count L1-icache-load-misses:u at 100% running beside instructions:u;
+the diagnostic pass was not run. perf stat said:
+8455625,,L1-icache-load-misses,265337741,100.00,,
+2383040500,,instructions:u,265337741,100.00,,

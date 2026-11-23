@@ -1,0 +1,4 @@
+ALLOCATOR jemalloc
+READY fallback on 18082
+EVICT ok fallback: /r/0 to /r/3 answered their own policies, in that order
+WARM fallback: /page accept-encoding "": content-encoding -, age 0, 6124 bytes
