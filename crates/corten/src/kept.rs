@@ -179,12 +179,14 @@ pub(crate) const BROTLI_MAX: usize = 32 << 10;
 /// queued by a page's second answer, it cost a workload whose every URL was asked for twice 110%
 /// more cycles a request. Part of it does not grow with the body (brotli's tables, and about 250
 /// page faults a job under jemalloc), the rest grows with it. Of the 36 bodies of 1 to 32 KiB a
-/// probe counted under callgrind, one asked for exactly this often spent at most about 116
-/// instructions on its brotli for each of its answers, averaged over all of them: under 0.5% of
-/// the about 25,000 an answer given again took on the 6,124-byte page measured, which an answer
-/// of another body need not take. One asked for more spends less, so the count spreads the cost
-/// thin; the answers before it do not repay it (`docs/design.md#choice-kept-pages`). A body or a
-/// spread of answers not measured may differ.
+/// probe counted under callgrind, one asked for exactly this often spent at most about 116 user
+/// instructions on its brotli for each answer that counted, averaged over its due: about 0.46% of
+/// the about 25,000 one answer given again took on the 6,124-byte page measured, a reference and
+/// not each body's own answer. One asked for more spends less, so the count spreads the cost thin.
+/// Nothing repays it: later answers are smaller only if the brotli is kept, made while the copy
+/// stands and smaller than their coding's form (`docs/design.md#choice-kept-pages`). A full queue
+/// is asked once in each due, as the encoding is made (`Kept::coded`). A body or a spread of
+/// answers not measured may differ.
 #[cfg(feature = "compress")]
 pub(crate) const fn due(length: usize) -> u32 {
     if length > BROTLI_MAX {
@@ -744,9 +746,9 @@ struct Coded {
     /// entry stays in jemalloc's class of 448 bytes ([`BOXED`]).
     brotli: OnceLock<Box<Bytes>>,
     /// The answers to a client that ranks brotli as high as any coding before `brotli` was made,
-    /// up to the body's [`due`]: the answer that makes them that many queues it, and the next one
-    /// again when the queue was full, but not when the thread could not be started, which is not
-    /// tried again. Once queued, or so refused, it is not written again, while the job waits,
+    /// up to the body's [`due`]: the answer that makes them that many queues it. A full queue
+    /// sets the count back to none, so the answer that makes a whole due more asks again; a thread
+    /// that could not be started leaves it at the due, and is not tried again. Once queued, or so refused, it is not written again, while the job waits,
     /// once it made the bytes and once it found no room for them, so an answer to a page that does
     /// without them only reads it. A body past [`BROTLI_MAX`] is due none, so no answer writes it.
     promotion: AtomicU32,
@@ -844,9 +846,13 @@ impl Kept {
                             }),
                         );
                         if queued == Err(Refused::Full) {
-                            // The next such answer asks again. With no thread to be had none
-                            // would be taken, so the count stays at the due and no answer asks.
-                            coded.promotion.store(due - 1, Ordering::Release);
+                            // Counted from none again, so the page asks once more a whole due
+                            // later: a queue that stays full is asked by one answer in each due,
+                            // not by every answer, and each refusal's job and the queue's lock
+                            // are spread over the due as the encoding is. With no thread to be
+                            // had none would be taken, so the count stays at the due and no
+                            // answer asks.
+                            coded.promotion.store(0, Ordering::Release);
                         }
                         break;
                     }
@@ -2703,7 +2709,7 @@ mod tests {
             let fast = Bytes::from_static(b"fast");
             let ask = |asked: &'static str, now| Kept::coded(&extensions, &page.body, accepts(asked), now, || fast.clone());
             let promotion = || page.coded.promotion.load(Ordering::Acquire);
-            // Refused, so no job runs and the count is put back: each ask of the queue is seen.
+            // Refused, so no job runs and the count starts over: each ask of the queue is seen.
             let asked = the_queue_answers(&[false]);
             for _ in 0..100 {
                 ask("gzip", Coding::Gzip);
@@ -2723,18 +2729,50 @@ mod tests {
             } else {
                 assert_eq!(promotion(), due - 1, "{length}");
                 ask("gzip, deflate, br, zstd", Coding::Zstd);
-                assert_eq!((asked.get(), promotion()), (1, due - 1), "{length}: asked on its due answer, and refused");
+                assert_eq!((asked.get(), promotion()), (1, 0), "{length}: asked on its due answer, refused, and counted from none");
             }
             crate::compress::QUEUEING.take();
         }
     }
 
-    /// A page's brotli the queue refused, as a full queue does, is queued by the very next answer
-    /// that could use it, and once: the due answer it was refused on puts the count back, and none
-    /// after the one the queue took asks the queue again, while the job waits or once it is done.
+    /// A queue that stays full is asked for a page's brotli once for each due of the answers that
+    /// could use it, not by every answer after its first due: each refusal starts the count over,
+    /// so a page asked for without end while the thread is busy makes a job, takes the queue's lock
+    /// and is refused at most once in its due, as often as a job it was given would be made.
     #[cfg(feature = "compress")]
     #[test]
-    fn a_kept_answer_s_brotli_a_full_queue_refused_is_queued_by_the_next_answer() {
+    fn a_queue_that_stays_full_is_asked_once_a_due() {
+        const DUES: u32 = 5;
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let body = a_page(0);
+        let page = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
+        let mut extensions = http::Extensions::new();
+        extensions.insert(Kept(page.clone()));
+        let hit = || Kept::coded(&extensions, &page.body, accepts("br"), Coding::Brotli, || body.clone());
+        let due = due(body.len());
+        let asked = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let count = asked.clone();
+        crate::compress::QUEUEING.set(Some(Box::new(move |turn| {
+            assert_eq!(turn, Turn::Kept);
+            count.set(count.get() + 1);
+            Err(Refused::Full)
+        })));
+        // Short of a further due by half of one, so the answers after the last refusal ask nothing.
+        for _ in 0..DUES * due + due / 2 {
+            hit();
+        }
+        crate::compress::QUEUEING.take();
+        assert_eq!(asked.get(), DUES, "asked once on each due answer, by none between");
+        assert!(page.coded.made().is_none(), "nothing made");
+    }
+
+    /// A page's brotli the queue refused, as a full queue does, is asked for again by the answer
+    /// that makes a whole due more, and queued once: the due answer it was refused on starts the
+    /// count over, and none after the one the queue took asks the queue again, while the job waits
+    /// or once it is done.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_kept_answer_s_brotli_a_full_queue_refused_is_queued_a_due_later() {
         let answers = Answers::new(1 << 20).expect("a bound");
         let body = a_page(0);
         let page = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
@@ -2752,9 +2790,13 @@ mod tests {
         }
         assert_eq!((asked.get(), promotion()), (0, due - 1), "the answers before the due one ask nothing of the queue");
         hit();
-        assert_eq!((asked.get(), promotion()), (1, due - 1), "the due one is refused, and puts the count back");
+        assert_eq!((asked.get(), promotion()), (1, 0), "the due one is refused, and starts the count over");
+        for _ in 1..due {
+            hit();
+        }
+        assert_eq!((asked.get(), promotion()), (1, due - 1), "none of the next due less one asks");
         hit();
-        assert_eq!((asked.get(), promotion()), (2, due), "the next asks again, and the queue takes it");
+        assert_eq!((asked.get(), promotion()), (2, due), "the one that makes the due again asks, and the queue takes it");
         for _ in 0..3 {
             assert_eq!(hit(), (body.clone(), Coding::Brotli), "the fast form while the job waits");
         }

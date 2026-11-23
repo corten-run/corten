@@ -7239,7 +7239,7 @@ rules something out.
     `crates/corten/src/kept.rs`). The hash of its body and its bytes in each coding are made
     once and stay with it, so the tag and the compression after the handler cost a kept page a
     lookup, and its brotli is made once more at a higher level, queued once the page has been
-    given often enough to repay it and made by no request (below). It is on unless the app says otherwise, holds at most 32 MiB
+    given often enough to spread its cost thin and made by no request (below). It is on unless the app says otherwise, holds at most 32 MiB
     (`App::kept_answers`), and is off under `corten dev`.
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
@@ -7474,7 +7474,9 @@ rules something out.
     to say, and a reload is not a reason to render it.
 
     A kept page's bytes in a coding are made once and sent many times, so a level that costs
-    more and sends fewer pays for itself where a per-request answer's cannot
+    more and sends fewer can be afforded where a per-request answer's cannot: its CPU is spread over
+    the answers before it and repaid by none, and the bytes it saves are the later answers', when
+    it is kept, made while the page stands and smaller than their coding's form
     ([#1793 A kept page is compressed at the level a per-request answer is](https://github.com/corten-run/corten/issues/1793)).
     The request that makes the copy is still a visitor's, so nothing more is made on it, and the
     encoding costs the server's CPU wherever it runs, so it is made only for a page asked for
@@ -7491,7 +7493,9 @@ rules something out.
     that lands after the second check, while the thread puts the bytes in, leaves them with a page
     that no longer stands and counted toward the bound for it, if there was room: no lookup after that
     write gives the page, and its bytes go when it is replaced or room is made. A full queue
-    leaves it to the next such answer, and once queued no answer writes to the page's count again.
+    refuses it and the page's count starts over from none, so the page asks again a whole due
+    later: a queue that stays full is asked once in each due of a page's answers, not by each
+    answer after it. Once queued, no answer writes to the page's count again.
     So it is best effort: held values compressed without a pause keep it waiting for as long as
     that lasts, past the page's lifetime, and a job whose bytes find no room is not tried again
     for that page. A body past 32 KiB (`BROTLI_MAX` in `kept.rs`) is given none and keeps the
@@ -8025,8 +8029,9 @@ rules something out.
     each encoded once before the count), were 342,886 to 12,363,878 a job and 48.5 to 497.1 a byte
     of the body (the most for the table of 1 KiB: 509,048 over 1,024), a part of them not growing
     with it. Spread over its due, the job of a body asked for exactly that often took at most 116.10
-    instructions for each of its answers among those 36 (prose of 32 KiB: 12,363,878 over 106,496),
-    0.462% of the 25,136 a page's answer given again took under callgrind, and 45.19 at 1 KiB (the
+    user instructions for each answer that counted among those 36 (prose of 32 KiB: 12,363,878
+    over 106,496), about 0.46% (0.462%) of the 25,136 one answer given again took on the 6,124-byte
+    reference page under callgrind, a reference and not each body's own answer, and 45.19 at 1 KiB (the
     table: 509,048 over 11,264); the faults, about 250 a job whatever the body, are spread over
     11,264 answers or more. That is the most among the bodies measured, averaged over a copy's whole
     count: a body of another kind may take more, and over a span shorter than the count the job's
@@ -8043,9 +8048,9 @@ rules something out.
     ten times its due in a lifetime sends nine tenths of its browser answers in brotli 5. Every
     answer before the due writes the page's count, where the second answer had been the last to:
     callgrind counts that write's instructions, not what it costs where several cores answer
-    the same page; the eighth run's `hot`, below, compares answers on four cores of one host that
-    write one page's count, which permits but does not verify writes to the same count from
-    different cores. Counted in process under callgrind as the sixth run's pair was (`a88a06aa8`
+    the same page; the eighth run's `hot`, below, runs the app on four cores of one host under
+    two independent streams of requests that share their URLs' order, which permits but does not
+    verify writes to one page's count from different cores or at once. Counted in process under callgrind as the sixth run's pair was (`a88a06aa8`
     against `04530f7e0`, whose production sources are `a02c81e86`'s; rustc 1.100.0, valgrind
     3.24.0, jemalloc 5.3.0 preloaded, the medians of three rounds, each URL new, the thread started
     by the first URL's due answer): the first answer, which makes and keeps the page, took 264,406.5
@@ -8067,19 +8072,32 @@ rules something out.
     so that each URL's due answer queues its job, and once more, so that an answer given its brotli
     5 shows that job's encoding published while the turn was counted (published, not the job
     returned: `Entry::make_brotli` puts the brotli in before it counts its size and unlocks the
-    store); `hot`, a four-CPU hot-load comparison, the app on four CPUs with a worker each and
-    every URL new and asked for 16,384 times from all 64 connections at once, answers that write
-    one page's count before its due, which permits but does not verify writes to the same count
-    from different cores; and the four workloads of the runs
+    store); `hot`, a four-CPU hot-load comparison, the app on four CPUs with four workers and
+    `wrk`'s two threads, 32 connections each, as two independent streams that ask the same new
+    URLs in the same order, 8,192 times each a URL, 16,384 in all and below its due: up to 64
+    requests are in flight at once, not all of one URL, no answer's CPU is recorded and not every
+    answer is checked to be one that wrote the count (an answer without an `Age` is tolerated
+    within a slack), so it permits but does not verify writes to one page's count from different
+    cores; and the four workloads of the runs
     before (`browser`, `gzip`, `refused`, `json-browser`), each warmed to its due, all but `hot`
     with the app on one CPU. `churn`'s turns of this change are usable only if each shows an encoding
     published on each of `wrk`'s two threads and, in all, at least half as many for each answer as
-    when every answer is one of a URL asked for exactly its due, so its bound covers the rule's worst
-    case for that page diluted to no less than half, with the density each build reached reported;
-    a host too slow for that makes the run unusable. Every turn counts from perf's acknowledgement
-    of `enable`, sent before `wrk` starts, to its acknowledgement of `disable`, sent after `wrk`
-    has exited, and a turn without both is refused, so the counted interval encloses the load
-    (round 17 of the review found the earlier fixed-length count did not show that). A first plan for this run counted the requests
+    when every answer is one of a URL asked for exactly its due, so its bound covers the rule's
+    densest encoding for that page diluted to no less than half, with the density each build
+    reached reported; a host too slow for that makes the run unusable, and a turn whose counts are
+    not those its own requests give under the script's order is refused (round 18). That is the
+    encoding's density for the reference page, not the most a request can pay: no workload fills
+    the queue, so the asking a full queue refuses, once in each due of a page's answers, a job made
+    and the queue's lock taken each time, is tested for how often it happens and not measured.
+    Every turn counts from perf's acknowledgement of `enable`, sent before `wrk` starts, to its
+    acknowledgement of `disable`, sent after `wrk` has exited, and a turn without both is
+    refused, so the counted interval encloses the load (round 17 of the review found the earlier
+    fixed-length count did not show that). It is not the load alone: perf may count from the
+    moment it reads `enable` and until it acknowledges `disable`, so a turn is also refused
+    whose gaps pass 25 ms from `enable` sent to `wrk`'s start or from `wrk`'s end to `disable`
+    acknowledged (round 18), and what the server does in them, a job the load queued among it, is
+    counted with the load. Every timed answer must be a `200`: the scripts count any other
+    status themselves, since `wrk` counts one as an error only above 399 (round 18). A first plan for this run counted the requests
     sent where it meant the jobs done, which could have let a turn with no job pass, and had no
     workload with more than one core; round 16 of the review found both before it ran. A bound at
     or over +1% on any, or a run that cannot be used, blocks the merge. The first two runs on a quiet host did
@@ -8853,7 +8871,8 @@ rules something out.
     of a kind or size the probe did not count spends more than about 116 instructions an answer on
     its job, so the count's terms should be drawn again, or a run on more cores than `hot`'s four,
     or a profile of an app on many, shows the count's write costing answers to one page there, so
-    it should be written less often, or a
+    it should be written less often, or a measured app's queue for kept pages is found full for
+    most of its pages' dues, so the asking it refuses, once in each due, should be measured, or a
     measured app's kept pages rarely reach their due in a lifetime while most of its bytes go to
     browsers, so it should fall, or the job's part that does not grow with the body (brotli's
     tables and, under jemalloc, about 250 page faults a job) is made smaller, as by an encoder the

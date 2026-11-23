@@ -22,9 +22,10 @@
 //! made by no request but by the thread that compresses held JSON, when no held value waits:
 //! a kept copy's compressed answers to clients that rank brotli as high as any coding are counted,
 //! and the one that makes 8,192 and three for each of the body's bytes queues it there (an answer in no
-//! coding, or a 304, does not count, and one the full queue refused leaves it to the next such
-//! answer), since the encoding runs on the server's CPU and is paid for only by the answers after
-//! it ([`crate::kept::due`]). It is best effort: it is not made for a copy that
+//! coding, or a 304, does not count, and one the full queue refused starts the count over), since
+//! the encoding runs on the server's CPU: the count spreads that cost over the answers before it,
+//! and nothing repays it, as the answers after it are smaller only if its brotli is kept, made in
+//! time and smaller ([`crate::kept::due`]). It is best effort: it is not made for a copy that
 //! no longer stands, nor kept where the store has no room left for it, and a body past 32 KiB is
 //! given none, since a held value queued while it is made would wait for all of it. Once it is kept, later
 //! such answers get it in the place of the form made for their coding when that is larger, 18%

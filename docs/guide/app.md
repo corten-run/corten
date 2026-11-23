@@ -1552,18 +1552,21 @@ kept copy counts its own compressed answers to clients that rank brotli first or
 among the codings they take (a browser, or any other client that does), and the job is queued while
 the app prepares the one that makes 8,192 and three more for each byte of the page (26,564 for a
 page of 6,124 bytes), before it looks for that answer's own form. Spread over that many answers,
-the encoding took at most about 0.5% of their instructions for the bodies measured (1 to 32 KiB,
-under callgrind), and less for a copy asked for more often. The count spreads the cost; the answers
-before it do not repay it: a copy asked for exactly its due pays for the encoding and never sends a
-smaller answer. A copy asked for fewer times never pays for it and sends what it did before, zstd
+the encoding took at most about 116 user instructions an answer among the 36 bodies measured (1 to
+32 KiB, under callgrind), about 0.46% of what one answer given again took on the 6,124-byte page
+measured (a reference, not each body's own answer), and less for a copy asked for more often. The
+count spreads the cost and nothing repays it: a copy asked for exactly its due pays for the
+encoding and never sends a smaller answer, and later answers send fewer bytes only if the brotli is
+kept in the store, made while the copy still stands and smaller than the form for their coding. A
+copy asked for fewer times never pays for it and sends what it did before, zstd
 to a browser and brotli 1 to a client that takes brotli alone. A page made again, by a write or
 when its lifetime ends, is a new copy: it counts from none, and can reach its own due. Queued on a
 page's second answer instead, it took a workload whose every URL was asked for twice 110% more
 CPU cycles a request. An answer the store did not keep (in a full store, the first for a URL not asked
 for before), one that is not compressed (a `304`, a client that takes none, a body too small) or
 one to a client that ranks another coding higher does not count, and when the queue for kept pages
-is full the next answer that counts tries again (a compression thread that could not be started
-is not tried again). No answer waits for the encoding: the one that queues it,
+is full the copy counts from none again, so it asks once more a whole due later (a compression
+thread that could not be started is not tried again). No answer waits for the encoding: the one that queues it,
 and every answer until the thread is done, gets the form made for its coding, as before (a lookup may
 wait the moment the thread takes the store's lock to put the bytes in). From then on a client that
 ranks brotli as high as any coding, as a browser does, gets it in the place of zstd (on the catalog
