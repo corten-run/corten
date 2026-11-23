@@ -43,6 +43,8 @@ the exact-host cleanup requirements do not change. The `git-source.test.mjs`
 Linux fixture executes the generated stage and failure packer with local
 commands, not an upstream download or guest qualification.
 Reservations without the marker regenerate their original PPA job bytes.
+That preserves ordinary collection from the measured checkout. It does not
+make a new controller source-compatible with [grouped pre-plan retirement](#failed-native-custody-and-retirement).
 Keep the marked recipe fixed too; a future Git pin needs a distinct saved recipe.
 
 The production adapter in `cloud-remote.mjs` keeps the job at `umask 077` but
@@ -781,7 +783,28 @@ wrapper archive; it cannot produce a benchmark result. Use a separate
 `--retire-failed-native --print-approval` from a clean, merged descendant. The
 preview must bind the consumed launch intent, reservation, launch key, registered
 boot, original archive and extraction, and the output roots for the measured
-group. The measured registry and remote-job definitions must still match.
+group. This is a narrow exception to ordinary collection at the measured SHA.
+Use a clean checkout of a **strict descendant** of the measured commit that
+implements grouped pre-plan retirement and is in the fetched `origin/main` history.
+The controller compares the complete committed contents of three files, not just
+the group roster or the generated job. To check a candidate using full commit IDs:
+
+```sh
+test "$measured" != "$candidate" &&
+  git merge-base --is-ancestor "$measured" "$candidate" &&
+  git merge-base --is-ancestor "$candidate" origin/main &&
+  git diff --quiet --no-ext-diff --no-textconv "$measured" "$candidate" -- \
+    bench/workloads/registry.mjs bench/workloads/cloud-contract.mjs bench/workloads/cloud-remote.mjs
+```
+
+For example, measured `52b25c556499a9c4f537577aa3fcb6df175dd073` and merged
+candidate `14126d2a8a12bccd173ec29032c1818d42904213` pass that source check.
+A controller with the changed Git-install contract does not pass it for that
+measured commit, even though it regenerates identical unmarked job bytes.
+If no compatible merged descendant is verified, stop; do not substitute the
+latest checkout or edit a reservation. Source compatibility is not evidence
+of native entry, permission to delete, or a reason to reopen a closed slot.
+An unacknowledged upload before checkout is not a pre-plan native failure.
 
 This path requires a revoked monitor with a settled local owner, wrapper exit
 2, an empty archived campaign directory, and the final failure line from the

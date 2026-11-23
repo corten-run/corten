@@ -55,6 +55,11 @@ printf 'extract\n' >> "$ROOT/calls"
 mkdir git-2.56.1`,
   make: String.raw`test "$*" = "-C git-2.56.1 -j2 prefix=$ROOT/usr/local INSTALL_STRIP=-s INSTALL_SYMLINKS=1 NO_RUST=1 NO_GETTEXT=1 NO_TCLTK=1 NO_GITWEB=1 USE_LIBPCRE2=1 install"
 printf 'build\n' >> "$ROOT/calls"
+if test "$SCENARIO" = SIGKILL; then
+  trap '' TERM
+  printf 'ignoring TERM\n' >> "$ROOT/calls"
+  exec /bin/sleep 6
+fi
 test "$SCENARIO" != build
 mkdir -p "$ROOT/usr/local/bin" "$ROOT/git-core"
 install -m 755 "$ROOT/git-fixture" "$ROOT/usr/local/bin/git"
@@ -76,7 +81,7 @@ case "$*" in
 esac`,
 };
 
-for (const scenario of ["accepted", "apt", "download", "digest", "signature", "signing key", "build", "version", "lazy", "replace"])
+for (const scenario of ["accepted", "apt", "download", "digest", "signature", "signing key", "build", "SIGKILL", "version", "lazy", "replace"])
   test("generated guest Git install: " + scenario, { skip: process.platform !== "linux" }, (t) => {
     const root = mkdtempSync(join(tmpdir(), "corten-guest-git-")), shims = join(root, "bin");
     t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -101,8 +106,13 @@ for (const scenario of ["accepted", "apt", "download", "digest", "signature", "s
     assert.match(prefix, /^finish\(\).*pack\.sh/m);
     assert.match(prefix, /trap .* ERR/);
     writeFileSync(join(root, "pack.sh"), pack.replaceAll("/bench", root));
-    const body = stage(script).replaceAll("/bench", root).replaceAll("/usr/local", root + "/usr/local")
+    let body = stage(script).replaceAll("/bench", root).replaceAll("/usr/local", root + "/usr/local")
       .replace("export PATH=", "export PATH=" + shims + ":").replace("/tmp/corten-git-build.", root + "/corten-git-build.");
+    if (scenario === "SIGKILL") {
+      // Shorten only the two deadlines; GNU timeout still signals the fake make.
+      assert.ok(body.includes("timeout -k 10 900 make "));
+      body = body.replace("timeout -k 10 900 make ", "timeout -k 0.2 1 make ");
+    }
     const result = spawnSync("/bin/bash", ["-c", 'set -Eeuo pipefail\numask 077\n: > "$ROOT/host.txt"\nexec > "$ROOT/run.log" 2>&1\n'
       + prefix.replaceAll("/bench", root) + body + 'trap - EXIT\ntouch "$ROOT/checkout-ready"\n'], {
       cwd: root, env: { PATH: shims + ":/usr/bin:/bin", HOME: root, ROOT: root, SCENARIO: scenario,
@@ -119,6 +129,12 @@ for (const scenario of ["accepted", "apt", "download", "digest", "signature", "s
       assert.equal(readFileSync(join(root, "host.txt"), "utf8"),
         `git version 2.56.1\ngit-source-url=https://www.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz\ngit-source-sha256=${digest}\ngit-source-signer=${fingerprint}\n`);
     } else {
+      if (scenario === "SIGKILL") {
+        assert.equal(result.status, 137, log);
+        assert.match(calls, /build\nignoring TERM\n/);
+        assert.match(log, /benchmark job failed: stage=git-install line=\d+ exit=137\b/);
+        assert.doesNotMatch(calls, /^git /m);
+      }
       assert.notEqual(result.status, 0, log);
       assert.match(log, /benchmark job failed: stage=git-install line=\d+ exit=\d+/);
       assert.equal(existsSync(join(root, "checkout-ready")), false);
