@@ -443,6 +443,9 @@ struct Store {
     /// a place in its table.
     keys: RandomState,
     inner: RwLock<Inner>,
+    /// Told when a copy being made again goes ([`Store::drop_entry`]), so its refresh, whose answer
+    /// could no longer be kept, stops ([`Again::run`]).
+    gone: tokio::sync::Notify,
 }
 
 /// Which of the store's counts is a path's: by a hash of the path with its escapes decoded
@@ -893,9 +896,28 @@ impl Store {
                 inner.at.remove(&entry.hash);
             }
         }
-        let size = entry.size.swap(GONE, Ordering::AcqRel);
+        // In one order with the refresh's claim ([`Refresh::claim`]): either the claim sees the
+        // copy gone, or this sees it claimed and tells the refresh.
+        let size = entry.size.swap(GONE, Ordering::SeqCst);
         if size != GONE {
             self.bytes.fetch_sub(size, Ordering::AcqRel);
+        }
+        if entry.refreshing.load(Ordering::SeqCst) {
+            self.gone.notify_waiters();
+        }
+    }
+
+    /// Until `copy` has gone from the store, for its refresh ([`Again::run`]).
+    async fn until_gone(&self, copy: &Weak<Entry>) {
+        loop {
+            let notified = self.gone.notified();
+            let mut notified = std::pin::pin!(notified);
+            // Waiting before the look, so a copy that goes after it is told of.
+            notified.as_mut().enable();
+            if copy.upgrade().is_none_or(|copy| copy.size.load(Ordering::SeqCst) == GONE) {
+                return;
+            }
+            notified.await;
         }
     }
 
@@ -934,6 +956,7 @@ impl Answers {
                 marked: AtomicUsize::new(0),
                 keys: RandomState::new(),
                 inner: RwLock::default(),
+                gone: tokio::sync::Notify::new(),
             }))
         })
     }
@@ -1188,10 +1211,11 @@ impl Refresh {
     /// took its place, or it went for room) or a write to its path ended it. The mark is let go
     /// when this goes.
     fn claim(store: &Store, entry: &Arc<Entry>) -> Option<Self> {
-        entry.refreshing.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed).ok()?;
+        // In one order with the copy going ([`Store::drop_entry`]).
+        entry.refreshing.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed).ok()?;
         let window = Duration::from_secs(entry.lifetime.saturating_add(entry.cache.stale()));
         let refresh = Refresh { entry: Arc::downgrade(entry), ends: entry.made.checked_add(window) };
-        (entry.size.load(Ordering::Acquire) != GONE && entry.written.stands(store)).then_some(refresh)
+        (entry.size.load(Ordering::SeqCst) != GONE && entry.written.stands(store)).then_some(refresh)
     }
 
     /// Readies `req`, which was given the copy, for its handler to make it again apart from its
@@ -1265,15 +1289,17 @@ impl Again {
     /// Runs `made` (the handler's answer, and whether it drew a form's new submit key) on a task of
     /// its own, which shutdown waits for as it waits for work a handler finishes
     /// ([`crate::Signal::finish`]) and stops, the reading of the answer's body with it: its signal
-    /// aborts then, at its deadline, and once it has answered. Its answer is kept as a miss's would
-    /// be, in the copy's place, only while the copy is still the store's, with no write to its path
-    /// since the handler read, and before it stops ([`Store::make_way`]): a page another
-    /// request kept in the copy's place meanwhile stands. A failure (one a cache may give a stale
-    /// answer for, a body of the size it gave that could not be read, a panic, a passed deadline,
-    /// shutdown) leaves the copy as it was, to be given until its window ends; any other answer not
-    /// kept (a `404`, a redirect, a page that may not be kept) takes the copy out, since it is no
-    /// longer what the handler makes. Work a write left counts when it ends, as for any answer
-    /// kept.
+    /// aborts then, at its deadline, once the copy has gone from the store (its answer could no
+    /// longer be kept, so a store of a bound holds no more refreshes than copies), and once it has
+    /// answered or ended any other way, a panic too. Its answer is kept as a miss's would be, in
+    /// the copy's place, only while the copy is still the store's, with no write to its path since
+    /// the handler read, and before it stops ([`Store::make_way`]): a page another request kept in
+    /// the copy's place meanwhile stands. A failure (one a cache may give a stale answer for, a
+    /// body of the size it gave that could not be read, a panic in the handler or as the body is
+    /// read, a passed deadline, shutdown) leaves the copy as it was, to be given until its window
+    /// ends; any other answer not kept (a `404`, a redirect, a page that may not be kept) takes the
+    /// copy out, since it is no longer what the handler makes. Work a write left counts when it
+    /// ends, as for any answer kept.
     pub(crate) fn spawn<F>(self, made: F)
     where
         F: std::future::Future<Output = (Response, bool)> + Send + 'static,
@@ -1290,21 +1316,12 @@ impl Again {
 
     async fn run<F: std::future::Future<Output = (Response, bool)>>(self, made: F, stop: crate::Signal) {
         let Again { refresh, missed, signal, until } = self;
+        // However this ends, work the handler started on its signal ends with it.
+        let _aborts = AbortsAtEnd(signal.clone());
         let at = missed.at.clone();
-        let mut made = std::pin::pin!(made);
-        // A panic is the handler's failure, logged as a request's is.
-        let answered =
-            std::future::poll_fn(|cx| match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| made.as_mut().poll(cx))) {
-                Ok(polled) => polled.map(Some),
-                Err(panic) => {
-                    let message = crate::task::panic_message(&*panic);
-                    tracing::error!("corten: GET {} panicked as its kept answer was made again: {message}", at.path());
-                    Poll::Ready(None)
-                }
-            });
         // Whether the answer, once its body is read, takes the copy out.
         let ends_copy = async {
-            let (res, drew_key) = answered.await?;
+            let (res, drew_key) = made.await;
             if failed(res.status()) {
                 return None;
             }
@@ -1315,9 +1332,29 @@ impl Again {
                 Settled::Kept(_) | Settled::Failed => None,
             }
         };
+        let mut ends_copy = std::pin::pin!(ends_copy);
+        // A panic, in the handler or as its body is read, is the handler's failure, logged as a
+        // request's is.
+        let ends_copy = std::future::poll_fn(|cx| {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| std::future::Future::poll(ends_copy.as_mut(), cx))) {
+                Ok(polled) => polled,
+                Err(panic) => {
+                    let message = crate::task::panic_message(&*panic);
+                    tracing::error!("corten: GET {} panicked as its kept answer was made again: {message}", at.path());
+                    Poll::Ready(None)
+                }
+            }
+        });
         let late = async {
             match until {
                 Some(until) => tokio::time::sleep_until(until).await,
+                None => std::future::pending().await,
+            }
+        };
+        let kept = signal.shared().and_then(|shared| shared.kept.as_ref());
+        let gone = async {
+            match kept {
+                Some(kept) => kept.0.until_gone(&refresh.entry).await,
                 None => std::future::pending().await,
             }
         };
@@ -1333,20 +1370,32 @@ impl Again {
                 tracing::warn!("corten: GET {} passed its deadline as its kept answer was made again", at.path());
                 None
             }
+            // Its copy went for room, or another page took its place: what it makes would not be kept.
+            () = gone => None,
             ends_copy = ends_copy => ends_copy,
         };
         if ends_copy.is_some() {
-            if let Some(kept) = signal.shared().and_then(|shared| shared.kept.as_ref()) {
+            if let Some(kept) = kept {
                 kept.forget(&refresh.entry);
             }
         }
-        signal.abort(crate::Abort::Responded);
+    }
+}
+
+/// Aborts the signal of a page made again as it goes, with [`crate::Abort::Responded`] unless it
+/// aborted already: when its work answers, stops or panics, and when its task is dropped.
+struct AbortsAtEnd(crate::Signal);
+
+impl Drop for AbortsAtEnd {
+    fn drop(&mut self) {
+        self.0.abort(crate::Abort::Responded);
     }
 }
 
 /// A copy past its lifetime within `stale-if-error`, held on its request's signal while the
 /// handler runs ([`Held`]), by its identity alone: a copy turned out for room meanwhile takes its
 /// body and head with it, and is not given.
+#[derive(Clone)]
 struct HeldCopy(Weak<Entry>);
 
 impl HeldCopy {
@@ -1375,32 +1424,47 @@ impl Held {
     /// be given ([`HeldCopy::given`]), when it is a failure a cache may give a stale answer for
     /// ([`failed`]) or its body, of a size it gave, could not be read. Any other answer is the
     /// handler's, kept as a miss's would be, and takes the copy out: a `404` says the page is
-    /// gone. Settled once the body is read, so one that could not be read leaves the copy.
+    /// gone. Settled once the body is read, so one that could not be read leaves the copy; until
+    /// then the copy stays on the signal, for a deadline that passes or a panic as the body is
+    /// read ([`held`]).
     pub(crate) async fn answer(self, res: Response, drew_key: bool, missed: Missed) -> Response {
-        let Some(copy) = self.0.take::<HeldCopy>() else {
+        let Some(copy) = self.0.holding::<HeldCopy>() else {
             return if drew_key { res } else { missed.keep(res, None).await.answer() };
         };
-        if failed(res.status()) {
-            return copy.given(&self.0).unwrap_or(res);
-        }
-        let settled = if drew_key { Settled::Left(res) } else { missed.keep(res, Some(Over::Held(&copy.0))).await };
-        match settled {
-            Settled::Kept(res) => res,
-            Settled::Left(res) => {
-                if let Some(kept) = self.0.shared().and_then(|shared| shared.kept.as_ref()) {
-                    kept.forget(&copy.0);
+        let answer = if failed(res.status()) {
+            copy.given(&self.0).unwrap_or(res)
+        } else {
+            let settled = if drew_key { Settled::Left(res) } else { missed.keep(res, Some(Over::Held(&copy.0))).await };
+            match settled {
+                Settled::Kept(res) => res,
+                Settled::Left(res) => {
+                    if let Some(kept) = self.0.shared().and_then(|shared| shared.kept.as_ref()) {
+                        kept.forget(&copy.0);
+                    }
+                    res
                 }
-                res
+                Settled::Failed => copy.given(&self.0).unwrap_or_else(unread),
             }
-            Settled::Failed => copy.given(&self.0).unwrap_or_else(unread),
-        }
+        };
+        // Settled: the copy is no longer the request's to fall back on.
+        drop(self.0.take::<HeldCopy>());
+        answer
     }
 }
 
-/// The copy held for a request whose handler panicked or passed its deadline before it answered
-/// ([`Held`]), as the answer in place of the failure.
+/// The copy held for a request whose handler panicked or passed its deadline before its answer
+/// was settled, its body read too ([`Held`]), as the answer in place of the failure. The app's
+/// middleware did not finish for it
+/// (the panic unwound it, the deadline dropped it), so what it would have said of caching after
+/// `next` (`private, no-store`, say) was never said: the copy goes out `private, no-store`, with
+/// the headers a CDN reads first removed, not with the handler's `public` and windows, so no
+/// cache after the app keeps or shares it.
 pub(crate) fn held(signal: &crate::Signal) -> Option<Response> {
-    signal.take::<HeldCopy>()?.given(signal)
+    let mut res = signal.take::<HeldCopy>()?.given(signal)?;
+    let headers = res.headers_mut();
+    crate::cache::drop_cdn_caching(headers);
+    headers.insert(header::CACHE_CONTROL, crate::cache::PRIVATE_NO_STORE);
+    Some(res)
 }
 
 /// The answer for a body of a size it gave that could not be read: not a page to send as it is.

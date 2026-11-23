@@ -517,6 +517,12 @@ impl Signal {
         kept.downcast::<T>().ok().and_then(|kept| Arc::try_unwrap(kept).ok())
     }
 
+    /// A copy of what [`Signal::hold`] holds of type `T`, left on the request.
+    pub(crate) fn holding<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        let found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        found.iter().find_map(|kept| kept.downcast_ref::<T>().cloned())
+    }
+
     /// Marks the answer as differing by something of the visitor's that does not change the page
     /// around `<main>` (their time zone): private, but not part of the page's key.
     pub(crate) fn mark_personal(&self) {

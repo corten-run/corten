@@ -2289,17 +2289,23 @@ type Step = (Does, Option<Gate>);
 /// and takes the next step set for it (what it does, and a gate it waits at first), or answers
 /// when none is set. A run with a gate adds a permit to `started` as it starts, so a test knows
 /// the run is under way before it releases it, with no sleep. The page's text names the run that
-/// made it.
+/// made it, and each run's signal is kept in `signals`, in order.
 #[derive(Clone)]
 struct Steps {
     runs: Runs,
     next: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Step>>>,
     started: Gate,
+    signals: std::sync::Arc<std::sync::Mutex<Vec<crate::Signal>>>,
 }
 
 impl Steps {
     fn new() -> Self {
-        Steps { runs: Runs::default(), next: Default::default(), started: Gate::new(tokio::sync::Semaphore::new(0)) }
+        Steps {
+            runs: Runs::default(),
+            next: Default::default(),
+            started: Gate::new(tokio::sync::Semaphore::new(0)),
+            signals: Default::default(),
+        }
     }
 
     /// The next run to start does `does`.
@@ -2319,6 +2325,11 @@ impl Steps {
         self.started.acquire().await.unwrap().forget();
     }
 
+    /// The signal the last run was given.
+    fn last_signal(&self) -> crate::Signal {
+        self.signals.lock().unwrap().last().cloned().expect("a run")
+    }
+
     /// `/` (at any query) and `/written`, which takes a `POST`: a `Public` page for a second with
     /// the windows `windows` adds.
     fn routes(&self, windows: fn(Public<HtmlResult>) -> Public<HtmlResult>) -> Table {
@@ -2326,6 +2337,7 @@ impl Steps {
         let page = move |req: Req| {
             steps.runs.ran();
             let run = steps.runs.count();
+            steps.signals.lock().unwrap().push(req.signal().clone());
             let (does, gate) = steps.next.lock().unwrap().pop_front().unwrap_or_default();
             if gate.is_some() {
                 steps.started.add_permits(1);
@@ -2708,14 +2720,102 @@ async fn a_middleware_s_no_store_leaves_a_kept_page_s_windows_as_the_handler_set
     assert_eq!((status, age_of(&headers), body), (StatusCode::OK, Some(3), made), "held for a failure: {headers:?}");
 }
 
+/// A panic or a passed deadline unwinds the app's middleware or drops it before it sees the
+/// answer, so the kept page given in its place cannot say what the middleware would have said of
+/// caching: it goes out `private, no-store`, which no cache after the app keeps, with or without a
+/// middleware that says so. A failure the handler returns goes through the middleware as any
+/// answer does, and leaves with what the middleware says, or the handler's own windows.
+#[tokio::test(start_paused = true)]
+async fn a_kept_page_given_for_a_panic_or_a_passed_deadline_is_not_shared() {
+    struct Unshared;
+
+    impl crate::Middleware for Unshared {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+            res
+        }
+    }
+
+    for middleware in [true, false] {
+        let steps = Steps::new();
+        let app = App::new(Routes::from(steps.routes(|page| page.stale_if_error(Duration::from_secs(2)))))
+            .deadline(Duration::from_millis(300));
+        let router = if middleware { app.middleware(Unshared).router() } else { app.router() };
+        let (_, _, made) = fetch(&router, "GET", "/", &[]).await;
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let returned = if middleware { "private, no-store" } else { "public, max-age=1, stale-if-error=2" };
+        let failures = [(Does::Fails, returned), (Does::Panics, "private, no-store"), (Does::Waits, "private, no-store")];
+        for (failure, said) in failures {
+            steps.then(failure);
+            let (status, headers, body) = fetch(&router, "GET", "/", &[]).await;
+            assert_eq!((status, age_of(&headers), &body), (StatusCode::OK, Some(1), &made), "{middleware} {failure:?}");
+            assert_eq!(headers[header::CACHE_CONTROL], said, "{middleware} {failure:?}: {headers:?}");
+        }
+    }
+}
+
+/// A page made again whose copy goes from the store meanwhile (turned out for room as other pages
+/// are kept) stops at once, its signal aborted, though its handler is still at its gate and its
+/// window has a day to run: what it makes could not be kept, so a store of a bound never holds
+/// more pages being made again than copies, however many turns of new pages go through it.
+#[tokio::test(start_paused = true)]
+async fn a_page_made_again_stops_once_its_copy_goes_for_room() {
+    let steps = Steps::new();
+    let app = App::new(Routes::from(steps.routes(|page| page.stale_while_revalidate(Duration::from_secs(86_400)))));
+    let app = app.kept_answers(128 * 1024);
+    let finishing = app.finishing();
+    let router = app.router();
+    for turn in 0..3 {
+        // In a full store, a URL is kept the second time it is asked for.
+        let urls: Vec<String> = (0..8).map(|n| format!("/?turn={turn}&n={n}")).collect();
+        for at in &urls {
+            fetch(&router, "GET", at, &[]).await;
+            fetch(&router, "GET", at, &[]).await;
+            assert_eq!(age_of(&fetch(&router, "GET", at, &[]).await.1), Some(0), "{at}: kept");
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let mut made_again = Vec::new();
+        for at in &urls {
+            let gate = steps.held(Does::Answers);
+            assert_eq!(age_of(&fetch(&router, "GET", at, &[]).await.1), Some(1), "{at}: given past its lifetime");
+            steps.started().await;
+            made_again.push((gate, steps.last_signal()));
+        }
+        tokio::task::yield_now().await;
+        assert_eq!(finishing.running(), 8, "turn {turn}: each made again, still at its gate");
+        assert!(made_again.iter().all(|(_, signal)| signal.reason().is_none()), "turn {turn}: none stopped yet");
+        // Other pages are kept until every copy has been turned out for room; with the gates
+        // never opened and a day of window left, only the copies going can end the refreshes.
+        let mut n = 0;
+        while finishing.running() > 0 {
+            assert!(n < 1024, "turn {turn}: {} still made again after {n} other pages", finishing.running());
+            let at = format!("/?turn={turn}&other={n}");
+            fetch(&router, "GET", &at, &[]).await;
+            fetch(&router, "GET", &at, &[]).await;
+            tokio::task::yield_now().await;
+            n += 1;
+        }
+        assert_eq!(settled(&finishing).await, 0, "turn {turn}: each stopped as its copy went");
+        for (_, signal) in &made_again {
+            assert_eq!(signal.reason(), Some(crate::Abort::Responded), "turn {turn}");
+        }
+    }
+}
+
 /// How a page's body is read, for the tests of a page made again: whole at once, once its gate has
-/// a permit (which may never come), or not at all, with an error.
+/// a permit (which may never come), not at all, with an error, or with a panic, its handler's
+/// signal kept in the slot first.
 #[derive(Clone)]
 enum Read {
     Whole,
     Gated(Gate),
     Fails,
+    Panics(Slot),
 }
+
+/// Where a run of [`exact_routes`]' handler whose body panics keeps its signal.
+type Slot = std::sync::Arc<std::sync::Mutex<Option<crate::Signal>>>;
 
 /// A page of an exact size whose body is read as its `Read` says: an answer type of the app's own
 /// that says it is a page, as a `Public` route may answer.
@@ -2728,10 +2828,11 @@ impl crate::response::IntoResponse for Exact {
     fn into_response(self) -> crate::response::Response {
         let wait: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> = match self.read.clone() {
             Read::Gated(gate) => Some(Box::pin(async move { gate.acquire().await.unwrap().forget() })),
-            Read::Whole | Read::Fails => None,
+            Read::Whole | Read::Fails | Read::Panics(_) => None,
         };
         let length = self.text.len() as u64;
-        let body = ExactBody { text: Some(self.text), length, wait, fails: matches!(self.read, Read::Fails) };
+        let (fails, panics) = (matches!(self.read, Read::Fails), matches!(self.read, Read::Panics(_)));
+        let body = ExactBody { text: Some(self.text), length, wait, fails, panics };
         let mut res = crate::response::Response::new(Body::new(body));
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
         res
@@ -2764,6 +2865,7 @@ struct ExactBody {
     length: u64,
     wait: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>>,
     fails: bool,
+    panics: bool,
 }
 
 impl http_body::Body for ExactBody {
@@ -2780,6 +2882,9 @@ impl http_body::Body for ExactBody {
         }
         if self.fails {
             return std::task::Poll::Ready(Some(Err(std::io::Error::other("the page's store went away"))));
+        }
+        if self.panics {
+            panic!("the page's body panicked as it was read");
         }
         std::task::Poll::Ready(self.text.take().map(|text| Ok(http_body::Frame::data(text))))
     }
@@ -2798,10 +2903,13 @@ fn exact_routes(
     windows: fn(Public<Exact>) -> Public<Exact>,
 ) -> Table {
     let (runs, reads) = (runs.clone(), reads.clone());
-    let page = move |_: Req| {
+    let page = move |req: Req| {
         runs.ran();
         let run = runs.count();
         let read = reads.lock().unwrap().pop_front().unwrap_or(Read::Whole);
+        if let Read::Panics(slot) = &read {
+            *slot.lock().unwrap() = Some(req.signal().clone());
+        }
         async move {
             let text = format!("<!DOCTYPE html><html><head><title>Exact</title></head><body><main><p>made by run {run} </p></main></body></html>");
             windows(Public::new(Duration::from_secs(1), Exact { text: text.into(), read }))
@@ -2847,6 +2955,64 @@ async fn a_body_that_cannot_be_read_past_a_page_s_lifetime_is_a_failure() {
     let (status, headers, body) = fetch(&router, "GET", "/?if-error", &[]).await;
     assert_eq!((status, age_of(&headers), made_by(&body)), (StatusCode::OK, None, 6), "the handler's: {headers:?}");
     assert_eq!(age_of(&fetch(&router, "GET", "/?if-error", &[]).await.1), Some(0), "kept");
+}
+
+/// Within `stale-if-error` the kept page stands in for a failure that comes while the handler's
+/// answer's body is read, as for one that comes before: the request's deadline passing as it
+/// waits for the body, or a panic as the body is read. Past the window each is the request's own.
+#[tokio::test(start_paused = true)]
+async fn a_kept_page_stands_in_for_a_failure_while_the_answer_s_body_is_read() {
+    let (runs, reads) = (Runs::default(), std::sync::Arc::default());
+    let windows = |page: Public<Exact>| page.stale_if_error(Duration::from_secs(2));
+    let app = App::new(Routes::from(exact_routes(&runs, &reads, windows))).deadline(Duration::from_millis(500));
+    let router = app.router();
+    for at in ["/?deadline", "/?panic", "/?late"] {
+        fetch(&router, "GET", at, &[]).await;
+    }
+    let never = Gate::new(tokio::sync::Semaphore::new(0));
+    let read = |read: Read| reads.lock().unwrap().push_back(read);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for (at, read_as, made) in [("/?deadline", Read::Gated(never.clone()), 1), ("/?panic", Read::Panics(Slot::default()), 2)] {
+        read(read_as);
+        let (status, headers, body) = fetch(&router, "GET", at, &[]).await;
+        assert_eq!((status, age_of(&headers), made_by(&body)), (StatusCode::OK, Some(1), made), "{at}: {headers:?}");
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-store", "{at}");
+    }
+
+    // Past the window.
+    tokio::time::advance(Duration::from_secs(2)).await;
+    read(Read::Gated(never.clone()));
+    let (status, headers, _) = fetch(&router, "GET", "/?late", &[]).await;
+    assert_eq!((status, age_of(&headers)), (StatusCode::SERVICE_UNAVAILABLE, None), "its deadline: {headers:?}");
+    read(Read::Panics(Slot::default()));
+    let (status, headers, _) = fetch(&router, "GET", "/?late", &[]).await;
+    assert_eq!((status, age_of(&headers)), (StatusCode::INTERNAL_SERVER_ERROR, None), "its panic: {headers:?}");
+}
+
+/// A page made again whose body panics as it is read failed, as one whose handler panics did:
+/// the signal its handler was given aborts, so work the handler started on it ends, and the old
+/// page is still given, and made again by the next request.
+#[tokio::test(start_paused = true)]
+async fn a_page_made_again_whose_body_panics_aborts_its_signal_and_leaves_the_page() {
+    let (runs, reads) = (Runs::default(), std::sync::Arc::default());
+    let windows = |page: Public<Exact>| page.stale_while_revalidate(Duration::from_secs(2));
+    let app = App::new(Routes::from(exact_routes(&runs, &reads, windows)));
+    let finishing = app.finishing();
+    let router = app.router();
+    fetch(&router, "GET", "/", &[]).await;
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let slot = Slot::default();
+    reads.lock().unwrap().push_back(Read::Panics(slot.clone()));
+    let (status, headers, body) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((status, age_of(&headers), made_by(&body)), (StatusCode::OK, Some(1), 1), "{headers:?}");
+    assert_eq!((settled(&finishing).await, runs.count()), (0, 2), "made again, and its body panicked");
+    let signal = slot.lock().unwrap().clone().expect("the run's signal");
+    assert_eq!(signal.reason(), Some(crate::Abort::Responded), "its signal aborted");
+    let (_, headers, body) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((age_of(&headers), made_by(&body)), (Some(1), 1), "the old page stands: {headers:?}");
+    assert_eq!((settled(&finishing).await, runs.count()), (0, 3), "and is made again");
+    let (_, headers, body) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((age_of(&headers), made_by(&body)), (Some(0), 3), "{headers:?}");
 }
 
 /// A page made again stops, its whole work with it, at its deadline or at shutdown, however long

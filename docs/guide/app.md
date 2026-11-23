@@ -1574,7 +1574,11 @@ or another request's page was kept in its place, what the refresh made is droppe
 replaces a newer page. The refresh has the area's deadline counted afresh from when it starts,
 not what was left of the request's, and stops at the earlier of that and the window's end, or
 at shutdown, which waits for it; reading its body is part of that time, and none starts once
-shutdown has begun. A failure there (a `500`, `502`, `503` or `504`, a panic, a passed deadline,
+shutdown has begun. It also stops as soon as the old page leaves the store (it went for room, or
+another page took its place), since what it made could no longer be kept: so the store never has
+more pages being made again than pages it keeps. When it stops, however it stops, the signal its
+handler was given aborts, and work the handler started on that signal ends. A failure there (a
+`500`, `502`, `503` or `504`, a panic in the handler or as its body is read, a passed deadline,
 a body of a known size that could not be read) leaves the old page given until its window
 ends, and the next request has it made again; any other answer (a `404`, a redirect, a page
 that may not be kept) ends the old page.
@@ -1588,7 +1592,8 @@ that.
 
 Within `.stale_if_error(..)` (past the other window, where both are set) a request waits for
 the handler, as when nothing is kept, and when the handler answers `500`, `502`, `503` or `504`,
-panics, passes its deadline or gives a body of a known size that cannot be read, the kept page
+panics, passes its deadline or gives a body of a known size that cannot be read (a deadline
+that passes or a panic while that body is read counts too), the kept page
 is sent in the place of that failure with its `Age`, if it may still be given then: not once
 another request's answer ended it (a `404`, a redirect, a page that may not be kept) or
 replaced it, it went for room, a write to its path came, or its window ended while the handler
@@ -1603,6 +1608,13 @@ The windows are the handler's answer's. A middleware that sets its own `Cache-Co
 front of it, not what the app keeps, which stands where the handler does (below): the kept page
 is still given within its windows. Leave the windows off a route whose kept page should stop at
 its lifetime.
+
+A panic or a passed deadline ends your middleware before it sees an answer, so the kept page
+sent in place of either cannot carry what the middleware would have said. It goes out
+`private, no-store`, with the headers a CDN reads first removed, so no cache after the app keeps
+or shares it, whatever the handler's answer said; a `500`, `502`, `503` or `504` the handler
+returns goes back through the middleware, and the kept page sent in its place leaves with what
+the middleware makes of it.
 
 A kept page stands where the handler does, after [your own middleware](#your-own-middleware). Every
 stage runs for every request: a middleware that refuses, counts or stamps a header still does, and
