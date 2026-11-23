@@ -8165,8 +8165,9 @@ rules something out.
     copied it out of the map, and sends the same lines in the same order. A head of more than
     1,024 names is not kept, so that map with the stages' names stays far below the 24,576
     `http` 1.5 holds, past which making or filling one panics, and an answer given again has the
-    room its handler's had. At 0.95 kernel cycles a byte the bytes saved are worth about 509
-    kernel cycles a page kept with room and 388 a JSON body. Their cycles were measured on
+    room its handler's had. At 0.95 kernel cycles a byte the bytes saved would be worth about 509
+    kernel cycles a page kept with room and 388 a JSON body, an estimate from that rate, not a
+    saving the run below verified. Their cycles were measured on
     2026-11-23 (run b21, kept under the tag `evidence/611749e1`): `d3bb2e0e4` against main's
     `04530f7e0`, rustc 1.100.0 with jemalloc 5.3.0 preloaded, on a cloud host with eight
     dedicated CPUs (Xeon Platinum 8280, Debian 13, Linux 6.12.117) that ran nothing else, 100
@@ -8182,8 +8183,9 @@ rules something out.
     saving in cycles shown to be the cut's: the page not `Public` keeps nothing and ran the
     same instructions, yet 1.94% fewer cycles, as much as the kept pages moved, so one build of
     each side differs by about what is measured (as where the code sits did above), though the
-    run does not show that placement caused it either. What it shows is that the cut costs no
-    more than 1% on any of the four. How much more a `Public` page's first ask costs than the
+    run does not show that placement caused it either. What it shows is that on that host,
+    for these two binaries, all four one-sided bounds met the +1% margin set before the run.
+    How much more a `Public` page's first ask costs than the
     same page not kept, which the issue asks, stays open: the cut takes 536 of the bytes it
     holds, not that cost.
     Not measured: a file kept for a handler that reads it from a disk, a database or a store
