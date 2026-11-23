@@ -8045,7 +8045,11 @@ rules something out.
     the zstd 1 it had before this change, and one asked for more gets it only after its due: at
     6,124 bytes the 184 bytes a browser's answer saves begin after 26,564 answers, so a page kept
     for a minute must be asked for about 443 times a second to get it at all, and one asked for
-    ten times its due in a lifetime sends nine tenths of its browser answers in brotli 5. Every
+    ten times its due in a lifetime can send at most nine tenths of its browser answers in brotli
+    5, and that many only if the queue takes the job at the due and its encoding is published
+    promptly, the store admits the bytes, and they are smaller than the form made for the coding
+    each answer would get otherwise: a full queue is asked again only a whole due later, a late or
+    refused encoding sends none, and a smaller form already made wins. Every
     answer before the due writes the page's count, where the second answer had been the last to:
     callgrind counts that write's instructions, not what it costs where several cores answer
     the same page; the eighth run's `hot`, below, runs the app on four cores of one host under
@@ -8104,7 +8108,11 @@ rules something out.
     in them, a job the load queued among it, is counted with the load. Before any deciding turn the
     run qualifies the host: every workload's turns bracketed the same way, and turns with a stall
     injected before, inside and after `wrk`'s launch and exit, which must be refused; the run
-    records the gaps' distribution and stops if any qualification turn passes 50 ms. Every timed answer must be a `200`: the scripts count any other
+    records the gaps' distribution and stops if any qualification turn passes 50 ms. A turn is
+    also refused unless its load ran its declared length, 3 s or, in the diagnostic pass, 1 s:
+    `wrk`'s launch to its exit at least that long, and its first answer to its last within 50 ms
+    short of it and 150 ms over it, since `wrk` interrupted in its sleep still prints its summary
+    and exits cleanly (round 19). Every timed answer must be a `200`: the scripts count any other
     status themselves, since `wrk` counts one as an error only above 399 (round 18). A first plan
     for this run counted the requests
     sent where it meant the jobs done, which could have let a turn with no job pass, and had no
