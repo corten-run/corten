@@ -8077,6 +8077,28 @@ rules something out.
     what it adds (402 finding the answer and making its head, 212 reading the request, 155
     reading `Accept`, 131 the URL's hash) against about as many in what the handler and its
     answer would have taken, and the rest in no one place.
+    What a kept answer holds beside its body was cut next (`6091f1905` against main's
+    `7e9a0c715`), after
+    [#1824 A `Public` page asked for once costs 44% more cycles than the same page not kept](https://github.com/corten-run/corten/issues/1824)
+    found a page kept with room paying about 0.95 kernel cycles a byte of new memory under
+    jemalloc. Counted by an allocator that records what each request leaves allocated, under
+    jemalloc 5.3.0 with each size as `malloc_usable_size` gives it, a page of 6,124 bytes kept
+    with room held 7,648 bytes in 11 allocations: the body 6,144, its entry 640 (520 asked), a
+    copy of the header map 576 (its slots 448 and its index 128), a 96-byte buffer behind
+    `Cache-Control`, the key 48, the URL's list of copies 32, the header values' shared counts
+    96 and the shell's key 16. Its head is now kept as a slice of its lines (320 for four), the
+    entry fits jemalloc's class of 448 (a test holds it there on 64-bit targets),
+    `Cache-Control` is written at its own length (32) and a URL's list starts with room for one
+    copy (8): 7,112 bytes in 10, 536 fewer, and 2,824 against 3,232 for a JSON body of 1,999
+    bytes, 408 fewer. Over 40,000 such pages in one process its resident memory grew 7,268
+    bytes a page against 7,810. Under callgrind as above (rustc 1.100.0, jemalloc preloaded,
+    three rounds of each, the order alternated), a page made and kept with room ran 48,203
+    instructions a request against 48,677, the JSON body 53,140 against 53,564, a kept page
+    given again 17,971 against 18,004, a page not `Public` 34,006 to 34,010 in both, and the
+    store off 37,445 against 37,494. A kept answer given again copies its head out of the
+    slice into a map with room, as it copied it out of the map. At 0.95 kernel cycles a byte
+    the bytes saved are worth about 509 kernel cycles a page kept with room; that is not
+    measured in cycles yet.
     Not measured: a file kept for a handler that reads it from a disk, a database or a store
     of objects, where the read is what a kept file saves; a body between 1,024 and 8,000
     bytes, under 1,024 or over 1 MiB; a store that kept pictures or downloads fill, where
@@ -8162,7 +8184,9 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-22 for the cuts to a kept answer given again, `7794749ad` (main's
+    Last checked: 2026-11-22 for what a kept answer holds, `6091f1905` against `7e9a0c715`
+    under jemalloc 5.3.0 and callgrind (valgrind 3.19.0) with rustc 1.100.0, in a Debian 12
+    container; 2026-11-22 for the cuts to a kept answer given again, `7794749ad` (main's
     `7a275ef15` with five file routes and a kept page in the catalog benchmark) and `0a2dc9b32`
     (this change's `a0267d8a6` with them), and for where the code sits `abbd6113f`, `9f628467d`
     and `ba72c5f23` (those two, and the second with no body kept, each with a block of bytes
