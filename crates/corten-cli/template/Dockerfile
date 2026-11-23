@@ -45,7 +45,7 @@ FROM debian:trixie-slim
 # these three lines to run on glibc's allocator.
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
-ENV MALLOC_CONF=background_thread:true,tcache_max:65536
+ENV MALLOC_CONF=background_thread:true,tcache_max:1048576
 WORKDIR /app
 COPY --from=build /server /app/server
 # Behind a domain, add the names the app is served under (HOSTS=shop.example): any other Host

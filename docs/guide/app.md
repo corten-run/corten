@@ -154,7 +154,7 @@ the same three lines, before any `USER` line; removing them runs the app on glib
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
-ENV MALLOC_CONF=background_thread:true,tcache_max:65536
+ENV MALLOC_CONF=background_thread:true,tcache_max:1048576
 ```
 
 Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of
