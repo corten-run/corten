@@ -2038,7 +2038,9 @@ rules something out.
     `ef2c15eb8` (round 12's head) against main `04530f7e0` (its code as at `a02c81e86`, with the
     head's probe; three rounds alternating the two builds, every run within 1.2 of the others):
     the `404` 1,146 more (19,144.6 against 17,998.5), the plain page 105 more (16,384.6 against
-    16,279.7).
+    16,279.7); 2026-11-23, the same two at `6fb4c7fcc` (round 13's head) against that main built
+    again (three rounds alternating the two builds, every run within 0.1 of the others): the `404`
+    1,180 more (19,158.6 against 17,978.5), the plain page 104 more (16,399.6 against 16,295.6).
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2641,6 +2643,9 @@ rules something out.
     measurement.
 
     Last checked: 2026-11-23, the plain page in `tests::cache::what_settling_a_page_costs` at
+    `6fb4c7fcc` (round 13's head) against main `04530f7e0` built again (three rounds alternating
+    the two builds, every run within 0.1 of the others): 104 more (16,399.6 against 16,295.6);
+    2026-11-23, the same at
     `ef2c15eb8` (round 12's head) against main `04530f7e0` (its code as at `a02c81e86`, with the
     head's probe; three rounds alternating the two builds, every run within 1.2 of the others):
     105 more (16,384.6 against 16,279.7); 2026-11-22, the plain page, the unstaged route and the `service_fn` control in
