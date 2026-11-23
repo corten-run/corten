@@ -3857,10 +3857,12 @@ async fn run<'r, F: Future<Output = Result<Response, Late>>>(
     let req = pending.get();
     let (method, uri) = (req.method().clone(), req.uri().clone());
     // Both dispatchers only construct a future here. Polling it, including taking the request
-    // and answering a timeout, stays inside the panic catch.
+    // and answering a timeout, stays inside the panic catch, and the thread holds the `public`
+    // headers made meanwhile, which `cache::settle` then reads (`cache::Staged`).
     let mut fut = pin!(dispatch(pending));
     let outcome = std::future::poll_fn(|cx| {
         match std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _staged = crate::cache::Staged::enter();
             fut.as_mut()
                 .poll(cx)
                 .map(|result| result.unwrap_or_else(|late| deadline_failure(late, deadline, signal, (&method, &uri))))

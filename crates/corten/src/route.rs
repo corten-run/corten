@@ -4597,18 +4597,13 @@ where
 {
     use std::{panic::AssertUnwindSafe, task::Poll};
     let mut answering = std::pin::pin!(answering);
-    let polled = std::future::poll_fn(|cx| {
-        match std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let _unstaged = crate::cache::Unstaged::enter();
-            answering.as_mut().poll(cx)
-        })) {
-            Ok(Poll::Pending) => Poll::Pending,
-            Ok(Poll::Ready(res)) => Poll::Ready(Some(res)),
-            Err(panic) => {
-                let message = crate::task::panic_message(&*panic);
-                tracing::error!("corten: {} (unstaged) panicked: {message}", lane.written);
-                Poll::Ready(None)
-            }
+    let polled = std::future::poll_fn(|cx| match std::panic::catch_unwind(AssertUnwindSafe(|| answering.as_mut().poll(cx))) {
+        Ok(Poll::Pending) => Poll::Pending,
+        Ok(Poll::Ready(res)) => Poll::Ready(Some(res)),
+        Err(panic) => {
+            let message = crate::task::panic_message(&*panic);
+            tracing::error!("corten: {} (unstaged) panicked: {message}", lane.written);
+            Poll::Ready(None)
         }
     })
     .await;

@@ -149,14 +149,14 @@ impl Cache {
         }
     }
 
-    /// The header: a `public` one held by the thread where an answer's header can be
-    /// ([`Cache::held_header`]), and made for the answer alone while the thread runs an unstaged
-    /// route's handler ([`Unstaged`]); `no-store`'s and `immutable`'s, which are constants, without
-    /// asking the thread.
+    /// The header: a `public` one held by the thread while it runs a staged route's handler and
+    /// middleware ([`Staged`]), whose answer [`settle`] reads ([`Cache::held_header`]), and made for
+    /// the answer alone anywhere else, as an unstaged route's handler; `no-store`'s and
+    /// `immutable`'s, which are constants, without asking the thread.
     #[inline]
     fn value(self) -> HeaderValue {
         match self.kind {
-            Kind::Public { .. } if !UNSTAGED.get() => self.held_header(),
+            Kind::Public { .. } if STAGED.get() => self.held_header(),
             _ => self.header(),
         }
     }
@@ -184,8 +184,8 @@ impl Cache {
         .unwrap_or_else(|_| public(max_age, shared, stale, if_error))
     }
 
-    /// The header made for this answer alone, from a `Vec`: an unstaged route's answer's, which no
-    /// [`settle`] reads, so holding it would cost such an answer more and save it nothing.
+    /// The header made for this answer alone, from a `Vec`: one no [`settle`] reads (an unstaged
+    /// route's answer's), so holding it would cost such an answer more and save it nothing.
     fn header(self) -> HeaderValue {
         let (max_age, shared, stale, if_error) = match self.kind {
             Kind::Public { max_age, shared, stale, if_error } => (max_age, shared, stale, if_error),
@@ -195,7 +195,7 @@ impl Cache {
         let mut text = Vec::with_capacity(96);
         let mut push = |name: &str, n: u64| {
             text.extend_from_slice(name.as_bytes());
-            text.extend_from_slice(crate::ascii::digits_inlined(n, &mut [0; 20]));
+            text.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
         };
         push("public, max-age=", max_age);
         if let Some(shared) = shared {
@@ -212,25 +212,26 @@ impl Cache {
 }
 
 thread_local! {
-    /// Whether this thread is running an unstaged route's handler ([`Unstaged`]).
-    static UNSTAGED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether this thread is running a staged route's handler and middleware ([`Staged`]).
+    static STAGED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Held while a thread runs an unstaged route's handler ([`crate::route::Lane`]), whose answer no
-/// [`settle`] reads: [`Cache`] makes its header for it alone ([`Cache::header`]), and the thread
-/// holds none of its bytes. A request the handler has an app's router answer meanwhile is settled
-/// as one with a header written by hand is: read, line by line.
-pub(crate) struct Unstaged(bool);
+/// Held while a thread polls a staged route's handler and the app's middleware around it
+/// (`page::run`), whose answer [`settle`] reads: there [`Cache`] gives a `public` header the
+/// thread holds. Anywhere else, an unstaged route's handler among them ([`crate::route::Lane`],
+/// which pays nothing for this), the header is made for the answer alone ([`Cache::header`]) and
+/// the thread holds none of its bytes.
+pub(crate) struct Staged(bool);
 
-impl Unstaged {
+impl Staged {
     pub(crate) fn enter() -> Self {
-        Unstaged(UNSTAGED.replace(true))
+        Staged(STAGED.replace(true))
     }
 }
 
-impl Drop for Unstaged {
+impl Drop for Staged {
     fn drop(&mut self) {
-        UNSTAGED.set(self.0);
+        STAGED.set(self.0);
     }
 }
 
@@ -1000,27 +1001,31 @@ mod tests {
         assert_eq!(Made::held(), HELD);
     }
 
-    /// While a thread runs an unstaged route's handler, an answer's header has the same text but is
-    /// made for that answer alone: the thread holds none for its numbers. After, the thread holds
-    /// it again.
+    /// Outside a staged route's handler (an unstaged one's), an answer's header has the same text
+    /// but is made for that answer alone: the thread holds none for its numbers. While a thread runs
+    /// a staged one, it holds the header, and after, it makes each apart again.
     #[test]
-    fn an_unstaged_answer_s_header_is_made_for_it_alone() {
+    fn a_header_is_held_only_while_a_staged_handler_runs() {
         let numbers =
             Cache::public(Duration::from_secs(2_000_000)).shared(Duration::from_secs(9)).stale_if_error(Duration::from_secs(3));
         let text = "public, max-age=2000000, s-maxage=9, stale-if-error=3";
+        assert!(!STAGED.get(), "a test's thread runs no handler");
+        let (value, again) = (numbers.value(), numbers.value());
+        assert_eq!((value.to_str().unwrap(), again.to_str().unwrap()), (text, text));
+        assert!(!held(numbers), "nothing holds it");
+        assert!(!std::ptr::eq(value.as_bytes(), again.as_bytes()), "each made for its answer");
         {
-            let _unstaged = Unstaged::enter();
-            let (value, again) = (numbers.value(), numbers.value());
-            assert_eq!((value.to_str().unwrap(), again.to_str().unwrap()), (text, text));
-            assert!(!held(numbers), "nothing holds it");
-            assert!(!std::ptr::eq(value.as_bytes(), again.as_bytes()), "each made for its answer");
-            drop(Unstaged::enter());
-            assert!(UNSTAGED.get(), "a guard within leaves it as it found it");
+            let _staged = Staged::enter();
+            let value = numbers.value();
+            assert_eq!(value, text);
+            assert!(held(numbers) && std::ptr::eq(value.as_bytes(), numbers.value().as_bytes()), "held");
+            drop(Staged::enter());
+            assert!(STAGED.get(), "a guard within leaves it as it found it");
         }
-        assert!(!UNSTAGED.get());
-        let value = numbers.value();
+        assert!(!STAGED.get());
+        let (value, again) = (numbers.value(), numbers.value());
         assert_eq!(value, text);
-        assert!(held(numbers) && std::ptr::eq(value.as_bytes(), numbers.value().as_bytes()));
+        assert!(!std::ptr::eq(value.as_bytes(), again.as_bytes()), "made apart again, though the thread still holds one");
         let minute = Duration::from_secs(60);
         for cache in
             [Cache::no_store(), Cache::immutable(), Cache::public(minute), Cache::public(minute).stale_while_revalidate(minute)]
