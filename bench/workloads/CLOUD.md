@@ -503,8 +503,9 @@ handoff to a fresh root is possible only when the old campaign is over:
    cleanup. A 404 proves nothing about saved results. If a slot contains a
    verified or potentially recoverable result, or its evidence cannot be
    classified, stop. The unchanged index cannot carry standalone results.
-4. Copy the index into an empty root. If an indexed checkout is no longer at
-   its measured commit, provide a separate clean worktree with its pinned
+4. Copy the index into an empty root. If an indexed checkout cannot replay
+   (including missing or mismatched dependencies at the right commit),
+   provide a separate clean worktree at the measured commit with its pinned
    installs at `NEW_ROOT-checkouts/MEASURED_SHA`; leave old worktrees intact.
    Run the read-only continuation report there. Require native replay of the
    full roster: the same verified groups, measured commits and archive hashes
