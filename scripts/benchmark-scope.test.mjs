@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { parse } from "yaml";
+import { teardownReserve } from "../bench/marketplace/alert-probe-run.mjs";
 import { sourceRoots } from "../bench/workloads/isolated/contract.mjs";
 import { eventPaths, selectEvidence, selectKernel, selectScope } from "./benchmark-scope.mjs";
 
@@ -138,6 +139,45 @@ test("every local module used by Catalog parity selects each consuming matrix ap
     }
   }
   assert.deepEqual(missing, [], "unselected Catalog parity inputs");
+});
+
+// The probe step's condition, for one matrix app and gate outcome. Only the expression's own
+// operators and these three operands are allowed; anything new must be traced here.
+function probeRuns(condition, app, gate) {
+  const js = condition.replaceAll("always()", "true").replaceAll("matrix.app", JSON.stringify(app))
+    .replaceAll("steps.marketplace.outcome", JSON.stringify(gate)).replaceAll("==", "===");
+  assert.match(js, /^(?:true|"[\w-]+"|'[\w-]+'|===|&&|\|\||[()\s])+$/, "trace new probe condition: " + condition);
+  return Function(`return ${js}`)();
+}
+
+test("the React Router alert probe diagnoses a failed gate without hiding it, and ends inside its step", () => {
+  const steps = workflow.jobs.parity.steps;
+  const gate = steps.findIndex((step) => step.id === "marketplace");
+  const probe = steps.findIndex((step) => step.run?.includes("bench/marketplace/alert-probe-run.mjs"));
+  const upload = steps.findIndex((step) => step.uses?.startsWith("actions/upload-artifact"));
+  const { if: condition, run, env, "timeout-minutes": minutes } = steps[probe];
+  assert.ok(gate >= 0 && gate < probe && probe < upload);
+  // A failed gate fails the job: no step or job in parity may turn a failure into a pass.
+  assert.equal(workflow.jobs.parity["continue-on-error"], undefined);
+  assert.deepEqual(steps.filter((step) => step["continue-on-error"] !== undefined).map((step) => step.name), []);
+  // It runs for React Router after the gate passed or failed, and not after cancellation or a skip.
+  for (const app of allApps) for (const outcome of ["success", "failure", "cancelled", "skipped"])
+    assert.equal(probeRuns(condition, app, outcome), app === "react-router" && ["success", "failure"].includes(outcome), `${app} ${outcome}`);
+  // The only way past it without the probe is a gate that failed before building the image.
+  assert.equal(env.GATE, "${{ steps.marketplace.outcome }}");
+  const lines = run.trim().split("\n").map((line) => line.trim());
+  assert.deepEqual(lines.slice(0, 4), ['if [ "$GATE" = failure ] && ! docker image inspect cb-marketplace-react-router >/dev/null 2>&1; then',
+    'echo "The marketplace gate failed before building cb-marketplace-react-router; no probe."', "exit 0", "fi"]);
+  assert.equal(lines.length, 5);
+  // Its receipts and diagnostics upload whatever the outcome.
+  const [, results] = /alert-probe-run\.mjs cb-marketplace-react-router \d+ (\S+)/.exec(lines[4]);
+  assert.equal(steps[upload].if, "always()");
+  assert.ok(steps[upload].with.path.split("\n").includes(`${results}/`));
+  // Its own deadline is under the step timeout, with a minute for Node and the image check, and
+  // longer than the cleanup it reserves plus one source's budget.
+  const deadline = Number(/--deadline (\d+)/.exec(lines[4])?.[1]), budget = Number(/--budget (\d+)/.exec(lines[4])?.[1]);
+  assert.ok(deadline + 60 <= minutes * 60, `--deadline ${deadline} must end a minute before the ${minutes}-minute step timeout`);
+  assert.ok(deadline > teardownReserve + budget, `--deadline ${deadline} must leave the cleanup reserve and one probe budget`);
 });
 
 test("Evidence covers every real source-custody root and its descendants", () => {

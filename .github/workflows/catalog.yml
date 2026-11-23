@@ -146,6 +146,8 @@ jobs:
       # redirect, document and message checks (#1251). Its diagnostics upload with the results.
       # It also runs after a failed gate, to diagnose it, when the gate built the image; the job
       # still fails on the gate. Each source's probe stops between cases at its budget.
+      # --deadline is under the step's timeout and keeps its last two minutes for removal and
+      # cleanup.json, so a stalled probe cannot leave the step killed before its receipt.
       - name: Probe React Router script-free alert forms in both sources
         if: always() && matrix.app == 'react-router' && (steps.marketplace.outcome == 'success' || steps.marketplace.outcome == 'failure')
         timeout-minutes: 15
@@ -156,7 +158,7 @@ jobs:
             echo "The marketplace gate failed before building cb-marketplace-react-router; no probe."
             exit 0
           fi
-          node bench/marketplace/alert-probe-run.mjs cb-marketplace-react-router 10 bench/marketplace/results/alert-probe --budget 240
+          node bench/marketplace/alert-probe-run.mjs cb-marketplace-react-router 10 bench/marketplace/results/alert-probe --budget 240 --deadline 840
       - name: Qualify Next.js marketplace methods and alert writes in both sources
         if: matrix.app == 'nextjs'
         working-directory: bench/fullstack/apps/nextjs

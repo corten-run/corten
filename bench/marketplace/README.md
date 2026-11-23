@@ -322,7 +322,7 @@ message wait keeps its predicate (the first `.marketplace__message` has non-whit
 locator, rather than an in-page poll that never ran again once it had seen the POST document
 before its message. That stall matches r19's symptom in [#1251](https://github.com/corten-run/corten/issues/1251),
 though r19's cause is not established.
-`alert-probe-run.mjs IMAGE [ITERATIONS] [RESULTS_DIR] [--budget SECONDS]` repeats the three
+`alert-probe-run.mjs IMAGE [ITERATIONS] [RESULTS_DIR] [--budget SECONDS] [--deadline SECONDS]` repeats the three
 English phone alert cases without JavaScript against an image in both sources, laid out like
 the gate. It uses the gate's own submission wait, then requires one document POST answered
 200 without a redirect, that POST to be the last main-frame document request (a refresh or
@@ -331,9 +331,15 @@ keeps a bounded diagnostic (case, POST chain, document requests, ready state, me
 document tail) for each failure. Its containers and network carry the run's owner label and
 are removed by the IDs their creation returned after confirming that label; a removal that
 fails or an owner that cannot be confirmed fails the run, and `cleanup.json` records the
-outcome. Catalog Contract runs it for React Router at 10 iterations per source, including
-after a failed marketplace gate that built the image, within a budget. It is a functional
-check, not a measurement.
+outcome. The app and upstream join the network by its ID. Extra `--label` values may not use
+the owner key or its prefix. A create that returns neither an ID nor the daemon's refusal is
+looked for by a label of its own for up to 10 seconds at teardown; if nothing appears, its
+cleanup is reported unconfirmed and the run fails, since Docker may still make it.
+`--deadline` bounds the whole run: work stops starting two minutes before it, leaving that
+time for the app logs, removal and `cleanup.json`. Catalog Contract runs it for React Router
+at 10 iterations per source, including after a failed marketplace gate that built the image,
+with a 240-second probe budget and an 840-second deadline inside the step's 15 minutes. It is
+a functional check, not a measurement.
 
 New native runs retain `evidenceVersion: "marketplace-raw/v3"` alongside the
 `marketplace-results/v6` summary format. `validateSaved({ folder, round, commit })` from
