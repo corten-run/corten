@@ -32,6 +32,8 @@ let lifetimeStartup;
 let lifetimeRun;
 let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSurvives, settleNativeFails;
 let liveOutput, compilerScratch;
+let offlineTest, auditClock, offlinePrep;
+const hourNs = 3600n * 1000000000n;
 const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
 const sourceStatus = (cwd) => sourceGit(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all");
 mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
@@ -100,18 +102,23 @@ function rawProcess({ pid, startTicks, cgroup, parentPid }, comm = "ordinary") {
 const udevClock = () => ({ bootId: admittedHost.bootId, uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" });
 function udevHost(observation) {
   const value = host();
-  value.processes = [...admittedApparatus.members, admittedApparatus.listener].map((p) => rawProcess(p));
+  value.processes = admittedApparatus ? [...admittedApparatus.members, admittedApparatus.listener].map((p) => rawProcess(p)) : [];
   value.processes.push({ ...rawProcess({ pid: 846, startTicks: "812", cgroup: udevPath, parentPid: 1 }, "systemd-udevd"), udevExecutable });
   if (observation === 3 || observation === 4 && settleSurvives)
     value.processes.push({ ...rawProcess({ pid: 62274, startTicks: settleWorkerTicks, cgroup: udevPath, parentPid: 846 }, "(udev-worker)"), udevExecutable });
   value.uptime = `${["100.00", "101.00", "106.15", "111.16"][observation - 1]} 1280.13\n`;
-  value.controlApparatus.sample.monoNs = ["2000000", "2000000", "5000000", "5015000000"][observation - 1];
+  if (admittedApparatus) value.controlApparatus.sample.monoNs = ["2000000", "2000000", "5000000", "5015000000"][observation - 1];
   return value;
 }
 mock.module("./host-observation.mjs", { namedExports: {
   ...actualHost, udevSettleMs: 0,
+  sampleAuditClock: () => ({ ...auditClock }),
   observeHost(_apparatus, retainUdev = false) {
     observations++;
+    if (offlinePrep && retainUdev) {
+      const value = offlinePrep.settled ? udevHost(observations) : host();
+      return { ...value, offlineMonoNs: offlinePrep[["", "before", "after", "settled"][observations - 1]] };
+    }
     if (mode === "udev-settle") {
       assert.equal(retainUdev, observations > 1);
       if (observations === 3 && settleAbort) queueMicrotask(() => settleAbort.abort(new Error("abort during udev settle")));
@@ -120,7 +127,7 @@ mock.module("./host-observation.mjs", { namedExports: {
     const value = host(); if (mode === "leak" && observations > 2) value.containers = ["leak"]; return value;
   },
   verifyHostBoundary(before, after) {
-    if (mode === "udev-settle") return actualHost.verifyHostBoundary(before, after);
+    if (mode === "udev-settle" || offlinePrep) return actualHost.verifyHostBoundary(before, after);
     assert.deepEqual(after, before, "host cleanup uncertain"); return { cleanup: "observed-boundary-matched", isolation: "unverified" };
   },
 } });
@@ -140,9 +147,11 @@ mock.module("./host-lifetime.mjs", { exports: {
       const checks = { accounting: true, terminal: result.terminal, empty: true, observer: true,
         unforced: !result.cancelled && !result.forced, leader: true };
       if (lifetimeFailure?.command === command) Object.assign(checks, lifetimeFailure.checks);
-      if (retainTerminalClock) { assert.equal(mode, "udev-settle"); assert.equal(command, 1); assert.equal(observations, 2); }
+      if (retainTerminalClock && !offlineTest) { assert.equal(mode, "udev-settle"); assert.equal(command, 1); assert.equal(observations, 2); }
       if (compilerScratch && command === 1) assert.ok(existsSync(join(compilerScratch.target, "scratch")), "target must exist during descriptor sealing");
-      writeFileSync(join(directory, "terminal.json"), JSON.stringify({ ...checks, ...(retainTerminalClock ? { terminalClock: udevClock() } : {}) }));
+      const terminalClock = retainTerminalClock && (offlinePrep?.terminal
+        ? { ...udevClock(), monoNs: offlinePrep.terminal } : !offlineTest ? udevClock() : undefined);
+      writeFileSync(join(directory, "terminal.json"), JSON.stringify({ ...checks, ...(terminalClock ? { terminalClock } : {}) }));
       if (checks.terminal && checks.empty) settled?.();
       return evidence.tree(directory);
     } };
@@ -258,7 +267,7 @@ const { validateCampaign: validateSavedCampaign } = await import("./campaign-ver
 let round = 100;
 function setup(policy = () => true) {
   admittedHost = null; admittedApparatus = null; controlWindows = []; settleAbort = null;
-  liveOutput = null; compilerScratch = null;
+  liveOutput = null; compilerScratch = null; offlineTest = false; offlinePrep = null;
   round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null; lifetimeRun = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
@@ -317,6 +326,213 @@ test("v4 live campaign retains actual bootstrap proof before baseline and bracke
   writeFileSync(collectionPath, JSON.stringify(collection));
   assert.equal((await validateSavedCampaign({ folder: root, round: "r21", commit: s.plan.commit })).status, "invalid",
     "rehashed journal/collection cannot substitute for watcher termination");
+});
+
+async function offlineCampaign(t, group, packets = 2, settle = false) {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
+    { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024 });
+  assert.equal(result.status, 0, result.stderr);
+  const { binding, admission } = JSON.parse(result.stdout), s = setupGroup(group);
+  s.plan.round = "r21"; admittedHost = admission.host; offlineTest = true;
+  const closed = BigInt(admission.closedMonoNs), after = closed + 6n * hourNs;
+  if (group === "json-api") {
+    offlinePrep = { before: String(closed + 5n * hourNs), after: String(after),
+      ...(settle ? { terminal: String(after - 1n), settled: String(after + BigInt(actualHost.udevSettleMs) * 1000000n) } : {}) };
+    settleWorkerTicks = "10400"; settleSurvives = false;
+  }
+  auditClock = { bootId: admittedHost.bootId, monoNs: offlinePrep?.settled ?? offlinePrep?.after ?? admission.closedMonoNs };
+  s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2" }, load: { cpuset: "3-7" } };
+  const table = "corten_bench_native", tcpMatch = { match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 22 } };
+  const policy = { nftables: [
+    { metainfo: { json_schema_version: 1 } },
+    { table: { handle: 1, family: "inet", name: table } },
+    { chain: { handle: 2, family: "inet", table, name: "input", type: "filter", hook: "input", prio: 10, policy: "accept" } },
+    { rule: { handle: 3, family: "inet", table, chain: "input", expr: [
+      tcpMatch, { match: { op: "==", left: { "&": [{ payload: { protocol: "tcp", field: "flags" } }, ["fin", "syn", "rst", "ack"]] }, right: "syn" } },
+      { limit: { rate: 8, burst: 8, per: "minute" } }, { counter: { packets: 0, bytes: 0 } }, { drop: null },
+    ] } },
+    { rule: { handle: 4, family: "inet", table, chain: "input", expr: [tcpMatch, { counter: { packets: 0, bytes: 0 } }, { drop: null }] } },
+  ] };
+  const events = [];
+  t.mock.method(childProcess, "spawnSync", (program, args, opts) => {
+    if (program === "/usr/bin/python3") {
+      const op = args.at(-2);
+      assert.ok(["window-open", "window-close"].includes(op));
+      assert.equal(calls.length, op === "window-open" ? 0 : 2);
+      assert.equal(args.at(-1), binding.token);
+      events.push(op);
+    } else {
+      assert.equal(program, "/usr/bin/taskset");
+      assert.deepEqual(args.slice(0, 3), ["-c", "0", "/usr/sbin/nft"]);
+      events.push(args[3]);
+      if (args[3] === "-f") assert.equal(opts.input, controlAdmission.offlineFenceRules);
+      else assert.deepEqual(args.slice(-3), ["table", "inet", table]);
+      if (args[3] === "-j" && events.includes("window-close"))
+        policy.nftables[3].rule.expr[3].counter = { packets, bytes: 60 * packets };
+    }
+    return { status: 0, stdout: JSON.stringify(policy) };
+  });
+  syncBuiltinESMExports();
+  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding, admission, offlineHandoff: true } });
+  return { ...s, binding, admission, events, handle, collection: join(handle.directory, "collection-manifest.json"),
+    validate: () => validateSavedCampaign({ folder: root, round: "r21", commit: s.plan.commit }) };
+}
+
+test("offline timed probe hits preserve evidence but disqualify an otherwise verified native phase", async (t) => {
+  const s = await offlineCampaign(t, "localized-marketplace");
+  const { handle, binding, admission, events, collection, validate } = s;
+  mode = "complete";
+  assert.equal(s.campaign.status(handle).executionVersion, 6);
+  const status = await s.campaign.advance(handle);
+  assert.equal(status.state, "finished");
+  assert.equal(status.outcomes[0].outcome, "blocked");
+  assert.equal(status.outcomes[0].nativeStatus, "verified");
+  assert.ok(status.outcomes[0].appOutcomes.every(({ comparisonEligible }) => !comparisonEligible));
+  assert.deepEqual(events, ["-f", "-j", "window-open", "window-close", "-j", "delete"]);
+  writeFileSync(collection, JSON.stringify(s.campaign.collect(handle)));
+  const saved = await validate();
+  assert.equal(saved.status, "blocked", JSON.stringify(saved));
+  assert.deepEqual(saved.offlineIngress, [{ group: "localized-marketplace", phase: "timing", packets: 2, bytes: 120 }]);
+  assert.ok(saved.blockers.includes("localized-marketplace/timing: denied pre-login probe traffic"));
+  assert.deepEqual(saved.offlineTerminal, { ...admission.host, token: binding.token,
+    bootstrapSealSha256: evidence.digest(JSON.stringify(admission.seal.ledger)) });
+  const phase = "00-localized-marketplace-timing", raw = join(handle.directory, phase, "control-ingress.json");
+  const changed = JSON.parse(readFileSync(raw));
+  assert.deepEqual(changed.after.nftables[3].rule.expr[3].counter, { packets: 2, bytes: 120 });
+  assert.deepEqual(controlAdmission.verifyOfflineWindow(changed), { packets: 2, bytes: 120 });
+  for (const mutate of [
+    ({ before }) => { before.nftables[3].rule.expr[3].counter = { packets: 3, bytes: 180 }; },
+    ({ after }) => { after.nftables[3].rule.handle++; },
+    ({ after }) => { after.nftables[3].rule.expr[1].match.right = "ack"; },
+    ({ after }) => { after.nftables[3].rule.expr[2].limit.burst++; },
+  ]) {
+    const wrong = structuredClone(changed); mutate(wrong);
+    assert.throws(() => controlAdmission.verifyOfflineWindow(wrong));
+  }
+  changed.after.nftables[4].rule.expr[1].counter = { packets: 1, bytes: 60 };
+  assert.throws(() => controlAdmission.verifyOfflineWindow(changed));
+  // Matching hashes cannot repair a bad fence observation.
+  writeFileSync(raw, JSON.stringify(changed));
+  const phaseSeal = evidence.tree(handle.directory).entries.find(({ path }) => /^\d{5}-phase-sealed\.json$/.test(path));
+  const sealPath = join(handle.directory, phaseSeal.path), event = JSON.parse(readFileSync(sealPath));
+  event.phaseManifestSha256 = evidence.phaseSnapshot(join(handle.directory, phase)).sha256;
+  writeFileSync(sealPath, JSON.stringify(event));
+  const retained = JSON.parse(readFileSync(collection)), entries = evidence.tree(handle.directory).entries.filter(({ path }) => path !== "collection-manifest.json");
+  writeFileSync(collection, JSON.stringify({ ...retained, manifest: { entries, sha256: evidence.digest(JSON.stringify(entries)) } }));
+  assert.equal((await validate()).status, "invalid");
+});
+
+test("offline timed phase with zero denied probes remains eligible for ordinary replay", async (t) => {
+  const { campaign, handle, collection, validate } = await offlineCampaign(t, "localized-marketplace", 0);
+  mode = "complete";
+  const status = await campaign.advance(handle);
+  assert.equal(status.outcomes[0].outcome, "native-validated");
+  writeFileSync(collection, JSON.stringify(campaign.collect(handle)));
+  const saved = await validate();
+  assert.equal(saved.status, "verified", JSON.stringify(saved));
+  assert.deepEqual(saved.offlineIngress, [{ group: "localized-marketplace", phase: "timing", packets: 0, bytes: 0 }]);
+});
+
+test("offline audit cannot start before the guest has closed bootstrap", async (t) => {
+  const { campaign, handle, admission } = await offlineCampaign(t, "mixed-production");
+  auditClock.monoNs = String(BigInt(admission.closedMonoNs) - 1n);
+  await assert.rejects(campaign.advance(handle), /audit wait predates bootstrap closure/);
+  assert.equal(campaign.status(handle).state, "preserved-uncertain");
+});
+
+for (const settle of [false, true]) test("offline JSON wait cannot start before " + (settle ? "settled" : "first") + " preparation boundary", async (t) => {
+  const { campaign, handle, admission } = await offlineCampaign(t, "json-api", 2, settle);
+  auditClock.monoNs = settle ? offlinePrep.after : String(BigInt(admission.closedMonoNs) + hourNs);
+  await assert.rejects(campaign.advance(handle), /audit wait predates preparation completion/);
+  assert.equal(campaign.status(handle).state, "preserved-uncertain");
+});
+
+for (const [group, settle] of [["json-api", false], ["json-api", true], ["mixed-production", false]]) test(
+  "offline audit expiry seals only the pre-timing evidence: " + group + (settle ? " settled" : ""), async (t) => {
+  const { campaign, handle, collection, validate, admission } = await offlineCampaign(t, group, 2, settle);
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-22T00:00:00Z") });
+  const waiting = await campaign.advance(handle);
+  assert.equal(waiting.state, "blocked-review-needed", "untimed preparation may see denied probes");
+  assert.throws(() => campaign.expireOfflineAudit(handle), /deadline has not expired/);
+  t.mock.timers.tick(contracts.auditWaitMs * 2);
+  assert.throws(() => campaign.expireOfflineAudit(handle), /deadline has not expired/, "a forward wall step must not expire the wait");
+  const bootId = auditClock.bootId;
+  auditClock = { bootId: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+    monoNs: String(BigInt(auditClock.monoNs) + BigInt(contracts.auditWaitMs) * 1000000n) };
+  assert.throws(() => campaign.expireOfflineAudit(handle), /audit clock boot differs/);
+  auditClock.bootId = bootId;
+  const completeNs = BigInt(auditClock.monoNs);
+  auditClock.monoNs = String(completeNs - 1n);
+  assert.equal(campaign.offlineAuditRemainingMs(handle), 1);
+  assert.throws(() => campaign.expireOfflineAudit(handle), /deadline has not expired/);
+  auditClock.monoNs = String(completeNs);
+  t.mock.timers.setTime(new Date("2026-11-21T00:00:00Z").valueOf());
+  const prefix = group === "json-api" ? "json" : "mixed", inbox = join(handle.directory, prefix + "-audit-delivery-pending.json");
+  writeFileSync(inbox, "{}");
+  assert.throws(() => campaign.expireOfflineAudit(handle), /delivery may have started/);
+  fs.unlinkSync(inbox);
+  writeFileSync(collection, JSON.stringify(campaign.expireOfflineAudit(handle)));
+  const result = await validate();
+  assert.equal(result.status, "blocked", JSON.stringify(result));
+  assert.deepEqual(result.groups, []);
+  assert.equal(result.collectionIntegrity, "manifest-verified");
+  assert.equal(result.commandLifecycle, "observed-terminal");
+  assert.deepEqual(result.offlineAuditExpired, { group, subjectSha256: group === "json-api" ? waiting.auditSubjectSha256 : waiting.mixedAuditSubjectSha256 });
+  assert.deepEqual(result.offlineIngress, group === "json-api" ? [{ group, phase: "prepare", packets: 2, bytes: 120 }] : []);
+  const retained = JSON.parse(readFileSync(collection));
+  const { deploymentSha256 } = await import("../deployments.mjs");
+  const reseal = () => {
+    const entries = evidence.tree(handle.directory).entries.filter(({ path }) => path !== "collection-manifest.json");
+    writeFileSync(collection, JSON.stringify({ ...retained, manifest: { entries, sha256: deploymentSha256(entries) } }));
+  };
+  reseal(); assert.equal((await validate()).status, "blocked", "control: an unchanged archive survives resealing");
+  writeFileSync(inbox, "{}"); reseal();
+  assert.equal((await validate()).status, "invalid", "rehashing cannot excuse an unsettled audit delivery");
+  fs.unlinkSync(inbox);
+  const expiry = retained.manifest.entries.find(({ path }) => /^\d{5}-offline-audit-expired\.json$/.test(path));
+  const expiryPath = join(handle.directory, expiry.path), terminal = JSON.parse(readFileSync(expiryPath));
+  const goodClock = { ...terminal.auditClock };
+  terminal.auditClock.monoNs = String(BigInt(goodClock.monoNs) - 1n);
+  writeFileSync(expiryPath, JSON.stringify(terminal)); reseal();
+  assert.equal((await validate()).status, "invalid", "rehashing cannot authorize an early expiry");
+  terminal.auditClock = { ...goodClock, bootId: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff" };
+  writeFileSync(expiryPath, JSON.stringify(terminal)); reseal();
+  assert.equal((await validate()).status, "invalid", "rehashing cannot join samples from different boots");
+  const waitingEvent = retained.manifest.entries.find(({ path }) => /^\d{5}-(?:mixed-)?review-needed\.json$/.test(path));
+  const waitPath = join(handle.directory, waitingEvent.path), wait = JSON.parse(readFileSync(waitPath));
+  const savedWaitClock = { ...wait.auditClock };
+  wait.auditClock.bootId = terminal.auditClock.bootId;
+  writeFileSync(waitPath, JSON.stringify(wait));
+  reseal();
+  assert.equal((await validate()).status, "invalid", "two samples on a different boot cannot qualify the admitted host");
+  const beforeBootstrap = BigInt(admission.closedMonoNs) - 1n;
+  wait.auditClock = { bootId, monoNs: String(beforeBootstrap) };
+  terminal.auditClock = { bootId, monoNs: String(beforeBootstrap + BigInt(contracts.auditWaitMs) * 1000000n) };
+  writeFileSync(waitPath, JSON.stringify(wait)); writeFileSync(expiryPath, JSON.stringify(terminal)); reseal();
+  assert.equal((await validate()).status, "invalid", "the full wait must begin after bootstrap has closed");
+  if (group === "json-api") {
+    const early = settle ? BigInt(offlinePrep.after) : BigInt(admission.closedMonoNs) + hourNs;
+    wait.auditClock = { bootId, monoNs: String(early) };
+    terminal.auditClock = { bootId, monoNs: String(early + BigInt(contracts.auditWaitMs) * 1000000n) };
+    writeFileSync(waitPath, JSON.stringify(wait)); writeFileSync(expiryPath, JSON.stringify(terminal)); reseal();
+    assert.equal((await validate()).status, "invalid", "a canonically resealed wait cannot borrow time from preparation");
+    if (!settle) {
+      wait.auditClock = savedWaitClock; terminal.auditClock = goodClock;
+      writeFileSync(waitPath, JSON.stringify(wait)); writeFileSync(expiryPath, JSON.stringify(terminal));
+      const phase = join(handle.directory, "00-json-api-prepare");
+      const seal = retained.manifest.entries.find(({ path }) => /^\d{5}-phase-sealed\.json$/.test(path));
+      const sealPath = join(handle.directory, seal.path), sealEvent = JSON.parse(readFileSync(sealPath));
+      const afterPath = join(phase, "host-after.json"), after = JSON.parse(readFileSync(afterPath));
+      for (const [badClock, reason] of [[undefined, "missing"], [String(BigInt(offlinePrep.before) - 1n), "regressing"]]) {
+        writeFileSync(afterPath, JSON.stringify({ ...after, offlineMonoNs: badClock }));
+        sealEvent.phaseManifestSha256 = evidence.phaseSnapshot(phase, true).sha256;
+        writeFileSync(sealPath, JSON.stringify(sealEvent)); reseal();
+        assert.equal((await validate()).status, "invalid", `resealing cannot excuse a ${reason} preparation end clock`);
+      }
+    }
+  }
 });
 
 test("v5 browser campaign carries the native roles through streamed bookends and saved drain replay", async (t) => {

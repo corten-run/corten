@@ -145,7 +145,7 @@ export function controllerState(s, round, options) {
   validateState(s, round, options);
   const allowed = ["schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "createdAt", "status", "id", "ip",
     "createIntentAt", "archiveSha256", "evidenceSha256", "extractionAttempts", "evidence", "evidenceOutcome", "collectedAt", "deletionIntentAt", "destroyedAt",
-    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "quietBootstrap", "remainingPlacement", "launchHostKeySha256"];
+    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "gitSource", "quietBootstrap", "remainingPlacement", "launchHostKeySha256"];
   assert.ok(Object.keys(s).every((k) => allowed.includes(k)), "unknown controller state field");
   providerIdentity(s.provider);
   if (s.fleet) assert.deepEqual(s.provider, s.fleet.provider, "fleet account/context differs");
@@ -156,7 +156,8 @@ export function controllerState(s, round, options) {
   assert.equal(s.fullGroupQualified, false, "this provisional contract cannot qualify a campaign");
   if (s.launchHostKeySha256 !== undefined) {
     full(s.launchHostKeySha256, /[a-f0-9]{64}/, "launch host-key digest required");
-    assert.ok(s.fleet && s.control?.monitor && s.id && s.ip && s.createIntentAt, "launch host key requires a bound supervised child");
+    assert.ok(s.fleet && (s.control?.monitor || s.fleet.single?.offlineHandoff) && s.id && s.ip && s.createIntentAt,
+      "launch host key requires a bound registered child");
   }
   if (s.preBootstrapTerminal !== undefined) {
     const p = s.preBootstrapTerminal, m = s.control?.monitor;
@@ -184,9 +185,16 @@ export function controllerState(s, round, options) {
   if (s.bootstrapReady !== undefined) {
     assert.ok(s.group !== undefined && s.group === s.fleet.jobs[0].group
       && (["running", "collected"].includes(s.status) || s.status === "retired" && ["setup-failed", "native-failed"].includes(s.retirement?.kind)), "only the first started fleet group records bootstrap admission");
-    assert.deepEqual(Object.keys(s.bootstrapReady).sort(), ["observedAt", "sha256"]);
+    const offline = s.fleet.single?.offlineHandoff;
+    assert.deepEqual(Object.keys(s.bootstrapReady).sort(), [...(offline ? ["bootId"] : []), "observedAt", "sha256"]);
+    if (offline) full(s.bootstrapReady.bootId, /[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/, "bootstrap boot ID required");
     full(s.bootstrapReady.sha256, /[a-f0-9]{64}/, "bootstrap observation hash");
     assert.equal(new Date(s.bootstrapReady.observedAt).toISOString(), s.bootstrapReady.observedAt, "bootstrap observation time required");
+  }
+  if (s.fleet?.single?.offlineHandoff && s.control.sealed.includes("bootstrap")) {
+    assert.ok(s.launchHostKeySha256 && s.bootstrapReady?.bootId, "offline handoff requires pinned bootstrap identity");
+    const last = s.control.ledger.filter(({ request }) => request.epoch === "bootstrap").at(-1);
+    assert.equal(last.code, 0, "offline handoff requires a successful seal");
   }
   if (s.status === "retired" || s.retirement !== undefined) {
     assert.equal(s.status, "retired");
@@ -248,13 +256,45 @@ export function campaignOutcome(report, s, exitCode) {
     assert.equal(report.supervisedTerminal.registrationSha256, s.control.monitor.registrationSha256);
     full(report.supervisedTerminal.sealSha256, /[a-f0-9]{64}/, "native stream seal");
   }
+  const offline = s.fleet?.single?.offlineHandoff;
+  if (offline) {
+    assert.ok(s.control.sealed.includes("bootstrap") && s.bootstrapReady?.bootId);
+    const last = s.control.ledger.filter(({ request }) => request.epoch === "bootstrap").at(-1);
+    assert.equal(last?.code, 0);
+    const bootstrapSealSha256 = createHash("sha256").update(JSON.stringify(last.request.seal)).digest("hex");
+    assert.deepEqual(report.offlineTerminal, { hostname: s.name, bootId: s.bootstrapReady.bootId, token: s.token, bootstrapSealSha256 },
+      "offline replay does not match the acknowledged host, boot and bootstrap ledger");
+    assert.ok(Array.isArray(report.offlineIngress) && report.offlineIngress.length <= (s.group === "json-api" ? 2 : 1));
+    assert.equal(new Set(report.offlineIngress.map(({ phase }) => phase)).size, report.offlineIngress.length);
+    for (const ingress of report.offlineIngress) {
+      assert.deepEqual(Object.keys(ingress).sort(), ["bytes", "group", "packets", "phase"]);
+      assert.equal(ingress.group, s.group);
+      assert.ok(ingress.phase === "timing" || s.group === "json-api" && ingress.phase === "prepare");
+      assert.ok([ingress.bytes, ingress.packets].every((n) => Number.isSafeInteger(n) && n >= 0));
+      assert.ok(ingress.packets ? ingress.bytes >= ingress.packets : ingress.bytes === 0);
+      if (report.status === "verified" && ingress.phase === "timing") assert.equal(ingress.packets, 0);
+    }
+    if (report.status === "verified") assert.ok(report.offlineIngress.some(({ phase }) => phase === "timing"));
+  } else for (const field of ["offlineTerminal", "offlineIngress", "offlineAuditExpired"])
+    assert.equal(report[field], undefined, "offline evidence cannot qualify a different reservation mode");
   assert.ok(Array.isArray(report.blockers) && report.blockers.every((b) => typeof b === "string"));
   for (const key of ["campaignSha256", "sourceSha256", "archiveTreeSha256", "reservationSha256"]) full(report[key], /[a-f0-9]{64}/, key);
-  assert.equal(exitCode, report.status === "verified" ? 0 : 1, "native CLI exit disagrees or remains uncertain; preserve host");
+  if (report.offlineAuditExpired) {
+    assert.equal(exitCode, 2);
+    assert.equal(report.status, "blocked"); assert.deepEqual(report.groups, []);
+    assert.deepEqual(Object.keys(report.offlineAuditExpired).sort(), ["group", "subjectSha256"]);
+    assert.equal(report.offlineAuditExpired.group, s.group);
+    assert.ok(["json-api", "mixed-production"].includes(s.group));
+    assert.ok(!s.auditIntents?.[s.group] && !s.auditIntent && !s.control.ledger.some(({ request }) => request.epoch.startsWith("audit-")),
+      "audit control or delivery may have started; preserve host");
+    full(report.offlineAuditExpired.subjectSha256, /[a-f0-9]{64}/, "expired audit subject identity");
+    assert.deepEqual(report.offlineIngress.map(({ phase }) => phase), s.group === "json-api" ? ["prepare"] : []);
+  } else assert.equal(exitCode, report.status === "verified" ? 0 : 1, "native CLI exit disagrees or remains uncertain; preserve host");
   if (report.status === "verified") {
     const fields = ["schema", "scope", "status", "round", "commit", "campaign", "campaignSha256", "sourceSha256", "selection", "groups", "blockers",
       "collectionIntegrity", "commandLifecycle", "uncollectedNativeRoots", "archiveTreeSha256", "reservationSha256"];
     if (s.control?.monitor?.phase === "closed") fields.push("supervisedTerminal");
+    if (offline) fields.push("offlineTerminal", "offlineIngress");
     if (loadLayout) fields.push("loadLayout");
     if (placement) fields.push("placement");
     assert.deepEqual(Object.keys(report).sort(), fields.sort(), "verified inspection schema differs");
