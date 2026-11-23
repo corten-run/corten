@@ -201,6 +201,7 @@ static DIGITS: &str = {
 /// number is two allocations for every answer given again: about 900 instructions of the 39,000
 /// a kept file's request took (docs/design.md#choice-kept-pages). An older answer's is made
 /// from the number.
+#[inline]
 fn age_value(seconds: u64) -> HeaderValue {
     // Where the numbers of this many digits begin in `DIGITS`, and the first of them.
     let (digits, from, first) = match seconds {
@@ -463,6 +464,7 @@ impl Written {
     /// The count for `at` (a path, with or without a query) as it is now: 0 while there are no
     /// counts, which start at 0 when they are made. The writes that find none are read first,
     /// so one that ends after this is seen whichever it turns out to be.
+    #[inline]
     fn of(store: &Store, at: &str) -> Self {
         let count = count_of(at.split(['?', '#']).next().unwrap_or(at).as_bytes());
         let early = store.early.load(Ordering::Acquire);
@@ -783,6 +785,12 @@ impl Entry {
             && self.key.host() == host.map(HeaderValue::as_bytes)
             && self.language().is_none_or(|kept| kept == language.map(HeaderValue::as_bytes))
     }
+
+    /// The copy for a request for `at` asked this way.
+    #[inline(always)]
+    fn answers(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>, data: bool) -> bool {
+        self.key.at() == at.as_bytes() && self.is_for(host, language, data)
+    }
 }
 
 impl Store {
@@ -916,12 +924,12 @@ impl Answers {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
         let copies = inner.at.get(&hash)?;
-        let mine = |entry: &&Arc<Entry>| entry.key.at() == at.as_bytes() && entry.is_for(host, language, data);
         // The copy that stands: one that no longer does is in no other's way until it goes, and
         // is looked at only when none stands, for a request that may be given it all the same.
-        let (entry, standing) = match copies.iter().find(|entry| mine(entry) && entry.stands(&self.0, now)) {
+        let found = copies.iter().find(|entry| entry.answers(at, host, language, data) && entry.stands(&self.0, now));
+        let (entry, standing) = match found {
             Some(entry) => (entry, Standing::Fresh),
-            None => past(copies.iter().filter(mine), &self.0, now)?,
+            None => past(copies, (at, host, language, data), &self.0, now)?,
         };
         let age = entry.age(now);
         // Stored only when it changes: a page read often is marked once for each pass of the hand.
@@ -1029,9 +1037,16 @@ enum Standing {
     Held,
 }
 
-/// The first of `copies` a request may still be given past its lifetime, and how.
+/// The first of `copies` for a request for `at` asked this way that it may still be given past
+/// its lifetime, and how.
 #[cold]
-fn past<'a>(mut copies: impl Iterator<Item = &'a Arc<Entry>>, store: &Store, now: Instant) -> Option<(&'a Arc<Entry>, Standing)> {
+fn past<'a>(
+    copies: &'a [Arc<Entry>],
+    (at, host, language, data): (&str, Option<&HeaderValue>, Option<&HeaderValue>, bool),
+    store: &Store,
+    now: Instant,
+) -> Option<(&'a Arc<Entry>, Standing)> {
+    let mut copies = copies.iter().filter(|entry| entry.answers(at, host, language, data));
     copies.find_map(|entry| entry.past(store, now).map(|standing| (entry, standing)))
 }
 
@@ -1055,8 +1070,9 @@ pub(crate) enum Found {
 }
 
 /// `entry` as the answer to a request, `age` seconds after it was asked for: its body and head
-/// as its handler gave them, with its `Age`.
-#[inline]
+/// as its handler gave them, with its `Age`. Inlined where a kept page is given, the path most
+/// requests for it take.
+#[inline(always)]
 fn given(entry: Arc<Entry>, age: u64, signal: &crate::Signal) -> Response {
     // Kept for the language it was asked in: the answer names `Accept-Language` as it leaves
     // the app, whatever `Vary` a middleware puts on it after this (`crate::page::vary_on_language`).
@@ -1082,6 +1098,19 @@ fn given(entry: Arc<Entry>, age: u64, signal: &crate::Signal) -> Response {
 /// has made again apart from its answer, one request at a time for each copy: the entry is marked
 /// until this goes ([`Entry::refreshing`]).
 pub(crate) struct Refresh(Arc<Entry>);
+
+/// What a request finds of `entry` past its lifetime (`Stale` or `Held`): given at once, with what
+/// having it made again needs where no other request is making it; or held on the request's
+/// signal for the handler's failure.
+#[cold]
+fn past_found(entry: Arc<Entry>, age: u64, standing: Standing, signal: &crate::Signal) -> Found {
+    if standing == Standing::Stale {
+        let refresh = Refresh::claim(&entry);
+        return Found::Stale(given(entry, age, signal), refresh);
+    }
+    signal.hold(HeldCopy(entry));
+    Found::Held(Held(signal.clone()))
+}
 
 impl Refresh {
     /// Marks `entry` as being made again, unless another request is making it.
@@ -1379,14 +1408,7 @@ impl<'a> Asked<'a> {
         };
         match standing {
             Standing::Fresh => Found::Kept(given(entry, age, self.signal)),
-            Standing::Stale => {
-                let refresh = Refresh::claim(&entry);
-                Found::Stale(given(entry, age, self.signal), refresh)
-            }
-            Standing::Held => {
-                self.signal.hold(HeldCopy(entry));
-                Found::Held(Held(self.signal.clone()))
-            }
+            standing => past_found(entry, age, standing, self.signal),
         }
     }
 
@@ -1405,6 +1427,7 @@ impl<'a> Asked<'a> {
 
     /// What keeping the handler's answer needs of the request, in a full store too: for one
     /// whose URL has a copy past its lifetime, which was asked for before.
+    #[inline]
     pub(crate) fn missing(&self, req: &Request, route: Option<Arc<Unkept>>) -> Missed {
         Missed {
             asked: Instant::now(),
@@ -1877,7 +1900,7 @@ mod tests {
 
     /// An answer for `at` as [`entry`] makes it, made `age` seconds ago with a lifetime of 10
     /// and these windows past it.
-    fn windowed(answers: &Answers, at: &str, age: u64, stale: u64, if_error: u64) -> impl FnOnce(Place) -> Entry {
+    fn windowed(answers: &Answers, at: &str, age: u64, stale: u32, if_error: u32) -> impl FnOnce(Place) -> Entry {
         let entry = entry(answers, at, None, 10, 1000);
         move |place| Entry {
             made: Instant::now().checked_sub(Duration::from_secs(age)).expect("a clock that has run that long"),

@@ -157,6 +157,8 @@ impl Cache {
             Kind::Public { shared: None, stale, if_error, .. } => (stale, if_error),
             _ => (0, 0),
         };
+        // Held in 32 bits (136 years), so the mark stays in the allocation it had without them.
+        let (stale, if_error) = (u32::try_from(stale).unwrap_or(u32::MAX), u32::try_from(if_error).unwrap_or(u32::MAX));
         Typed { named: self.kind == Kind::Immutable, lifetime: self.lifetime(), stale, if_error }
     }
 
@@ -214,8 +216,8 @@ pub(crate) struct Typed {
     /// How long past `lifetime` the app may give the answer it keeps while it is made again
     /// (`stale-while-revalidate`) and in place of a failure (`stale-if-error`), in seconds: 0 for
     /// one with neither, or with `s-maxage` ([`Cache::typed`]).
-    stale: u64,
-    if_error: u64,
+    stale: u32,
+    if_error: u32,
 }
 
 impl Typed {
@@ -228,12 +230,12 @@ impl Typed {
 
     /// `stale-while-revalidate`, in seconds, as the app keeps the answer (0 with `s-maxage`).
     pub(crate) fn stale(self) -> u64 {
-        self.stale
+        u64::from(self.stale)
     }
 
     /// `stale-if-error`, in seconds, as the app keeps the answer (0 with `s-maxage`).
     pub(crate) fn if_error(self) -> u64 {
-        self.if_error
+        u64::from(self.if_error)
     }
 
     #[cfg(test)]
@@ -243,7 +245,7 @@ impl Typed {
 
     /// A mark with these windows, for a test.
     #[cfg(test)]
-    pub(crate) fn for_test_stale(stale: u64, if_error: u64) -> Self {
+    pub(crate) fn for_test_stale(stale: u32, if_error: u32) -> Self {
         Typed { named: false, lifetime: 60, stale, if_error }
     }
 }
@@ -880,6 +882,22 @@ mod tests {
         assert_eq!(Cache::public(minute).stale_if_error(Duration::ZERO).header(), "public, max-age=60", "0 is left out");
         assert_eq!(Cache::no_store().stale_if_error(day).header(), "no-store");
         assert_eq!(Cache::immutable().stale_if_error(day).header(), "public, max-age=31536000, immutable");
+    }
+
+    /// The windows the app keeps an answer past its lifetime for are the header's, read from
+    /// the typed mark; none with `s-maxage`, which forbids a shared cache to give it stale, and
+    /// none for an answer at a URL that names its content.
+    #[test]
+    fn the_stale_windows_the_app_keeps_by_are_the_header_s_but_under_s_maxage() {
+        let (minute, day) = (Duration::from_secs(60), Duration::from_secs(86_400));
+        let windows = |cache: Cache| (cache.typed().stale(), cache.typed().if_error());
+        assert_eq!(windows(Cache::public(minute)), (0, 0));
+        assert_eq!(windows(Cache::public(minute).stale_while_revalidate(minute).stale_if_error(day)), (60, 86_400));
+        assert_eq!(windows(Cache::public(minute).stale_if_error(day).shared(day)), (0, 0));
+        assert_eq!(windows(Cache::public(minute).shared(day).stale_while_revalidate(minute)), (0, 0));
+        assert_eq!(windows(Cache::immutable().stale_if_error(day)), (0, 0));
+        let far = Duration::from_secs(u64::from(u32::MAX) + 7);
+        assert_eq!(windows(Cache::public(minute).stale_if_error(far)), (0, u64::from(u32::MAX)), "held to 32 bits");
     }
 
     #[test]
