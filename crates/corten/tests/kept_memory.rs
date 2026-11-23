@@ -246,9 +246,10 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
     let before = LIVE.load(Ordering::Relaxed);
     let mut twice = 0;
     for n in 0..PAGES {
-        // The marking app's connection read now and then, so it is not closed as idle.
+        // The marking app's connection read now and then, and before each page asked for until it
+        // is due, which takes the longest, so it is not closed as idle (`App::header_timeout`).
         #[cfg(feature = "compress")]
-        if n % 100 == 0 {
+        if n % 100 == 0 || n >= PAGES - PROMOTED {
             answer(&mut marks, &mut read, "/mark", "identity").await;
         }
         // With room a page is kept the first time it is made. In a full store it is kept from
