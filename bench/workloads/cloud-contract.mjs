@@ -603,7 +603,8 @@ bootcmd:
     ( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${rootManagerDropIn}' > "$dropin" )
     systemctl daemon-reload
 `;
-const rootManagerBinding = (s) => s.group && s.control?.monitor ? `/run/corten-bench-control-${s.token}/binding.json` : null;
+const rootManagerBinding = (s) => s.group && s.control && (s.control.monitor || s.fleet?.single?.offlineHandoff)
+  ? `/run/corten-bench-control-${s.token}/binding.json` : null;
 const rootManagerPolicy = (marker, prelogin = false) => `test -f '${marker}'
 test ! -L '${marker}'
 dropin=${rootManagerDropIn}
@@ -631,8 +632,10 @@ const observeRootManager = `    echo "root-manager: querying ActiveState" >&2
 
 export function installBenchmarkUnit(s) {
   const install = `bash -n /bench/job.sh && bash -n /bench/pack.sh && install -m 644 /bench/${s.unit} /etc/systemd/system/${s.unit} && systemd-analyze verify /etc/systemd/system/${s.unit}`;
+  const binding = rootManagerBinding(s);
+  assert.ok(!s.quietBootstrap || binding, "quiet bootstrap requires a guardian binding");
   return s.quietBootstrap
-    ? `${install} || exit 1\n${rootManagerPolicy(rootManagerBinding(s), s.quietBootstrap === "prelogin")}systemctl daemon-reload`
+    ? `${install} || exit 1\n${rootManagerPolicy(binding, s.quietBootstrap === "prelogin")}systemctl daemon-reload`
     : `${install} && systemctl daemon-reload`;
 }
 
