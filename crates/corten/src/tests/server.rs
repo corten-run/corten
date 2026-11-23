@@ -1962,3 +1962,368 @@ async fn a_connect_answered_with_success_has_no_body() {
     assert_eq!(res.headers()[header::CONTENT_LENGTH], "6");
     assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "tunnel");
 }
+
+/// A server for `app` served per core (`App::per_core`) on a free port of `127.0.0.1`, with a
+/// listener for each core, until `stop` is sent.
+#[cfg(target_os = "linux")]
+async fn served_per_core<M: crate::Middleware>(
+    app: App<M>,
+) -> (std::net::SocketAddr, tokio::sync::oneshot::Sender<()>, tokio::task::JoinHandle<std::io::Result<()>>) {
+    let cores = crate::app::cores().expect("Linux has the cores' event loops").len();
+    let listeners = crate::app::bind_each(Some("127.0.0.1"), 0, cores).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app.per_core(), async {
+        let _ = stopped.await;
+    }));
+    (addr, stop, server)
+}
+
+/// The name of the thread this runs on: `corten-core-N` on a core's event loop.
+#[cfg(target_os = "linux")]
+fn thread() -> String {
+    std::thread::current().name().unwrap_or("unnamed").to_string()
+}
+
+/// The body of an answer `raw_get` read.
+#[cfg(target_os = "linux")]
+fn body(answer: &str) -> &str {
+    answer.rsplit("\r\n\r\n").next().unwrap_or_default()
+}
+
+/// With `App::per_core`, a connection is served on the event loop of the core whose listener
+/// accepted it, every request of it, and so is a task its handler spawns; blocking work leaves
+/// the event loop. The system spreads connections over the cores' listeners.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn per_core_serves_a_connection_on_the_core_that_accepted_it() {
+    use tokio::io::AsyncWriteExt;
+    let routes = Table::new().route("/where", get(|| async { thread() })).route(
+        "/work",
+        get(|| async {
+            let spawned = tokio::spawn(async { thread() }).await.unwrap();
+            let blocking = tokio::task::spawn_blocking(thread).await.unwrap();
+            format!("{spawned} {blocking}")
+        }),
+    );
+    let (addr, stop, server) = served_per_core(App::new(Routes::from(routes))).await;
+    let mut cores = std::collections::BTreeSet::new();
+    for _ in 0..64 {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut on = Vec::new();
+        for path in ["/where", "/where", "/work"] {
+            stream.write_all(format!("GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n").as_bytes()).await.unwrap();
+            on.push(read_answer(&mut stream).await.1);
+        }
+        assert!(on[0].starts_with("corten-core-"), "served on {}", on[0]);
+        assert_eq!(on[0], on[1], "a connection's requests stay on its core");
+        let (spawned, blocking) = on[2].split_once(' ').unwrap();
+        assert_eq!(spawned, on[0], "a task a handler spawns stays on its core");
+        assert!(!blocking.starts_with("corten-core-"), "blocking work ran on the event loop: {blocking}");
+        cores.insert(on.swap_remove(0));
+    }
+    assert!(cores.len() > 1, "64 connections were all served on one core: {cores:?}");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// With `App::per_core`, a connection's step before HTTP (`serve_wrapped`: a TLS handshake) runs
+/// on the core that accepted it, where its requests then run.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn per_core_runs_a_connections_step_on_its_core() {
+    use std::sync::Mutex;
+    let stepped: Arc<Mutex<std::collections::BTreeSet<String>>> = Arc::default();
+    let step = {
+        let stepped = stepped.clone();
+        move |tcp: tokio::net::TcpStream| {
+            stepped.lock().unwrap().insert(thread());
+            std::future::ready(Ok::<_, std::convert::Infallible>((tcp, ())))
+        }
+    };
+    let cores = crate::app::cores().unwrap().len();
+    let listeners = crate::app::bind_each(Some("127.0.0.1"), 0, cores).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(Table::new().route("/where", get(|| async { thread() })))).per_core();
+    let server = tokio::spawn(crate::app::run(listeners, step, app, async {
+        let _ = stopped.await;
+    }));
+    let mut answered = std::collections::BTreeSet::new();
+    for _ in 0..32 {
+        answered.insert(body(&raw_get(addr, "/where", "").await).to_string());
+    }
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+    let stepped = stepped.lock().unwrap().clone();
+    assert!(stepped.iter().all(|thread| thread.starts_with("corten-core-")), "{stepped:?}");
+    assert_eq!(stepped, answered, "each connection's step ran where its request did");
+}
+
+/// With `App::per_core`, `App::max_connections` is the whole server's: with one place, no core
+/// serves a second connection while the first is open, and once it closes every waiting
+/// connection is served in turn whichever core's listener it came to. A core waiting to accept
+/// holds no place: if it took one first, as a server on one runtime does, the place would go to
+/// a core with no connection waiting while those of the others were never served.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn per_core_holds_the_whole_server_to_max_connections() {
+    use tokio::io::AsyncWriteExt;
+    let routes = Routes::from(Table::new().route("/", get(|| async { "hi" })));
+    let (addr, stop, server) = served_per_core(App::new(routes).header_timeout(None).max_connections(1)).await;
+    let mut held = tokio::net::TcpStream::connect(addr).await.unwrap();
+    held.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    assert_eq!(read_answer(&mut held).await.1, "hi");
+    // Sixteen more, which the system spreads over the cores' listeners.
+    let waiting: Vec<_> = (0..16).map(|_| tokio::spawn(raw_get(addr, "/", ""))).collect();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let answered = waiting.iter().filter(|waiting| waiting.is_finished()).count();
+    assert_eq!(answered, 0, "connections were served past the limit while the first was open");
+    drop(held);
+    for (n, waiting) in waiting.into_iter().enumerate() {
+        let answer = tokio::time::timeout(Duration::from_secs(5), waiting).await;
+        let answer = answer.unwrap_or_else(|_| panic!("connection {n} was never served once places were free")).unwrap();
+        assert!(answer.ends_with("hi"), "{answer}");
+    }
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// With `App::per_core`, the one clock closes a connection that never finishes its head on
+/// whichever core it is, and a request that does finish is answered.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn per_core_closes_an_unfinished_head_on_any_core() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let routes = Routes::from(Table::new().route("/", get(|| async { "hi" })));
+    let (addr, stop, server) = served_per_core(App::new(routes).header_timeout(Duration::from_millis(300))).await;
+    let mut stalled = Vec::new();
+    for _ in 0..16 {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n").await.unwrap();
+        stalled.push(stream);
+    }
+    for (n, mut stream) in stalled.into_iter().enumerate() {
+        let mut rest = Vec::new();
+        let closed = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut rest)).await;
+        assert!(closed.is_ok(), "connection {n}'s unfinished head was held past the timeout");
+    }
+    assert!(raw_get(addr, "/", "").await.ends_with("hi"), "a request that finishes its head is answered");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// With `App::per_core`, shutdown is one shutdown across the cores: the app's task (which runs
+/// on the runtime the server was started from, not on a core) is told once, requests in progress
+/// on several cores finish, idle connections close, every core's listener closes, and the server
+/// returns once all of that is done.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn per_core_shuts_every_core_down_as_one_server() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let routes = Table::new().route("/", get(|| async { "hi" })).route(
+        "/slow",
+        get(|| async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            thread()
+        }),
+    );
+    let (told, mut heard) = tokio::sync::mpsc::unbounded_channel();
+    let app = App::new(Routes::from(routes)).task("watch", move |signal: Signal| async move {
+        let _ = told.send((signal.aborted().await, thread()));
+    });
+    let test = thread();
+    let (addr, stop, server) = served_per_core(app).await;
+    let slow: Vec<_> = (0..16).map(|_| tokio::spawn(raw_get(addr, "/slow", ""))).collect();
+    let mut idle = Vec::new();
+    for _ in 0..16 {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+        assert_eq!(read_answer(&mut stream).await.1, "hi");
+        idle.push(stream);
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    stop.send(()).unwrap();
+
+    let (reason, ran_on) = tokio::time::timeout(Duration::from_secs(5), heard.recv()).await.expect("the task is told").unwrap();
+    assert_eq!(reason, crate::Abort::Shutdown);
+    assert_eq!(ran_on, test, "the app's task ran on a core");
+    let mut cores = std::collections::BTreeSet::new();
+    for slow in slow {
+        let answer = tokio::time::timeout(Duration::from_secs(5), slow).await.expect("a request in progress finishes").unwrap();
+        assert!(answer.starts_with("HTTP/1.1 200") && body(&answer).starts_with("corten-core-"), "{answer}");
+        cores.insert(body(&answer).to_string());
+    }
+    assert!(cores.len() > 1, "the requests in progress were all on one core: {cores:?}");
+    tokio::time::timeout(Duration::from_secs(5), server).await.expect("the server returns").unwrap().unwrap();
+    for mut stream in idle {
+        let mut rest = Vec::new();
+        let closed = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut rest)).await;
+        assert!(closed.is_ok() && rest.is_empty(), "an idle connection was left open: {rest:?}");
+    }
+    assert!(tokio::net::TcpStream::connect(addr).await.is_err(), "a core's listener is still open");
+    assert!(heard.recv().await.is_none(), "the task was started more than once");
+}
+
+/// With `App::per_core`, work a handler finishes (`Signal::finish`) on a core is waited for at
+/// shutdown as it is on one runtime: the server returns only once work whose client left has
+/// released what it held.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn per_core_waits_at_shutdown_for_work_a_handler_finishes() {
+    use std::sync::Mutex;
+    use tokio::io::AsyncWriteExt;
+    let released: Arc<Mutex<Vec<String>>> = Arc::default();
+    let routes = {
+        let released = released.clone();
+        Routes::from(Table::new().route(
+            "/",
+            get(move |signal: crate::Signal| {
+                let released = released.clone();
+                async move {
+                    signal
+                        .finish(move |signal| async move {
+                            signal.aborted().await;
+                            tokio::time::sleep(Duration::from_millis(400)).await;
+                            released.lock().unwrap().push(thread());
+                            "done"
+                        })
+                        .await
+                }
+            }),
+        ))
+    };
+    let app = App::new(routes).shutdown_grace(Duration::from_secs(3));
+    let (addr, stop, server) = served_per_core(app).await;
+    for _ in 0..8 {
+        let mut gone = tokio::net::TcpStream::connect(addr).await.unwrap();
+        gone.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        drop(gone);
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), server).await.expect("the server returns").unwrap().unwrap();
+    let released = released.lock().unwrap().clone();
+    assert_eq!(released.len(), 8, "the server returned before the work it had to wait for: {released:?}");
+    assert!(released.iter().all(|thread| thread.starts_with("corten-core-")), "{released:?}");
+}
+
+/// A listener of the test's own on `127.0.0.1` whose accept panics once `broken` is notified.
+#[cfg(target_os = "linux")]
+struct Breaks {
+    listener: tokio::net::TcpListener,
+    broken: Arc<tokio::sync::Notify>,
+}
+
+#[cfg(target_os = "linux")]
+impl crate::Listener for Breaks {
+    type Io = tokio::net::TcpStream;
+    type Addr = std::net::SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        tokio::select! {
+            accepted = crate::Listener::accept(&mut self.listener) => accepted,
+            _ = self.broken.notified() => panic!("the listener broke"),
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.listener.local_addr()
+    }
+}
+
+/// With `App::per_core`, a panic in one core's accept loop (a listener of the app's own) is the
+/// server's, as it is on one runtime: the other cores stop accepting and finish their requests,
+/// then the panic goes on from the server's future. No core is left serving alone.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn per_core_ends_the_server_when_a_cores_accept_loop_panics() {
+    let (broken, sound) = (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()));
+    let listener = |broken: &Arc<tokio::sync::Notify>| {
+        let broken = broken.clone();
+        async move { Breaks { listener: tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(), broken } }
+    };
+    let listeners = vec![listener(&broken).await, listener(&sound).await];
+    let addr = crate::Listener::local_addr(&listeners[1]).unwrap();
+    let routes = Table::new().route(
+        "/slow",
+        get(|| async {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            thread()
+        }),
+    );
+    let app = App::new(Routes::from(routes)).per_core();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, std::future::pending()));
+    let slow = tokio::spawn(raw_get(addr, "/slow", ""));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!server.is_finished());
+    broken.notify_one();
+    let ended = tokio::time::timeout(Duration::from_secs(5), server).await.expect("the server ends");
+    assert!(ended.unwrap_err().is_panic(), "the panic is the server's");
+    let answer = slow.await.unwrap();
+    assert!(answer.starts_with("HTTP/1.1 200") && body(&answer).starts_with("corten-core-"), "another core's request: {answer}");
+    assert!(tokio::net::TcpStream::connect(addr).await.is_err(), "the other core's listener is still open");
+}
+
+/// With `App::per_core`, a server dropped without a shutdown (its future aborted) ends the
+/// cores' accept loops and closes their connections, though they are tasks of the cores' own.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn per_core_ends_the_cores_loops_when_the_server_is_dropped() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (started, mut running) = tokio::sync::mpsc::channel::<()>(16);
+    let routes = Table::new().route(
+        "/",
+        get(move || {
+            let started = started.clone();
+            async move {
+                let _ = started.send(()).await;
+                std::future::pending::<&'static str>().await
+            }
+        }),
+    );
+    let (addr, _stop, server) = served_per_core(App::new(Routes::from(routes))).await;
+    let mut open = Vec::new();
+    for _ in 0..8 {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+        running.recv().await.expect("the handler runs");
+        open.push(stream);
+    }
+    server.abort();
+    for mut stream in open {
+        let mut rest = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut rest)).await.expect("closed at once").ok();
+    }
+    // The listeners close with their loops, a moment after the abort.
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        while tokio::net::TcpStream::connect(addr).await.is_ok() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    });
+    closed.await.expect("a core's listener stayed open after the server was dropped");
+}
+
+/// The listeners `serve` binds for `App::per_core`: one for each core on every address, all of
+/// an address's together, on one port; and a port they hold is still taken for another server,
+/// whether it would share the port or not.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_port_the_cores_share_is_still_taken_for_another_server() {
+    let shared = crate::app::bind_each(Some("127.0.0.1"), 0, 4).await.unwrap();
+    let addr = shared[0].local_addr().unwrap();
+    assert_eq!(shared.len(), 4);
+    assert!(shared.iter().all(|listener| listener.local_addr().unwrap() == addr), "one address and port");
+    let error = crate::app::bind_each(Some("127.0.0.1"), addr.port(), 4).await.expect_err("the port is taken");
+    assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse, "for a server that would share it");
+    let error = crate::app::bind(Some("127.0.0.1"), addr.port()).await.expect_err("the port is taken");
+    assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse, "for a server with one listener");
+
+    let pair = crate::app::bind_each(None, 0, 3).await.unwrap();
+    let addrs: Vec<_> = pair.iter().map(|listener| listener.local_addr().unwrap()).collect();
+    assert_eq!(addrs.len(), if has_ipv6_loopback() { 6 } else { 3 }, "{addrs:?}");
+    assert!(addrs.iter().all(|a| a.ip().is_loopback() && a.port() == addrs[0].port()), "{addrs:?}");
+    assert!(addrs.chunks(3).all(|of| of.iter().all(|a| *a == of[0])), "an address's listeners come together: {addrs:?}");
+    assert!(addrs[0].is_ipv4(), "{addrs:?}");
+}

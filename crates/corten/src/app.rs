@@ -526,6 +526,9 @@ pub(crate) struct Connections {
     pub head: usize,
     pub send_timeout: Option<Duration>,
     pub max: Option<usize>,
+    /// Each listener is served on one of the process's event loops, one per core
+    /// ([`App::per_core`]), where the system has them ([`cores`]).
+    pub per_core: bool,
     /// How long a connection may go on once shutdown begins, set by `run` (`App::drain`).
     pub drain: Drain,
 }
@@ -610,6 +613,7 @@ impl Default for Connections {
             head: REQUEST_HEAD,
             send_timeout: Some(Duration::from_secs(60)),
             max: None,
+            per_core: false,
             drain: Drain { grace: GRACE, most: GRACE.max(DEADLINE), each: false },
         }
     }
@@ -1247,6 +1251,40 @@ impl<M: Middleware> App<M> {
         self
     }
 
+    /// Serves each connection on the core that accepted it: one single-threaded event loop per
+    /// core (as many as `std::thread::available_parallelism` reports), each accepting on a
+    /// listener of its own, in place of one listener served on the runtime [`serve`] was called
+    /// from. A connection's requests then run where its socket is read, with that core's timers,
+    /// and are never moved to another core. It is still one app: one router and one store of kept
+    /// answers, one set of [tasks](App::task) (they stay on the runtime `serve` was called from,
+    /// with the shutdown signal), one shutdown across the cores, and [`App::max_connections`],
+    /// [`App::header_timeout`] and [`App::send_timeout`] hold for the whole server.
+    ///
+    /// [`serve`] binds a listener per core on each of its addresses, sharing the port
+    /// (`SO_REUSEPORT`), and the system gives each new connection to one of them by its addresses
+    /// and ports. With listeners of the app's own ([`serve_on`], [`serve_wrapped`]) each listener
+    /// is accepted on one core, dealt in turn (listener `i` to core `i` modulo the cores): give it
+    /// one per core for each address, bound with `SO_REUSEPORT`, or it serves on as many cores as
+    /// it has listeners.
+    ///
+    /// What changes for a handler: `tokio::spawn` puts a task on the handler's core, where no
+    /// other core takes it over, so work that computes for long holds up that core's other
+    /// connections (`tokio::task::spawn_blocking` still leaves the core, for a pool of that
+    /// core's own); `tokio::task::block_in_place` panics, as on any single-threaded runtime; and
+    /// connections are not moved once accepted, so a few long-lived busy ones (a proxy's
+    /// keep-alive connections) can share a core while others sit idle. Under a limit, a
+    /// connection is accepted before its place is taken, so each core's listener may hold one
+    /// accepted connection waiting for a place.
+    ///
+    /// Linux only, where listeners that share a port have the system spread connections over
+    /// them: elsewhere (Windows has no `SO_REUSEPORT`, and macOS's was not tried) the setting does
+    /// nothing and `serve` serves as without it. The event loops are the process's: every `serve`
+    /// in it that asks shares them, and they last until it exits.
+    pub fn per_core(mut self) -> Self {
+        self.connections.per_core = true;
+        self
+    }
+
     /// A tower layer around the whole app, outside the router and every stage of
     /// [`crate::middleware`], for what must see the raw request first: a cap on body size, a limit
     /// per address, a trace span. It sees the request before its route is matched (so with no
@@ -1681,9 +1719,12 @@ impl<M: Middleware> From<App<M>> for Router {
 ///
 /// A tower layer of the app's own goes around it with [`App::layer`]. To serve it on listeners of
 /// the app's own (a Unix socket, a socket a supervisor hands over) with the same shutdown, see
-/// [`serve_on`]; for HTTPS, [`serve_wrapped`].
+/// [`serve_on`]; for HTTPS, [`serve_wrapped`]. Connections are served on the runtime this is
+/// called from, or with [`App::per_core`] each on the core that accepted it.
 pub async fn serve<M: Middleware>(app: App<M>) -> std::io::Result<()> {
-    let listeners = listeners(3000).await?;
+    // With `App::per_core`, a listener per core on each address.
+    let each = if app.connections.per_core { cores().map_or(1, <[_]>::len) } else { 1 };
+    let listeners = listeners_each(3000, each).await?;
     let shown = match std::env::var("HOST").ok().as_deref() {
         None | Some("0.0.0.0" | "::") => "localhost".to_string(),
         Some(host) => host.to_string(),
@@ -1701,12 +1742,17 @@ pub async fn serve<M: Middleware>(app: App<M>) -> std::io::Result<()> {
 /// accepted, where `TcpListener::bind` asks for 128. The system may hold fewer: Linux caps it at
 /// `net.core.somaxconn`, macOS at `kern.ipc.somaxconn` (128 by default), and Windows 11 held 200.
 pub async fn listeners(port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
+    listeners_each(port, 1).await
+}
+
+/// [`listeners`], with `each` listeners on every address ([`bind_each`]).
+async fn listeners_each(port: u16, each: usize) -> std::io::Result<Vec<tokio::net::TcpListener>> {
     let host = std::env::var("HOST").ok();
     let port: u16 = match std::env::var("PORT") {
         Ok(port) => port.parse().map_err(|_| std::io::Error::other(format!("PORT is not a port number: {port}")))?,
         Err(_) => port,
     };
-    bind(host.as_deref(), port).await
+    bind_each(host.as_deref(), port, each).await
 }
 
 /// [`serve`] on listeners of the app's own: anything that implements
@@ -1858,14 +1904,22 @@ where
 /// on Windows with Chromium and curl). A system without IPv6 gets `127.0.0.1` alone, but a `[::1]`
 /// port another process holds is an error: `localhost` would reach that process instead (port 0,
 /// any free port, tries another pair).
+#[cfg(test)]
 pub(crate) async fn bind(host: Option<&str>, port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
+    bind_each(host, port, 1).await
+}
+
+/// [`bind`], with `each` listeners on every address, which share its port (`SO_REUSEPORT`) when
+/// `each` is above one ([`App::per_core`], one for each core): all of the first address's, then
+/// all of the next's, so dealt in turn to `each` cores every core has one on each address.
+pub(crate) async fn bind_each(host: Option<&str>, port: u16, each: usize) -> std::io::Result<Vec<tokio::net::TcpListener>> {
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
     if let Some(host) = host {
         // Each address the host resolves to in turn, as `TcpListener::bind` tries them.
         let mut last = None;
         for addr in tokio::net::lookup_host((host, port)).await? {
-            match listen(addr) {
-                Ok(listener) => return Ok(vec![listener]),
+            match listen_each(addr, each) {
+                Ok(listeners) => return Ok(listeners),
                 Err(error) => last = Some(error),
             }
         }
@@ -1875,18 +1929,42 @@ pub(crate) async fn bind(host: Option<&str>, port: u16) -> std::io::Result<Vec<t
     }
     let mut tries = 0;
     loop {
-        let v4 = listen(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))?;
-        match listen(SocketAddr::from((Ipv6Addr::LOCALHOST, v4.local_addr()?.port()))) {
-            Ok(v6) => return Ok(vec![v4, v6]),
+        let mut v4 = listen_each(SocketAddr::from((Ipv4Addr::LOCALHOST, port)), each)?;
+        match listen_each(SocketAddr::from((Ipv6Addr::LOCALHOST, v4[0].local_addr()?.port())), each) {
+            Ok(v6) => {
+                v4.extend(v6);
+                return Ok(v4);
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
                 tries += 1;
                 if port != 0 || tries == 8 {
                     return Err(error);
                 }
             }
-            Err(_) => return Ok(vec![v4]),
+            Err(_) => return Ok(v4),
         }
     }
+}
+
+/// `each` listeners on `addr`: one as [`listen`] makes it, or several that share the port, which
+/// the system then spreads new connections over by their addresses and ports.
+fn listen_each(addr: std::net::SocketAddr, each: usize) -> std::io::Result<Vec<tokio::net::TcpListener>> {
+    if each == 1 {
+        return Ok(vec![listen(addr, false)?]);
+    }
+    // A port another server holds stays an error: a listener that shares its port would join a
+    // server of the same user that shares it too (a second copy of this app), and each would get
+    // some of the connections. Port 0 is given a port no listener holds.
+    if addr.port() != 0 {
+        drop(listen(addr, false)?);
+    }
+    let first = listen(addr, true)?;
+    let addr = first.local_addr()?;
+    let mut listeners = vec![first];
+    for _ in 1..each {
+        listeners.push(listen(addr, true)?);
+    }
+    Ok(listeners)
 }
 
 /// How many connections the kernel holds finished (handshake done) for the server to accept.
@@ -1906,13 +1984,74 @@ const BACKLOG: u32 = 511;
 
 /// A listener on `addr` with [`BACKLOG`], otherwise as `TcpListener::bind` makes it
 /// (`SO_REUSEADDR` on Unix, so a restarted server binds a port its last connections still hold
-/// in `TIME_WAIT`).
-fn listen(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
+/// in `TIME_WAIT`). With `shared`, one that shares its port with others bound the same way
+/// (`SO_REUSEPORT`, [`listen_each`]); only where [`cores`] has event loops to serve them.
+fn listen(addr: std::net::SocketAddr, shared: bool) -> std::io::Result<tokio::net::TcpListener> {
     let socket = if addr.is_ipv4() { tokio::net::TcpSocket::new_v4()? } else { tokio::net::TcpSocket::new_v6()? };
     #[cfg(unix)]
     socket.set_reuseaddr(true)?;
+    #[cfg(target_os = "linux")]
+    if shared {
+        socket.set_reuseport(true)?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = shared;
     socket.bind(addr)?;
     socket.listen(BACKLOG)
+}
+
+/// The process's event loops for [`App::per_core`]: a single-threaded runtime per core (as many
+/// as `available_parallelism` reports, which counts the CPUs the process may run on), each on a
+/// thread of its own named `corten-core-N`, started by the first serve that asks and kept until
+/// the process exits, so every serve in the process shares them and work a handler left on one
+/// (`tokio::spawn`, [`crate::Signal::finish`]) outlives its server as it does on the app's own
+/// runtime. `None` off Linux, the one system where listeners that share a port were seen to
+/// have connections spread over them (Windows has no `SO_REUSEPORT`; macOS's was not tried), so
+/// elsewhere a serve stays on the runtime it was called from. The threads are not tied to CPUs:
+/// the system's scheduler places them.
+pub(crate) fn cores() -> Option<&'static [tokio::runtime::Handle]> {
+    static CORES: std::sync::OnceLock<Vec<tokio::runtime::Handle>> = std::sync::OnceLock::new();
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let cores = CORES.get_or_init(|| {
+        let count = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+        // The crate's tests need several whatever the machine has.
+        #[cfg(test)]
+        let count = count.max(4);
+        (0..count)
+            .map(|core| {
+                let (ready, started) = std::sync::mpsc::channel();
+                std::thread::Builder::new()
+                    .name(format!("corten-core-{core}"))
+                    .spawn(move || {
+                        let runtime = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("corten: could not start a core's event loop");
+                        let _ = ready.send(runtime.handle().clone());
+                        runtime.block_on(std::future::pending::<()>())
+                    })
+                    .expect("corten: could not start a core's thread");
+                started.recv().expect("corten: could not start a core's event loop")
+            })
+            .collect()
+    });
+    Some(cores)
+}
+
+/// `listener` registered with the event loop of the core this runs on, when it is tokio's TCP
+/// listener: its accepts are then woken by that core, not through the runtime that made it. A
+/// listener of another kind keeps the runtime it was made on; the connections it accepts are
+/// the core's either way.
+fn homed<L: Listener>(listener: L) -> L {
+    let mut slot = Some(listener);
+    let any: &mut dyn std::any::Any = &mut slot;
+    if let Some(tcp) = any.downcast_mut::<Option<tokio::net::TcpListener>>() {
+        let moved = tcp.take().expect("just set").into_std().and_then(tokio::net::TcpListener::from_std);
+        *tcp = Some(moved.expect("corten: could not move a listener to its core"));
+    }
+    slot.expect("just set")
 }
 
 /// Serves `router` on every listener, each connection after its step `wrap`, until `stop`
@@ -1932,12 +2071,15 @@ pub(crate) async fn serve_router<L, W, F, Io, E, D>(
     D: ConnectionData,
 {
     use futures_util::future::{join, join_all};
+    let cores = if connections.per_core { cores() } else { None };
     // When shutdown begins: when it began, and how long connections may go on from then.
     let (stopped, watch) = tokio::sync::watch::channel(None);
+    // One clock and one count of open connections for the server, whichever core serves each.
     let held = Held {
         clock: crate::watch::Clock::start(connections.header_timeout, connections.send_timeout),
         open: connections.max.map(|max| Arc::new(tokio::sync::Semaphore::new(max))),
         bounds: connections.drain.each,
+        ahead: cores.is_some(),
     };
     let wrap = Arc::new(wrap);
     let mut http = hyper::server::conn::http1::Builder::new();
@@ -1945,16 +2087,64 @@ pub(crate) async fn serve_router<L, W, F, Io, E, D>(
     if connections.head > HYPER_BUFFER {
         http.max_buf_size(connections.head);
     }
-    let servers = listeners.into_iter().map(|listener| {
-        let (wrap, http, router, held) = (wrap.clone(), http.clone(), router.clone(), held.clone());
-        serve_listener(listener, wrap, http, router, held, watch.clone())
-    });
     let drain = connections.drain;
-    let stopping = async {
-        stop.await;
+    let close = || {
         let _ = stopped.send(Some(Closing { began: tokio::time::Instant::now(), drain }));
     };
-    let ((), counts) = join(stopping, join_all(servers)).await;
+    let counts = match cores {
+        None => {
+            let servers = listeners.into_iter().map(|listener| {
+                let (wrap, http, router, held) = (wrap.clone(), http.clone(), router.clone(), held.clone());
+                serve_listener(listener, wrap, http, router, held, watch.clone())
+            });
+            let stopping = async {
+                stop.await;
+                close();
+            };
+            join(stopping, join_all(servers)).await.1
+        }
+        // Each listener's accept loop is a task on a core's event loop, so the connections it
+        // accepts are tasks there too. This future, on the runtime it was called from, only waits:
+        // for `stop`, then for the loops to end.
+        Some(cores) => {
+            if listeners.len() < cores.len() {
+                let (some, all) = (listeners.len(), cores.len());
+                tracing::warn!("corten: per_core has {some} listener(s) for {all} cores, so it serves on {some} of them: give it one for each core");
+            }
+            // An accept loop that panicked (a listener of the app's own): shutdown begins for the
+            // rest, and the panic goes on from here once they have ended, as it would have from a
+            // loop this future ran itself.
+            let failed = tokio::sync::Notify::new();
+            let servers = listeners.into_iter().enumerate().map(|(n, listener)| {
+                let (wrap, http, router, held) = (wrap.clone(), http.clone(), router.clone(), held.clone());
+                let watch = watch.clone();
+                let server = cores[n % cores.len()]
+                    .spawn(async move { serve_listener(homed(listener), wrap, http, router, held, watch).await });
+                let failed = &failed;
+                async move {
+                    let ended = server.await;
+                    if ended.is_err() {
+                        failed.notify_one();
+                    }
+                    ended
+                }
+            });
+            let stopping = async {
+                tokio::select! {
+                    _ = stop => {}
+                    _ = failed.notified() => {}
+                }
+                close();
+            };
+            let ((), ended) = join(stopping, join_all(servers)).await;
+            let cut = |ended: Result<usize, tokio::task::JoinError>| match ended.map_err(tokio::task::JoinError::try_into_panic) {
+                Ok(cut) => cut,
+                Err(Ok(panic)) => std::panic::resume_unwind(panic),
+                Err(Err(error)) => panic!("corten: a core's event loop ended while serving: {error}"),
+            };
+            ended.into_iter().map(cut).collect()
+        }
+    };
     let cut: usize = counts.into_iter().sum();
     if cut > 0 && drain.each {
         let (grace, most) = (drain.grace, drain.most);
@@ -1974,6 +2164,13 @@ struct Held {
     open: Option<Arc<tokio::sync::Semaphore>>,
     /// Each connection keeps its request's deadline for shutdown ([`Drain::each`]).
     bounds: bool,
+    /// A connection is accepted ahead of its place under `open`, not after ([`App::per_core`]).
+    /// Each core's listener has a queue of its own, so a listener that took a place and then
+    /// waited for a connection would hold it from another core's connection already waiting:
+    /// with fewer places than listeners, for good. Accepting first, a listener holds no place
+    /// while it waits, and at the limit holds one accepted connection that is not served, and
+    /// accepts no other, until a place is free.
+    ahead: bool,
 }
 
 /// When shutdown began, and how long connections may go on from then.
@@ -2020,16 +2217,32 @@ where
     // closed because shutdown's drain ran out sends first, to be counted.
     let (alive, mut closed) = tokio::sync::mpsc::channel::<()>(1);
     loop {
-        let permit = match &held.open {
-            None => None,
-            Some(open) => tokio::select! {
-                permit = open.clone().acquire_owned() => Some(permit.expect("the semaphore is never closed")),
+        let (permit, (io, addr)) = if held.ahead {
+            let accepted = tokio::select! {
+                accepted = listener.accept() => accepted,
                 _ = stop.wait_for(Option::is_some) => break,
-            },
-        };
-        let (io, addr) = tokio::select! {
-            accepted = listener.accept() => accepted,
-            _ = stop.wait_for(Option::is_some) => break,
+            };
+            let permit = match &held.open {
+                None => None,
+                Some(open) => tokio::select! {
+                    permit = open.clone().acquire_owned() => Some(permit.expect("the semaphore is never closed")),
+                    _ = stop.wait_for(Option::is_some) => break,
+                },
+            };
+            (permit, accepted)
+        } else {
+            let permit = match &held.open {
+                None => None,
+                Some(open) => tokio::select! {
+                    permit = open.clone().acquire_owned() => Some(permit.expect("the semaphore is never closed")),
+                    _ = stop.wait_for(Option::is_some) => break,
+                },
+            };
+            let accepted = tokio::select! {
+                accepted = listener.accept() => accepted,
+                _ = stop.wait_for(Option::is_some) => break,
+            };
+            (permit, accepted)
         };
         let addr: &dyn std::any::Any = &addr;
         let peer = match addr.downcast_ref::<std::net::SocketAddr>() {
