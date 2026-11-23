@@ -1,0 +1,421 @@
+diff --git a/crates/corten/src/cache.rs b/crates/corten/src/cache.rs
+index e511acd8b..2ffa0a82f 100644
+--- a/crates/corten/src/cache.rs
++++ b/crates/corten/src/cache.rs
+@@ -155,10 +155,16 @@ impl Cache {
+             Kind::NoStore => return NO_STORE,
+             Kind::Immutable => return crate::assets::IMMUTABLE,
+         };
+-        let mut text = Vec::with_capacity(96);
++        // Written here and copied into a value of its own length: one allocation, where a vector
++        // with room is two (its bytes, and what shares them), and a kept answer holds the room
++        // for as long as it is kept (docs/design.md#choice-kept-pages).
++        let mut text = [0; LONGEST];
++        let mut at = 0;
+         let mut push = |name: &str, n: u64| {
+-            text.extend_from_slice(name.as_bytes());
+-            text.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
++            for part in [name.as_bytes(), crate::ascii::digits(n, &mut [0; 20])] {
++                text[at..at + part.len()].copy_from_slice(part);
++                at += part.len();
++            }
+         };
+         push("public, max-age=", max_age);
+         if let Some(shared) = shared {
+@@ -170,10 +176,14 @@ impl Cache {
+         if if_error > 0 {
+             push(", stale-if-error=", if_error);
+         }
+-        HeaderValue::from_maybe_shared(bytes::Bytes::from(text)).expect("digits are a valid header")
++        HeaderValue::from_bytes(&text[..at]).expect("digits are a valid header")
+     }
+ }
+ 
++/// The longest `Cache-Control` a [`Cache`] writes: each of its four names with a number of
++/// twenty digits, the most a `u64` has.
++const LONGEST: usize = "public, max-age=, s-maxage=, stale-while-revalidate=, stale-if-error=".len() + 4 * 20;
++
+ impl Cache {
+     /// Sets the response's `Cache-Control` to this, as [`settle`] reads it.
+     pub(crate) fn apply(self, res: &mut Response) {
+@@ -848,6 +858,12 @@ mod tests {
+         assert_eq!(Cache::public(minute).stale_if_error(Duration::ZERO).header(), "public, max-age=60", "0 is left out");
+         assert_eq!(Cache::no_store().stale_if_error(day).header(), "no-store");
+         assert_eq!(Cache::immutable().stale_if_error(day).header(), "public, max-age=31536000, immutable");
++        // The longest it writes, every number twenty digits, fills what it is written in.
++        let most = Duration::from_secs(u64::MAX);
++        let longest = Cache::public(most).shared(most).stale_while_revalidate(most).stale_if_error(most).header();
++        let n = u64::MAX;
++        let text = format!("public, max-age={n}, s-maxage={n}, stale-while-revalidate={n}, stale-if-error={n}");
++        assert_eq!((longest.to_str().ok(), text.len()), (Some(text.as_str()), LONGEST));
+     }
+ 
+     #[test]
+diff --git a/crates/corten/src/kept.rs b/crates/corten/src/kept.rs
+index b475c1544..95fcf78b6 100644
+--- a/crates/corten/src/kept.rs
++++ b/crates/corten/src/kept.rs
+@@ -35,7 +35,8 @@
+ //! not the one for `/items`. The headers are compared as they were sent, so `fr` and `fr-FR`
+ //! each have a copy. An answer is
+ //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
+-//! and no value made for this request alone, and varies on nothing but what the key covers.
++//! and no value made for this request alone, varies on nothing but what the key covers, and has
++//! at most [`NAMES`] header names.
+ //!
+ //! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`), text or a file (`Media`,
+ //! a sitemap or `robots.txt` of [`crate::seo`]) is kept the same
+@@ -87,8 +88,8 @@
+ //! is how stale the app said the page may be. Off under `corten dev`,
+ //! and in an app with no route that keeps a page, whose writes are then not counted. The
+ //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
+-//! the compressed forms made for it, with an allowance for what holds them; the body, the key
+-//! and each compressed form are held in allocations of their own size
++//! the compressed forms made for it, with an allowance for what holds them; the body, the key,
++//! the head's lines and each compressed form are held in allocations of their own size
+ //! (`tests/kept_memory.rs` holds the count to what the allocator is asked for). The key is
+ //! built when an answer is kept, so a miss that is not kept never builds it ([`Key`]).
+ //!
+@@ -134,11 +135,11 @@ const SHARE: usize = 8;
+ /// place of the oldest.
+ const COPIES: usize = 8;
+ 
+-/// What an entry counts for beside its key, its headers and its bytes: itself, its header map
+-/// and its places in the maps.
++/// What an entry counts for beside its key, its headers and its bytes: itself and its places in
++/// the maps.
+ const OVERHEAD: usize = 1024;
+ 
+-/// What a header counts for beside its name and value: its place in the header map.
++/// What a header counts for beside its name and value: its place in the head's lines.
+ const HEADER: usize = 112;
+ 
+ /// An entry's size once it is no longer kept: nothing made for it counts from then on.
+@@ -150,9 +151,12 @@ const GONE: usize = usize::MAX;
+ /// it would any other.
+ const ADDED: usize = 12;
+ 
+-/// The most names a kept answer's head is given that room beside. One with more is copied as it
+-/// is, so no head is too large for the map the room asks for.
+-const ROOMY: usize = 64;
++/// The most names a kept answer's head has: one with more is its handler's to answer for every
++/// request. Far more than a page's, and few enough that a map of them with room for [`ADDED`]
++/// more, and what crowding makes `http` grow it to, stays far below the most a map holds (24,576
++/// names in `http` 1.5, past which making or filling one panics), so a request given a kept
++/// answer adds its `Age` and the stages their headers as they would to its handler's.
++pub(crate) const NAMES: usize = 1024;
+ 
+ /// `Last-Event-ID`, held once: a comparison with a name that is not the `http` crate's own
+ /// would make the name each time.
+@@ -213,16 +217,26 @@ fn age_value(seconds: u64) -> HeaderValue {
+     HeaderValue::from_static(&DIGITS[at..at + digits])
+ }
+ 
+-/// A copy of a kept answer's `head`, each line where it was, with room for [`ADDED`] more
+-/// names: a copy made by `clone` holds its lines in a vector as long as they are, which grows on
+-/// the first name a stage adds. (A head with more than four lines beyond the first of their
+-/// names pays for this copy once more than for a `clone`, as the map's room for those is not
+-/// asked for.)
+-fn with_room(head: &HeaderMap) -> HeaderMap {
+-    if head.keys_len() > ROOMY {
+-        return head.clone();
+-    }
+-    let mut copy = HeaderMap::with_capacity(head.keys_len() + ADDED);
++/// A kept answer's head: its lines in the order its map gave them, each name as many times as it
++/// has values, in one allocation of their number. A copy of the handler's map would hold its
++/// table of places beside the lines and the room it grew to, as long as the answer is kept: 576
++/// bytes of jemalloc's for a page's four lines, where these take 320 (docs/design.md#choice-kept-pages).
++/// A request given the answer makes a map of them all the same ([`with_room`]).
++type Head = Box<[(header::HeaderName, HeaderValue)]>;
++
++/// The lines of `headers`, in the order a map made of them again gives them back.
++fn head_of(headers: &HeaderMap) -> Head {
++    let mut lines = Vec::with_capacity(headers.len());
++    lines.extend(headers.iter().map(|(name, value)| (name.clone(), value.clone())));
++    lines.into_boxed_slice()
++}
++
++/// A map of a kept answer's `head`, whose map had `names` names (at most [`NAMES`]), each line
++/// where it was, with room for [`ADDED`] more names: a map made just large enough grows on the
++/// first name a stage adds, and moves its lines. The room is for names and not lines, since a
++/// name's second and later values are held beside the map's table.
++fn with_room(head: &[(header::HeaderName, HeaderValue)], names: usize) -> HeaderMap {
++    let mut copy = HeaderMap::with_capacity(names + ADDED);
+     for (name, value) in head {
+         copy.append(name.clone(), value.clone());
+     }
+@@ -638,7 +652,10 @@ pub(crate) struct Entry {
+     made: Instant,
+     /// Its lifetime, in seconds.
+     lifetime: u64,
+-    head: HeaderMap,
++    head: Head,
++    /// How many names `head` has, each counted once: what its map is made with room for
++    /// ([`with_room`]). At most [`NAMES`].
++    names: u16,
+     cache: crate::cache::Typed,
+     style: Option<crate::security::StyleBlock>,
+     body: Bytes,
+@@ -941,7 +958,9 @@ impl Answers {
+             inner.slots.push(None);
+         }
+         inner.slots[slot] = Some(entry.clone());
+-        inner.at.entry(entry.hash).or_default().push(entry.clone());
++        // Room for this copy alone: most URLs are kept for one `Host` and one way of asking, and
++        // a list made by `push` has room for four, 32 bytes of jemalloc's where this takes 8.
++        inner.at.entry(entry.hash).or_insert_with(|| Vec::with_capacity(1)).push(entry.clone());
+         store.bytes.fetch_add(entry.size.load(Ordering::Acquire), Ordering::AcqRel);
+         store.make_room(&mut inner, &entry);
+         entry
+@@ -1103,7 +1122,7 @@ impl<'a> Asked<'a> {
+             self.signal.ask_language();
+         }
+         let mut res = Response::new(Body::from(entry.body.clone()));
+-        let mut head = with_room(&entry.head);
++        let mut head = with_room(&entry.head, entry.names.into());
+         // So a cache after this one, the browser's too, does not start the lifetime over.
+         head.insert(header::AGE, age_value(age));
+         *res.headers_mut() = head;
+@@ -1186,6 +1205,7 @@ impl Missed {
+             || res.headers().contains_key(header::CONTENT_ENCODING)
+             || res.headers().contains_key(header::CONTENT_RANGE)
+             || res.headers().contains_key(header::ETAG)
++            || res.headers().keys_len() > NAMES
+             || self.nonce.as_ref().is_some_and(|slot| slot.taken().is_some())
+             || self.signal.as_ref().is_none_or(crate::Signal::is_personal)
+             // Made over a time longer than it lasts: it would never be given.
+@@ -1235,7 +1255,9 @@ impl Missed {
+             data,
+             made,
+             lifetime,
+-            head: parts.headers.clone(),
++            head: head_of(&parts.headers),
++            // At most `NAMES`, as checked above.
++            names: parts.headers.keys_len() as u16,
+             cache,
+             style,
+             body: body.clone(),
+@@ -1438,6 +1460,17 @@ mod tests {
+         headers.iter().collect()
+     }
+ 
++    /// An entry and the two counts its `Arc` adds fit jemalloc's class of 448 bytes (the
++    /// template's allocator), as they do since its head is a list of lines and not a map: a field
++    /// that takes them past it costs every kept answer the next class, 64 bytes more
++    /// (docs/design.md#choice-kept-pages). A test and not a check when the crate compiles, which
++    /// a release of `http` or `bytes` that an app's lock takes could fail.
++    #[test]
++    #[cfg(target_pointer_width = "64")]
++    fn an_entry_fits_jemallocs_class_of_448_bytes() {
++        assert!(std::mem::size_of::<Entry>() + 16 <= 448, "{}", std::mem::size_of::<Entry>());
++    }
++
+     #[test]
+     fn a_kept_head_is_copied_line_for_line_with_room_for_what_the_stages_add() {
+         // Made as a page's head is, with room in its table that a `clone` has as well.
+@@ -1457,11 +1490,14 @@ mod tests {
+         head.remove("link");
+         head.append("link", HeaderValue::from_static("</a.css>; rel=preload; as=style"));
+         head.append("link", HeaderValue::from_static("</b.js>; rel=modulepreload"));
+-        let mut copy = with_room(&head);
++        // Kept as its lines alone, in the map's order, and made a map of again line for line.
++        let kept = head_of(&head);
++        assert_eq!(kept.len(), head.len());
++        let mut copy = with_room(&kept, head.keys_len());
+         assert_eq!(lines(&copy), lines(&head));
+         // As many more names as the stages add, and the map is the size it was made, with each
+-        // line where it was put: the vector a `clone` holds them in grows on the first of these
+-        // and moves them, which the size of the map's table does not show.
++        // line where it was put: the vector a map just large enough holds them in grows on the
++        // first of these and moves them, which the size of the map's table does not show.
+         let first = |copy: &HeaderMap| std::ptr::from_ref(&copy[header::CONTENT_TYPE]);
+         let (room, at) = (copy.capacity(), first(&copy));
+         assert!(room >= head.keys_len() + ADDED, "{room}");
+@@ -1475,23 +1511,43 @@ mod tests {
+         assert_eq!(first(&copy), at);
+         assert_eq!(lines(&copy)[..head.len()], lines(&head)[..]);
+ 
+-        // A head of more names than is given room, with two lines of one, is copied as it is: the
+-        // copy is the size of the map it was copied from, which was made larger than the room.
+-        let mut large = HeaderMap::with_capacity(4 * ROOMY);
+-        for name in 0..=ROOMY {
++        // A head of many names, with two lines of one, is given room for all of its names too.
++        let mut large = HeaderMap::with_capacity(256);
++        for name in 0..=128 {
+             large.append(header::HeaderName::from_bytes(format!("x-{name}").as_bytes()).unwrap(), HeaderValue::from(name));
+         }
+         large.append("x-0", HeaderValue::from_static("again"));
+-        let roomy = HeaderMap::<HeaderValue>::with_capacity(ROOMY + ADDED).capacity();
+-        assert!(large.capacity() > roomy, "{} {roomy}", large.capacity());
+-        let copy = with_room(&large);
+-        assert_eq!(lines(&copy), lines(&large));
+-        assert_eq!(copy.capacity(), large.capacity());
+-        // And the largest that is given room has that room and no more.
+-        large.remove("x-1");
+-        let copy = with_room(&large);
++        let copy = with_room(&head_of(&large), large.keys_len());
+         assert_eq!(lines(&copy), lines(&large));
+-        assert_eq!(copy.capacity(), roomy);
++        assert_eq!(copy.capacity(), HeaderMap::<HeaderValue>::with_capacity(129 + ADDED).capacity());
++    }
++
++    #[test]
++    fn the_most_names_kept_and_the_stages_fit_a_map_grown_as_far_as_crowding_grows_one() {
++        // `http` grows a crowded map while it has at most five places a name, so to at most ten:
++        // a kept head of the most names with the stages' never asks for a map past the most it
++        // holds (making a map larger than that panics).
++        assert!(HeaderMap::<HeaderValue>::with_capacity(10 * (NAMES + ADDED)).capacity() >= 10 * (NAMES + ADDED));
++        assert!(u16::try_from(NAMES).is_ok());
++    }
++
++    #[test]
++    fn a_kept_head_of_few_names_and_many_values_is_given_room_for_its_names() {
++        // Four names and 64 lines, as a page with many `Link`s has: a name's second and later
++        // values are held beside the map's table, so they need no room in it.
++        let mut head = HeaderMap::new();
++        for (name, value) in
++            [("content-type", "text/html; charset=utf-8"), ("vary", "corten, accept"), ("corten-shell", "f2858fac99b1c5e6")]
++        {
++            head.append(header::HeaderName::from_static(name), HeaderValue::from_static(value));
++        }
++        for at in 0..61 {
++            head.append(header::LINK, HeaderValue::from(at));
++        }
++        assert_eq!((head.keys_len(), head.len()), (4, 64));
++        let copy = with_room(&head_of(&head), head.keys_len());
++        assert_eq!(lines(&copy), lines(&head));
++        assert_eq!(copy.capacity(), HeaderMap::<HeaderValue>::with_capacity(4 + ADDED).capacity());
+     }
+ 
+     #[test]
+@@ -1582,7 +1638,8 @@ mod tests {
+             data: false,
+             made: Instant::now(),
+             lifetime,
+-            head: HeaderMap::new(),
++            head: Head::default(),
++            names: 0,
+             cache: crate::cache::Typed::for_test(),
+             style: None,
+             body: Bytes::from(vec![b'x'; body]),
+diff --git a/crates/corten/src/tests/cache.rs b/crates/corten/src/tests/cache.rs
+index 8a4282b79..609a410d1 100644
+--- a/crates/corten/src/tests/cache.rs
++++ b/crates/corten/src/tests/cache.rs
+@@ -1293,6 +1293,116 @@ async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
+     assert_eq!(runs.count(), ran + 1);
+ }
+ 
++/// A `Public` body whose head has `names` names: `Public`'s own and as many of `x-0`, `x-1`, ..
++/// as make up the rest. An app's handler cannot name that many (`Public::header` takes a name a
++/// type gives), so the route is made by hand as a `Public` body's is.
++#[derive(Clone)]
++struct Named {
++    names: usize,
++    runs: Runs,
++}
++
++impl crate::handler::Handler<(), ()> for Named {
++    fn keeps(&self) -> Option<crate::kept::Shape> {
++        Some(crate::kept::Shape::Body)
++    }
++
++    fn call(self, _: Request, _: ()) -> impl std::future::Future<Output = crate::response::Response> + Send + 'static {
++        self.runs.ran();
++        async move {
++            let mut res = Public::new(Duration::from_secs(60), "named ".repeat(300)).into_response();
++            let headers = res.headers_mut();
++            for n in 0.. {
++                if headers.keys_len() >= self.names {
++                    break;
++                }
++                headers.append(header::HeaderName::from_bytes(format!("x-{n}").as_bytes()).unwrap(), HeaderValue::from(n));
++            }
++            res
++        }
++    }
++}
++
++/// Asks for a `Named` route of `names` names three times, with a middleware that takes 64 of
++/// them off after the handler when `thin` (as an app's may), checking each answer; returns
++/// whether the answer was kept, which says how the second and third were checked.
++async fn named_three_times(names: usize, thin: bool) -> bool {
++    /// Takes 64 of the names off after the handler.
++    struct Thin;
++
++    impl crate::Middleware for Thin {
++        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
++            let mut res = next.run(req).await;
++            for n in 0..64 {
++                res.headers_mut().remove(format!("x-{n}").as_str());
++            }
++            res
++        }
++    }
++    let runs = Runs::default();
++    let routes = Table::new().route("/", crate::router::get(Named { names, runs: runs.clone() })).route(
++        "/held",
++        crate::router::get(|signal: crate::Signal| async move {
++            signal.shared().and_then(|shared| shared.kept.as_ref()).map_or(0, |kept| kept.bytes()).to_string()
++        }),
++    );
++    let app = App::new(Routes::from(routes)).kept_answers(1 << 30);
++    let router = if thin { app.middleware(Thin).router() } else { app.router() };
++    let held = || async { String::from_utf8(fetch(&router, "GET", "/held", &[]).await.2.to_vec()).unwrap() != "0" };
++    let lines = |headers: &HeaderMap| {
++        headers.iter().filter(|(name, _)| *name != header::AGE).map(|(n, v)| (n.clone(), v.clone())).collect::<Vec<_>>()
++    };
++    let (status, first, body) = fetch(&router, "GET", "/", &[]).await;
++    assert!(status == StatusCode::OK && runs.count() == 1, "{names}: {status}");
++    let kept = held().await;
++    for again in 2..=3 {
++        let (status, headers, same) = fetch(&router, "GET", "/", &[]).await;
++        assert_eq!((status, &same), (StatusCode::OK, &body), "{names}");
++        // Every line but `Age` as the first answer had it, in its order.
++        assert!(lines(&headers) == lines(&first), "{names}");
++        if kept {
++            assert!(headers.contains_key(header::AGE) && runs.count() == 1, "{names}: given again");
++        } else {
++            assert!(!headers.contains_key(header::AGE) && runs.count() == again, "{names}: the handler's");
++        }
++        assert_eq!(held().await, kept, "{names}: kept as it was");
++    }
++    kept
++}
++
++/// The most names a map holds: `http` grows one no further, and its `reserve` and `insert`
++/// panic past them.
++fn most_names() -> usize {
++    let name = |n: usize| header::HeaderName::from_bytes(format!("x-{n}").as_bytes()).unwrap();
++    let mut map = HeaderMap::new();
++    while map.try_append(name(map.len()), HeaderValue::from(0)).is_ok() {}
++    map.keys_len()
++}
++
++/// A head of the most names a kept answer has (`crate::kept::NAMES`) is kept and given again as
++/// it was made; one of more is its handler's for every request.
++#[tokio::test]
++async fn a_kept_answers_head_has_at_most_its_names() {
++    assert!(named_three_times(crate::kept::NAMES, false).await);
++    assert!(!named_three_times(crate::kept::NAMES + 1, false).await);
++}
++
++/// A head of as many names as the security headers (seven, with no `Vary` and no HSTS) have room
++/// beside on the handler's answer is the handler's for every request: given again, its `Age`
++/// took the room they need, and the request panicked.
++#[tokio::test]
++async fn a_head_near_the_most_names_a_map_holds_is_not_given_again_without_room_for_the_stages() {
++    assert!(!named_three_times(most_names() - 7, false).await);
++}
++
++/// A head of the most names a map holds, which no answer given again has room beside for its
++/// `Age`, is not kept (a middleware of the app's makes room for the stages after it): it was
++/// kept again by every request that could not be given it.
++#[tokio::test]
++async fn a_head_that_could_not_be_given_again_is_not_kept_again_by_every_request() {
++    assert!(!named_three_times(most_names(), true).await);
++}
++
+ /// While the store has room a page is kept the first time it is made. Once it is full, keeping
+ /// one drops another, so a page is kept from the second time its URL is asked for and a URL
+ /// asked for once takes no page's room.

@@ -1,0 +1,5 @@
+.form { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: end; margin: 0; }
+/* The kit's field (`Input`) as a price beside the small Save button: two classes, so it wins over the
+   kit's width, height and padding. */
+.form .price { width: 9ch; height: 2rem; padding-inline: .5rem; text-align: end; font-variant-numeric: tabular-nums; }
+.form p { margin: 0; color: var(--destructive); font-size: .75rem; }

@@ -1,0 +1,33 @@
+main d37fd292a227eb8d9d5bababe42b7efb1d6ca4838cec8bdf5ac98f72d3d13e07
+head 62d93f2bd174ff267f04cfd7139333ceddce120381e30182400f5b906d081d81
+round=1 config=room build=main per_request=48512.2
+round=1 config=room build=head per_request=48031.8
+round=1 config=jroom build=main per_request=53448.3
+round=1 config=jroom build=head per_request=52870.5
+round=1 config=off build=main per_request=37325.9
+round=1 config=off build=head per_request=37266.1
+round=1 config=hit build=main per_request=17876.0
+round=1 config=hit build=head per_request=17842.6
+round=1 config=plain build=main per_request=33881.4
+round=1 config=plain build=head per_request=33874.0
+round=2 config=room build=head per_request=48027.9
+round=2 config=room build=main per_request=48514.5
+round=2 config=jroom build=head per_request=53015.9
+round=2 config=jroom build=main per_request=53451.9
+round=2 config=off build=head per_request=37263.9
+round=2 config=off build=main per_request=37323.7
+round=2 config=hit build=head per_request=17844.7
+round=2 config=hit build=main per_request=17874.7
+round=2 config=plain build=head per_request=33876.4
+round=2 config=plain build=main per_request=33876.2
+round=3 config=room build=main per_request=48519.3
+round=3 config=room build=head per_request=48027.9
+round=3 config=jroom build=main per_request=53453.8
+round=3 config=jroom build=head per_request=53016.1
+round=3 config=off build=main per_request=37325.9
+round=3 config=off build=head per_request=37264.0
+round=3 config=hit build=main per_request=17872.5
+round=3 config=hit build=head per_request=17842.5
+round=3 config=plain build=main per_request=33876.2
+round=3 config=plain build=head per_request=33876.3
+CG-DONE

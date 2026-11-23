@@ -1,0 +1,13 @@
+HTTP/1.1 200 OK
+content-type: application/json
+cache-control: private, max-age=86400
+content-security-policy: default-src 'self'; script-src 'self' 'sha256-nTNh/j5EVR4pQkMgDuFT9GSiOyFTeTGtewV4aHnYbhI='; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+x-frame-options: DENY
+cross-origin-opener-policy: same-origin
+vary: cookie
+vary: accept-encoding
+content-length: 1999
+
+[["Access","Access notes for entry 7: North gate, woodland path and open ground."],["Area","Area notes for entry 7: North gate, woodland path and open ground."],["Archive","Archive notes for entry 7: North gate, woodland path and open ground."],["Boundary","Boundary notes for entry 7: North gate, woodland path and open ground."],["Condition","Condition notes for entry 7: North gate, woodland path and open ground."],["Direction","Direction notes for entry 7: North gate, woodland path and open ground."],["Environment","Environment notes for entry 7: North gate, woodland path and open ground."],["Feature","Feature notes for entry 7: North gate, woodland path and open ground."],["Ground","Ground notes for entry 7: North gate, woodland path and open ground."],["Habitat","Habitat notes for entry 7: North gate, woodland path and open ground."],["Information","Information notes for entry 7: North gate, woodland path and open ground."],["Journey","Journey notes for entry 7: North gate, woodland path and open ground."],["Key","Key notes for entry 7: North gate, woodland path and open ground."],["Location","Location notes for entry 7: North gate, woodland path and open ground."],["Material","Material notes for entry 7: North gate, woodland path and open ground."],["Notes","Notes notes for entry 7: North gate, woodland path and open ground."],["Origin","Origin notes for entry 7: North gate, woodland path and open ground."],["Path","Path notes for entry 7: North gate, woodland path and open ground."],["Quality","Quality notes for entry 7: North gate, woodland path and open ground."],["Route","Route notes for entry 7: North gate, woodland path and open ground."],["Surface","Surface notes for entry 7: North gate, woodland path and open ground."],["Terrain","Terrain notes for entry 7: North gate, woodland path and open ground."],["Use","Use notes for entry 7: North gate, woodland path and open ground."],["View","View notes for entry 7: North gate, woodland path and open ground."]]

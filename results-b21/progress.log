@@ -1,0 +1,17 @@
+== 1824f check start 09:33:22
+room: checked 1 requests: A twice and B the same; 6124 bytes
+hit: checked 1 requests: A twice and B the same; 6124 bytes
+plain: checked 1 requests: A twice and B the same; 6124 bytes
+jroom: checked 1 requests: A twice and B the same; 1999 bytes
+== 1824f checks ok 09:33:34
+== room start 09:33:34
+== room ok 09:45:36
+== hit start 09:45:36
+== hit ok 09:57:21
+== plain start 09:57:21
+== plain ok 10:09:07
+== jroom start 10:09:07
+== jroom ok 10:21:08
+failed: none
+EXIT 0
+ALL-DONE

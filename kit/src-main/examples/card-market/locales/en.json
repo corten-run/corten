@@ -1,0 +1,82 @@
+{
+  "item": {
+    "lowest": "lowest",
+    "listing_count_one": "{count} listing",
+    "listing_count_other": "{count} listings",
+    "available_one": "{count} available",
+    "available_other": "{count} available",
+    "no_listings": "No listings yet",
+    "listings": "Listings",
+    "sort_asc": "Price: low to high",
+    "sort_desc": "Price: high to low",
+    "offers": "Offers",
+    "show_all_offers": "Show all {count} offers",
+    "details": "Details",
+    "contents": "Contents",
+    "included_in": "Included in",
+    "image": "{title} image {n}",
+    "art": "{title} card art"
+  },
+  "table": {
+    "seller": "Seller",
+    "buyer": "Buyer",
+    "condition": "Condition",
+    "ships_from": "Ships from",
+    "qty": "Qty",
+    "price": "Price"
+  },
+  "listing": {
+    "rating": "{rating} ★ ({reviews})"
+  },
+  "grade": {
+    "near_mint": "Near Mint",
+    "lightly_played": "Lightly Played",
+    "moderately_played": "Moderately Played",
+    "heavily_played": "Heavily Played",
+    "damaged": "Damaged",
+    "sealed": "Sealed"
+  },
+  "detail": {
+    "set": "Set",
+    "number": "Card number",
+    "rarity": "Rarity",
+    "finish": "Finish",
+    "packs": "Packs"
+  },
+  "alert": {
+    "title": "Price alert",
+    "email": "Email",
+    "below": "Alert me below",
+    "submit": "Set alert",
+    "invalid_email": "Enter a valid email address.",
+    "invalid_price": "Enter a target price above zero.",
+    "no_listings": "This item has no listings yet, so there is no price to watch.",
+    "set": "Alert set: we will email {email} when {title} drops below {price}."
+  },
+  "category": {
+    "title": "Category {name}",
+    "back": "Back to popular items"
+  },
+  "home": {
+    "title": "Popular items",
+    "item": "Item {n}"
+  },
+  "grading": {
+    "title": "How we grade a card's condition",
+    "caption": "From Near Mint to Moderately Played, in six seconds.",
+    "captions_en": "English",
+    "captions_fr": "Français"
+  },
+  "card": {
+    "from": "From {price}"
+  },
+  "error": {
+    "not_found": "Not found",
+    "not_found_text": "There is no card at this address.",
+    "unavailable": "Not available",
+    "unavailable_text": "Check your connection and try again.",
+    "failed": "Something went wrong",
+    "failed_text": "Please try again.",
+    "home": "Go to popular items"
+  }
+}
