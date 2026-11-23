@@ -8165,14 +8165,31 @@ rules something out.
     copied it out of the map, and sends the same lines in the same order. A head of more than
     1,024 names is not kept, so that map with the stages' names stays far below the 24,576
     `http` 1.5 holds, past which making or filling one panics, and an answer given again has the
-    room its handler's had. At 0.95
-    kernel cycles a byte
-    the bytes saved are worth about 509 kernel cycles a page kept with room; that is not
-    measured in cycles yet.
+    room its handler's had. At 0.95 kernel cycles a byte the bytes saved are worth about 509
+    kernel cycles a page kept with room and 388 a JSON body. Their cycles were measured on
+    2026-11-23 (run b21, kept under the tag `evidence/611749e1`): `d3bb2e0e4` against main's
+    `04530f7e0`, rustc 1.100.0 with jemalloc 5.3.0 preloaded, on a cloud host with eight
+    dedicated CPUs (Xeon Platinum 8280, Debian 13, Linux 6.12.117) that ran nothing else, 100
+    alternated pairs of 3-second `wrk` turns for each of four workloads, each turn on a fresh
+    start, held to a margin set before the run: the one-sided 95% bound on the median per-pair
+    change in user and kernel cycles a request strictly under 1% more. All four met it, the
+    median and the bound: a page kept with room 1.98% fewer (1.30% fewer), a kept page given
+    again 2.71% fewer (1.96%), a page not `Public` 1.94% fewer (1.59%) and the JSON body kept
+    with room 1.45% fewer (0.99%), on 0.51%, 0.13%, 0.00% and 0.36% fewer user instructions.
+    The kernel ran 478 fewer cycles a page kept with room (bound 309) against the 509 expected,
+    and 201 fewer a JSON body (bound 12) against 388, with resident memory 543 and 420 bytes
+    fewer a request. Those are differences between these two binaries on that host, not a
+    saving in cycles shown to be the cut's: the page not `Public` keeps nothing and ran the
+    same instructions, yet 1.94% fewer cycles, as much as the kept pages moved, so one build of
+    each side differs by about what is measured (as where the code sits did above), though the
+    run does not show that placement caused it either. What it shows is that the cut costs no
+    more than 1% on any of the four. How much more a `Public` page's first ask costs than the
+    same page not kept, which the issue asks, stays open: the cut takes 536 of the bytes it
+    holds, not that cost.
     Not measured: a file kept for a handler that reads it from a disk, a database or a store
     of objects, where the read is what a kept file saves; a body between 1,024 and 8,000
-    bytes in cycles (the 1,999-byte JSON body above was counted for memory and instructions
-    only), under 1,024 or over 1 MiB; a head of many names or many values of one name (a page
+    bytes in cycles against its handler (the 1,999-byte JSON body above was measured in cycles
+    only against main, for the cut of what it holds), under 1,024 or over 1 MiB; a head of many names or many values of one name (a page
     with dozens of `Link`s), whose map a kept answer given again makes with room for its names,
     beside the four lines measured; a store that kept pictures or downloads fill, where
     pages are turned out for them; a picture asked for with `gzip` alone; a request with a
@@ -8269,7 +8286,9 @@ rules something out.
     to tell where a build's code sits from what the change costs, so an older answer's
     digits written to a buffer can be read again.
 
-    Last checked: 2026-11-23 for what a kept answer holds, `23a98a7e9` against `a02c81e86`
+    Last checked: 2026-11-23 for the cycles of the cut of what a kept answer holds, `d3bb2e0e4`
+    against `04530f7e0` on the Xeon Platinum 8280 with jemalloc 5.3.0, kept under the tag
+    `evidence/611749e1`; 2026-11-23 for what a kept answer holds, `23a98a7e9` against `a02c81e86`
     under jemalloc 5.3.0, and for its instructions, `4e53ff290` against `04530f7e0` under
     callgrind (valgrind 3.19.0), with rustc 1.100.0 in a Debian 12 container; 2026-11-22 for the forms of a kept answer's `Age`, `48df6c67c`, `c25d263a9`,
     `77dde53d6` and `09cddd7f1` (this choice's `0a2dc9b32` with each form and the benchmark's
