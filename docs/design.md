@@ -8264,8 +8264,9 @@ rules something out.
     minor page faults a job under jemalloc 5.3.0 with the 64 KiB thread cache `corten new`'s
     Dockerfile then set, whatever the pause between jobs, and none under glibc's allocator, and its
     jobs took 1.2 to 3.3 times as long under jemalloc, the most at 1 KiB: under that setting each
-    job faulted in about a megabyte of brotli's tables afresh, a cost that did not grow with the
-    body and that callgrind, which counts user space, does not see. Those are the old probe's
+    job took faults, about a megabyte of pages, that did not grow with the body, most likely in
+    brotli's per-job tables (the probe counted a thread's faults, not which allocations took them),
+    a cost that callgrind, which counts user space, does not see. Those are the old probe's
     counts, not today's image's: the 512 KiB thread cache keeps brotli 1's buffers between
     responses, and whether it keeps any of a brotli 5 job's, which would make that part smaller,
     and so how many faults a job takes now, is not measured. The eighth run (below) does not
@@ -8298,8 +8299,10 @@ rules something out.
     ten times its due in a lifetime can send at most nine tenths of those answers in brotli 5, of
     all its answers to clients that rank brotli first taken together, browsers and clients that
     accept `br` alone; not of its browser answers alone, since clients that accept `br` alone can
-    make the whole due before a browser asks, after which every browser answer can be brotli 5. It
-    is nine tenths of the browser answers only where browsers make all ten dues. And that many
+    make the whole due before a browser asks, after which every browser answer can be brotli 5.
+    Where browsers are the only clients that rank brotli first, nine tenths is the most of their
+    answers it can be; with both, the browsers' share depends on which answers follow the
+    encoding's publication. And that many
     only if the queue takes the job at the due and its encoding is published
     promptly, the store admits the bytes, and they are smaller than the form made for the coding
     each answer would get otherwise: a full queue is asked again only a whole due later, a late or
@@ -8327,7 +8330,8 @@ rules something out.
     this change's head, with main merged, against main's `e19c25b5b` (declared first against
     `04530f7e0`, again for the merged pair against `1fb2b3784` in round 18, and again once main set
     the image's thread cache to 512 KiB) on such a host, every start under the allocator setting
-    the measured trees' image ships (read from each tree's `examples/card-market/Dockerfile`, now
+    the measured trees' image ships (read from the environment of the image each tree's
+    `examples/card-market/Dockerfile` builds, now
     `MALLOC_CONF=background_thread:true,tcache_max:524288`; the run refuses to start if the base's,
     the head's and its declared setting differ), with every turn on a newly
     started build, 100 pairs a workload and the margin of the runs before, a one-sided 95% bound
