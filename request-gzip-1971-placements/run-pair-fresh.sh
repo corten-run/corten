@@ -28,7 +28,7 @@
 #           100% of the turn (no multiplexing). With the default the CSV is cycles-<workload>.csv,
 #           columns cycles_u,cycles_k,instructions_u; otherwise counts-<workload>.csv, a column per
 #           event (its name with every character but letters and digits turned to _).
-#           (corten-run/corten#1923's copy; the rest is D:\Temp\cycles\run-pair-fresh.sh unchanged.)
+#           (corten-run/corten#1923's copy.)
 # Writes <out dir>/cycles-<workload>.csv, raw-<workload>.log (every turn's perf and wrk output),
 # answers-<workload>/ and serve-<workload>-{base,head}.log.
 set -eu

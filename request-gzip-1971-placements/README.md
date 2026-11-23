@@ -33,7 +33,8 @@ change does not pass on it, whatever its own bound. `results/h09/results/placeme
    `link-capture.mjs`, `relink.mjs`, `pads.mjs`, `stats.mjs` and `placement.mjs`. `src-base/` and
    `src-head/` are `git archive` of `crates examples Cargo.toml Cargo.lock .cargo` at the two
    commits. One comment line of `run-pair-fresh.sh` that named a path on the workstation the kit
-   was packed on was removed for this receipt; the script is otherwise as it ran.
+   was packed on was shortened in this commit; the script is otherwise as it ran, and this
+   commit's parent, under the tag `evidence/request-gzip-1971-placements`, has it as it ran.
 3. `results/h09`: the host that ran `plain` (a c-8 with a Xeon Platinum 8168). `results/h10`: the
    host that ran `zstd` and then `sb-gzbr` (a c-8 with a Xeon Platinum 8280). Both Debian 13,
    Linux 6.12.117, rustc 1.100.0 with LLD 23.1.5, gcc 14.2.0, perf 6.12.118. In each: `results/`
