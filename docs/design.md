@@ -7978,9 +7978,9 @@ rules something out.
     fewer; 1,611.8 instruction-cache misses against 1,593.8 and 314.3 data reads missed
     against 284.9. Simulated instruction-cache misses on the page for one visitor were 1,657.5
     against 1,654.0, on the unstaged route 1,029.5 against 1,005.1 with five policies and with
-    one. `ascii::digits`'s `inline(always)` reaches the JSON writer too (`json::unsigned`, an
+    one. `ascii::digits`'s `inline(always)` reached the JSON writer too (`json::unsigned`, an
     integer of three digits or more: the benchmark fixture's 500 items have 124,192, widths,
-    heights and counts). Its instructions are main's there: `json::unsigned` disassembles to
+    heights and counts). Its instructions were main's there: `json::unsigned` disassembles to
     the same 254 instructions in both builds of card-market, and counted the same way through
     card-market's router in process (a test added to the counted trees only, each item asked
     for once first, then (1,200 requests less 200) over 1,000 of `/api/items/{id}`), every
@@ -7989,14 +7989,42 @@ rules something out.
     50,576.2), moved by glibc's allocator and a sort in the fixture's order, as runs of one
     build do; the item's `ToJson` alone, 35,416.5 against 35,382.8 an item (35,412.2 to
     35,428.0 against 35,303.8 to 35,416.8), every function main's but the allocator and
-    `memcpy`. A third quiet-host run is declared before it runs, as the second, in place of
-    the one declared against `a0eeeacca`: this change's code as of `3ed9d15f3` (`3438b72d1`'s)
-    against `40aba72e1`, the six answers and the kept page whose header is not held, every turn
-    on a freshly started build, 100 pairs, passing when the one-sided 95% upper bound of the
-    paired change in user plus kernel cycles a request is under +1% for every one of the seven;
-    until it passes, this change does not merge. After it, and apart from it, 30 pairs of each
-    in 1 s turns count user first-level instruction-cache misses and user instructions alone, to
-    say what the hardware's misses were, not as a condition.
+    `memcpy`.
+    The attribute is now on `ascii::digits_inlined`, which only `Cache-Control`'s two writers
+    call, and `ascii::digits`, the JSON writer's, is main's `#[inline]` again around the same
+    body (`e37a8b260`), so the catalog's item JSON, which the run below does not measure, takes
+    main's code for it: in release builds of card-market (rustc 1.100.0) from `e37a8b260` and
+    `7e9a0c715`, all 83 functions named in `corten::json` disassemble to the same 37,540
+    instructions apart from addresses and the names of anonymous constants, `json::unsigned` 245
+    of them. `Cache::value` now matches the kind first, so `no-store`'s and `immutable`'s
+    headers, constants, are taken without reading the thread's unstaged flag or calling the held
+    header's function, which a staged `NoStore` answer did before. `settle` still looks through
+    the held headers for such a line: under callgrind as above (rustc 1.100.0, the run's
+    binaries, `e37a8b260` against `7e9a0c715`), a short `NoStore` text answer on a staged route
+    after the thread had made four `Public` headers took 21,317.4 instructions against 21,302.6
+    (21,311.5 to 21,319.5 against 21,297.3 to 21,309.5, three rounds), by function `settle` 551
+    against 516, the look through the four, `Cache::apply` 1 more and the extensions' map 21
+    fewer, which hashes types whose ids differ between the two builds; a short image given
+    `Public::immutable` the same way 23,070.7 against 23,071.3 (23,063.4 to 23,075.8 against
+    23,060.9 to 23,073.5), `settle` 1,271 against 1,247. Counted once each the same way, the
+    seven answers above: the page for one visitor 40,208.8 against 40,227.5, the `Public` page
+    in an app that keeps none 42,305.1 against 43,386.6 (2.49% fewer), a kept page 23,852.1
+    against 24,601.1 (3.04% fewer), the page with five policies behind a middleware 43,998.7
+    against 46,403.9 (5.18% fewer), the unstaged route with five policies 13,551.9 against
+    13,544.8 and with one 13,550.0 against 13,552.9, and a kept page whose header is not held
+    24,590.4 against 24,594.2. The quiet-host run is declared before it runs, in place of the
+    third: this change's code as of `e37a8b260` against `7e9a0c715`, the `origin/main` the
+    branch merged, the seven answers above and those two, every turn on a freshly started build,
+    100 pairs after one not recorded, passing when the one-sided 95% upper bound of the paired
+    change in user plus kernel cycles a request (the 59th of the 100 sorted changes) is under
+    +1% for every one of the nine; none is a negative control and no layout floor applies. Each
+    build's dependencies are fixed: its lock is the tree's with the probe's own package added,
+    every package from a registry the workspace lock's version and checksum, and it is built
+    with `--locked`. The bound is read only from complete evidence: every one of the 100 pairs,
+    one turn a build, every counter at 100% running, every turn's requests counted without an
+    error. Until it passes, this change does not merge. After it, and apart from it, 30 pairs of
+    each in 1 s turns count user first-level instruction-cache misses and user instructions
+    alone, to say what the hardware's misses were, not as a condition.
     Set aside, counted the same way on the unstaged route with
     five policies and with one, each against main: a thread that stops looking in its four
     after eight misses in a row, but for one call in 64, 10 more instructions and 517 fewer, with
@@ -8377,7 +8405,10 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-22, under callgrind as below `3438b72d1` (main's `40aba72e1` merged)
+    Last checked: 2026-11-22, under callgrind as below `e37a8b260` (main's `7e9a0c715` merged)
+    against `7e9a0c715` with rustc 1.100.0, a short `NoStore` answer and an immutable image after
+    four `Public` headers, and card-market's `corten::json` functions disassembled in both builds;
+    2026-11-22, under callgrind as below `3438b72d1` (main's `40aba72e1` merged)
     against `40aba72e1`, three rounds in turned order, with a kept page whose header the thread
     does not hold, and card-market's item JSON (`/api/items/{id}` in process and its `ToJson`
     alone, by a test added to the counted trees only, the mean of two starts that each moved the
