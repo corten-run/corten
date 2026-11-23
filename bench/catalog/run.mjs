@@ -1,14 +1,13 @@
 // Independent catalog-v1 baseline. Never invokes fullstack runners, trend, nightly, or cleanup.
 // node bench/catalog/run.mjs c1 [--apps corten,nextjs] [--build] [--check-only] [--passes 3]
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sampleStats } from "./stats.mjs";
-import { commandOutput } from "./output.mjs";
+import { commandRunner, failureReceipt } from "./output.mjs";
 import { readFailedCheck } from "./check-result.mjs";
 import { describeK6, k6Image } from "../load-tool.mjs";
 import { collectTimedPhase, verifyTimedPhase } from "./timed.mjs";
@@ -69,49 +68,9 @@ const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.string
 const log = (message) => { const line = `${new Date().toISOString()} ${message}`; console.log(line); appendFileSync(join(folder, "run.log"), `${line}\n`); };
 const active = new Set();
 let interrupted = false;
-const children = new Set();
-// This stops command clients, not browser descendants. Browsers run ONLY in
-// owned containers, which finally removes even when their docker client exited.
-function killCommand(child) {
-  if (process.platform === "win32" && child.pid) {
-    // Node's Windows kill terminates only the child; the check's browser would survive.
-    const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", cwd: repo });
-    killer.on("error", () => child.kill("SIGKILL"));
-  } else if (child.pid) {
-    try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
-  }
-  const force = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    if (process.platform !== "win32" && child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); } }
-    else child.kill("SIGKILL");
-  }, 2000);
-  force.unref();
-}
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { interrupted = true; for (const child of children) killCommand(child); });
-async function command(binary, args, { timeout = 30000, file, capture = true, cleanup = false } = {}) {
-  if (interrupted && !cleanup) throw new Error("catalog run interrupted");
-  const output = commandOutput({ file, capture });
-  const child = spawn(binary, args, { cwd: repo, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-  children.add(child);
-  let killed = false;
-  let ioError;
-  const keep = (chunk, stderr) => {
-    try { (stderr ? output.stderr : output.stdout)(chunk); }
-    catch (e) { ioError ??= e; killCommand(child); }
-  };
-  child.stdout.on("data", (c) => keep(c, false));
-  child.stderr.on("data", (c) => keep(c, true));
-  const timer = setTimeout(() => { killed = true; killCommand(child); }, timeout);
-  try {
-    const { code, signal } = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", (code, signal) => resolve({ code, signal })); });
-    if (ioError) throw ioError;
-    if (code !== 0 || killed || (interrupted && !cleanup)) {
-      const failure = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${output.diagnostic()}`);
-      failure.exit = { code, signal, expired: killed, interrupted: interrupted && !cleanup }; throw failure;
-    }
-    return output.result();
-  } finally { clearTimeout(timer); children.delete(child); output.close(); }
-}
+const runner = commandRunner({ cwd: repo, interrupted: () => interrupted });
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { interrupted = true; runner.interrupt(); });
+const command = runner.command;
 const docker = (args, opts) => command("docker", args, opts);
 const inspect = async (name, cleanup = false) => JSON.parse(await docker(["inspect", name], { cleanup }))[0];
 const fail = (app, source, stage, error) => {
@@ -126,6 +85,21 @@ const owned = async (args, name, opts) => {
   await docker([args[0], "--name", name, "--label", `${label}=${runId}`, ...args.slice(1)], opts);
   return name;
 };
+// A failed bounded command saves its receipt BEFORE owned cleanup removes the container.
+// Saving it never replaces or clears the failure itself.
+async function saveReceipt(path, stage, name, error) {
+  const receipt = await failureReceipt(docker, { stage, container: name, error, owned: (labels) => labels?.[label] === runId });
+  try { writeFileSync(path, JSON.stringify(receipt, null, 2)); log(`${stage} failure receipt: ${path}`); }
+  catch (e) { log(`${stage} failure receipt not saved: ${e.message}`); }
+}
+async function startApp(args, name, receipt) {
+  try { return await owned(["run", "-d", ...args], name); }
+  catch (e) { await saveReceipt(receipt, "app start", name, e); throw e; }
+}
+async function collectLogs(name, file, stage, opts = {}) {
+  try { await docker(["logs", name], { file, capture: false, ...opts }); }
+  catch (e) { await saveReceipt(`${file}.failure.json`, stage, name, e); throw e; }
+}
 async function remove(name) {
   // A failed create might not have created anything. A collision is never ours to stop.
   const list = await docker(["ps", "-a", "--filter", `name=^/${name}$`, "--format", "{{.ID}}"], { cleanup: true });
@@ -141,7 +115,7 @@ async function portOf(name) {
   const port = info.NetworkSettings.Ports["8080/tcp"]?.[0]?.HostPort;
   if (!info.State.Running || !port) {
     const file = join(folder, `${name}-startup.log`);
-    await docker(["logs", name], { file, capture: false });
+    await collectLogs(name, file, "startup logs");
     throw new Error(`${name}: native startup failed; state=${JSON.stringify(info.State)}\n${readFileSync(file, "utf8")}`);
   }
   return `http://127.0.0.1:${port}`;
@@ -347,7 +321,7 @@ try {
       mkdirSync(out, { recursive: true });
       try {
         log(`checking ${app} ${source}`);
-        await owned(["run", "-d", ...appArgs(name, source, entry.imageId)], name);
+        await startApp(appArgs(name, source, entry.imageId), name, join(out, "app-start.failure.json"));
         const base = await portOf(name);
         await ready(base);
         // Chromium starts a separate process group. A host Node/group kill cannot
@@ -389,7 +363,7 @@ try {
       } catch (e) { fail(app, source, "checks", e); }
       finally {
         if (active.has(checkContainer)) await remove(checkContainer);
-        try { await docker(["logs", name], { file: join(out, "app.log"), capture: false }); } catch (e) { fail(app, source, "app logs", e); }
+        try { await collectLogs(name, join(out, "app.log"), "app logs"); } catch (e) { fail(app, source, "app logs", e); }
         await remove(name);
       }
       save();
@@ -412,7 +386,7 @@ try {
           const name = `${runId}-corten`, raw = join(folder, "preflight", subject.source);
           mkdirSync(raw, { recursive: true });
           try {
-            await owned(["run", "-d", ...appArgs(name, subject.source, summary.apps.corten.imageId)], name);
+            await startApp(appArgs(name, subject.source, summary.apps.corten.imageId), name, join(raw, "app-start.failure.json"));
             await ready(await portOf(name));
             const instance = containerEvidence(await inspect(name));
             writeFileSync(join(raw, "container.json"), JSON.stringify(instance, null, 2));
@@ -460,7 +434,7 @@ try {
         if (group) run.outcome = phases.some((phase) => run.phases[phase].outcome === "failed") ? "failed" : "passed";
       } catch (e) { run.failed = e.message; fail(app, source, `load ${target} pass ${pass}`, e); }
       finally {
-        try { await docker(["logs", name], { file: join(raw, "app.log"), capture: false }); } catch (e) { fail(app, source, "app logs", e); }
+        try { await collectLogs(name, join(raw, "app.log"), "app logs"); } catch (e) { fail(app, source, "app logs", e); }
         await remove(name);
       }
       for (const phase of phases) {
@@ -478,7 +452,7 @@ finally {
   if (group && summary.tools?.upstream) {
     try {
       assert.equal((await inspect(upstreamName, true)).Config.Labels?.[label], runId, "refusing unowned upstream log collection");
-      await docker(["logs", upstreamName], { file: join(folder, "upstream.log"), capture: false, cleanup: true });
+      await collectLogs(upstreamName, join(folder, "upstream.log"), "upstream logs", { cleanup: true });
     } catch (e) { fail(null, null, "upstream logs", e); summary.complete = false; summary.attemptComplete = false; }
   }
   for (const name of [...active].reverse()) {

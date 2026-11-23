@@ -181,6 +181,15 @@ Application logs preserve both stdout and stderr directly in each raw `app.log`,
 output larger than the command's bounded in-memory diagnostic tail. Command deadlines and
 log-collection failures remain explicit failures; incomplete logs are not silently accepted.
 This does not disable native access logging or change measured application settings.
+When a detached app start or an application, startup or upstream log collection fails or
+reaches its deadline, the runner saves a `catalog-command-failure/v1` receipt before it removes
+the owned container: `app-start.failure.json` in the source or preflight folder, or
+`<log>.failure.json` beside the partial log. It records the Docker client's lifetime in
+milliseconds after spawn (first and last output on each pipe, client exit, each pipe's close,
+and when and why the runner stopped it), the bytes and SHA-256 of what the log collection
+wrote, the container's `docker inspect` state and its Docker events from one minute before the
+command. Each probe has a 10-second bound and a probe failure is recorded in the receipt. The
+failure still fails the run; nothing is retried and no command deadline changes.
 Startup failures include the container's actual exit state and application log. A checker
 failure without a valid record-response failure receipt retains its original diagnostic
 (including browser/style assertions), rather than replacing it with a missing-file error.
@@ -526,7 +535,9 @@ The runner uses a version-matched Playwright container for browser checks. Remov
 container also removes detached browser processes after a timeout or interruption. To exercise
 that Linux cleanup regression locally, run `CATALOG_DOCKER_TESTS=1 node --test
 bench/catalog/cleanup.test.mjs` in a shell that supports this environment-variable syntax (or
-set the variable separately in PowerShell). The ordinary harness tests do not require Docker.
+set the variable separately in PowerShell). The same variable runs the failure receipt's probes
+against a real container in `bench/catalog/output.test.mjs`. The ordinary harness tests do not
+require Docker.
 
 The opt-in native Gin permission regression builds the real Dockerfile from a Linux
 0700-directory/0600-file context and generates fixtures under umask 0077. It retains the
