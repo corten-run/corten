@@ -87,10 +87,12 @@ const owned = async (args, name, opts) => {
 };
 const ownedByRun = (labels) => labels?.[label] === runId;
 // A failed bounded command saves its receipt BEFORE owned cleanup removes the container.
+// `verified` is the one ownership check that command relied on; the receipt never re-resolves the name.
 // Saving and reporting it are best effort: they never replace or clear the failure itself.
-async function saveReceipt(path, stage, name, error) {
+async function saveReceipt(path, stage, name, error, verified) {
   try {
-    writeFileSync(path, JSON.stringify(await failureReceipt(docker, { stage, container: name, error, owned: ownedByRun }), null, 2));
+    if (typeof verified === "function") verified = await verified();
+    writeFileSync(path, JSON.stringify(await failureReceipt(docker, { stage, container: name, error, verified, owned: ownedByRun }), null, 2));
     log(`${stage} failure receipt: ${path}`);
   } catch (e) { try { log(`${stage} failure receipt not saved: ${e?.message ?? e}`); } catch {} }
 }
@@ -98,16 +100,22 @@ async function saveReceipt(path, stage, name, error) {
 // not the measured cold-start create and start.
 async function startApp(args, name, receipt) {
   try { return await owned(["run", "-d", ...args], name, { receipt: true }); }
-  catch (e) { await saveReceipt(receipt, "app start", name, e); throw e; }
+  catch (e) {
+    // Nothing checked this container before its start failed, so the receipt's check is the only one.
+    await saveReceipt(receipt, "app start", name, e, () => ownedContainer((args) => docker(args, { cleanup: true, timeout: 10000 }), name, ownedByRun));
+    throw e;
+  }
 }
 // Logs come only from the container this run owns, by its immutable ID, never by a name
-// another container could hold.
+// another container could hold. Its one ownership check also binds the failure receipt, and a
+// missing or foreign container gets a receipt with the refusal.
 async function collectLogs(name, file, stage, opts = {}) {
+  let found = { refusal: "not inspected" };
   try {
-    const found = await ownedContainer((args) => docker(args, { cleanup: opts.cleanup }), name, ownedByRun);
+    found = await ownedContainer((args) => docker(args, { cleanup: opts.cleanup }), name, ownedByRun);
     if (!found.id) throw new Error(`refusing ${stage} from ${name}: ${found.refusal}${found.problem ? ` (${found.problem})` : ""}`);
     await docker(["logs", found.id], { file, capture: false, receipt: true, ...opts });
-  } catch (e) { await saveReceipt(`${file}.failure.json`, stage, name, e); throw e; }
+  } catch (e) { await saveReceipt(`${file}.failure.json`, stage, name, e, found); throw e; }
 }
 async function remove(name) {
   // A failed create might not have created anything. A collision is never ours to stop.
@@ -463,10 +471,8 @@ try {
 } catch (e) { fail(null, null, suiteStage, e); }
 finally {
   if (group && summary.tools?.upstream) {
-    try {
-      assert.equal((await inspect(upstreamName, true)).Config.Labels?.[label], runId, "refusing unowned upstream log collection");
-      await collectLogs(upstreamName, join(folder, "upstream.log"), "upstream logs", { cleanup: true });
-    } catch (e) { fail(null, null, "upstream logs", e); summary.complete = false; summary.attemptComplete = false; }
+    try { await collectLogs(upstreamName, join(folder, "upstream.log"), "upstream logs", { cleanup: true }); }
+    catch (e) { fail(null, null, "upstream logs", e); summary.complete = false; summary.attemptComplete = false; }
   }
   for (const name of [...active].reverse()) {
     try { await remove(name); } catch (e) { summary.cleanupFailures.push({ resource: name, error: e.message }); }

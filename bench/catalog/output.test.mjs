@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import cp, { spawn } from "node:child_process";
 import crypto, { createHash, randomBytes } from "node:crypto";
 import fs, { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import test from "node:test";
-import { commandOutput, commandRunner, failureReceipt } from "./output.mjs";
+import { commandOutput, commandRunner, failureReceipt, killCommand, ownedContainer, releaseMs } from "./output.mjs";
 import { upstreamImage } from "./raw.mjs";
 
 test("full raw stdout and stderr survive the bounded diagnostic tail", () => {
@@ -240,6 +241,242 @@ test("on Linux a descendant in the client's process group that ignores SIGTERM i
   }
 });
 
+test("on Linux a descendant in the client's group that ignores SIGTERM and holds no pipe is gone when the command settles", { skip: process.platform !== "linux", timeout: 20000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "catalog-command-group-nopipe-"));
+  const pidFile = join(dir, "holder.pid");
+  // The holder stays in the client's group but has no pipe, so the pipes close as soon as
+  // SIGTERM ends the client; the command must still wait for the group's SIGKILL.
+  const holder = `process.on('SIGTERM',()=>{});require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000)`;
+  const client = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(holder)}],{stdio:'ignore'});setInterval(()=>{},1000)`;
+  try {
+    const { command } = commandRunner({ cwd: tmpdir() });
+    const error = await failure(command(...node(client), { timeout: 2000, receipt: true }));
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    assert.equal(alive(pid), false, "the holder in the client's group is gone once the command settles");
+    const life = error.lifetime;
+    assert.equal(life.stopped, "deadline"); assert.equal(life.releasedMs, null);
+    assert.ok(life.closeMs < life.stoppedMs + 1500, `the pipes closed when the client ended: ${JSON.stringify(life)}`);
+    assert.deepEqual(life.kill, { method: "process group", term: "sent", kill: "sent", end: "group gone" });
+    assert.ok(life.settledMs >= life.stoppedMs + 2000, "the command settled after the group's SIGKILL");
+  } finally {
+    try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL"); } catch {}
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Every signal this process sends while `run` runs, recorded and answered by `answer`.
+async function signals(answer, run) {
+  const real = process.kill, sent = [];
+  process.kill = (pid, signal) => { sent.push([pid, signal]); return answer(pid, signal); };
+  try { return { result: await run(), sent }; } finally { process.kill = real; }
+}
+const errno = (code) => Object.assign(new Error(code), { code });
+
+test("a group whose ID may no longer be the client's never gets SIGKILL, and an owned TERM-resistant group does", { timeout: 20000 }, async () => {
+  const clients = [], options = { platform: "linux", graceMs: 300, pollMs: 20, boundMs: 1500 };
+  const client = (pid, exitCode = null, exitAfterMs = null) => {
+    const c = { pid, exitCode, signalCode: null, signals: [], kill(signal) { this.signals.push(signal); } };
+    if (exitAfterMs !== null) setTimeout(() => { c.exitCode = 0; }, exitAfterMs);
+    clients.push(c); return c;
+  };
+  const groups = { 4201: "gone", 4202: "gone", 4203: "term then gone", 4204: "foreign after exit", 4205: "until killed", 4206: "until killed" };
+  const killed = new Set();
+  const { result, sent } = await signals((pid, signal) => {
+    const group = groups[-pid];
+    if (group === "gone") throw errno("ESRCH");
+    if (signal === 0 && group === "term then gone") throw errno("ESRCH");
+    if (signal === 0 && group === "foreign after exit") throw errno("EPERM");
+    if (signal === 0 && killed.has(pid)) throw errno("ESRCH");
+    if (signal === "SIGKILL") {
+      killed.add(pid);
+      const leader = clients.find((c) => c.pid === -pid);
+      if (leader.exitCode === null) leader.signalCode = "SIGKILL";
+    }
+    return true;
+  }, async () => {
+    const records = await Promise.all([
+      killCommand(client(4201, 0), options), // Already exited with code 0: its group's ID may be reused.
+      killCommand(client(4202, null, 50), options), // The initial group SIGTERM finds no group (ESRCH).
+      killCommand(client(4203, null, 50), options), // The group vanishes after the client exits.
+      killCommand(client(4204, null, 50), options), // After the client exits the ID belongs to someone else.
+      killCommand(client(4205, null, 50), options), // A member ignores SIGTERM after the client exits.
+      killCommand(client(4206), options), // The client itself ignores SIGTERM.
+    ]);
+    // Anything still scheduled would fire within the old two-second escalation.
+    await sleep(2300);
+    return records;
+  });
+  const kills = sent.filter(([, signal]) => signal === "SIGKILL").map(([pid]) => pid);
+  assert.deepEqual(kills.sort(), [-4205, -4206], "SIGKILL only for a group still the client's");
+  assert.deepEqual(sent.filter(([pid]) => pid === -4201), [], "an exited client's group is never signalled");
+  assert.deepEqual(sent.filter(([pid]) => pid === -4202), [[-4202, "SIGTERM"]], "nothing after ESRCH");
+  assert.deepEqual(sent.filter(([pid, signal]) => pid === -4204 && signal !== 0), [[-4204, "SIGTERM"]]);
+  assert.deepEqual(clients.map((c) => c.signals), [[], ["SIGTERM"], [], [], [], []], "only the unreaped client is signalled directly");
+  assert.deepEqual(result.map((r) => [r.term ?? null, r.kill ?? null, r.end]), [
+    [null, null, "the client had already exited; nothing signalled"], ["ESRCH", null, "the client exited; the group was not signalled"],
+    ["sent", null, "group gone"], ["sent", null, "group no longer the client's (EPERM)"], ["sent", "sent", "group gone"], ["sent", "sent", "group gone"]]);
+});
+
+test("an interrupt accepted just before the deadline stays an interrupt while the pipes are held", { timeout: 20000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "catalog-command-interrupt-deadline-"));
+  const pidFile = join(dir, "holder.pid");
+  try {
+    let interrupted = false;
+    const runner = commandRunner({ cwd: tmpdir(), interrupted: () => interrupted });
+    const began = Date.now();
+    const pending = failure(runner.command(...node(heldClient(pidFile)), { timeout: 2500, receipt: true }));
+    for (let i = 0; i < 100 && !existsSync(pidFile); i++) await sleep(50);
+    await sleep(Math.max(0, 2200 - (Date.now() - began)));
+    assert.ok(Date.now() - began < 2450, "the interrupt came before the deadline");
+    interrupted = true; runner.interrupt();
+    const error = await pending;
+    assert.deepEqual(error.exit, { code: 0, signal: null, expired: false, interrupted: true });
+    assert.doesNotMatch(error.message, /timeout/);
+    assert.match(error.message, /: exit 0; interrupted; the client exited 0 at \d+ ms but its output stayed open; its pipes were released at \d+ ms without end of file/);
+    const life = error.lifetime;
+    assert.equal(life.stopped, "interrupt"); assert.ok(life.stoppedMs < 2500 && life.releasedMs >= life.stoppedMs + releaseMs - 50, JSON.stringify(life));
+  } finally {
+    try { process.kill(Number(readFileSync(pidFile, "utf8"))); } catch {}
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the Windows taskkill helper is bounded, never run for an exited client, and a failure is recorded and falls back to the client", { timeout: 30000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "catalog-taskkill-"));
+  // The substituted helper receives the client's PID as taskkill would.
+  const options = (script) => ({ platform: "win32", helperMs: 500, boundMs: 2000, taskkill: (pid) => [process.execPath, ["-e", script, String(pid)]] });
+  const live = () => spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore", windowsHide: true });
+  const ended = (child) => new Promise((resolve) => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once("exit", resolve); });
+  const helperPid = join(dir, "helper.pid"), marker = join(dir, "helper.ran");
+  const clients = [], helpers = [];
+  try {
+    // Any process.kill would mean the Windows path was not taken.
+    const { sent } = await signals(() => { throw errno("ESRCH"); }, async () => {
+      const exitedClient = spawn(process.execPath, ["-e", ""], { stdio: "ignore", windowsHide: true });
+      await ended(exitedClient);
+      const record = await killCommand(exitedClient, options(`require('fs').writeFileSync(${JSON.stringify(marker)},'')`));
+      await sleep(500);
+      assert.equal(existsSync(marker), false, "no helper for a client that already exited");
+      assert.deepEqual(record, { method: "taskkill", end: "the client had already exited; nothing signalled" });
+
+      const stalledClient = live(); clients.push(stalledClient);
+      const began = Date.now();
+      const stalled = await killCommand(stalledClient, options(`require('fs').writeFileSync(${JSON.stringify(helperPid)},String(process.pid));setInterval(()=>{},1000)`));
+      assert.ok(Date.now() - began < 2000, "settled within the helper's bound");
+      assert.equal(stalled.helper.stalled, true); assert.equal(stalled.helper.exitCode, null); assert.equal(stalled.kill, "client");
+      helpers.push(Number(readFileSync(helperPid, "utf8")));
+      await ended(stalledClient);
+
+      const failedClient = live(); clients.push(failedClient);
+      const failed = await killCommand(failedClient, options("process.exit(128)"));
+      assert.deepEqual(failed, { method: "taskkill", helper: { exitCode: 128, signal: null, error: null, stalled: false }, kill: "client" });
+      await ended(failedClient);
+
+      const stoppedClient = live(); clients.push(stoppedClient);
+      const stopped = await killCommand(stoppedClient, options("process.kill(Number(process.argv[1]),'SIGKILL')"));
+      assert.deepEqual(stopped, { method: "taskkill", helper: { exitCode: 0, signal: null, error: null, stalled: false }, kill: null });
+      await ended(stoppedClient);
+    });
+    assert.deepEqual(sent, []);
+    assert.equal(alive(helpers[0]), false, "the stalled helper was stopped");
+    // Through the runner the command settles only after the helper's bound, with the helper gone.
+    rmSync(helperPid, { force: true });
+    const { command } = commandRunner({ cwd: tmpdir(), killOptions: options(`require('fs').writeFileSync(${JSON.stringify(helperPid)},String(process.pid));setInterval(()=>{},1000)`) });
+    const error = await failure(command(...node("setInterval(()=>{},1000)"), { timeout: 500, receipt: true }));
+    const life = error.lifetime;
+    assert.equal(life.kill.helper.stalled, true); assert.equal(life.kill.kill, "client");
+    assert.ok(life.settledMs >= life.stoppedMs + 500 && life.settledMs < life.stoppedMs + releaseMs, JSON.stringify(life));
+    assert.equal(alive(Number(readFileSync(helperPid, "utf8"))), false);
+  } finally {
+    for (const child of clients) child.kill("SIGKILL");
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the output descriptor is closed when fstat or spawn fails, and a close-only failure keeps its receipt", { timeout: 15000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "catalog-command-fd-"));
+  const file = join(dir, "app.log");
+  try {
+    let target = null;
+    const closed = [];
+    const tracking = {
+      openSync: ({ openSync }) => appendFd(file, openSync, (fd) => { target = fd; }),
+      closeSync: ({ closeSync }) => (fd) => { if (fd === target) closed.push(fd); return closeSync(fd); },
+    };
+    await patched(fs, { ...tracking, fstatSync: ({ fstatSync }) => (fd, ...rest) => {
+      if (fd === target) throw Object.assign(new Error("EIO: i/o error, fstat"), { code: "EIO" });
+      return fstatSync(fd, ...rest);
+    } }, async () => {
+      assert.throws(() => commandOutput({ file, receipt: true }), { code: "EIO" });
+      assert.deepEqual(closed, [target], "fstat failure closes the descriptor");
+      closed.length = 0;
+      await assert.rejects(commandRunner({ cwd: dir }).command(...node(""), { file, receipt: true }), { code: "EIO" });
+      assert.deepEqual(closed, [target]);
+    });
+    closed.length = 0;
+    await patched(fs, tracking, () => patched(cp, { spawn: ({ spawn }) => (binary, ...rest) => {
+      if (binary === "unspawnable") throw Object.assign(new Error("spawn EAGAIN"), { code: "EAGAIN" });
+      return spawn(binary, ...rest);
+    } }, async () => {
+      await assert.rejects(commandRunner({ cwd: dir }).command("unspawnable", [], { file, receipt: true }), { code: "EAGAIN" });
+      assert.deepEqual(closed, [target], "spawn failure closes the descriptor");
+    }));
+    target = null; // That descriptor is closed; its number may be reused by any later open.
+    await patched(fs, {
+      openSync: tracking.openSync,
+      closeSync: ({ closeSync }) => (fd) => {
+        closeSync(fd);
+        if (fd === target) { target = null; throw Object.assign(new Error("EIO: i/o error, close"), { code: "EIO", syscall: "close" }); }
+      },
+    }, async () => {
+      const before = readFileSync(file).length;
+      const error = await failure(commandRunner({ cwd: dir }).command(...node("console.log('logs')"), { file, capture: false, receipt: true }));
+      assert.equal(error.code, "EIO");
+      const bytes = readFileSync(file).subarray(before), life = error.lifetime;
+      assert.equal(life.exitCode, 0); assert.equal(life.stopped, null); assert.ok(life.closeMs !== null && life.settledMs >= life.closeMs);
+      assert.deepEqual(life.file, { offset: before, bytes: bytes.length, sha256: sha256(bytes) });
+      assert.equal(bytes.toString().trim(), "logs");
+    });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a command without a receipt keeps no lifetime and adds no listener beyond its output and its close", { timeout: 15000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "catalog-command-timed-"));
+  const count = (c) => ({ exit: c.listenerCount("exit"), close: c.listenerCount("close"), error: c.listenerCount("error"),
+    stdoutClose: c.stdout.listenerCount("close"), stderrClose: c.stderr.listenerCount("close"), stdoutData: c.stdout.listenerCount("data"), stderrData: c.stderr.listenerCount("data") });
+  try {
+    const seen = [];
+    let base;
+    await patched(cp, { spawn: ({ spawn }) => (...args) => {
+      const child = spawn(...args);
+      queueMicrotask(() => seen.push(count(child)));
+      return child;
+    } }, async () => {
+      const bare = cp.spawn(process.execPath, ["-e", ""], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      // Polled, so no listener of the test's own is counted.
+      while (bare.exitCode === null) await sleep(20);
+      base = seen.pop();
+      const realNow = performance.now;
+      let nows = 0;
+      performance.now = function () { nows++; return realNow.call(this); };
+      try {
+        const { command } = commandRunner({ cwd: dir });
+        // The timed k6 phase's shapes (timed.mjs): `start -a` with a file and a deadline, no receipt.
+        assert.equal(await command(...node("console.log('k6 progress')"), { timeout: 10000, file: join(dir, "fixed.log") }), "k6 progress");
+        const threshold = await failure(command(...node("process.exit(99)"), { timeout: 10000, file: join(dir, "sat256.log") }));
+        assert.equal(threshold.exit.code, 99); assert.equal(threshold.lifetime, undefined);
+        assert.equal(nows, 0, "no receipt clock");
+      } finally { performance.now = realNow; }
+      const output = { ...base, close: base.close + 1, error: base.error + 1, stdoutData: base.stdoutData + 1, stderrData: base.stderrData + 1 };
+      assert.deepEqual(seen.splice(0), [output, output], "only output, error and close listeners");
+      const { command } = commandRunner({ cwd: dir });
+      await command(...node("console.log('logs')"), { file: join(dir, "app.log"), capture: false, receipt: true });
+      assert.deepEqual(seen.splice(0), [{ ...output, exit: base.exit + 1, stdoutClose: base.stdoutClose + 1, stderrClose: base.stderrClose + 1 }],
+        "a receipt command adds its exit and pipe-close timing");
+    });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("only a failed receipt command hashes its log, after it ends; timed-phase commands never do", { timeout: 20000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "catalog-command-hash-"));
   try {
@@ -278,7 +515,6 @@ test("a short write and then ENOSPC leave a receipt whose bytes and hash match t
         if (++writes === 1) return writeSync(fd, buffer, offset, 3);
         throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC", syscall: "write" });
       },
-    // Not cwd: dir; the stop's taskkill.exe can outlive the command on Windows.
     }, () => failure(commandRunner({ cwd: tmpdir() }).command(...node("process.stdout.write('abcdefgh');setInterval(()=>{},1000)"),
       { timeout: 10000, file, capture: false, receipt: true })));
     assert.equal(error.code, "ENOSPC"); assert.equal(error.lifetime.stopped, "output error");
@@ -336,18 +572,23 @@ function fakeDocker(inspected, events = "") {
 }
 const commandError = () => Object.assign(new Error("docker logs c1-run-gin: timeout after 30000 ms\nSECRET-RAW-LINE tail"),
   { exit: { code: null, signal: "SIGTERM", expired: true, interrupted: false } });
-const receiptOf = (docker) => failureReceipt(docker, { stage: "app logs", container: "c1-run-gin", error: commandError(), owned: (labels) => labels?.[label] === runId });
+const ownedByRun = (labels) => labels?.[label] === runId;
+// The command's one ownership check by name, then its receipt bound to that result.
+const receiptOf = async (docker) => failureReceipt(docker, { stage: "app logs", container: "c1-run-gin", error: commandError(), owned: ownedByRun,
+  verified: await ownedContainer((args) => docker(args, { cleanup: true, timeout: 10000 }), "c1-run-gin", ownedByRun) });
 const leaks = (receipt) => secrets.filter((secret) => JSON.stringify(receipt).includes(secret));
 
-test("a receipt keeps only allowlisted state and events of the owned container, by its immutable ID", async () => {
+test("a receipt keeps only allowlisted state and events of the owned container, by its verified immutable ID", async () => {
   const lines = [event(ownedId, "create", 1795000000), event(ownedId, "start", 1795000001), event(ownedId, "health_status: unhealthy", 1795000002),
     event(ownedId, "exec_start: sh -c SECRET-EXEC-COMMAND", 1795000003), event(foreignId, "destroy", 1795000004), "SECRET-RAW-LINE {"].join("\n");
   const { docker, calls } = fakeDocker(container(ownedId, { [label]: runId }), lines);
   const receipt = await receiptOf(docker);
-  assert.deepEqual(calls.map(({ args, opts }) => [args[0], opts]), [["inspect", { cleanup: true, timeout: 10000 }], ["events", { cleanup: true, timeout: 10000 }]]);
+  const bounded = { cleanup: true, timeout: 10000 };
+  assert.deepEqual(calls.map(({ args, opts }) => [args[0], opts]), [["inspect", bounded], ["inspect", bounded], ["events", bounded]]);
   assert.deepEqual(calls[0].args, ["inspect", "--type", "container", "c1-run-gin"]);
-  assert.equal(calls[1].args[calls[1].args.indexOf("--filter") + 1], `container=${ownedId}`, "events are bound to the inspected ID, not the name");
-  assert.equal(receipt.refusal, null);
+  assert.deepEqual(calls[1].args, ["inspect", "--type", "container", ownedId], "the receipt inspects the verified ID, not the name");
+  assert.equal(calls[2].args[calls[2].args.indexOf("--filter") + 1], `container=${ownedId}`, "events are bound to the verified ID, not the name");
+  assert.equal(receipt.refusal, null); assert.equal(receipt.id, ownedId);
   assert.deepEqual(receipt.inspect, { id: ownedId, restartCount: 2, state: { status: "running", running: true, exitCode: 0, oomKilled: false,
     startedAt: "2026-11-23T10:00:00.000000001Z", finishedAt: "0001-01-01T00:00:00Z" } });
   assert.deepEqual(receipt.events.recent, [["create", 0], ["start", 1], ["health_status", 2], ["exec_start", 3]]
@@ -362,7 +603,7 @@ test("a receipt for a foreign container of the same name keeps the command evide
     const { docker, calls } = fakeDocker(foreign, event(foreignId, "start", 1795000001));
     const receipt = await receiptOf(docker);
     assert.deepEqual(calls.map(({ args }) => args[0]), ["inspect"], "a foreign container's events are never queried");
-    assert.equal(receipt.refusal, "not owned by this run");
+    assert.equal(receipt.refusal, "not owned by this run"); assert.equal(receipt.id, null);
     assert.equal(receipt.inspect, null); assert.equal(receipt.events, null); assert.deepEqual(receipt.diagnosticErrors, []);
     assert.deepEqual(receipt.exit, commandError().exit);
     assert.deepEqual(leaks(receipt), []);
@@ -390,15 +631,39 @@ test("receipt probes are bounded and an events failure is recorded, not thrown",
     throw Object.assign(new Error("docker events --since 1: timeout after 10000 ms\nSECRET-RAW-LINE"), { exit: { expired: true } });
   };
   const receipt = await receiptOf(docker);
-  assert.deepEqual(calls.map(({ opts }) => opts), [{ cleanup: true, timeout: 10000 }, { cleanup: true, timeout: 10000 }]);
+  assert.deepEqual(calls.map(({ opts }) => opts), [{ cleanup: true, timeout: 10000 }, { cleanup: true, timeout: 10000 }, { cleanup: true, timeout: 10000 }]);
   assert.equal(receipt.inspect.id, ownedId); assert.equal(receipt.events, null);
   assert.deepEqual(receipt.diagnosticErrors, ["events: docker events --since 1: timeout after 10000 ms"]);
   assert.deepEqual(leaks(receipt), []);
 });
 
+test("a receipt never re-resolves the name: a refusal queries nothing, and a verified ID that disappeared is recorded alone", async () => {
+  const refused = fakeDocker(container(ownedId, { [label]: runId }), event(ownedId, "start", 1795000001));
+  const refusal = await failureReceipt(refused.docker, { stage: "upstream logs", container: "c1-run-gin", error: commandError(), owned: ownedByRun,
+    verified: { refusal: "not inspected", problem: "inspect: docker inspect --type container: exit 1" } });
+  assert.deepEqual(refused.calls, [], "the original refusal stands; nothing is inspected again");
+  assert.equal(refusal.refusal, "not inspected"); assert.deepEqual(refusal.diagnosticErrors, ["inspect: docker inspect --type container: exit 1"]);
+  // The logs were read from A; before the receipt, A was removed and B took its name and this run's label.
+  const missing = (key) => Object.assign(new Error(`docker inspect --type container: exit 1\nError: No such container: ${key}`), { exit: { code: 1 } });
+  const { calls } = fakeDocker(null);
+  const docker = async (args, opts) => {
+    calls.push({ args, opts });
+    if (args[0] === "inspect" && args.at(-1) === "c1-run-gin") return JSON.stringify([container(foreignId, { [label]: runId })]);
+    if (args[0] === "inspect") throw missing(args.at(-1));
+    return event(foreignId, "start", 1795000001);
+  };
+  const receipt = await failureReceipt(docker, { stage: "app logs", container: "c1-run-gin", error: commandError(), owned: ownedByRun, verified: { id: ownedId } });
+  assert.deepEqual(calls.map(({ args }) => args), [["inspect", "--type", "container", ownedId]], "only the verified ID; never the name, never events");
+  assert.equal(receipt.id, ownedId); assert.equal(receipt.refusal, "verified container gone");
+  assert.equal(receipt.inspect, null); assert.equal(receipt.events, null);
+  assert.deepEqual(receipt.diagnosticErrors, ["inspect: docker inspect --type container: exit 1"]);
+  assert.deepEqual(leaks(receipt), [], "nothing of the replacement");
+});
+
 test("a failure receipt reads a real container's state and recent events", { skip: process.env.CATALOG_DOCKER_TESTS !== "1", timeout: 360000 }, async () => {
   const { command } = commandRunner({ cwd: process.cwd() });
   const docker = (args, opts) => command("docker", args, opts);
+  const probe = (args) => docker(args, { cleanup: true, timeout: 10000 });
   const id = randomBytes(6).toString("hex"), name = `catalog-receipt-${id}`, label = "run.corten.catalog.receipt-test";
   const owned = (labels) => labels?.[label] === id;
   try {
@@ -407,7 +672,8 @@ test("a failure receipt reads a real container's state and recent events", { ski
     const started = await docker(["run", "-d", "--name", name, "--label", `${label}=${id}`, "--network", "none", "--cpus", "1", "--memory", "128m",
       upstreamImage, "node", "-e", "setInterval(()=>{},1000)"], { timeout: 60000 });
     const error = await failure(command(...node("console.log('partial');setInterval(()=>{},1000)"), { timeout: 1000 }));
-    const receipt = await failureReceipt(docker, { stage: "app logs", container: name, error, owned });
+    const verified = await ownedContainer(probe, name, owned);
+    const receipt = await failureReceipt(docker, { stage: "app logs", container: name, error, owned, verified });
     assert.deepEqual(receipt.diagnosticErrors, []);
     assert.equal(receipt.refusal, null);
     assert.equal(receipt.inspect.id, started); assert.equal(receipt.inspect.state.running, true);
@@ -415,9 +681,14 @@ test("a failure receipt reads a real container's state and recent events", { ski
     const actions = receipt.events.recent.map((event) => event.action);
     assert.ok(actions.includes("create") && actions.includes("start"), JSON.stringify(actions));
     assert.ok(receipt.events.recent.every((event) => Object.keys(event).join() === "action,time"));
-    const missing = await failureReceipt(docker, { stage: "app start", container: `${name}-absent`, error, owned });
+    const missing = await failureReceipt(docker, { stage: "app start", container: `${name}-absent`, error, owned,
+      verified: await ownedContainer(probe, `${name}-absent`, owned) });
     assert.equal(missing.refusal, "not inspected"); assert.equal(missing.inspect, null); assert.equal(missing.events, null);
     assert.match(missing.diagnosticErrors[0], /^inspect: docker inspect --type container: exit 1$/);
+    // A verified ID that is gone by the time of the receipt is recorded as gone.
+    await docker(["rm", "-f", "-v", started]);
+    const gone = await failureReceipt(docker, { stage: "app logs", container: name, error, owned, verified });
+    assert.equal(gone.refusal, "verified container gone"); assert.equal(gone.id, started); assert.equal(gone.events, null);
   } finally {
     const found = await docker(["ps", "-a", "--filter", `name=^/${name}$`, "--format", "{{.ID}}"]);
     if (found) {

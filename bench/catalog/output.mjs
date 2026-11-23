@@ -9,7 +9,11 @@ import { performance } from "node:perf_hooks";
 // once the file is closed; nothing is hashed while the command runs.
 export function commandOutput({ file, capture = true, receipt = false } = {}) {
   const fd = file === undefined ? null : openSync(file, "a");
-  const start = fd !== null && receipt ? fstatSync(fd).size : null;
+  let start = null;
+  // The descriptor is this helper's from open onward: a failure before it is returned closes it.
+  if (fd !== null && receipt) {
+    try { start = fstatSync(fd).size; } catch (e) { try { closeSync(fd); } catch {} throw e; }
+  }
   const tail = (limit) => {
     let chunks = [], bytes = 0;
     return {
@@ -67,124 +71,197 @@ export function commandOutput({ file, capture = true, receipt = false } = {}) {
   };
 }
 
-// This stops command clients, not browser descendants. Browsers run ONLY in
-// owned containers, which the runner removes even when their docker client exited.
-// Call it once per command. On Linux the client leads its own process group; a
-// descendant that stays in it is killed with it, even after the leader has exited. A
-// process that left the group (a new session) is out of reach; see commandRunner.
-export function killCommand(child, cwd) {
-  if (process.platform === "win32" && child.pid) {
-    // Node's Windows kill terminates only the child; the check's browser would survive.
-    const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", cwd });
-    killer.on("error", () => child.kill("SIGKILL"));
-  } else if (child.pid) {
-    try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
-  }
-  const force = setTimeout(() => {
-    const exited = child.exitCode !== null || child.signalCode !== null;
-    // The group outlives its leader while any member lives, and its ID is not reused
-    // until then, so an exited leader is no reason to skip the group.
-    if (process.platform !== "win32" && child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { if (!exited) child.kill("SIGKILL"); } }
-    else if (!exited) child.kill("SIGKILL");
-  }, 2000);
-  force.unref();
-}
-
 // After a stop, how long the runner keeps reading pipes that another process holds open.
 export const releaseMs = 5000;
+// Node has reaped the client. Until then its PID, which is also its process group's ID, is reserved.
+const exited = (child) => child.exitCode !== null || child.signalCode !== null;
+
+// Stops a command client once, and resolves with what it did inside the stop bound (before
+// `releaseMs`); it never rejects. It stops command clients, not browser descendants: browsers
+// run ONLY in owned containers, which the runner removes even when their docker client exited.
+// A numeric ID is the client's only while it is reserved: an exited client's PID or empty
+// group's ID can name another process, so nothing is signalled for a client already reaped.
+// On Linux the client leads its own process group: SIGTERM, then SIGKILL after `graceMs` while
+// the group is still the client's, so a member that ignores SIGTERM dies even after the client
+// exited; it resolves once the group is gone or at the bound. After the client is reaped the
+// group stays the client's only while every probe finds it: a missing or foreign group (ESRCH,
+// EPERM) is never signalled again. On Windows `taskkill /T` stops the client's tree, bounded by
+// `helperMs`; if the helper fails, stalls or cannot start, the client is killed through its own
+// handle. A process that left the group (a new session) or the tree is out of reach; see
+// commandRunner. The options other than `cwd` exist for tests.
+export function killCommand(child, { cwd, platform = process.platform, graceMs = 2000, pollMs = 100, helperMs = 3000,
+  boundMs = releaseMs - 250, taskkill = (pid) => ["taskkill.exe", ["/PID", String(pid), "/T", "/F"]] } = {}) {
+  const method = platform === "win32" ? "taskkill" : "process group";
+  if (!child.pid) return Promise.resolve({ method, end: "no process" });
+  if (exited(child)) return Promise.resolve({ method, end: "the client had already exited; nothing signalled" });
+  return platform === "win32" ? stopTree(child, { cwd, helperMs, boundMs, taskkill }) : stopGroup(child, { graceMs, pollMs, boundMs });
+}
+
+function stopGroup(child, { graceMs, pollMs, boundMs }) {
+  const record = { method: "process group", term: null, kill: null, end: null }, group = -child.pid;
+  // A failed group signal while the client is unreaped is unexpected: from then on only the
+  // client is stopped, through its handle, which Node never signals once it has reaped it.
+  let owned = true;
+  try { process.kill(group, "SIGTERM"); record.term = "sent"; }
+  catch (e) { owned = false; record.term = e?.code ?? "error"; child.kill("SIGTERM"); }
+  const began = performance.now();
+  return new Promise((resolve) => {
+    const done = (end) => { record.end = end; resolve(record); };
+    const step = () => {
+      const late = performance.now() - began >= graceMs;
+      if (!owned) {
+        if (exited(child)) return done("the client exited; the group was not signalled");
+        if (late && record.kill === null) { child.kill("SIGKILL"); record.kill = "client"; }
+      } else {
+        if (exited(child)) {
+          try { process.kill(group, 0); }
+          catch (e) { return done(e?.code === "ESRCH" ? "group gone" : `group no longer the client's (${e?.code ?? "error"})`); }
+        }
+        if (late && record.kill === null) {
+          try { process.kill(group, "SIGKILL"); record.kill = "sent"; }
+          catch (e) { return done(e?.code === "ESRCH" ? "group gone" : `group no longer the client's (${e?.code ?? "error"})`); }
+        }
+      }
+      if (performance.now() - began >= boundMs) return done("bound reached");
+      setTimeout(step, pollMs);
+    };
+    setTimeout(step, pollMs);
+  });
+}
+
+function stopTree(child, { cwd, helperMs, boundMs, taskkill }) {
+  const record = { method: "taskkill", helper: null, kill: null };
+  return new Promise((resolve) => {
+    let finished = false, stalled = false, helper, limit, cap;
+    const finish = (result) => {
+      if (finished) return;
+      finished = true; clearTimeout(limit); clearTimeout(cap);
+      record.helper = { ...result, stalled };
+      if (result.exitCode !== 0 && !exited(child)) { child.kill("SIGKILL"); record.kill = "client"; }
+      resolve(record);
+    };
+    try {
+      const [binary, args] = taskkill(child.pid);
+      helper = spawn(binary, args, { windowsHide: true, stdio: "ignore", cwd });
+    } catch (e) { finish({ exitCode: null, signal: null, error: e?.code ?? "error" }); return; }
+    helper.on("error", (e) => finish({ exitCode: null, signal: null, error: e?.code ?? "error" }));
+    helper.once("exit", (code, signal) => finish({ exitCode: code, signal, error: null }));
+    limit = setTimeout(() => { stalled = true; helper.kill(); }, helperMs);
+    // A helper that survives its own kill is abandoned, unreferenced, at the bound.
+    cap = setTimeout(() => { helper.unref(); finish({ exitCode: null, signal: null, error: "did not exit" }); }, boundMs);
+  });
+}
 
 // Bounded external commands. A command succeeds only on `close`: the client exited AND
 // both pipes reached end of file, so its output is complete, and nothing stopped it. A
 // command the runner stopped (deadline, interrupt, output error) or whose pipes it had to
 // release fails, whatever its exit code or `cleanup`; `cleanup` only lets it start after
-// an interrupt. A failure carries `exit` (the stable outcome other evidence checks).
+// an interrupt. The first stop reason the runner accepts decides the outcome. A failure
+// carries `exit` (the stable outcome other evidence checks). A stopped command settles only
+// after its stop has (killCommand), inside the stop bound.
 // With `receipt`, a failure also carries `lifetime`: when the client was spawned, first
 // and last wrote, exited, closed each pipe and was stopped, in milliseconds after spawn,
-// and, after the file is closed, the bytes this command appended and their hash. Without
-// `receipt` (every timed-phase command), each chunk costs what it did before receipts.
-export function commandRunner({ cwd, interrupted = () => false } = {}) {
+// what the stop did, and, after the file is closed, the bytes this command appended and
+// their hash. Without `receipt` (every timed-phase command) it keeps no lifetime and adds no
+// listener beyond its output and its close: each chunk costs what it did before receipts.
+export function commandRunner({ cwd, interrupted = () => false, killOptions = {} } = {}) {
   const running = new Set();
   async function command(binary, args, { timeout = 30000, file, capture = true, cleanup = false, receipt = false } = {}) {
     if (interrupted() && !cleanup) throw new Error("catalog run interrupted");
     const output = commandOutput({ file, capture, receipt });
-    const origin = performance.now(), spawnedAt = new Date().toISOString();
-    const at = () => Math.round(performance.now() - origin);
-    const child = spawn(binary, args, { cwd, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-    const lifetime = { command: [binary, ...args.slice(0, 3)], spawnedAt, timeoutMs: timeout, pid: child.pid ?? null,
+    let child;
+    // The output's descriptor is closed when the client cannot even be spawned.
+    try { child = spawn(binary, args, { cwd, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); }
+    catch (e) {
+      try { output.close(); } catch (c) { if (e && typeof e === "object") e.outputCloseError ??= firstLine(c); }
+      throw e;
+    }
+    const origin = receipt ? performance.now() : 0, at = () => Math.round(performance.now() - origin);
+    const lifetime = receipt ? { command: [binary, ...args.slice(0, 3)], spawnedAt: new Date().toISOString(), timeoutMs: timeout, pid: child.pid ?? null,
       stdout: { bytes: 0, firstMs: null, lastMs: null, closedMs: null }, stderr: { bytes: 0, firstMs: null, lastMs: null, closedMs: null },
-      exitMs: null, exitCode: null, exitSignal: null, closeMs: null, stopped: null, stoppedMs: null, releasedMs: null, file: null, settledMs: null };
-    let killed = false, released = false;
-    let ioError;
-    let release, settleNow;
-    // Idempotent: a second deadline, interrupt or output error neither signals again nor
-    // restarts the grace.
-    const stop = (reason) => {
-      if (lifetime.stopped !== null) return;
-      lifetime.stopped = reason; lifetime.stoppedMs = at();
-      killCommand(child, cwd);
+      exitMs: null, exitCode: null, exitSignal: null, closeMs: null, stopped: null, stoppedMs: null, releasedMs: null, kill: null, file: null,
+      settledMs: null } : null;
+    let reason = null, exitedAtStop = false, released = false, settled = false, escalation = null;
+    let ioError, release, timer, settleNow;
+    // Idempotent, and the first accepted reason decides the outcome: a later deadline, interrupt
+    // or output error neither signals again, restarts the grace, nor changes the outcome.
+    const stop = (why) => {
+      if (reason !== null || settled) return;
+      reason = why; clearTimeout(timer); exitedAtStop = exited(child);
+      if (lifetime) { lifetime.stopped = why; lifetime.stoppedMs = at(); }
+      escalation = killCommand(child, { cwd, ...killOptions });
       // A process that inherited the client's pipes (outside its process group or
       // taskkill tree) keeps them open after the client exits, so `close` may never
       // come. Stop reading after a bounded grace; the command still fails. Such an
       // escaped process is not stopped here: only a container the runner owns is removed.
       release = setTimeout(() => {
-        released = true; lifetime.releasedMs = at();
+        released = true; if (lifetime) lifetime.releasedMs = at();
         child.stdout.destroy(); child.stderr.destroy();
         settleNow({ code: child.exitCode, signal: child.signalCode });
       }, releaseMs);
     };
-    const entry = { stop };
-    running.add(entry);
+    const closed = new Promise((resolve, reject) => {
+      settleNow = (value) => { settled = true; resolve(value); };
+      child.on("error", (e) => { settled = true; reject(e); });
+      child.on("close", (code, signal) => { if (lifetime && !released) lifetime.closeMs = at(); settleNow({ code, signal }); });
+    });
     const write = (chunk, stderr) => {
       try { (stderr ? output.stderr : output.stdout)(chunk); }
       catch (e) { ioError ??= e; stop("output error"); }
     };
-    const keep = receipt ? (chunk, stderr) => {
-      const stream = stderr ? lifetime.stderr : lifetime.stdout;
-      stream.bytes += chunk.length; stream.lastMs = at(); stream.firstMs ??= stream.lastMs;
-      write(chunk, stderr);
-    } : write;
-    child.stdout.on("data", (c) => keep(c, false));
-    child.stderr.on("data", (c) => keep(c, true));
-    // A pipe the runner destroyed on release did not close; it is not recorded as closed.
-    child.stdout.once("close", () => { if (!released) lifetime.stdout.closedMs = at(); });
-    child.stderr.once("close", () => { if (!released) lifetime.stderr.closedMs = at(); });
-    child.once("exit", (code, signal) => { lifetime.exitMs = at(); lifetime.exitCode = code; lifetime.exitSignal = signal; });
-    const timer = setTimeout(() => { killed = true; stop("deadline"); }, timeout);
+    if (lifetime) {
+      const keep = (chunk, stderr) => {
+        const stream = stderr ? lifetime.stderr : lifetime.stdout;
+        stream.bytes += chunk.length; stream.lastMs = at(); stream.firstMs ??= stream.lastMs;
+        write(chunk, stderr);
+      };
+      child.stdout.on("data", (c) => keep(c, false));
+      child.stderr.on("data", (c) => keep(c, true));
+      // A pipe the runner destroyed on release did not close; it is not recorded as closed.
+      child.stdout.once("close", () => { if (!released) lifetime.stdout.closedMs = at(); });
+      child.stderr.once("close", () => { if (!released) lifetime.stderr.closedMs = at(); });
+      child.once("exit", (code, signal) => { lifetime.exitMs = at(); lifetime.exitCode = code; lifetime.exitSignal = signal; });
+    } else {
+      child.stdout.on("data", (c) => write(c, false));
+      child.stderr.on("data", (c) => write(c, true));
+    }
+    timer = setTimeout(() => stop("deadline"), timeout);
+    const entry = { stop };
+    running.add(entry);
     // After close, and a copy: pipe events after a release must not change a receipt already taken.
     const settle = () => { lifetime.file = output.segment(); lifetime.settledMs = at(); return structuredClone(lifetime); };
-    let failure, result;
-    try {
-      const { code, signal } = await new Promise((resolve, reject) => {
-        settleNow = resolve;
-        child.on("error", reject);
-        child.on("close", (code, signal) => { if (!released) lifetime.closeMs = at(); resolve({ code, signal }); });
-      });
-      if (ioError) throw ioError;
-      const stopped = lifetime.stopped !== null;
-      if (code !== 0 || killed || stopped || released || (interrupted() && !cleanup)) {
-        // Exit before the stop means the client finished but a pipe was still held open.
-        const held = lifetime.exitMs !== null && lifetime.stoppedMs !== null && lifetime.exitMs <= lifetime.stoppedMs
-          ? `; the client exited ${lifetime.exitCode ?? lifetime.exitSignal} at ${lifetime.exitMs} ms but its output stayed open` : "";
-        const forced = released ? `; its pipes were released at ${lifetime.releasedMs} ms without end of file` : "";
-        const interruption = lifetime.stopped === "interrupt" ? "; interrupted" : "";
-        const error = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}${interruption}${held}${forced}\n${output.diagnostic()}`);
-        error.exit = { code, signal, expired: killed, interrupted: lifetime.stopped === "interrupt" || (interrupted() && !cleanup) }; throw error;
-      }
-      result = output.result();
-    } catch (error) { failure = error ?? new Error(`${binary}: failed`); }
+    let failure, result, code, signal;
+    try { ({ code, signal } = await closed); }
+    catch (error) { failure = error ?? new Error(`${binary}: failed`); }
     finally { clearTimeout(timer); clearTimeout(release); running.delete(entry); }
-    // Closing is reported, but never replaces the command's own error.
+    // A stopped command settles only once its stop has, so no signal for it is left pending.
+    if (escalation) { const stopped = await escalation; if (lifetime) lifetime.kill = stopped; }
+    if (failure === undefined) {
+      try {
+        if (ioError) throw ioError;
+        const expired = reason === "deadline", interruption = reason === "interrupt", runInterrupted = interrupted() && !cleanup;
+        if (code !== 0 || reason !== null || released || runInterrupted) {
+          // Exited before the stop: the client finished but a pipe was still held open.
+          const held = exitedAtStop ? `; the client exited ${child.exitCode ?? child.signalCode}${lifetime ? ` at ${lifetime.exitMs} ms` : ""} but its output stayed open` : "";
+          const forced = released ? `; its pipes were released${lifetime ? ` at ${lifetime.releasedMs} ms` : ""} without end of file` : "";
+          const error = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${expired ? `timeout after ${timeout} ms` : `exit ${code}`}${interruption ? "; interrupted" : ""}${held}${forced}\n${output.diagnostic()}`);
+          error.exit = { code, signal, expired, interrupted: interruption || (reason === null && runInterrupted) }; throw error;
+        }
+        result = output.result();
+      } catch (error) { failure = error ?? new Error(`${binary}: failed`); }
+    }
+    // Closing is reported, but never replaces the command's own error. A command that otherwise
+    // succeeded is not complete without its artifact, so the close failure becomes its error.
     let closeError;
     try { output.close(); } catch (e) { closeError = e; }
+    if (closeError !== undefined) {
+      if (failure === undefined) failure = closeError;
+      else if (failure && typeof failure === "object") failure.outputCloseError ??= firstLine(closeError);
+    }
     if (failure !== undefined) {
-      if (typeof failure === "object") {
-        if (closeError) failure.outputCloseError ??= firstLine(closeError);
-        if (receipt) failure.lifetime ??= settle();
-      }
+      if (receipt && failure && typeof failure === "object") failure.lifetime ??= settle();
       throw failure;
     }
-    // A command that succeeded but whose artifact did not close is not complete.
-    if (closeError) throw closeError;
     return result;
   }
   return { command, interrupt() { for (const entry of running) entry.stop("interrupt"); } };
@@ -198,14 +275,20 @@ const containerId = /^[0-9a-f]{64}$/;
 
 // The immutable ID of container `name` when this run owns it: Docker names it exactly
 // `name` and it carries this run's label (`owned(labels)`). Otherwise a refusal, and
-// nothing read from the container. `probe(args)` runs one bounded Docker command.
-export async function ownedContainer(probe, name, owned) {
+// nothing read from the container. `probe(args)` runs one bounded Docker command. With
+// `id`, it inspects that ID, never the name: a container that took the name since is not
+// read, and a missing one is "verified container gone".
+export async function ownedContainer(probe, name, owned, { id } = {}) {
   let text, info;
-  try { text = await probe(["inspect", "--type", "container", name]); }
-  catch (e) { return { refusal: "not inspected", problem: problem("inspect", e) }; }
+  try { text = await probe(["inspect", "--type", "container", id ?? name]); }
+  catch (e) {
+    const gone = id !== undefined && /No such (container|object)/i.test(String(e?.message ?? ""));
+    return { refusal: gone ? "verified container gone" : "not inspected", problem: problem("inspect", e) };
+  }
   try { [info] = JSON.parse(text); } catch { return { refusal: "not inspected", problem: "inspect: unparseable output" }; }
   if (!info || typeof info !== "object") return { refusal: "not inspected", problem: "inspect: unparseable output" };
-  if (typeof info.Id !== "string" || !containerId.test(info.Id) || info.Name !== `/${name}` || owned(info.Config?.Labels) !== true) {
+  if (typeof info.Id !== "string" || !containerId.test(info.Id) || (id !== undefined && info.Id !== id) || info.Name !== `/${name}`
+    || owned(info.Config?.Labels) !== true) {
     return { refusal: "not owned by this run" };
   }
   return { id: info.Id, info };
@@ -228,17 +311,24 @@ function eventOf(line, id) {
 }
 
 // Daemon-side evidence for a failed container command, taken before owned cleanup removes
-// the container. It reads only a container this run owns, bound to the immutable ID it
-// resolved: allowlisted inspect state and its events' actions and times. For a missing or
-// foreign container it keeps the command's own evidence and the refusal. Each probe is
-// bounded and read-only; a probe failure is recorded in the receipt, never thrown.
-export async function failureReceipt(docker, { stage, container, error, owned }) {
+// the container. `verified` is the one ownership check the command relied on (ownedContainer's
+// result); the receipt never resolves the name again. For a refusal it keeps the command's own
+// evidence and that refusal and queries nothing. For a verified ID it reads that ID only, and
+// only while it is still this run's: allowlisted inspect state and its events' actions and
+// times; if the ID is gone it records that and queries nothing else. Each probe is bounded and
+// read-only; a probe failure is recorded in the receipt, never thrown.
+export async function failureReceipt(docker, { stage, container, error, verified, owned }) {
   const lifetime = error?.lifetime ?? null;
-  const receipt = { schema: "catalog-command-failure/v1", stage, container, recordedAt: new Date().toISOString(),
+  const receipt = { schema: "catalog-command-failure/v1", stage, container, id: verified?.id ?? null, recordedAt: new Date().toISOString(),
     error: firstLine(error), exit: error?.exit ?? null, outputCloseError: error?.outputCloseError ?? null, lifetime,
     refusal: null, inspect: null, events: null, diagnosticErrors: [] };
+  if (!verified?.id) {
+    receipt.refusal = verified?.refusal ?? "not verified";
+    if (verified?.problem) receipt.diagnosticErrors.push(verified.problem);
+    return receipt;
+  }
   const probe = (args) => docker(args, { cleanup: true, timeout: 10000 });
-  const found = await ownedContainer(probe, container, owned);
+  const found = await ownedContainer(probe, container, owned, { id: verified.id });
   if (found.problem) receipt.diagnosticErrors.push(found.problem);
   if (!found.id) { receipt.refusal = found.refusal; return receipt; }
   receipt.inspect = { id: found.id, restartCount: found.info.RestartCount ?? null, state: stateOf(found.info.State) };

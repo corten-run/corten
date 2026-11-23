@@ -14,9 +14,15 @@ const repo = join(here, "../..");
 const idOf = (name) => createHash("sha256").update(name).digest("hex");
 
 for (const [index, mode] of ["cached", "absent", "wrong platform", "daemon error", "registry error", "start error", "prepare timeout",
-  "app start stall", "app start held", "app logs stall", "app logs receipt unwritable", "startup logs stall twice"].entries()) {
+  "app start stall", "app start held", "app logs stall", "app logs receipt unwritable", "startup logs stall twice", "app logs replaced"].entries()) {
   test(`runner upstream image: ${mode}`, () => run(mode, index));
 }
+
+test("upstream logs take the same single ownership check as every other log collection", () => {
+  const source = readFileSync(join(here, "run.mjs"), "utf8");
+  assert.ok(source.includes('try { await collectLogs(upstreamName, join(folder, "upstream.log"), "upstream logs", { cleanup: true }); }'));
+  assert.doesNotMatch(source, /inspect\(upstreamName, true\)/, "no separate refusal before the receipt path");
+});
 
 // A real local client stands in for one Docker command: the deadline is shortened, but the
 // runner's own helper, receipt and cleanup run unchanged. `at` lists which of the matching
@@ -38,6 +44,8 @@ const stalls = {
   // Both sources' apps stop after starting, and both startup log collections stall. The app
   // logs collected in between (the second matching command) do not.
   "startup logs stall twice": { ...logsStall, source: null, stage: "checks", startup: true, at: [0, 2] },
+  // While the logs of container A stall, A is removed and B takes its name and this run's label.
+  "app logs replaced": { ...logsStall, replace: true },
 };
 
 function run(mode, index) {
@@ -62,12 +70,14 @@ import { records } from ${JSON.stringify(pathToFileURL(join(here, "fixtures.mjs"
 const spawn = cp.spawn, read = fs.readFileSync, write = fs.writeFileSync, append = fs.appendFileSync, containers = new Map();
 const imageId = 'sha256:' + 'a'.repeat(64);
 const upstreamImage = ${JSON.stringify(upstreamImage)}, mode = ${JSON.stringify(mode)};
-const stall = ${JSON.stringify(stall ? { command: stall.command, source: stall.source, ms: stall.ms, at: stall.at, startup: !!stall.startup, unwritable: !!stall.unwritable } : null)};
+const stall = ${JSON.stringify(stall ? { command: stall.command, source: stall.source, ms: stall.ms, at: stall.at, startup: !!stall.startup, unwritable: !!stall.unwritable,
+  replace: !!stall.replace } : null)};
 const stallScript = ${stall ? stall.script.toString() : "null"};
 const holder = ${JSON.stringify(holder)};
 const journal = [], stallDeadlines = [];
 let matched = 0, stallTimer = false;
-const idOf = name => createHash('sha256').update(name).digest('hex');
+// A replaced container keeps its name but gets a new immutable ID.
+const idOf = name => createHash('sha256').update(name + (containers.get(name)?.replaced ? '#replaced' : '')).digest('hex');
 // Docker resolves a container by its name or its ID.
 const resolve = key => containers.has(key) ? key : [...containers.keys()].find(name => idOf(name) === key);
 const localPlatform = mode === 'wrong platform' ? 'linux/arm64' : ['absent', 'registry error'].includes(mode) ? null : 'linux/amd64';
@@ -110,6 +120,7 @@ cp.spawn = (binary, args, options) => {
     if (name === runId + '-gin' && (stall.source === null || source === stall.source) && stall.at.includes(matched++)) {
       stallTimer = true;
       if (stall.command === 'run') containers.set(name, { source }); // The daemon created it; its client stalls.
+      if (stall.replace) containers.get(name).replaced = true;
       return spawn(process.execPath, ['-e', stallScript(name, holder, matched)], options);
     }
   }
@@ -209,6 +220,7 @@ syncBuiltinESMExports();
     const trace = stall && JSON.parse(readFileSync(journal, "utf8"));
     if (stall?.startup) verifyStartupStalls(stall, summary, folder, trace);
     else if (stall?.unwritable) verifyUnwritable(summary, folder, trace);
+    else if (stall?.replace) verifyReplaced(summary, folder, trace);
     else if (stall) verifyStall(stall, summary, folder, trace);
   } finally {
     if (existsSync(holder)) try { process.kill(Number(readFileSync(holder, "utf8"))); } catch {}
@@ -275,6 +287,28 @@ function verifyUnwritable(summary, folder, { stallDeadlines }) {
   assert.match(found[0].error, new RegExp(`^Error: docker logs ${idOf(`${summary.runId}-gin`)}: timeout after 30000 ms`));
   assert.equal(existsSync(join(folder, "api/gin/app.log.failure.json")), false);
   assert.doesNotMatch(readFileSync(join(folder, "run.log"), "utf8"), /failure receipt/);
+}
+
+// The receipt describes the container whose logs were read, A, by its ID; it neither reads B,
+// which took the name and label meanwhile, nor queries events once A is gone.
+function verifyReplaced(summary, folder, { journal, stallDeadlines }) {
+  const name = `${summary.runId}-gin`, a = idOf(name), b = createHash("sha256").update(`${name}#replaced`).digest("hex");
+  assert.deepEqual(stallDeadlines, [30000]);
+  const found = summary.failures.filter((f) => f.app === "gin" && f.source === "api" && f.stage === "app logs");
+  assert.equal(found.length, 1, JSON.stringify(summary.failures));
+  assert.match(found[0].error, new RegExp(`^Error: docker logs ${a}: timeout after 30000 ms`));
+  const bytes = readFileSync(join(folder, "api/gin/app.log")), text = readFileSync(join(folder, "api/gin/app.log.failure.json"), "utf8");
+  const receipt = JSON.parse(text);
+  assert.ok(!text.includes(b), "nothing of the replacement");
+  const logs = journal.findLastIndex((args) => args[0] === "logs" && args[1] === a);
+  assert.deepEqual(journal[logs + 1], ["inspect", "--type", "container", a], "the receipt's only probe is the verified ID");
+  assert.equal(journal.filter((args) => args[0] === "events").length, 0, "no events once the verified container is gone");
+  assert.equal(receipt.container, name); assert.equal(receipt.id, a);
+  assert.equal(receipt.refusal, "verified container gone"); assert.equal(receipt.inspect, null); assert.equal(receipt.events, null);
+  assert.deepEqual(receipt.diagnosticErrors, ["inspect: docker inspect --type container: exit 1"]);
+  assert.deepEqual(receipt.lifetime.file, { offset: 0, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
+  // Cleanup then removes the replacement, which carries this run's label, by its own ID.
+  assert.ok(journal.slice(logs + 2).some((args) => args[0] === "rm" && args.at(-1) === b), JSON.stringify(journal.slice(logs)));
 }
 
 // Two startup log collections for one reused container name keep two logs and two receipts,

@@ -187,28 +187,39 @@ the owned container: `app-start.failure.json` in the source or preflight folder,
 `<log>.failure.json` beside the partial log. Each failed start keeps its own
 `<container>-startup-<attempt>.log`. The receipt records the Docker client's lifetime in
 milliseconds after spawn (first and last output on each pipe, client exit, each pipe's close,
-and when and why the runner stopped it), and the offset, bytes and SHA-256 of what the log
-collection appended, hashed from the closed file. It reads the container only when Docker names
-it exactly and it carries this run's label, and then only by the ID it resolved: from
-`docker inspect`, the restart count and the state's status, running flag, exit code, OOM flag
-and start and finish times; from Docker events since one minute before the command, each
-event's action and time. It keeps no health-check output, labels or other event attributes.
-For a missing or foreign container it keeps the command's own evidence and the refusal. Logs
-are collected the same way, by the owned container's ID. Each probe has a 10-second bound and a
-probe failure is recorded in the receipt. Saving the receipt is best effort and never replaces
-the failure, which still fails the run; nothing is retried and no command deadline changes.
+when and why the runner stopped it, and what the stop signalled), and the offset, bytes and
+SHA-256 of what the log collection appended, hashed from the closed file. A container is read
+only when Docker names it exactly and it carries this run's label. Each command makes that
+check once, and its receipt is bound to the result: a log collection reads logs by the ID it
+resolved, and its receipt reads that same ID, never the name again. From `docker inspect` it
+keeps the restart count and the state's status, running flag, exit code, OOM flag and start
+and finish times; from Docker events since one minute before the command, each event's action
+and time. It keeps no health-check output, labels or other event attributes. For a missing or
+foreign container (application, startup or upstream) it keeps the command's own evidence and
+the refusal and queries nothing; if the verified container has gone by the time of the
+receipt, it records that and queries nothing else. Each probe has a 10-second bound and a probe
+failure is recorded in the receipt. Saving the receipt is best effort and never replaces the
+failure, which still fails the run; nothing is retried and no command deadline changes.
 Receipts cover the detached parity and preflight starts and these log collections, not the
 measured cold-start create and start. Commands in a timed phase, such as k6's `docker start
--a`, take no receipt: they hash nothing and keep no per-chunk timing.
+-a`, take no receipt and do no receipt work: no lifetime record or clock, no hashing, and no
+listener beyond their output and their close.
 A command succeeds only once its Docker client has exited and both of its pipes have closed,
 so its output is complete, and nothing stopped it: a command stopped at its deadline or by an
-interrupt fails whatever its exit code, cleanup commands included. On Linux the stop sends
-SIGTERM and then SIGKILL to the client's process group, even after the client itself has
-exited, so a descendant still in that group cannot keep its output open. A process that left
-the group (a new session) or the `taskkill` tree can still hold a pipe after the client exits.
-The runner does not stop such a process: five seconds after the stop it stops reading, so the
-command settles as a failure that says its pipes were released without end of file, instead
-of waiting forever.
+interrupt fails whatever its exit code, cleanup commands included, and the first stop reason
+decides which (an interrupt followed by the deadline stays an interrupt). On Linux the stop
+sends SIGTERM to the client's process group and, two seconds later, SIGKILL while the group is
+still the client's, so a member that ignores SIGTERM dies even after the client has exited and
+even when it holds no pipe; the command settles only after that. A process or group ID is the
+client's only while Node has not reaped the client, or, for the group, while every probe since
+then finds it, so nothing is signalled for a client that had already exited before the stop or
+for a group that has gone (a numeric ID can be reused). On Windows `taskkill /T` stops the
+client's tree within three seconds; it is not run for a client that has already exited, and if
+it fails or stalls the client itself is killed and the helper's exit is recorded. A process
+that left the group (a new session) or the `taskkill` tree can still hold a pipe after the
+client exits. The runner does not stop such a process: five seconds after the stop it stops
+reading, so the command settles as a failure that says its pipes were released without end of
+file, instead of waiting forever.
 Startup failures include the container's actual exit state and application log. A checker
 failure without a valid record-response failure receipt retains its original diagnostic
 (including browser/style assertions), rather than replacing it with a missing-file error.
