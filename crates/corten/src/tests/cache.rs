@@ -5669,6 +5669,96 @@ async fn settle_unstaged_item(at: crate::Params<settle_unstaged::Item>) -> crate
     crate::Media::new("application/json", format!("{{\"id\":{}}}", at.id))
 }
 
+/// The MCP endpoint's route in [`what_an_mcp_call_costs`].
+#[cfg(feature = "agent")]
+#[derive(crate::Route)]
+#[route("/mcp")]
+struct CostMcp;
+
+/// The tool's input in [`what_an_mcp_call_costs`].
+#[cfg(feature = "agent")]
+#[derive(crate::json::FromJson)]
+struct CostItem {
+    id: String,
+}
+
+/// The tool's output in [`what_an_mcp_call_costs`].
+#[cfg(feature = "agent")]
+#[derive(crate::json::ToJson)]
+struct CostFound {
+    id: String,
+}
+
+/// What an MCP tool call costs a request: `MCP_REQUESTS` (200) `POST`s to an app's MCP endpoint
+/// (`App::api` with `Tools::route`, one read tool), in process, one at a time. `MCP_CASE` is the
+/// message: `call` (the default), a call the tool answers (its result, the tool's own answer);
+/// `unfit`, a call whose arguments do not fit the tool's input (the `isError` result Corten makes in
+/// the tool's place); `unknown`, a call to a tool the endpoint does not have (Corten's JSON-RPC
+/// error, `-32602`, at `200`). With `MCP_CDN` set, a staged middleware writes the six caching
+/// headers a CDN reads first on every answer, and each answer is checked to keep them (`kept`) or
+/// not (`dropped`). Counted under callgrind at two numbers of requests, as
+/// [`what_settling_a_page_costs`] is: `MCP_REQUESTS=1200 LD_PRELOAD=.. valgrind --tool=callgrind
+/// <the release test binary> --ignored --exact tests::cache::what_an_mcp_call_costs`, and again at 200.
+#[cfg(feature = "agent")]
+#[test]
+#[ignore]
+fn what_an_mcp_call_costs() {
+    use crate::agent::Tools;
+
+    struct Cdn;
+
+    impl crate::Middleware for Cdn {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            for name in CDN_OVERRIDES {
+                res.headers_mut().insert(name, HeaderValue::from_static("public, max-age=60"));
+            }
+            res
+        }
+    }
+
+    let requests: usize = std::env::var("MCP_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let case = std::env::var("MCP_CASE").unwrap_or_else(|_| "call".to_string());
+    let kept = std::env::var("MCP_CDN").ok().map(|cdn| match cdn.as_str() {
+        "kept" => true,
+        "dropped" => false,
+        other => panic!("MCP_CDN is kept or dropped, not {other:?}"),
+    });
+    let message = match case.as_str() {
+        "call" => r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find","arguments":{"id":"7"}}}"#,
+        "unfit" => r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find","arguments":{}}}"#,
+        "unknown" => r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lost","arguments":{}}}"#,
+        other => panic!("MCP_CASE is call, unfit or unknown, not {other:?}"),
+    };
+    let tools = Tools::new("cost", "1.0")
+        .read_tool("find", "Finds an item", |(), item: CostItem| async move { Ok(CostFound { id: item.id }) });
+    let app = App::new(Routes::new()).api::<CostMcp>(|api| api.route::<CostMcp>(tools.route()));
+    let router = if kept.is_some() { app.middleware(Cdn).router() } else { app.router() };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let req = Request::post("/mcp")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ACCEPT, "application/json, text/event-stream")
+                .body(Body::from(message))
+                .unwrap();
+            let (parts, body) = router.clone().oneshot(req).await.unwrap().into_parts();
+            let body = String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap();
+            assert_eq!(parts.status, StatusCode::OK, "{body}");
+            match case.as_str() {
+                "call" => assert!(body.contains(r#""isError":false"#) && body.contains(r#"\"id\":\"7\""#), "{body}"),
+                "unfit" => assert!(body.contains(r#""isError":true"#), "{body}"),
+                _ => assert!(body.contains(r#""code":-32602"#), "{body}"),
+            }
+            if let Some(kept) = kept {
+                for name in CDN_OVERRIDES {
+                    assert_eq!(parts.headers.contains_key(name), kept, "{name}: {body}");
+                }
+            }
+        }
+    });
+}
+
 /// The error page of its own an app has in [`what_settling_a_page_costs`]'s `custom` case.
 async fn settle_error_page(_: Failure, req: Req) -> HtmlResult {
     req.test_page("Missing", html! { <p>"Nothing here."</p> })
@@ -5726,6 +5816,48 @@ impl http_body::Body for CutOff {
     fn size_hint(&self) -> http_body::SizeHint {
         http_body::SizeHint::with_exact(4096)
     }
+}
+
+/// An exact-size answer whose body fails as Corten reads it after the cache rules ran, to tag it
+/// for an `If-None-Match` or to compress it, goes out empty in its place. That empty answer is
+/// Corten's, not the handler's, so no cache keeps it: `private, no-store`, with none of the caching
+/// headers a CDN reads first that a staged middleware wrote, no validator and no stated length,
+/// though the handler's answer was one a CDN could keep. Asked for with a tag (a page), and as an
+/// API answer worth compressing (it has a tag of its own, so it is not tagged first).
+#[tokio::test]
+async fn an_answer_whose_body_fails_after_the_cache_rules_is_never_kept() {
+    let cut = |kind: &'static str, tag: Option<&'static str>| {
+        move || async move {
+            let mut res = crate::response::Response::builder().header(header::CONTENT_TYPE, kind);
+            if let Some(tag) = tag {
+                res = res.header(header::ETAG, tag);
+            }
+            res.body(Body::new(CutOff)).unwrap()
+        }
+    };
+    let router = App::new(Routes::from(Table::new().route("/page", get(cut("text/html; charset=utf-8", None)))))
+        .api::<ApiItems>(|items| items.route::<ApiItem>(crate::Methods::reads(get(cut("application/json", Some("\"v1\""))))))
+        .middleware(CdnRecaches(Some("public, max-age=60")))
+        .router();
+    let mut cases = vec![("tagged", "/page", &[("if-none-match", "W/\"0000000000000000\"")][..])];
+    #[cfg(feature = "compress")]
+    cases.push(("compressed", "/api/items/7", &[("accept-encoding", "gzip"), ("accept", "application/json")][..]));
+    let mut wrong = Vec::new();
+    for (item, uri, asked) in cases {
+        let (status, headers, body) = sent_by_ann(&router, "GET", uri, asked, b"").await;
+        if status != StatusCode::OK || !body.is_empty() {
+            wrong.push(format!("{item}: {status}, {body:?}"));
+        }
+        wrong.extend(kept_from_cdns(&headers, "private, no-store").into_iter().map(|what| format!("{item}: {what}")));
+        for name in [header::ETAG, header::CONTENT_LENGTH, header::CONTENT_ENCODING] {
+            if let Some(value) = headers.get(&name) {
+                if !(name == header::CONTENT_LENGTH && value == "0") {
+                    wrong.push(format!("{item}: {name} {value:?}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
 /// Staged middleware that takes the `Cookie` off the request before the route sees it (as one that
@@ -6440,6 +6572,65 @@ async fn a_rejection_passed_on_with_the_question_mark_stays_corten_s() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
+/// A `FormRejection` the app made itself (`FormRejection::new`, for a form it read and found
+/// wanting) is the handler's answer, not Corten's refusal: passed on with `?` (the error page's
+/// `500` in its place) or answered as it is (its `422`), it keeps what a middleware wrote, as a
+/// handler's own error does. The extractor's own, answered as it is, stays Corten's: `private,
+/// no-cache` with none of the CDN headers (passed on with `?`, it is checked by
+/// `a_rejection_passed_on_with_the_question_mark_stays_corten_s`).
+#[tokio::test]
+async fn a_form_rejection_the_app_made_is_the_handler_s() {
+    type Fields = std::result::Result<crate::Form<std::collections::HashMap<String, u32>>, crate::form::FormRejection>;
+    let own = || crate::form::FormRejection::new(StatusCode::UNPROCESSABLE_ENTITY, "pick a size");
+    assert!(own().into_response().extensions().get::<crate::cache::Unshared>().is_none(), "the app's own, as a response");
+    assert!(Error::from(own()).into_response().extensions().get::<crate::cache::Unshared>().is_none(), "the app's own, with ?");
+    let routes = Table::new()
+        .route(
+            "/own-passed",
+            get(move || async move {
+                Err::<(), _>(own())?;
+                Ok::<_, Error>("never")
+            }),
+        )
+        .route("/own-answered", get(move || async move { own() }))
+        .route(
+            "/extractor-answered",
+            get(|fields: Fields| async move {
+                match fields {
+                    Ok(_) => "read".into_response(),
+                    Err(rejection) => rejection.into_response(),
+                }
+            }),
+        );
+    let router = App::new(Routes::from(routes))
+        .middleware(CdnRecaches(Some("public, max-age=60")))
+        .error_page(greeting_error_page, ())
+        .router();
+    let html = &[("accept", "text/html")][..];
+    let mut wrong = Vec::new();
+    for (uri, status_sent, corten) in [
+        ("/own-passed", StatusCode::INTERNAL_SERVER_ERROR, false),
+        ("/own-answered", StatusCode::UNPROCESSABLE_ENTITY, false),
+        ("/extractor-answered?n=x", StatusCode::BAD_REQUEST, true),
+    ] {
+        let (status, headers, body) = sent_by_ann(&router, "GET", uri, html, b"").await;
+        if status != status_sent || !body.contains("Sorry, ann.") {
+            wrong.push(format!("{uri}: {status}, not the error page's {status_sent}: {body}"));
+            continue;
+        }
+        if corten {
+            wrong.extend(kept_from_cdns(&headers, "private, no-cache").into_iter().map(|what| format!("{uri}: {what}")));
+        } else {
+            for name in CDN_OVERRIDES {
+                if headers.get(name).is_none_or(|value| value != "public, max-age=60") {
+                    wrong.push(format!("{uri}: the handler's own rejection lost {name}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 /// Staged middleware that applies a header part that is not one (a name with a space) to the
 /// answer it was given, as `([(name, value)], res)`: Corten's `500` replaces that answer.
 struct BreaksTheHeader;
@@ -6486,6 +6677,51 @@ async fn a_header_that_is_not_one_keeps_the_no_store_of_the_answer_it_replaces()
         let wrong = kept_from_cdns(&headers, sent);
         assert!(wrong.is_empty(), "{uri}: {wrong:#?}");
     }
+}
+
+/// A tuple with a header part that is not one and a `Cache::no_store()` part keeps its `500` out of
+/// every cache whichever part comes first: the policy a part after the failed one would have set is
+/// still read. With and without a status, made directly, and as a handler's answer through the
+/// app, behind a middleware that writes the CDN headers, where the error page in its place goes
+/// out `private, no-store` with none of them. A tuple without `NoStore` stays `private, no-cache`
+/// (the control).
+#[tokio::test]
+async fn a_failed_header_part_keeps_no_store_whatever_order_the_parts_are_in() {
+    let bad = || [("bad name", "1")];
+    for (item, failed, no_store) in [
+        ("NoStore first", (Cache::no_store(), bad(), "secret").into_response(), true),
+        ("NoStore after", (bad(), Cache::no_store(), "secret").into_response(), true),
+        ("status, NoStore first", (StatusCode::OK, Cache::no_store(), bad(), "secret").into_response(), true),
+        ("status, NoStore after", (StatusCode::OK, bad(), Cache::no_store(), "secret").into_response(), true),
+        (
+            "status, NoStore last of three",
+            (StatusCode::OK, bad(), [("x-note", "1")], Cache::no_store(), "secret").into_response(),
+            true,
+        ),
+        ("no NoStore", (StatusCode::OK, bad(), [("x-note", "1")], "secret").into_response(), false),
+    ] {
+        assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR, "{item}");
+        assert!(failed.extensions().get::<crate::cache::Unshared>().is_some(), "{item}: not marked as Corten's");
+        assert_eq!(crate::cache::Typed::is_no_store(&failed), no_store, "{item}: NoStore");
+    }
+    let routes = Table::new()
+        .route("/first", get(|| async { (StatusCode::OK, Cache::no_store(), [("bad name", "1")], "secret") }))
+        .route("/after", get(|| async { (StatusCode::OK, [("bad name", "1")], Cache::no_store(), "secret") }))
+        .route("/neither", get(|| async { (StatusCode::OK, [("bad name", "1")], "secret") }));
+    let router = App::new(Routes::from(routes))
+        .middleware(CdnRecaches(Some("public, max-age=60")))
+        .error_page(greeting_error_page, ())
+        .router();
+    let html = &[("accept", "text/html")][..];
+    let mut wrong = Vec::new();
+    for (uri, sent) in [("/first", "private, no-store"), ("/after", "private, no-store"), ("/neither", "private, no-cache")] {
+        let (status, headers, body) = from_ann(&router, "GET", uri, html).await;
+        if status != StatusCode::INTERNAL_SERVER_ERROR || !body.contains("Sorry, ann.") {
+            wrong.push(format!("{uri}: {status}: {body}"));
+        }
+        wrong.extend(kept_from_cdns(&headers, sent).into_iter().map(|what| format!("{uri}: {what}")));
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
 /// The MCP endpoint's route, for [`the_mcp_endpoint_s_own_errors_are_never_shared`].
@@ -6613,8 +6849,10 @@ async fn the_mcp_endpoint_s_own_errors_are_never_shared() {
 /// status named to answer with, an `Error` made another way (`Error::new` called or passed as a
 /// function), and a JSON-RPC error code. The statement (or match arm) that makes it must hold one
 /// of the marks, or the failure must be marked where it goes next: a status set on a response
-/// (`*res.status_mut() = ..`) where that response was made, a value bound to a name in a statement
-/// of the same block that uses the name. A function of the file listed in
+/// (`*res.status_mut() = ..`) where that response was made, a value bound to a name at every
+/// statement of the rest of its block that uses the name (each use may be an exit of its own, so
+/// one marked `return` does not vouch for an unmarked final expression; a binding nothing uses is
+/// refused). A function of the file listed in
 /// [`failure_check::HELPERS`], and a closure of the same function that holds a mark, counts as one.
 /// Anything else is refused unless listed below with why it may (a stale entry fails too), so a new
 /// exit is marked as it is written or named where review sees it.
@@ -6625,9 +6863,13 @@ async fn the_mcp_endpoint_s_own_errors_are_never_shared() {
 /// http::StatusCode as S` or a `const` holding a failing status; one passed in from another
 /// function or made by a macro), a failure with no status in it (an MCP result with `isError`,
 /// whose producers are checked by `the_mcp_endpoint_s_own_errors_are_never_shared`), a mark in the
-/// statement that is not applied to the failure (`let _ = cache::unshared(other)` beside it), a
-/// closure or helper that marks on some paths only, and a value in [`failure_check::MARKS`] taken
-/// at its word that it is answered marked. Strings and comments are blanked first, so the name of
+/// statement that is not applied to the failure (`let _ = cache::unshared(other)` beside it, or a
+/// use of a bound name inside a marked statement that hands the value elsewhere unmarked), a
+/// value that leaves the rest of its block another way (stored, then answered elsewhere), a later
+/// `let` of the same name, read as the same binding, a closure or helper that marks on some paths only, and a value in [`failure_check::MARKS`] taken
+/// at its word that it is answered marked. Because every use of a binding must be marked, a
+/// binding that is only compared or logged after it is made is refused too, and is marked where it
+/// is made. Strings and comments are blanked first, so the name of
 /// a mark in either does not count. (Skipped outside the repository.)
 #[test]
 fn corten_makes_its_failures_through_the_constructors_that_mark_them() {
@@ -6639,9 +6881,9 @@ fn corten_makes_its_failures_through_the_constructors_that_mark_them() {
         ("lib.rs", "Error::status(StatusCode::NOT_FOUND)", 1, "Error::not_found: a handler's own failure"),
         (
             "lib.rs",
-            "Error { corten: corten_s::<E>(), ..Error::new(error) }",
+            "Error { corten: corten_s(&error), ..Error::new(error) }",
             1,
-            "an error passed on with `?`: the handler's own, but for Corten's typed rejections (`corten_s`), which it marks",
+            "an error passed on with `?`: the handler's own, but for a rejection Corten's extractor made (`corten_s`), which it marks",
         ),
         ("lib.rs", "source: Box::new(caller::AsError(refused))", 1, "a refusal, answered as the refusal, which marks itself"),
         (
@@ -6686,8 +6928,10 @@ fn corten_makes_its_failures_through_the_constructors_that_mark_them() {
 /// The source check refuses each failure on its own, not the function it is in: a failure whose
 /// mark was taken off is found though its function makes another failure marked, a mark's name in
 /// a string or a comment does not count, and an `Error` made with `Error::new` passed as a function
-/// counts as one. Review round 13 of #1890 found three changes the check it replaced let through:
-/// they are the first three cases on the repository's own source.
+/// counts as one, and a binding is checked at each use (review round 14 of #1890: a marked early
+/// return beside an unmarked final expression of the same binding). Review round 13 found three
+/// changes the check it replaced let through: they are the first three cases on the repository's
+/// own source.
 #[test]
 fn the_source_check_finds_each_failure_on_its_own() {
     let found =
@@ -6716,6 +6960,16 @@ fn the_source_check_finds_each_failure_on_its_own() {
         ),
         // A JSON-RPC error made without a mark.
         ("fn f(id: Value) -> Response {\n    reply(id, Err((-32601, \"method not found\".into())))\n}\n", "reply(id, Err((-32601,"),
+        // One binding, a marked early return and an unmarked final expression (review round 14).
+        (
+            "fn f(condition: bool) -> Response {\n    let status = StatusCode::FORBIDDEN;\n    if condition {\n        return crate::cache::unshared(status.into_response());\n    }\n    status.into_response()\n}\n",
+            "let status = StatusCode::FORBIDDEN;",
+        ),
+        // The same with the unmarked use first.
+        (
+            "fn f(condition: bool) -> Response {\n    let status = StatusCode::FORBIDDEN;\n    if condition {\n        return status.into_response();\n    }\n    crate::cache::unshared(status.into_response())\n}\n",
+            "let status = StatusCode::FORBIDDEN;",
+        ),
     ];
     for (source, holds) in unmarked {
         let got = found("x.rs", source);
@@ -6728,6 +6982,8 @@ fn the_source_check_finds_each_failure_on_its_own() {
         "fn f(ok: bool) -> Response {\n    let status = if ok { StatusCode::OK } else { StatusCode::BAD_REQUEST };\n    crate::cache::unshared(status.into_response())\n}\n",
         "fn f() -> Response {\n    let refused = |status: StatusCode| crate::cache::unshared(status.into_response());\n    refused(StatusCode::GONE)\n}\n",
         "fn f(status: StatusCode) -> bool {\n    status == StatusCode::NOT_FOUND || matches!(status, StatusCode::GONE)\n}\n",
+        // One binding, every exit marked.
+        "fn f(condition: bool) -> Response {\n    let status = StatusCode::FORBIDDEN;\n    if condition {\n        return crate::cache::unshared(status.into_response());\n    }\n    crate::cache::unshared(status.into_response())\n}\n",
     ];
     for source in marked {
         let got = found("x.rs", source);
@@ -6926,23 +7182,29 @@ mod failure_check {
                     }
                 }
             }
-            // A value bound to a name: marked where the name is used, in the rest of its block.
+            // A value bound to a name: marked where the name is used, in the rest of its block, at
+            // every use, since each may be an exit of its own (a marked early return does not mark
+            // the unmarked final expression after it). A binding no statement uses is unmarked.
             if !ok {
                 if let Some((v, v_end)) = let_at(head, 0, true) {
                     let name = &head[v..v_end];
                     let end = block_end(t, e);
                     let mut from = e;
+                    let mut uses = 0;
+                    let mut every = true;
                     while let Some(i) = find(&t[..end], from, name) {
                         from = i + 1;
                         if word(before(t, i)) || word(at(t, i + name.len())) {
                             continue;
                         }
+                        uses += 1;
                         let (us, ue) = scope(t, i);
-                        if marked(&t[us..ue], &names) {
-                            ok = true;
+                        if !marked(&t[us..ue], &names) {
+                            every = false;
                             break;
                         }
                     }
+                    ok = uses > 0 && every;
                 }
             }
             if !ok {

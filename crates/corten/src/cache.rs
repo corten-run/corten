@@ -637,6 +637,24 @@ pub(crate) fn settle_refused(res: &mut Response) {
     settle_unshared(res);
 }
 
+/// The empty answer sent in place of one whose exact-size body failed as it was read after the
+/// cache rules ran ([`settle`]): to be tagged ([`tag`]) or compressed. It is Corten's, not the
+/// handler's, and nothing it says is the answer's: marked [`Unshared`] and settled here, since no
+/// stage after this one settles it, `private, no-store` (an empty answer no cache may keep in place
+/// of the page), with none of the caching headers a CDN reads first, and without the answer's
+/// validators or length, which were about the body it does not have. Its status is the answer's.
+#[cold]
+pub(crate) fn unread(mut parts: http::response::Parts) -> Response {
+    for name in [header::ETAG, header::LAST_MODIFIED, header::CONTENT_LENGTH, header::CONTENT_ENCODING, header::CONTENT_RANGE] {
+        parts.headers.remove(name);
+    }
+    parts.extensions.insert(Unshared);
+    let mut res = Response::from_parts(parts, Body::empty());
+    drop_cdn_caching(res.headers_mut());
+    res.headers_mut().insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
+    res
+}
+
 /// In a debug build: whether an answer's headers, as sent, let a shared cache keep it: one of
 /// [`CDN_CACHING`], or no line of its `Cache-Control` says a plain `private` (some CDNs keep an
 /// answer that says only `no-cache` or `no-store`).
@@ -710,7 +728,7 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     // Exact size: one held `Bytes`, which comes back as it is (compression then sends a held
     // value's stored form, which it finds by this pointer).
     let Ok(bytes) = crate::body::to_bytes(body, usize::MAX).await else {
-        return Response::from_parts(parts, Body::empty());
+        return unread(parts);
     };
     // A kept answer's body is read once, for its first tag.
     let tag = tagged(crate::kept::Kept::hashed(&parts.extensions, &bytes, &*TAG_KEY), &parts.headers);

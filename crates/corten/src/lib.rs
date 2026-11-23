@@ -1425,22 +1425,28 @@ impl std::fmt::Display for Error {
     }
 }
 
-/// Any error passed on with `?`: a 500, the handler's own failure. One of Corten's typed
-/// rejections a handler met as a value ([`extract::BodyRejection`], [`form::FormRejection`]: it
-/// took `Result<Json<T>, BodyRejection>` and ran the extractor itself) is still a 500, and still
+/// Any error passed on with `?`: a 500, the handler's own failure. A rejection Corten's extractor
+/// made, which a handler met as a value ([`extract::BodyRejection`], [`form::FormRejection`]: it
+/// took `Result<Json<T>, BodyRejection>` and ran the extractor itself), is still a 500, and still
 /// Corten's ([`Error::corten`]), so the error page in its place is never shared; wrapped by hand
-/// (`Error::new(rejection)`), it is the handler's.
+/// (`Error::new(rejection)`), it is the handler's. A `FormRejection` the handler made itself
+/// ([`form::FormRejection::new`]) is the handler's too; only an extractor makes a `BodyRejection`.
 impl<E: std::error::Error + Send + Sync + 'static> From<E> for Error {
     fn from(error: E) -> Self {
-        Error { corten: corten_s::<E>(), ..Error::new(error) }
+        Error { corten: corten_s(&error), ..Error::new(error) }
     }
 }
 
-/// Whether `E` is one of Corten's typed rejections: known from the type alone, so the check costs
-/// an error of the handler's own nothing.
-fn corten_s<E: 'static>() -> bool {
+/// Whether `error` is a rejection one of Corten's extractors made. The type is compared first,
+/// so an error of the handler's own costs a comparison of two constants; a `FormRejection` is
+/// asked who made it, since the app can make one too.
+fn corten_s<E: 'static>(error: &E) -> bool {
     let id = std::any::TypeId::of::<E>();
-    id == std::any::TypeId::of::<extract::BodyRejection>() || id == std::any::TypeId::of::<form::FormRejection>()
+    if id == std::any::TypeId::of::<extract::BodyRejection>() {
+        return true;
+    }
+    id == std::any::TypeId::of::<form::FormRejection>()
+        && (error as &dyn std::any::Any).downcast_ref::<form::FormRejection>().is_some_and(form::FormRejection::corten_s)
 }
 
 /// The error it holds, with its causes and without its status, so a stream of

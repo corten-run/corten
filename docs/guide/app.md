@@ -596,9 +596,11 @@ Corten has no scheduler of its own: a task and tokio's intervals are the one way
 is down. A check that has not answered in 800 ms is dropped and `/health/ready` answers
 `unavailable`, inside Kubernetes' one-second probe timeout, and one warning is logged until it
 answers again; `App::ready_within(d)` changes the limit, kept under the probe's own timeout.
-No cache keeps either answer: the `200` says `Cache-Control: no-store`, and the `503` is a
-`NoStore` answer and Corten's own failure, so it goes out `private, no-store` with no CDN caching
-header whatever a middleware writes on it, as does the error page a browser gets in its place.
+The `200` sends `Cache-Control: no-store` by default; it is a plain header, so a staged middleware
+that rewrites `Cache-Control` or adds a CDN's own caching header can change what caches do with
+it. The `503` is a `NoStore` answer and Corten's own failure, so it goes out `private, no-store`
+with no CDN caching header whatever a middleware writes on it, as does the error page a browser
+gets in its place.
 
 With a database, set the pool's wait for a connection well under the app's deadline
 (`App::deadline`): sqlx's `acquire_timeout` and Corten's deadline are both 30 seconds by default,
@@ -1524,12 +1526,16 @@ the route reads, a WebSocket handshake), an MCP endpoint's own errors (a JSON-RP
 refusal before any tool ran; an error result the tool itself returns is the tool's), the 503 of
 `/health/ready` (`NoStore` too), a static
 file's 416, the 421 for another host, the 403 for a cross-site write, the 500 for an answer whose
-header is not one, a document with no `<Corten />` or a kept page that cannot be read, and a debug
+header is not one (`private, no-store` when the answer was `NoStore` or a `Cache::no_store()` part
+of the same tuple asks for it, whatever order the parts are in), a document with no `<Corten />` or a
+kept page that cannot be read, the empty answer sent in place of one whose body failed as Corten
+read it to tag or compress it (`private, no-store`, without the answer's validators), and a debug
 build's error about the app's code, which keeps a `NoStore` answer's `private, no-store` where it
 replaces one. A handler that passes such a failure on with `?`, or gives it another status, keeps
 the mark, as one does that met an extractor's rejection as a value (`Result<Json<T>, BodyRejection>`,
-a `FormRejection`) and passes it on with `?`; one that wraps it (`Error::new(error)`) makes it its
-own, except an `Error` that holds a refusal (`Refused`), which `Error::new` keeps as the refusal it
+a `FormRejection` the extractor made) and passes it on with `?`; a `FormRejection` the handler made
+itself (`FormRejection::new`) is its own, passed on or answered, and one that wraps a rejection
+(`Error::new(error)`) makes it its own, except an `Error` that holds a refusal (`Refused`), which `Error::new` keeps as the refusal it
 is (inside an error of another type, `io::Error::other(error)`, it is the handler's). A handler's own failure is its answer, a plain-text one too: the error
 page a browser gets in its place keeps what a middleware wrote, as for its own 404. An unstaged route's `NoStore`
 answer goes out `private, no-store` with none of them either
