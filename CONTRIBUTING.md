@@ -400,15 +400,18 @@ establish a general ranking.
       not speed; fewer cycles per request show lower CPU cost, not lower request latency.
 
       The no-regression margin is separate from that smallest worthwhile reduction: a workload the
-      change should leave as fast as it was is held to +1%, declared before the run. If the
-      one-sided 95% upper bound on the median per-pair change in user plus kernel cycles per
-      request is under +1%, the margin is met. If it is at or above +1%, the margin is not met,
-      with one exception, for a negative control: a workload the run's plan (its `margin.md`)
-      names before the run as one whose code paths the change does not touch, with the reason,
-      which the pull request's review accepts. A workload the change touches is held to +1% with
-      no floor, however flat its instructions, and so is a workload not named so before the run; a
-      declaration is never added or changed after a run to clear its result, and a plan that
-      made +1% decisive before this exception existed stays bound by it.
+      change should leave as fast as it was is held to +1%, declared before the run. Read on one
+      build of each side, if the one-sided 95% upper bound on the median per-pair change in user
+      plus kernel cycles per request is under +1%, the margin is met. If it is at or above +1%,
+      the margin is not met, with one exception, for a negative control: a workload the run's
+      plan (its `margin.md`) names before the run as one whose code paths the change does not
+      touch, with the reason, which the pull request's review accepts. A workload the change
+      touches is held to +1% with no floor, however flat its instructions, and so is a workload
+      not named so before the run; a declaration is never added or changed after a run to clear
+      its result, and a plan that made +1% decisive before this exception existed stays bound by
+      it. This single-build reading and the CPU-win rule above do not decide a touched workload
+      whose single-build bound lands inside its recorded placement spread, or one read across
+      placements; both are decided as described below.
 
       A negative control whose bound is at or above +1% but under the layout floor that applies
       to it may go ahead when its user instructions pass a screen: the median of the paired
@@ -484,18 +487,31 @@ establish a general ranking.
       names it before the run with the numbers below
       ([design Choice 72](docs/design.md#choice-placement-runs)). One build's code placement moves
       a touched request's cycles by up to about 4% either way, so a single build of each side can
-      pass or miss +1% by where the linker put the code. Where that Choice records a placement
-      spread for the workload (the lowest and highest placement median of its A/A across
-      placements, as the Choice prints them to two decimals, for the probe program, workload and
-      host type the Choice names), a single-build bound that, less +1%, lands inside that spread,
-      either end included, does not decide the workload, a pass as much as a miss: the pull
-      request reports it as "inside the placement spread: not decided", which does not pass, and
-      reads the workload across placements in a run whose plan is written before that run. A
-      single-build bound outside the spread, and any single-build bound on a workload with no
-      recorded spread, is the reading by this rule, not because placement is shown unable to move
-      it. A workload with no single-build bound (a run that failed, too few pairs) does not pass,
-      as before, and a control the plan declared keeps
-      [design Choice 71](docs/design.md#choice-layout-floor)'s rule. The plan states:
+      pass or miss +1%, or show a CPU-cost win, by where the linker put the code. That Choice
+      records a placement spread for a workload (the lowest and highest placement median of its
+      A/A across placements, as the Choice prints them to two decimals) and the setup it was
+      measured on. A spread applies only to a run that matches that setup in each of: the probe
+      program and its features, the workload's request and the configuration it is sent to, the
+      allocator and its settings, the turn protocol (every turn on a freshly started build, the
+      server, the load and the driver with `perf` each pinned to CPUs of their own, `wrk -t2 -c64`
+      and 3 s turns) and the CPU model (a Xeon Platinum 8358 for the spreads recorded so far). A
+      run that differs in any has no recorded spread for the workload
+      until a placement run on its setup records one. Where a spread applies, either end counting
+      as inside, a single-build bound that, less +1%, lands inside it does not decide the margin,
+      a pass as much as a miss: the pull request reports it as "inside the placement spread: not
+      decided", which does not pass, and reads the workload across placements in a run whose plan
+      is written before that run. A single-build bound that, plus the smallest worthwhile
+      reduction, lands inside it does not decide a CPU-cost win either, since a placement can make
+      a win as easily as a loss: no win is claimed from it. A single-build bound outside the
+      spread, and any single-build bound on a workload with no recorded spread for the run's
+      setup, is the reading by the rules above, binding by policy, not because placement is shown
+      unable to move it. A workload with no single-build bound (a run that failed, too few pairs)
+      does not pass, as before, and a control the plan declared keeps
+      [design Choice 71](docs/design.md#choice-layout-floor)'s rule. Item 2's other requirements
+      apply to a run read across placements as to any other: every counter at 100%; the user and
+      kernel split and, when the change adds or moves code, user L1 instruction-cache misses per
+      request, reported across placements as cycles are; and the affected-route, memory and
+      waiting measurements. The plan states:
 
       1. Placements: each side is compiled once, and its K placements are that build's final link
          run again with one more object, a function of a declared size that nothing calls (a pad),
@@ -507,9 +523,12 @@ establish a general ranking.
          byte-identical to the build's own binary; that each placement has exactly that binary's
          functions and the pad, the pad first, every function moved and every pair of neighbours
          still next to each other in order; that each has a SHA-256 no other binary has; and that
-         each answers the workload's requests as the unpadded binary does (status, headers but
-         `Date`, and body, with only the values the plan names as drawn per process masked, as
-         `Age` and a keyed `ETag` are).
+         each answers the workload's requests as the unpadded binary does: status, headers but
+         `Date`, and body as received, with nothing in the body masked and only the header values
+         the plan names masked, each one that differs between two starts of one binary (a keyed
+         `ETag`). A header value the workload's cost depends on, as `kept`'s depends on `Age`, is
+         masked for that comparison only if it can differ between starts, and is then checked
+         separately against the value or range the plan states, not accepted as any number.
       2. Pairs: R recorded pairs per placement after one that is not, every turn on a freshly
          started build, as above, so a placement and a process start are told apart.
       3. The statistic: per placement, the median of its R per-pair changes in user plus kernel
@@ -520,12 +539,17 @@ establish a general ranking.
          medians are independent draws with a common median, and the plan's pads are a declared,
          phase-balanced set rather than a random sample of the builds a change can land in, so
          the bound reads the change across those placements, not across every placement.
-      4. Resolution: the same run reads main against main on the workload with the same K, R and
-         statistic, main with pad p_i against main with pad q_i from a second list of sizes, no
-         size in both lists. That A/A's bound is what the run can resolve, and its lowest and
-         highest placement median are the spread the Choice records for the workload. If its
-         bound is at or above +1%, the workload is **not resolved**, and not resolved does not
-         pass, whatever the change's own bound.
+      4. Resolution: the same run reads an A/A on the workload: the change's base commit against
+         itself, compiled once with the change comparison's build inputs and run with its probe
+         program, workload and load inputs, with the same K, R and statistic, base with pad p_i
+         against base with pad q_i from a second list of sizes, no size in both lists. The A/A is
+         read twice from the same pairs: as recorded, and with its lists' labels swapped (each
+         per-pair change B / A - 1 read as A / B - 1), since a list whose placements happened to
+         run faster would lower one reading's bound and raise the other's. Its bounds in the two
+         readings are what the run can resolve, and its lowest and highest placement median as
+         recorded are the spread the Choice records for the workload. If either bound is at or
+         above +1%, the workload is **not resolved**, and not resolved does not pass, whatever the
+         change's own bound.
 
       The margin stays +1% with no floor: the workload meets it when the change's bound across
       placements is under +1% and its A/A resolves. A placement that fails a check above, or has
@@ -538,8 +562,10 @@ establish a general ranking.
       if the plan declares it, with its smallest worthwhile reduction, before the run: a CPU-cost
       win then needs the change's upper bound across placements at or below minus that reduction,
       and its A/A's one-sided 95% lower bound (the (K + 1 - j)-th smallest placement median, the
-      11th of 30) above it. The reading measures the change across placements, not the release
-      binary, whose placement is one of them. A run of K = 30 placements of R = 8 pairs, for the
+      11th of 30) above it in both readings. The reading measures the change across the plan's
+      placements, not the release binary, which has a placement of its own: the unpadded build,
+      which no comparison the gate reads includes (the first run read it only in a diagnostic).
+      A run of K = 30 placements of R = 8 pairs, for the
       change and the A/A on `kept` and an A/A on `plain`, takes about 2 hours on a c-8 (the first
       run: 99 minutes of turns after 2 minutes of checks, besides setup and builds).
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
