@@ -81,6 +81,37 @@ owner "rm -- '$work/result'" </dev/null
 test ! -e "$work/result"
 test "$(forks)" -eq 6
 /bin/bash "$work/verify"
+
+# Exercise the production offline phase rules against the real kernel ABI.
+# A refused connection must not fork the listener or invalidate otherwise
+# unchanged isolation; a modified policy is not the same observation.
+"$1" --input-type=module -e 'import {offlineFenceRules} from "./bench/workloads/isolated/control-admission.mjs"; process.stdout.write(offlineFenceRules)' |
+  /usr/sbin/nft -f -
+sample() { /usr/sbin/nft -j -a list table inet corten_bench_native; }
+window() {
+  "$node" --input-type=module -e '
+    import {readFileSync} from "node:fs";
+    import {verifyOfflineWindow} from "./bench/workloads/isolated/control-admission.mjs";
+    const [before, after] = process.argv.slice(1).map(p => JSON.parse(readFileSync(p)));
+    verifyOfflineWindow({before, after});
+  ' "$1" "$2"
+}
+node=$1
+sample > "$work/before"
+if owner true </dev/null 2>"$work/refused"; then exit 1; fi
+grep -Fq 'Connection timed out' "$work/refused"
+test "$(forks)" -eq 6
+sample > "$work/after"
+# Rule handles must remain stable; make sure this is not just two idle samples.
+if cmp -s "$work/before" "$work/after"; then echo 'owner did not exercise the native fence' >&2; exit 1; fi
+window "$work/before" "$work/after"
+/usr/sbin/nft insert rule inet corten_bench_native input tcp dport 22 drop
+sample > "$work/changed"
+if window "$work/after" "$work/changed"; then echo 'accepted modified native fence' >&2; exit 1; fi
+/usr/sbin/nft delete table inet corten_bench_native
+owner true </dev/null
+test "$(forks)" -eq 7
+
 # A stricter rule still changes the verified policy, even though the table exists.
 /usr/sbin/nft insert rule inet corten_bench_ssh input tcp dport 22 ip saddr 127.0.0.2 drop
 /usr/sbin/nft list table inet corten_bench_ssh >/dev/null
