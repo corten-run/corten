@@ -22,6 +22,14 @@ diagnostic are under the tags `evidence/thread-cache-1979` and
    CPU, Docker, `wrk`, `perf`, the server binary's SHA-256, the image's id, the load average).
    `results/readings.txt`: `pairs3.py` run over every log.
 
+5. `trial/`: a trial of the scripts on `h06`, from 14:06:46 to 14:07:58 UTC, before the plan was
+   in the pull request's description (14:08:16 UTC) and before the run started (14:08:24). It ran
+   one pair of 512 KiB against 64 KiB with `br` on each of the four page lengths (`n1`, `n20`,
+   `n160`, `n400`) and two pairs of 64 KiB against itself with `identity` (`aa.log`). It ran no
+   pair of 512 KiB against 64 KiB with `identity` or with `gzip, deflate, br, zstd`. The margins,
+   counts and readings in the plan were written before it and were not changed after it. These
+   logs were added to the receipt in a second commit, after the first was tagged.
+
 ## The run
 
 Three DigitalOcean c-16s, Linux 6.8.0-149, Docker 29.10.0, perf 6.8.12, `wrk` 4.1.0. `h06` and

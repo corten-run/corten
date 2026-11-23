@@ -1,0 +1,5 @@
+# 14:06:46 n1 enc=br pairs=1 A=tc64k B=tc512k host network load=0.54
+# answers identical but Date and ETag (3581 bytes, HTTP/1.1 200 OK, body 9793 bytes uncompressed)
+pair 1: tc64k requests=29236 failed=0 cycles_user=310411 cycles_kernel=50375 total=360786 instr_user=628445 running=100.00/100.00/100.00
+pair 1: tc512k requests=29885 failed=0 cycles_user=306361 cycles_kernel=48660 total=355021 instr_user=628878 running=100.00/100.00/100.00
+# done 14:06:58
