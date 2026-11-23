@@ -34,9 +34,10 @@ test("a substituted CI Git archive fails before extraction or another download",
   const cwd = mkdtempSync(join(tmpdir(), "ci-git-release-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   writeFileSync(join(cwd, "curl"), '#!/bin/sh\nset -eu\nwhile test "$1" != -o; do shift; done\necho "$2" >> calls\nprintf substitute > "$2"\n', { mode: 0o700 });
+  symlinkSync("/usr/bin/sha256sum", join(cwd, "sha256sum"));
   const script = fileURLToPath(new URL("../../scripts/benchmark-evidence-git.sh", import.meta.url));
-  const r = spawnSync("/bin/sh", [script], { cwd, env: { PATH: cwd + ":/usr/bin:/bin", HOME: cwd }, encoding: "utf8", timeout: 5000 });
-  assert.ifError(r.error); assert.equal(r.status, 1);
+  const r = spawnSync("/bin/sh", [script], { cwd, env: { PATH: cwd, HOME: cwd }, encoding: "utf8", timeout: 5000 });
+  assert.ifError(r.error); assert.equal(r.status, 1, r.stderr);
   assert.match(r.stdout, /git.tar.xz: FAILED/);
   assert.equal(readFileSync(join(cwd, "calls"), "utf8"), "git.tar.xz\n");
   assert.equal(existsSync(join(cwd, "git.tar")), false);
@@ -52,13 +53,14 @@ test("CI requires gpgv success and the pinned Git signing subkey and primary", {
     curl: 'while test "$1" != -o; do shift; done; touch "$2"', sha256sum: "cat >/dev/null", gpg: "exit 0", xz: "exit 0",
     gpgv: 'test "$1 $2 $3 $4 $5 $6" = "--status-fd 1 --keyring $PWD/release-key.gpg git.tar.sign git.tar" || exit 8\necho "[GNUPG:] VALIDSIG $SIGNING ... $PRIMARY"\nexit "$CODE"',
   })) writeFileSync(join(root, command), `#!/bin/sh\n${body}\n`, { mode: 0o700 });
+  for (const command of ["awk", "cat", "mkdir", "touch"]) symlinkSync("/usr/bin/" + command, join(root, command));
   for (const [label, key, signer, code, expected] of [
     ["approved", signing, primary, 0, 0], ["bad signature", signing, primary, 1, 1],
     ["foreign primary", signing, "OTHER", 0, 1], ["foreign subkey", "OTHER", primary, 0, 1],
   ]) {
     const cwd = join(root, label); mkdirSync(cwd);
     const script = fileURLToPath(new URL("../../scripts/benchmark-evidence-git.sh", import.meta.url));
-    const r = spawnSync("/bin/sh", [script], { cwd, env: { PATH: root + ":/usr/bin:/bin", HOME: cwd,
+    const r = spawnSync("/bin/sh", [script], { cwd, env: { PATH: root, HOME: cwd,
       SIGNING: key, PRIMARY: signer, CODE: String(code) }, timeout: 5000, encoding: "utf8" });
     assert.ifError(r.error); assert.equal(r.status, expected, label + ": " + r.stderr);
   }
