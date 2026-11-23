@@ -5892,7 +5892,7 @@ async fn every_failure_corten_makes_is_never_shared() {
             true,
             "private, no-cache",
         ),
-        ("not ready", &router, "GET", "/health/ready", html, empty, StatusCode::SERVICE_UNAVAILABLE, true, "private, no-cache"),
+        ("not ready", &router, "GET", "/health/ready", html, empty, StatusCode::SERVICE_UNAVAILABLE, true, "private, no-store"),
         (
             "kept answer that cannot be read",
             &hides,
@@ -6223,16 +6223,438 @@ async fn every_failure_corten_makes_is_never_shared() {
     assert!(wrong.is_empty(), "a failure Corten made, open to a CDN: {wrong:#?}");
 }
 
+/// `method` `uri` with `body` through `router` from Ann (`name=ann`), asked with `asked`: its
+/// status, headers and body.
+async fn sent_by_ann(
+    router: &Router,
+    method: &str,
+    uri: &str,
+    asked: &[(&'static str, &'static str)],
+    body: &[u8],
+) -> (StatusCode, http::HeaderMap, String) {
+    let mut req = Request::builder().method(method).uri(uri).header(header::COOKIE, "name=ann");
+    for (name, value) in asked {
+        req = req.header(*name, *value);
+    }
+    let (parts, body) = router.clone().oneshot(req.body(Body::from(body.to_vec())).unwrap()).await.unwrap().into_parts();
+    (parts.status, parts.headers, String::from_utf8_lossy(&body.collect().await.unwrap().to_bytes()).into_owned())
+}
+
+/// A typed rejection a handler meets as a value (it takes `Result<String, BodyRejection>` or
+/// `Result<Form<T>, FormRejection>`, so it runs the extractor itself) and passes on with `?` stays
+/// Corten's: the `500` it becomes, as any error passed on with `?` does, keeps the mark, so the
+/// error page drawn in its place, which greets Ann by her cookie, is never shared. Wrapped by hand
+/// (`Error::new`), it is the handler's own failure, as an error of the handler's own passed on with
+/// `?` is, and the page in its place keeps what the middleware wrote (the controls).
+#[tokio::test]
+async fn a_rejection_passed_on_with_the_question_mark_stays_corten_s() {
+    type Text = std::result::Result<String, crate::extract::BodyRejection>;
+    type Fields = std::result::Result<crate::Form<std::collections::HashMap<String, u32>>, crate::form::FormRejection>;
+    let routes = Table::new()
+        .route(
+            "/text",
+            crate::router::post(|text: Text| async move {
+                let text = text?;
+                Ok::<_, Error>(text)
+            }),
+        )
+        .route(
+            "/fields",
+            get(|fields: Fields| async move {
+                let crate::Form(_) = fields?;
+                Ok::<_, Error>("read")
+            }),
+        )
+        .route(
+            "/text-wrapped",
+            crate::router::post(|text: Text| async move {
+                let text = text.map_err(Error::new)?;
+                Ok::<_, Error>(text)
+            }),
+        )
+        .route(
+            "/fields-wrapped",
+            get(|fields: Fields| async move {
+                let crate::Form(_) = fields.map_err(Error::new)?;
+                Ok::<_, Error>("read")
+            }),
+        )
+        .route(
+            "/own",
+            get(|| async {
+                Err::<(), _>(std::io::Error::other("the store is down"))?;
+                Ok::<_, Error>("never")
+            }),
+        );
+    let router = App::new(Routes::from(routes))
+        .middleware(CdnRecaches(Some("public, max-age=60")))
+        .error_page(greeting_error_page, ())
+        .router();
+    let html = &[("accept", "text/html")][..];
+    let same_site = &[("accept", "text/html"), ("sec-fetch-site", "same-origin")][..];
+    let mut wrong = Vec::new();
+    // What each is, its request, and whether it is Corten's.
+    for (item, method, uri, asked, body, corten) in [
+        ("BodyRejection passed on with ?", "POST", "/text", same_site, &b"\xff"[..], true),
+        ("FormRejection passed on with ?", "GET", "/fields?n=x", html, &b""[..], true),
+        ("BodyRejection wrapped with Error::new", "POST", "/text-wrapped", same_site, &b"\xff"[..], false),
+        ("FormRejection wrapped with Error::new", "GET", "/fields-wrapped?n=x", html, &b""[..], false),
+        ("the handler's own error passed on with ?", "GET", "/own", html, &b""[..], false),
+    ] {
+        let (status, headers, body) = sent_by_ann(&router, method, uri, asked, body).await;
+        // `?` makes a 500 of any error, Corten's or not, as it did.
+        if status != StatusCode::INTERNAL_SERVER_ERROR || !body.contains("Sorry, ann.") {
+            wrong.push(format!("{item}: {status}, not the error page's 500: {body}"));
+            continue;
+        }
+        if corten {
+            wrong.extend(kept_from_cdns(&headers, "private, no-cache").into_iter().map(|what| format!("{item}: {what}")));
+        } else {
+            for name in CDN_OVERRIDES {
+                if headers.get(name).is_none_or(|value| value != "public, max-age=60") {
+                    wrong.push(format!("{item}: the handler's own failure lost {name}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// Staged middleware that applies a header part that is not one (a name with a space) to the
+/// answer it was given, as `([(name, value)], res)`: Corten's `500` replaces that answer.
+struct BreaksTheHeader;
+
+impl crate::Middleware for BreaksTheHeader {
+    async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        let res = next.run(req).await;
+        ([("bad name", "1")], res).into_response()
+    }
+}
+
+/// The `500` Corten sends in place of an answer given a header that is not one (a name or a
+/// value) is Corten's, and keeps that answer's `NoStore`: `private, no-store` and none of a CDN's
+/// caching headers, whatever a middleware then writes, with the error page in its place too.
+#[tokio::test]
+async fn a_header_that_is_not_one_keeps_the_no_store_of_the_answer_it_replaces() {
+    let answer = |no_store: bool| {
+        let mut res = "secret".into_response();
+        if no_store {
+            Cache::no_store().apply(&mut res);
+        }
+        res
+    };
+    for (item, failed, no_store) in [
+        ("a name that is not one, NoStore", ([("bad name", "1")], answer(true)).into_response(), true),
+        ("a value that is not one, NoStore", ([("x-note", "one\nline")], answer(true)).into_response(), true),
+        ("a name that is not one", ([("bad name", "1")], answer(false)).into_response(), false),
+    ] {
+        assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR, "{item}");
+        assert!(failed.extensions().get::<crate::cache::Unshared>().is_some(), "{item}: not marked as Corten's");
+        assert_eq!(crate::cache::Typed::is_no_store(&failed), no_store, "{item}: NoStore");
+    }
+    let routes = Table::new()
+        .route("/statement", get(|req: Req| async move { NoStore(req.test_page("Statement", html! { <p>"yours"</p> })) }))
+        .route("/plain", get(|req: Req| async move { req.test_page("Plain", html! { <p>"plain"</p> }) }));
+    let router = App::new(Routes::from(routes))
+        .middleware((CdnRecaches(Some("public, max-age=60")), BreaksTheHeader))
+        .error_page(greeting_error_page, ())
+        .router();
+    let html = &[("accept", "text/html")][..];
+    for (uri, sent) in [("/statement", "private, no-store"), ("/plain", "private, no-cache")] {
+        let (status, headers, body) = from_ann(&router, "GET", uri, html).await;
+        assert!(status == StatusCode::INTERNAL_SERVER_ERROR && body.contains("Sorry, ann."), "{uri}: {status}: {body}");
+        let wrong = kept_from_cdns(&headers, sent);
+        assert!(wrong.is_empty(), "{uri}: {wrong:#?}");
+    }
+}
+
+/// The MCP endpoint's route, for [`the_mcp_endpoint_s_own_errors_are_never_shared`].
+#[cfg(feature = "agent")]
+#[derive(crate::Route)]
+#[route("/mcp")]
+struct McpAt;
+
+/// A tool's input, for [`the_mcp_endpoint_s_own_errors_are_never_shared`].
+#[cfg(feature = "agent")]
+#[derive(crate::json::FromJson)]
+struct McpItem {
+    id: String,
+}
+
+/// A tool's output, for [`the_mcp_endpoint_s_own_errors_are_never_shared`].
+#[cfg(feature = "agent")]
+#[derive(crate::json::ToJson)]
+struct McpFound {
+    id: String,
+}
+
+/// The MCP endpoint's own answers to a message it cannot serve are Corten's, not a tool's, at the
+/// status and in the envelope the protocol gives them: a JSON-RPC error at `200` for a message
+/// that is not JSON or not one request, an invalid request, a method it does not have, or a tool
+/// call without a tool, with an unknown one or arguments that are not an object, and a result with
+/// `isError` for arguments that do not fit the tool's input or a caller [`Tools::auth`] turned away
+/// before any tool ran (without an `Authorization`, whose metadata would make that a `403`). Behind
+/// a staged middleware that marks every answer for a CDN, each goes out `private, no-cache` with none
+/// of the caching headers a CDN reads first. What a tool itself answers, its own `isError` result
+/// included, and what the endpoint answers to a message it serves keep what the middleware wrote
+/// (the controls).
+///
+/// [`Tools::auth`]: crate::agent::Tools::auth
+#[cfg(feature = "agent")]
+#[tokio::test]
+async fn the_mcp_endpoint_s_own_errors_are_never_shared() {
+    use crate::agent::{ToolError, Tools};
+    let tools = Tools::new("test", "1.0")
+        .auth(|headers| match headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok()) {
+            Some("Bearer banned") => Err(ToolError::Forbidden("suspended".into())),
+            _ => Ok(()),
+        })
+        .read_tool("find", "Finds an item", |(), item: McpItem| async move {
+            if item.id == "locked" {
+                return Err(ToolError::Forbidden("that item is locked".into()));
+            }
+            Ok(McpFound { id: item.id })
+        });
+    let router = App::new(Routes::new())
+        .api::<McpAt>(|api| api.route::<McpAt>(tools.route()))
+        .middleware(CdnRecaches(Some("public, max-age=60")))
+        .router();
+    let call = |arguments: &str| {
+        format!(r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"find","arguments":{arguments}}}}}"#)
+    };
+    let json = &[("content-type", "application/json")][..];
+    let banned = &[("content-type", "application/json"), ("authorization", "Bearer banned")][..];
+    // What each is, its message and headers, what the answer must say (a JSON-RPC error's code, or
+    // `isError`), and whether it is Corten's.
+    type Case<'a> = (&'a str, String, &'a [(&'static str, &'static str)], serde_json::Value, bool);
+    let cases: Vec<Case> = vec![
+        ("not JSON", "{".into(), json, serde_json::json!(-32700), true),
+        ("not one message", "[]".into(), json, serde_json::json!(-32600), true),
+        ("an invalid request", r#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#.into(), json, serde_json::json!(-32600), true),
+        (
+            "a method it does not have",
+            r#"{"jsonrpc":"2.0","id":1,"method":"nope"}"#.into(),
+            json,
+            serde_json::json!(-32601),
+            true,
+        ),
+        (
+            "a tool call without a tool",
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}"#.into(),
+            json,
+            serde_json::json!(-32602),
+            true,
+        ),
+        (
+            "an unknown tool",
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lost"}}"#.into(),
+            json,
+            serde_json::json!(-32602),
+            true,
+        ),
+        ("arguments that are not an object", call("[]"), json, serde_json::json!(-32602), true),
+        ("arguments that do not fit", call("{}"), json, serde_json::json!(true), true),
+        ("a caller the check turned away", call(r#"{"id":"7"}"#), banned, serde_json::json!(true), true),
+        ("the tool's own refusal", call(r#"{"id":"locked"}"#), json, serde_json::json!(true), false),
+        ("the tool's answer", call(r#"{"id":"7"}"#), json, serde_json::json!(false), false),
+        ("the tools' list", r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.into(), json, serde_json::Value::Null, false),
+    ];
+    let mut wrong = Vec::new();
+    for (item, message, asked, says, corten) in cases {
+        let (status, headers, body) = sent_by_ann(&router, "POST", "/mcp", asked, message.as_bytes()).await;
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+        // The protocol's status and envelope, as before.
+        let said = match &says {
+            serde_json::Value::Bool(_) => body["result"]["isError"].clone(),
+            serde_json::Value::Number(_) => body["error"]["code"].clone(),
+            _ => serde_json::Value::Null,
+        };
+        if status != StatusCode::OK || said != says || body["jsonrpc"] != "2.0" {
+            wrong.push(format!("{item}: {status}, {body}"));
+            continue;
+        }
+        if corten {
+            wrong.extend(kept_from_cdns(&headers, "private, no-cache").into_iter().map(|what| format!("{item}: {what}")));
+        } else {
+            for name in CDN_OVERRIDES {
+                if headers.get(name).is_none_or(|value| value != "public, max-age=60") {
+                    wrong.push(format!("{item}: what the endpoint served lost {name}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 /// The crate's source makes each failure of its own through the constructors that mark it
 /// ([`crate::cache::Unshared`]): `Error::corten`, `cache::unshared`, `cache::unshared_in_place_of`,
-/// or a rejection that marks itself as it becomes a response (`BodyRejection`, `FormRejection`, a
-/// refusal). Outside the tests, a line that names a 4xx or 5xx status to answer with, or makes an
-/// `Error` another way, is refused unless the function it is in uses one of them or it is listed
-/// below with why it may, so a new exit is marked as it is written or named where review sees it.
-/// It reads lines, not Rust: a status held in a variable is its constructor's to mark, and the
-/// behavior is `every_failure_corten_makes_is_never_shared`'s. (Skipped outside the repository.)
+/// or a value that marks itself as it becomes a response (`BodyRejection`, `FormRejection`, a
+/// refusal). Each failure the source makes, outside the tests, is checked on its own: a 4xx or 5xx
+/// status named to answer with, an `Error` made another way (`Error::new` called or passed as a
+/// function), and a JSON-RPC error code. The statement (or match arm) that makes it must hold one
+/// of the marks, or the failure must be marked where it goes next: a status set on a response
+/// (`*res.status_mut() = ..`) where that response was made, a value bound to a name in a statement
+/// of the same block that uses the name. A function of the file listed in
+/// [`failure_check::HELPERS`], and a closure of the same function that holds a mark, counts as one.
+/// Anything else is refused unless listed below with why it may (a stale entry fails too), so a new
+/// exit is marked as it is written or named where review sees it.
+///
+/// It reads tokens, not Rust (`failure_check`), so it has limits, which the behavior tests cover
+/// (`every_failure_corten_makes_is_never_shared` and the tests after it): a status or an `Error`
+/// it cannot see made (a status number, `StatusCode::from_u16(500)`; an alias, `use
+/// http::StatusCode as S` or a `const` holding a failing status; one passed in from another
+/// function or made by a macro), a failure with no status in it (an MCP result with `isError`,
+/// whose producers are checked by `the_mcp_endpoint_s_own_errors_are_never_shared`), a mark in the
+/// statement that is not applied to the failure (`let _ = cache::unshared(other)` beside it), a
+/// closure or helper that marks on some paths only, and a value in [`failure_check::MARKS`] taken
+/// at its word that it is answered marked. Strings and comments are blanked first, so the name of
+/// a mark in either does not count. (Skipped outside the repository.)
 #[test]
 fn corten_makes_its_failures_through_the_constructors_that_mark_them() {
+    // The file, what the line holds, how many lines hold it, and why each may.
+    const OWN: &[(&str, &str, usize, &str)] = &[
+        ("assets.rs", "NO_FAVICON_CACHE)]).into_response()", 1, "no icon: one 404 for everyone, public for an hour"),
+        ("lib.rs", "source: error.into(), corten: false }", 1, "Error::new: a handler's own failure"),
+        ("lib.rs", "source: status.canonical_reason()", 1, "Error::status: a handler's own failure"),
+        ("lib.rs", "Error::status(StatusCode::NOT_FOUND)", 1, "Error::not_found: a handler's own failure"),
+        (
+            "lib.rs",
+            "Error { corten: corten_s::<E>(), ..Error::new(error) }",
+            1,
+            "an error passed on with `?`: the handler's own, but for Corten's typed rejections (`corten_s`), which it marks",
+        ),
+        ("lib.rs", "source: Box::new(caller::AsError(refused))", 1, "a refusal, answered as the refusal, which marks itself"),
+        (
+            "page.rs",
+            "let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };",
+            2,
+            "the sign-in's 500s, sent through `carried` with `marks`, which says `unshared: true` above them",
+        ),
+        ("router.rs", "Status(StatusCode::NOT_FOUND)", 1, "the router's 404, which `Status` marks as it answers"),
+        ("router.rs", "Status(StatusCode::METHOD_NOT_ALLOWED)", 1, "the router's 405, which `Status` marks as it answers"),
+        ("security/violations.rs", "StatusCode::UNSUPPORTED_MEDIA_TYPE,", 1, "a reason, which the extractor marks as it answers"),
+        ("security/violations.rs", "let refused = |_| (StatusCode::BAD_REQUEST", 1, "a reason, which the extractor marks"),
+        ("security/violations.rs", "_ => Err((StatusCode::BAD_REQUEST", 1, "a reason, which the extractor marks"),
+    ];
+    let Some(sources) = failure_check::sources() else { return };
+    let mut unmarked = Vec::new();
+    for (file, text) in &sources {
+        for (line, holds) in failure_check::unmarked(file, text) {
+            unmarked.push((file.clone(), line, holds));
+        }
+    }
+    let mut wrong = Vec::new();
+    for (file, line, text) in &unmarked {
+        if !OWN.iter().any(|(own, holds, _, _)| own == file && text.contains(holds)) {
+            wrong.push(format!("{file}:{line}: {text}"));
+        }
+    }
+    for (file, holds, lines, why) in OWN {
+        let mut found: Vec<usize> =
+            unmarked.iter().filter(|(at, _, text)| at == file && text.contains(holds)).map(|(_, line, _)| *line).collect();
+        found.dedup();
+        if found.len() != *lines {
+            wrong.push(format!("{file}: {} lines hold {holds:?}, not {lines} ({why}): change the list", found.len()));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "a failure made without Error::corten, cache::unshared or cache::unshared_in_place_of; mark it, add it to \
+         every_failure_corten_makes_is_never_shared, or list it here with why it may: {wrong:#?}"
+    );
+}
+/// The source check refuses each failure on its own, not the function it is in: a failure whose
+/// mark was taken off is found though its function makes another failure marked, a mark's name in
+/// a string or a comment does not count, and an `Error` made with `Error::new` passed as a function
+/// counts as one. Review round 13 of #1890 found three changes the check it replaced let through:
+/// they are the first three cases on the repository's own source.
+#[test]
+fn the_source_check_finds_each_failure_on_its_own() {
+    let found =
+        |file: &str, text: &str| failure_check::unmarked(file, text).into_iter().map(|(_, holds)| holds).collect::<Vec<_>>();
+    // Small sources of their own, so this half runs anywhere.
+    let unmarked = [
+        // A function that marks one failure and not the other.
+        (
+            "fn f(x: bool) -> Response {\n    if x {\n        return crate::cache::unshared(StatusCode::NOT_FOUND.into_response());\n    }\n    StatusCode::SERVICE_UNAVAILABLE.into_response()\n}\n",
+            "StatusCode::SERVICE_UNAVAILABLE.into_response()",
+        ),
+        // A mark's name in a string or a comment.
+        (
+            "fn f() -> Response {\n    let res = StatusCode::BAD_REQUEST.into_response(); // crate::cache::unshared(res)\n    let _ = \"crate::cache::unshared(res)\";\n    res\n}\n",
+            "let res = StatusCode::BAD_REQUEST.into_response();",
+        ),
+        // `Error::new` passed as a function.
+        (
+            "fn f(to: &str) -> Result<HeaderValue, Error> {\n    let value = HeaderValue::try_from(to).map_err(Error::new)?;\n    Ok(value)\n}\n",
+            "map_err(Error::new)",
+        ),
+        // A status set on a response that was not marked where it was made.
+        (
+            "fn f() -> Response {\n    let mut res = \"no\".into_response();\n    *res.status_mut() = StatusCode::FORBIDDEN;\n    res\n}\n",
+            "*res.status_mut() = StatusCode::FORBIDDEN;",
+        ),
+        // A JSON-RPC error made without a mark.
+        ("fn f(id: Value) -> Response {\n    reply(id, Err((-32601, \"method not found\".into())))\n}\n", "reply(id, Err((-32601,"),
+    ];
+    for (source, holds) in unmarked {
+        let got = found("x.rs", source);
+        assert!(got.iter().any(|line| line.contains(holds)), "not found: {holds}, in {got:?}\n{source}");
+    }
+    let marked = [
+        "fn f() -> Response {\n    crate::cache::unshared(StatusCode::NOT_FOUND.into_response())\n}\n",
+        "fn f(to: &str) -> Result<HeaderValue, Error> {\n    HeaderValue::try_from(to).map_err(Error::corten)\n}\n",
+        "fn f() -> Response {\n    let mut res = crate::cache::unshared(\"no\".into_response());\n    *res.status_mut() = StatusCode::FORBIDDEN;\n    res\n}\n",
+        "fn f(ok: bool) -> Response {\n    let status = if ok { StatusCode::OK } else { StatusCode::BAD_REQUEST };\n    crate::cache::unshared(status.into_response())\n}\n",
+        "fn f() -> Response {\n    let refused = |status: StatusCode| crate::cache::unshared(status.into_response());\n    refused(StatusCode::GONE)\n}\n",
+        "fn f(status: StatusCode) -> bool {\n    status == StatusCode::NOT_FOUND || matches!(status, StatusCode::GONE)\n}\n",
+    ];
+    for source in marked {
+        let got = found("x.rs", source);
+        assert!(got.is_empty(), "{got:?}\n{source}");
+    }
+    // The three changes review round 13 found the previous check let through, and a fourth on the
+    // MCP endpoint's own helper, each made to the repository's source.
+    let Some(sources) = failure_check::sources() else { return };
+    let source = |file: &str| sources.iter().find(|(name, _)| name == file).map(|(_, text)| text.clone()).unwrap();
+    for (file, from, to, holds) in [
+        // The deadline's 503 without its wrapper, in a function that makes other failures marked.
+        (
+            "page.rs",
+            "crate::cache::unshared(StatusCode::SERVICE_UNAVAILABLE.into_response())",
+            "StatusCode::SERVICE_UNAVAILABLE.into_response()",
+            "let mut res = StatusCode::SERVICE_UNAVAILABLE.into_response();",
+        ),
+        // The MCP endpoint's mark replaced by an unused string that names it.
+        (
+            "agent.rs",
+            "let mut res = crate::cache::unshared(json_response(",
+            "let _ = \"crate::cache::unshared\";\n    let mut res = (json_response(",
+            "*res.status_mut() = StatusCode::BAD_REQUEST;",
+        ),
+        // `map_err(Error::corten)` made `map_err(Error::new)`.
+        ("page.rs", "map_err(Error::corten)", "map_err(Error::new)", "map_err(Error::new)"),
+        // The helper every other JSON-RPC error goes through, without its mark.
+        (
+            "agent.rs",
+            "let mut res = crate::cache::unshared(reply(id, Err((code, message))));",
+            "let mut res = reply(id, Err((code, message)));\n    let _ = \"unshared\";",
+            "helper rpc_error",
+        ),
+    ] {
+        let text = source(file);
+        assert!(text.contains(from), "{file} no longer holds {from:?}: change this case to what it holds now");
+        let before = found(file, &text);
+        let after = found(file, &text.replacen(from, to, 1));
+        let new: Vec<_> = after.iter().filter(|line| !before.contains(line)).collect();
+        assert!(new.iter().any(|line| line.contains(holds)), "{file}: {from:?} made {to:?} was not found: {new:?}");
+    }
+}
+
+/// The source check's reading of Rust: tokens, not a parse (see
+/// `corten_makes_its_failures_through_the_constructors_that_mark_them` for what that leaves out).
+mod failure_check {
+    /// The failing statuses, by `http::StatusCode`'s names.
     const FAILING: &[&str] = &[
         "BAD_REQUEST",
         "UNAUTHORIZED",
@@ -6275,140 +6697,575 @@ fn corten_makes_its_failures_through_the_constructors_that_mark_them() {
         "NOT_EXTENDED",
         "NETWORK_AUTHENTICATION_REQUIRED",
     ];
-    const MARKS: &[&str] = &[
+
+    /// The marks, each read as a token (not after a letter, a digit or `_`): a constructor that
+    /// marks the failure it makes, or a value answered only marked, taken at its word.
+    pub(super) const MARKS: &[&str] = &[
         "Error::corten",
-        "unshared",
+        "unshared(",
+        "unshared_in_place_of(",
+        // Either passed as a function: `.map(cache::unshared)`.
+        "unshared)",
         "corten: true",
         "corten: self.corten",
-        "BodyRejection::new",
-        "FormRejection::invalid",
+        // Mark themselves as they become a response.
+        "BodyRejection::new(",
+        "FormRejection::invalid(",
         "Why::Refusal",
+        // agent.rs: answered by `rpc_error` alone.
+        "CallError::Rpc(",
     ];
-    // The file, what the line holds, and why it may.
-    const OWN: &[(&str, &str, &str)] = &[
-        ("assets.rs", "NO_FAVICON_CACHE)]).into_response()", "no icon: one 404 for everyone, public for an hour"),
-        ("lib.rs", "source: error.into(), corten: false }", "Error::new: a handler's own failure"),
-        ("lib.rs", "source: status.canonical_reason()", "Error::status: a handler's own failure"),
-        ("lib.rs", "Error::status(StatusCode::NOT_FOUND)", "Error::not_found: a handler's own failure"),
-        ("lib.rs", "Error::new(error)", "a handler's error passed on with `?`: its own"),
-        ("lib.rs", "source: Box::new(caller::AsError(refused))", "a refusal, answered as the refusal, which marks itself"),
-        ("router.rs", "Status(StatusCode::NOT_FOUND)", "the router's 404, which `Status` marks as it answers"),
-        ("router.rs", "Status(StatusCode::METHOD_NOT_ALLOWED)", "the router's 405, which `Status` marks as it answers"),
-        ("security/violations.rs", "StatusCode::UNSUPPORTED_MEDIA_TYPE,", "a reason, which the extractor marks as it answers"),
-        ("security/violations.rs", "let refused = |_| (StatusCode::BAD_REQUEST", "a reason, which the extractor marks"),
-        ("security/violations.rs", "_ => Err((StatusCode::BAD_REQUEST", "a reason, which the extractor marks"),
-    ];
-    fn is_word(byte: Option<&u8>) -> bool {
-        byte.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
-    }
-    // Whether the line makes a failure: answers with a 4xx or 5xx (not compares one, matches it or
-    // maps a reason to it) or makes an `Error`.
-    fn makes(line: &str) -> bool {
-        let line = line.replace("crate::Error::", "Error::").replace("http::StatusCode::", "StatusCode::");
-        let named = FAILING.iter().any(|name| {
-            let key = format!("StatusCode::{name}");
-            line.match_indices(&key).any(|(at, _)| {
-                let end = at + key.len();
-                if is_word(line.as_bytes().get(end)) {
-                    return false;
+
+    /// A file's functions that mark what they make, each checked to hold one of [`MARKS`].
+    pub(super) const HELPERS: &[(&str, &str)] = &[("agent.rs", "rpc_error"), ("response.rs", "invalid_header")];
+
+    /// The crate's source files outside the tests, by their path under `src/`, or `None` outside
+    /// the repository.
+    pub(super) fn sources() -> Option<Vec<(String, String)>> {
+        fn files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().map(Result::unwrap) {
+                let path = entry.path();
+                let name = entry.file_name().into_string().unwrap();
+                if path.is_dir() {
+                    if name != "tests" && name != "type_tests" {
+                        files(&path, out);
+                    }
+                } else if name.ends_with(".rs") && name != "tests.rs" {
+                    out.push(path);
                 }
-                let (before, after) = (line[..at].trim_end(), line[end..].trim_start());
-                let compared = before.ends_with("==") || before.ends_with("!=") || before.ends_with('|');
-                let pattern = after.starts_with('|') || after.starts_with("=>");
-                let mapped = before.ends_with("=>") && (after.is_empty() || after == ",");
-                !(compared || pattern || mapped || line.contains("matches!("))
-            })
-        });
-        let made = ["Error::new(", "Error::status(", "Error::not_found(", "Error { status"].iter().any(|key| {
-            line.match_indices(key)
-                .any(|(at, _)| at == 0 || !is_word(line.as_bytes().get(at - 1)) && line.as_bytes()[at - 1] != b':')
-        });
-        named || made
-    }
-    fn fn_start(line: &str) -> bool {
-        let mut rest = line.trim_start();
-        for prefix in ["pub(crate) ", "pub(super) ", "pub ", "const ", "async ", "unsafe "] {
-            rest = rest.strip_prefix(prefix).unwrap_or(rest);
-        }
-        rest.starts_with("fn ")
-    }
-    fn files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).unwrap().map(Result::unwrap) {
-            let path = entry.path();
-            let name = entry.file_name().into_string().unwrap();
-            if path.is_dir() {
-                if name != "tests" && name != "type_tests" {
-                    files(&path, out);
-                }
-            } else if name.ends_with(".rs") && name != "tests.rs" {
-                out.push(path);
             }
         }
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        if !src.join("cache.rs").is_file() {
+            return None;
+        }
+        let mut paths = Vec::new();
+        files(&src, &mut paths);
+        paths.sort();
+        Some(
+            paths
+                .into_iter()
+                .map(|path| {
+                    let file = path.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
+                    (file, std::fs::read_to_string(&path).unwrap())
+                })
+                .collect(),
+        )
     }
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    if !src.join("cache.rs").is_file() {
-        return;
+
+    /// The source's failures with none of [`MARKS`] where they are made or go next, by line (`0`
+    /// for a helper of [`HELPERS`] that holds none) and what that line holds.
+    pub(super) fn unmarked(file: &str, text: &str) -> Vec<(usize, String)> {
+        let cleaned = clean(text);
+        let t = &cleaned[..];
+        let helpers: Vec<&[u8]> = HELPERS.iter().filter(|(at, _)| *at == file).map(|(_, name)| name.as_bytes()).collect();
+        let mut found = Vec::new();
+        for name in &helpers {
+            let body = fn_named(t, name).map(|start| {
+                let open = find(t, start, b"{").map_or(t.len(), |i| i + 1);
+                &t[start..block_end(t, open)]
+            });
+            if !body.is_some_and(|body| marked(body, &[])) {
+                found.push((0, format!("helper {} marks nothing", String::from_utf8_lossy(name))));
+            }
+        }
+        for p in producers(t) {
+            let f = function(t, p);
+            // The helpers, and the closures of the same function made before it that mark.
+            let mut names = helpers.clone();
+            let mut from = f;
+            while let Some(i) = find(&t[..p], from, b"let") {
+                from = i + 3;
+                let Some((start, end)) = let_at(t, i, false) else { continue };
+                let eq = skip_space(t, end);
+                if at(t, eq) != b'=' {
+                    continue;
+                }
+                let mut body = skip_space(t, eq + 1);
+                if t[body..].starts_with(b"move") && at(t, body + 4).is_ascii_whitespace() {
+                    body = skip_space(t, body + 4);
+                }
+                if at(t, body) == b'|' {
+                    let (s, e) = scope(t, body + 1);
+                    if marked(&t[s..e], &helpers) {
+                        names.push(&t[start..end]);
+                    }
+                }
+            }
+            let (s, e) = scope(t, p);
+            let mut ok = marked(&t[s..e], &names);
+            let head = trim(&t[s..e]);
+            // A status set on a response: marked where the response was bound.
+            if !ok && head.starts_with(b"*") {
+                let v = skip_space(head, 1);
+                let v_end = ident(head, v);
+                if v_end > v && head[v_end..].starts_with(b".status_mut()") && at(head, skip_space(head, v_end + 13)) == b'=' {
+                    if let Some(made) = bound(t, f, s, &head[v..v_end]) {
+                        let (bs, be) = scope(t, made);
+                        ok = marked(&t[bs..be], &names);
+                    }
+                }
+            }
+            // A value bound to a name: marked where the name is used, in the rest of its block.
+            if !ok {
+                if let Some((v, v_end)) = let_at(head, 0, true) {
+                    let name = &head[v..v_end];
+                    let end = block_end(t, e);
+                    let mut from = e;
+                    while let Some(i) = find(&t[..end], from, name) {
+                        from = i + 1;
+                        if word(before(t, i)) || word(at(t, i + name.len())) {
+                            continue;
+                        }
+                        let (us, ue) = scope(t, i);
+                        if marked(&t[us..ue], &names) {
+                            ok = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !ok {
+                let line = t[..p].iter().filter(|&&c| c == b'\n').count() + 1;
+                found.push((line, text.lines().nth(line - 1).unwrap_or("").trim().to_owned()));
+            }
+        }
+        found
     }
-    let mut paths = Vec::new();
-    files(&src, &mut paths);
-    let mut unmarked = Vec::new();
-    for path in paths {
-        let file = path.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
-        let text = std::fs::read_to_string(&path).unwrap();
-        // The code as it builds outside the tests: comments blanked, test modules left out.
-        let mut lines: Vec<&str> = text.lines().map(|line| if line.trim_start().starts_with("//") { "" } else { line }).collect();
+
+    /// Where the last binding of `name` in `t[from..to]` (`let name =`, `let mut name =` or a
+    /// statement `name = ..`) gives it its value.
+    fn bound(t: &[u8], from: usize, to: usize, name: &[u8]) -> Option<usize> {
+        let mut last = None;
+        let mut k = from;
+        while let Some(i) = find(&t[..to], k, name) {
+            k = i + 1;
+            if word(before(t, i)) || word(at(t, i + name.len())) {
+                continue;
+            }
+            let eq = skip_space(t, i + name.len());
+            if at(t, eq) != b'=' || at(t, eq + 1) == b'=' {
+                continue;
+            }
+            let lead = trim_end(&t[from..i]);
+            let declared = ends_with_word(lead, "let")
+                || (ends_with_word(lead, "mut") && ends_with_word(trim_end(&lead[..lead.len() - 3]), "let"))
+                || lead.last().is_some_and(|c| b";{}".contains(c));
+            if declared {
+                last = Some(eq + 1);
+            }
+        }
+        last
+    }
+
+    /// Whether `x` holds one of [`MARKS`], or calls one of `names` (a helper or a closure that
+    /// marks).
+    fn marked(x: &[u8], names: &[&[u8]]) -> bool {
+        MARKS.iter().any(|mark| holds(x, mark.as_bytes(), false)) || names.iter().any(|name| holds(x, name, true))
+    }
+
+    /// Where the source makes a failure: a failing status named to answer with (not one compared,
+    /// matched or mapped from), an `Error` made with `Error::new`, `Error::status`,
+    /// `Error::not_found` or `Error { status, .. }`, and a JSON-RPC error code.
+    fn producers(t: &[u8]) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut from = 0;
+        while let Some(i) = find(t, from, b"StatusCode::") {
+            from = i + 1;
+            let name = i + "StatusCode::".len();
+            let mut end = name;
+            while end < t.len() && (t[end].is_ascii_uppercase() || t[end] == b'_') {
+                end += 1;
+            }
+            if !FAILING.iter().any(|failing| failing.as_bytes() == &t[name..end]) || word(at(t, end)) {
+                continue;
+            }
+            let line = t[..i].iter().rposition(|&c| c == b'\n').map_or(0, |k| k + 1);
+            let line_end = find(t, i, b"\n").unwrap_or(t.len());
+            let mut lead = &t[line..i];
+            for path in [&b"::http::"[..], b"http::", b"crate::"] {
+                if let Some(rest) = lead.strip_suffix(path) {
+                    lead = rest;
+                    break;
+                }
+            }
+            let lead = trim_end(lead);
+            let rest = trim(&t[end..line_end]);
+            let compared = lead.ends_with(b"==") || lead.ends_with(b"!=") || lead.ends_with(b"|");
+            let pattern = rest.starts_with(b"|") || rest.starts_with(b"=>");
+            let mapped = lead.ends_with(b"=>") && (rest.is_empty() || rest == b",");
+            if !(compared || pattern || mapped || find(&t[line..line_end], 0, b"matches!(").is_some()) {
+                out.push(i);
+            }
+        }
+        let mut from = 0;
+        while let Some(i) = find(t, from, b"Error") {
+            from = i + 1;
+            let rest = &t[i + "Error".len()..];
+            let made =
+                [&b"::new"[..], b"::status", b"::not_found"].iter().any(|k| rest.starts_with(k) && !word(at(rest, k.len())))
+                    || rest.starts_with(b" { status");
+            let p = if t[..i].ends_with(b"crate::") { i - "crate::".len() } else { i };
+            if made && !(word(before(t, p)) || before(t, p) == b':') {
+                out.push(p);
+            }
+        }
+        let mut from = 0;
+        while let Some(i) = find(t, from, b"-32") {
+            from = i + 1;
+            let digit = |k: usize| at(t, i + k).is_ascii_digit();
+            let code = (at(t, i + 3) == b'0' && digit(4) && digit(5))
+                || (matches!(at(t, i + 3), b'6' | b'7') && at(t, i + 4) == b'0' && digit(5));
+            if code && !word(at(t, i + 6)) {
+                out.push(i);
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// The statement, or the match arm, the offset `p` is in: through the struct literals, macro
+    /// bodies and `if`/`else` blocks around it, which are part of one expression.
+    fn scope(t: &[u8], p: usize) -> (usize, usize) {
+        let (mut depth, mut start, mut arm, mut through) = (0i32, 0, false, 0usize);
+        for i in (0..p).rev() {
+            match t[i] {
+                // A block with no `;` after it (an `if`, a `match`, a macro's body) ends its
+                // statement where the next one starts with a word.
+                b'}' if depth == 0 && starts_statement(t, i + 1) => {
+                    start = i + 1;
+                    break;
+                }
+                b')' | b']' | b'}' => depth += 1,
+                b'(' | b'[' => depth -= 1,
+                b'{' if depth > 0 => depth -= 1,
+                b'{' if group(t, i) || valued(t, i) => through += 1,
+                b'{' | b';' if t[i] == b'{' || depth <= 0 => {
+                    start = i + 1;
+                    break;
+                }
+                b'>' if before(t, i) == b'=' && depth <= 0 => {
+                    start = i + 1;
+                    arm = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let (mut depth, mut braces, mut end) = (0i32, 0usize, t.len());
+        for (i, &c) in t.iter().enumerate().skip(p) {
+            match c {
+                b'(' | b'[' => depth += 1,
+                b')' | b']' => depth -= 1,
+                b'{' => braces += 1,
+                b'}' if braces > 0 => braces -= 1,
+                b'}' if through > 0 => through -= 1,
+                b'}' => {
+                    end = i;
+                    break;
+                }
+                b';' | b',' if depth <= 0 && braces == 0 && (c == b';' || arm) => {
+                    end = i;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        (start, end)
+    }
+
+    /// Whether what follows a `}` at `i` is a statement of its own: a word that is not `else` or
+    /// `as`.
+    fn starts_statement(t: &[u8], i: usize) -> bool {
+        let k = skip_space(t, i);
+        let mut end = k;
+        while word(at(t, end)) {
+            end += 1;
+        }
+        end > k && !at(t, k).is_ascii_digit() && !matches!(&t[k..end], b"else" | b"as")
+    }
+
+    /// Whether the `{` at `i` opens a struct literal or a macro's body rather than a block.
+    fn group(t: &[u8], i: usize) -> bool {
+        let Some(k) = t[..i].iter().rposition(|c| !c.is_ascii_whitespace()) else { return false };
+        if b"([,!".contains(&t[k]) {
+            return true;
+        }
+        let mut start = k + 1;
+        while start > 0 && word(t[start - 1]) {
+            start -= 1;
+        }
+        let id = &t[start..=k];
+        if !id.first().is_some_and(u8::is_ascii_uppercase) || !id.iter().any(u8::is_ascii_lowercase) {
+            return false;
+        }
+        while start >= 2 && t[start - 1] == b':' && t[start - 2] == b':' {
+            start -= 2;
+            while start > 0 && word(t[start - 1]) {
+                start -= 1;
+            }
+        }
+        let lead = trim_end(&t[..start]);
+        !(lead.ends_with(b"->")
+            || lead.ends_with(b":")
+            || lead.ends_with(b"<")
+            || lead.ends_with(b"+")
+            || ["impl", "for", "struct", "enum", "trait", "dyn"].iter().any(|w| ends_with_word(lead, w)))
+    }
+
+    /// Whether the `{` at `i` opens a block whose value is the expression's: an `if`'s or an
+    /// `else`'s.
+    fn valued(t: &[u8], i: usize) -> bool {
+        let lead = trim_end(&t[..i]);
+        if ends_with_word(lead, "else") {
+            return true;
+        }
+        let mut depth = 0;
+        let mut start = 0;
+        for k in (0..lead.len()).rev() {
+            match lead[k] {
+                b')' | b']' | b'}' => depth += 1,
+                b'(' | b'[' | b'{' if depth > 0 => depth -= 1,
+                b'(' | b'[' | b'{' | b';' if lead[k] != b';' || depth == 0 => {
+                    start = k + 1;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let head = &lead[start..];
+        let has_if = (0..head.len()).any(|k| {
+            head[k..].starts_with(b"if") && (k == 0 || !word(head[k - 1])) && head.get(k + 2).is_some_and(u8::is_ascii_whitespace)
+        });
+        has_if && !holds(head, b"fn", true)
+    }
+
+    /// The end of the block the offset `p` is in: its unmatched `}`.
+    fn block_end(t: &[u8], p: usize) -> usize {
+        let mut depth = 0;
+        for (i, &c) in t.iter().enumerate().skip(p) {
+            if c == b'{' {
+                depth += 1;
+            } else if c == b'}' {
+                if depth == 0 {
+                    return i;
+                }
+                depth -= 1;
+            }
+        }
+        t.len()
+    }
+
+    /// Where the last `fn` before `p` starts: the function `p` is in, as far as tokens tell.
+    fn function(t: &[u8], p: usize) -> usize {
+        let mut last = 0;
+        let mut from = 0;
+        while let Some(i) = find(&t[..p], from, b"fn") {
+            from = i + 2;
+            let name = skip_space(t, i + 2);
+            if !word(before(t, i)) && at(t, i + 2).is_ascii_whitespace() && ident(t, name) > name {
+                last = i;
+            }
+        }
+        last
+    }
+
+    /// Where `fn name` starts.
+    fn fn_named(t: &[u8], name: &[u8]) -> Option<usize> {
+        let mut from = 0;
+        while let Some(i) = find(t, from, b"fn ") {
+            from = i + 1;
+            if !word(before(t, i)) && t[i + 3..].starts_with(name) && !word(at(t, i + 3 + name.len())) {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// `let` at `i`, then a name (after `mut` if `mutable`): where the name starts and ends.
+    fn let_at(t: &[u8], i: usize, mutable: bool) -> Option<(usize, usize)> {
+        if !t[i..].starts_with(b"let") || word(before(t, i)) || !at(t, i + 3).is_ascii_whitespace() {
+            return None;
+        }
+        let mut name = skip_space(t, i + 3);
+        if mutable && t[name..].starts_with(b"mut") && at(t, name + 3).is_ascii_whitespace() {
+            name = skip_space(t, name + 3);
+        }
+        let end = ident(t, name);
+        (end > name && !word(at(t, end))).then_some((name, end))
+    }
+
+    /// The end of a lowercase name starting at `i` (`i` if there is none).
+    fn ident(t: &[u8], i: usize) -> usize {
+        if !(at(t, i).is_ascii_lowercase() || at(t, i) == b'_') {
+            return i;
+        }
+        let mut end = i;
+        while at(t, end).is_ascii_lowercase() || at(t, end).is_ascii_digit() || at(t, end) == b'_' {
+            end += 1;
+        }
+        end
+    }
+
+    /// The source without its test modules, with its comments and the insides of its string and
+    /// character literals blanked: the same lines, so a line number is the source's.
+    fn clean(text: &str) -> Vec<u8> {
+        let kept = without_tests(text);
+        let t = kept.as_bytes();
+        let n = t.len();
+        let mut out = t.to_vec();
+        let blank = |out: &mut Vec<u8>, from: usize, to: usize| {
+            for c in out.iter_mut().take(to.min(n)).skip(from) {
+                if *c != b'\n' {
+                    *c = b' ';
+                }
+            }
+        };
+        let mut i = 0;
+        while i < n {
+            let c = t[i];
+            if c == b'/' && at(t, i + 1) == b'/' {
+                let end = find(t, i, b"\n").unwrap_or(n);
+                blank(&mut out, i, end);
+                i = end;
+                continue;
+            }
+            if c == b'/' && at(t, i + 1) == b'*' {
+                let (mut depth, mut k) = (1, i + 2);
+                while k < n && depth > 0 {
+                    if t[k] == b'/' && at(t, k + 1) == b'*' {
+                        depth += 1;
+                        k += 2;
+                    } else if t[k] == b'*' && at(t, k + 1) == b'/' {
+                        depth -= 1;
+                        k += 2;
+                    } else {
+                        k += 1;
+                    }
+                }
+                blank(&mut out, i, k);
+                i = k;
+                continue;
+            }
+            if (c == b'r' || (c == b'b' && at(t, i + 1) == b'r')) && !word(before(t, i)) {
+                let mut k = if c == b'b' { i + 2 } else { i + 1 };
+                let mut hashes = 0;
+                while at(t, k) == b'#' {
+                    hashes += 1;
+                    k += 1;
+                }
+                if at(t, k) == b'"' {
+                    let close: Vec<u8> = std::iter::once(b'"').chain(std::iter::repeat_n(b'#', hashes)).collect();
+                    let end = find(t, k + 1, &close).unwrap_or(n);
+                    blank(&mut out, k + 1, end);
+                    i = end + close.len();
+                    continue;
+                }
+            }
+            if c == b'"' {
+                let mut k = i + 1;
+                while k < n && t[k] != b'"' {
+                    if t[k] == b'\\' {
+                        k += 1;
+                    }
+                    k += 1;
+                }
+                blank(&mut out, i + 1, k);
+                i = k + 1;
+                continue;
+            }
+            if c == b'\'' {
+                if at(t, i + 1) == b'\\' {
+                    let end = find(t, i + 3, b"'").unwrap_or(n);
+                    blank(&mut out, i + 1, end);
+                    i = end + 1;
+                    continue;
+                }
+                if at(t, i + 2) == b'\'' {
+                    blank(&mut out, i + 1, i + 2);
+                    i += 3;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
+    /// The source with each `#[cfg(test)]` module's lines emptied.
+    fn without_tests(text: &str) -> String {
+        let mut lines: Vec<&str> = text.split('\n').collect();
         let mut at = 0;
         while at < lines.len() {
             if lines[at].trim() == "#[cfg(test)]" {
-                let mut module = at + 1;
-                while lines.get(module).is_some_and(|line| line.trim_start().starts_with("#[")) {
-                    module += 1;
+                let mut item = at + 1;
+                while item < lines.len() && lines[item].trim().starts_with("#[") {
+                    item += 1;
                 }
-                if let Some(line) = lines.get(module).filter(|line| line.trim_end().ends_with('{') && line.contains("mod ")) {
-                    let indent = &line[..line.len() - line.trim_start().len()];
-                    let close = format!("{indent}}}");
-                    let end = (module + 1..lines.len()).find(|&i| lines[i].trim_end() == close).unwrap_or(lines.len() - 1);
-                    lines[at..=end].fill("");
+                if let Some(line) = lines.get(item).filter(|line| line.trim_end().ends_with('{') && line.contains("mod ")) {
+                    let close = format!("{}}}", &line[..line.len() - line.trim_start().len()]);
+                    let end = (item + 1..lines.len()).find(|&k| lines[k].trim_end() == close).unwrap_or(lines.len() - 1);
+                    for line in &mut lines[at..=end] {
+                        *line = "";
+                    }
                     at = end;
                 }
             }
             at += 1;
         }
-        for (at, line) in lines.iter().enumerate() {
-            if !makes(line) {
-                continue;
+        lines.join("\n")
+    }
+
+    fn word(c: u8) -> bool {
+        c.is_ascii_alphanumeric() || c == b'_'
+    }
+
+    /// The byte at `i`, or `0` past the end.
+    fn at(t: &[u8], i: usize) -> u8 {
+        t.get(i).copied().unwrap_or(0)
+    }
+
+    /// The byte before `i`, or `0` at the start.
+    fn before(t: &[u8], i: usize) -> u8 {
+        i.checked_sub(1).map_or(0, |i| t[i])
+    }
+
+    fn skip_space(t: &[u8], mut i: usize) -> usize {
+        while at(t, i).is_ascii_whitespace() {
+            i += 1;
+        }
+        i
+    }
+
+    fn find(t: &[u8], from: usize, what: &[u8]) -> Option<usize> {
+        t.get(from..)?.windows(what.len()).position(|window| window == what).map(|i| from + i)
+    }
+
+    fn trim_end(t: &[u8]) -> &[u8] {
+        &t[..t.iter().rposition(|c| !c.is_ascii_whitespace()).map_or(0, |i| i + 1)]
+    }
+
+    fn trim(t: &[u8]) -> &[u8] {
+        let t = trim_end(t);
+        &t[t.iter().position(|c| !c.is_ascii_whitespace()).unwrap_or(t.len())..]
+    }
+
+    /// Whether `t` ends with the word `w`.
+    fn ends_with_word(t: &[u8], w: &str) -> bool {
+        t.ends_with(w.as_bytes()) && !word(before(t, t.len() - w.len()))
+    }
+
+    /// Whether `t` holds `what` with no letter, digit or `_` before it, nor after it if `whole`.
+    fn holds(t: &[u8], what: &[u8], whole: bool) -> bool {
+        let mut from = 0;
+        while let Some(i) = find(t, from, what) {
+            from = i + 1;
+            if !word(before(t, i)) && !(whole && word(at(t, i + what.len()))) {
+                return true;
             }
-            // The function the line is in, to the brace that closes it.
-            let body = match (0..=at).rev().find(|&i| fn_start(lines[i])) {
-                Some(start) if !lines[start].trim_end().ends_with('}') => {
-                    let indent = &lines[start][..lines[start].len() - lines[start].trim_start().len()];
-                    let close = format!("{indent}}}");
-                    let end = (start + 1..lines.len()).find(|&i| lines[i].starts_with(&close)).unwrap_or(lines.len() - 1);
-                    lines[start..=end].join("\n")
-                }
-                _ => line.to_string(),
-            };
-            if !MARKS.iter().any(|mark| body.contains(mark)) {
-                unmarked.push((file.clone(), at + 1, line.trim().to_string()));
-            }
         }
+        false
     }
-    let mut wrong = Vec::new();
-    for (file, line, text) in &unmarked {
-        if !OWN.iter().any(|(own, holds, _)| own == file && text.contains(holds)) {
-            wrong.push(format!("{file}:{line}: {text}"));
-        }
-    }
-    for (file, holds, why) in OWN {
-        if !unmarked.iter().any(|(at, _, text)| at == file && text.contains(holds)) {
-            wrong.push(format!("{file}: no line holds {holds:?} ({why}): take it off the list"));
-        }
-    }
-    assert!(
-        wrong.is_empty(),
-        "a failure made without Error::corten, cache::unshared or cache::unshared_in_place_of; mark it, add it to \
-         every_failure_corten_makes_is_never_shared, or list it here with why it may: {wrong:#?}"
-    );
 }
 
 /// The mark of a failure Corten made (`Error::corten`) is a flag in what was the padding of

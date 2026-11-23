@@ -1187,20 +1187,20 @@ impl Served {
 }
 
 /// `GET /health/live` (the process answers) and `GET /health/ready` (`ready` says it can serve:
-/// database reachable, feeds loaded). Both answer `no-store` plain text. The `503` is Corten's own
-/// failure ([`cache::unshared`]), so it goes out `private, no-store`, and a browser that asks for
-/// it gets the app's error page.
+/// database reachable, feeds loaded). Both answer plain text that no cache keeps: the `200` says
+/// `no-store`, and the `503` is Corten's own failure ([`cache::unshared`]) and a `NoStore` answer,
+/// so it goes out `private, no-store` whatever a middleware writes in its `Cache-Control`, and a
+/// browser that asks for it gets the app's error page, `NoStore` too.
 pub(crate) fn health<F, Fut>(ready: F) -> router::Table
 where
     F: Fn() -> Fut + Clone + Send + Sync + 'static,
     Fut: std::future::Future<Output = bool> + Send,
 {
     let answer = |ok: bool| {
-        let no_store = [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))];
         if ok {
-            (StatusCode::OK, no_store, "ok").into_response()
+            (StatusCode::OK, [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))], "ok").into_response()
         } else {
-            cache::unshared((StatusCode::SERVICE_UNAVAILABLE, no_store, "unavailable").into_response())
+            cache::unshared((StatusCode::SERVICE_UNAVAILABLE, cache::Cache::no_store(), "unavailable").into_response())
         }
     };
     router::Table::new().route("/health/live", router::get(move || async move { answer(true) })).route(
@@ -1353,7 +1353,9 @@ impl Error {
     /// cannot send. Its answer, in every form it goes out in, is marked as no handler's own
     /// ([`cache::Unshared`]): the error page drawn in its place may read the request's `Cookie`
     /// without reading a caller. A handler that passes it on with `?`, or gives it another status,
-    /// keeps the mark; one that wraps it (`Error::new(error)`) makes the failure its own. Every
+    /// keeps the mark, as does one that passes a typed rejection on with `?` (`From<E>`); one that
+    /// wraps it (`Error::new(error)`) makes the failure its own, except a [`Refused`] in it, which
+    /// stays Corten's (a plain failure at the new status, as [`Error::with_status`] makes it). Every
     /// failure Corten makes is one of these, [`cache::unshared`] or [`cache::unshared_in_place_of`]
     /// (`tests::cache`'s source check holds the crate to it).
     pub(crate) fn corten(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
@@ -1422,10 +1424,22 @@ impl std::fmt::Display for Error {
     }
 }
 
+/// Any error passed on with `?`: a 500, the handler's own failure. One of Corten's typed
+/// rejections a handler met as a value ([`extract::BodyRejection`], [`form::FormRejection`]: it
+/// took `Result<Json<T>, BodyRejection>` and ran the extractor itself) is still a 500, and still
+/// Corten's ([`Error::corten`]), so the error page in its place is never shared; wrapped by hand
+/// (`Error::new(rejection)`), it is the handler's.
 impl<E: std::error::Error + Send + Sync + 'static> From<E> for Error {
     fn from(error: E) -> Self {
-        Error::new(error)
+        Error { corten: corten_s::<E>(), ..Error::new(error) }
     }
+}
+
+/// Whether `E` is one of Corten's typed rejections: known from the type alone, so the check costs
+/// an error of the handler's own nothing.
+fn corten_s<E: 'static>() -> bool {
+    let id = std::any::TypeId::of::<E>();
+    id == std::any::TypeId::of::<extract::BodyRejection>() || id == std::any::TypeId::of::<form::FormRejection>()
 }
 
 /// The error it holds, with its causes and without its status, so a stream of

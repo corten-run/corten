@@ -2269,7 +2269,9 @@ rules something out.
     static files' `404` for a file the version lacks and `400` for a path that is not one, a
     failure Corten sends in place of a page whose layout reads it could not fill (and a debug
     build's diagnostic there), whatever that page was, a
-    refusal sent at another status with `Error::with_status`, and what an error page's own
+    refusal sent at another status with `Error::with_status`, an extractor's typed rejection a
+    handler met as a value and passes on with `?`, an MCP endpoint's own JSON-RPC errors and the
+    results it makes in a tool's place, and what an error page's own
     extractor answers in its place) carries a private mark in its
     extensions (`cache::Unshared`), put there by the code that made it, and the cache rule decides
     from the final answer alone on every exit, success or failure (`cache::settle`). The mark goes
@@ -2282,7 +2284,10 @@ rules something out.
     its `NoStore` (`cache::unshared_in_place_of`). Every failure Corten makes is made through
     `Error::corten`, `cache::unshared` or `cache::unshared_in_place_of`, and `tests::cache` holds the
     crate's source to them and checks each exit, since rounds 10 to 12 of the review each found
-    another exit made without the mark (round 13). It replaced a count of refusals on the thread compared before and after each poll
+    another exit made without the mark (round 13). The source check reads each failure the source
+    makes on its own, by the statement that makes it, not the function it is in, since round 13's
+    check let a failure through beside another one marked; it reads tokens, not Rust, and its
+    limits are written next to it (round 14). It replaced a count of refusals on the thread compared before and after each poll
     (`402a11a08`), which lost the answers other code drew in a refusal's place (another app's
     error page and sign-in redirect relayed inline, a JSON failure turned into a `200`) and a
     refusal made outside the stages; a mark on the answer is what the answer is, wherever it was

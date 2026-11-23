@@ -266,9 +266,16 @@ impl From<serde_json::Error> for ToolError {
     }
 }
 
-type BoxFuture<T> = Pin<Box<dyn Future<Output = Result<T, ToolError>> + Send>>;
+type BoxFuture<T> = Pin<Box<dyn Future<Output = Result<T, Ran>> + Send>>;
 /// A tool, given who [`Tools::auth`] says is calling: its output as JSON text.
 type Handler<A> = Arc<dyn Fn(A, Value) -> BoxFuture<String> + Send + Sync>;
+
+/// Why a tool's call ended without its output: what the tool answered, or Corten's reading of its
+/// input or writing of its output, which is no tool's own answer.
+enum Ran {
+    Tool(ToolError),
+    Corten(ToolError),
+}
 type Auth<A> = Arc<dyn Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync>;
 
 /// Where an MCP client gets a token for the endpoint: its OAuth 2.0 protected-resource metadata
@@ -665,13 +672,13 @@ impl<A: Send + 'static> Tools<A> {
         let handler: Handler<A> = Arc::new(move |caller, args| {
             let handler = handler.clone();
             Box::pin(async move {
-                let input: I = serde_json::from_value(args)?;
-                let output = handler(caller, input).await?;
+                let input: I = serde_json::from_value(args).map_err(|error| Ran::Corten(error.into()))?;
+                let output = handler(caller, input).await.map_err(Ran::Tool)?;
                 // A value in the output that its `ToJson` cannot write (a field whose own
                 // `Serialize` fails) panics there; the call answers it as the tool's internal
                 // error, a JSON-RPC result the agent reads, as it did when serde wrote outputs.
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| output.to_json()))
-                    .map_err(|panic| ToolError::internal(crate::task::panic_message(&*panic).to_owned()))
+                    .map_err(|panic| Ran::Corten(ToolError::internal(crate::task::panic_message(&*panic).to_owned())))
             })
         });
         let tools = Arc::get_mut(&mut self.tools).expect("add tools before serving");
@@ -723,14 +730,10 @@ impl<A: Send + 'static> Tools<A> {
         // 400 (MCP 2025-06-18 and 2025-11-25, Transports, "Protocol Version Header"), so a message
         // that cannot be read is one too, with the same JSON-RPC error as without the header.
         let speaks = speaks(&headers);
+        // The protocol's `200` with a JSON-RPC error, or that `400`.
         let malformed = |code, message: &str| {
-            let mut res = reply(Value::Null, Err((code, message.into())));
-            if !speaks {
-                // Corten's refusal ([`crate::cache::Unshared`]).
-                res = crate::cache::unshared(res);
-                *res.status_mut() = StatusCode::BAD_REQUEST;
-            }
-            res
+            let status = if speaks { StatusCode::OK } else { StatusCode::BAD_REQUEST };
+            rpc_error(Value::Null, status, code, message.into())
         };
         let message: Value = match serde_json::from_slice(body) {
             Ok(value) => value,
@@ -765,29 +768,31 @@ impl<A: Send + 'static> Tools<A> {
             return StatusCode::ACCEPTED.into_response();
         };
         if message.get("jsonrpc") != Some(&json!("2.0")) || method.is_empty() {
-            return reply(id, Err((-32600, "invalid request".into())));
+            return rpc_error(id, StatusCode::OK, -32600, "invalid request".into());
         }
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         let result = match method {
             "tools/call" => match self.call(&headers, caller, params).await {
                 Err(CallError::Refused(error)) => return self.refused(id, error, &headers),
-                Err(CallError::Rpc(code, message)) => Err((code, message)),
+                Err(CallError::Rpc(code, message)) => return rpc_error(id, StatusCode::OK, code, message),
+                // A result the endpoint made in the tool's place: Corten's, as its errors are.
+                Err(CallError::Failed(result)) => return crate::cache::unshared(reply_raw(&id, &result)),
                 Ok(result) => return reply_raw(&id, &result),
             },
             "initialize" => {
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or("");
                 let version = PROTOCOL_VERSIONS.iter().find(|v| **v == asked).unwrap_or(&PROTOCOL_VERSIONS[0]);
-                Ok(json!({
+                json!({
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false } },
                     "serverInfo": { "name": self.name, "version": self.version },
-                }))
+                })
             }
-            "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": self.list() })),
-            _ => Err((-32601, format!("method not found: {method}"))),
+            "ping" => json!({}),
+            "tools/list" => json!({ "tools": self.list() }),
+            _ => return rpc_error(id, StatusCode::OK, -32601, format!("method not found: {method}")),
         };
-        reply(id, result)
+        reply(id, Ok(result))
     }
 
     /// A request [`Tools::auth`] turned away, before any tool ran: 401 or 403 with the challenge
@@ -795,31 +800,28 @@ impl<A: Send + 'static> Tools<A> {
     /// could not check (its provider is down), 500 (logged) for anything else. Never the answer,
     /// and never shared ([`crate::cache::Unshared`]): each is about who is asking.
     fn refused(&self, id: Value, error: ToolError, headers: &HeaderMap) -> Response {
-        let (status, message) = match error {
-            ToolError::Unauthorized => return self.unauthorized(id, sent_bearer(headers)),
-            ToolError::InsufficientScope(scope) => return self.forbidden(id, &scope),
+        match error {
+            ToolError::Unauthorized => self.unauthorized(id, sent_bearer(headers)),
+            ToolError::InsufficientScope(scope) => self.forbidden(id, &scope),
             // A malformed request (RFC 6750 3.1), told so in the challenge.
             ToolError::Invalid(message) => {
-                let mut res = crate::cache::unshared(reply(id, Err((-32600, format!("invalid request: {message}")))));
-                *res.status_mut() = StatusCode::BAD_REQUEST;
+                let mut res = rpc_error(id, StatusCode::BAD_REQUEST, -32600, format!("invalid request: {message}"));
                 let challenge = crate::Challenge::scheme("Bearer").param("error", "invalid_request");
                 res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge.value().clone());
-                return res;
+                res
             }
             ToolError::Forbidden(message) | ToolError::Refused(message) => {
-                (StatusCode::FORBIDDEN, format!("not allowed: {message}"))
+                rpc_error(id, StatusCode::FORBIDDEN, -32001, format!("not allowed: {message}"))
             }
-            ToolError::Upstream(message) => (StatusCode::SERVICE_UNAVAILABLE, format!("cannot check the token now: {message}")),
+            ToolError::Upstream(message) => {
+                rpc_error(id, StatusCode::SERVICE_UNAVAILABLE, -32603, format!("cannot check the token now: {message}"))
+            }
             ToolError::Internal(error) => {
                 let error: &(dyn std::error::Error + 'static) = &*error;
                 tracing::error!(error, "corten: the MCP endpoint's auth check failed");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
+                rpc_error(id, StatusCode::INTERNAL_SERVER_ERROR, -32603, "internal error".into())
             }
-        };
-        let code = if status == StatusCode::FORBIDDEN { -32001 } else { -32603 };
-        let mut res = crate::cache::unshared(reply(id, Err((code, message))));
-        *res.status_mut() = status;
-        res
+        }
     }
 
     /// The 401: the challenge, and `error="invalid_token"` when the request sent one (RFC 6750
@@ -828,8 +830,7 @@ impl<A: Send + 'static> Tools<A> {
     /// the name is empty or not printable ASCII, since RFC 6750 (3) has `Bearer` followed by a
     /// parameter.
     fn unauthorized(&self, id: Value, sent: bool) -> Response {
-        let mut res = crate::cache::unshared(reply(id, Err((-32001, "unauthorized".into()))));
-        *res.status_mut() = StatusCode::UNAUTHORIZED;
+        let mut res = rpc_error(id, StatusCode::UNAUTHORIZED, -32001, "unauthorized".into());
         let mut challenge = match self.challenge.get() {
             Some(protected) => protected.unauthorized.clone(),
             None => self.named.clone(),
@@ -843,8 +844,7 @@ impl<A: Send + 'static> Tools<A> {
 
     /// The 403 for a token without a scope the request needs.
     fn forbidden(&self, id: Value, scope: &str) -> Response {
-        let mut res = crate::cache::unshared(reply(id, Err((-32001, "insufficient scope".into()))));
-        *res.status_mut() = StatusCode::FORBIDDEN;
+        let mut res = rpc_error(id, StatusCode::FORBIDDEN, -32001, "insufficient scope".into());
         res.headers_mut().insert(header::WWW_AUTHENTICATE, self.insufficient_scope(scope));
         res
     }
@@ -896,8 +896,9 @@ impl<A: Send + 'static> Tools<A> {
                 Err(error @ (ToolError::Unauthorized | ToolError::InsufficientScope(_))) => {
                     return Err(CallError::Refused(error))
                 }
-                // Other refusals are the tool's result, as they were before a check per request.
-                Err(error) => return Ok(self.failed(name, error)),
+                // Other refusals are a result with isError, as they were before a check per
+                // request, but the check's, made before any tool ran: Corten's.
+                Err(error) => return Err(CallError::Failed(self.failed(name, error))),
             },
         };
         match (tool.handler)(caller, args).await {
@@ -912,7 +913,7 @@ impl<A: Send + 'static> Tools<A> {
                     if cfg!(debug_assertions) {
                         panic!("corten: tool {name}'s output {rule}");
                     }
-                    return Ok(self.failed(name, ToolError::internal(format!("its output {rule}"))));
+                    return Err(CallError::Failed(self.failed(name, ToolError::internal(format!("its output {rule}")))));
                 }
                 // The output as written, and once more as a JSON string for the text block, into
                 // one string sized for both: a large result is not copied as it grows.
@@ -926,8 +927,10 @@ impl<A: Send + 'static> Tools<A> {
                 ]
                 .concat())
             }
-            Err(error @ (ToolError::Unauthorized | ToolError::InsufficientScope(_))) => Err(CallError::Refused(error)),
-            Err(error) => Ok(self.failed(name, error)),
+            Err(Ran::Tool(error @ (ToolError::Unauthorized | ToolError::InsufficientScope(_)))) => Err(CallError::Refused(error)),
+            Err(Ran::Tool(error)) => Ok(self.failed(name, error)),
+            // Arguments that do not fit the input, or an output that could not be written.
+            Err(Ran::Corten(error)) => Err(CallError::Failed(self.failed(name, error))),
         }
     }
 
@@ -1017,7 +1020,21 @@ fn sent_bearer(headers: &HeaderMap) -> bool {
 enum CallError {
     /// The check turned the call away (`Unauthorized`, `InsufficientScope`): a 401 or 403.
     Refused(ToolError),
+    /// A call the endpoint cannot make (no tool, an unknown one, arguments that are not an
+    /// object) or whose output it cannot write: a JSON-RPC error, answered by [`rpc_error`] alone.
     Rpc(i64, String),
+    /// A result with `isError` that the endpoint made, not the tool: the check turned the caller
+    /// away before any tool ran, the arguments did not fit the tool's input, or its output was not
+    /// one JSON object.
+    Failed(String),
+}
+
+/// A JSON-RPC error the endpoint makes itself, at `status` (the protocol's `200` for an error in a
+/// message it read): Corten's, not a tool's answer, so never shared ([`crate::cache::Unshared`]).
+fn rpc_error(id: Value, status: StatusCode, code: i64, message: String) -> Response {
+    let mut res = crate::cache::unshared(reply(id, Err((code, message))));
+    *res.status_mut() = status;
+    res
 }
 
 fn reply(id: Value, result: Result<Value, (i64, String)>) -> Response {

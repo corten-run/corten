@@ -596,6 +596,9 @@ Corten has no scheduler of its own: a task and tokio's intervals are the one way
 is down. A check that has not answered in 800 ms is dropped and `/health/ready` answers
 `unavailable`, inside Kubernetes' one-second probe timeout, and one warning is logged until it
 answers again; `App::ready_within(d)` changes the limit, kept under the probe's own timeout.
+No cache keeps either answer: the `200` says `Cache-Control: no-store`, and the `503` is a
+`NoStore` answer and Corten's own failure, so it goes out `private, no-store` with no CDN caching
+header whatever a middleware writes on it, as does the error page a browser gets in its place.
 
 With a database, set the pool's wait for a connection well under the app's deadline
 (`App::deadline`): sqlx's `acquire_timeout` and Corten's deadline are both 30 seconds by default,
@@ -1516,12 +1519,17 @@ by another app of Corten's that a middleware asks for an answer inline (the erro
 redirect that app drew in a refusal's place included) is never shared, whatever status the
 middleware sends it with. So is every other failure Corten makes rather than a handler: an
 extractor's or a protocol's refusal of the request (a body over its limit, too slow, or not what
-the route reads, a WebSocket handshake, an MCP endpoint's), the 503 of `/health/ready`, a static
+the route reads, a WebSocket handshake), an MCP endpoint's own errors (a JSON-RPC error it answers
+`200` with, a call that names no tool it has or whose arguments do not fit the tool's input, a
+refusal before any tool ran; an error result the tool itself returns is the tool's), the 503 of
+`/health/ready` (`NoStore` too), a static
 file's 416, the 421 for another host, the 403 for a cross-site write, the 500 for an answer whose
 header is not one, a document with no `<Corten />` or a kept page that cannot be read, and a debug
 build's error about the app's code, which keeps a `NoStore` answer's `private, no-store` where it
 replaces one. A handler that passes such a failure on with `?`, or gives it another status, keeps
-the mark; one that wraps it (`Error::new(error)`) makes it its own. A handler's own failure is its answer, a plain-text one too: the error
+the mark, as one does that met an extractor's rejection as a value (`Result<Json<T>, BodyRejection>`,
+a `FormRejection`) and passes it on with `?`; one that wraps it (`Error::new(error)`) makes it its
+own, except a refusal (`Refused`), which stays Corten's however it is wrapped. A handler's own failure is its answer, a plain-text one too: the error
 page a browser gets in its place keeps what a middleware wrote, as for its own 404. An unstaged route's `NoStore`
 answer goes out `private, no-store` with none of them either
 ([a route outside the stages](#a-route-outside-the-stages)); its other answers, refusals

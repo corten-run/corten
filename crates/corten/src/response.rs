@@ -246,19 +246,20 @@ where
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Response> {
         for (name, value) in self {
-            let name = name.try_into().map_err(|e| invalid_header(e.to_string()))?;
-            let value = value.try_into().map_err(|e| invalid_header(e.to_string()))?;
+            let name = name.try_into().map_err(|e| invalid_header(res.extensions(), e.to_string()))?;
+            let value = value.try_into().map_err(|e| invalid_header(res.extensions(), e.to_string()))?;
             res.headers_mut().insert(name, value);
         }
         Ok(res)
     }
 }
 
-/// The `500` in place of an answer whose header is not one: Corten's failure, not the answer the
-/// handler meant ([`crate::cache::Unshared`]).
+/// The `500` in place of the answer whose extensions are `answer`, given a header that is not one:
+/// Corten's failure, not the answer the handler meant, and `NoStore` where that answer was
+/// ([`crate::cache::unshared_in_place_of`]).
 #[cold]
-fn invalid_header(error: String) -> Response {
-    crate::cache::unshared((StatusCode::INTERNAL_SERVER_ERROR, error).into_response())
+fn invalid_header(answer: &Extensions, error: String) -> Response {
+    crate::cache::unshared_in_place_of(answer, (StatusCode::INTERNAL_SERVER_ERROR, error).into_response())
 }
 
 impl<T: IntoResponseParts> IntoResponseParts for Option<T> {
