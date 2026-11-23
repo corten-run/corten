@@ -1293,6 +1293,53 @@ rules something out.
    client with gzip alone, a long page with a browser's encodings or uncompressed, pages past
    496 KB and more than one runtime were not run under load.
 
+   A second declared run, which the maintainer asked for after that result, changed one thing in
+   the protocol and compared a setting with itself before each comparison. First, what the first
+   protocol could not tell apart was looked for with one setting (64 KiB, the uncompressed page, a
+   c-16 with a Xeon Platinum 8280, 30 turns a mode, card-market's image of main `14126d2a8`): the
+   cycles a request varied from turn to turn with a standard deviation of 3.99% of the mean behind
+   a published port with a fresh start each turn, as the first run measured, 2.51% behind the
+   port in one start, 1.56% on the host's network with fresh starts and 0.91% on the host's
+   network in one start, on 76,922 to 76,972 user instructions a request in every turn. So most
+   of it came from the published port, Docker's proxy and bridge between `wrk` and the app. The
+   second plan, in the pull request before its run, is the first's with the app on the host's
+   network (`--network host`), 200 recorded pairs a comparison on the 9,793-byte page, and before
+   each of those 64 KiB against itself under two labels, read as recorded and with the labels
+   swapped, the workload not resolved if either bound is at or above +1%. It ran on three c-16s,
+   two with a Xeon Platinum 8280 and one with an 8358 (the plan named no CPU), on card-market's
+   image built on each from `faba240cd`, this change with main `14126d2a8` merged, whose server
+   is one binary on the three. 64 KiB against itself: with `identity` 0.02% more at the median of
+   200 pairs with a bound of 0.43% more (0.20% with the labels swapped), with
+   `gzip, deflate, br, zstd` 0.05% more with 0.36% (0.20%), and with `br` 0.07% fewer with 0.13%
+   more (0.17%), so each workload resolved 1%. 512 KiB against 64 KiB on that page: with
+   `identity` 92,115 user and kernel cycles a request against 92,321 at the medians, 0.01% more
+   at the median of 200 pairs (4.56% fewer to 7.44% more) with a bound of 0.20% more, on the same
+   instructions (76,930 against 76,930); with `gzip, deflate, br, zstd` 200,467 against 200,200,
+   0.00% at the median (13.62% fewer to 5.83% more) with a bound of 0.41% more; with `br` 227,950
+   against 228,162, 0.19% fewer (12.91% fewer to 13.22% more) with a bound of 0.06% fewer. So all
+   three margins were met. With `br` over 40 pairs each, the 32,501-byte page took 747,324
+   against 1,068,776: 30.09% fewer (24.36% to 33.49%) with a bound of 29.30% (kernel 66,812
+   against 284,204, user 679,838 against 782,802); the 202,041-byte page 3,382,601 against
+   4,160,992: 18.79% fewer (16.21% to 20.74%) with a bound of 18.39% (kernel 136,578 against
+   864,152); and the 495,521-byte page 5,342,588 against 6,173,144: 13.42% fewer (9.95% to
+   15.66%) with a bound of 13.13% (kernel 247,214 against 908,617). No request failed, no counter
+   ran for less than all of a turn, no pair was dropped, and each comparison's answers were the
+   same but `Date` and `ETag`. The comparisons ran once each, in the plan's order.
+
+   The first run's miss is not undone by the second: it stands as its plan's result, under a
+   protocol that read one setting as 1.56% apart from itself on that workload. The limit rests on
+   the second run, a plan of its own declared before its own run, and that plan was written after
+   one that said a missed margin stops the change. The ground for it is in three parts: the first
+   protocol was shown, by its own same-setting diagnostic, unable to tell 1% on the workload it
+   missed; what made it so was found and removed before the second plan was written, by turns
+   of one setting; and the second plan could not count a comparison whose own same-setting
+   reading did not resolve 1% first. A second run under the first protocol would not have that
+   ground. One thing weakens it and is on record: a trial of the scripts ran on one host in the
+   72 seconds before the plan was posted, one pair of 512 KiB against 64 KiB with `br` on each of
+   the four page lengths and two pairs of 64 KiB against itself with `identity`. It ran no pair
+   of the change with `identity` or a browser's encodings, and one pair does not read 1%, but the
+   plan was not in the pull request before any turn of the change on the host's network.
+
    What a larger limit costs is memory, since a thread's cache keeps buffers its thread used.
    jemalloc 5.3.0 keeps up to 20 objects of a large size class in a thread's cache and trims a cache
    as its thread allocates, not by time (`opt_tcache_nslots_large` and `opt_tcache_gc_incr_bytes` in
@@ -1338,13 +1385,19 @@ rules something out.
    The receipt is commit `a362507a3`, kept under the tag `evidence/thread-cache-1979-diagnostic`:
    the plans, the scripts as run and every result file. Its parent `5b38611b5`, under
    `evidence/thread-cache-1979`, is the receipt as it stood before the diagnostic, the bursts and
-   the 512 KiB fault counts with other encodings were run.
+   the 512 KiB fault counts with other encodings were run. The second run's receipt is commit
+   `431fe209d`, under `evidence/thread-cache-1979-second-trial`: its plan, the one-setting turns
+   looked at before it, the scripts, every log, the readings and the script trial's logs; its
+   parent `5fcf9d73b`, under `evidence/thread-cache-1979-second`, is that receipt before the
+   trial's logs were added.
 
    Stands on: measured (memory after eight floods, three runs each, seven allocator settings; page
    faults a request, repeatable to 0.1 in every round; idle CPU, three rounds; instructions a
    request under callgrind, five runs each; for the limit, page faults a request by page length and
    limit, three rounds; cycles under load, 40 and 60 pairs a workload on one host and one runtime,
-   which met five of the six margins their plan declared and missed the uncompressed page's; memory
+   which met five of the six margins their plan declared and missed the uncompressed page's, and
+   a second declared run on three hosts with the app on the host's network, 200 and 40 pairs a
+   workload, each short-page workload first read against itself, which met all six; memory
    after floods on that host, three or six runs a setting, with eight CPUs, three rounds, and after
    bursts of slow readers, three runs); measured, noisy (CPU time and throughput in three rounds on
    a shared desktop, whose rounds moved by up to 2.4 times); platform (Debian 13's `libjemalloc2`,
@@ -1359,7 +1412,8 @@ rules something out.
    Revisit when: an app is measured to hold more than 5 MiB a CPU at rest above what it holds with a
    64 KiB limit (3 MiB here after brotli pages of nine lengths and up to 4.9 after bursts of slow
    readers, on eight CPUs); a run that can tell 1% on an uncompressed page shows it taking more
-   cycles a request with this limit than with 64 KiB (the declared run's bound was 1.98% more, by a
+   cycles a request with this limit than with 64 KiB (the second declared run, which read 64 KiB
+   against itself within 0.43%, had a bound of 0.20% more; the first's was 1.98% more, by a
    protocol that read 64 KiB as 1.56% apart from itself); the encoder's buffers are kept in
    `compress.rs`, which would leave this limit without its reason; a run under load on a quiet Linux
    host shows the image's settings taking more cycles a request than glibc's allocator (glibc was
@@ -1378,7 +1432,9 @@ rules something out.
    the floods, the bursts, the memory with eight CPUs and the idle CPU), card-market's image of
    `bcf4aa073` on a DigitalOcean c-16 with a Xeon Platinum 8280, Linux 6.8.0-149, Docker 29.10.0,
    perf 6.8.12, `wrk` 4.1.0, libjemalloc2 5.3.0 and `brotli` 9.1.3, with jemalloc 5.3.0's
-   `src/tcache.c` and the size classes in jemalloc's manual as they read that day.
+   `src/tcache.c` and the size classes in jemalloc's manual as they read that day; 2026-11-23,
+   the second declared run, card-market's image of `faba240cd` on three DigitalOcean c-16s (two
+   with a Xeon Platinum 8280, one with an 8358), with that kernel, Docker, perf and `wrk`.
 
 24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
