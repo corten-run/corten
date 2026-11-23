@@ -1,0 +1,12 @@
+twice (cycles, 100 pairs): usable true
+  cycles user+kernel a request: base 105936.80, head 222237.15; median change +109.60%, bound (rank 59) +110.31%, range +89.26% to +122.08%
+  instructions:u a request: base 150135.93, head 231950.35; median change +54.55%, bound (rank 59) +54.78%, range +52.73% to +60.92%
+  second requests answered kept (base, recorded turns): 4843024 of 4844778 (99.964%)
+  second requests answered kept (head, recorded turns): 2339261 of 2341114 (99.921%)
+  gate (usable, 100 pairs, bound under +1%): NOT met
+twice-icache (icache, 30 pairs): usable true
+  L1-icache-load-misses:u a request: base 4039.82, head 4315.55; median change +7.03%, bound (rank 20) +8.07%, range -0.29% to +12.71%
+  instructions:u a request: base 150925.20, head 233983.95; median change +54.93%, bound (rank 20) +55.25%, range +53.68% to +59.60%
+  second requests answered kept (base, recorded turns): 495014 of 495909 (99.820%)
+  second requests answered kept (head, recorded turns): 235999 of 236480 (99.797%)
+pass 1 gate: NOT met

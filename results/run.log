@@ -1,0 +1,23 @@
+checked 2 requests: differ only as /m/1846r5/expect-browser.diff says
+twice: pair 10 of 100 done
+twice: pair 20 of 100 done
+twice: pair 30 of 100 done
+twice: pair 40 of 100 done
+twice: pair 50 of 100 done
+twice: pair 60 of 100 done
+twice: pair 70 of 100 done
+twice: pair 80 of 100 done
+twice: pair 90 of 100 done
+twice: pair 100 of 100 done
+twice: done, /m/1846r5/results/cycles-twice.csv
+twice base: 102 of 102 starts: WARM twice: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1818 bytes
+twice head: 102 of 102 starts: WARM twice: /page accept-encoding "gzip, deflate, br, zstd": content-encoding br, age _, 1634 bytes
+check-warm: twice: br-smaller: base zstd age 0 1818 bytes; head br age 0 1634 bytes
+checked 2 requests: differ only as /m/1846r5/expect-browser.diff says
+twice-icache: pair 10 of 30 done
+twice-icache: pair 20 of 30 done
+twice-icache: pair 30 of 30 done
+twice-icache: done, /m/1846r5/results/counts-twice-icache.csv
+twice-icache base: 32 of 32 starts: WARM twice: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1818 bytes
+twice-icache head: 32 of 32 starts: WARM twice: /page accept-encoding "gzip, deflate, br, zstd": content-encoding br, age _, 1634 bytes
+check-warm: twice-icache: br-smaller: base zstd age 0 1818 bytes; head br age 0 1634 bytes

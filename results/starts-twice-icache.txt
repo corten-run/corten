@@ -1,0 +1,2 @@
+twice-icache base: 32 of 32 starts: WARM twice: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1818 bytes
+twice-icache head: 32 of 32 starts: WARM twice: /page accept-encoding "gzip, deflate, br, zstd": content-encoding br, age _, 1634 bytes

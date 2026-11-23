@@ -1,0 +1,7 @@
+twice (cycles, 100 pairs): usable true
+  cycles user+kernel a request: base 105936.80, head 222237.15; median change +109.60%, bound (rank 59) +110.31%, range +89.26% to +122.08%
+  instructions:u a request: base 150135.93, head 231950.35; median change +54.55%, bound (rank 59) +54.78%, range +52.73% to +60.92%
+  second requests answered kept (base, recorded turns): 4843024 of 4844778 (99.964%)
+  second requests answered kept (head, recorded turns): 2339261 of 2341114 (99.921%)
+  gate (usable, 100 pairs, bound under +1%): NOT met
+JSON {"workload":"twice","kind":"cycles","pairs":100,"boundRank":59,"usable":true,"problems":[],"cycles user+kernel":{"base":105936.80079929852,"head":222237.14509142682,"change":1.0960339746296979,"bound":1.103068026775194,"min":0.8925620782957595,"max":1.2207884762065762},"instructions:u":{"base":150135.9328163081,"head":231950.3517520039,"change":0.5454530126974488,"bound":0.5477504236949342,"min":0.5273479576697204,"max":0.6092484915918794},"second requests kept, base":{"seconds":4844778,"aged":4843024},"second requests kept, head":{"seconds":2341114,"aged":2339261},"met":false}

@@ -1,0 +1,7 @@
+/m/1846r5/results/counts-twice-icache.csv: 30 pairs; the one-sided 95% upper bound is the change of rank 20 from the smallest (A = base rows, B = head rows)
+| per request | A median | B median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| L1_icache_load_misses_u | 4039.82 | 4315.55 | +7.03% | +8.07% | -0.29% to +12.71% |
+| instructions user | 150925.20 | 233983.95 | +54.93% | +55.25% | +53.68% to +59.60% |
+median requests/s: A 33291, B 15972
+JSON {"file":"/m/1846r5/results/counts-twice-icache.csv","pairs":30,"boundRank":20,"measures":{"L1_icache_load_misses_u":{"a":4039.82054980919,"b":4315.551996142279,"change":0.0702572147918058,"bound":0.08067733838068203,"min":-0.0029126522407380007,"max":0.12710320122793983},"instructions user":{"a":150925.19804425124,"b":233983.95399195404,"change":0.5493211150612871,"bound":0.5525018472377679,"min":0.5368050459057432,"max":0.5959841194517121}},"aRequestsPerSecond":33291,"bRequestsPerSecond":15971.5}

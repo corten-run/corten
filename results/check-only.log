@@ -1,0 +1,5 @@
+checked 2 requests: differ only as /m/1846r5/expect-browser.diff says
+twice: done, /m/1846r5/results/check-only/cycles-twice.csv
+twice base: 1 of 1 starts: WARM twice: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1818 bytes
+twice head: 1 of 1 starts: WARM twice: /page accept-encoding "gzip, deflate, br, zstd": content-encoding br, age _, 1634 bytes
+check-warm: twice: br-smaller: base zstd age 0 1818 bytes; head br age 0 1634 bytes

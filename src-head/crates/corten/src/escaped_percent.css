@@ -1,0 +1,7 @@
+@property --fill {
+    syntax: "<percentage>";
+    inherits: false;
+    initial-value: 10\%;
+}
+
+.meter { width: var(--fill) }

@@ -1,0 +1,116 @@
+mod app;
+mod model;
+#[cfg(smoke_routes)]
+mod smoke;
+mod source;
+mod text;
+mod theme;
+mod views;
+
+/// Every URL the app serves and links to, with the handlers that serve it (in `app`), which share
+/// the item source. Views and redirects build links from the same structs, so a link to a missing
+/// parameter or a renamed route fails to compile, and a route without a handler does too.
+#[corten::routes(state = source::Source)]
+mod routes {
+    #[route("/", get = app::home)]
+    pub struct Home;
+
+    /// Where an item was before the site moved to `/items/`: a permanent redirect, so links and
+    /// search results that still name it land on the page.
+    #[route("/item/{id}", get = app::old_item)]
+    pub struct OldItem<'a> {
+        pub id: &'a str,
+    }
+
+    #[route("/categories/{slug}", get = app::category)]
+    pub struct Category<'a> {
+        pub slug: &'a str,
+    }
+
+    #[route("/robots.txt", get = app::robots)]
+    pub struct Robots;
+
+    #[route("/sitemap.xml", get = app::sitemap)]
+    pub struct Sitemap;
+
+    /// Where browsers send a report of what a page's policy blocked (`Policy::report_to`).
+    #[route("/csp-reports", post = app::csp_reports)]
+    pub struct CspReports;
+}
+
+/// How the market grades a card's condition: a short captioned clip, linked from each category.
+/// An area of its own, so the clip's stylesheet is linked from this page alone and the components'
+/// sheet every other page links (the one the bench apps copy) stays as it was.
+#[corten::routes(area = Grading)]
+mod grading {
+    #[route("/grading", get = app::grading)]
+    pub struct Grading;
+}
+
+/// The item pages, where a visitor writes (a price alert): the write limit is on this area, so
+/// every request under `/items` meets it and the limit compares no paths. `Items` is the
+/// prefix, so it needs no handler of its own.
+#[corten::routes(area = Items, state = source::Source)]
+mod items {
+    #[route("/items")]
+    pub struct Items;
+
+    /// An item's page; `view` says which of its offers it shows.
+    #[route("/items/{id}", get = app::show, post = app::create_alert)]
+    #[derive(Default)]
+    pub struct Item<'a> {
+        pub id: &'a str,
+        #[route(query)]
+        pub view: crate::views::ItemQuery,
+    }
+}
+
+/// What partners' sites show of the market in a frame: an item's card. Only this area's pages
+/// may be framed, and only by the sites `EMBED_ORIGINS` names.
+#[corten::routes(area = Embeds, state = source::Source)]
+mod embeds {
+    #[route("/embed")]
+    pub struct Embeds;
+
+    /// An item's card, for a partner's page to frame.
+    #[route("/embed/items/{id}", get = app::embed_item)]
+    pub struct EmbedItem<'a> {
+        pub id: &'a str,
+    }
+}
+
+/// The JSON routes, for other services: every failure under `/api` is JSON, whatever the client
+/// accepts. `ApiRoot` is the prefix, so it needs no handler of its own.
+#[corten::routes(api = ApiRoot, state = app::ApiState, openapi = ApiDoc)]
+mod api {
+    #[route("/api")]
+    pub struct ApiRoot;
+
+    /// The OpenAPI document of these routes, generated from them (`openapi.json` keeps a copy).
+    #[route("/api/openapi.json")]
+    pub struct ApiDoc;
+
+    /// An item as JSON (the same data the page shows).
+    #[route("/api/items/{id}", get = app::item_json)]
+    pub struct ItemJson<'a> {
+        pub id: &'a str,
+    }
+
+    /// A price alert a partner's service sets for one of its users. A request without a known
+    /// API key is answered 401.
+    #[route("/api/alerts", post = app::alert_json)]
+    pub struct AlertsJson;
+}
+
+/// The MCP endpoint for agents: an API of one route, which `app::tools` serves.
+#[corten::routes(api = Mcp)]
+mod mcp {
+    #[route("/mcp")]
+    pub struct Mcp;
+}
+
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    let source = source::Source::from_env().map_err(|e| std::io::Error::other(e.to_string()))?;
+    corten::serve(app::app(source)).await
+}

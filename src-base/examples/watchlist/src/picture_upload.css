@@ -1,0 +1,4 @@
+/* The upload's bar, shown only while the form waits for its answer (`aria-busy`, which the
+   runtime sets and clears), so a page without JavaScript never shows it. */
+.bar { display: none; inline-size: 100%; }
+[aria-busy="true"] > .bar { display: block; }

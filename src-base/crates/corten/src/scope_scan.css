@@ -1,0 +1,11 @@
+@scope (.a) {
+    --ink: red;
+    @media all { color: var(--discarded) }
+    .b {
+        color: var(--ink);
+        @media all {
+            --nested: blue;
+            background-color: var(--nested);
+        }
+    }
+}
