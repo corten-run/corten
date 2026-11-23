@@ -523,7 +523,8 @@ offers it; for one that does not, gzip up to 16 KiB and Brotli past it, or the o
 the client accepts. Assets and held JSON compressed once are Brotli and gzip, and event streams
 zstd or gzip, never Brotli ([Choice 32](../design.md#choice-stream-coding)). A request's gzip
 is made by libdeflate: up to 16 KiB it was smaller than Brotli at level 1, the level a request's
-Brotli is made at, on all but one of twelve bodies and took a third to a half less time to make, and at every size it was
+Brotli is made at, on all but one of the bodies measured and took less to make (29% fewer
+cycles a request under load for JSON of 4 to 8 KB), and at every size it was
 smaller than the gzip it replaced ([Choice 72](../design.md#choice-request-gzip)). So one
 client can be sent gzip for a short page and Brotli for a long one; `Vary: Accept-Encoding`
 is the same for both.

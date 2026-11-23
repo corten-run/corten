@@ -74,8 +74,8 @@ const BROTLI_LEVEL: u32 = 1;
 const GZIP_LEVEL: i32 = 1;
 /// The largest body gzip is ahead of brotli for when it is compressed per request
 /// ([`Accepts::now`]). Up to here libdeflate's gzip 1 was the smaller of the two on all but one
-/// of twelve bodies; from 20 KB to 32 KB brotli 1 was the smaller on four of nine, by up to 30%,
-/// and gzip on five, by up to 7.4% (`docs/design.md#choice-request-gzip`).
+/// of the bodies measured; from 20 KB to 32 KB gzip was up to 30.5% larger than brotli 1 on four
+/// of nine and up to 7.4% smaller on five (`docs/design.md#choice-request-gzip`).
 const GZIP_FIRST: u64 = 16 * 1024;
 /// A stream's gzip level: deflate (miniz_oxide) at 1 finds few of an earlier event's matches, so a
 /// 2.7 KB redraw of one changed row costs 129 to 453 bytes a time; at 3 it costs 60 to 69
@@ -934,6 +934,36 @@ mod tests {
         assert_eq!(read("zstd;q=0.5, br;q=0.5").await.0[header::CONTENT_ENCODING], "br");
     }
 
+    /// A held document's reads before its stored forms exist are compressed as any answer is: a
+    /// short one is gzip for a client without zstd, and the stored brotli once it is made.
+    #[cfg(feature = "json")]
+    #[tokio::test]
+    async fn a_held_document_is_gzip_for_a_client_without_zstd_until_its_brotli_is_stored() {
+        let text: String =
+            format!("[{}]", (0..300).map(|i| format!(r#"{{"id":{i},"name":"row {i}"}}"#)).collect::<Vec<_>>().join(","));
+        assert!((MIN_SIZE..=GZIP_FIRST).contains(&(text.len() as u64)));
+        let raw = crate::json::Raw::new(text.clone()).unwrap();
+        let held = raw.clone();
+        let app = apply(Table::new().route("/doc", get(move || std::future::ready(crate::Json(held.clone())))));
+        let read = || {
+            let app = app.clone();
+            async move {
+                let req = Request::get("/doc").header("accept-encoding", "gzip, br").body(Body::empty()).unwrap();
+                let (parts, body) = app.oneshot(req).await.unwrap().into_parts();
+                (parts.headers, body.collect().await.unwrap().to_bytes().to_vec())
+            }
+        };
+        for _ in 0..2 {
+            let (headers, body) = read().await;
+            assert_eq!(headers[header::CONTENT_ENCODING], "gzip");
+            let mut out = String::new();
+            std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&body[..]), &mut out).unwrap();
+            assert_eq!(out, text);
+        }
+        raw.wait_stored();
+        assert_eq!(read().await.0[header::CONTENT_ENCODING], "br");
+    }
+
     /// A job that panics costs its own value's forms, not the worker: the next held value read
     /// twice is still compressed.
     #[cfg(feature = "json")]
@@ -1017,7 +1047,8 @@ mod tests {
     /// change of coder or level that loses either fails here.
     #[test]
     fn a_short_bodys_gzip_is_smaller_than_brotli_1_and_than_flate2s_gzip_1() {
-        let words = ["card", "market", "holo", "mint", "played", "rare", "foil", "seller", "ships", "listing", "offer", "edition"];
+        let words =
+            ["card", "market", "holo", "mint", "played", "rare", "foil", "seller", "ships", "listing", "offer", "edition"];
         let mut seed = 0x2545_f491_u64;
         let mut next = || {
             seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);

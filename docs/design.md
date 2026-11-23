@@ -8466,8 +8466,11 @@ rules something out.
 
 72. <a id="choice-request-gzip"></a>**A body compressed as it is sent is zstd, else libdeflate's gzip
     up to 16 KiB and brotli 1 past it.** A client that accepts
-    gzip and not zstd (Safari before 26.3 and over HTTP, as the `compress` module reads caniuse;
-    an HTTP client that asks for `gzip` alone, as Go's `net/http` does) was sent brotli 1 when it
+    gzip and not zstd (Safari before 26.3, a later Safari on a macOS before 26.3, and a browser
+    over plain HTTP; every request that comes through CloudFront with gzip and Brotli on in its
+    cache policy, which sends the app `br,gzip` whatever the viewer sent and is what the
+    [deploy guide](guide/deploy.md#response-compression) has an app behind it set; an HTTP client
+    that asks for `gzip` alone, as Go's `net/http` does) was sent brotli 1 when it
     also accepted brotli and flate2's gzip 1 when it did not, and compressing was most of what
     its request cost. libdeflate's gzip at its level 1 takes less to make than brotli 1, is
     smaller than flate2's at every size measured, and is smaller than brotli 1 on a short body
@@ -8475,7 +8478,10 @@ rules something out.
     server's order after zstd is gzip then brotli for a body up to 16 KiB, and brotli then gzip
     past it. A client that accepts one of the two gets that one at any size, and its own ranking
     (q-values) comes before the server's order. One client can so be sent gzip for a short page
-    and brotli for a long one; both carry `Vary: Accept-Encoding`. Stored forms (assets, held
+    and brotli for a long one; both carry `Vary: Accept-Encoding`. A held document read before
+    its stored forms exist is compressed as any answer is, so that client is sent a short one as
+    gzip until the stored brotli exists and as brotli after, where it was brotli 1 and then the
+    stored brotli. Stored forms (assets, held
     JSON) are brotli 11 or 9 first, unchanged, and a stream is zstd or flate2's gzip
     ([Choice 32](#choice-stream-coding)): libdeflate compresses only a whole body into one
     buffer, which a request's body is and a stream is not.
@@ -8488,7 +8494,11 @@ rules something out.
     rendered to HTML by Python-Markdown (28 KB to 880 KB); and five JSON files (the HttpArena
     benchmark's `dataset.json`, 13 KB; card-market's two fixtures, 31 and 68 KB;
     `bench/workloads/latest-stable.json`, 83 KB; and a 231 KB `plan.json` under
-    `bench/live/evidence`).
+    `bench/live/evidence`). The long page is the item page for its first 8,192 bytes, so
+    below that there are eleven contents, and four of the twelve are this repository's own
+    documents. The one body with records that repeat as an app's list does, the smoke fixture's
+    JSON, is the one where gzip is the larger from 8 KB; no list page and no patch between 6 and
+    16 KiB was swept.
 
     | Cut to (bytes) | Bodies that long | libdeflate's gzip 1 against brotli 1 |
     |---|---|---|
@@ -8533,14 +8543,16 @@ rules something out.
     counted in 10 ms ticks, 3.3 µs a request, and its rounds ranged by up to 73 µs, so it shows
     the size of a change and not a difference of a few µs: the rows whose coding did not change
     moved by -43 to +13 µs across the three allocators. With jemalloc's defaults the item page
-    for `gzip, br` went from 230 to 100 µs, and on glibc from 167 to 103.
+    for `gzip, br` went from 230 to 100 µs, and on glibc from 167 to 103. The zstd request's
+    time in process was higher after in each of its three turns (40.94 to 41.10, 40.51 to 40.88
+    and 40.74 to 41.12 µs), on 61 more instructions.
 
     Under load, as paired cycles ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2)
     with the plan written before the run: a small app's JSON of 4 to 8 KB
     (`GET /json/{25,40,50}?m=4`, written by `Json`, through the stages, on jemalloc as the
     starter's image sets it), the two builds on 24 cores of a c-48 with the load's 4,096
-    connections on the other 24, each turn a freshly started server, 2 s of warm-up and 3 s
-    counted by `perf stat`, the builds' order turned every pair. For `gzip, br` a request took
+    connections on the other 24, each turn a freshly started server, 2 s of warm-up and a 3 s
+    load inside 6 s counted by `perf stat`, the builds' order turned every pair. For `gzip, br` a request took
     284,990 user and kernel cycles against 403,571 at the medians: 29.22% fewer at the median of
     40 pairs (21.96% to 33.79% fewer), with a one-sided 95% bound of 28.76% fewer against the 5%
     the plan asked (user 219,414 against 335,155, kernel 65,618 against 68,285, user
@@ -8551,8 +8563,13 @@ rules something out.
     (232,873 against 232,936, 0.02% more at the median of the pairs with a bound of 0.06%; user
     cycles 178,834 against 176,642, kernel 63,242 against 62,923). A text answer that names no
     coding took 82,972 against 83,348, 0.28% fewer over 60 pairs with a bound of 0.19% fewer.
-    No request failed, every counter ran for all of every turn, and the builds' answers were
-    the same but `Date` (for `gzip, br`, also but the coding, the `ETag` and the length). A
+    No request was answered with a 4xx or a 5xx (socket errors were not counted), every
+    counter ran for all of every turn, and the builds' answers to one probe of each workload
+    were the same but `Date` (for `gzip, br`, also but the coding, the `ETag` and the length).
+    User L1 instruction-cache misses were not counted for the first and the third workload. A
+    first run at `01ad562a3`, before gzip stopped at 16 KiB and read before the plan was
+    revised, had the zstd comparison 0.01% more at the median of 60 pairs with a bound of
+    0.46%. A
     diagnostic planned after that miss and before it ran, which tests nothing against a margin,
     made the zstd comparison three more times, 60 pairs each, also counting user L1
     instruction-cache misses: the same two builds again took 1.84% more (bound 2.40%); the
@@ -8564,13 +8581,18 @@ rules something out.
     -0.30% to +0.12%. So on this host a pad no request runs cost the base what the padded
     candidate cost, and the candidate as built cost 0.5 to 1.1 points more than that in its two
     runs: placement and a cost of this change are not told apart, and a zstd request is not
-    shown to be as fast as it was. Not run under load: a client with gzip alone or brotli
+    shown to be as fast as it was. Three pairs of binaries so gave that path bounds of 0.46%,
+    1.50% and 2.40% more (the last two the same pair). The code on this branch has since taken
+    main's later commits, among them one to the `Json` writer these workloads run
+    (`a02c81e86`); that binary was not measured. Not run under load: a client with gzip alone or brotli
     alone, and a body past 16 KiB (counted and probed above). These are cycles, not latency.
 
     The receipt is commit `4800ed8d1`, which adds it to `fdf94a6a7`, kept under the tag
     `evidence/request-gzip-1971`: the kit (the plans,
     the scripts, the small app, the sweep's program and the generators of the long page and of
-    the rendered documents) and every result file. The requests are those of
+    the rendered documents) and the result files. Three figures below were read from a terminal
+    and have no file there: the compressor's 200 KiB and the zstd context's 193 KiB,
+    `libdeflate-sys` built alone, and the image's growth. The requests are those of
     `MDA2AV/HttpArena@986128bbf527`, whose `dataset.json` the sweep also reads.
 
     The dependency: `libdeflater`, whose `libdeflate-sys` compiles libdeflate's C (MIT) into
@@ -8627,18 +8649,23 @@ rules something out.
     time in process, three turns; CPU and faults on the image, three rounds; cycles under load,
     40 and 60 pairs a workload on one host, whose margin for a zstd request was not met; the
     coders alone, one run on one host; a clean build's time, four builds each); platform (libdeflate 1.26.1 as `libdeflater` 1.26.1 builds it,
-    `brotli` 9.1.3, Go's `net/http` asking for gzip alone; which browsers send zstd is the
-    `compress` module's reading of caniuse, not checked again here); reasoned (up to 16 KiB gzip
+    `brotli` 9.1.3; Go 1.27.4's `net/http` asking for gzip alone, as its `Transport`
+    documents; caniuse's zstd data, where Chrome and Edge send it from 123, Firefox from 126,
+    Safari on iOS from 26.3 and Safari on a Mac from 26.3 on macOS 26.3 or later, 84.27% of
+    use by StatCounter's shares for October 2026; CloudFront's developer guide for the header
+    it sends an origin, read and not run here); reasoned (up to 16 KiB gzip
     is smaller on all but one body measured and at most 154 bytes larger there, which the first
-    congestion window holds either way, so no browser's load time was measured); bet (an app's
+    congestion window holds either way, so no browser's load time was measured); bet (how many
+    of an app's requests come without zstd, which is all of them behind CloudFront and few
+    straight from browsers; and that an app's
     bodies are like the twelve measured: one whose short bodies repeat as the smoke fixture does
     sends 2.8% to 11.6% more as gzip, and one whose long bodies do not repeat sends up to 7.4%
     more as brotli than gzip would); value (Fast, and proven fast; Small surface, deliberate
     dependencies: the C library is behind the one feature, which already compiles zstd's in a
     local build, README Values).
 
-    Revisit when: every browser Corten supports sends zstd, so that gzip and brotli made per
-    request serve only other clients; a deflate in Rust is as small as libdeflate's level 1 and
+    Revisit when: every browser Corten supports sends zstd and CloudFront sends an origin
+    zstd, so that gzip and brotli made per request serve only other clients; a deflate in Rust is as small as libdeflate's level 1 and
     as fast on these bodies, which would take the C library out; the `brotli` crate's or
     libdeflate's fast levels change, since the line was drawn between these two; an app's short
     bodies are measured larger as gzip than as brotli 1; or bodies compressed per request are
@@ -8648,7 +8675,8 @@ rules something out.
     a Xeon Platinum 8280 (the counts, the times and the cycles on a c-48, Linux 7.0.0-43, perf
     6.12.118, and the sweep, the coders alone, the probe and the builds on a c-16, Linux
     6.8.0-149, both with Docker 29.10.0), with rustc 1.100.0, libdeflater 1.26.1, brotli 9.1.3
-    and Debian's libjemalloc2 5.3.0 in the image.
+    and Debian's libjemalloc2 5.3.0 in the image, and caniuse's zstd data, pkg.go.dev's
+    `net/http` at go1.27.4 and CloudFront's developer guide as they read that day.
 
 ## Rules
 
