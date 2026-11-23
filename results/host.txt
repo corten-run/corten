@@ -1,0 +1,323 @@
+Mon Nov 23 07:06:24 UTC 2026
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           40 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  8
+On-line CPU(s) list:                     0-7
+Vendor ID:                               GenuineIntel
+Model name:                              Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz
+CPU family:                              6
+Model:                                   106
+Thread(s) per core:                      1
+Core(s) per socket:                      8
+Socket(s):                               1
+Stepping:                                6
+BogoMIPS:                                5187.82
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault pti ssbd ibrs ibpb tpr_shadow flexpriority ept vpid ept_ad fsgsbase bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap clflushopt clwb avx512cd avx512bw avx512vl xsaveopt xsavec xgetbv1 wbnoinvd arat vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq
+Virtualization:                          VT-x
+Hypervisor vendor:                       KVM
+Virtualization type:                     full
+L1d cache:                               256 KiB (8 instances)
+L1i cache:                               256 KiB (8 instances)
+L2 cache:                                32 MiB (8 instances)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-7
+Vulnerability Gather data sampling:      Unknown: Dependent on hypervisor status
+Vulnerability Indirect target selection: Mitigation; Aligned branch/return thunks
+Vulnerability Itlb multihit:             KVM: Mitigation: Split huge pages
+Vulnerability L1tf:                      Mitigation; PTE Inversion; VMX conditional cache flushes, SMT disabled
+Vulnerability Mds:                       Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown
+Vulnerability Meltdown:                  Mitigation; PTI
+Vulnerability Mmio stale data:           Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Not affected
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Retpolines; IBPB conditional; IBRS_FW; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Retpoline
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+
+/sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0
+/sys/devices/system/cpu/cpu1/topology/thread_siblings_list:1
+/sys/devices/system/cpu/cpu2/topology/thread_siblings_list:2
+/sys/devices/system/cpu/cpu3/topology/thread_siblings_list:3
+/sys/devices/system/cpu/cpu4/topology/thread_siblings_list:4
+/sys/devices/system/cpu/cpu5/topology/thread_siblings_list:5
+/sys/devices/system/cpu/cpu6/topology/thread_siblings_list:6
+/sys/devices/system/cpu/cpu7/topology/thread_siblings_list:7
+
+perf_event_paranoid -1 nmi_watchdog 0 (runs as root)
+Linux corten-cycles-b19 6.12.117+deb13-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.117-1 (2026-11-12) x86_64 GNU/Linux
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+binary: rustc
+commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a
+commit-date: 2026-11-09
+host: x86_64-unknown-linux-gnu
+release: 1.100.0
+LLVM version: 23.1.5
+perf version 6.12.118
+wrk debian/4.1.0-4+b1 [epoll] Copyright (C) 2012 Will Glozer
+GNU assembler (GNU Binutils for Debian) 2.44
+main .comment: GCC: (Debian 14.2.0-19) 14.2.0;Linker: LLD 23.1.5 (/checkout/src/llvm-project/llvm 0a5579eb649d3634a9c30ac873300cc2944fa070);rustc version 1.100.0 (0ef1bc386 2026-11-09)
+main a02c81e86e6eb81cd6ee5e3815886cb2c4e1a71e base bd6b7741f3e3ce1407a22cbe3f6383093a9e1d2e head 5a22836fc283e9d731c701fb7dfa74ce3a843684
+Package: libjemalloc2
+Version: 5.3.0-3
+Package: libzstd1
+Version: 1.5.7+dfsg-1
+Package: wrk
+Version: 4.1.0-4+b1
+binaries (sha256, size):
+main fe641015967b56584895319a26b0d9bfe2b10e629d485d78344cba120dfd4273 4589560 bytes
+base 7033cbc1deffabbbc69398825961110ed8bae066846a6c1401b546560fdb0bfa 4546600 bytes
+head 549cd51a7413c80a3123ac757bd9068b9434df11806affae20f1e192b89ba609 4586352 bytes
+main-p320 0a86b509f41a53023813c1a02037c3c7e87732a2fa132cbc254c3c831c5c0e41 4589928 bytes
+main-p15120 8ce5584566b669a81a2647747bd42f6e908fcbd5bfacc1eb2761176201e39874 4604728 bytes
+main-p25824 e2752716be233816e28720a368894bd6040e3027bd723c4e9ae91674f89794d7 4615432 bytes
+main-p40624 85d49df3887cdb8cfd86ba6945c827b6e1898ed6a5689e494b1602161a0527a3 4630232 bytes
+main-p10304 c7a97afce04593a00fa8e069be56a7993d5d2bcbdb8f0bfe80dff38918b540e6 4599912 bytes
+main-p21008 1d9d1b8c62f8ff70b20e5b85934d16ebff7498c6d338f94c44335d7f51c25ade 4610616 bytes
+main-p35808 d9d79ab793685171547016bdc369c9ba87d2d0139efef21f83fa3ffb83c02fd5 4625416 bytes
+main-p5552 8ae971d8e16268c738a4b803faa064864a567d91e5f3fe7b40205068779291d7 4595160 bytes
+main-p20288 470a348f96a97b638d02ccb5742e75492a75df5749e60eb31c322be624c8837a 4609896 bytes
+main-p30992 d1f114e772a57ddadd1566e45109786a63e54402c139923077bebcea39aaf89b 4620600 bytes
+main-p736 aab0ff2dba5499a9a770f6a3052c9406d3759b87c1ec5b3613d19ef658e26b4a 4590344 bytes
+main-p15536 9748b7dd1562f40911d466e5e13dea6dfc4d41a8d4f2d9a459d3402b5d54a11a 4605144 bytes
+main-p26176 f87a6ee50b9b7cccd46708f232148e257bbed596fffe857c88ad5c2227854f70 4615784 bytes
+main-p36880 d31e386a9677696bdc974750edcba092541123b4ae1172b4c00304f1a7cc701f 4626488 bytes
+main-p10720 76f29677904eed536bc071427d952b5c14ef70680b2a13d26895b9f9fb8c3be0 4600328 bytes
+main-p21424 b1b1b5ed0f8cb5f7ae5e5103b1ae04615a70f5172e0c1aa752cd91d7e259f383 4611032 bytes
+main-p36160 cd0cc4a4309da229faf3d24ed4ceed7eb92f5df8b6727de4cf7e5ff86fc5a995 4625768 bytes
+main-p5904 704fc6bf1480c5d3a04ed89cbb44b8aee81762d1aa00192a89183e12a09e2149 4595512 bytes
+main-p16608 dc3d25cd7e8d119ae47acff6dcdfc5f6c48071f7568028f9027e2639242f4339 4606216 bytes
+main-p31408 691198602f4d1c90c95f2730a5749a68ae3bcbc4e47af4164665309e5fa2ebeb 4621016 bytes
+main-p1088 6633d5e1682e46b601c305ee7f3b313cfffc808ac0e30a87a5d882ae1bf85b27 4590696 bytes
+main-p15888 1c514a40837ce555ecd09e2175fec4dd74509a7a87ad9448b9c4bd5525858189 4605496 bytes
+main-p26592 7a1417398b46686e7006e3db19e565d0cb23f3d0ce4565566fde0c37e137a2b4 4616200 bytes
+main-p37296 df2ca8f86f58a671e2f54cd9fc02d55adacbda49cab38a1224959232f11cd44d 4626904 bytes
+main-p11072 fd4cf1e3b06ccab615218f6084ca220cf5abc602daa9205689a3278855415ebd 4600680 bytes
+main-p21776 8f842a132f0514b03b40bc890d2110249f0d0c85b0ef28becac79e1f0729bc90 4611384 bytes
+main-p36576 1b05607c397a8dae890f2ab882c43838be9ed146e0665b8c06e97a14288d37e5 4626184 bytes
+main-p6320 abf75c51748d10ebb8490fbc3ecb3134ec2f8a0ca4663b80f4826c69baf3351b 4595928 bytes
+main-p16960 76014003ca53df5d1a6086a5028b364da10c2dfb823dbbcd5fd94a90d6a4d40f 4606568 bytes
+main-p31760 0296547e550e623f17e2a95ee1605aa29cae4dcaf3840739a08c5fba8614116a 4621368 bytes
+main-p22848 49c02fc3bdcb7983f54b93da2d7b1c2ee2a89aeae4aa104e4ba92ef4ddd93583 4612456 bytes
+main-p12160 c7301ed72ca48b8da574988483b9b0a77e41513559026afeccce362f1007111f 4601768 bytes
+main-p38336 102d556039ea4e5e0d5bd392a35c271c58d61bfab8ba182c4c06d78577bb772d 4627944 bytes
+main-p27648 41a46f4bfe2a310ee2e0dfd9f6518301244a22eb218e3b29ab17f11df85620f7 4617256 bytes
+main-p12880 6d3d6ad9cdfafbfd208b69e5c50bc75562faac77cbf4ffcd5b4318feb3994247 4602488 bytes
+main-p2192 4511dd8e9e4628de646f85bd584143699132cce8d52bf3137f56dcbc14097ab0 4591800 bytes
+main-p32464 70b6b79e71352f3036622199a94a371280be9141e841f619c5b1a7a216c56c42 4622072 bytes
+main-p17680 4b5835f1c1fc6a55fd9fc4da8c05dfb2b8121895e75ad6edf23761be911822e6 4607288 bytes
+main-p7008 83c0c4df099627ee2402e8842f226f2df8bcbb21f34bd105ecebe9bca4683b95 4596616 bytes
+main-p33184 7b48eb2c51c497b45304d3158264ef217343dc43675380eecf1aa55cec0f4989 4622792 bytes
+main-p22496 b2930331fa04693d4807eeb86bf92dec9e8f2b99a5518cb8748bd569a65c9605 4612104 bytes
+main-p11808 24fde520902dc4103cd5c85ab7be673e2154341febf5dcdc65c861a6de1d9ee3 4601416 bytes
+main-p38000 13fb12eb1fe2b0067abe9cdc43f5fe3adab6dd3f42edff4255297d2751a5a7db 4627608 bytes
+main-p27312 efe704b50ea5515bedc00c75c4d6d0bda631a65c5928cf5f58610c47060d8bbe 4616920 bytes
+main-p12528 2a4d8c8ad7112854a4a003d7a68c7bc6084447282ee7fc931ae4ac5e18f8239a 4602136 bytes
+main-p1840 cc85b52a5b52172c5b0ffb5ce545e2b67bde1879078905313045edd418722ea9 4591448 bytes
+main-p32064 bce272fef1c8ecd1e6d46e473826333a596555d40c6ca9dc2244f53db1cda87a 4621672 bytes
+main-p17280 6474c943edc92f754eff7ec355635af94ff1f4424c9896979370f2cce9f12d57 4606888 bytes
+main-p6592 8e9b7dc93b949374f96485bccb2d88f5c6439446c36be9b3da11797de63828e1 4596200 bytes
+main-p32768 5f43064eddc14ecf35890fd4289324a950a2c4cb52f27cb3581c5bc8a0e6910d 4622376 bytes
+main-p22096 fb1bdf65e0c01d0ccc4d149e47076bd4c3d991c1f473d23573756e0b45bb4e7d 4611704 bytes
+main-p11408 53c95a94131cf9d48da67de56a95945aed6fb3650366c35a2b3f5739ec102002 4601016 bytes
+main-p37584 93853cd65b799183aaf08b90ff2b6432072b2db2f995fa5b8391618dd2cc6c57 4627192 bytes
+main-p26896 fd2473edd8f00629196aabf77991cb1d8a71f4cbb29b870bfd95160957dea0bc 4616504 bytes
+main-p16224 83bee71236d63b80d05942a7c6e8f38cf140b66dbc0e3f94ac6e7cedfca8dcd6 4605832 bytes
+main-p1440 ee8d4cc1903b0f1bb9434b64ed8d715710cdf703fb2aee81809d69530f0642e5 4591048 bytes
+main-p31712 02c9eae35636f9f8bc11eb557bd6220f02fd0f0d2fa5d90bb01ad4cb898ae696 4621320 bytes
+main-p16928 3c6dc101be14c8ef37b0400379dc6c9a92ead19154738f851f7de59ca10142bc 4606536 bytes
+main-p6256 b23e1cf95c29c995a12ea354e4b18eeb70ac5edbaa9a9e3a61adbd11f4d3cf42 4595864 bytes
+main-p36528 9a5884b673483c8763428e293fcceb2724f5b27bd2017a59d36825c8c9eeb99c 4626136 bytes
+base-p320 ad80fb96d56bbd5216bc103cbb90e321cd435c2a582060a61e67f7ac007e2443 4546960 bytes
+head-p320 af1f44d0352370fd8bb9b0cb51c940c50400b41f3dea6b2dd1157889a040bd4a 4586712 bytes
+base-p15120 28f30e6b6e12af4d7beeba1cc3ca103206b9c8538c1ed0cdf66428a49e1dad96 4561760 bytes
+head-p15120 470cbcd0adf60f6faa87fd65e2abaed5935cf4c49d1fbbbe60f7930017562980 4601512 bytes
+base-p25824 91456f620ce10f912ce9298f03f30033ab5b6776096c8625e6a597ea4c5b3890 4572464 bytes
+head-p25824 8efd7654abcfd72bb641e4433bca8ee450ec453ff7a5a0c9e52230023aaf75ea 4612216 bytes
+base-p40624 4f83bec9e061fef15030a4e95efa2c78173fd817832a8d3a87bfe14c5434c460 4587264 bytes
+head-p40624 5bd264f89386a2a3a13576cfc875b867df5f4187c281881d40529c5288f38777 4627016 bytes
+base-p10304 56b060f7f664ceccc54d481a9a0414f4aa92637957962f668b6b190918c84e52 4556944 bytes
+head-p10304 71357e5704e02eaf231c3e3e53069d241d81e18c3725da89a0514a2ca8624543 4596696 bytes
+base-p21008 b5328d8942d7f9a7af55e68f717b6357f279c689ee469fc701d487f0a1db80c8 4567648 bytes
+head-p21008 74aefaf5fbf99c0299338147e59038072e71a26cb2ea71bdb2a830ad65e9ac6d 4607400 bytes
+base-p35808 1e05a5315a210fd0d0310f206bb59233649a9ad622b3334ac66919032b4e6509 4582448 bytes
+head-p35808 f282b560b922f18ce494c276f941b6f79891841c5c904a3ee87b93a893c46555 4622200 bytes
+base-p5552 08969969504597fdd53db5cd3d558de6cdb2769bccbbaed0cd189eb88b59c388 4552192 bytes
+head-p5552 5c83448135ec9e60e6d552985904e81695296ac0a80e185e54a5a5c9bf978cf0 4591944 bytes
+base-p20288 0dfee5ff08d38dce6942d1b95e28f98e8f95127a736f32525f65c16f80393ec9 4566928 bytes
+head-p20288 ea14c360a762437785b68b3aaf7244dea0a3477fff78b0f3da02f0f7eb79817c 4606680 bytes
+base-p30992 15d16b911dc7f5117c0c0cb932e0886a2ce37eeb38a4674e62699f8a5405c996 4577632 bytes
+head-p30992 d998b2fcc7ca56e268ef3e56880d6be27c0e03fcea168d38be31478aa59b76f2 4617384 bytes
+base-p736 59c26e84fe77c8372dc47b339772d14d1ae09965288031191c0f6d179adc3d42 4547376 bytes
+head-p736 23cad4f4fce59d4051af504cba3f758d27a142e7a463cd8e650de524a86c6b08 4587128 bytes
+base-p15536 c7268eb228b1988abbcfe8e9bb0f474b5e437b093eaf75c6f8447957bb08eb89 4562176 bytes
+head-p15536 57b8fd36676d059706e7428c043b60ea44db4762d4f47e34e51fc6af2ea91bd3 4601928 bytes
+base-p26176 843e3f9de344916b851cb3647069e1b7bf95a83a68cefc56554fd81b96631c92 4572816 bytes
+head-p26176 c76c6092143aad87de09f73898b794c10fcce1f8fbdc58a8b8a0a97570b660c5 4612568 bytes
+base-p36880 6c68c036756f934fb9ed33e438550806e89d7e1264ef798c703573bdf8f2597e 4583520 bytes
+head-p36880 77bd4b1513dc91b845c27ba3d14e76da307a628bc769e6fe798d413670bb6c64 4623272 bytes
+base-p10720 50d2f5bab9665c23d77e56e8ff33805c66e2d4f3a41ec7d9e3321c113cb1a5dd 4557360 bytes
+head-p10720 16372af6f3e979d9165df8b52b0a8fd20dcd089df5481ffa98712ef667424208 4597112 bytes
+base-p21424 5223dc6aa5b8b99ee8c082697b76ddc1e130cb8b03820864fa2245d0fc15cba6 4568064 bytes
+head-p21424 94a4aab71d165c62eb969cea4d793728862e2f47325b5003ffbfbdef2f3c58e9 4607816 bytes
+base-p36160 95988793d71ed71950a55bb398bcc1a0a210309c5f85986da4270a541e635cd7 4582800 bytes
+head-p36160 e659afb21521726d1c3992c920145f7d4a5aeada8e923e9e69a82e1367c2033c 4622552 bytes
+base-p5904 7b51b4a8080668c2bdbd14dba1bbbb510e6aa3219820827c7a4b99d413d3260d 4552544 bytes
+head-p5904 0505eaea40d0b024c946bdcbe413976b48abce0675aa1f2be9509fa693b99579 4592296 bytes
+base-p16608 46fcc9b1c5772e6ab9d5fa6c920d722557054c7058d7092cb91a6b39313ac03d 4563248 bytes
+head-p16608 e7475481febbc9cf5e8474c40b941064f629c121fe10284a2fee0ed607624f70 4603000 bytes
+base-p31408 83da73727b77026b5ab95309da916079e1f254c6fa248c8d47d916e9485c6a4e 4578048 bytes
+head-p31408 0bfe113e586fbe22b958d2f1da41cc9bafa698b060f519c0efae2171b07956d7 4617800 bytes
+base-p1088 98f5b5b01943e30233a3eb84069e954c5538fd2b9875c71be18d7d8afa8dbb66 4547728 bytes
+head-p1088 ad7012655c3b1a227e093dd15f178d6e308d3a965dc308411f81b165f6fd4622 4587480 bytes
+base-p15888 a2447c77ea5349121e0e728c548aed7b2e5dd0be2cff4e8517956a01a8bf0027 4562528 bytes
+head-p15888 229650a3d730dc1f681a6338c4fb61f47141110bdba49abeee3bea91545e8f45 4602280 bytes
+base-p26592 8e35c8751f80fb68652de3f0730777fef453d30c36d675a75f8174406fba2601 4573232 bytes
+head-p26592 4b9f80c77ab21a5a6b589411ad5b286edb2319f4ad8222d3c27468c8a6caf41d 4612984 bytes
+base-p37296 a4674a5398cb323eaf6a124d53197870f71fa9929ff023a349511f3fe53d0648 4583936 bytes
+head-p37296 513c3a8a6f82cfa1729462616f097f1cbfc4546d1d402846f6f15f3d7b8ad2a5 4623688 bytes
+base-p11072 79dcaa96ddde475e348efb721b4e6cd9e1b1f7bd87fd2f5fd0d9afd2a70aacc2 4557712 bytes
+head-p11072 ec6ddf60c3217389a5daf4960ed240f062cd33c7547ddcafc7cde4c1ab1fcc11 4597464 bytes
+base-p21776 676ac09ca1f5e51e1ef51e6a35c6d8402d0f360ea565166f901721d5aa51f1f6 4568416 bytes
+head-p21776 d5c403e61e1068b29ac40b5f93e59bea59da8897868c6a4823a7b96563a5585c 4608168 bytes
+base-p36576 35636f7ad605e4e39b4ad06cfb99c834b1ab8c2f01d5ce08b65ed3b28206bbc4 4583216 bytes
+head-p36576 ef77962add2914bc19bf54510a1b928c86ee48dfa1aea0eec59569a202303ccd 4622968 bytes
+base-p6320 76833156502cf6ee924147b06cf18012ae98d37698912de58eb297b66ad87e4e 4552960 bytes
+head-p6320 c74bbd828523bbbd6bc849ebdbf7d27dcf4a7d26c95ca0ed6eaf6958bfcf82f3 4592712 bytes
+base-p16960 a95095d812447a38f403df58084bae845ed554fb5dcbb53b1b6a335bf9ec19c6 4563600 bytes
+head-p16960 f675b6cfe92b66a7fdbc20c79dab118ed824ebda9009e09d837554a35c1687ee 4603352 bytes
+base-p31760 d09d1722a236023cf8773fd027b75bf9c484994a478dea11e12131ad4050c66b 4578400 bytes
+head-p31760 3fe613e6896815762d203eafb9ccd63e8bd949052c4bdb5fd22447e8a80b4773 4618152 bytes
+placements (layout against the side's unpadded binary):
+main-p320 0a86b509f41a53023813c1a02037c3c7e87732a2fa132cbc254c3c831c5c0e41 4589928 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +320 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p15120 8ce5584566b669a81a2647747bd42f6e908fcbd5bfacc1eb2761176201e39874 4604728 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +15120 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p25824 e2752716be233816e28720a368894bd6040e3027bd723c4e9ae91674f89794d7 4615432 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +25824 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p40624 85d49df3887cdb8cfd86ba6945c827b6e1898ed6a5689e494b1602161a0527a3 4630232 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +40624 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p10304 c7a97afce04593a00fa8e069be56a7993d5d2bcbdb8f0bfe80dff38918b540e6 4599912 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +10304 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p21008 1d9d1b8c62f8ff70b20e5b85934d16ebff7498c6d338f94c44335d7f51c25ade 4610616 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +21008 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p35808 d9d79ab793685171547016bdc369c9ba87d2d0139efef21f83fa3ffb83c02fd5 4625416 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +35808 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p5552 8ae971d8e16268c738a4b803faa064864a567d91e5f3fe7b40205068779291d7 4595160 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +5552 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p20288 470a348f96a97b638d02ccb5742e75492a75df5749e60eb31c322be624c8837a 4609896 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +20288 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p30992 d1f114e772a57ddadd1566e45109786a63e54402c139923077bebcea39aaf89b 4620600 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +30992 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p736 aab0ff2dba5499a9a770f6a3052c9406d3759b87c1ec5b3613d19ef658e26b4a 4590344 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +736 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p15536 9748b7dd1562f40911d466e5e13dea6dfc4d41a8d4f2d9a459d3402b5d54a11a 4605144 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +15536 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p26176 f87a6ee50b9b7cccd46708f232148e257bbed596fffe857c88ad5c2227854f70 4615784 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +26176 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p36880 d31e386a9677696bdc974750edcba092541123b4ae1172b4c00304f1a7cc701f 4626488 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +36880 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p10720 76f29677904eed536bc071427d952b5c14ef70680b2a13d26895b9f9fb8c3be0 4600328 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +10720 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p21424 b1b1b5ed0f8cb5f7ae5e5103b1ae04615a70f5172e0c1aa752cd91d7e259f383 4611032 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +21424 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p36160 cd0cc4a4309da229faf3d24ed4ceed7eb92f5df8b6727de4cf7e5ff86fc5a995 4625768 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +36160 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p5904 704fc6bf1480c5d3a04ed89cbb44b8aee81762d1aa00192a89183e12a09e2149 4595512 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +5904 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p16608 dc3d25cd7e8d119ae47acff6dcdfc5f6c48071f7568028f9027e2639242f4339 4606216 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +16608 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p31408 691198602f4d1c90c95f2730a5749a68ae3bcbc4e47af4164665309e5fa2ebeb 4621016 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +31408 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p1088 6633d5e1682e46b601c305ee7f3b313cfffc808ac0e30a87a5d882ae1bf85b27 4590696 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +1088 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p15888 1c514a40837ce555ecd09e2175fec4dd74509a7a87ad9448b9c4bd5525858189 4605496 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +15888 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p26592 7a1417398b46686e7006e3db19e565d0cb23f3d0ce4565566fde0c37e137a2b4 4616200 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +26592 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p37296 df2ca8f86f58a671e2f54cd9fc02d55adacbda49cab38a1224959232f11cd44d 4626904 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +37296 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p11072 fd4cf1e3b06ccab615218f6084ca220cf5abc602daa9205689a3278855415ebd 4600680 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +11072 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p21776 8f842a132f0514b03b40bc890d2110249f0d0c85b0ef28becac79e1f0729bc90 4611384 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +21776 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p36576 1b05607c397a8dae890f2ab882c43838be9ed146e0665b8c06e97a14288d37e5 4626184 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +36576 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p6320 abf75c51748d10ebb8490fbc3ecb3134ec2f8a0ca4663b80f4826c69baf3351b 4595928 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +6320 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p16960 76014003ca53df5d1a6086a5028b364da10c2dfb823dbbcd5fd94a90d6a4d40f 4606568 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +16960 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p31760 0296547e550e623f17e2a95ee1605aa29cae4dcaf3840739a08c5fba8614116a 4621368 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +31760 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p22848 49c02fc3bdcb7983f54b93da2d7b1c2ee2a89aeae4aa104e4ba92ef4ddd93583 4612456 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +22848 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p12160 c7301ed72ca48b8da574988483b9b0a77e41513559026afeccce362f1007111f 4601768 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +12160 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p38336 102d556039ea4e5e0d5bd392a35c271c58d61bfab8ba182c4c06d78577bb772d 4627944 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +38336 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p27648 41a46f4bfe2a310ee2e0dfd9f6518301244a22eb218e3b29ab17f11df85620f7 4617256 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +27648 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p12880 6d3d6ad9cdfafbfd208b69e5c50bc75562faac77cbf4ffcd5b4318feb3994247 4602488 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +12880 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p2192 4511dd8e9e4628de646f85bd584143699132cce8d52bf3137f56dcbc14097ab0 4591800 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +2192 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p32464 70b6b79e71352f3036622199a94a371280be9141e841f619c5b1a7a216c56c42 4622072 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +32464 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p17680 4b5835f1c1fc6a55fd9fc4da8c05dfb2b8121895e75ad6edf23761be911822e6 4607288 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +17680 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p7008 83c0c4df099627ee2402e8842f226f2df8bcbb21f34bd105ecebe9bca4683b95 4596616 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +7008 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p33184 7b48eb2c51c497b45304d3158264ef217343dc43675380eecf1aa55cec0f4989 4622792 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +33184 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p22496 b2930331fa04693d4807eeb86bf92dec9e8f2b99a5518cb8748bd569a65c9605 4612104 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +22496 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p11808 24fde520902dc4103cd5c85ab7be673e2154341febf5dcdc65c861a6de1d9ee3 4601416 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +11808 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p38000 13fb12eb1fe2b0067abe9cdc43f5fe3adab6dd3f42edff4255297d2751a5a7db 4627608 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +38000 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p27312 efe704b50ea5515bedc00c75c4d6d0bda631a65c5928cf5f58610c47060d8bbe 4616920 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +27312 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p12528 2a4d8c8ad7112854a4a003d7a68c7bc6084447282ee7fc931ae4ac5e18f8239a 4602136 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +12528 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p1840 cc85b52a5b52172c5b0ffb5ce545e2b67bde1879078905313045edd418722ea9 4591448 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +1840 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p32064 bce272fef1c8ecd1e6d46e473826333a596555d40c6ca9dc2244f53db1cda87a 4621672 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +32064 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p17280 6474c943edc92f754eff7ec355635af94ff1f4424c9896979370f2cce9f12d57 4606888 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +17280 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p6592 8e9b7dc93b949374f96485bccb2d88f5c6439446c36be9b3da11797de63828e1 4596200 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +6592 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p32768 5f43064eddc14ecf35890fd4289324a950a2c4cb52f27cb3581c5bc8a0e6910d 4622376 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +32768 B: 3404; same offset in a 64-byte line: 3404, in a 4 KiB page: 3404; A's neighbours still next in B, in order: 3335 of 3335
+main-p22096 fb1bdf65e0c01d0ccc4d149e47076bd4c3d991c1f473d23573756e0b45bb4e7d 4611704 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +22096 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p11408 53c95a94131cf9d48da67de56a95945aed6fb3650366c35a2b3f5739ec102002 4601016 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +11408 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p37584 93853cd65b799183aaf08b90ff2b6432072b2db2f995fa5b8391618dd2cc6c57 4627192 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +37584 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p26896 fd2473edd8f00629196aabf77991cb1d8a71f4cbb29b870bfd95160957dea0bc 4616504 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +26896 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p16224 83bee71236d63b80d05942a7c6e8f38cf140b66dbc0e3f94ac6e7cedfca8dcd6 4605832 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +16224 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p1440 ee8d4cc1903b0f1bb9434b64ed8d715710cdf703fb2aee81809d69530f0642e5 4591048 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +1440 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p31712 02c9eae35636f9f8bc11eb557bd6220f02fd0f0d2fa5d90bb01ad4cb898ae696 4621320 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +31712 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p16928 3c6dc101be14c8ef37b0400379dc6c9a92ead19154738f851f7de59ca10142bc 4606536 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +16928 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p6256 b23e1cf95c29c995a12ea354e4b18eeb70ac5edbaa9a9e3a61adbd11f4d3cf42 4595864 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +6256 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+main-p36528 9a5884b673483c8763428e293fcceb2724f5b27bd2017a59d36825c8c9eeb99c 4626136 bytes; all functions in both: 3404; moved by exactly the pad: 3404; not moved: 0; shifts: +36528 B: 3404; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3335 of 3335
+base-p320 ad80fb96d56bbd5216bc103cbb90e321cd435c2a582060a61e67f7ac007e2443 4546960 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +320 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p320 af1f44d0352370fd8bb9b0cb51c940c50400b41f3dea6b2dd1157889a040bd4a 4586712 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +320 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p15120 28f30e6b6e12af4d7beeba1cc3ca103206b9c8538c1ed0cdf66428a49e1dad96 4561760 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +15120 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p15120 470cbcd0adf60f6faa87fd65e2abaed5935cf4c49d1fbbbe60f7930017562980 4601512 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +15120 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p25824 91456f620ce10f912ce9298f03f30033ab5b6776096c8625e6a597ea4c5b3890 4572464 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +25824 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p25824 8efd7654abcfd72bb641e4433bca8ee450ec453ff7a5a0c9e52230023aaf75ea 4612216 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +25824 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p40624 4f83bec9e061fef15030a4e95efa2c78173fd817832a8d3a87bfe14c5434c460 4587264 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +40624 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p40624 5bd264f89386a2a3a13576cfc875b867df5f4187c281881d40529c5288f38777 4627016 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +40624 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p10304 56b060f7f664ceccc54d481a9a0414f4aa92637957962f668b6b190918c84e52 4556944 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +10304 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p10304 71357e5704e02eaf231c3e3e53069d241d81e18c3725da89a0514a2ca8624543 4596696 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +10304 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p21008 b5328d8942d7f9a7af55e68f717b6357f279c689ee469fc701d487f0a1db80c8 4567648 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +21008 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p21008 74aefaf5fbf99c0299338147e59038072e71a26cb2ea71bdb2a830ad65e9ac6d 4607400 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +21008 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p35808 1e05a5315a210fd0d0310f206bb59233649a9ad622b3334ac66919032b4e6509 4582448 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +35808 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p35808 f282b560b922f18ce494c276f941b6f79891841c5c904a3ee87b93a893c46555 4622200 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +35808 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p5552 08969969504597fdd53db5cd3d558de6cdb2769bccbbaed0cd189eb88b59c388 4552192 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +5552 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p5552 5c83448135ec9e60e6d552985904e81695296ac0a80e185e54a5a5c9bf978cf0 4591944 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +5552 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p20288 0dfee5ff08d38dce6942d1b95e28f98e8f95127a736f32525f65c16f80393ec9 4566928 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +20288 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p20288 ea14c360a762437785b68b3aaf7244dea0a3477fff78b0f3da02f0f7eb79817c 4606680 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +20288 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p30992 15d16b911dc7f5117c0c0cb932e0886a2ce37eeb38a4674e62699f8a5405c996 4577632 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +30992 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p30992 d998b2fcc7ca56e268ef3e56880d6be27c0e03fcea168d38be31478aa59b76f2 4617384 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +30992 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p736 59c26e84fe77c8372dc47b339772d14d1ae09965288031191c0f6d179adc3d42 4547376 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +736 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p736 23cad4f4fce59d4051af504cba3f758d27a142e7a463cd8e650de524a86c6b08 4587128 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +736 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p15536 c7268eb228b1988abbcfe8e9bb0f474b5e437b093eaf75c6f8447957bb08eb89 4562176 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +15536 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p15536 57b8fd36676d059706e7428c043b60ea44db4762d4f47e34e51fc6af2ea91bd3 4601928 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +15536 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p26176 843e3f9de344916b851cb3647069e1b7bf95a83a68cefc56554fd81b96631c92 4572816 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +26176 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p26176 c76c6092143aad87de09f73898b794c10fcce1f8fbdc58a8b8a0a97570b660c5 4612568 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +26176 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p36880 6c68c036756f934fb9ed33e438550806e89d7e1264ef798c703573bdf8f2597e 4583520 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +36880 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p36880 77bd4b1513dc91b845c27ba3d14e76da307a628bc769e6fe798d413670bb6c64 4623272 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +36880 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p10720 50d2f5bab9665c23d77e56e8ff33805c66e2d4f3a41ec7d9e3321c113cb1a5dd 4557360 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +10720 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p10720 16372af6f3e979d9165df8b52b0a8fd20dcd089df5481ffa98712ef667424208 4597112 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +10720 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p21424 5223dc6aa5b8b99ee8c082697b76ddc1e130cb8b03820864fa2245d0fc15cba6 4568064 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +21424 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p21424 94a4aab71d165c62eb969cea4d793728862e2f47325b5003ffbfbdef2f3c58e9 4607816 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +21424 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p36160 95988793d71ed71950a55bb398bcc1a0a210309c5f85986da4270a541e635cd7 4582800 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +36160 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p36160 e659afb21521726d1c3992c920145f7d4a5aeada8e923e9e69a82e1367c2033c 4622552 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +36160 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p5904 7b51b4a8080668c2bdbd14dba1bbbb510e6aa3219820827c7a4b99d413d3260d 4552544 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +5904 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p5904 0505eaea40d0b024c946bdcbe413976b48abce0675aa1f2be9509fa693b99579 4592296 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +5904 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p16608 46fcc9b1c5772e6ab9d5fa6c920d722557054c7058d7092cb91a6b39313ac03d 4563248 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +16608 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p16608 e7475481febbc9cf5e8474c40b941064f629c121fe10284a2fee0ed607624f70 4603000 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +16608 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p31408 83da73727b77026b5ab95309da916079e1f254c6fa248c8d47d916e9485c6a4e 4578048 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +31408 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p31408 0bfe113e586fbe22b958d2f1da41cc9bafa698b060f519c0efae2171b07956d7 4617800 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +31408 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p1088 98f5b5b01943e30233a3eb84069e954c5538fd2b9875c71be18d7d8afa8dbb66 4547728 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +1088 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p1088 ad7012655c3b1a227e093dd15f178d6e308d3a965dc308411f81b165f6fd4622 4587480 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +1088 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p15888 a2447c77ea5349121e0e728c548aed7b2e5dd0be2cff4e8517956a01a8bf0027 4562528 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +15888 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p15888 229650a3d730dc1f681a6338c4fb61f47141110bdba49abeee3bea91545e8f45 4602280 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +15888 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p26592 8e35c8751f80fb68652de3f0730777fef453d30c36d675a75f8174406fba2601 4573232 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +26592 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p26592 4b9f80c77ab21a5a6b589411ad5b286edb2319f4ad8222d3c27468c8a6caf41d 4612984 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +26592 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p37296 a4674a5398cb323eaf6a124d53197870f71fa9929ff023a349511f3fe53d0648 4583936 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +37296 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p37296 513c3a8a6f82cfa1729462616f097f1cbfc4546d1d402846f6f15f3d7b8ad2a5 4623688 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +37296 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p11072 79dcaa96ddde475e348efb721b4e6cd9e1b1f7bd87fd2f5fd0d9afd2a70aacc2 4557712 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +11072 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p11072 ec6ddf60c3217389a5daf4960ed240f062cd33c7547ddcafc7cde4c1ab1fcc11 4597464 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +11072 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p21776 676ac09ca1f5e51e1ef51e6a35c6d8402d0f360ea565166f901721d5aa51f1f6 4568416 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +21776 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p21776 d5c403e61e1068b29ac40b5f93e59bea59da8897868c6a4823a7b96563a5585c 4608168 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +21776 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p36576 35636f7ad605e4e39b4ad06cfb99c834b1ab8c2f01d5ce08b65ed3b28206bbc4 4583216 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +36576 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p36576 ef77962add2914bc19bf54510a1b928c86ee48dfa1aea0eec59569a202303ccd 4622968 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +36576 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p6320 76833156502cf6ee924147b06cf18012ae98d37698912de58eb297b66ad87e4e 4552960 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +6320 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p6320 c74bbd828523bbbd6bc849ebdbf7d27dcf4a7d26c95ca0ed6eaf6958bfcf82f3 4592712 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +6320 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p16960 a95095d812447a38f403df58084bae845ed554fb5dcbb53b1b6a335bf9ec19c6 4563600 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +16960 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p16960 f675b6cfe92b66a7fdbc20c79dab118ed824ebda9009e09d837554a35c1687ee 4603352 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +16960 B: 3402; same offset in a 64-byte line: 3402, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+base-p31760 d09d1722a236023cf8773fd027b75bf9c484994a478dea11e12131ad4050c66b 4578400 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +31760 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+head-p31760 3fe613e6896815762d203eafb9ccd63e8bd949052c4bdb5fd22447e8a80b4773 4618152 bytes; all functions in both: 3402; moved by exactly the pad: 3402; not moved: 0; shifts: +31760 B: 3402; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3333 of 3333
+120 placements: functions moved by exactly their pad 408360 of 408360; neighbours kept 400080 of 400080
+allocator: jemalloc (LD_PRELOAD=libjemalloc.so.2, MALLOC_CONF=background_thread:true,tcache_max:65536)
+plan: K=30 placements, R=8 recorded pairs each after 1 unrecorded, cycles:u,cycles:k,instructions:u; diagnostic DIAG_K=8, DIAG_R=8
+PADS_P: 320 15120 25824 40624 10304 21008 35808 5552 20288 30992 736 15536 26176 36880 10720 21424 36160 5904 16608 31408 1088 15888 26592 37296 11072 21776 36576 6320 16960 31760
+PADS_Q: 22848 12160 38336 27648 12880 2192 32464 17680 7008 33184 22496 11808 38000 27312 12528 1840 32064 17280 6592 32768 22096 11408 37584 26896 16224 1440 31712 16928 6256 36528
+every turn on a fresh start; server CPU 2, wrk CPUs 4,5, driver and perf CPU 7

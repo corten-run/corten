@@ -1,0 +1,3 @@
+comparison change-kept placement 25 workload kept
+A base-p11072 79dcaa96ddde475e348efb721b4e6cd9e1b1f7bd87fd2f5fd0d9afd2a70aacc2
+B head-p11072 ec6ddf60c3217389a5daf4960ed240f062cd33c7547ddcafc7cde4c1ab1fcc11

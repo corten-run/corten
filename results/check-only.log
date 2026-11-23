@@ -1,0 +1,14 @@
+checked 1 requests: same
+plain: done, /m/1965/results/check-only/aa-plain/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/check-only/aa-kept/cycles-kept.csv
+all_warm: kept base: 2 of 2 starts kept the page (6124 bytes)
+all_warm: kept head: 2 of 2 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/check-only/change-kept/cycles-kept.csv
+all_warm: kept base: 2 of 2 starts kept the page (6124 bytes)
+all_warm: kept head: 2 of 2 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/check-only/unpadded-kept/cycles-kept.csv
+all_warm: kept base: 2 of 2 starts kept the page (6124 bytes)
+all_warm: kept head: 2 of 2 starts kept the page (6124 bytes)

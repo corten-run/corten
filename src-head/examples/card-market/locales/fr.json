@@ -1,0 +1,84 @@
+{
+  "item": {
+    "lowest": "le plus bas",
+    "listing_count_one": "{count} annonce",
+    "listing_count_many": "{count} d’annonces",
+    "listing_count_other": "{count} annonces",
+    "available_one": "{count} disponible",
+    "available_many": "{count} disponibles",
+    "available_other": "{count} disponibles",
+    "no_listings": "Aucune annonce pour l'instant",
+    "listings": "Annonces",
+    "sort_asc": "Prix croissant",
+    "sort_desc": "Prix décroissant",
+    "offers": "Offres",
+    "show_all_offers": "Voir les {count} offres",
+    "details": "Détails",
+    "contents": "Contenu",
+    "included_in": "Inclus dans",
+    "image": "Image {n} de {title}",
+    "art": "{title} : illustration"
+  },
+  "table": {
+    "seller": "Vendeur",
+    "buyer": "Acheteur",
+    "condition": "État",
+    "ships_from": "Expédié de",
+    "qty": "Qté",
+    "price": "Prix"
+  },
+  "listing": {
+    "rating": "{rating} ★ ({reviews})"
+  },
+  "grade": {
+    "near_mint": "Quasi neuf",
+    "lightly_played": "Peu joué",
+    "moderately_played": "Joué",
+    "heavily_played": "Très joué",
+    "damaged": "Abîmé",
+    "sealed": "Scellé"
+  },
+  "detail": {
+    "set": "Extension",
+    "number": "Numéro de carte",
+    "rarity": "Rareté",
+    "finish": "Finition",
+    "packs": "Boosters"
+  },
+  "alert": {
+    "title": "Alerte de prix",
+    "email": "E-mail",
+    "below": "M'alerter sous",
+    "submit": "Créer l'alerte",
+    "invalid_email": "Saisissez une adresse e-mail valide.",
+    "invalid_price": "Saisissez un prix cible supérieur à zéro.",
+    "no_listings": "Cet article n'a pas encore d'annonce : il n'y a aucun prix à surveiller.",
+    "set": "Alerte créée : nous écrirons à {email} quand {title} passera sous {price}."
+  },
+  "category": {
+    "title": "Catégorie {name}",
+    "back": "Retour aux articles populaires"
+  },
+  "home": {
+    "title": "Articles populaires",
+    "item": "Article {n}"
+  },
+  "grading": {
+    "title": "Comment nous évaluons l'état d'une carte",
+    "caption": "De Quasi neuf à Joué, en six secondes.",
+    "captions_en": "English",
+    "captions_fr": "Français"
+  },
+  "card": {
+    "from": "À partir de {price}"
+  },
+  "error": {
+    "not_found": "Introuvable",
+    "not_found_text": "Aucune carte à cette adresse.",
+    "unavailable": "Indisponible",
+    "unavailable_text": "Vérifiez votre connexion et réessayez.",
+    "failed": "Une erreur est survenue",
+    "failed_text": "Veuillez réessayer.",
+    "home": "Aller aux articles populaires"
+  }
+}

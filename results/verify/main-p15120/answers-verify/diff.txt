@@ -1,0 +1,2 @@
+== check 1: /private
+== check 2: /page

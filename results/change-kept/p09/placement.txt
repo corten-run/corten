@@ -1,0 +1,3 @@
+comparison change-kept placement 9 workload kept
+A base-p20288 0dfee5ff08d38dce6942d1b95e28f98e8f95127a736f32525f65c16f80393ec9
+B head-p20288 ea14c360a762437785b68b3aaf7244dea0a3477fff78b0f3da02f0f7eb79817c

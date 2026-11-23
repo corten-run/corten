@@ -1,0 +1,239 @@
+/* After: the closing parts, set straight onto the steel. */
+.fit,
+.start,
+.decided {
+  margin-bottom: clamp(3.25rem, 8svh, 6.5rem);
+  scroll-margin-top: 5rem;
+}
+
+.decided {
+  margin-bottom: 0;
+}
+
+.statement {
+  max-width: 22ch;
+  margin-bottom: clamp(1.5rem, 3vw, 2.5rem);
+  color: var(--bone);
+  font-size: clamp(2.6rem, 5.6vw, 5.4rem);
+  /* Far enough apart that a comma does not reach the capitals under it. */
+  line-height: 1.1;
+  text-shadow: 0 -2px 0 rgb(0 0 0 / 60%);
+}
+
+/* What it is for leads; what it is not for, and its limits, stand beside it, quieter. */
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 4fr) minmax(0, 4fr);
+  gap: 1px;
+  background: color-mix(in srgb, var(--bone) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bone) 16%, transparent);
+}
+
+.column {
+  padding: clamp(1.4rem, 2.6vw, 2.25rem);
+  background: var(--ink);
+  border-top: 3px solid var(--rust);
+}
+
+.away {
+  border-top-color: var(--bone-dim);
+}
+
+.sub {
+  margin-bottom: 1.1rem;
+  font-size: clamp(1.7rem, 2.6vw, 2.3rem);
+}
+
+.away .sub {
+  color: var(--bone-dim);
+}
+
+.list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.list li {
+  padding-left: 1.1rem;
+  border-left: 2px solid var(--rust);
+}
+
+.away .list li {
+  border-left-color: color-mix(in srgb, var(--bone) 30%, transparent);
+  color: #cfc7ba;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+
+.against {
+  margin: clamp(2.5rem, 6svh, 4.5rem) 0 1.1rem;
+  color: var(--bone);
+  font-size: clamp(1.9rem, 3.4vw, 3rem);
+}
+
+/* The other choices: each a row, its name on the left at the weight of a heading. */
+.others {
+  display: grid;
+  border-top: 1px solid color-mix(in srgb, var(--bone) 24%, transparent);
+}
+
+.other {
+  display: grid;
+  grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+  align-items: baseline;
+  gap: 0.5rem clamp(1.5rem, 3vw, 3rem);
+  padding: clamp(0.8rem, 1.4vw, 1.15rem) 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--bone) 24%, transparent);
+}
+
+.other dt {
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: clamp(1.45rem, 2.2vw, 2rem);
+  line-height: 1.02;
+  text-transform: uppercase;
+}
+
+.other dd {
+  max-width: 44rem;
+  color: #dcd5c9;
+}
+
+.begin {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  align-items: start;
+  gap: clamp(1.5rem, 3vw, 3rem);
+}
+
+.blocks {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.kept {
+  max-width: 44rem;
+  color: #dcd5c9;
+  font-size: 0.9375rem;
+}
+
+.words {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.words code {
+  color: var(--ember);
+}
+
+.ways {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.way {
+  display: inline-block;
+  padding: 0.65rem 1.2rem;
+  border: 1px solid color-mix(in srgb, var(--bone) 55%, transparent);
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-size: 1.2rem;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.way:first-child {
+  background: var(--bone);
+  border-color: var(--bone);
+  color: var(--ink);
+}
+
+.way:hover {
+  background: var(--ember);
+  border-color: var(--ember);
+  color: var(--ink);
+}
+
+.next {
+  padding-top: 0.9rem;
+  border-top: 1px solid color-mix(in srgb, var(--bone) 18%, transparent);
+  color: #dcd5c9;
+  font-size: 0.9375rem;
+}
+
+@media (max-width: 62rem) {
+  .columns,
+  .begin,
+  .other {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The order: a real sequence, so it is numbered. */
+.order {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  counter-reset: rank;
+  background: color-mix(in srgb, var(--bone) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bone) 16%, transparent);
+}
+
+.rank {
+  padding: 1.25rem 1.3rem 1.5rem;
+  background: var(--ink);
+  counter-increment: rank;
+}
+
+/* A number of this size is read, so it is lighter than the brand's rust, which is too close
+   to the steel it stands on. */
+.rank::before {
+  content: counter(rank);
+  display: block;
+  margin-bottom: 1.25rem;
+  color: #cf6d3c;
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: 4.5rem;
+  line-height: 0.8;
+}
+
+.rank:first-child::before {
+  color: var(--ember);
+}
+
+.value {
+  margin-bottom: 0.6rem;
+  font-size: 1.6rem;
+  line-height: 1.05;
+}
+
+.rank p {
+  color: #cfc7ba;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.proof {
+  max-width: 46rem;
+  margin-top: 1.5rem;
+  color: #dcd5c9;
+}
+
+@media (max-width: 62rem) {
+  .order {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 36rem) {
+  .order {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

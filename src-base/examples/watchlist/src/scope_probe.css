@@ -1,0 +1,19 @@
+@scope (body) {
+    @scope (:scope > main) {
+        .list p { --smoke-filtered-scope: yes; }
+    }
+    @scope (.list) {
+        p { --smoke-hoisted-scope: yes; }
+    }
+    /* Both roots are inside the frame, whether the engine resolves them through it or body. */
+    .frame {
+        @scope (article.list) {
+            p { --smoke-subject-scope: yes; }
+        }
+        @supports (display: block) {
+            @scope (.list > section) {
+                p { --smoke-ancestor-scope: yes; }
+            }
+        }
+    }
+}

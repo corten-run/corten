@@ -1,0 +1,332 @@
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p01/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p01/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p01/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p02/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p02/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p02/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p03/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p03/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p03/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p04/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p04/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p04/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p05/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p05/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p05/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p06/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p06/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p06/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p07/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p07/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p07/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p08/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p08/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p08/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p09/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p09/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p09/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p10/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p10/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p10/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p11/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p11/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p11/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p12/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p12/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p12/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p13/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p13/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p13/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p14/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p14/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p14/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p15/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p15/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p15/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p16/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p16/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p16/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p17/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p17/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p17/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p18/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p18/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p18/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p19/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p19/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p19/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p20/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p20/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p20/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p21/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p21/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p21/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p22/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p22/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p22/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p23/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p23/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p23/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p24/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p24/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p24/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p25/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p25/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p25/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p26/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p26/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p26/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p27/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p27/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p27/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p28/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p28/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p28/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p29/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p29/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p29/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+plain: done, /m/1965/results/aa-plain/p30/cycles-plain.csv
+checked 1 requests: same
+kept: done, /m/1965/results/aa-kept/p30/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/change-kept/p30/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/unpadded-kept/p01/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/unpadded-kept/p02/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/unpadded-kept/p03/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/unpadded-kept/p04/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/unpadded-kept/p05/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/unpadded-kept/p06/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/unpadded-kept/p07/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)
+checked 1 requests: same
+kept: done, /m/1965/results/unpadded-kept/p08/cycles-kept.csv
+all_warm: kept base: 10 of 10 starts kept the page (6124 bytes)
+all_warm: kept head: 10 of 10 starts kept the page (6124 bytes)

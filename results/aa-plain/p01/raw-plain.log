@@ -1,0 +1,270 @@
+## pair w1 base
+# started on Mon Nov 23 07:08:21 2026
+
+3932869197,,cycles:u,2997382770,100.00,,
+4732126974,,cycles:k,2997382770,100.00,,
+7904570980,,instructions:u,2997382770,100.00,2.01,insn per cycle
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms   37.10us   2.51ms   96.06%
+    Req/Sec    33.68k   352.64    34.36k    61.67%
+  201070 requests in 3.03s, 1.34GB read
+Requests/sec:  66356.36
+Transfer/sec:    452.34MB
+RESULT 201070 0 0 0 0 0
+## pair w1 head
+# started on Mon Nov 23 07:08:25 2026
+
+3990381288,,cycles:u,2999158369,100.00,,
+4879842952,,cycles:k,2999158369,100.00,,
+8218070716,,instructions:u,2999158369,100.00,2.06,insn per cycle
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.01ms    1.49ms  35.10ms   99.46%
+    Req/Sec    35.03k     2.31k   47.24k    96.67%
+  209035 requests in 3.04s, 1.39GB read
+Requests/sec:  68867.85
+Transfer/sec:    469.46MB
+RESULT 209035 0 0 0 0 0
+## pair 1 base
+# started on Mon Nov 23 07:08:28 2026
+
+4096377733,,cycles:u,3074888338,100.00,,
+4921157644,,cycles:k,3074888338,100.00,,
+8169138546,,instructions:u,3074888338,100.00,1.99,insn per cycle
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms  822.06us  24.01ms   99.61%
+    Req/Sec    34.24k     3.47k   59.46k    96.72%
+  207789 requests in 3.10s, 1.38GB read
+Requests/sec:  67049.78
+Transfer/sec:    457.07MB
+RESULT 207789 0 0 0 0 0
+## pair 1 head
+# started on Mon Nov 23 07:08:32 2026
+
+4210131348,,cycles:u,2998187267,100.00,,
+4901363441,,cycles:k,2998187267,100.00,,
+8969034235,,instructions:u,2998187267,100.00,2.13,insn per cycle
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.90ms    1.05ms  28.02ms   99.57%
+    Req/Sec    38.25k     3.04k   48.72k    81.67%
+  228146 requests in 3.03s, 1.52GB read
+Requests/sec:  75379.75
+Transfer/sec:    513.85MB
+RESULT 228146 0 0 0 0 0
+## pair 2 head
+# started on Mon Nov 23 07:08:35 2026
+
+3898845260,,cycles:u,2998325081,100.00,,
+4792529655,,cycles:k,2998325081,100.00,,
+7846286877,,instructions:u,2998325081,100.00,2.01,insn per cycle
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.96ms   36.16us   1.54ms   85.13%
+    Req/Sec    33.45k   788.65    37.10k    90.00%
+  199585 requests in 3.02s, 1.33GB read
+Requests/sec:  66131.89
+Transfer/sec:    450.81MB
+RESULT 199585 0 0 0 0 0
+## pair 2 base
+# started on Mon Nov 23 07:08:39 2026
+
+3943596187,,cycles:u,2994513775,100.00,,
+4794368000,,cycles:k,2994513775,100.00,,
+8173706719,,instructions:u,2994513775,100.00,2.07,insn per cycle
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.92ms   96.13us   5.21ms   98.54%
+    Req/Sec    34.86k   755.78    38.06k    90.00%
+  207918 requests in 3.03s, 1.38GB read
+Requests/sec:  68533.94
+Transfer/sec:    467.19MB
+RESULT 207918 0 0 0 0 0
+## pair 3 base
+# started on Mon Nov 23 07:08:42 2026
+
+3972821373,,cycles:u,2999621175,100.00,,
+4819907783,,cycles:k,2999621175,100.00,,
+8083284064,,instructions:u,2999621175,100.00,2.03,insn per cycle
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.93ms   31.42us   2.03ms   85.25%
+    Req/Sec    34.46k   543.56    35.19k    73.33%
+  205608 requests in 3.04s, 1.37GB read
+Requests/sec:  67580.01
+Transfer/sec:    460.68MB
+RESULT 205608 0 0 0 0 0
+## pair 3 head
+# started on Mon Nov 23 07:08:46 2026
+
+3885754475,,cycles:u,2999670379,100.00,,
+4789746204,,cycles:k,2999670379,100.00,,
+7951018263,,instructions:u,2999670379,100.00,2.05,insn per cycle
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms   23.20us   1.41ms   87.80%
+    Req/Sec    33.91k   287.24    34.44k    71.67%
+  202242 requests in 3.02s, 1.35GB read
+Requests/sec:  67014.22
+Transfer/sec:    456.83MB
+RESULT 202242 0 0 0 0 0
+## pair 4 head
+# started on Mon Nov 23 07:08:49 2026
+
+3876180496,,cycles:u,2998268859,100.00,,
+4837648940,,cycles:k,2998268859,100.00,,
+8207953017,,instructions:u,2998268859,100.00,2.12,insn per cycle
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.92ms   23.71us   1.39ms   87.42%
+    Req/Sec    35.00k   296.78    35.56k    73.33%
+  208780 requests in 3.03s, 1.39GB read
+Requests/sec:  68991.20
+Transfer/sec:    470.30MB
+RESULT 208780 0 0 0 0 0
+## pair 4 base
+# started on Mon Nov 23 07:08:52 2026
+
+3979622007,,cycles:u,2998339001,100.00,,
+4799194694,,cycles:k,2998339001,100.00,,
+7938841183,,instructions:u,2998339001,100.00,1.99,insn per cycle
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms   74.91us   1.45ms   92.59%
+    Req/Sec    33.85k     2.02k   35.31k    93.33%
+  201932 requests in 3.03s, 1.34GB read
+Requests/sec:  66732.72
+Transfer/sec:    454.91MB
+RESULT 201932 0 0 0 0 0
+## pair 5 base
+# started on Mon Nov 23 07:08:56 2026
+
+4144589843,,cycles:u,3059184228,100.00,,
+4898367916,,cycles:k,3059184228,100.00,,
+8338004719,,instructions:u,3059184228,100.00,2.01,insn per cycle
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.03ms    1.78ms  39.56ms   99.40%
+    Req/Sec    34.96k     3.31k   55.95k    96.72%
+  212087 requests in 3.10s, 1.41GB read
+Requests/sec:  68433.09
+Transfer/sec:    466.50MB
+RESULT 212087 0 0 0 0 0
+## pair 5 head
+# started on Mon Nov 23 07:08:59 2026
+
+4048327346,,cycles:u,3056055713,100.00,,
+4820385961,,cycles:k,3056055713,100.00,,
+7974340765,,instructions:u,3056055713,100.00,1.97,insn per cycle
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.10ms    2.05ms  43.53ms   99.34%
+    Req/Sec    33.44k     3.16k   53.01k    96.72%
+  202832 requests in 3.10s, 1.35GB read
+Requests/sec:  65425.56
+Transfer/sec:    446.00MB
+RESULT 202832 0 0 0 0 0
+## pair 6 head
+# started on Mon Nov 23 07:09:03 2026
+
+4231450662,,cycles:u,3075126494,100.00,,
+4989202774,,cycles:k,3075126494,100.00,,
+8852995958,,instructions:u,3075126494,100.00,2.09,insn per cycle
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.90ms  807.64us  23.61ms   99.62%
+    Req/Sec    37.13k     4.08k   63.61k    96.72%
+  225203 requests in 3.10s, 1.50GB read
+Requests/sec:  72659.77
+Transfer/sec:    495.31MB
+RESULT 225203 0 0 0 0 0
+## pair 6 base
+# started on Mon Nov 23 07:09:06 2026
+
+4169758499,,cycles:u,3076557868,100.00,,
+4990033279,,cycles:k,3076557868,100.00,,
+8805215976,,instructions:u,3076557868,100.00,2.11,insn per cycle
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.91ms  813.87us  23.89ms   99.64%
+    Req/Sec    36.93k     3.84k   64.98k    96.72%
+  223976 requests in 3.10s, 1.49GB read
+Requests/sec:  72248.04
+Transfer/sec:    492.51MB
+RESULT 223976 0 0 0 0 0
+## pair 7 base
+# started on Mon Nov 23 07:09:10 2026
+
+4182271147,,cycles:u,3079076881,100.00,,
+4976284415,,cycles:k,3079076881,100.00,,
+8758807271,,instructions:u,3079076881,100.00,2.09,insn per cycle
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.90ms  611.34us  19.68ms   99.70%
+    Req/Sec    36.75k     3.92k   65.98k    96.72%
+  222808 requests in 3.10s, 1.48GB read
+Requests/sec:  71895.95
+Transfer/sec:    490.10MB
+RESULT 222808 0 0 0 0 0
+## pair 7 head
+# started on Mon Nov 23 07:09:13 2026
+
+4163031279,,cycles:u,3076132907,100.00,,
+4941151294,,cycles:k,3076132907,100.00,,
+8403685026,,instructions:u,3076132907,100.00,2.02,insn per cycle
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms  797.92us  23.29ms   99.64%
+    Req/Sec    35.25k     3.85k   61.82k    96.72%
+  213759 requests in 3.10s, 1.42GB read
+Requests/sec:  68956.21
+Transfer/sec:    470.07MB
+RESULT 213759 0 0 0 0 0
+## pair 8 head
+# started on Mon Nov 23 07:09:16 2026
+
+4056086314,,cycles:u,3071297030,100.00,,
+4923489383,,cycles:k,3071297030,100.00,,
+8421949888,,instructions:u,3071297030,100.00,2.08,insn per cycle
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.97ms    1.05ms  27.77ms   99.47%
+    Req/Sec    35.32k     4.01k   64.32k    96.72%
+  214232 requests in 3.10s, 1.43GB read
+Requests/sec:  69120.36
+Transfer/sec:    471.18MB
+RESULT 214232 0 0 0 0 0
+## pair 8 base
+# started on Mon Nov 23 07:09:20 2026
+
+4119024544,,cycles:u,3075117071,100.00,,
+4955333400,,cycles:k,3075117071,100.00,,
+8605338060,,instructions:u,3075117071,100.00,2.09,insn per cycle
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.93ms  810.60us  23.66ms   99.64%
+    Req/Sec    36.05k     3.83k   64.21k    96.72%
+  218889 requests in 3.10s, 1.46GB read
+Requests/sec:  70620.08
+Transfer/sec:    481.41MB
+RESULT 218889 0 0 0 0 0

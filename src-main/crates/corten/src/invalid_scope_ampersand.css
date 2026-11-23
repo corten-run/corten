@@ -1,0 +1,5 @@
+.list {
+  @scope (:is(main, [foo=&])) to (.slot) {
+    p { color: red; }
+  }
+}

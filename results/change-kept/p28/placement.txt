@@ -1,0 +1,3 @@
+comparison change-kept placement 28 workload kept
+A base-p6320 76833156502cf6ee924147b06cf18012ae98d37698912de58eb297b66ad87e4e
+B head-p6320 c74bbd828523bbbd6bc849ebdbf7d27dcf4a7d26c95ca0ed6eaf6958bfcf82f3

@@ -1,0 +1,3 @@
+comparison aa-plain placement 13 workload plain
+A main-p26176 f87a6ee50b9b7cccd46708f232148e257bbed596fffe857c88ad5c2227854f70
+B main-p38000 13fb12eb1fe2b0067abe9cdc43f5fe3adab6dd3f42edff4255297d2751a5a7db

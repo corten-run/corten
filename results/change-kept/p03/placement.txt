@@ -1,0 +1,3 @@
+comparison change-kept placement 3 workload kept
+A base-p25824 91456f620ce10f912ce9298f03f30033ab5b6776096c8625e6a597ea4c5b3890
+B head-p25824 8efd7654abcfd72bb641e4433bca8ee450ec453ff7a5a0c9e52230023aaf75ea

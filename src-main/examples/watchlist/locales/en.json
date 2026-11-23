@@ -1,0 +1,6 @@
+{
+  "prices": {
+    "updates_one": "{count} price update",
+    "updates_other": "{count} price updates"
+  }
+}

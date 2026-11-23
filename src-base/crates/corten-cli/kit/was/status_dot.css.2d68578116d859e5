@@ -1,0 +1,7 @@
+/* corten ui {{version}}: status_dot */
+.dot { display: inline-block; flex: none; width: .5rem; height: .5rem; border-radius: 50%; background: var(--kit-tone); }
+.neutral { --kit-tone: var(--muted-foreground); }
+.info { --kit-tone: var(--info); }
+.success { --kit-tone: var(--success); }
+.warning { --kit-tone: var(--warning); }
+.destructive { --kit-tone: var(--destructive); }

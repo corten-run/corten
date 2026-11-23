@@ -1,0 +1,109 @@
+== 1965 verify start 07:06:24
+verify: 120 placements answer as their unpadded binary
+== 1965 check start 07:07:50
+aa-plain: checked 1 requests: same
+aa-kept: checked 1 requests: same
+change-kept: checked 1 requests: same
+unpadded-kept: checked 1 requests: same
+== 1965 checks ok 07:08:21
+aa-plain p01 ok 07:09:23
+aa-kept p01 ok 07:10:31
+change-kept p01 ok 07:11:40
+aa-plain p02 ok 07:12:42
+aa-kept p02 ok 07:13:50
+change-kept p02 ok 07:14:58
+aa-plain p03 ok 07:16:00
+aa-kept p03 ok 07:17:08
+change-kept p03 ok 07:18:16
+aa-plain p04 ok 07:19:18
+aa-kept p04 ok 07:20:26
+change-kept p04 ok 07:21:34
+aa-plain p05 ok 07:22:37
+aa-kept p05 ok 07:23:45
+change-kept p05 ok 07:24:53
+aa-plain p06 ok 07:25:55
+aa-kept p06 ok 07:27:03
+change-kept p06 ok 07:28:11
+aa-plain p07 ok 07:29:14
+aa-kept p07 ok 07:30:22
+change-kept p07 ok 07:31:30
+aa-plain p08 ok 07:32:32
+aa-kept p08 ok 07:33:40
+change-kept p08 ok 07:34:48
+aa-plain p09 ok 07:35:50
+aa-kept p09 ok 07:36:58
+change-kept p09 ok 07:38:06
+aa-plain p10 ok 07:39:09
+aa-kept p10 ok 07:40:17
+change-kept p10 ok 07:41:25
+aa-plain p11 ok 07:42:27
+aa-kept p11 ok 07:43:35
+change-kept p11 ok 07:44:43
+aa-plain p12 ok 07:45:45
+aa-kept p12 ok 07:46:53
+change-kept p12 ok 07:48:01
+aa-plain p13 ok 07:49:03
+aa-kept p13 ok 07:50:12
+change-kept p13 ok 07:51:20
+aa-plain p14 ok 07:52:22
+aa-kept p14 ok 07:53:30
+change-kept p14 ok 07:54:38
+aa-plain p15 ok 07:55:40
+aa-kept p15 ok 07:56:48
+change-kept p15 ok 07:57:56
+aa-plain p16 ok 07:58:58
+aa-kept p16 ok 08:00:07
+change-kept p16 ok 08:01:15
+aa-plain p17 ok 08:02:17
+aa-kept p17 ok 08:03:25
+change-kept p17 ok 08:04:33
+aa-plain p18 ok 08:05:35
+aa-kept p18 ok 08:06:43
+change-kept p18 ok 08:07:51
+aa-plain p19 ok 08:08:53
+aa-kept p19 ok 08:10:02
+change-kept p19 ok 08:11:10
+aa-plain p20 ok 08:12:12
+aa-kept p20 ok 08:13:20
+change-kept p20 ok 08:14:28
+aa-plain p21 ok 08:15:30
+aa-kept p21 ok 08:16:38
+change-kept p21 ok 08:17:46
+aa-plain p22 ok 08:18:49
+aa-kept p22 ok 08:19:57
+change-kept p22 ok 08:21:05
+aa-plain p23 ok 08:22:07
+aa-kept p23 ok 08:23:15
+change-kept p23 ok 08:24:23
+aa-plain p24 ok 08:25:25
+aa-kept p24 ok 08:26:33
+change-kept p24 ok 08:27:42
+aa-plain p25 ok 08:28:44
+aa-kept p25 ok 08:29:52
+change-kept p25 ok 08:31:00
+aa-plain p26 ok 08:32:02
+aa-kept p26 ok 08:33:10
+change-kept p26 ok 08:34:18
+aa-plain p27 ok 08:35:20
+aa-kept p27 ok 08:36:28
+change-kept p27 ok 08:37:36
+aa-plain p28 ok 08:38:39
+aa-kept p28 ok 08:39:47
+change-kept p28 ok 08:40:55
+aa-plain p29 ok 08:41:57
+aa-kept p29 ok 08:43:05
+change-kept p29 ok 08:44:13
+aa-plain p30 ok 08:45:15
+aa-kept p30 ok 08:46:23
+change-kept p30 ok 08:47:31
+unpadded-kept p01 ok 08:48:40
+unpadded-kept p02 ok 08:49:48
+unpadded-kept p03 ok 08:50:56
+unpadded-kept p04 ok 08:52:04
+unpadded-kept p05 ok 08:53:12
+unpadded-kept p06 ok 08:54:20
+unpadded-kept p07 ok 08:55:28
+unpadded-kept p08 ok 08:56:36
+report: /m/1965/results/placements.md
+failed: none
+ALL-DONE

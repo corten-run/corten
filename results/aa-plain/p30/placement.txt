@@ -1,0 +1,3 @@
+comparison aa-plain placement 30 workload plain
+A main-p31760 0296547e550e623f17e2a95ee1605aa29cae4dcaf3840739a08c5fba8614116a
+B main-p36528 9a5884b673483c8763428e293fcceb2724f5b27bd2017a59d36825c8c9eeb99c

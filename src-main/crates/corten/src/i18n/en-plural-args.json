@@ -1,0 +1,6 @@
+{
+  "cart": {
+    "lines_one": "{count} line in {cart} ({total})",
+    "lines_other": "{count} lines in {cart} ({total})"
+  }
+}

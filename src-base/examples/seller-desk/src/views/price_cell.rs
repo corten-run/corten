@@ -1,0 +1,57 @@
+use corten::prelude::*;
+
+use super::money;
+use crate::{
+    app::{PriceInput, url},
+    ui::{
+        button::{Button, ButtonSize, ButtonVariant},
+        input::Input,
+    },
+};
+
+/// A price cell's id, `price-{item id}`: the price route answers with the cell, which replaces it.
+#[derive(Id)]
+pub struct PriceId<'a>(pub &'a str);
+
+/// A price cell's word to the grid around it: whether a price typed in it is not saved yet. The
+/// grid counts them, so an edit is not lost unnoticed.
+#[corten::script::event]
+pub struct PriceEdited {
+    pub unsent: bool,
+}
+
+/// A price that edits in place: typing shows Save, Escape restores the saved price (the input's
+/// `value` attribute, its `defaultValue`), and the form posts to the item's price route, which
+/// answers with this cell (or the cell with its error). The input is a plain number; the grid's
+/// column header names its currency once.
+#[component(css, js)]
+pub fn PriceCell<'a>(id: &'a str, cents: Option<u32>, typed: &'a str, errors: &'a Errors) -> impl Patch {
+    let save = refs();
+    let f = PriceInput::FIELDS;
+    let saved = cents.map(money);
+    let e = errors.within(PriceId(id));
+    html! {
+        // Borrowed from `saved`, which the markup owns.
+        let shown = saved.as_deref().unwrap_or(typed);
+        <form id={PriceId(id)} class={Form} method="post" action={url::SetPrice { id }} data-patch>
+            <input
+                class={(Input {}, Price)}
+                name={f.price}
+                value={shown}
+                inputmode="decimal"
+                aria-label="Price"
+                on:input={js::edited(target, save)}
+                on:keydown={js::revert(event, target, save)}
+                {..e.aria(f.price)}
+            >
+            <button
+                class={Button { variant: ButtonVariant::Primary, size: ButtonSize::Sm }}
+                ref={save}
+                hidden={errors.is_empty()}
+            >
+                "Save"
+            </button>
+            {e.message(f.price)}
+        </form>
+    }
+}

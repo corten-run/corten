@@ -1,0 +1,19 @@
+// @ts-check
+// ListingSort (listing_sort.rs).
+
+/**
+ * Flips the listings between cheapest and dearest first, by the cents each row gives its ref (an
+ * integer, the largest for a listing without a price). The sort is stable either way, so rows with
+ * the same price keep the server's order and a second click restores it. The rule is sort_listings
+ * in src/model.rs.
+ * @param {HTMLTableSectionElement} body @param {Map<HTMLTableRowElement, number>} rows
+ * @param {HTMLSpanElement} ascending @param {HTMLSpanElement} descending
+ */
+export function toggle(body, rows, ascending, descending) {
+  const down = descending.hidden;
+  const sign = down ? -1 : 1;
+  const sorted = Array.from(rows).sort(([, a], [, b]) => sign * (a - b));
+  body.replaceChildren(...sorted.map(([row]) => row));
+  ascending.hidden = down;
+  descending.hidden = !down;
+}

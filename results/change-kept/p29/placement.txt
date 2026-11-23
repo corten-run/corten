@@ -1,0 +1,3 @@
+comparison change-kept placement 29 workload kept
+A base-p16960 a95095d812447a38f403df58084bae845ed554fb5dcbb53b1b6a335bf9ec19c6
+B head-p16960 f675b6cfe92b66a7fdbc20c79dab118ed824ebda9009e09d837554a35c1687ee

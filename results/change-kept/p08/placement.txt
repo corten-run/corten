@@ -1,0 +1,3 @@
+comparison change-kept placement 8 workload kept
+A base-p5552 08969969504597fdd53db5cd3d558de6cdb2769bccbbaed0cd189eb88b59c388
+B head-p5552 5c83448135ec9e60e6d552985904e81695296ac0a80e185e54a5a5c9bf978cf0

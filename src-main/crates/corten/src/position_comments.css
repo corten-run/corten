@@ -1,0 +1,5 @@
+@position-try --above { top: 0; }
+.popup {
+  position-try: --above /* @media (--ghost){ */;
+  position-try-fallbacks: var(/* note */--missing), --above;
+}
