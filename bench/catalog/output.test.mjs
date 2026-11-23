@@ -239,7 +239,7 @@ test("on Linux the group is not signalled after the client exits: a surviving me
     assert.match(error.message, /: timeout after 2000 ms; the client exited SIGTERM at \d+ ms but its output stayed open; its pipes were released at \d+ ms without end of file\n/);
     const life = error.lifetime;
     assert.equal(life.stopped, "deadline"); assert.equal(life.exitSignal, "SIGTERM"); assert.ok(life.exitMs >= life.stoppedMs);
-    assert.deepEqual(life.kill, { method: "process group", term: "sent", kill: null, end: clientExitEnd });
+    assert.deepEqual(life.kill, { method: "process group", term: "sent", kill: null, end: clientExitEnd, clientError: null });
     assert.equal(life.clientAtRelease, "exited"); assert.equal(life.stdout.closedMs, null, "the member still held the pipes");
     assert.ok(life.releasedMs >= life.stoppedMs + releaseMs - 50, JSON.stringify(life));
   } finally {
@@ -260,7 +260,7 @@ test("on Linux a TERM-resistant group gets SIGKILL while its leader, the client,
     const error = await failure(command(...node(client), { timeout: 2000, receipt: true }));
     const life = error.lifetime;
     assert.equal(life.stopped, "deadline"); assert.equal(life.releasedMs, null, "the pipes closed; they were not released");
-    assert.deepEqual(life.kill, { method: "process group", term: "sent", kill: "sent", end: clientExitEnd });
+    assert.deepEqual(life.kill, { method: "process group", term: "sent", kill: "sent", end: clientExitEnd, clientError: null });
     assert.equal(life.exitSignal, "SIGKILL"); assert.ok(life.exitMs >= life.stoppedMs + 1900, JSON.stringify(life));
     // Death, not reaping: an orphan killed in a container without an init stays a zombie, which `alive` counts as dead.
     const pid = Number(readFileSync(pidFile, "utf8"));
@@ -322,6 +322,44 @@ test("on Linux the group is signalled only while the client is unreaped; a repla
     ["sent", "sent", clientExitEnd], ["ESRCH", "client", clientExitEnd], ["sent", "sent", "bound reached; the client was still running"]]);
 });
 
+// A Linux process that has exited but has not been reaped.
+const zombie = (pid) => { try { return /^\d+ \(.*\) Z /.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return false; } };
+const block = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+test("on Linux a stop that starts inside one client's exit callback signals no client that libuv has already reaped", { skip: process.platform !== "linux", timeout: 20000 }, async () => {
+  // libuv reaps every exited child in one batch and only then calls each one's exit callback, so
+  // inside the first callback the other quick client is already reaped while its exit fields
+  // are still null. The interrupt comes from that first callback. The quick clients are
+  // single-threaded (`sh`): a multithreaded process shows as a zombie when its main thread
+  // exits but cannot be reaped until its other threads have, so one batch might not reap both.
+  const realKill = process.kill, children = [], sent = [];
+  const { quick, live, errors } = await patched(cp, { spawn: ({ spawn }) => (...args) => { const child = spawn(...args); children.push(child); return child; } }, async () => {
+    const runner = commandRunner({ cwd: tmpdir() });
+    const pending = [failure(runner.command(...node("setInterval(()=>{},1000)"), { timeout: 10000 })),
+      failure(runner.command("sh", ["-c", "exit 0"], { timeout: 10000 })), failure(runner.command("sh", ["-c", "exit 0"], { timeout: 10000 }))];
+    const [client, ...quickClients] = children;
+    let first = null;
+    for (const child of quickClients) child.once("exit", () => { if (first === null) { first = child; runner.interrupt(); } });
+    // The event loop is blocked until both quick clients have exited, so one SIGCHLD batch reaps both.
+    for (const began = Date.now(); !quickClients.every((c) => zombie(c.pid)) && Date.now() - began < 5000;) block(10);
+    assert.ok(quickClients.every((c) => zombie(c.pid)), "both quick clients exited before the event loop could reap either");
+    // Only the live client's group is really signalled; anything else is recorded with whether its
+    // process was already reaped (a zombie still answers signal 0), not sent.
+    const reaped = (pid) => { try { realKill(pid, 0); return false; } catch (e) { return e.code === "ESRCH"; } };
+    process.kill = (pid, signal) => {
+      if (-pid === client.pid) { sent.push([pid, signal]); return realKill(pid, signal); }
+      sent.push([pid, signal, reaped(Math.abs(pid)) ? "reaped" : "unreaped"]); return true;
+    };
+    try { return { quick: quickClients, live: client, errors: await Promise.all(pending) }; } finally { process.kill = realKill; }
+  });
+  assert.ok(quick.every((c) => c.exitCode === 0), "the quick clients exited by themselves");
+  // Before the fix the quick client reaped in the same batch got a group SIGTERM.
+  assert.deepEqual(sent, [[-live.pid, "SIGTERM"]],
+    `only the unreaped live client's group is signalled, never a reaped client's number: ${JSON.stringify({ quick: quick.map((c) => c.pid), sent })}`);
+  assert.equal(live.signalCode, "SIGTERM");
+  for (const error of errors) assert.equal(error.exit.interrupted, true, error.message);
+});
+
 test("an interrupt accepted before the deadline stays an interrupt while the pipes are held", { timeout: 20000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "catalog-command-interrupt-deadline-"));
   const pidFile = join(dir, "holder.pid");
@@ -353,23 +391,38 @@ test("an output error after an accepted interrupt keeps the interrupt and record
   const file = join(dir, "app.log");
   try {
     let target = null, failing = false, accepted = 0, refused = 0, interrupted = false;
-    // The client is killed 300 ms after the stop, so its output keeps arriving after the interrupt.
+    let clientPid = null, helper = null, firstWrite;
+    const written = new Promise((resolve) => { firstWrite = resolve; });
+    // A substituted taskkill helper that stops the client and exits only once the write after the
+    // interrupt has been refused: the order is fixed by those events, not by a timer.
     const runner = commandRunner({ cwd: tmpdir(), interrupted: () => interrupted, killOptions: { platform: "win32",
-      taskkill: (pid) => [process.execPath, ["-e", "setTimeout(()=>process.kill(Number(process.argv[1]),'SIGKILL'),300)", String(pid)]] } });
-    const error = await patched(fs, {
+      taskkill: (pid) => { clientPid = pid; return ["late-write-helper", []]; } } });
+    const error = await patched(cp, { spawn: ({ spawn }) => (binary, ...rest) => {
+      if (binary !== "late-write-helper") return spawn(binary, ...rest);
+      helper = Object.assign(new EventEmitter(), { kill: () => true, unref() {} });
+      return helper;
+    } }, () => patched(fs, {
       openSync: ({ openSync }) => appendFd(file, openSync, (fd) => { target = fd; }),
       writeSync: ({ writeSync }) => (fd, ...rest) => {
         if (fd !== target) return writeSync(fd, ...rest);
-        if (failing) { refused++; throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC", syscall: "write" }); }
-        accepted++; return writeSync(fd, ...rest);
+        if (failing) {
+          refused++;
+          process.kill(clientPid, "SIGKILL"); setImmediate(() => helper.emit("exit", 0, null));
+          throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC", syscall: "write" });
+        }
+        accepted++; firstWrite(); return writeSync(fd, ...rest);
       },
     }, async () => {
       const pending = failure(runner.command(...node("setInterval(()=>process.stdout.write('tick\\n'),20)"), { timeout: 10000, file, capture: false, receipt: true }));
-      while (accepted === 0) await sleep(10);
+      // Bounded: a client that ends before its first write ends this wait too.
+      const ended = pending.then((e) => { if (accepted === 0) throw new Error(`the client ended before its first write: ${e.message}`); });
+      await Promise.race([written, ended]);
       interrupted = true; runner.interrupt(); failing = true;
       return pending;
-    });
+    }));
     assert.equal(refused, 1, "output arrived after the interrupt and its write failed");
+    assert.deepEqual(error.lifetime.kill.helper, { exitCode: 0, signal: null, error: null, stalled: false, killError: null },
+      "the helper exited after that write, inside its budget");
     assert.equal(error.code, undefined, "not the raw output error");
     assert.deepEqual({ expired: error.exit.expired, interrupted: error.exit.interrupted }, { expired: false, interrupted: true });
     assert.match(error.message, /; interrupted/);
@@ -406,12 +459,77 @@ catch (error) {
     const { message, life, processWraps } = JSON.parse(run.stdout);
     assert.match(message, /: timeout after 500 ms; its pipes were released at \d+ ms without end of file while the client was still running; it was left running$/);
     assert.equal(life.clientAtRelease, "running"); assert.equal(life.exitMs, null);
-    assert.deepEqual(life.kill, { method: "process group", term: "EPERM", kill: "client", end: "bound reached; the client was still running" });
+    assert.deepEqual(life.kill, { method: "process group", term: "EPERM", kill: "client", end: "bound reached; the client was still running", clientError: null });
     assert.equal(processWraps, 0, "the surviving client no longer keeps the event loop alive");
     // On Windows libuv ends a non-detached child with its parent's job; elsewhere it is still running.
     if (process.platform !== "win32") assert.equal(alive(Number(readFileSync(pidFile, "utf8"))), true);
   } finally {
     try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL"); } catch {}
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Runs one command with a 300 ms deadline in a separate Node process where every signal fails as
+// EPERM: a group signal throws it, and each child's own handle returns it, so Node's kill() emits
+// `error` on that child exactly as it does for a real EPERM. The client and any helper write
+// their PIDs to `dir`. Returns what the command's failure carried and the referenced ProcessWraps.
+const pidOf = (file) => `require('fs').writeFileSync(${JSON.stringify(file)},String(process.pid));setInterval(()=>{},1000)`;
+function failedSignals(dir, killOptions) {
+  const script = `
+import cp from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import util from "node:util";
+const EPERM = [...util.getSystemErrorMap()].find(([, [name]]) => name === "EPERM")[0];
+const spawn = cp.spawn;
+cp.spawn = (...args) => { const child = spawn(...args); if (child._handle) child._handle.kill = () => EPERM; return child; };
+syncBuiltinESMExports();
+process.kill = () => { throw Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" }); };
+const { commandRunner } = await import(${JSON.stringify(new URL("./output.mjs", import.meta.url).href)});
+const { command } = commandRunner({ cwd: ${JSON.stringify(tmpdir())}, killOptions: ${killOptions} });
+try { await command(process.execPath, ["-e", ${JSON.stringify(pidOf(join(dir, "client.pid")))}], { timeout: 300, receipt: true }); console.log("unexpected success"); }
+catch (error) {
+  console.log(JSON.stringify({ message: error.message.split("\\n")[0], code: error.code ?? null, exit: error.exit ?? null, signalError: error.signalError ?? null,
+    life: error.lifetime ?? null, processWraps: process.getActiveResourcesInfo().filter((resource) => resource === "ProcessWrap").length }));
+}
+`;
+  const began = Date.now();
+  const result = cp.spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 15000, windowsHide: true });
+  assert.equal(result.signal, null, `the runner process exited by itself, not at the test's timeout: ${result.stdout}${result.stderr}`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(Date.now() - began < 12000);
+  const { message, code, exit, signalError, life, processWraps } = JSON.parse(result.stdout);
+  assert.match(message, /: timeout after 300 ms; its pipes were released at \d+ ms without end of file while the client was still running; it was left running$/);
+  assert.equal(code, null, "not the raw kill error");
+  assert.deepEqual(exit, { code: null, signal: null, expired: true, interrupted: false });
+  assert.equal(signalError, "kill EPERM", "the client's failed signal is kept as secondary evidence");
+  assert.equal(life.stopped, "deadline"); assert.equal(life.clientAtRelease, "running");
+  assert.ok(life.releasedMs >= life.stoppedMs + releaseMs - 50, JSON.stringify(life));
+  assert.equal(processWraps, 0, "neither the client nor a helper keeps the event loop alive");
+  return life.kill;
+}
+const killPid = (file) => { try { process.kill(Number(readFileSync(file, "utf8")), "SIGKILL"); } catch {} };
+
+test("an EPERM on the group and on the client's own handle is secondary: the deadline decides and the pipes are released", { timeout: 30000 }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "catalog-command-eperm-"));
+  try {
+    assert.deepEqual(failedSignals(dir, `{ platform: "linux", graceMs: 200 }`), { method: "process group", term: "EPERM", kill: "client",
+      end: "bound reached; the client was still running", clientError: "EPERM" });
+    if (process.platform !== "win32") assert.equal(alive(Number(readFileSync(join(dir, "client.pid"), "utf8"))), true);
+  } finally {
+    killPid(join(dir, "client.pid"));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a Windows helper whose stop fails is abandoned at the bound, and an EPERM on the client's handle is secondary", { timeout: 30000 }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "catalog-command-eperm-helper-"));
+  const helperPid = join(dir, "helper.pid");
+  try {
+    assert.deepEqual(failedSignals(dir, `{ platform: "win32", helperMs: 200, boundMs: 1500, taskkill: () => [process.execPath, ["-e", ${JSON.stringify(pidOf(helperPid))}]] }`),
+      { method: "taskkill", helper: { exitCode: null, signal: null, error: "did not exit", stalled: true, killError: "EPERM" }, kill: "client", clientError: "EPERM" });
+    if (process.platform !== "win32") assert.equal(alive(Number(readFileSync(helperPid, "utf8"))), true, "the helper was abandoned, not stopped");
+  } finally {
+    killPid(join(dir, "client.pid")); killPid(helperPid);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -444,7 +562,7 @@ test("the Windows taskkill helper is bounded, never run for an exited client, an
 
       const failedClient = live(); clients.push(failedClient);
       const failed = await killCommand(failedClient, options("process.exit(128)"));
-      assert.deepEqual(failed, { method: "taskkill", helper: { exitCode: 128, signal: null, error: null, stalled: false }, kill: "client" });
+      assert.deepEqual(failed, { method: "taskkill", helper: { exitCode: 128, signal: null, error: null, stalled: false, killError: null }, kill: "client", clientError: null });
       await ended(failedClient);
 
       // A helper that exits 0 only after crossing its budget: the stall decides, not the exit code.
@@ -455,12 +573,12 @@ test("the Windows taskkill helper is bounded, never run for an exited client, an
         helper.kill = () => { setImmediate(() => helper.emit("exit", 0, null)); return true; };
         return helper;
       } }, () => killCommand(lateClient, { ...options(""), taskkill: () => ["late-helper", []] }));
-      assert.deepEqual(late, { method: "taskkill", helper: { exitCode: 0, signal: null, error: null, stalled: true }, kill: "client" });
+      assert.deepEqual(late, { method: "taskkill", helper: { exitCode: 0, signal: null, error: null, stalled: true, killError: null }, kill: "client", clientError: null });
       await ended(lateClient);
 
       const stoppedClient = live(); clients.push(stoppedClient);
       const stopped = await killCommand(stoppedClient, options("process.kill(Number(process.argv[1]),'SIGKILL')"));
-      assert.deepEqual(stopped, { method: "taskkill", helper: { exitCode: 0, signal: null, error: null, stalled: false }, kill: null });
+      assert.deepEqual(stopped, { method: "taskkill", helper: { exitCode: 0, signal: null, error: null, stalled: false, killError: null }, kill: null, clientError: null });
       await ended(stoppedClient);
     });
     assert.deepEqual(sent, []);

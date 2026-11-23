@@ -206,7 +206,10 @@ failure, which still fails the run; nothing is retried and no command deadline c
 Receipts cover the detached parity and preflight starts and these log collections, not the
 measured cold-start create and start. Commands in a timed phase, such as k6's `docker start
 -a`, take no receipt and do no receipt work: no lifetime record or clock, no receipt byte
-count, no hashing, and no listener beyond their output and their close.
+count, no hashing, and no listener beyond their output, error and close. Their command path is
+still not the one before receipts: each output chunk also passes an earlier-write-error check
+and a receipt flag test, and command setup and settlement changed. Their timing effect has not
+been measured.
 A command succeeds only once its Docker client has exited and both of its pipes have closed,
 so its output is complete, and nothing stopped it: a command stopped at its deadline or by an
 interrupt fails whatever its exit code, cleanup commands included, and the first stop reason
@@ -214,10 +217,14 @@ decides which (an interrupt followed by the deadline stays an interrupt).
 On Linux the client leads its own process group, and the runner signals that group only while
 the client has not exited: Node has not reaped it, so its PID, which is the group's ID, is still
 reserved. The stop sends SIGTERM to the group and, two seconds later if the client is still
-running, SIGKILL. Once the client has exited the group is never signalled again, because a
-successful probe cannot tell the original group from a new one that took its number. This is a
-deliberate rule: a group member that ignores SIGTERM and outlives the client is not killed. If
-it holds a pipe, the runner releases the pipes at the bound and fails the command, recording
+running, SIGKILL. Each signal is checked and sent from an event-loop callback of its own, never
+from the code that requested the stop: libuv reaps every exited child in one batch before it
+reports any of their exits, so a stop requested from one client's exit callback could otherwise
+see another client as unreaped after it was reaped. Once the client has exited the group is
+never signalled again, because a successful probe cannot tell the original group from a new
+one that took its number. This is a deliberate rule: a group member that ignores SIGTERM and
+outlives the client is not killed. If it holds a pipe, the runner releases the pipes at the
+bound and fails the command, recording
 that the client exited while its output stayed open. Owned Docker containers are still removed
 independently, so this does not leave a browser or k6 container behind. Nothing is signalled
 for a client that had already exited before the stop.
@@ -226,6 +233,10 @@ seconds to stop the client's tree. It is not run for a client that has already e
 is abandoned at 4.75 seconds. If it fails, cannot start or takes longer than three seconds,
 whatever its exit code, a client still running is killed through its own handle, and the
 helper's outcome is recorded.
+A signal that fails (to the group, to the client's own handle, or the helper's own kill) is
+recorded and never ends the stop early: the first stop reason still decides the outcome, the
+pipes are still released at the bound, and a helper still running then is abandoned without
+holding the runner.
 A process that left the group (a new session) or the `taskkill` tree, or a group member that
 outlived the client, can still hold a pipe after the client exits. The runner does not stop
 such a process: five seconds after the stop it stops reading, so the command settles as a
