@@ -8096,7 +8096,7 @@ rules something out.
     refused, so the counted interval encloses the load (round 17 of the review found the earlier
     fixed-length count did not show that). It is not the load alone: perf may count from the
     moment it reads `enable` and until it acknowledges `disable`, so a turn is also refused
-    whose gaps pass 25 ms from `enable` sent to `wrk`'s start or from `wrk`'s end to `disable`
+    whose gaps pass 50 ms from `enable` sent to `wrk`'s start or from `wrk`'s end to `disable`
     acknowledged (round 18), and what the server does in them, a job the load queued among it, is
     counted with the load. Every timed answer must be a `200`: the scripts count any other
     status themselves, since `wrk` counts one as an error only above 399 (round 18). A first plan
