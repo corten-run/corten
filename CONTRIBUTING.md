@@ -479,6 +479,46 @@ establish a general ranking.
 
       A layout floor never applies to the benefit side: it cannot establish a CPU-cost win, which
       the rule above decides as before.
+
+      A workload the change touches may instead be read across placements, when the run's plan
+      names it before the run with the numbers below
+      ([design Choice 72](docs/design.md#choice-placement-runs)). One build's code placement moves
+      a touched request's cycles by up to about 4% either way, so a single build of each side can
+      pass or miss +1% by where the linker put the code. The plan states:
+
+      1. Placements: each side is compiled once, and its K placements are that build's final link
+         run again with LLD's `-Wl,--shuffle-sections=.text*=<seed>`, which reorders every
+         function. The plan lists every seed. Placement i of the change is base with seed s_i
+         against head with seed s_i. Before anything is measured, the run records that the link
+         run again unshuffled is byte-identical to the build's own binary, that each placement has
+         exactly that binary's function symbols with some of them moved and a SHA-256 no other
+         binary has, and that each answers the workload's requests as the unshuffled binary does
+         (status, headers but `Date`, and body).
+      2. Pairs: R recorded pairs per placement after one that is not, every turn on a freshly
+         started build, as above, so a placement and a process start are told apart.
+      3. The statistic: per placement, the median of its R per-pair changes in user plus kernel
+         cycles per request; across placements, the median of the K placement medians and its
+         one-sided 95% upper bound, the j-th smallest of them, j the smallest rank with
+         P(Binomial(K, 1/2) >= j) <= 5% (the 20th of 30, as the 59th of 100 is for pairs). K is
+         one that has such a rank, at least 5.
+      4. Resolution: the same run reads main against main on the workload with the same K, R and
+         statistic, main with seed a_i against main with seed b_i, every seed distinct. That A/A's
+         bound is what the run can resolve. If it is at or above +1%, the workload is **not
+         resolved**, and not resolved does not pass, whatever the change's own bound.
+
+      The margin stays +1% with no floor: the workload meets it when the change's bound across
+      placements is under +1% and its A/A resolves. A placement that fails a check above, or has
+      fewer than R valid pairs, leaves its comparison with no bound, which does not pass; no
+      placement is rerun, replaced or dropped for its result. A layout floor never applies to a
+      workload read across placements. A single-build run stays valid, and binding for each workload
+      its plan read that way: a placement run declared after it does not clear its miss. The benefit
+      side may use the same protocol if the plan declares it, with its smallest worthwhile
+      reduction, before the run: a CPU-cost win then needs the change's upper bound across
+      placements at or below minus that reduction, and its A/A's one-sided 95% lower bound (the (K +
+      1 - j)-th smallest placement median, the 11th of 30) above it. The reading measures the change
+      across placements, not the release binary, whose placement is one of them. A run of K = 30
+      placements of R = 12 pairs, for the change and the A/A on `kept` and an A/A on `plain`, takes
+      about TODO(evidence) on a c-8.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
