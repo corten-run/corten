@@ -7978,13 +7978,63 @@ rules something out.
     at that price, on the bet below that clients naming a coding are most of what asks for
     an app's `Public` bodies. The app's resident memory, about 10 MB, was at most 352 kB more
     with a body kept, and 1,270 kB more with the 1 MiB file kept, its second copy.
-    Two cuts to what a kept answer given again costs followed (`a0267d8a6`). Its `Age` was
-    made from the number, two allocations for every answer; it is a slice of a table of the
+    Two cuts to what a kept answer given again costs followed (`a0267d8a6`). The first: its
+    `Age` was made from the number, two allocations for every answer; it is a slice of a table of the
     numbers under 10,000 in decimal, 38,890 bytes of the binary, and an older answer's is made
     as before. Four digits, 2 hours 46 minutes, take in a lifetime of an hour, which is what
-    `seo` writes; a table of three digits is 2,890 bytes and covers 16 minutes 39 seconds, and
-    the digits written to a buffer and copied into a value need no table and one allocation by
-    the libraries' code, and neither was counted. And the answer carried the cache's mark as an extension of its own beside the
+    `seo` writes. The table's size was
+    counted afterwards against three smaller forms
+    ([#1964 A kept answer's `Age` is read from a 38,890-byte table of four-digit numbers, chosen without measuring a 2,890-byte table or a form with no table and one allocation](https://github.com/corten-run/corten/issues/1964)),
+    each built on `0a2dc9b32` with the benchmark's PNG of 8,000 bytes kept for four hours, so
+    that an answer could be counted at an age of one digit, of four and of five (`48df6c67c`,
+    `c25d263a9`, `77dde53d6` and `09cddd7f1`): callgrind and glibc's allocator, the catalog
+    benchmark's app with its default features, one build and one count of each form, where
+    two counts of one build have differed by 256 on this request, 178 of them the
+    allocator's. Instructions a request under ten seconds old, at 1,005 seconds and at 10,005,
+    the allocations at each, and the app's `.rodata`: the table of four digits 37,397, 37,491
+    and 38,435, with 25, 25 and 27 allocations, 1,132,672 bytes; a table of three digits, an
+    older answer's made from the number, 37,409 and 38,547 (not counted at 10,005), 25 and
+    27, 1,096,640 bytes; no table and the value made from the number 38,512 and 38,450, 27 and
+    27, 1,093,760 bytes; no table and the digits written to a buffer and copied into a value
+    37,829, 37,892 and 38,022 (the last over 1,001 requests), 26 at each, 1,093,824 bytes. The
+    rule the issue set was that the smallest form within about 100 instructions of the table
+    replaces it: the buffer is 432 over it under ten seconds and 401 at 1,005, so the table
+    stays. Three
+    digits and four are 12 apart under 1,000 seconds, which one count cannot tell from
+    nothing; from there to 9,999 the fourth digit is worth 1,056 instructions and two
+    allocations, for 36,032 bytes. How many answers are given at those ages is a judgment
+    and not a count: `seo` writes an hour and the examples a minute. Past the table the
+    number made into a value costs what it did before the cut, and an answer kept for a day
+    is past the table for 88% of its life. Writing an older answer's digits to a buffer, with
+    the writer a JSON number and a `Cache-Control` lifetime have, and copying them into a
+    value was counted and not made (`b0bc7ae32` against `9b0f2e6aa`, main's `fef1f83de` with
+    the file routes and the four-hour lifetime). Under callgrind on one connection the kept
+    PNG at 10,005 seconds took 37,894 instructions where it took 38,364 and made 26
+    allocations where it made 27, the allocator's count 5,755 where 6,289 and the rest 32,140
+    where 32,075; under ten seconds it took 37,414 against 37,398, the PNG of 1,024 bytes
+    37,332 against 37,331 and a kept page 41,082 against 41,078, which is no change. Under
+    load the gain was about a tenth of that count and the cycles missed both margins set before
+    they were read. On a cloud host with a Xeon Platinum 8280, the server on one CPU and
+    `wrk -t2 -c64` on two others, twelve starts of eight alternated pairs of three-second
+    turns for each comparison: the answer past 10,000 seconds took 0.21% fewer user
+    instructions at the median of the pairs (the builds' medians 24,470 a request against
+    24,497.5, where an answer a few minutes old takes 24,208), and its cycles, user and
+    kernel together, held to a median at or under zero and a one-sided 95% bound under 1%,
+    read +1.56% and +2.45% (user +2.44%, kernel +1.19%; 2,530 user instruction-cache misses a
+    request against 2,405.5). The answer a few minutes old, which that build does not alter
+    (-0.04% in instructions) and which was held to a bound under 1%, read +1.60% and +2.16%
+    (2,467 misses against 2,400.5). In the same run the base against a second copy of its
+    own file read -0.85% with a bound of +0.29% and -1.18% with a bound of +0.02%, and its
+    twelve starts' medians ran from -7.43% to +6.79% and from -7.30% to +6.38%, where the
+    build's ran from -2.73% to +5.52% and from -1.57% to +6.68%. The build read the same 1.6%
+    on the answer whose code it changed and on the one whose code it left alone, which is
+    where its code sat and not what its digits cost, and identical bytes moved further from
+    one start to the next than the two builds differ. A touched request is held to 1% with
+    no allowance for that ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2;
+    [#1965 The cycle gate reads one build, and one build's placement moves a touched request's cycles by up to 4% either way, so a change of a few hundred instructions passes or misses +1% by where its code landed](https://github.com/corten-run/corten/issues/1965)
+    is about what such a reading can decide), and one allocation with about 0.2% of the
+    instructions of an answer more than 2 hours 46 minutes old is not a gain to waive it for.
+    The second cut: the answer carried the cache's mark as an extension of its own beside the
     one for what was kept, an allocation and a place in the map; the mark is read from what
     was kept, which is a second lookup among the extensions for an answer that has some and
     carries neither mark (the one answer counted that carries neither, a page that is not
@@ -8085,7 +8135,8 @@ rules something out.
     asks; the kernel's part of the price with no coding on a load whose threads do not sleep;
     the cuts of `a0267d8a6` in cycles apart from where a build's code sits, a pair of builds
     having differed by more than they are worth, and at more than one placement without
-    `compress`; a kept answer older than 9,999 seconds, whose `Age` is made from the number;
+    `compress`; a kept answer older than 9,999 seconds other than the PNG of 8,000 bytes, and a
+    table of three digits at that age;
     a browser's twelve header lines under load, which sends three; a new URL for every request for a
     file, which takes the path a body's does above; a body kept for a handler that waits on a database or another service,
     where the wait and not the compression is what a kept body saves (the benchmark's handler
@@ -8162,7 +8213,12 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-22 for the cuts to a kept answer given again, `7794749ad` (main's
+    Last checked: 2026-11-22 for the forms of a kept answer's `Age`, `48df6c67c`, `c25d263a9`,
+    `77dde53d6` and `09cddd7f1` (this choice's `0a2dc9b32` with each form and the benchmark's
+    PNG kept for four hours), and for an older answer's, `9b0f2e6aa` (main's `fef1f83de` with
+    the file routes and that lifetime) and `b0bc7ae32` (the buffer past the table on it, not
+    made), kept under the tag
+    `evidence/age-forms-1964`; 2026-11-22 for the cuts to a kept answer given again, `7794749ad` (main's
     `7a275ef15` with five file routes and a kept page in the catalog benchmark) and `0a2dc9b32`
     (this change's `a0267d8a6` with them), and for where the code sits `abbd6113f`, `9f628467d`
     and `ba72c5f23` (those two, and the second with no body kept, each with a block of bytes
