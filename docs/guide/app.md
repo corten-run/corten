@@ -1547,18 +1547,23 @@ handler with what it reads, the render, the tag's hash and the compression, sinc
 coding's bytes are made once and stay with the page. A page's bytes are made once and sent many
 times, so its brotli is made once more, at level 5 (a request's is 1), on the thread that
 compresses held JSON, after any held JSON waiting there. That encoding runs on the server's own
-CPU, so it is made only for a page asked for often enough to repay it: the page's compressed
-answers to clients that rank brotli first or tie it for first among the codings they take are
-counted, and the job is queued while the app prepares the one that makes 8,192 and three more for
-each byte of the page (26,564 for a page of 6,124 bytes), before it looks for that answer's own
-form. Spread over that many answers, the encoding costs at most about 0.5% of their instructions
-for the bodies measured, and less for a page asked for more often; a page asked for fewer times
-in its lifetime, or made again by a write, never pays for it and keeps its zstd. Queued on a
+CPU, so it is made only for a kept copy asked for often enough to spread that cost thin: each
+kept copy counts its own compressed answers to clients that rank brotli first or tie it for first
+among the codings they take (a browser, or any other client that does), and the job is queued while
+the app prepares the one that makes 8,192 and three more for each byte of the page (26,564 for a
+page of 6,124 bytes), before it looks for that answer's own form. Spread over that many answers,
+the encoding took at most about 0.5% of their instructions for the bodies measured (1 to 32 KiB,
+under callgrind), and less for a copy asked for more often. The count spreads the cost; the answers
+before it do not repay it: a copy asked for exactly its due pays for the encoding and never sends a
+smaller answer. A copy asked for fewer times never pays for it and sends what it did before, zstd
+to a browser and brotli 1 to a client that takes brotli alone. A page made again, by a write or
+when its lifetime ends, is a new copy: it counts from none, and can reach its own due. Queued on a
 page's second answer instead, it took a workload whose every URL was asked for twice 110% more
 CPU cycles a request. An answer the store did not keep (in a full store, the first for a URL not asked
 for before), one that is not compressed (a `304`, a client that takes none, a body too small) or
 one to a client that ranks another coding higher does not count, and when the queue for kept pages
-is full the next answer that counts tries again. No answer waits for the encoding: the one that queues it,
+is full the next answer that counts tries again (a compression thread that could not be started
+is not tried again). No answer waits for the encoding: the one that queues it,
 and every answer until the thread is done, gets the form made for its coding, as before (a lookup may
 wait the moment the thread takes the store's lock to put the bytes in). From then on a client that
 ranks brotli as high as any coding, as a browser does, gets it in the place of zstd (on the catalog
