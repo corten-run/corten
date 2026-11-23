@@ -277,7 +277,7 @@ export function validateState(s, round, options) {
   if (s.benchPackage !== undefined) assert.equal(s.benchPackage, true, "bench package marker");
   // Saved reservations without this marker must regenerate the original job.
   if (s.quietBootstrap !== undefined)
-    assert.ok(s.quietBootstrap === true && dedicated && s.control?.monitor, "quiet bootstrap requires a supervised group");
+    assert.ok([true, "after-start"].includes(s.quietBootstrap) && dedicated && s.control?.monitor, "quiet bootstrap requires a supervised group");
   date(s.createdAt);
   assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected", "retired"].includes(s.status));
   if (["preparing", "starting", "running", "collected", "retired"].includes(s.status)) assert.ok(s.id && s.ip, "owned host identity missing");
@@ -578,6 +578,7 @@ test -s '${sshIngressSnapshot}'
 ${listSshIngress} | cmp -s -- '${sshIngressSnapshot}' -`;
 
 export const rootManagerDrainSeconds = 120;
+export const rootManagerCheckSeconds = 15;
 
 const rootManagerDropIn = "/run/systemd/system/user@0.service.d/90-corten-benchmark.conf";
 const rootManagerBinding = (s) => s.group && s.control?.monitor ? `/run/corten-bench-control-${s.token}/binding.json` : null;
@@ -626,6 +627,29 @@ export function remoteFiles(s) {
   // Dedicated group runners are system services. Their root SSH sessions need
   // logind scopes, not a user service manager. Leave any existing session alone.
   const marker = rootManagerBinding(s);
+  const afterStart = s.quietBootstrap === "after-start";
+  // Type=exec acknowledges this unit after exec. Anchor the host deadline to
+  // that event, not to how long metadata collection or scheduling happened to take.
+  const drain = afterStart ? `bootstrap_stage=root-manager-drain
+sample_manager() {
+  echo "root-manager: $1" >&2
+  timeout 5 systemctl show user@0.service --all --property=ActiveState,MainPID,ActiveEnterTimestampMonotonic
+}
+start_us=$(timeout 5 systemctl show ${s.unit} --property=ExecMainStartTimestampMonotonic --value)
+[[ "$start_us" =~ ^[1-9][0-9]{0,19}$ ]] || { echo "root-manager: missing unit start time" >&2; exit 1; }
+sample_manager before-drain
+python3 -I -c 'import sys,time
+start = int(sys.argv[1])
+elapsed = time.monotonic_ns() // 1000 - start
+if elapsed < 0: sys.exit("invalid unit start time")
+time.sleep(max(0, ${rootManagerDrainSeconds} - elapsed / 1000000))' "$start_us"
+sample_manager after-drain
+` : "";
+  const checkWindow = afterStart ? `python3 -I -c 'import sys,time
+elapsed = time.monotonic_ns() // 1000 - int(sys.argv[1])
+if not ${rootManagerDrainSeconds * 1_000_000} <= elapsed < ${(rootManagerDrainSeconds + rootManagerCheckSeconds) * 1_000_000}:
+    sys.exit("root-manager: idle proof outside post-start quiet window")' "$start_us"
+` : "";
   const loginPolicy = marker ? `bootstrap_stage=root-manager-policy
 ${rootManagerPolicy(marker)}systemctl daemon-reload
 ` : "";
@@ -641,7 +665,7 @@ ${observeRootManager}
   done'
 ` : "";
   const requireIdleUserManager = (stage) => `bootstrap_stage=${stage}
-timeout 15 bash -e -o pipefail -c '
+timeout ${rootManagerCheckSeconds} bash -e -o pipefail -c '
     test -f "$1" && test ! -L "$1" || exit 1
     test -f "$2" && test ! -L "$2" || exit 1
     cmp -s -- "$2" <(printf "%s\\n" "[Unit]" "$3")
@@ -677,7 +701,7 @@ bootstrap_stage=supervisor
 bootstrap_error() { local code=$?; trap - ERR; printf 'benchmark job failed: stage=%s line=%s exit=%s\\n' "$bootstrap_stage" "$1" "$code" >&2; return "$code"; }
 trap 'bootstrap_error "$LINENO"' ERR
 ${supervisorBootstrap(s.unit)}
-${s.quietBootstrap ? requireIdleUserManager("root-manager-idle") : ""}bootstrap_stage=cloud-init
+${drain}${s.quietBootstrap ? requireIdleUserManager("root-manager-idle") : ""}${checkWindow}bootstrap_stage=cloud-init
 timeout 900 cloud-init status --wait
 ${s.quietBootstrap ? "" : loginPolicy}# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
 bootstrap_stage=firmware-mask
