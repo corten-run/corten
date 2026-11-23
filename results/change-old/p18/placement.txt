@@ -1,0 +1,3 @@
+comparison change-old placement 18 workload old
+A base-p5904 a8c34ee1ef12ce45d7c4638094947f4e847fb97a6756304219489160cff7e8af
+B head-p5904 1f3ab9db853c493d467825b0fec07d3b4efc64cca887637ce8e19fab924b9743

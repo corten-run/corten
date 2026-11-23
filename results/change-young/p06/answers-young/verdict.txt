@@ -1,0 +1,3 @@
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 0 and 0; head 0 then 0 and 0 (range 0..15)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8

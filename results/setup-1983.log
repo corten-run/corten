@@ -1,0 +1,165 @@
+curl is already the newest version (8.14.1-2+deb13u7).
+libjemalloc2 is already the newest version (5.3.0-3).
+libjemalloc2 set to manually installed.
+ca-certificates is already the newest version (20250419+deb13u1).
+util-linux is already the newest version (2.41.5-0+deb13u1).
+The following additional packages will be installed:
+  binutils-common binutils-x86-64-linux-gnu bzip2 cpp cpp-14
+  cpp-14-x86-64-linux-gnu cpp-x86-64-linux-gnu dpkg-dev fakeroot g++ g++-14
+  g++-14-x86-64-linux-gnu g++-x86-64-linux-gnu gcc gcc-14
+  gcc-14-x86-64-linux-gnu gcc-x86-64-linux-gnu libalgorithm-diff-perl
+  libalgorithm-diff-xs-perl libalgorithm-merge-perl libasan8 libbabeltrace1
+  libbinutils libc-bin libc-dev-bin libc-l10n libc6 libc6-dev libcares2
+  libcc1-0 libcrypt-dev libctf-nobfd0 libctf0 libcurl3t64-gnutls
+  libdebuginfod-common libdebuginfod1t64 libdpkg-perl libdw1t64 libfakeroot
+  libfile-fcntllock-perl libgcc-14-dev libgdbm-compat4t64 libgomp1 libgprofng0
+  libhwasan0 libicu76 libisl23 libitm1 libjansson4 liblocale-gettext-perl
+  liblsan0 libluajit-5.1-2 libluajit-5.1-common libmpc3 libmpfr6 libngtcp2-16
+  libngtcp2-crypto-gnutls8 libnode115 libopencsd1 libperl5.40 libpkgconf3
+  libpython3.13 libquadmath0 libsframe1 libstdc++-14-dev libtraceevent1
+  libtsan2 libubsan1 libunwind8 linux-libc-dev locales make manpages-dev
+  node-acorn node-balanced-match node-brace-expansion node-cjs-module-lexer
+  node-corepack node-minimatch node-undici node-xtend nodejs-doc patch perl
+  perl-modules-5.40 pkgconf pkgconf-bin rpcsvc-proto
+Suggested packages:
+  binutils-doc gprofng-gui binutils-gold bzip2-doc cpp-doc gcc-14-locales
+  cpp-14-doc debian-keyring debian-tag2upload-keyring g++-multilib
+  g++-14-multilib gcc-14-doc gcc-multilib autoconf automake libtool flex bison
+  gdb gcc-doc gcc-14-multilib gdb-x86-64-linux-gnu libc-devtools glibc-doc git
+  bzr libstdc++-14-doc linux-doc-6.12 make-doc npm ed diffutils-doc perl-doc
+  libterm-readline-gnu-perl | libterm-readline-perl-perl
+  libtap-harness-archive-perl
+The following NEW packages will be installed:
+  binutils binutils-common binutils-x86-64-linux-gnu build-essential bzip2 cpp
+  cpp-14 cpp-14-x86-64-linux-gnu cpp-x86-64-linux-gnu dpkg-dev fakeroot g++
+  g++-14 g++-14-x86-64-linux-gnu g++-x86-64-linux-gnu gcc gcc-14
+  gcc-14-x86-64-linux-gnu gcc-x86-64-linux-gnu libalgorithm-diff-perl
+  libalgorithm-diff-xs-perl libalgorithm-merge-perl libasan8 libbabeltrace1
+  libbinutils libc-dev-bin libc6-dev libcares2 libcc1-0 libcrypt-dev
+  libctf-nobfd0 libctf0 libcurl3t64-gnutls libdebuginfod-common
+  libdebuginfod1t64 libdpkg-perl libdw1t64 libfakeroot libfile-fcntllock-perl
+  libgcc-14-dev libgdbm-compat4t64 libgomp1 libgprofng0 libhwasan0 libicu76
+  libisl23 libitm1 libjansson4 liblocale-gettext-perl liblsan0 libluajit-5.1-2
+  libluajit-5.1-common libmpc3 libmpfr6 libngtcp2-16 libngtcp2-crypto-gnutls8
+  libnode115 libopencsd1 libperl5.40 libpkgconf3 libpython3.13 libquadmath0
+  libsframe1 libstdc++-14-dev libtraceevent1 libtsan2 libubsan1 libunwind8
+  libzstd-dev linux-libc-dev linux-perf make manpages-dev node-acorn
+  node-balanced-match node-brace-expansion node-cjs-module-lexer node-corepack
+  node-minimatch node-undici node-xtend nodejs nodejs-doc patch perl
+  perl-modules-5.40 pkg-config pkgconf pkgconf-bin rpcsvc-proto wrk
+The following packages will be upgraded:
+  libc-bin libc-l10n libc6 locales
+4 upgraded, 91 newly installed, 0 to remove and 21 not upgraded.
+Need to get 132 MB of archives.
+After this operation, 500 MB of additional disk space will be used.
+apt-listchanges: Reading changelogs...
+Preconfiguring packages ...
+Adding 'diversion of /usr/bin/perf to /usr/bin/perf.wrapper by linux-perf'
+Adding 'diversion of /usr/share/bash-completion/completions/perf to /usr/share/bash-completion/completions/perf.wrapper by linux-perf'
+Adding 'diversion of /usr/share/man/man1/perf.1.gz to /usr/share/man/man1/perf.wrapper.1.gz by linux-perf'
+Generating locales (this might take a while)...
+Generation complete.
+update-alternatives: using /usr/bin/fakeroot-sysv to provide /usr/bin/fakeroot (fakeroot) in auto mode
+update-alternatives: using /usr/bin/g++ to provide /usr/bin/c++ (c++) in auto mode
+update-alternatives: using /usr/bin/nodejs to provide /usr/bin/js (js) in auto mode
+kernel.perf_event_paranoid = -1
+kernel.nmi_watchdog = 0
+info: downloading installer
+info: profile set to minimal
+info: default host tuple is x86_64-unknown-linux-gnu
+info: syncing channel updates for 1.100.0-x86_64-unknown-linux-gnu
+info: latest update on 2026-11-12 for version 1.100.0 (0ef1bc386 2026-11-09)
+info: downloading 3 components
+info: default toolchain set to 1.100.0-x86_64-unknown-linux-gnu
+
+  1.100.0-x86_64-unknown-linux-gnu installed - rustc 1.100.0 (0ef1bc386 2026-11-09)
+
+
+Rust is installed now. Great!
+
+To get started you may need to restart your current shell.
+This would reload your PATH environment variable to include
+Cargo's bin directory ($HOME/.cargo/bin).
+
+To configure your current shell, you need to source the
+corresponding env file under $HOME/.cargo.
+
+Consider running the right command for your shell (note the leading DOT):
+. "$HOME/.cargo/env" # For sh/ash/dash/pdksh/bash
+cargo:rerun-if-env-changed=CC_x86_64-unknown-linux-gnu
+CC_x86_64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=CC_x86_64_unknown_linux_gnu
+CC_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_CC
+HOST_CC = None
+cargo:rerun-if-env-changed=CC
+CC = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+cargo:rerun-if-env-changed=CPATH
+cargo:rerun-if-env-changed=C_INCLUDE_PATH
+cargo:rerun-if-env-changed=CPLUS_INCLUDE_PATH
+cargo:rerun-if-env-changed=OBJC_INCLUDE_PATH
+cargo:rerun-if-env-changed=OBJCPLUS_INCLUDE_PATH
+cargo:rerun-if-env-changed=COMPILER_PATH
+cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH
+cargo:rerun-if-env-changed=GCC_EXEC_PREFIX
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64_unknown_linux_gnu
+CFLAGS_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64-unknown-linux-gnu
+CFLAGS_x86_64-unknown-linux-gnu = None
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+v20.19.2
+/sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0
+/sys/devices/system/cpu/cpu1/topology/thread_siblings_list:1
+/sys/devices/system/cpu/cpu2/topology/thread_siblings_list:2
+/sys/devices/system/cpu/cpu3/topology/thread_siblings_list:3
+/sys/devices/system/cpu/cpu4/topology/thread_siblings_list:4
+/sys/devices/system/cpu/cpu5/topology/thread_siblings_list:5
+/sys/devices/system/cpu/cpu6/topology/thread_siblings_list:6
+/sys/devices/system/cpu/cpu7/topology/thread_siblings_list:7
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+shim: ab58393bd9478030afffc5a3dc5003536be1bd3d8cad0680ad999cc2df9f4011 15760 bytes
+pads: 60 objects, each one function of its size
+== base: 14126d2a8a12bccd173ec29032c1818d42904213, 14:14:39
+warning: `p1983` (bin "probe") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 55.56s
+warning: linker stderr: link-capture: /m/target-1983-base/release/build/p1983/79d2b2058a261d83/out/probe: 99 arguments, 69 inputs copied to /m/1983/capture/base
+base: the captured link run again unpadded is byte-identical to cargo's binary
+base 566e7f6d33882360249a062d5a9f97e9a5c116926641f425b4e2094e5f77f0bb 4605872 bytes
+base built in 56 s
+== head: 8d02090bfa2bae538394e3a36a6b941de844390c, 14:15:35
+warning: `p1983` (bin "probe") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 54.93s
+warning: linker stderr: link-capture: /m/target-1983-head/release/build/p1983/79d2b2058a261d83/out/probe: 99 arguments, 69 inputs copied to /m/1983/capture/head
+head: the captured link run again unpadded is byte-identical to cargo's binary
+head 5e20dd45d39330ae0a7721d2633a1a28b34c9c896b8be26125d51233ae965714 4606400 bytes
+head built in 55 s
+base pad 320 relinked again is byte-identical
+binaries of base and head with one sha256: 0 (0 unless the change compiles to the same code)
+90 placements: functions moved by exactly their pad 307800 of 307800; neighbours kept 301590 of 301590
+92 binaries; placements relinked in 46 s
+== layout-base-p320.txt
+.text: A 2370070 bytes at 0x15a0a0; B 2370390 bytes at 0x15a0a0 (B - A 320 bytes; pad 320)
+other sections moved: .init +320, .fini +320, .plt +320, .tdata +320, .tbss +320, .fini_array +320, .init_array +320, .data.rel.ro +320, .dynamic +320, .got +320, .got.plt +320, .relro_padding +320, .tm_clone_table +320, .data +320, .bss +320
+pad function: at 0x15a0a0, the start of .text
+all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +320 B: 3420; same offset in a 64-byte line: 3420, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+corten functions in both: 1723; moved by exactly the pad: 1723; not moved: 0; shifts: +320 B: 1723; same offset in a 64-byte line: 1723, in a 4 KiB page: 0; A's neighbours still next in B, in order: 1686 of 1686
+probe functions in both: 866; moved by exactly the pad: 866; not moved: 0; shifts: +320 B: 866; same offset in a 64-byte line: 866, in a 4 KiB page: 0; A's neighbours still next in B, in order: 865 of 865
+only in A: 0; only in B: 1 (corten_layout_pad)
+== layout-head-p320.txt
+.text: A 2370598 bytes at 0x15a0a0; B 2370918 bytes at 0x15a0a0 (B - A 320 bytes; pad 320)
+other sections moved: .init +320, .fini +320, .plt +320, .tdata +320, .tbss +320, .fini_array +320, .init_array +320, .data.rel.ro +320, .dynamic +320, .got +320, .got.plt +320, .relro_padding +320, .tm_clone_table +320, .data +320, .bss +320
+pad function: at 0x15a0a0, the start of .text
+all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +320 B: 3420; same offset in a 64-byte line: 3420, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+corten functions in both: 1723; moved by exactly the pad: 1723; not moved: 0; shifts: +320 B: 1723; same offset in a 64-byte line: 1723, in a 4 KiB page: 0; A's neighbours still next in B, in order: 1686 of 1686
+probe functions in both: 866; moved by exactly the pad: 866; not moved: 0; shifts: +320 B: 866; same offset in a 64-byte line: 866, in a 4 KiB page: 0; A's neighbours still next in B, in order: 865 of 865
+only in A: 0; only in B: 1 (corten_layout_pad)
+BUILD-DONE
+SETUP-DONE
+ALL-DONE-WRAPPER

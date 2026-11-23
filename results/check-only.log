@@ -1,0 +1,20 @@
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1983/results/check-only/aa-old/counts-old.csv; 2 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1983/results/check-only/change-old/counts-old.csv; 2 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 0 and 0; head 0 then 0 and 0 (range 0..15)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+young: done, /m/1983/results/check-only/aa-young/counts-young.csv; 2 starts, each with its Age in 0..15 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 0 and 0; head 0 then 0 and 0 (range 0..15)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+young: done, /m/1983/results/check-only/change-young/counts-young.csv; 2 starts, each with its Age in 0..15 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1983/results/check-only/unpadded-old/counts-old.csv; 2 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler

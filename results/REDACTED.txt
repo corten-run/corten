@@ -1,0 +1,5 @@
+Two changes were made to these results after they were collected, before they were published,
+neither to a count or a reading:
+1. The measuring host's name, as uname printed it, is replaced by (host) wherever it appeared.
+2. setup-1983.log, setup.sh's output, has its package manager's download and install lines
+   removed (672 lines before, 165 after); build.sh's output in it is as written.
