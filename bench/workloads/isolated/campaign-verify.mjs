@@ -2,7 +2,7 @@
 // provider ownership, operator authorization or independent human attestation.
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { campaignRounds, exact, groupCampaignSchema, jsonPhase, mixedPhase, validateCampaign as validatePlan } from "./campaign-contract.mjs";
+import { campaignRounds, exact, groupCampaignSchema, jsonPhase, mixedPhase, validateCampaign as validatePlan, verifyOfflineAuditClock } from "./campaign-contract.mjs";
 import { digest, inspectEvidence, phaseSnapshot, readRegular, supportedGroups, tree } from "./evidence.mjs";
 import { auditSubject, inspectPreparation, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
@@ -94,6 +94,8 @@ export async function validateCampaign(input) {
       const initial = read(`${id}/host-initial.json`);
       for (const field of ["hostname", "bootId"]) assert.equal(initial[field], controlHost[field]);
     }
+    if (offline) for (const wait of [replay.reviewNeeded, replay.mixedReviewNeeded])
+      if (wait) verifyOfflineAuditClock(wait.auditClock, controlHost?.bootId);
     if (offline && (status.state === "finished" || replay.offlineAuditExpired)) {
       assert.ok(controlHost);
       offlineTerminal = { ...controlHost, token: replay.controlAdmissions.get("bootstrap").binding.token, bootstrapSealSha256 };

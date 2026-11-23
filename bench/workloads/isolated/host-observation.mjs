@@ -24,6 +24,7 @@ export function processStat(stat) {
 
 const uptime = () => readFileSync("/proc/uptime", "utf8");
 const bootId = () => readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+export const sampleAuditClock = () => ({ bootId: bootId(), monoNs: String(process.hrtime.bigint()) });
 const t = (value) => {
   if (typeof value !== "string") return null;
   const match = /^(\d{1,12})\.(\d{2}) \d{1,15}\.\d{2}\n$/.exec(value);

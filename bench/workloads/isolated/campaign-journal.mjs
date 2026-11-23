@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { auditWaitMs, jsonPhase, mixedPhase } from "./campaign-contract.mjs";
+import { jsonPhase, mixedPhase, offlineAuditRemainingMs } from "./campaign-contract.mjs";
 import { supportedGroups } from "./evidence.mjs";
 import { executionGroups } from "./native-replay.mjs";
 import { liveGroup } from "./native-roles.mjs";
@@ -155,7 +155,7 @@ export function replayJournal(plan, id, events, status) {
           const group = plan.order[index], waiting = group === "json-api" ? reviewNeeded : mixedReviewNeeded;
           assert.ok(["json-api", "mixed-production"].includes(group) && waiting);
           assert.equal(event.group, group); assert.equal(event.subjectSha256, waiting.subjectSha256);
-          assert.ok(Date.parse(event.at) >= Date.parse(waiting.at) + auditWaitMs, "premature audit expiry");
+          assert.equal(offlineAuditRemainingMs(waiting.auditClock, event.auditClock, waiting.auditClock?.bootId), 0, "premature audit expiry");
           assert.ok(!auditStaged && !mixedAuditStaged && !command && !completed.size);
           assert.deepEqual([...controlAdmissions.keys()], ["bootstrap"]);
           assert.deepEqual(status.uncollectedNativeRoots, []);

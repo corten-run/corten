@@ -32,7 +32,7 @@ let lifetimeStartup;
 let lifetimeRun;
 let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSurvives, settleNativeFails;
 let liveOutput, compilerScratch;
-let offlineTest;
+let offlineTest, auditClock;
 const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
 const sourceStatus = (cwd) => sourceGit(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all");
 mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
@@ -111,6 +111,7 @@ function udevHost(observation) {
 }
 mock.module("./host-observation.mjs", { namedExports: {
   ...actualHost, udevSettleMs: 0,
+  sampleAuditClock: () => ({ ...auditClock }),
   observeHost(_apparatus, retainUdev = false) {
     observations++;
     if (mode === "udev-settle") {
@@ -329,6 +330,7 @@ async function offlineCampaign(t, group, packets = 2) {
   assert.equal(result.status, 0, result.stderr);
   const { binding, admission } = JSON.parse(result.stdout), s = setupGroup(group);
   s.plan.round = "r21"; admittedHost = admission.host; offlineTest = true;
+  auditClock = { bootId: admittedHost.bootId, monoNs: "5000000" };
   s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2" }, load: { cpuset: "3-7" } };
   const table = "corten_bench_native", tcpMatch = { match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 22 } };
   const policy = { nftables: [
@@ -427,7 +429,19 @@ for (const group of ["json-api", "mixed-production"]) test("offline audit expiry
   const waiting = await campaign.advance(handle);
   assert.equal(waiting.state, "blocked-review-needed", "untimed preparation may see denied probes");
   assert.throws(() => campaign.expireOfflineAudit(handle), /deadline has not expired/);
-  t.mock.timers.tick(contracts.auditWaitMs);
+  t.mock.timers.tick(contracts.auditWaitMs * 2);
+  assert.throws(() => campaign.expireOfflineAudit(handle), /deadline has not expired/, "a forward wall step must not expire the wait");
+  const bootId = auditClock.bootId;
+  auditClock = { bootId: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+    monoNs: String(BigInt(auditClock.monoNs) + BigInt(contracts.auditWaitMs) * 1000000n) };
+  assert.throws(() => campaign.expireOfflineAudit(handle), /audit clock boot differs/);
+  auditClock.bootId = bootId;
+  const completeNs = BigInt(auditClock.monoNs);
+  auditClock.monoNs = String(completeNs - 1n);
+  assert.equal(campaign.offlineAuditRemainingMs(handle), 1);
+  assert.throws(() => campaign.expireOfflineAudit(handle), /deadline has not expired/);
+  auditClock.monoNs = String(completeNs);
+  t.mock.timers.setTime(new Date("2026-11-21T00:00:00Z").valueOf());
   const prefix = group === "json-api" ? "json" : "mixed", inbox = join(handle.directory, prefix + "-audit-delivery-pending.json");
   writeFileSync(inbox, "{}");
   assert.throws(() => campaign.expireOfflineAudit(handle), /delivery may have started/);
@@ -450,9 +464,19 @@ for (const group of ["json-api", "mixed-production"]) test("offline audit expiry
   fs.unlinkSync(inbox);
   const expiry = retained.manifest.entries.find(({ path }) => /^\d{5}-offline-audit-expired\.json$/.test(path));
   const expiryPath = join(handle.directory, expiry.path), terminal = JSON.parse(readFileSync(expiryPath));
-  terminal.at = new Date(Date.parse(terminal.at) - 1).toISOString();
+  const goodClock = { ...terminal.auditClock };
+  terminal.auditClock.monoNs = String(BigInt(goodClock.monoNs) - 1n);
   writeFileSync(expiryPath, JSON.stringify(terminal)); reseal();
   assert.equal((await validate()).status, "invalid", "rehashing cannot authorize an early expiry");
+  terminal.auditClock = { ...goodClock, bootId: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff" };
+  writeFileSync(expiryPath, JSON.stringify(terminal)); reseal();
+  assert.equal((await validate()).status, "invalid", "rehashing cannot join samples from different boots");
+  const waitingEvent = retained.manifest.entries.find(({ path }) => /^\d{5}-(?:mixed-)?review-needed\.json$/.test(path));
+  const waitPath = join(handle.directory, waitingEvent.path), wait = JSON.parse(readFileSync(waitPath));
+  wait.auditClock.bootId = terminal.auditClock.bootId;
+  writeFileSync(waitPath, JSON.stringify(wait));
+  reseal();
+  assert.equal((await validate()).status, "invalid", "two samples on a different boot cannot qualify the admitted host");
 });
 
 test("v5 browser campaign carries the native roles through streamed bookends and saved drain replay", async (t) => {

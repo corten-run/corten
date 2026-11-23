@@ -1,6 +1,6 @@
 // Exercise the real host entry; only native work and privileged observations are faked.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
@@ -11,8 +11,13 @@ let fixture;
 mock.module("./campaign-contract.mjs", { exports: { ...contracts, bindGroupCampaign: (input) => input } });
 mock.module("./control-admission.mjs", { exports: {
   bootstrapControl: () => ({ ...binding, offlineHandoff: true }),
-  waitControlAdmission: async (control, epoch) => {
+  waitControlAdmission: async (control, epoch, options) => {
     assert.deepEqual(control, binding);
+    if (epoch.startsWith("audit-")) {
+      assert.equal(options.deadline, Infinity);
+      assert.equal(options.signal.aborted, false);
+      if (fixture.expireDuringAdmission) fixture.expire = true;
+    }
     fixture.steps.push("admit:" + epoch);
     return fixture.apparatus ? { apparatus: {} } : {};
   },
@@ -53,12 +58,21 @@ mock.module("./campaign.mjs", { exports: { createCampaign({ authorize }) {
     },
     recordControlAdmission() { fixture.steps.push("drained"); },
     submitJsonAudit: submit, submitMixedAudit: submit,
+    offlineAuditRemainingMs(handle) {
+      assert.equal(handle, fixture.handle);
+      if (fixture.badBoot) throw new Error("offline audit clock boot differs");
+      return fixture.expire ? 0 : contracts.auditWaitMs;
+    },
     expireOfflineAudit(handle) {
       assert.equal(handle, fixture.handle);
       fixture.steps.push("expire"); fixture.state = "preserved-uncertain";
       return { status: status() };
     },
     collect() { fixture.steps.push("collect"); return { status: status() }; },
+    stop(handle) {
+      assert.equal(handle, fixture.handle);
+      fixture.steps.push("stop");
+    },
   };
 } } });
 mock.module("./campaign-verify.mjs", { exports: { async validateCampaign() {
@@ -75,6 +89,8 @@ for (const group of ["localized-marketplace", "json-api", "mixed-production"]) {
     const handle = { id: "r21-0123456789abcdef", directory: join(root, "r21-0123456789abcdef") };
     mkdirSync(handle.directory);
     fixture = { group, handle, steps: [], connected: true, state: "active" };
+    let wallReads = 0;
+    t.mock.method(Date, "now", () => fixture.state === "blocked-review-needed" ? wallReads++ * contracts.auditWaitMs * 2 : 0);
     // Simulate loss of the original connection at the proven admission boundary.
     const steps = fixture.steps;
     steps.push = function (value) {
@@ -84,6 +100,7 @@ for (const group of ["localized-marketplace", "json-api", "mixed-production"]) {
     assert.equal(await runCampaignEntry(["r21", "--commit", binding.commit, "--state-dir", "/bench/campaign", "--group", group]), 0);
     assert.deepEqual([...steps], ["admit:bootstrap", "activate", "begin", ...(group === "localized-marketplace"
       ? [] : ["admit:audit-" + group, "drained", "submit"]), "finish", "collect", "replay"]);
+    assert.equal(wallReads, 0, "a forward wall step is not an offline audit deadline");
   });
 }
 
@@ -93,15 +110,26 @@ test("an offline audit wait writes a terminal failure manifest and returns 2 wit
   const handle = { id: "r21-0123456789abcdef", directory: join(root, "r21-0123456789abcdef") };
   mkdirSync(handle.directory);
   fixture = { group: "json-api", handle, steps: [], state: "active", expire: true };
-  let now = 0;
-  t.mock.method(Date, "now", () => {
-    if (fixture.state === "blocked-review-needed") now += contracts.auditWaitMs;
-    return now;
-  });
+  t.mock.method(Date, "now", () => 0);
   assert.equal(await runCampaignEntry(["r21", "--commit", binding.commit, "--state-dir", "/bench/campaign", "--group", fixture.group]), 2);
   assert.deepEqual(fixture.steps, ["admit:bootstrap", "activate", "begin", "expire"]);
   const manifest = JSON.parse(readFileSync(join(handle.directory, "collection-manifest.json"), "utf8"));
   assert.equal(manifest.status.state, "preserved-uncertain");
+});
+
+for (const [fault, reason] of [
+  ["badBoot", /offline audit clock boot differs/],
+  ["expireDuringAdmission", /offline audit admission reached the deadline/],
+]) test("offline audit entry preserves uncertain custody: " + fault, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "corten-offline-handoff-"));
+  t.after(() => rmSync(root, { recursive: true }));
+  const handle = { id: "r21-0123456789abcdef", directory: join(root, "r21-0123456789abcdef") };
+  mkdirSync(handle.directory);
+  fixture = { group: "json-api", handle, steps: [], state: "active", [fault]: true };
+  await assert.rejects(runCampaignEntry(["r21", "--commit", binding.commit, "--state-dir", "/bench/campaign", "--group", fixture.group]), reason);
+  assert.deepEqual(fixture.steps, ["admit:bootstrap", "activate", "begin", ...(fixture.expireDuringAdmission ? ["admit:audit-json-api"] : []), "stop"]);
+  assert.equal(existsSync(join(handle.directory, "collection-manifest.json")), false);
+  assert.equal(existsSync(join(handle.directory, "json-audit-delivery.json")), false);
 });
 
 test("an offline handoff must not silently adopt a stream apparatus", async () => {
