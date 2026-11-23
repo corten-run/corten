@@ -8017,7 +8017,6 @@ rules something out.
     KiB: as `corten new`'s Dockerfile runs an app, each job faults in about a megabyte of brotli's
     tables afresh, a cost that does not grow with the body and that callgrind, which counts user
     space, does not see.
-
     So the job is queued by a count that makes it pay for itself in the workload that triggers it
     (`kept::due`): 8,192 answers to clients that rank brotli first, and three more for each byte
     of the body. Its instructions, by the probe under callgrind for bodies of 1 to 32 KiB (a table
@@ -8059,14 +8058,13 @@ rules something out.
     gives no job), `churn`, in which every URL is new and asked for exactly its due, 26,564 times,
     so that each URL's last answer queues its job, and the four workloads of the runs before
     (`browser`, `gzip`, `refused`, `json-browser`), each warmed to its due. A bound at or over +1%
-    on any, or a run that cannot be used, blocks the merge.
-
-    The first two runs on a quiet host did not count
-    user first-level instruction-cache misses, which CONTRIBUTING.md asks for as a diagnostic when
-    code is added or moved: each turn counted `cycles:u`, `cycles:k` and `instructions:u` alone,
+    on any, or a run that cannot be used, blocks the merge. The first two runs on a quiet host did
+    not count user first-level instruction-cache misses, which CONTRIBUTING.md asks for as a
+    diagnostic when code is added or moved: each turn counted `cycles:u`, `cycles:k` and
+    `instructions:u` alone,
     so that no turn's counters were multiplexed and perf ran all three for the whole of every turn;
     the simulated instruction misses above (callgrind's, 1,811 against 1,798 an answer) are another
-    measure and do not stand in for them, and the third to sixth runs' second passes count
+    measure and do not stand in for them, and the third to seventh runs' second passes count
     them. Each workload's 100 per-pair changes in the first four runs are listed in the description of
     [#1846 Send a kept page in brotli 5, made off the request after its second answer](https://github.com/corten-run/corten/pull/1846),
     and the fifth and sixth runs' are in their results under their tags.
