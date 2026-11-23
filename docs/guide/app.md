@@ -1591,7 +1591,9 @@ page stands is the app's to say. Give a page whose changes must show at once a s
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
 counted is each page's key (its URL once, its `Host`, and its `Accept-Language` where the page
 varies on it), headers and body and each compressed form made of it, with an allowance for what
-holds them. Earlier releases counted the URL twice, so under the same bound a page with a long
+holds them. The allowance is generous: under jemalloc, the template's allocator, a kept page of
+6,124 bytes takes about 7,200 bytes of memory in all and counts for about 7,800. Earlier
+releases counted the URL twice, so under the same bound a page with a long
 URL near its share (an eighth of the bound) may now be kept where it was not, and the store
 reaches the point where it is full a little later. Past the bound, a page not read since room was last made goes
 first. With room, every page is kept the first time it is made. Once the kept pages are within
