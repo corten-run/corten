@@ -36,9 +36,27 @@ export function offlineAuditRemainingMs(waiting, now, bootId) {
   const remainingNs = BigInt(auditWaitMs) * 1000000n - elapsed;
   return remainingNs > 0n ? Number((remainingNs + 999999n) / 1000000n) : 0;
 }
-export function verifyOfflineAuditStart(sample, bootstrap) {
-  assert.ok(verifyOfflineAuditClock(sample, bootstrap.host.bootId) >= BigInt(bootstrap.closedMonoNs),
-    "offline audit wait predates bootstrap closure");
+export function verifyOfflineAuditStart(sample, bootstrap, preparation) {
+  const bootId = bootstrap.host.bootId;
+  const start = verifyOfflineAuditClock(sample, bootId);
+  const closed = verifyOfflineAuditClock({ bootId, monoNs: bootstrap.closedMonoNs }, bootId);
+  assert.ok(start >= closed, "offline audit wait predates bootstrap closure");
+  if (preparation) {
+    // These are the same host boundaries used to prove cleanup, not the
+    // review or journal's wall time. A settled census supersedes the first.
+    const { before, after, settled, terminalClock } = preparation;
+    const observed = (host) => verifyOfflineAuditClock({ bootId: host.bootId, monoNs: host.offlineMonoNs }, bootId);
+    const first = observed(before), last = observed(after);
+    assert.ok(closed <= first && first <= last, "offline audit preparation clock is out of order");
+    assert.deepEqual(after.terminalClock, terminalClock, "offline audit terminal clock differs from sealed lifetime");
+    if (terminalClock) {
+      const terminal = verifyOfflineAuditClock({ bootId: terminalClock.bootId, monoNs: terminalClock.monoNs }, bootId);
+      assert.ok(first <= terminal && terminal <= last, "offline audit terminal clock is outside preparation");
+    }
+    const end = settled ? observed(settled) : last;
+    assert.ok(last <= end, "offline audit settled clock predates the first cleanup census");
+    assert.ok(end <= start, "offline audit wait predates preparation completion");
+  }
 }
 export { campaignRounds };
 export function bindCampaign(input) {

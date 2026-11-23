@@ -94,8 +94,7 @@ export async function validateCampaign(input) {
       const initial = read(`${id}/host-initial.json`);
       for (const field of ["hostname", "bootId"]) assert.equal(initial[field], controlHost[field]);
     }
-    if (offline) for (const wait of [replay.reviewNeeded, replay.mixedReviewNeeded])
-      if (wait) verifyOfflineAuditStart(wait.auditClock, offlineBootstrap);
+    if (offline && replay.mixedReviewNeeded) verifyOfflineAuditStart(replay.mixedReviewNeeded.auditClock, offlineBootstrap);
     if (offline && (status.state === "finished" || replay.offlineAuditExpired)) {
       assert.ok(controlHost);
       offlineTerminal = { ...controlHost, token: replay.controlAdmissions.get("bootstrap").binding.token,
@@ -124,6 +123,7 @@ export async function validateCampaign(input) {
     for (const recorded of replay.phases.values()) for (const path of recorded.logs)
       assert.ok(subtree.entries.some((e) => e.path === path && e.type === "file"), "command log missing");
     const manifests = new Map();
+    let offlinePreparation;
     for (const entry of phaseDirectories) {
       const index = Number(entry.path.slice(0, 2)), group = plan.order[index], phase = entry.path.endsWith("-prepare") ? "prepare" : "timing";
       assert.equal(entry.path, `${String(index).padStart(2, "0")}-${group}-${phase}`);
@@ -174,8 +174,10 @@ export async function validateCampaign(input) {
         if (observation.status !== "verified") blockers.push(`${group}/${phase}: host observations incomplete`);
       }
       if (hostBefore) {
+        let after, settled;
+        const terminalClock = hostObservations.at(recorded.results.length - 1)?.terminalClock;
         try {
-          const after = read(`${id}/${entry.path}/host-after.json`);
+          after = read(`${id}/${entry.path}/host-after.json`);
           if (offline) assert.equal(after.controlApparatus, undefined);
           const settlePath = `${entry.path}/host-after-settled.json`;
           if (subtree.entries.some((e) => e.path === settlePath)) {
@@ -183,15 +185,17 @@ export async function validateCampaign(input) {
             const lifetime = hostObservations.at(recorded.results.length - 1);
             assert.ok(settlePolicy && recorded.results.length === recorded.invocations.length && lifetime?.status === "verified"
               && lifetime.cleanupComplete && lifetime.terminalClock, "udev settle lacks an eligible sealed terminal lifetime");
-            const settled = read(`${id}/${settlePath}`);
+            settled = read(`${id}/${settlePath}`);
             if (offline) assert.equal(settled.controlApparatus, undefined);
             if (streamSeal) assert.ok(BigInt(settled.controlApparatus.sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
             boundary = verifySettledHostBoundary(hostBefore, after, settled, lifetime.terminalClock, settlePolicy, offline);
           } else boundary = verifyHostBoundary(hostBefore, after);
         }
         catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
-        if ((status.executionVersion === 5 || offline) && phase === "prepare" && replay.reviewNeeded)
+        if ((status.executionVersion === 5 || offline) && phase === "prepare" && replay.reviewNeeded) {
           assert.ok(boundary && isDeepStrictEqual(replay.reviewNeeded.cleanup, boundary), "JSON preparation cleanup boundary differs");
+          if (offline) offlinePreparation = { before: hostBefore, after, settled, terminalClock };
+        }
         if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }
       }
       const manifestEntry = subtree.entries.find((e) => e.path === `${entry.path}/native-manifest.json`);
@@ -257,6 +261,10 @@ export async function validateCampaign(input) {
       }
     }
     if (replay.reviewNeeded) {
+      if (offline) {
+        assert.ok(offlinePreparation, "offline audit preparation boundary missing");
+        verifyOfflineAuditStart(replay.reviewNeeded.auditClock, offlineBootstrap, offlinePreparation);
+      }
       const subject = read(`${id}/json-audit-subject.json`), sourceRoot = join(folder, id, "audit-sources");
       const sources = subject.sourcesManifest;
       assert.ok(isDeepStrictEqual(sources.snapshot, tree(sourceRoot)), "audit source snapshot differs");

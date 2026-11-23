@@ -53,9 +53,12 @@ export function createCampaign({ authorize }) {
     c.sequence++;
     return value;
   }
-  function waitForAudit(c, kind, data) {
+  function waitForAudit(c, kind, data, preparation) {
     const auditClock = c.offlineHandoff ? sampleAuditClock() : undefined;
-    if (c.offlineHandoff) verifyOfflineAuditStart(auditClock, c.offlineBootstrap);
+    if (c.offlineHandoff) {
+      assert.equal(!!preparation, kind === "review-needed", "offline audit preparation boundary missing or unexpected");
+      verifyOfflineAuditStart(auditClock, c.offlineBootstrap, preparation);
+    }
     c.state = "blocked-review-needed";
     c.reviewWait = event(c, kind, { ...data, ...(auditClock ? { auditClock } : {}) });
   }
@@ -235,6 +238,7 @@ export function createCampaign({ authorize }) {
     c.stream?.close();
     p.cleanup = settled ? verifySettledHostBoundary(before, after, settled, terminalClock, settlePolicy, c.offlineHandoff)
       : verifyHostBoundary(before, after);
+    if (c.offlineHandoff && phaseName === "prepare") p.offlinePreparation = { before, after, settled, terminalClock };
     return p;
   }
   function cancelled(c, phase, signal) {
@@ -338,7 +342,8 @@ export function createCampaign({ authorize }) {
             const subject = auditSubject(c.plan, prepared, p.manifest, sources, images);
             c.audit = { subject, sourceRoot, prepared, accepted: false, phase: p };
             save(c, "json-audit-subject.json", subject);
-            waitForAudit(c, "review-needed", { subjectSha256: subject.subjectSha256, nativeExit: 1, qualification: "blocked", cleanup: p.cleanup });
+            waitForAudit(c, "review-needed", { subjectSha256: subject.subjectSha256, nativeExit: 1, qualification: "blocked", cleanup: p.cleanup },
+              p.offlinePreparation);
             return status(c);
           }
         } else {
