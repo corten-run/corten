@@ -16,6 +16,7 @@ import { continuationPeer, fleetChildOptions as childOptions, fleetRoot, present
   recheckCollectedGroup, supervisedHost, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { groupNames } from "./registry.mjs";
+import { acknowledgedBootstrapSeal } from "./cloud-control-runtime.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const ownPaths = ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs", "group-continuation.mjs"].map((name) => `bench/workloads/${name}`);
@@ -37,7 +38,7 @@ export function parseFleetArgs(args) {
     "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--approve-reviewed-merged-ready": "approval" };
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]; assert.ok(!seen.has(flag), "fleet-option"); seen.add(flag);
-    if (["--prepare", "--detach", "--admit-remaining", "--collect", "--print-approval"].includes(flag)) o[flag.slice(2)] = true;
+    if (["--prepare", "--detach", "--admit-remaining", "--collect", "--print-approval", "--offline-handoff"].includes(flag)) o[flag.slice(2)] = true;
     else {
       assert.ok(Object.hasOwn(values, flag), "fleet-option");
       const value = args[++i]; assert.ok(value && !value.startsWith("--"), "fleet-option"); o[values[flag]] = value;
@@ -51,6 +52,7 @@ export function parseFleetArgs(args) {
     o.root = join(o.continuationRoot, o.group);
   } else assert.equal(o.group, undefined, "group requires a continuation root");
   fleetRoot(o.root);
+  if (o["offline-handoff"]) assert.ok(o.prepare && o.continuationRoot, "offline handoff must be selected at single-group preparation");
   if (o.prepare) {
     full(o.commit, /[a-f0-9]{40}/, "fleet-source"); full(o.sshKey, /[1-9]\d*/, "fleet-key");
     providerIdentity({ accountId: o.accountId, context: o.context });
@@ -234,6 +236,7 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
   if (launching) {
     requireStagedFleet(fleet.manifest);
     if (fleet.manifest.single) assert.ok(continuation && mode === "detach", "use continuation detach for an independent group");
+    if (fleet.manifest.single?.offlineHandoff) assert.ok(!continuation.subject.peers?.length, "offline handoff requires no live peer");
   }
   let deferred = false;
   if (mode === "collect" && present(join(root, "launch-intent.json")) && !present(join(root, "remaining-intent.json"))) {
@@ -340,6 +343,7 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
     assert.ok(!continuation.rows.some((r) => r.unresolved), "continuation has unresolved custody or invalid evidence");
     const slot = continuation.slots.get(options.group);
     if (options.prepare) {
+      if (options["offline-handoff"]) assert.ok(!continuation.subject.peers?.length, "offline handoff requires no live peer");
       const superseding = continuation.unlaunched.has(slot?.root) && options.commit !== slot.manifest.commit;
       assert.ok(row.outcome === "missing" || row.retryable || superseding, "group already reserved; never allocate again");
       requireSetupRetryCommit(row.attempts, options.commit);
@@ -410,7 +414,8 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
     try {
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       const provider = { accountId: options.accountId, context: options.context };
-      const single = continuation && { group: options.group, indexSha256: continuation.indexSha256, checkout: repo };
+      const single = continuation && { group: options.group, indexSha256: continuation.indexSha256, checkout: repo,
+        ...(options["offline-handoff"] ? { offlineHandoff: true } : {}) };
       const region = await readPlacement(provider, placement, undefined, { staged: true, group: single?.group });
       const used = new Set(), token = () => { let v; do { v = randomBytes(8).toString("hex"); } while (used.has(v)); used.add(v); return v; };
       const manifest = fleetPlan({ round: options.round, commit: options.commit, token: token(),
@@ -491,6 +496,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       write(JSON.stringify(row)); return row;
     };
     const launching = options.detach || options["admit-remaining"];
+    const offline = repeated.fleet.manifest.single?.offlineHandoff === true;
     const admittedIds = new Set(), admittedIps = new Set(), supervised = new Map();
     const claimHost = (group, proof) => {
       if (!proof) return false;
@@ -536,13 +542,19 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
           && /^[a-f0-9]{64}$/.test(state.retirement.evidenceSha256);
         const consistent = saved?.outcome === "available" && (launching
           ? code === 3 && state.status === "running" && state.id && state.ip && !state.deletionIntentAt && !state.destroyedAt
-            && bootstrap && (options["admit-remaining"] ? claimHost(job.group, closed)
+            && bootstrap && (!offline || state.control.sealed.includes("bootstrap") && acknowledgedBootstrapSeal(state.control.ledger))
+            && (options["admit-remaining"] ? claimHost(job.group, closed)
               : !admittedIds.has(state.id) && !admittedIps.has(state.ip))
           : code === 3 ? state.status === "running"
-          : retired || [0, 1].includes(code) && state.status === "collected" && state.destroyedAt && state.exitCode === code
+          : retired || [0, 1].includes(code) && state.status === "collected" && state.destroyedAt
+            && (state.exitCode === code || offline && code === 1 && state.exitCode === 2 && state.validation?.status === "blocked")
             && (code === 0 ? state.validation?.status === "verified" : ["failed", "blocked"].includes(state.validation?.status)));
         if (!consistent) Object.assign(row, { outcome: "error", error: "group-state-invalid" });
         else if (closed) row.collection = "separate-child-approval-required";
+        else if (launching && offline) {
+          row.handoff = "acknowledged"; row.collection = "separate-child-approval-required";
+          admittedIds.add(state.id); admittedIps.add(state.ip);
+        }
         else if (launching) { admittedIds.add(state.id); admittedIps.add(state.ip); }
         else if (retired) row.outcome = `${state.retirement.kind}-retired`;
       }
@@ -582,7 +594,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
           const done = operate(job, stopped, watch ? (proof) => {
             if (!claimHost(job.group, proof)) stopped = "prior-admission-failed";
             ready.resolve();
-          } : continuation?.onReady,
+          } : offline ? undefined : continuation?.onReady,
           watch ? () => { stopped ??= "prior-admission-failed"; } : undefined).then((value) => {
             settled[i] = { status: "fulfilled", value };
             if (!["pending", "deferred", "verified"].includes(value.outcome)) stopped ??= "prior-admission-failed";

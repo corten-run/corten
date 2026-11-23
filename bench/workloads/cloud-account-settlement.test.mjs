@@ -219,7 +219,7 @@ test("a reset after bootstrap sequence 5 does not replay provisioning", { timeou
 });
 
 test("typed proof rejects wrong nonce/sequence/grammar/version and unexpected exit", { timeout: 60000 }, async (t) => {
-  for (const mode of ["nonce", "sequence", "extra", "diagnostic", "disposition", "version", "duplicate", "exit", "disconnect", "exit2", "withhold-exit", "deadline-exit", "parent-clock", "parent-clock-exit"]) await t.test(mode, async (t) => {
+  for (const mode of ["nonce", "sequence", "extra", "diagnostic", "disposition", "version", "duplicate", "exit", "disconnect", "exit2", "withhold-exit", "parent-clock", "parent-clock-exit"]) await t.test(mode, async (t) => {
     const a = await api(t, "http503"); let altered = false; const clock = Date.now;
     const w = worker(t, a, { mode, receive(message) {
       if (message.schema !== "cloud-provider-account-failed/v2") return message;
@@ -240,10 +240,35 @@ test("typed proof rejects wrong nonce/sequence/grammar/version and unexpected ex
     } });
     a.arm(false); assert.equal((await w.run(account, 15000)).status, 0); a.arm(true);
     try {
-      await assert.rejects(w.run(account, mode === "deadline-exit" ? 250 : 2000), (error) => error.controlUncertain === true);
+      await assert.rejects(w.run(account, 2000), (error) => error.controlUncertain === true);
       await assert.rejects(w.run.close(), (error) => error.controlUncertain === true);
     } finally { Date.now = clock; }
     assert.ok(altered); assert.equal(w.state().requests, 2);
+  });
+});
+
+test("account settlement requires a clean exit strictly before the request deadline", async (t) => {
+  for (const atDeadline of [false, true]) await t.test(atDeadline ? "at deadline" : "one millisecond before", async (t) => {
+    const a = await api(t, "http503"), budget = 15000, start = Date.now();
+    let now = start, proofAtExit = false;
+    t.mock.method(Date, "now", () => now);
+    // This fixture listener runs just before the controller observes the real child exit.
+    const w = worker(t, a, { onExit() {
+      proofAtExit = w.messages.some((m) => m.schema === "cloud-provider-account-failed/v2" && m.disposition === "resources-closed");
+      now = start + budget - (atDeadline ? 0 : 1);
+    } });
+    a.arm(false); assert.equal((await w.run(account, budget)).status, 0); a.arm(true);
+    // Only the exit handler sees the boundary; the later close check cannot substitute for it.
+    w.child.once("exit", () => { now = start + budget - 1; });
+    if (atDeadline) {
+      await assert.rejects(w.run(account, budget), (error) => error.controlUncertain === true);
+      await assert.rejects(w.run.close(), (error) => error.controlUncertain === true);
+    } else {
+      await assert.rejects(w.run(account, budget), (error) => failed(error, "account-http"));
+      await w.run.close();
+    }
+    assert.ok(proofAtExit); assert.equal(w.child.exitCode, 0); assert.equal(w.child.signalCode, null);
+    assert.equal(w.state().requests, 2);
   });
 });
 

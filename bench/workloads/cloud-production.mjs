@@ -10,7 +10,7 @@ import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
-import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, launchHostKey, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
+import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, interruptedFirstUpload, launchHostKey, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
@@ -110,14 +110,15 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
         registrationSha256: saved.control.monitor.registrationSha256, sealSha256: terminal.sealSha256, campaign: terminal.campaign,
         archiveSha256: options.exitArchiveSha256, policy: "collect-one-sealed-exit-archive-with-measured-replay" };
     } else if (options.unusedBootstrapKnownHosts !== undefined) {
-      const settled = settledBootstrap(saved, join(physicalRequest, `groups-${options.round}`));
-      assert.ok(settled || unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op, unless the upload prefix is settled");
-      if (settled) assert.equal(saved.commit, head, "settled uploads require the measured checkout");
+      const local = join(physicalRequest, `groups-${options.round}`), settled = settledBootstrap(saved, local), interrupted = interruptedFirstUpload(saved, local);
+      assert.ok(settled || interrupted || unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op, a settled upload prefix, or the unacknowledged first job upload");
+      if (settled || interrupted) assert.equal(saved.commit, head, "bootstrap uploads require the measured checkout");
       else if (saved.commit !== head) await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
       const key = regular(options.unusedBootstrapKnownHosts, 1024 * 1024);
       assert.ok(key.length, "verified host key required");
+      if (interrupted) assert.ok(launchHostKey(local, saved).equals(key), "verified key differs from launch");
       recovery = { measuredCommit: saved.commit, hostId: saved.id, ip: saved.ip, knownHostsSha256: digest(key),
-        policy: settled ? "settled-uploads-unused-only-no-qualification" : "first-ssh-unused-only-no-qualification" };
+        policy: interrupted ? "unacknowledged-first-upload-never-written-only" : settled ? "settled-uploads-unused-only-no-qualification" : "first-ssh-unused-only-no-qualification" };
     } else if (options.cancelMixedWait) {
       ownedMixedWait(saved); assert.equal(saved.status, "running");
       for (const key of ["mixedCancellation", "archiveSha256", "evidence", "deletionIntentAt", "collectedAt"]) assert.equal(saved[key], undefined);
@@ -235,6 +236,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     if (manifest.single) {
       const root = dirname(fleet.root), { indexSha256, group } = manifest.single;
       assert.equal(intent.subject.continuation?.indexSha256, indexSha256, "continuation approval required");
+      if (manifest.single.offlineHandoff) assert.ok(!intent.subject.continuation.peers?.length, "offline handoff requires no live peer");
       assert.equal(continuationIndexSha256(root), indexSha256, "continuation index changed");
       assert.deepEqual(JSON.parse(regular(join(root, ".continuation-operation.lock"), 1024)), { pid: process.pid, group },
         "group launch requires the active continuation lock");
@@ -277,6 +279,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       if (historicalIds.size) assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
       const root = dirname(current.fleetRoot), { indexSha256, indexedCustody, peers } = current.subject.continuation;
       const currentPeers = recheckContinuationPeers(root, indexSha256, manifest.provider, options.group, peers);
+      if (manifest.single.offlineHandoff) assert.deepEqual(currentPeers, [], "offline handoff requires no live peer");
       if (beforeCreate === true) {
         recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
         const checks = unconfirmed.filter((row) => row.root !== undefined).map((row) => recheckSetupAttempt(root, row, manifest));

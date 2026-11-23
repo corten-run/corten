@@ -88,18 +88,67 @@ backend.
    marked TODO. Corten offers nothing for it yet: building on a draft means rewriting with each
    revision (Values 2).
 
-   An app can offer a tool today from a function its component's markup calls, in the
-   `#[component(js)]` script, with `document.modelContext.registerTool(.., { signal })`, so the
-   tool goes away with the component. Nothing in Corten needs to change for that.
+   It was reviewed again on 2026-11-23 (Corten `14126d2a8`), when one of the conditions set for
+   that came true: a major agent calls it. ChatGPT's desktop app finds and calls a page's tools
+   in its built-in browser, those a script registers and those written as attributes on a form
+   ([Site tools](https://learn.chatgpt.com/docs/webmcp)). The draft of that day is still a
+   Community Group report that is not on the Standards Track, and the form attributes are not in
+   it at all: `tooldescription`, `toolautosubmit`, `toolparamdescription` and the submit event's
+   `agentInvoked` and `respondWith()` occur nowhere in its text. They are proposed in the group's
+   explainer
+   ([declarative-api-explainer.md](https://github.com/webmachinelearning/webmcp/blob/main/declarative-api-explainer.md)),
+   which leaves how a form's controls become a schema as a TODO ("Chromium is implementing a
+   loose version of this") and says that what a form answers the agent with is under debate. It
+   is still one engine, Chromium: the group lists origin trials in Chrome (from 149) and Edge
+   (from 150)
+   ([implementation-status.md](https://github.com/webmachinelearning/webmcp/blob/main/implementation-status.md)),
+   and Chromium has it off without a flag (159). Mozilla's position is neutral
+   ([mozilla/standards-positions#1412 WebMCP](https://github.com/mozilla/standards-positions/issues/1412))
+   and WebKit's is to oppose it
+   ([WebKit/standards-positions#670 WebMCP](https://github.com/WebKit/standards-positions/issues/670)).
+   So Corten still offers nothing of its own.
 
-   The part Corten would own is the declarative form, where an annotated `<form>` is the tool:
-   `html!` could write the tool's name and field descriptions from the form's
-   `#[derive(Fields)]` struct, with no script, and the agent would use the form's own path
-   (session cookie, same-origin check, `SubmitKey`, `req.invalid`). To settle then: whether the
-   agent gets the patch or the data-mode JSON back; the styling hooks the draft proposes for a
-   form an agent is filling (`:tool-form-active`, `:tool-submit-active`); and a smoke check in
-   a browser that has it. Revisit when the declarative section is written and a second engine
-   ships it, or a major agent calls it
+   What an app can do today was tried that day in Chromium 159 (Playwright 1.65.1's build,
+   started with `--enable-features=WebMCP`), on plain pages and on ui-gallery's forms. Each call
+   was made from the page's own script with `document.modelContext.executeTool`, so a result
+   below is what that returned: no agent was run, and what ChatGPT's browser hands its model
+   was not seen.
+
+   1. A tool from script: a function its component's markup calls, in the `#[component(js)]`
+      script, calls `document.modelContext.registerTool(tool, { signal })`, so the tool goes
+      away with the component. On a plain page the tool was listed after the call, answered a
+      call with what its `execute` returned, and was gone once the signal aborted. Nothing in
+      Corten needs to change for that. TypeScript 7.0.2's DOM types have no `modelContext`, so
+      the script declares it or casts `document`.
+   2. A form as a tool: a `<form>` with `toolname` and `tooldescription`, which are plain
+      attributes to `html!`, is listed as a tool with no script. The browser writes the tool's
+      input schema from the form's own controls: each one's name and type, `required`, a
+      number's `min`, `max` and `step`, the choices of a select, of radios and of checkboxes of
+      one name with their labels, and each control's label as its description. A call fills the
+      controls and, when the form has `toolautosubmit`, sends it; without that the person
+      presses its button. A form that posts with no `data-patch` is sent by the browser as an
+      ordinary same-origin post, the page it answers with is loaded, and the call's result is
+      `null`. The form goes as its first submit button sends it, and the schema has no member
+      for a button: of two `formaction` buttons the first one's write was sent, so a form that
+      is a tool has one write. A form that `get`s was not tried.
+   3. Do not make a `data-patch` form a tool yet. The runtime takes its submit and sends the
+      request, and the browser then fails the call ("Tool execution failed."; Chromium 156 gave
+      the reason, "it called preventDefault() on the 'submit' event, without also calling
+      respondWith() with the tool result"). The write is made and the caller is told it failed,
+      with `toolautosubmit` and, once the person presses the button, without it.
+
+   The part Corten would own is smaller than first written: the browser reads each field's name,
+   type, limits, choices and label from the form Corten already draws, which `html!` was to
+   write from its `#[derive(Fields)]` struct. The tool's name and description are still the
+   app's to write. What is left: the runtime answering an agent's submit of a form it sends
+   (`event.respondWith(..)` when `event.agentInvoked`), with what the agent gets back still to
+   settle (the patch, the data-mode JSON, a refusal's field errors); the tool attributes as
+   typed names, so a typo does not compile; the styling hooks Chrome has for a form an agent is
+   filling (`:tool-form-active`, `:tool-submit-active`); and a smoke check in a browser that has
+   it. All of that would be written against one engine's build, which changed the error it gives
+   for the same failure between 156 and 159. Revisit when the draft specifies the form
+   attributes and the submit event's answer, or a second engine ships them, or an app needs a
+   `data-patch` form as a tool
    ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/corten-run/corten/issues/695);
    related:
    [#692 An MCP tool is a second handler next to its route, with its own auth closure instead of Identify, so each action is written once per surface and drifts](https://github.com/corten-run/corten/issues/692)).

@@ -139,6 +139,7 @@ pub enum MarketTab {
 pub enum Period {
     Week,
     Month,
+    Year,
 }
 
 /// A sale in the month's list.
@@ -328,9 +329,10 @@ pub fn Gallery<'a>(
     // The view drawn, which the draft's writes are sent from and come back to.
     let here = url::Home { tab: shown_tab, sale: sale.then_some(Sale::Last), period: shown_period, sold, sales };
     let at = move |tab| url::Home { tab, sale: None, period: shown_period, sold, sales };
-    let (week, month) = (
+    let (week, month, year) = (
         url::Home { tab: shown_tab, sale: None, period: Some(Period::Week), sold, sales },
         url::Home { tab: shown_tab, sale: None, period: None, sold, sales },
+        url::Home { tab: shown_tab, sale: None, period: Some(Period::Year), sold, sales },
     );
     // The other page of the month's sales, in the order the page was drawn with; its link takes the
     // order on screen (`ordered::link`), also after a sort in place.
@@ -448,6 +450,9 @@ pub fn Gallery<'a>(
                             <ShownFor choice={&period} values={&[Period::Month]}>
                                 <p>"Average $11.95 this month."</p>
                             </ShownFor>
+                            <ShownFor choice={&period} values={&[Period::Year]}>
+                                <p>"Average $11.40 this year."</p>
+                            </ShownFor>
                         </div>
                     </div>
                 </section>
@@ -461,12 +466,14 @@ pub fn Gallery<'a>(
                                 options={&[
                                     ChoiceOption { value: Period::Week, label: "Week", link: Some(&week) },
                                     ChoiceOption { value: Period::Month, label: "Month", link: Some(&month) },
+                                    ChoiceOption { value: Period::Year, label: "Year", link: Some(&year) },
                                 ]}
                             />
                         </Segmented>
                         <div class={Facts}>
                             <ShownFor choice={&period} values={&[Period::Week]}><p>"Sold 3 this week."</p></ShownFor>
                             <ShownFor choice={&period} values={&[Period::Month]}><p>"Sold 14 this month."</p></ShownFor>
+                            <ShownFor choice={&period} values={&[Period::Year]}><p>"Sold 96 this year."</p></ShownFor>
                         </div>
                         // A part wider than the card's content on a phone: the card's column keeps it
                         // to the card, so the table scrolls in its wrapper and the page does not.

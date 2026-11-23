@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { beginControlWindow, verifyControlAdmission } from "./control-admission.mjs";
+import { beginControlWindow, beginOfflineWindow, verifyControlAdmission } from "./control-admission.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
@@ -7,11 +7,11 @@ import { dirname, join } from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { validateCampaign, freeze, jsonPhase, mixedPhase } from "./campaign-contract.mjs";
+import { validateCampaign, freeze, jsonPhase, mixedPhase, offlineAuditRemainingMs, verifyOfflineAuditStart } from "./campaign-contract.mjs";
 import { verifyWorkingSources } from "./worker.mjs";
 import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, publishDurable, readRegular, syncDirectory, transferEvidence, tree } from "./evidence.mjs";
 import { supervise } from "./process.mjs";
-import { observeHost, udevSettleCandidates, udevSettleMs, udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
+import { observeHost, sampleAuditClock, udevSettleCandidates, udevSettleMs, udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
 import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
@@ -51,6 +51,20 @@ export function createCampaign({ authorize }) {
     save(c, `${String(value.sequence).padStart(5, "0")}-${kind}.json`, value,
       kind === "phase-sealed" && data.transferDestination ? publishDurable : durable);
     c.sequence++;
+    return value;
+  }
+  function waitForAudit(c, kind, data, preparation) {
+    const auditClock = c.offlineHandoff ? sampleAuditClock() : undefined;
+    if (c.offlineHandoff) {
+      assert.equal(!!preparation, kind === "review-needed", "offline audit preparation boundary missing or unexpected");
+      verifyOfflineAuditStart(auditClock, c.offlineBootstrap, preparation);
+    }
+    c.state = "blocked-review-needed";
+    c.reviewWait = event(c, kind, { ...data, ...(auditClock ? { auditClock } : {}) });
+  }
+  function remainingAuditMs(c, now) {
+    assert.ok(c?.offlineHandoff && !c.busy && c.state === "blocked-review-needed" && c.reviewWait);
+    return offlineAuditRemainingMs(c.reviewWait.auditClock, now, c.offlineBootstrap.host.bootId);
   }
   function verifyPhases(c) {
     own(c.handle);
@@ -66,7 +80,7 @@ export function createCampaign({ authorize }) {
     own(c.handle);
     return freeze({ schema: "benchmark-isolated-campaign-status/v1", campaign: c.handle.id, round: c.plan.round,
       campaignSha256: c.plan.campaignSha256, state: c.state, nextGroup: c.plan.order[c.index] ?? null,
-      executionVersion: c.stream ? 5 : c.control ? 4 : 3,
+      executionVersion: c.offlineHandoff ? 6 : c.stream ? 5 : c.control ? 4 : 3,
       outcomes: structuredClone(c.outcomes), auditSubjectSha256: c.audit?.subject.subjectSha256 ?? null,
       uncollectedNativeRoots: structuredClone(c.pendingNative),
       mixedAuditSubjectSha256: c.mixedAudit?.subject.subjectSha256 ?? null,
@@ -75,14 +89,15 @@ export function createCampaign({ authorize }) {
       controllerReady: false, isolation: "unverified", executionAuthorized: "separate-parent-policy",
       reservation: "retained-no-release-or-restart" });
   }
-  function halt(c, error) {
+  function halt(c, error, expiry) {
     c.state = "preserved-uncertain";
     for (const binding of c.plan.bindings.slice(c.index)) {
       if (!c.outcomes.some((r) => r.group === binding.request.group)) c.outcomes.push({ group: binding.request.group,
         outcome: c.attempted.has(binding.request.group) ? "preserved-uncertain" : "not-run", coverage: binding.coverage,
         blockers: ["campaign halted; no retry or assumed cleanup", error.message] });
     }
-    event(c, "halted", { error: error.message });
+    if (expiry) event(c, "offline-audit-expired", expiry);
+    else event(c, "halted", { error: error.message });
     save(c, "campaign-result.json", { status: status(c), wholeHostTerminal: "parent-must-observe", deletionAuthorized: false });
   }
   async function exclusive(handle, fn) {
@@ -152,15 +167,15 @@ export function createCampaign({ authorize }) {
     const pending = { group: binding.request.group, phase: phaseName, artifactRoot: binding.validation.artifactRoot,
       ...(transfer ? { transferDestination: `${relative}/native` } : {}) };
     c.pendingNative.push(pending); event(c, "native-output-reserved", pending);
-    if (c.stream) {
+    if (c.stream || c.offlineHandoff) {
       const { cpus, roles } = nativeControlPartition(binding);
-      c.stream.open(cpus, roles);
+      c.stream?.open(cpus, roles);
     }
-    const closeControlWindow = c.control ? beginControlWindow(c.control) : null;
-    const settlePolicy = c.stream ? udevSettlePolicy(binding.request.group, phaseName) : null;
+    const closeControlWindow = c.offlineHandoff ? beginOfflineWindow(c.control) : c.control ? beginControlWindow(c.control) : null;
+    const settlePolicy = c.stream || c.offlineHandoff ? udevSettlePolicy(binding.request.group, phaseName) : null;
     const retainUdev = settlePolicy !== null;
-    const before = observeHost(c.stream?.registration, retainUdev); save(c, `${relative}/host-before.json`, before);
-    if (c.stream) verifyHostBoundary(before, before);
+    const before = observeHost(c.stream?.registration, retainUdev, c.offlineHandoff); save(c, `${relative}/host-before.json`, before);
+    if (c.stream || c.offlineHandoff) verifyHostBoundary(before, before);
     const commands = [];
     for (const invocation of [...binding.preparation.fixtures, binding.execution.invocation]) {
       if (signal?.aborted) throw new Error("campaign cancelled");
@@ -188,14 +203,14 @@ export function createCampaign({ authorize }) {
     const terminalClock = commands.at(-1)?.terminalClock;
     try {
       if (!transfer) verifyWorkingSources(c.plan.bindings[0]);
-      after = observeHost(c.stream?.registration, retainUdev);
+      after = observeHost(c.stream?.registration, retainUdev, c.offlineHandoff);
       if (terminalClock) after.terminalClock = terminalClock;
       save(c, `${relative}/host-after.json`, after);
-      if (retainUdev && terminalClock && !signal?.aborted && udevSettleCandidates(before, after, terminalClock, settlePolicy)) {
+      if (retainUdev && terminalClock && !signal?.aborted && udevSettleCandidates(before, after, terminalClock, settlePolicy, c.offlineHandoff)) {
         await delay(udevSettleMs, undefined, { signal });
-        c.stream.check();
+        c.stream?.check();
         signal?.throwIfAborted();
-        settled = observeHost(c.stream.registration, true);
+        settled = observeHost(c.stream?.registration, true, c.offlineHandoff);
         save(c, `${relative}/host-after-settled.json`, settled);
       }
     } catch (error) { boundaryError = error; }
@@ -205,6 +220,12 @@ export function createCampaign({ authorize }) {
     else { assert.ok(commands.some((r) => !r.success), "native output missing"); mkdirSync(native, { mode: 0o700 }); manifest = tree(native); }
     const p = { relative, native, original, manifest, retainsOriginal: present && !transfer, commands, cleanup: null };
     save(c, `${relative}/native-manifest.json`, manifest);
+    if (c.offlineHandoff) {
+      if (boundaryError) throw boundaryError;
+      const { proof, ingress } = closeControlWindow();
+      p.offlineIngress = ingress;
+      save(c, `${relative}/control-ingress.json`, proof);
+    }
     event(c, "phase-sealed", { ...pending, nativeManifestSha256: manifest.sha256,
       phaseManifestSha256: phaseSnapshot(directory, binding.request.group === "json-api" && phaseName === "prepare").sha256 });
     c.phases.push(p);
@@ -213,9 +234,11 @@ export function createCampaign({ authorize }) {
     // The live runners write Git-visible result trees. Recheck every source
     // only after the exact reserved tree is in external phase custody.
     if (transfer) verifyWorkingSources(c.plan.bindings[0]);
-    closeControlWindow?.();
+    if (!c.offlineHandoff) closeControlWindow?.();
     c.stream?.close();
-    p.cleanup = settled ? verifySettledHostBoundary(before, after, settled, terminalClock, settlePolicy) : verifyHostBoundary(before, after);
+    p.cleanup = settled ? verifySettledHostBoundary(before, after, settled, terminalClock, settlePolicy, c.offlineHandoff)
+      : verifyHostBoundary(before, after);
+    if (c.offlineHandoff && phaseName === "prepare") p.offlinePreparation = { before, after, settled, terminalClock };
     return p;
   }
   function cancelled(c, phase, signal) {
@@ -247,10 +270,13 @@ export function createCampaign({ authorize }) {
       const info = lstatSync(directory), handle = Object.freeze({ id, directory });
       const c = { handle, root, directory, inode: info.ino, device: info.dev, lockHash: digest(lock), plan,
         control: control ? freeze(structuredClone(control.binding)) : null, controlEpochs: new Set(), stream: control?.stream ?? null,
+        offlineHandoff: control?.offlineHandoff === true,
         files: [], sequence: 0, commandIndex: 0, busy: false, index: 0, phases: [], outcomes: [], attempted: new Set(), pendingNative: [], state: "active", audit: null, mixedAudit: null };
       owned.set(handle, c); save(c, "plan.json", plan); event(c, "authorized", { subject, trustBoundary: "explicit trusted parent policy, not review data" });
       try {
         if (control) {
+          if (c.offlineHandoff) assert.ok(plan.order.length === 1 && !control.admission.apparatus && !c.stream,
+            "offline handoff requires one group without a stream");
           assert.equal(control.binding.commit, plan.commit); assert.equal(control.binding.round, plan.round);
           verifyControlAdmission(control.binding, "bootstrap", control.admission);
           c.control = freeze(structuredClone(control.binding));
@@ -261,6 +287,7 @@ export function createCampaign({ authorize }) {
         if (control?.admission.apparatus) assert.ok(c.stream, "presealed apparatus requires independent lease enforcement");
         const observed = observeHost(c.stream?.registration); save(c, "host-initial.json", observed);
         if (control) for (const field of ["hostname", "bootId"]) assert.equal(observed[field], control.admission.host[field]);
+        if (c.offlineHandoff) c.offlineBootstrap = control.admission;
         assert.deepEqual(observed.containers, [], "fresh campaign host has preexisting containers");
         event(c, "started"); return handle;
       } catch (error) { halt(c, error); throw error; }
@@ -293,7 +320,7 @@ export function createCampaign({ authorize }) {
           const sourceRoot = join(c.directory, "mixed-audit-sources"), subject = await prepareMixedAudit(c.plan, repo, sourceRoot);
           verifyWorkingSources(c.plan.bindings[0]);
           c.mixedAudit = { sourceRoot, subject, accepted: false }; save(c, "mixed-audit-subject.json", subject);
-          c.state = "blocked-review-needed"; event(c, "mixed-review-needed", { subjectSha256: subject.subjectSha256 });
+          waitForAudit(c, "mixed-review-needed", { subjectSha256: subject.subjectSha256 });
           return status(c);
         }
         if (group === "json-api" && !c.audit) {
@@ -314,8 +341,9 @@ export function createCampaign({ authorize }) {
             const sources = snapshotSources(c.plan.bindings[0], repo, sourceRoot);
             const subject = auditSubject(c.plan, prepared, p.manifest, sources, images);
             c.audit = { subject, sourceRoot, prepared, accepted: false, phase: p };
-            save(c, "json-audit-subject.json", subject); c.state = "blocked-review-needed";
-            event(c, "review-needed", { subjectSha256: subject.subjectSha256, nativeExit: 1, qualification: "blocked", cleanup: p.cleanup });
+            save(c, "json-audit-subject.json", subject);
+            waitForAudit(c, "review-needed", { subjectSha256: subject.subjectSha256, nativeExit: 1, qualification: "blocked", cleanup: p.cleanup },
+              p.offlinePreparation);
             return status(c);
           }
         } else {
@@ -345,7 +373,8 @@ export function createCampaign({ authorize }) {
             assert.equal(observation.manifestSha256, hostManifestSha256);
             host = composeHostProof(effective, native, observation);
           }
-          c.outcomes.push({ group, ...composePhase(effective, native, host, p.commands, !["json-api", "mixed-production"].includes(group) || timingAudit.complete), host,
+          const auditedTiming = !["json-api", "mixed-production"].includes(group) || timingAudit.complete;
+          c.outcomes.push({ group, ...composePhase(effective, native, host, p.commands, auditedTiming, p.offlineIngress?.packets), host,
             nativeManifestSha256: p.manifest.sha256, cleanup: p.cleanup, isolation: "external-exclusive-host-policy" });
         }
         c.index++; event(c, "group-finished", c.outcomes.at(-1));
@@ -418,6 +447,22 @@ export function createCampaign({ authorize }) {
       return status(c);
     },
     verify(handle) { const c = own(handle); verifyPhases(c); return status(c); },
+    offlineAuditRemainingMs(handle) { return remainingAuditMs(owned.get(handle), sampleAuditClock()); },
+    expireOfflineAudit(handle) {
+      const c = own(handle), group = c.plan.order[c.index];
+      assert.ok(c.offlineHandoff && !c.busy && c.state === "blocked-review-needed" && !c.pendingNative.length);
+      assert.ok(["json-api", "mixed-production"].includes(group) && c.reviewWait?.status.auditGroup === group);
+      const auditClock = sampleAuditClock();
+      assert.equal(remainingAuditMs(c, auditClock), 0, "offline audit deadline has not expired");
+      assert.deepEqual([...c.controlEpochs], ["bootstrap"], "audit control already admitted");
+      const prefix = group === "json-api" ? "json" : "mixed";
+      for (const suffix of ["", "-pending", "-retained"])
+        assert.equal(lstatSync(join(c.directory, `${prefix}-audit-delivery${suffix}.json`), { throwIfNoEntry: false }), undefined,
+          "audit delivery may have started; preserve uncertainty");
+      verifyPhases(c);
+      halt(c, new Error("independent audit expired before timing"), { group, subjectSha256: c.reviewWait.subjectSha256, auditClock });
+      return freeze({ status: status(c), manifest: tree(c.directory), wholeHostTerminal: "parent-must-observe", deletionAuthorized: false });
+    },
     collect(handle) {
       const c = own(handle); assert.equal(c.busy, false); assert.equal(c.state, "finished", "whole campaign is not finished");
       verifyPhases(c); return freeze({ status: status(c), manifest: tree(c.directory), wholeHostTerminal: "parent-must-observe", deletionAuthorized: false });

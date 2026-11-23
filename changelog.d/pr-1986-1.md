@@ -1,0 +1,1 @@
+- A new isolated benchmark group can finish after an acknowledged handoff even if the launcher disconnects. Independent review and terminal collection remain separate. [Offline handoff](https://github.com/corten-run/corten/blob/main/bench/workloads/CLOUD.md#offline-handoff)
