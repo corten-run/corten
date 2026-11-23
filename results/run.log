@@ -1,0 +1,107 @@
+wait: base round 1: 231 lines in 4 s
+wait: head round 1: 231 lines in 4 s
+wait: head round 2: 231 lines in 4 s
+wait: base round 2: 231 lines in 4 s
+wait: base round 3: 231 lines in 4 s
+wait: head round 3: 231 lines in 4 s
+wait: head round 4: 231 lines in 4 s
+wait: base round 4: 231 lines in 4 s
+wait: base round 5: 231 lines in 4 s
+wait: head round 5: 231 lines in 4 s
+wait: head round 6: 231 lines in 5 s
+wait: base round 6: 231 lines in 4 s
+wait: base round 7: 231 lines in 4 s
+wait: head round 7: 231 lines in 4 s
+wait: head round 8: 231 lines in 4 s
+wait: base round 8: 231 lines in 4 s
+wait: base round 9: 231 lines in 4 s
+wait: head round 9: 231 lines in 5 s
+wait: head round 10: 231 lines in 4 s
+wait: base round 10: 231 lines in 4 s
+wait: base round 11: 231 lines in 4 s
+wait: head round 11: 231 lines in 4 s
+wait: head round 12: 231 lines in 4 s
+wait: base round 12: 231 lines in 4 s
+wait: base round 13: 231 lines in 4 s
+wait: head round 13: 231 lines in 5 s
+wait: head round 14: 231 lines in 4 s
+wait: base round 14: 231 lines in 4 s
+wait: base round 15: 231 lines in 4 s
+wait: head round 15: 231 lines in 4 s
+wait: head round 16: 231 lines in 5 s
+wait: base round 16: 231 lines in 3 s
+wait: base round 17: 231 lines in 4 s
+wait: head round 17: 231 lines in 5 s
+wait: head round 18: 231 lines in 4 s
+wait: base round 18: 231 lines in 4 s
+wait: base round 19: 231 lines in 4 s
+wait: head round 19: 231 lines in 4 s
+wait: head round 20: 231 lines in 5 s
+wait: base round 20: 231 lines in 4 s
+wait: base round 21: 231 lines in 4 s
+wait: head round 21: 231 lines in 4 s
+wait: head round 22: 231 lines in 4 s
+wait: base round 22: 231 lines in 4 s
+wait: base round 23: 231 lines in 3 s
+wait: head round 23: 231 lines in 5 s
+wait: head round 24: 231 lines in 4 s
+wait: base round 24: 231 lines in 4 s
+wait: base round 25: 231 lines in 4 s
+wait: head round 25: 231 lines in 5 s
+wait: head round 26: 231 lines in 4 s
+wait: base round 26: 231 lines in 4 s
+wait: base round 27: 231 lines in 4 s
+wait: head round 27: 231 lines in 4 s
+wait: head round 28: 231 lines in 5 s
+wait: base round 28: 231 lines in 3 s
+wait: base round 29: 231 lines in 4 s
+wait: head round 29: 231 lines in 5 s
+wait: head round 30: 231 lines in 4 s
+wait: base round 30: 231 lines in 4 s
+wait: base round 31: 231 lines in 4 s
+wait: head round 31: 231 lines in 4 s
+wait: head round 32: 231 lines in 4 s
+wait: base round 32: 231 lines in 4 s
+wait: base round 33: 231 lines in 4 s
+wait: head round 33: 231 lines in 4 s
+wait: head round 34: 231 lines in 4 s
+wait: base round 34: 231 lines in 4 s
+wait: base round 35: 231 lines in 4 s
+wait: head round 35: 231 lines in 5 s
+wait: head round 36: 231 lines in 4 s
+wait: base round 36: 231 lines in 4 s
+wait: base round 37: 231 lines in 3 s
+wait: head round 37: 231 lines in 5 s
+wait: head round 38: 231 lines in 4 s
+wait: base round 38: 231 lines in 4 s
+wait: base round 39: 231 lines in 4 s
+wait: head round 39: 231 lines in 4 s
+wait: head round 40: 231 lines in 4 s
+wait: base round 40: 231 lines in 4 s
+# 1846w pass 3: a held value's forms behind a kept page's brotli 5 job (ms)
+
+Statistic: per round r, d_r = median of the head's 21 samples less the median of the base's; one-sided 95% upper bound on the median of the 40 d_r = the d of rank 26 from the smallest (sign test, rounds independent). Pooled columns are descriptive.
+
+| case | held B | rounds | base median (range) | head median (range) | median d_r | bound (rank) | d_r range | pooled median per-repetition head - base | head job median | head lock wait median (range) | outcomes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- |
+| contended | 4021 | 40 | 9.16 (8.31 to 12.30) | 14.27 (12.90 to 17.02) | 5.10 | 5.29 (26) | 4.08 to 6.32 | 5.13 | 5.22 | 3.44 (2.80 to 5.56) | refused 840 |
+| contended | 78967 | 40 | 18.59 (17.59 to 24.64) | 23.54 (21.75 to 28.95) | 4.99 | 5.10 (26) | 3.78 to 8.40 | 4.99 | 5.25 | 3.44 (2.83 to 6.04) | refused 840 |
+| idle | 4021 | 40 | 9.15 (7.22 to 12.00) | 9.11 (7.06 to 13.19) | -0.00 | 0.05 (26) | -0.43 to 0.41 | -0.01 | - | - | - 840 |
+| idle | 78967 | 40 | 18.24 (17.06 to 25.53) | 18.15 (16.50 to 22.90) | -0.04 | 0.01 (26) | -0.90 to 3.41 | -0.13 | - | - | - 840 |
+| refused | 4021 | 40 | 7.92 (6.14 to 11.10) | 9.81 (7.80 to 14.71) | 1.98 | 2.06 (26) | 0.96 to 2.41 | 1.92 | 1.59 | 0.00 (0.00 to 0.02) | refused 840 |
+| refused | 78967 | 40 | 17.95 (16.01 to 22.71) | 19.42 (16.98 to 26.31) | 1.48 | 1.59 (26) | 0.86 to 5.03 | 1.46 | 1.59 | 0.00 (0.00 to 0.01) | refused 840 |
+| room | 4021 | 40 | 8.07 (6.60 to 11.53) | 10.00 (8.30 to 15.24) | 1.99 | 2.08 (26) | 1.13 to 3.21 | 1.95 | 1.66 | 0.00 (0.00 to 0.01) | admitted 840 |
+| room | 78967 | 40 | 17.96 (16.35 to 24.35) | 19.46 (17.55 to 26.07) | 1.55 | 1.66 (26) | 0.90 to 5.60 | 1.54 | 1.64 | 0.00 (0.00 to 0.00) | admitted 840 |
+
+enc 32768 B: base 1.68 ms, head 1.68 ms (840 and 840)
+heldown 4021 B: base 8.92 ms (8.06 to 10.34), head 8.94 ms (8.34 to 11.67)
+heldown 78967 B: base 17.32 ms (15.78 to 19.70), head 17.26 ms (15.46 to 23.56)
+I, the base's median contended 4 MiB insertion call (Store::keep) with the 4021-byte value: 3.46 ms
+H, the base's median of the 4021-byte value's own forms (brotli 9 and gzip 9): 8.92 ms
+
+met: room: bound 2.08 ms under H 8.92 ms
+met: refused: bound 2.06 ms under H 8.92 ms
+met: contended: bound 5.29 ms under H + I = 8.92 + 3.46 ms
+usable: true
+pass 3 gate: met
+JSON {"rounds":40,"reps":21,"declaredMatrix":true,"boundRank":26,"cases":{"contended 4021":{"rounds":40,"boundRank":26,"base":9.15775,"head":14.26975,"change":5.095649999999999,"bound":5.292,"dMin":4.0822,"dMax":6.315999999999999,"pooledChange":5.1271499999999985,"job":5.2217,"lockWait":3.44135,"outcomes":{"refused":840},"baseInsertion":3.4585},"contended 78967":{"rounds":40,"boundRank":26,"base":18.5885,"head":23.535600000000002,"change":4.9864,"bound":5.097799999999999,"dMin":3.7836999999999996,"dMax":8.397199999999998,"pooledChange":4.99155,"job":5.252800000000001,"lockWait":3.4385000000000003,"outcomes":{"refused":840},"baseInsertion":3.4795},"idle 4021":{"rounds":40,"boundRank":26,"base":9.146450000000002,"head":9.108149999999998,"change":-0.0024999999999995026,"bound":0.04870000000000019,"dMin":-0.43350000000000044,"dMax":0.4123999999999999,"pooledChange":-0.014199999999999768,"job":null,"lockWait":null,"outcomes":{"-":840},"baseInsertion":null},"idle 78967":{"rounds":40,"boundRank":26,"base":18.2431,"head":18.15235,"change":-0.037149999999998684,"bound":0.006200000000003314,"dMin":-0.902000000000001,"dMax":3.4079000000000015,"pooledChange":-0.12670000000000137,"job":null,"lockWait":null,"outcomes":{"-":840},"baseInsertion":null},"refused 4021":{"rounds":40,"boundRank":26,"base":7.9184,"head":9.8102,"change":1.9802499999999994,"bound":2.0646999999999993,"dMin":0.9598000000000004,"dMax":2.409399999999999,"pooledChange":1.9150499999999995,"job":1.591,"lockWait":0.0004,"outcomes":{"refused":840},"baseInsertion":null},"refused 78967":{"rounds":40,"boundRank":26,"base":17.945500000000003,"head":19.4243,"change":1.4789499999999975,"bound":1.5869,"dMin":0.8557999999999986,"dMax":5.030099999999997,"pooledChange":1.463099999999999,"job":1.58895,"lockWait":0.0005,"outcomes":{"refused":840},"baseInsertion":null},"room 4021":{"rounds":40,"boundRank":26,"base":8.06705,"head":10.00325,"change":1.9942999999999995,"bound":2.0794000000000006,"dMin":1.1254999999999997,"dMax":3.208000000000002,"pooledChange":1.9527999999999999,"job":1.6643,"lockWait":0.0005,"outcomes":{"admitted":840},"baseInsertion":null},"room 78967":{"rounds":40,"boundRank":26,"base":17.9597,"head":19.4584,"change":1.5493999999999986,"bound":1.6614000000000004,"dMin":0.8987000000000016,"dMax":5.596,"pooledChange":1.5368499999999994,"job":1.6351,"lockWait":0.0005,"outcomes":{"admitted":840},"baseInsertion":null}},"gates":{"room":{"ok":true,"say":"bound 2.08 ms under H 8.92 ms"},"refused":{"ok":true,"say":"bound 2.06 ms under H 8.92 ms"},"contended":{"ok":true,"say":"bound 5.29 ms under H + I = 8.92 + 3.46 ms"}},"problems":[],"H":8.922550000000001,"I":3.4585,"usable":true,"met":true}
