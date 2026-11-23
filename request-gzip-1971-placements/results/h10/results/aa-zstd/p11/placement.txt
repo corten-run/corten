@@ -1,0 +1,3 @@
+comparison aa-zstd placement 11 workload zstd
+A base-p736 499c24d42357d06bc8d43f3659e340eb2bf8a3e8a611199030dc399706ae9abc
+B base-p22496 b15aeecf7cecd48280b3132b2b16aa2847afcb5f54f5d08239000855a2674d53

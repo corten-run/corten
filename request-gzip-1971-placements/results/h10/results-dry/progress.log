@@ -1,0 +1,21 @@
+== 1971 zstd verify start 14:39:47
+verify: 15 placements answer as their unpadded binary
+== 1971 zstd check start 14:39:50
+aa-zstd: checked 1 requests: same
+change-zstd: checked 1 requests: same
+sb-gzbr: checked 1 requests: same
+== 1971 zstd checks ok 14:40:11
+aa-zstd p01 ok 14:40:32
+change-zstd p01 ok 14:40:53
+aa-zstd p02 ok 14:41:14
+change-zstd p02 ok 14:41:35
+aa-zstd p03 ok 14:41:56
+change-zstd p03 ok 14:42:17
+aa-zstd p04 ok 14:42:38
+change-zstd p04 ok 14:42:58
+aa-zstd p05 ok 14:43:19
+change-zstd p05 ok 14:43:40
+sb-gzbr ok 14:44:01
+report: /m/1971/results/placements-zstd.md
+failed: none
+ALL-DONE

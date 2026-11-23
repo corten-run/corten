@@ -1,0 +1,1 @@
+== check 1: /private --compressed -H 'Accept-Encoding: gzip, br'

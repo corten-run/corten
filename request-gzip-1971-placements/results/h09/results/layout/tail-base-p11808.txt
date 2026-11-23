@@ -1,0 +1,3 @@
+functions before the C code: 3407, moved by exactly the pad 3407
+functions from the C code on (0 of them the archives' own, the first none at 0x-): 0; shifts {}
+JSON {"pad":11808,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}

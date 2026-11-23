@@ -1,0 +1,1 @@
+DRY RUN: K=5, R=2, SB_PAIRS=2; not a measurement

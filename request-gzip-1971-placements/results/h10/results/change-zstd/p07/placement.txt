@@ -1,0 +1,3 @@
+comparison change-zstd placement 7 workload zstd
+A base-p35808 63270ee4927ad78cc775b8a2b6658d6c04848b911860bca5044e6053709956ac
+B head-p35808 4c4feb1da831c13aa13119ff58ff5330fc8fe48e60b54b2c23450f7a981cc9a0

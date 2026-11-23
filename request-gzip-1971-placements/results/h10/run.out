@@ -1,0 +1,71 @@
+== 1971 zstd verify start 14:45:01
+verify: 90 placements answer as their unpadded binary
+== 1971 zstd check start 14:45:18
+aa-zstd: checked 1 requests: same
+change-zstd: checked 1 requests: same
+sb-gzbr: checked 1 requests: same
+== 1971 zstd checks ok 14:45:39
+aa-zstd p01 ok 14:46:41
+change-zstd p01 ok 14:47:44
+aa-zstd p02 ok 14:48:46
+change-zstd p02 ok 14:49:48
+aa-zstd p03 ok 14:50:50
+change-zstd p03 ok 14:51:53
+aa-zstd p04 ok 14:52:55
+change-zstd p04 ok 14:53:57
+aa-zstd p05 ok 14:55:00
+change-zstd p05 ok 14:56:02
+aa-zstd p06 ok 14:57:05
+change-zstd p06 ok 14:58:07
+aa-zstd p07 ok 14:59:10
+change-zstd p07 ok 15:00:12
+aa-zstd p08 ok 15:01:15
+change-zstd p08 ok 15:02:17
+aa-zstd p09 ok 15:03:20
+change-zstd p09 ok 15:04:22
+aa-zstd p10 ok 15:05:24
+change-zstd p10 ok 15:06:27
+aa-zstd p11 ok 15:07:29
+change-zstd p11 ok 15:08:31
+aa-zstd p12 ok 15:09:34
+change-zstd p12 ok 15:10:36
+aa-zstd p13 ok 15:11:39
+change-zstd p13 ok 15:12:41
+aa-zstd p14 ok 15:13:43
+change-zstd p14 ok 15:14:46
+aa-zstd p15 ok 15:15:48
+change-zstd p15 ok 15:16:50
+aa-zstd p16 ok 15:17:53
+change-zstd p16 ok 15:18:55
+aa-zstd p17 ok 15:19:57
+change-zstd p17 ok 15:21:00
+aa-zstd p18 ok 15:22:03
+change-zstd p18 ok 15:23:05
+aa-zstd p19 ok 15:24:08
+change-zstd p19 ok 15:25:10
+aa-zstd p20 ok 15:26:13
+change-zstd p20 ok 15:27:15
+aa-zstd p21 ok 15:28:17
+change-zstd p21 ok 15:29:20
+aa-zstd p22 ok 15:30:23
+change-zstd p22 ok 15:31:25
+aa-zstd p23 ok 15:32:27
+change-zstd p23 ok 15:33:30
+aa-zstd p24 ok 15:34:32
+change-zstd p24 ok 15:35:34
+aa-zstd p25 ok 15:36:37
+change-zstd p25 ok 15:37:39
+aa-zstd p26 ok 15:38:41
+change-zstd p26 ok 15:39:44
+aa-zstd p27 ok 15:40:46
+change-zstd p27 ok 15:41:49
+aa-zstd p28 ok 15:42:51
+change-zstd p28 ok 15:43:54
+aa-zstd p29 ok 15:44:56
+change-zstd p29 ok 15:45:59
+aa-zstd p30 ok 15:47:01
+change-zstd p30 ok 15:48:03
+sb-gzbr ok 15:52:48
+report: /m/1971/results/placements-zstd.md
+failed: none
+ALL-DONE

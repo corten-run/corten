@@ -1,0 +1,264 @@
+Mon Nov 23 14:39:47 UTC 2026
+workload: zstd
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           40 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  8
+On-line CPU(s) list:                     0-7
+Vendor ID:                               GenuineIntel
+Model name:                              Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz
+CPU family:                              6
+Model:                                   85
+Thread(s) per core:                      1
+Core(s) per socket:                      8
+Socket(s):                               1
+Stepping:                                7
+BogoMIPS:                                5387.32
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault ssbd ibrs ibpb ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap clflushopt clwb avx512cd avx512bw avx512vl xsaveopt xsavec xgetbv1 arat vnmi pku ospke avx512_vnni arch_capabilities
+Virtualization:                          VT-x
+Hypervisor vendor:                       KVM
+Virtualization type:                     full
+L1d cache:                               256 KiB (8 instances)
+L1i cache:                               256 KiB (8 instances)
+L2 cache:                                32 MiB (8 instances)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-7
+Vulnerability Gather data sampling:      Unknown: Dependent on hypervisor status
+Vulnerability Indirect target selection: Mitigation; Aligned branch/return thunks
+Vulnerability Itlb multihit:             KVM: Mitigation: Split huge pages
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Mitigation; Enhanced IBRS
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI SW loop, KVM SW loop
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+
+/sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0
+/sys/devices/system/cpu/cpu1/topology/thread_siblings_list:1
+/sys/devices/system/cpu/cpu2/topology/thread_siblings_list:2
+/sys/devices/system/cpu/cpu3/topology/thread_siblings_list:3
+/sys/devices/system/cpu/cpu4/topology/thread_siblings_list:4
+/sys/devices/system/cpu/cpu5/topology/thread_siblings_list:5
+/sys/devices/system/cpu/cpu6/topology/thread_siblings_list:6
+/sys/devices/system/cpu/cpu7/topology/thread_siblings_list:7
+
+perf_event_paranoid -1 nmi_watchdog 0 (runs as root)
+Linux httparena-gap-10 6.12.117+deb13-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.117-1 (2026-11-12) x86_64 GNU/Linux
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+binary: rustc
+commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a
+commit-date: 2026-11-09
+host: x86_64-unknown-linux-gnu
+release: 1.100.0
+LLVM version: 23.1.5
+perf version 6.12.118
+wrk debian/4.1.0-4+b1 [epoll] Copyright (C) 2012 Will Glozer
+GNU assembler (GNU Binutils for Debian) 2.44
+base .comment: GCC: (Debian 14.2.0-19) 14.2.0;Linker: LLD 23.1.5 (/checkout/src/llvm-project/llvm 0a5579eb649d3634a9c30ac873300cc2944fa070);rustc version 1.100.0 (0ef1bc386 2026-11-09)
+base 14126d2a8a12bccd173ec29032c1818d42904213 head 498291116fe5d3e3088bb3a663d1afc4dd998898
+Package: libjemalloc2
+Version: 5.3.0-3
+Package: libzstd1
+Version: 1.5.7+dfsg-1
+Package: wrk
+Version: 4.1.0-4+b1
+binaries (sha256, size):
+base 6c4805766b82f0d5cbf73dbfd15a131c025dbc7c059aff5f4bd848a37e61de48 4591728 bytes
+head c1e1708e8a6eb578ac81df2beed707676df4e188fa2c9f476621443fc5fe1d38 4683416 bytes
+base-p320 3695be9d0344ba61ed20754a57fbe49d2e9c0b220f7663694d69a6bdb04d5279 4592088 bytes
+base-p15120 b2603e2fc1781327d5a553ebb4e61002cd80470cc861794fe9f8fbb8d62f718d 4606888 bytes
+base-p25824 f3b7897b2c298dc4189e5e29c4de76481692b37cdb8d9283df7b92d30da280ea 4617592 bytes
+base-p40624 50b4b86770797b7cf7da4f12165c55098bb837fc86c30805be0c01b5d80ade11 4632392 bytes
+base-p10304 90daeb8ff4bcac4fa6b79ae2323d6867caeace2742a0729f172dbd561adc7f7f 4602072 bytes
+base-p21008 3424f6696ac29b12588b41fe768b12825be73f829deb41e2dc0bebaac0238c9e 4612776 bytes
+base-p35808 63270ee4927ad78cc775b8a2b6658d6c04848b911860bca5044e6053709956ac 4627576 bytes
+base-p5552 705e2ff09e5b88fab72cff6b8091365e22079333819aa4e001374d25cf2bea50 4597320 bytes
+base-p20288 c90955135fa32e882f5c7aa2e4d2a6c849da4cf0772e78340284c228ee00317e 4612056 bytes
+base-p30992 e19794bda38995381b6a68fa0917392007c7c3ee978fcb7af416ad51824a5bb0 4622760 bytes
+base-p736 499c24d42357d06bc8d43f3659e340eb2bf8a3e8a611199030dc399706ae9abc 4592504 bytes
+base-p15536 51231e39c1fba9b43c1f2969fd73e93e81881abbedfca2d761dcbc102b5a8709 4607304 bytes
+base-p26176 1cc5cdaf6abd07b42993dc4f0bf4c486246c2316d150d137ee42598e9b93b069 4617944 bytes
+base-p36880 59f5f8dbf7a2aa9a05369b9f0f38f6d9582556bf53f43512a07cd2056261a120 4628648 bytes
+base-p10720 8abf78b199126700c748248fa6f8d2d9cc400fa5274a0f40419879301b9a1cd7 4602488 bytes
+base-p21424 a3f1bf46eeb77cd26ea3378fbe886bcb831f7d0315b1741e6b278f1d732e94ab 4613192 bytes
+base-p36160 c9e622203950e2cb0da68f32c7772774c5db9b3646160f35f0bca4b33f5630a9 4627928 bytes
+base-p5904 ccabd2bb8c266fb47501463ca8a282b7d749218765e9ab7f59120c873a141b93 4597672 bytes
+base-p16608 6f9d838d2ca72e1682d9a090e83c582cc99de93269c0c0c5491ebc5bfcfcf05e 4608376 bytes
+base-p31408 9505ca0b06826936c458fec70402f8711cec0b5ebe0800f0bd1bde5f0527e55f 4623176 bytes
+base-p1088 863087b043efc5f35fb8cbe7b2b98322344ce8469e7f617159f2164990623c1e 4592856 bytes
+base-p15888 56578de9b372039d793a804425c5a4a26fc9165169f10816b05f6ceebbf48af1 4607656 bytes
+base-p26592 fd67facb8f90cf8799e27b9a7453bfb65f47f917503222e1a4fcc36629e969eb 4618360 bytes
+base-p37296 6aa66dd8854d19ae0d4a21071f2b14f2187b13c87207991c6301717cc6cb2f95 4629064 bytes
+base-p11072 a69c71f3304d355da4545c5a5e51cdaf7b68b1a0ae63510fc927acbdfdf0d7f6 4602840 bytes
+base-p21776 9f0e35bed1d57761a317546ec2b4376b8800c567e8e26ad850d78143a836f90f 4613544 bytes
+base-p36576 77caec0f112a9a48f631936882241d2fe368ad28afe7950cbf98d9d8b0b66264 4628344 bytes
+base-p6320 5d7473ef1659de0002ba79ef836d93867285921993e611a677b0e598d3f5d5e1 4598088 bytes
+base-p16960 109dcf9efa93e9138f5a39dab1d73e5ff92f35444dc5ada4a8973f6d9acd3a2a 4608728 bytes
+base-p31760 c49360897f333a78958d09781687babf05fe76ba8717ce9277d94b59ae3d555d 4623528 bytes
+base-p22848 9bdeaa256c1c2b3676360e5afc744870ce51f8fdf12c3a16adc441ae0a7129c7 4614616 bytes
+base-p12160 396702293bc8c0361e6c35b324584a4dd7c086c4fce24f2771a6c12663d677a6 4603928 bytes
+base-p38336 177642cc2e78cf32d731f1156245b8d698f4f432dee3bebaa00fe36bbafe4ce0 4630104 bytes
+base-p27648 9a203b7764233116115725dc21fdc18585581bb21f4cf924ad35302a0d07c4c4 4619416 bytes
+base-p12880 046aad7445e69de5b9e5828392e1af5eba5ec2b347a24c7092d6dddd0fd92e4c 4604648 bytes
+base-p2192 cb4e5dee3885916347309abc31b2a17e41bfd1dd20a36eb337f6e7a098fbb6e3 4593960 bytes
+base-p32464 42fd31975a8493861e65bfe8b75111f312755509d32aef2649f133c3345a71fb 4624232 bytes
+base-p17680 114defd2428ce832bc7875a244552d718203c9b12760f2cc6456b05159509368 4609448 bytes
+base-p7008 ace05529572178df71dc0a6fcf3dfc8b0fbd22d918013d3343b35b330a60c604 4598776 bytes
+base-p33184 79c20ea5f82574673185ab26ec5bb3dcebb90081734edef7b3b29d61b4c605dc 4624952 bytes
+base-p22496 b15aeecf7cecd48280b3132b2b16aa2847afcb5f54f5d08239000855a2674d53 4614264 bytes
+base-p11808 b635c605086f6676446c6fcae580944cb384133c4937243a1542346cee8c472c 4603576 bytes
+base-p38000 3823fdf0eb5dc325d483430708794091a094f45197a00708f13500bbfedf123a 4629768 bytes
+base-p27312 824a9e813769ce174f2def4a5daaa6f8031c9b129d36d783bb9443d49c184908 4619080 bytes
+base-p12528 c8b1b04014b824fc6cad1d2344c93f93be9aa07a1699c85698669022fa10b9d9 4604296 bytes
+base-p1840 b5cf708ff20d849c181c0d72baf9817ed87f4f737d355d8a3162c0e3caa139fe 4593608 bytes
+base-p32064 72598c6101661537fb263d3f15f4eded53388406ce67ce8d2eddb6e0260018e4 4623832 bytes
+base-p17280 e35d926c12b3cf889cd166330b3c0e0f048073c7c9738a169862c7f9ab63626e 4609048 bytes
+base-p6592 8746436c981f602d6000808595ed7869555e24588b27ada420e8455e55a98b93 4598360 bytes
+base-p32768 cb192228f842e7dfcd4af2da6d4cb83e26e4e74aa7c254e827b7094caf9e400e 4624536 bytes
+base-p22096 4ec32b8cc698e3805fcb8b1355ef65ddc6814ac316133cf7df81327a25003559 4613864 bytes
+base-p11408 3a55885ed43a87ba8bbd51742bcd0d2d51c055a9fba07152a934e7215a7474fe 4603176 bytes
+base-p37584 768bdf88676bd296d303ede6d59f68d0150c0ee9802dd95202b3c754e496bb2b 4629352 bytes
+base-p26896 d652bd0cb7a65b26ca17f285989ee6a911a7fd6156c034ce1237524c5bc54cee 4618664 bytes
+base-p16224 df7b4b11a3298f8244301801d63af158b722d958897b951c5725df28ec6dfd3e 4607992 bytes
+base-p1440 f9fe358379d3bfa7ce198e78351113a90d271dc589b405230b6bbe6e6a235e11 4593208 bytes
+base-p31712 f91fb3b52d5017f3cf50c82e5673760d4c196acd258e30dd10d32449d0b8dab7 4623480 bytes
+base-p16928 09076924515c16e98eff71f1421077ea10ecd3600a2fe4380c2d42bbd5b1a33b 4608696 bytes
+base-p6256 10ef18463d2caff19936e1c00bbceb617b4ceb3f8bc4acde82a2ab357b4c9330 4598024 bytes
+base-p36528 dcf8fd1f3c47f7f6acd4ea97492137be907b90b934a70b36636857315d3b9beb 4628296 bytes
+head-p320 33d475a6b1d34a651bbf9903796b299fad5125ac0e131f7d89018eaf1769254d 4683784 bytes
+head-p15120 dc6b2a3b775e146079fbae9c79de4bb50685da55017ded38d991dd789e45f1b5 4698568 bytes
+head-p25824 0f6c3387580c6337585912746c61487b17c5f718d81e81932497abaa0c0e3c04 4709256 bytes
+head-p40624 79e4a3156012545090cdf92f1b897f95d483552eb4656137f3dba5ee994c9d41 4724104 bytes
+head-p10304 b3b7c92bd4232f4b24307e6dfcc86c8b0385ba894c6e64b305548dfb2c53b852 4693768 bytes
+head-p21008 87bcb26700d6a8a5ee7b08a53f02f8c337d68de306b833813875531f27792dac 4704456 bytes
+head-p35808 4c4feb1da831c13aa13119ff58ff5330fc8fe48e60b54b2c23450f7a981cc9a0 4719240 bytes
+head-p5552 b0dfd673556b463668d9d17bcc4654bd672a2b0b381752cce2e6e400c86597a3 4689032 bytes
+head-p20288 a72ee0229c67500280d064d9b59bb73c7fe07ffe6284caf9f23c13c51206550f 4703752 bytes
+head-p30992 9ae0943ddadc7f68c8972f9392bc3d7f2ee85b29a65efad94f823f70b0251284 4714440 bytes
+head-p736 9637b2071f2e9cc375b0d92e0abbbf3b2046d90c044b19546ef97bf3193657b2 4684168 bytes
+head-p15536 b513fe5a2ca2ea6a8bf472e5145b399a0561697f2c96bcd5ad88e4360d817110 4699016 bytes
+head-p26176 9f046cb118d422e47375ddc6ba647a07af2dfe92a5cfd08f9b07ec5599f496e1 4709640 bytes
+head-p36880 ea314cead4ca40dae4e502ec711b9ca2d1baf70019e512c74a86e197e734c453 4720328 bytes
+head-p10720 5eb78cae9209ae41d853938435ab82de5ea6f2f75024a426315aa7be580720fb 4694152 bytes
+head-p21424 ba57b14ceeafd5ef4fd659910769ec57f5b9b49341eed6c0f5604d061c392c4c 4704904 bytes
+head-p36160 f84c2ca159faec67df75ad39a5b2469b1114efe08dc58155f2da5dfb00e30be6 4719624 bytes
+head-p5904 12bb431ff05ff27386f8980bf6040ff925a05a7c7cbacdece8c10cc513edb32a 4689352 bytes
+head-p16608 d04226e1e6b7c2d62efc18d1626434c8e797271300892ba5b4b99d153e756534 4700040 bytes
+head-p31408 4b2511421aa46771a6e47fe763d430efef8f5969c6158102cba55a3651b16eed 4714888 bytes
+head-p1088 06f4cbd3aa16248d7183f201ee80e2c610fc94196031e8d42631724edb55fff4 4684552 bytes
+head-p15888 9d31154f66623e8fb4e208c087c87adf2fe96cc6692901a5c7a444a547dd8786 4699336 bytes
+head-p26592 74b04103ec0a6ffbd13c8d61b4bcadfbc58e6028e836dbd90b8817df94e653f9 4710024 bytes
+head-p37296 aa48a20ede569057c91a0de84da30749f8f07b8a5745c97ac4db63bb436cd68d 4720776 bytes
+head-p11072 68fa85384ca966050dd49cfabfd9a71c58225a97cc052020bd46c758984c0054 4694536 bytes
+head-p21776 e636b54f481b55620f2f766d832ceab00122d2876efa75b555218e7ad8b2a73d 4705224 bytes
+head-p36576 fed941cd0cc4994b15a81043d48828159def415ac0aa29c547967c634b027615 4720008 bytes
+head-p6320 c9e5282ecca7e8879923528d035d4ad78480ce9ac6b323a9150e2b42a7ea95a9 4689800 bytes
+head-p16960 07651f355ea4fac1d122632bce35b56805cade4051be36ff3348c4eefc3df217 4700424 bytes
+head-p31760 4aef5d81a14df24752e60fc2da1a29d7c22fca18fab35d8b2a6b1334848afcf8 4715208 bytes
+placements (layout against the side's unpadded binary):
+base-p320 3695be9d0344ba61ed20754a57fbe49d2e9c0b220f7663694d69a6bdb04d5279 4592088 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +320 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":320,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p15120 b2603e2fc1781327d5a553ebb4e61002cd80470cc861794fe9f8fbb8d62f718d 4606888 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +15120 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":15120,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p25824 f3b7897b2c298dc4189e5e29c4de76481692b37cdb8d9283df7b92d30da280ea 4617592 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +25824 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":25824,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p40624 50b4b86770797b7cf7da4f12165c55098bb837fc86c30805be0c01b5d80ade11 4632392 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +40624 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":40624,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p10304 90daeb8ff4bcac4fa6b79ae2323d6867caeace2742a0729f172dbd561adc7f7f 4602072 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +10304 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":10304,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p21008 3424f6696ac29b12588b41fe768b12825be73f829deb41e2dc0bebaac0238c9e 4612776 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +21008 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":21008,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p35808 63270ee4927ad78cc775b8a2b6658d6c04848b911860bca5044e6053709956ac 4627576 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +35808 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":35808,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p5552 705e2ff09e5b88fab72cff6b8091365e22079333819aa4e001374d25cf2bea50 4597320 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +5552 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":5552,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p20288 c90955135fa32e882f5c7aa2e4d2a6c849da4cf0772e78340284c228ee00317e 4612056 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +20288 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":20288,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p30992 e19794bda38995381b6a68fa0917392007c7c3ee978fcb7af416ad51824a5bb0 4622760 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +30992 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":30992,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p736 499c24d42357d06bc8d43f3659e340eb2bf8a3e8a611199030dc399706ae9abc 4592504 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +736 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":736,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p15536 51231e39c1fba9b43c1f2969fd73e93e81881abbedfca2d761dcbc102b5a8709 4607304 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +15536 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":15536,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p26176 1cc5cdaf6abd07b42993dc4f0bf4c486246c2316d150d137ee42598e9b93b069 4617944 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +26176 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":26176,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p36880 59f5f8dbf7a2aa9a05369b9f0f38f6d9582556bf53f43512a07cd2056261a120 4628648 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +36880 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":36880,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p10720 8abf78b199126700c748248fa6f8d2d9cc400fa5274a0f40419879301b9a1cd7 4602488 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +10720 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":10720,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p21424 a3f1bf46eeb77cd26ea3378fbe886bcb831f7d0315b1741e6b278f1d732e94ab 4613192 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +21424 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":21424,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p36160 c9e622203950e2cb0da68f32c7772774c5db9b3646160f35f0bca4b33f5630a9 4627928 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +36160 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":36160,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p5904 ccabd2bb8c266fb47501463ca8a282b7d749218765e9ab7f59120c873a141b93 4597672 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +5904 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":5904,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p16608 6f9d838d2ca72e1682d9a090e83c582cc99de93269c0c0c5491ebc5bfcfcf05e 4608376 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +16608 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":16608,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p31408 9505ca0b06826936c458fec70402f8711cec0b5ebe0800f0bd1bde5f0527e55f 4623176 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +31408 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":31408,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p1088 863087b043efc5f35fb8cbe7b2b98322344ce8469e7f617159f2164990623c1e 4592856 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +1088 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":1088,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p15888 56578de9b372039d793a804425c5a4a26fc9165169f10816b05f6ceebbf48af1 4607656 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +15888 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":15888,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p26592 fd67facb8f90cf8799e27b9a7453bfb65f47f917503222e1a4fcc36629e969eb 4618360 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +26592 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":26592,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p37296 6aa66dd8854d19ae0d4a21071f2b14f2187b13c87207991c6301717cc6cb2f95 4629064 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +37296 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":37296,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p11072 a69c71f3304d355da4545c5a5e51cdaf7b68b1a0ae63510fc927acbdfdf0d7f6 4602840 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +11072 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":11072,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p21776 9f0e35bed1d57761a317546ec2b4376b8800c567e8e26ad850d78143a836f90f 4613544 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +21776 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":21776,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p36576 77caec0f112a9a48f631936882241d2fe368ad28afe7950cbf98d9d8b0b66264 4628344 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +36576 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":36576,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p6320 5d7473ef1659de0002ba79ef836d93867285921993e611a677b0e598d3f5d5e1 4598088 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +6320 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":6320,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p16960 109dcf9efa93e9138f5a39dab1d73e5ff92f35444dc5ada4a8973f6d9acd3a2a 4608728 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +16960 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":16960,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p31760 c49360897f333a78958d09781687babf05fe76ba8717ce9277d94b59ae3d555d 4623528 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +31760 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":31760,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p22848 9bdeaa256c1c2b3676360e5afc744870ce51f8fdf12c3a16adc441ae0a7129c7 4614616 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +22848 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":22848,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p12160 396702293bc8c0361e6c35b324584a4dd7c086c4fce24f2771a6c12663d677a6 4603928 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +12160 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":12160,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p38336 177642cc2e78cf32d731f1156245b8d698f4f432dee3bebaa00fe36bbafe4ce0 4630104 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +38336 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":38336,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p27648 9a203b7764233116115725dc21fdc18585581bb21f4cf924ad35302a0d07c4c4 4619416 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +27648 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":27648,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p12880 046aad7445e69de5b9e5828392e1af5eba5ec2b347a24c7092d6dddd0fd92e4c 4604648 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +12880 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":12880,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p2192 cb4e5dee3885916347309abc31b2a17e41bfd1dd20a36eb337f6e7a098fbb6e3 4593960 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +2192 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":2192,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p32464 42fd31975a8493861e65bfe8b75111f312755509d32aef2649f133c3345a71fb 4624232 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +32464 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":32464,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p17680 114defd2428ce832bc7875a244552d718203c9b12760f2cc6456b05159509368 4609448 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +17680 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":17680,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p7008 ace05529572178df71dc0a6fcf3dfc8b0fbd22d918013d3343b35b330a60c604 4598776 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +7008 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":7008,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p33184 79c20ea5f82574673185ab26ec5bb3dcebb90081734edef7b3b29d61b4c605dc 4624952 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +33184 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":33184,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p22496 b15aeecf7cecd48280b3132b2b16aa2847afcb5f54f5d08239000855a2674d53 4614264 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +22496 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":22496,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p11808 b635c605086f6676446c6fcae580944cb384133c4937243a1542346cee8c472c 4603576 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +11808 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":11808,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p38000 3823fdf0eb5dc325d483430708794091a094f45197a00708f13500bbfedf123a 4629768 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +38000 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":38000,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p27312 824a9e813769ce174f2def4a5daaa6f8031c9b129d36d783bb9443d49c184908 4619080 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +27312 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":27312,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p12528 c8b1b04014b824fc6cad1d2344c93f93be9aa07a1699c85698669022fa10b9d9 4604296 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +12528 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":12528,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p1840 b5cf708ff20d849c181c0d72baf9817ed87f4f737d355d8a3162c0e3caa139fe 4593608 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +1840 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":1840,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p32064 72598c6101661537fb263d3f15f4eded53388406ce67ce8d2eddb6e0260018e4 4623832 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +32064 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":32064,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p17280 e35d926c12b3cf889cd166330b3c0e0f048073c7c9738a169862c7f9ab63626e 4609048 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +17280 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":17280,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p6592 8746436c981f602d6000808595ed7869555e24588b27ada420e8455e55a98b93 4598360 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +6592 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":6592,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p32768 cb192228f842e7dfcd4af2da6d4cb83e26e4e74aa7c254e827b7094caf9e400e 4624536 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +32768 B: 3407; same offset in a 64-byte line: 3407, in a 4 KiB page: 3407; A's neighbours still next in B, in order: 3338 of 3338; {"pad":32768,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p22096 4ec32b8cc698e3805fcb8b1355ef65ddc6814ac316133cf7df81327a25003559 4613864 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +22096 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":22096,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p11408 3a55885ed43a87ba8bbd51742bcd0d2d51c055a9fba07152a934e7215a7474fe 4603176 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +11408 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":11408,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p37584 768bdf88676bd296d303ede6d59f68d0150c0ee9802dd95202b3c754e496bb2b 4629352 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +37584 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":37584,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p26896 d652bd0cb7a65b26ca17f285989ee6a911a7fd6156c034ce1237524c5bc54cee 4618664 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +26896 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":26896,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p16224 df7b4b11a3298f8244301801d63af158b722d958897b951c5725df28ec6dfd3e 4607992 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +16224 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":16224,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p1440 f9fe358379d3bfa7ce198e78351113a90d271dc589b405230b6bbe6e6a235e11 4593208 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +1440 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":1440,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p31712 f91fb3b52d5017f3cf50c82e5673760d4c196acd258e30dd10d32449d0b8dab7 4623480 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +31712 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":31712,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p16928 09076924515c16e98eff71f1421077ea10ecd3600a2fe4380c2d42bbd5b1a33b 4608696 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +16928 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":16928,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p6256 10ef18463d2caff19936e1c00bbceb617b4ceb3f8bc4acde82a2ab357b4c9330 4598024 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +6256 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":6256,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+base-p36528 dcf8fd1f3c47f7f6acd4ea97492137be907b90b934a70b36636857315d3b9beb 4628296 bytes; all functions in both: 3407; moved by exactly the pad: 3407; not moved: 0; shifts: +36528 B: 3407; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3338 of 3338; {"pad":36528,"before":3407,"beforeExact":3407,"tail":0,"tailOwn":0,"tailShifts":{},"ok":true}
+head-p320 33d475a6b1d34a651bbf9903796b299fad5125ac0e131f7d89018eaf1769254d 4683784 bytes; all functions in both: 3448; moved by exactly the pad: 3448; not moved: 0; shifts: +320 B: 3448; same offset in a 64-byte line: 3448, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":320,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"320":43},"ok":true}
+head-p15120 dc6b2a3b775e146079fbae9c79de4bb50685da55017ded38d991dd789e45f1b5 4698568 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +15120 B: 3406, +15104 B: 39, +15136 B: 3; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":15120,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"15104":39,"15120":1,"15136":3},"ok":true}
+head-p25824 0f6c3387580c6337585912746c61487b17c5f718d81e81932497abaa0c0e3c04 4709256 bytes; all functions in both: 3448; moved by exactly the pad: 3409; not moved: 0; shifts: +25824 B: 3409, +25792 B: 39; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":25824,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"25792":39,"25824":4},"ok":true}
+head-p40624 79e4a3156012545090cdf92f1b897f95d483552eb4656137f3dba5ee994c9d41 4724104 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +40624 B: 3406, +40640 B: 42; same offset in a 64-byte line: 42, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":40624,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"40624":1,"40640":42},"ok":true}
+head-p10304 b3b7c92bd4232f4b24307e6dfcc86c8b0385ba894c6e64b305548dfb2c53b852 4693768 bytes; all functions in both: 3448; moved by exactly the pad: 3448; not moved: 0; shifts: +10304 B: 3448; same offset in a 64-byte line: 3448, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":10304,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"10304":43},"ok":true}
+head-p21008 87bcb26700d6a8a5ee7b08a53f02f8c337d68de306b833813875531f27792dac 4704456 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +21008 B: 3406, +20992 B: 39, +21024 B: 3; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":21008,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"20992":39,"21008":1,"21024":3},"ok":true}
+head-p35808 4c4feb1da831c13aa13119ff58ff5330fc8fe48e60b54b2c23450f7a981cc9a0 4719240 bytes; all functions in both: 3448; moved by exactly the pad: 3409; not moved: 0; shifts: +35808 B: 3409, +35776 B: 39; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":35808,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"35776":39,"35808":4},"ok":true}
+head-p5552 b0dfd673556b463668d9d17bcc4654bd672a2b0b381752cce2e6e400c86597a3 4689032 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +5552 B: 3406, +5568 B: 42; same offset in a 64-byte line: 42, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":5552,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"5552":1,"5568":42},"ok":true}
+head-p20288 a72ee0229c67500280d064d9b59bb73c7fe07ffe6284caf9f23c13c51206550f 4703752 bytes; all functions in both: 3448; moved by exactly the pad: 3448; not moved: 0; shifts: +20288 B: 3448; same offset in a 64-byte line: 3448, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":20288,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"20288":43},"ok":true}
+head-p30992 9ae0943ddadc7f68c8972f9392bc3d7f2ee85b29a65efad94f823f70b0251284 4714440 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +30992 B: 3406, +30976 B: 39, +31008 B: 3; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":30992,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"30976":39,"30992":1,"31008":3},"ok":true}
+head-p736 9637b2071f2e9cc375b0d92e0abbbf3b2046d90c044b19546ef97bf3193657b2 4684168 bytes; all functions in both: 3448; moved by exactly the pad: 3409; not moved: 0; shifts: +736 B: 3409, +704 B: 39; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":736,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"704":39,"736":4},"ok":true}
+head-p15536 b513fe5a2ca2ea6a8bf472e5145b399a0561697f2c96bcd5ad88e4360d817110 4699016 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +15536 B: 3406, +15552 B: 42; same offset in a 64-byte line: 42, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":15536,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"15536":1,"15552":42},"ok":true}
+head-p26176 9f046cb118d422e47375ddc6ba647a07af2dfe92a5cfd08f9b07ec5599f496e1 4709640 bytes; all functions in both: 3448; moved by exactly the pad: 3448; not moved: 0; shifts: +26176 B: 3448; same offset in a 64-byte line: 3448, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":26176,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"26176":43},"ok":true}
+head-p36880 ea314cead4ca40dae4e502ec711b9ca2d1baf70019e512c74a86e197e734c453 4720328 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +36880 B: 3406, +36864 B: 39, +36896 B: 3; same offset in a 64-byte line: 39, in a 4 KiB page: 39; A's neighbours still next in B, in order: 3379 of 3379; {"pad":36880,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"36864":39,"36880":1,"36896":3},"ok":true}
+head-p10720 5eb78cae9209ae41d853938435ab82de5ea6f2f75024a426315aa7be580720fb 4694152 bytes; all functions in both: 3448; moved by exactly the pad: 3409; not moved: 0; shifts: +10720 B: 3409, +10688 B: 39; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":10720,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"10688":39,"10720":4},"ok":true}
+head-p21424 ba57b14ceeafd5ef4fd659910769ec57f5b9b49341eed6c0f5604d061c392c4c 4704904 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +21424 B: 3406, +21440 B: 42; same offset in a 64-byte line: 42, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":21424,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"21424":1,"21440":42},"ok":true}
+head-p36160 f84c2ca159faec67df75ad39a5b2469b1114efe08dc58155f2da5dfb00e30be6 4719624 bytes; all functions in both: 3448; moved by exactly the pad: 3448; not moved: 0; shifts: +36160 B: 3448; same offset in a 64-byte line: 3448, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":36160,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"36160":43},"ok":true}
+head-p5904 12bb431ff05ff27386f8980bf6040ff925a05a7c7cbacdece8c10cc513edb32a 4689352 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +5904 B: 3406, +5888 B: 39, +5920 B: 3; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":5904,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"5888":39,"5904":1,"5920":3},"ok":true}
+head-p16608 d04226e1e6b7c2d62efc18d1626434c8e797271300892ba5b4b99d153e756534 4700040 bytes; all functions in both: 3448; moved by exactly the pad: 3409; not moved: 0; shifts: +16608 B: 3409, +16576 B: 39; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":16608,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"16576":39,"16608":4},"ok":true}
+head-p31408 4b2511421aa46771a6e47fe763d430efef8f5969c6158102cba55a3651b16eed 4714888 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +31408 B: 3406, +31424 B: 42; same offset in a 64-byte line: 42, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":31408,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"31408":1,"31424":42},"ok":true}
+head-p1088 06f4cbd3aa16248d7183f201ee80e2c610fc94196031e8d42631724edb55fff4 4684552 bytes; all functions in both: 3448; moved by exactly the pad: 3448; not moved: 0; shifts: +1088 B: 3448; same offset in a 64-byte line: 3448, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":1088,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"1088":43},"ok":true}
+head-p15888 9d31154f66623e8fb4e208c087c87adf2fe96cc6692901a5c7a444a547dd8786 4699336 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +15888 B: 3406, +15872 B: 39, +15904 B: 3; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":15888,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"15872":39,"15888":1,"15904":3},"ok":true}
+head-p26592 74b04103ec0a6ffbd13c8d61b4bcadfbc58e6028e836dbd90b8817df94e653f9 4710024 bytes; all functions in both: 3448; moved by exactly the pad: 3409; not moved: 0; shifts: +26592 B: 3409, +26560 B: 39; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":26592,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"26560":39,"26592":4},"ok":true}
+head-p37296 aa48a20ede569057c91a0de84da30749f8f07b8a5745c97ac4db63bb436cd68d 4720776 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +37296 B: 3406, +37312 B: 42; same offset in a 64-byte line: 42, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":37296,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"37296":1,"37312":42},"ok":true}
+head-p11072 68fa85384ca966050dd49cfabfd9a71c58225a97cc052020bd46c758984c0054 4694536 bytes; all functions in both: 3448; moved by exactly the pad: 3448; not moved: 0; shifts: +11072 B: 3448; same offset in a 64-byte line: 3448, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":11072,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"11072":43},"ok":true}
+head-p21776 e636b54f481b55620f2f766d832ceab00122d2876efa75b555218e7ad8b2a73d 4705224 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +21776 B: 3406, +21760 B: 39, +21792 B: 3; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":21776,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"21760":39,"21776":1,"21792":3},"ok":true}
+head-p36576 fed941cd0cc4994b15a81043d48828159def415ac0aa29c547967c634b027615 4720008 bytes; all functions in both: 3448; moved by exactly the pad: 3409; not moved: 0; shifts: +36576 B: 3409, +36544 B: 39; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":36576,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"36544":39,"36576":4},"ok":true}
+head-p6320 c9e5282ecca7e8879923528d035d4ad78480ce9ac6b323a9150e2b42a7ea95a9 4689800 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +6320 B: 3406, +6336 B: 42; same offset in a 64-byte line: 42, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":6320,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"6320":1,"6336":42},"ok":true}
+head-p16960 07651f355ea4fac1d122632bce35b56805cade4051be36ff3348c4eefc3df217 4700424 bytes; all functions in both: 3448; moved by exactly the pad: 3448; not moved: 0; shifts: +16960 B: 3448; same offset in a 64-byte line: 3448, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":16960,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"16960":43},"ok":true}
+head-p31760 4aef5d81a14df24752e60fc2da1a29d7c22fca18fab35d8b2a6b1334848afcf8 4715208 bytes; all functions in both: 3448; moved by exactly the pad: 3406; not moved: 0; shifts: +31760 B: 3406, +31744 B: 39, +31776 B: 3; same offset in a 64-byte line: 39, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3379 of 3379; {"pad":31760,"before":3405,"beforeExact":3405,"tail":43,"tailOwn":39,"tailShifts":{"31744":39,"31760":1,"31776":3},"ok":true}
+90 placements: functions moved by exactly their pad 306957 of 307860 (before any C code 306570 of 306570; from the C code on 1290, each by its pad or a multiple of 32 bytes less than 64 from it); neighbours kept 301650 of 301650
+allocator: jemalloc (LD_PRELOAD=libjemalloc.so.2, MALLOC_CONF=background_thread:true,tcache_max:65536)
+plan: K=5 placements, R=2 recorded pairs each after 1 unrecorded, cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u; single build SB_PAIRS=2
+PADS_P: 320 15120 25824 40624 10304
+PADS_Q: 22848 12160 38336 27648 12880
+every turn on a fresh start; server CPU 2, wrk CPUs 4,5, driver and perf CPU 7
+DRY RUN: not a measurement

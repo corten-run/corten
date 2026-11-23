@@ -1,0 +1,19 @@
+== 1971 plain verify start 14:39:46
+verify: 15 placements answer as their unpadded binary
+== 1971 plain check start 14:39:50
+aa-plain: checked 1 requests: same
+change-plain: checked 1 requests: same
+== 1971 plain checks ok 14:40:04
+aa-plain p01 ok 14:40:25
+change-plain p01 ok 14:40:46
+aa-plain p02 ok 14:41:07
+change-plain p02 ok 14:41:28
+aa-plain p03 ok 14:41:49
+change-plain p03 ok 14:42:10
+aa-plain p04 ok 14:42:31
+change-plain p04 ok 14:42:52
+aa-plain p05 ok 14:43:13
+change-plain p05 ok 14:43:34
+report: /m/1971/results/placements-plain.md
+failed: none
+ALL-DONE

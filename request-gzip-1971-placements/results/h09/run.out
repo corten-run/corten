@@ -1,0 +1,69 @@
+== 1971 plain verify start 14:45:00
+verify: 90 placements answer as their unpadded binary
+== 1971 plain check start 14:45:22
+aa-plain: checked 1 requests: same
+change-plain: checked 1 requests: same
+== 1971 plain checks ok 14:45:36
+aa-plain p01 ok 14:46:39
+change-plain p01 ok 14:47:42
+aa-plain p02 ok 14:48:44
+change-plain p02 ok 14:49:48
+aa-plain p03 ok 14:50:50
+change-plain p03 ok 14:51:53
+aa-plain p04 ok 14:52:56
+change-plain p04 ok 14:53:58
+aa-plain p05 ok 14:55:01
+change-plain p05 ok 14:56:04
+aa-plain p06 ok 14:57:07
+change-plain p06 ok 14:58:09
+aa-plain p07 ok 14:59:12
+change-plain p07 ok 15:00:15
+aa-plain p08 ok 15:01:18
+change-plain p08 ok 15:02:21
+aa-plain p09 ok 15:03:23
+change-plain p09 ok 15:04:26
+aa-plain p10 ok 15:05:28
+change-plain p10 ok 15:06:31
+aa-plain p11 ok 15:07:34
+change-plain p11 ok 15:08:36
+aa-plain p12 ok 15:09:39
+change-plain p12 ok 15:10:42
+aa-plain p13 ok 15:11:44
+change-plain p13 ok 15:12:47
+aa-plain p14 ok 15:13:50
+change-plain p14 ok 15:14:53
+aa-plain p15 ok 15:15:56
+change-plain p15 ok 15:16:58
+aa-plain p16 ok 15:18:01
+change-plain p16 ok 15:19:04
+aa-plain p17 ok 15:20:07
+change-plain p17 ok 15:21:10
+aa-plain p18 ok 15:22:13
+change-plain p18 ok 15:23:15
+aa-plain p19 ok 15:24:18
+change-plain p19 ok 15:25:21
+aa-plain p20 ok 15:26:24
+change-plain p20 ok 15:27:27
+aa-plain p21 ok 15:28:29
+change-plain p21 ok 15:29:32
+aa-plain p22 ok 15:30:35
+change-plain p22 ok 15:31:37
+aa-plain p23 ok 15:32:40
+change-plain p23 ok 15:33:43
+aa-plain p24 ok 15:34:46
+change-plain p24 ok 15:35:49
+aa-plain p25 ok 15:36:51
+change-plain p25 ok 15:37:54
+aa-plain p26 ok 15:38:57
+change-plain p26 ok 15:39:59
+aa-plain p27 ok 15:41:02
+change-plain p27 ok 15:42:05
+aa-plain p28 ok 15:43:07
+change-plain p28 ok 15:44:10
+aa-plain p29 ok 15:45:13
+change-plain p29 ok 15:46:15
+aa-plain p30 ok 15:47:18
+change-plain p30 ok 15:48:21
+report: /m/1971/results/placements-plain.md
+failed: none
+ALL-DONE

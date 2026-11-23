@@ -1,0 +1,18 @@
+/* Element defaults, and the page's colors from the kit's theme, as `corten ui init` writes them.
+   (components.css starts with the rule that keeps a part the components hide with the hidden
+   attribute hidden, whatever its display.) */
+*, *::before, *::after { box-sizing: border-box; }
+:root { color-scheme: light; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--foreground); background: var(--background); }
+:root:not([data-theme]) { color-scheme: light dark; }
+[data-theme="dark"] { color-scheme: dark; }
+[data-theme="light"] { color-scheme: light; }
+body { margin: 0; }
+main { max-width: 60rem; margin: 0 auto; padding: 40px 20px; }
+h1 { margin: 0; font-size: 2rem; letter-spacing: -0.02em; line-height: 1.2; }
+a { color: var(--primary); }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+p[role="status"] { margin: 0; font-size: .875rem; color: var(--muted-foreground); }
+/* Help: a term and its explanation, at a reading width. */
+main > p, main > dl { max-width: 40rem; }
+dt { margin-block-start: 16px; font-weight: 600; }
+dd { margin: 4px 0 0; color: var(--muted-foreground); }

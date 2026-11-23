@@ -1,0 +1,3 @@
+comparison aa-zstd placement 10 workload zstd
+A base-p30992 e19794bda38995381b6a68fa0917392007c7c3ee978fcb7af416ad51824a5bb0
+B base-p33184 79c20ea5f82574673185ab26ec5bb3dcebb90081734edef7b3b29d61b4c605dc

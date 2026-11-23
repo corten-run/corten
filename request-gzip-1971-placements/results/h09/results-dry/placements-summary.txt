@@ -1,0 +1,1 @@
+90 placements: functions moved by exactly their pad 306957 of 307860 (before any C code 306570 of 306570; from the C code on 1290, each by its pad or a multiple of 32 bytes less than 64 from it); neighbours kept 301650 of 301650

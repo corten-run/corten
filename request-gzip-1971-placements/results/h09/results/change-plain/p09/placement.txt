@@ -1,0 +1,3 @@
+comparison change-plain placement 9 workload plain
+A base-p20288 c90955135fa32e882f5c7aa2e4d2a6c849da4cf0772e78340284c228ee00317e
+B head-p20288 a72ee0229c67500280d064d9b59bb73c7fe07ffe6284caf9f23c13c51206550f

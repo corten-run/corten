@@ -1,0 +1,126 @@
+/* Wall: 1,000 samples, each a tile the color of its reading, from cold steel to white heat. */
+.wall {
+  min-width: 0;
+  scroll-margin-top: 5rem;
+  padding: clamp(0.75rem, 1.4vw, 1.25rem);
+  background: color-mix(in srgb, var(--ink) 95%, transparent);
+  box-shadow: 0 1.5rem 3rem rgb(0 0 0 / 35%);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+/* Links: a script answers a click, and the server answers where none runs. */
+.press {
+  display: inline-block;
+  padding: 0.55rem 1.1rem;
+  text-decoration: none;
+  background: var(--bone);
+  border: 0;
+  color: var(--ink);
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-size: 1.2rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.press:hover {
+  background: var(--ember);
+}
+
+.press:active {
+  transform: translateY(1px);
+}
+
+.readout {
+  flex: 1 1 16rem;
+  min-height: 1.5em;
+  color: var(--ember);
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(50, minmax(0, 1fr));
+  gap: 2px;
+}
+
+@media (max-width: 62rem) {
+  .grid {
+    grid-template-columns: repeat(40, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 36rem) {
+  .grid {
+    grid-template-columns: repeat(25, minmax(0, 1fr));
+    gap: 1px;
+  }
+}
+
+.tile {
+  aspect-ratio: 1;
+}
+
+.heat0 {
+  background: #23211f;
+}
+
+.heat1 {
+  background: #33201a;
+}
+
+.heat2 {
+  background: #4a2318;
+}
+
+.heat3 {
+  background: #602b1b;
+}
+
+.heat4 {
+  background: #753620;
+}
+
+.heat5 {
+  background: #8f4022;
+}
+
+.heat6 {
+  background: #a84c27;
+}
+
+.heat7 {
+  background: #c5652b;
+}
+
+.heat8 {
+  background: #de8233;
+}
+
+.heat9 {
+  background: #f2a44b;
+}
+
+.heat10 {
+  background: #f7c779;
+}
+
+.heat11 {
+  background: #fbe7b5;
+}
+
+/* The tiles' colors are their readings, so the system's colors do not replace them. */
+@media (forced-colors: active) {
+  .tile {
+    forced-color-adjust: none;
+  }
+}

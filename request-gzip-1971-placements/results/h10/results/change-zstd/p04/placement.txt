@@ -1,0 +1,3 @@
+comparison change-zstd placement 4 workload zstd
+A base-p40624 50b4b86770797b7cf7da4f12165c55098bb837fc86c30805be0c01b5d80ade11
+B head-p40624 79e4a3156012545090cdf92f1b897f95d483552eb4656137f3dba5ee994c9d41

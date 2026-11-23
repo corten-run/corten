@@ -1,0 +1,3 @@
+comparison change-plain placement 8 workload plain
+A base-p5552 705e2ff09e5b88fab72cff6b8091365e22079333819aa4e001374d25cf2bea50
+B head-p5552 b0dfd673556b463668d9d17bcc4654bd672a2b0b381752cce2e6e400c86597a3

@@ -1,0 +1,3 @@
+comparison change-plain placement 12 workload plain
+A base-p15536 51231e39c1fba9b43c1f2969fd73e93e81881abbedfca2d761dcbc102b5a8709
+B head-p15536 b513fe5a2ca2ea6a8bf472e5145b399a0561697f2c96bcd5ad88e4360d817110

@@ -1,0 +1,1 @@
+/private -H 'Accept-Encoding: gzip, deflate, br, zstd'

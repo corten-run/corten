@@ -1,0 +1,3 @@
+== check 1: /private
+== check 2: /private -H 'Accept-Encoding: gzip, deflate, br, zstd'
+== check 3: /private -H 'Accept-Encoding: gzip, br'

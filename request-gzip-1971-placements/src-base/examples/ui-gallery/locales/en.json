@@ -1,0 +1,5 @@
+{
+  "discount_rule": "Enter a discount above {min} and below {max} percent, or none.",
+  "minimum_ratio_rule": "Enter a ratio above {min} and at most {max}.",
+  "maximum_ratio_rule": "Enter a ratio of at least {min} and below {max}."
+}

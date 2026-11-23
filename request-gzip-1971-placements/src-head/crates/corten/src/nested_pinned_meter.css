@@ -1,0 +1,2 @@
+@property --fill { syntax: "<length>"; inherits: false; initial-value: 0px }
+.meter { &:hover { color: red } /* gap */ --fill: 2px!/**/IMPORTANT }

@@ -1,0 +1,13 @@
+== check 1: /private
+== check 2: /private -H 'Accept-Encoding: gzip, deflate, br, zstd'
+13c13
+< etag: W/"0178671834ee0036"
+---
+> etag: W/"ee15995ad31a7365"
+== check 3: /private -H 'Accept-Encoding: gzip, br'
+13c13
+< etag: W/"0178671834ee0036"
+---
+> etag: W/"ee15995ad31a7365"
+run-pair: verify: base and head answer differently
+VERIFY FAILED: base-p320 against base
