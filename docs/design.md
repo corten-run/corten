@@ -9252,6 +9252,61 @@ rules something out.
     and where its placement medians get their spread and the share of draws in which an A/A of
     each size does not resolve, worked out the same day from those results at `c448780e0`, the
     scripts and what they print under the tag `evidence/c448780e`.
+73. <a id="choice-per-core"></a>**An app may ask to be served a core at a time (`App::per_core`), and
+    is not unless it asks. Proposed with a prototype, not decided.** `serve` runs every connection
+    on the multi-threaded runtime it was called from, where a task may be taken over by another
+    thread. With `App::per_core()` the process starts one single-threaded event loop per core,
+    `serve` binds a listener per core on each address (`SO_REUSEPORT`), the system gives each new
+    connection to one of them, and the connection's requests run on that core until it closes.
+    It is still one app: one router, one store of kept answers, one set of tasks, one shutdown,
+    and `App::max_connections` and the two timeouts hold for the whole server.
+    What it bought, on HttpArena's harness (a DigitalOcean c-48, the scratch entry
+    `bench/httparena/corten` with `ARENA_MODE`, best of three, requests a second; the default
+    runtime, then `per_core()`, then the same event loops written by hand in the app's `main`):
+    baseline 795,611, 830,353 and 859,000; limited-conn 669,386, 706,597 and 693,523; async, a
+    handler that sleeps, 551,657, 872,316 and 877,078, with its 99th percentile at 96.7 ms on the
+    default runtime and 59.7 ms with `per_core()`; json-comp 188,982, 196,908 and 191,671;
+    json-tls 518,189, 536,289 and 537,957; pipelined 1,812,081, 1,887,539 and 1,927,247. That is
+    one run of the matrix, and two runs of one image there differed by 1 to 2%, so the 4 to 6% on
+    the short answers is a small gain and the 58% where every request waits on a timer is the
+    large one; why the timer profile gains that much was not looked into.
+    Why not the default: it changes what a handler may do, and what it costs was measured on
+    one kind of load. `tokio::spawn` puts a task on the handler's core and no other core takes it
+    over, so work that computes for long holds up that core's other connections;
+    `tokio::task::block_in_place` panics, as on any single-threaded runtime; and a connection is
+    never moved once accepted, so a proxy's few busy keep-alive connections can land on one core
+    while others idle. HttpArena opens hundreds of connections from one client; an app behind a
+    proxy, or one whose handlers wait on a pooled database, was not measured either way. A
+    default has to be right for those ([Values](../README.md#values), good defaults), and this
+    one is right for a shape of load that is not shown to be the common one.
+    Why a setting and not the app's own `main`: written by hand, a listener per core on each
+    address, the connection limit across cores and one shutdown are each the app's to get
+    right, and the setting keeps one way to serve.
+    Left open for the maintainer, with what the prototype found: whether it should be the
+    default after all; and whether the system should spread connections (as built: Linux only,
+    by address and port, not by load) or one acceptor should deal them to the cores in turn
+    (every system, even counts, a hand-off per connection; not built or measured). Not done in
+    the prototype: listeners the app brings for HTTPS are dealt one to a core, so the documented
+    two-listener setup serves on two cores; each core keeps a blocking pool of its own; under
+    `max_connections` each core's listener may hold one accepted connection that waits for a
+    place; nothing changes off Linux; and no guide says any of it yet.
+
+    Stands on: measured (the matrix above, one run, best of three a profile; the prototype's
+    tests on Linux: a connection served on the core that accepted it, `max_connections` held
+    for the whole server, an unfinished head closed on any core, one shutdown across the cores); reasoned
+    (a single-threaded loop takes no task from another, so the handler changes above follow from
+    tokio's documented behavior and were not each run); bet (an app with many connections and
+    handlers that wait gains what the async profile shows, and an app behind a proxy with few
+    connections loses evenness; neither app was measured); value (good defaults with an override,
+    and one way to serve, ahead of the last 4 to 6% on short answers for an app that did not ask).
+
+    Revisit when: the maintainer settles the two open questions; or an app behind a proxy, or one
+    with a pooled database, is measured both ways and the default is the slower; or tokio's
+    multi-threaded runtime wakes timers and sockets on the thread that owns them, which removes
+    most of what this buys; or an app needs it off Linux.
+
+    Last checked: 2026-11-23, the matrix above at `17b7b4c4b` on a c-48 in sfo3 (Ubuntu 24.04,
+    Linux 7.0), with HttpArena's scripts as they were that day.
 
 ## Rules
 
