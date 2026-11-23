@@ -80,21 +80,31 @@ export async function runCampaignEntry(args) {
       if (abort.signal.aborted) { status = campaign.stop(handle); break; }
       if (status.state === "active") { deadline = null; status = await campaign.advance(handle, { signal: abort.signal }); }
       else {
-        deadline ??= Date.now() + auditWaitMs;
-        if (Date.now() >= deadline) {
-          if (offlineHandoff) {
+        let remaining;
+        if (offlineHandoff) {
+          remaining = campaign.offlineAuditRemainingMs(handle);
+          if (remaining === 0) {
             const collection = campaign.expireOfflineAudit(handle);
             durable(join(handle.directory, "collection-manifest.json"), `${JSON.stringify(collection, null, 2)}\n`);
             return 2; // An exact failed archive, never a completed timing run.
           }
-          status = campaign.stop(handle, "independent native audit delivery deadline expired"); break;
+        } else {
+          deadline ??= Date.now() + auditWaitMs;
+          if (Date.now() >= deadline) {
+            status = campaign.stop(handle, "independent native audit delivery deadline expired"); break;
+          }
         }
         const group = status.auditGroup ?? "json-api", prefix = group === "mixed-production" ? "mixed" : "json";
         const pending = join(handle.directory, `${prefix}-audit-delivery-pending.json`);
         if (lstatSync(pending, { throwIfNoEntry: false })) {
           if (stream) campaign.recordStreamAudit(handle, stream.audit(group, readRegular(pending)));
           else {
-            const proof = await waitControlAdmission(control, `audit-${group}`, { signal: abort.signal, deadline });
+            // Offline admission uses the remaining monotonic budget, not the
+            // wall deadline used by the existing bootstrap/monitored path.
+            const proof = await waitControlAdmission(control, `audit-${group}`, offlineHandoff
+              ? { signal: AbortSignal.any([abort.signal, AbortSignal.timeout(remaining)]), deadline: Infinity }
+              : { signal: abort.signal, deadline });
+            if (offlineHandoff) assert.ok(campaign.offlineAuditRemainingMs(handle) > 0, "offline audit admission reached the deadline");
             campaign.recordControlAdmission(handle, proof);
           }
           // Exclusive hard-link publication; no overwrite, symlink traversal or shell.
@@ -107,6 +117,7 @@ export async function runCampaignEntry(args) {
         }
         const inbox = readAuditInbox(handle.directory, group);
         if (inbox) {
+          if (offlineHandoff) assert.ok(campaign.offlineAuditRemainingMs(handle) > 0, "offline audit delivery reached the deadline");
           transport = { sha256: inbox.sha256, group, subjectSha256: group === "mixed-production" ? status.mixedAuditSubjectSha256 : status.auditSubjectSha256 };
           status = group === "mixed-production" ? await campaign.submitMixedAudit(handle, inbox.delivery) : await campaign.submitJsonAudit(handle, inbox.delivery);
           transport = null;

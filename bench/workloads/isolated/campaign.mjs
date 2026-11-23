@@ -7,11 +7,11 @@ import { dirname, join } from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { auditWaitMs, validateCampaign, freeze, jsonPhase, mixedPhase } from "./campaign-contract.mjs";
+import { validateCampaign, freeze, jsonPhase, mixedPhase, offlineAuditRemainingMs, verifyOfflineAuditClock } from "./campaign-contract.mjs";
 import { verifyWorkingSources } from "./worker.mjs";
 import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, publishDurable, readRegular, syncDirectory, transferEvidence, tree } from "./evidence.mjs";
 import { supervise } from "./process.mjs";
-import { observeHost, udevSettleCandidates, udevSettleMs, udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
+import { observeHost, sampleAuditClock, udevSettleCandidates, udevSettleMs, udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
 import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
@@ -52,6 +52,16 @@ export function createCampaign({ authorize }) {
       kind === "phase-sealed" && data.transferDestination ? publishDurable : durable);
     c.sequence++;
     return value;
+  }
+  function waitForAudit(c, kind, data) {
+    const auditClock = c.offlineHandoff ? sampleAuditClock() : undefined;
+    if (c.offlineHandoff) verifyOfflineAuditClock(auditClock, c.offlineBootId);
+    c.state = "blocked-review-needed";
+    c.reviewWait = event(c, kind, { ...data, ...(auditClock ? { auditClock } : {}) });
+  }
+  function remainingAuditMs(c, now) {
+    assert.ok(c?.offlineHandoff && !c.busy && c.state === "blocked-review-needed" && c.reviewWait);
+    return offlineAuditRemainingMs(c.reviewWait.auditClock, now, c.offlineBootId);
   }
   function verifyPhases(c) {
     own(c.handle);
@@ -273,6 +283,7 @@ export function createCampaign({ authorize }) {
         if (control?.admission.apparatus) assert.ok(c.stream, "presealed apparatus requires independent lease enforcement");
         const observed = observeHost(c.stream?.registration); save(c, "host-initial.json", observed);
         if (control) for (const field of ["hostname", "bootId"]) assert.equal(observed[field], control.admission.host[field]);
+        if (c.offlineHandoff) c.offlineBootId = control.admission.host.bootId;
         assert.deepEqual(observed.containers, [], "fresh campaign host has preexisting containers");
         event(c, "started"); return handle;
       } catch (error) { halt(c, error); throw error; }
@@ -305,8 +316,7 @@ export function createCampaign({ authorize }) {
           const sourceRoot = join(c.directory, "mixed-audit-sources"), subject = await prepareMixedAudit(c.plan, repo, sourceRoot);
           verifyWorkingSources(c.plan.bindings[0]);
           c.mixedAudit = { sourceRoot, subject, accepted: false }; save(c, "mixed-audit-subject.json", subject);
-          c.state = "blocked-review-needed";
-          c.reviewWait = event(c, "mixed-review-needed", { subjectSha256: subject.subjectSha256 });
+          waitForAudit(c, "mixed-review-needed", { subjectSha256: subject.subjectSha256 });
           return status(c);
         }
         if (group === "json-api" && !c.audit) {
@@ -327,8 +337,8 @@ export function createCampaign({ authorize }) {
             const sources = snapshotSources(c.plan.bindings[0], repo, sourceRoot);
             const subject = auditSubject(c.plan, prepared, p.manifest, sources, images);
             c.audit = { subject, sourceRoot, prepared, accepted: false, phase: p };
-            save(c, "json-audit-subject.json", subject); c.state = "blocked-review-needed";
-            c.reviewWait = event(c, "review-needed", { subjectSha256: subject.subjectSha256, nativeExit: 1, qualification: "blocked", cleanup: p.cleanup });
+            save(c, "json-audit-subject.json", subject);
+            waitForAudit(c, "review-needed", { subjectSha256: subject.subjectSha256, nativeExit: 1, qualification: "blocked", cleanup: p.cleanup });
             return status(c);
           }
         } else {
@@ -432,18 +442,20 @@ export function createCampaign({ authorize }) {
       return status(c);
     },
     verify(handle) { const c = own(handle); verifyPhases(c); return status(c); },
+    offlineAuditRemainingMs(handle) { return remainingAuditMs(owned.get(handle), sampleAuditClock()); },
     expireOfflineAudit(handle) {
       const c = own(handle), group = c.plan.order[c.index];
       assert.ok(c.offlineHandoff && !c.busy && c.state === "blocked-review-needed" && !c.pendingNative.length);
       assert.ok(["json-api", "mixed-production"].includes(group) && c.reviewWait?.status.auditGroup === group);
-      assert.ok(Date.now() >= Date.parse(c.reviewWait.at) + auditWaitMs, "offline audit deadline has not expired");
+      const auditClock = sampleAuditClock();
+      assert.equal(remainingAuditMs(c, auditClock), 0, "offline audit deadline has not expired");
       assert.deepEqual([...c.controlEpochs], ["bootstrap"], "audit control already admitted");
       const prefix = group === "json-api" ? "json" : "mixed";
       for (const suffix of ["", "-pending", "-retained"])
         assert.equal(lstatSync(join(c.directory, `${prefix}-audit-delivery${suffix}.json`), { throwIfNoEntry: false }), undefined,
           "audit delivery may have started; preserve uncertainty");
       verifyPhases(c);
-      halt(c, new Error("independent audit expired before timing"), { group, subjectSha256: c.reviewWait.subjectSha256 });
+      halt(c, new Error("independent audit expired before timing"), { group, subjectSha256: c.reviewWait.subjectSha256, auditClock });
       return freeze({ status: status(c), manifest: tree(c.directory), wholeHostTerminal: "parent-must-observe", deletionAuthorized: false });
     },
     collect(handle) {

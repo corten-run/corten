@@ -23,6 +23,19 @@ export function exact(value, fields) {
   assert.ok(value && Object.getPrototypeOf(value) === Object.prototype, "plain object required");
   assert.deepEqual(Object.keys(value).sort(), [...fields].sort(), "unexpected or missing fields");
 }
+export function verifyOfflineAuditClock(sample, bootId) {
+  exact(sample, ["bootId", "monoNs"]);
+  assert.match(sample.bootId, /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/);
+  assert.equal(sample.bootId, bootId, "offline audit clock boot differs");
+  assert.match(sample.monoNs, /^(0|[1-9]\d{0,19})$/);
+  return BigInt(sample.monoNs);
+}
+export function offlineAuditRemainingMs(waiting, now, bootId) {
+  const elapsed = verifyOfflineAuditClock(now, bootId) - verifyOfflineAuditClock(waiting, bootId);
+  assert.ok(elapsed >= 0n, "offline audit clock regressed");
+  const remainingNs = BigInt(auditWaitMs) * 1000000n - elapsed;
+  return remainingNs > 0n ? Number((remainingNs + 999999n) / 1000000n) : 0;
+}
 export { campaignRounds };
 export function bindCampaign(input) {
   exact(input, ["round", "commit"]);
