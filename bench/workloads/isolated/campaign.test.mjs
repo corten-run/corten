@@ -329,14 +329,16 @@ test("offline native phase fences SSH on support CPU, then replays the archived 
   const { binding, admission } = JSON.parse(result.stdout), s = setupGroup("localized-marketplace");
   s.plan.round = "r21"; admittedHost = admission.host; mode = "offline-fence";
   s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2" }, load: { cpuset: "3-7" } };
-  const table = "corten_bench_native", policy = { nftables: [
+  const table = "corten_bench_native", tcpMatch = { match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 22 } };
+  const policy = { nftables: [
     { metainfo: { json_schema_version: 1 } },
     { table: { handle: 1, family: "inet", name: table } },
     { chain: { handle: 2, family: "inet", table, name: "input", type: "filter", hook: "input", prio: 10, policy: "accept" } },
     { rule: { handle: 3, family: "inet", table, chain: "input", expr: [
-      { match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 22 } },
-      { counter: { packets: 0, bytes: 0 } }, { drop: null },
+      tcpMatch, { match: { op: "==", left: { "&": [{ payload: { protocol: "tcp", field: "flags" } }, ["fin", "syn", "rst", "ack"]] }, right: "syn" } },
+      { limit: { rate: 8, burst: 8, per: "minute" } }, { counter: { packets: 0, bytes: 0 } }, { drop: null },
     ] } },
+    { rule: { handle: 4, family: "inet", table, chain: "input", expr: [tcpMatch, { counter: { packets: 0, bytes: 0 } }, { drop: null }] } },
   ] };
   const events = [];
   t.mock.method(childProcess, "spawnSync", (program, args, opts) => {
@@ -350,8 +352,10 @@ test("offline native phase fences SSH on support CPU, then replays the archived 
       assert.equal(program, "/usr/bin/taskset");
       assert.deepEqual(args.slice(0, 3), ["-c", "0", "/usr/sbin/nft"]);
       events.push(args[3]);
-      if (args[3] === "-f") assert.match(opts.input, /tcp dport 22 counter drop\n$/);
+      if (args[3] === "-f") assert.equal(opts.input, controlAdmission.offlineFenceRules);
       else assert.deepEqual(args.slice(-3), ["table", "inet", table]);
+      if (args[3] === "-j" && events.includes("window-close"))
+        policy.nftables[3].rule.expr[3].counter = { packets: 2, bytes: 120 };
     }
     return { status: 0, stdout: JSON.stringify(policy) };
   });
@@ -369,7 +373,18 @@ test("offline native phase fences SSH on support CPU, then replays the archived 
     bootstrapSealSha256: evidence.digest(JSON.stringify(admission.seal.ledger)) });
   const phase = "00-localized-marketplace-timing", raw = join(handle.directory, phase, "control-ingress.json");
   const changed = JSON.parse(readFileSync(raw));
-  changed.after.nftables[3].rule.expr[1].counter = { packets: 1, bytes: 60 };
+  assert.deepEqual(changed.after.nftables[3].rule.expr[3].counter, { packets: 2, bytes: 120 });
+  assert.doesNotThrow(() => controlAdmission.verifyOfflineWindow(changed));
+  for (const mutate of [
+    ({ before }) => { before.nftables[3].rule.expr[3].counter = { packets: 3, bytes: 180 }; },
+    ({ after }) => { after.nftables[3].rule.handle++; },
+    ({ after }) => { after.nftables[3].rule.expr[1].match.right = "ack"; },
+    ({ after }) => { after.nftables[3].rule.expr[2].limit.burst++; },
+  ]) {
+    const wrong = structuredClone(changed); mutate(wrong);
+    assert.throws(() => controlAdmission.verifyOfflineWindow(wrong));
+  }
+  changed.after.nftables[4].rule.expr[1].counter = { packets: 1, bytes: 60 };
   assert.throws(() => controlAdmission.verifyOfflineWindow(changed));
   // Matching hashes cannot repair a bad fence observation.
   writeFileSync(raw, JSON.stringify(changed));
