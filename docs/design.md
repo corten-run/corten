@@ -8304,8 +8304,9 @@ rules something out.
     answers it can be; with both, the browsers' share depends on which answers follow the
     encoding's publication. And that many
     only if the queue takes the job at the due and its encoding is published
-    promptly, the store admits the bytes, and they are smaller than the form made for the coding
-    each answer would get otherwise: a full queue is asked again only a whole due later, a late or
+    promptly, the store admits the bytes, and, where the form for the coding each answer would get
+    otherwise has been made already, they are smaller than it (one not made yet is not made to
+    compare): a full queue is asked again only a whole due later, a late or
     refused encoding sends none, and a smaller form already made wins. Every
     answer before the due writes the page's count, where the second answer had been the last to:
     callgrind counts that write's instructions, not what it costs where several cores answer
