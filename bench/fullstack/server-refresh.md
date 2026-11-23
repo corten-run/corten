@@ -111,7 +111,8 @@ lists published security fixes that the 2026-11-13 refresh predates or did not r
 New builds take the patched release in each framework and runtime line; no OS base changes.
 The exception is the live Gin app's four pre-1.0 `golang.org/x` modules (net, crypto, text,
 sys): they cross minor versions on purpose, to the fixed versions the fullstack Gin app
-already uses, so both Gin apps build the same module versions.
+already uses, so both Gin apps build the same versions of the modules this change moves
+(their other modules, such as go-isatty, still differ).
 Rounds and groups measured before this change keep the versions their commit and receipts
 record, and nothing here is a performance measurement.
 
