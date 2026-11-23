@@ -764,6 +764,10 @@ Before reserving a new grouped fleet, its [placement preflight](../../bench/work
 checks the provider's size and region listings for all required hosts. The
 reservation fixes those locations; create never tries a different region.
 
+New guest reservations use the [pinned upstream Git verifier](../../bench/workloads/CLOUD.md#public-source-permissions)
+before checkout, without relying on Launchpad. A failed verification or Git
+capability check is a setup failure, not benchmark evidence.
+
 For a partial round, the [independent group procedure](../../bench/workloads/CLOUD.md#independent-group-continuation)
 replays completed results from their original evidence and reserves only the
 named missing group. Different groups in the same continuation can measure on

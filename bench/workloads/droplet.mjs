@@ -751,7 +751,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           token: fleet ? fleet.jobs.find((row) => row.group === options.group).token : randomBytes(8).toString("hex"),
           ...(fleet ? { group: options.group, fleet } : {}),
           ...(remainingPlacement ? { remainingPlacement } : {}) }),
-          provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false, benchPackage: true,
+          provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false, benchPackage: true, gitSource: true,
           ...(fleet ? { quietBootstrap: "prelogin" } : {}),
           control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
             monitor: { schema: "benchmark-supervised-control/v1", id: randomBytes(16).toString("hex"), phase: "pending" } } };
