@@ -546,7 +546,8 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
             && (options["admit-remaining"] ? claimHost(job.group, closed)
               : !admittedIds.has(state.id) && !admittedIps.has(state.ip))
           : code === 3 ? state.status === "running"
-          : retired || [0, 1].includes(code) && state.status === "collected" && state.destroyedAt && state.exitCode === code
+          : retired || [0, 1].includes(code) && state.status === "collected" && state.destroyedAt
+            && (state.exitCode === code || offline && code === 1 && state.exitCode === 2 && state.validation?.status === "blocked")
             && (code === 0 ? state.validation?.status === "verified" : ["failed", "blocked"].includes(state.validation?.status)));
         if (!consistent) Object.assign(row, { outcome: "error", error: "group-state-invalid" });
         else if (closed) row.collection = "separate-child-approval-required";

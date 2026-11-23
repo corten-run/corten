@@ -46,12 +46,18 @@ mock.module("./campaign.mjs", { exports: { createCampaign({ authorize }) {
         fixture.steps.push("finish"); fixture.state = "finished";
       } else {
         fixture.state = "blocked-review-needed";
-        writeFileSync(join(fixture.handle.directory, prefix + "-audit-delivery-pending.json"), "{}", { mode: 0o600 });
+        if (!fixture.expire)
+          writeFileSync(join(fixture.handle.directory, prefix + "-audit-delivery-pending.json"), "{}", { mode: 0o600 });
       }
       return status();
     },
     recordControlAdmission() { fixture.steps.push("drained"); },
     submitJsonAudit: submit, submitMixedAudit: submit,
+    expireOfflineAudit(handle) {
+      assert.equal(handle, fixture.handle);
+      fixture.steps.push("expire"); fixture.state = "preserved-uncertain";
+      return { status: status() };
+    },
     collect() { fixture.steps.push("collect"); return { status: status() }; },
   };
 } } });
@@ -80,6 +86,23 @@ for (const group of ["localized-marketplace", "json-api", "mixed-production"]) {
       ? [] : ["admit:audit-" + group, "drained", "submit"]), "finish", "collect", "replay"]);
   });
 }
+
+test("an offline audit wait writes a terminal failure manifest and returns 2 without timing or delivery", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "corten-offline-handoff-"));
+  t.after(() => rmSync(root, { recursive: true }));
+  const handle = { id: "r21-0123456789abcdef", directory: join(root, "r21-0123456789abcdef") };
+  mkdirSync(handle.directory);
+  fixture = { group: "json-api", handle, steps: [], state: "active", expire: true };
+  let now = 0;
+  t.mock.method(Date, "now", () => {
+    if (fixture.state === "blocked-review-needed") now += contracts.auditWaitMs;
+    return now;
+  });
+  assert.equal(await runCampaignEntry(["r21", "--commit", binding.commit, "--state-dir", "/bench/campaign", "--group", fixture.group]), 2);
+  assert.deepEqual(fixture.steps, ["admit:bootstrap", "activate", "begin", "expire"]);
+  const manifest = JSON.parse(readFileSync(join(handle.directory, "collection-manifest.json"), "utf8"));
+  assert.equal(manifest.status.state, "preserved-uncertain");
+});
 
 test("an offline handoff must not silently adopt a stream apparatus", async () => {
   fixture = { steps: [], apparatus: true };

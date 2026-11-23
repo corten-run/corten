@@ -3,14 +3,14 @@ import { linkSync, lstatSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { campaignRounds } from "./campaign-contract.mjs";
+import { auditWaitMs, campaignRounds } from "./campaign-contract.mjs";
 import { alternateCampaignPlacements } from "./contract.mjs";
 import { catalogFleetPlacement } from "../cloud-contract.mjs";
 import { groupNames } from "../registry.mjs";
 import { digest, durable, physical, readRegular } from "./evidence.mjs";
 import { superviseControlStream } from "./control-stream-remote.mjs";
 
-export const auditWaitMs = 24 * 60 * 60 * 1000;
+export { auditWaitMs };
 export function parseCampaignArgs(args) {
   assert.ok(Array.isArray(args) && args.every((v) => typeof v === "string"));
   assert.ok([5, 7, 9].includes(args.length), `usage: campaign-entry.mjs rN --commit SHA --state-dir /bench/campaign [--group GROUP [--load-layout c16-generator-v1 | --placement ${alternateCampaignPlacements.join("|")}]]`);
@@ -81,7 +81,14 @@ export async function runCampaignEntry(args) {
       if (status.state === "active") { deadline = null; status = await campaign.advance(handle, { signal: abort.signal }); }
       else {
         deadline ??= Date.now() + auditWaitMs;
-        if (Date.now() >= deadline) { status = campaign.stop(handle, "independent native audit delivery deadline expired"); break; }
+        if (Date.now() >= deadline) {
+          if (offlineHandoff) {
+            const collection = campaign.expireOfflineAudit(handle);
+            durable(join(handle.directory, "collection-manifest.json"), `${JSON.stringify(collection, null, 2)}\n`);
+            return 2; // An exact failed archive, never a completed timing run.
+          }
+          status = campaign.stop(handle, "independent native audit delivery deadline expired"); break;
+        }
         const group = status.auditGroup ?? "json-api", prefix = group === "mixed-production" ? "mixed" : "json";
         const pending = join(handle.directory, `${prefix}-audit-delivery-pending.json`);
         if (lstatSync(pending, { throwIfNoEntry: false })) {

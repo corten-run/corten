@@ -416,12 +416,23 @@ An [offline single-group handoff](../CLOUD.md#offline-handoff) writes execution
 version 6. It uses the registered bootstrap and audit epochs without a stream.
 Each phase seal includes the guest SSH fence readbacks before and after work;
 replay requires the exact policy with zero excess/non-SYN hits, monotonic counts
-for rate-bounded pre-login SYNs, and the ordinary lifetimes, workload evidence and audit
-gates. The two udev-settle cases use monotonic
+for rate-bounded pre-login SYNs, and the ordinary lifetimes, workload evidence and
+audit gates. Replay reports the packet and byte deltas by sealed phase in
+`offlineIngress`. Untimed preparation permits bounded denied SYNs; official timing
+requires zero. A valid archive with denied SYNs during timing stays replayable
+but cannot supply a comparison. The two udev-settle cases use monotonic
 bookends taken on that boot, not workstation timestamps. For a finished archive
 the replay result can bind the boot, hostname, ownership token and exact
 bootstrap seal ledger to the collector's reservation. That binding is not a
 whole-host terminal observation or permission to destroy the host.
+
+An offline JSON or mixed audit wait with no delivery or audit admission can
+seal a terminal failure after 24 hours. Replay matches the expired subject
+and bootstrap seal, requires JSON's sealed preparation or mixed's absent
+native phase, and reports `offlineAuditExpired` without timing results. The
+separate collector can use this archived failure only alongside fresh whole-host
+terminal and quiescence checks. Other unsealed or uncertain failures do not
+qualify for this path.
 
 ## Awaitable intrinsic API
 

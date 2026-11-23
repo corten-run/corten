@@ -264,15 +264,37 @@ export function campaignOutcome(report, s, exitCode) {
     const bootstrapSealSha256 = createHash("sha256").update(JSON.stringify(last.request.seal)).digest("hex");
     assert.deepEqual(report.offlineTerminal, { hostname: s.name, bootId: s.bootstrapReady.bootId, token: s.token, bootstrapSealSha256 },
       "offline replay does not match the acknowledged host, boot and bootstrap ledger");
-  } else assert.equal(report.offlineTerminal, undefined, "offline evidence cannot qualify a different reservation mode");
+    assert.ok(Array.isArray(report.offlineIngress) && report.offlineIngress.length <= (s.group === "json-api" ? 2 : 1));
+    assert.equal(new Set(report.offlineIngress.map(({ phase }) => phase)).size, report.offlineIngress.length);
+    for (const ingress of report.offlineIngress) {
+      assert.deepEqual(Object.keys(ingress).sort(), ["bytes", "group", "packets", "phase"]);
+      assert.equal(ingress.group, s.group);
+      assert.ok(ingress.phase === "timing" || s.group === "json-api" && ingress.phase === "prepare");
+      assert.ok([ingress.bytes, ingress.packets].every((n) => Number.isSafeInteger(n) && n >= 0));
+      assert.ok(ingress.packets ? ingress.bytes >= ingress.packets : ingress.bytes === 0);
+      if (report.status === "verified" && ingress.phase === "timing") assert.equal(ingress.packets, 0);
+    }
+    if (report.status === "verified") assert.ok(report.offlineIngress.some(({ phase }) => phase === "timing"));
+  } else for (const field of ["offlineTerminal", "offlineIngress", "offlineAuditExpired"])
+    assert.equal(report[field], undefined, "offline evidence cannot qualify a different reservation mode");
   assert.ok(Array.isArray(report.blockers) && report.blockers.every((b) => typeof b === "string"));
   for (const key of ["campaignSha256", "sourceSha256", "archiveTreeSha256", "reservationSha256"]) full(report[key], /[a-f0-9]{64}/, key);
-  assert.equal(exitCode, report.status === "verified" ? 0 : 1, "native CLI exit disagrees or remains uncertain; preserve host");
+  if (report.offlineAuditExpired) {
+    assert.equal(exitCode, 2);
+    assert.equal(report.status, "blocked"); assert.deepEqual(report.groups, []);
+    assert.deepEqual(Object.keys(report.offlineAuditExpired).sort(), ["group", "subjectSha256"]);
+    assert.equal(report.offlineAuditExpired.group, s.group);
+    assert.ok(["json-api", "mixed-production"].includes(s.group));
+    assert.ok(!s.auditIntents?.[s.group] && !s.auditIntent && !s.control.ledger.some(({ request }) => request.epoch.startsWith("audit-")),
+      "audit control or delivery may have started; preserve host");
+    full(report.offlineAuditExpired.subjectSha256, /[a-f0-9]{64}/, "expired audit subject identity");
+    assert.deepEqual(report.offlineIngress.map(({ phase }) => phase), s.group === "json-api" ? ["prepare"] : []);
+  } else assert.equal(exitCode, report.status === "verified" ? 0 : 1, "native CLI exit disagrees or remains uncertain; preserve host");
   if (report.status === "verified") {
     const fields = ["schema", "scope", "status", "round", "commit", "campaign", "campaignSha256", "sourceSha256", "selection", "groups", "blockers",
       "collectionIntegrity", "commandLifecycle", "uncollectedNativeRoots", "archiveTreeSha256", "reservationSha256"];
     if (s.control?.monitor?.phase === "closed") fields.push("supervisedTerminal");
-    if (offline) fields.push("offlineTerminal");
+    if (offline) fields.push("offlineTerminal", "offlineIngress");
     if (loadLayout) fields.push("loadLayout");
     if (placement) fields.push("placement");
     assert.deepEqual(Object.keys(report).sort(), fields.sort(), "verified inspection schema differs");

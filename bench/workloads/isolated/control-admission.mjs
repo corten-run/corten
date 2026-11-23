@@ -147,6 +147,7 @@ export function verifyOfflineWindow(proof) {
   assert.ok(after.packets >= before.packets && after.bytes >= before.bytes
     && (after.packets === before.packets ? after.bytes === before.bytes : after.bytes - before.bytes >= after.packets - before.packets),
   "pre-login probe counters regressed or diverged");
+  return { packets: after.packets - before.packets, bytes: after.bytes - before.bytes };
 }
 export function beginOfflineWindow(binding) {
   // Block new SSH input before checking that the preceding guarded epoch
@@ -157,9 +158,9 @@ export function beginOfflineWindow(binding) {
   return () => {
     close();
     const proof = { before, after: fenceRead() };
-    verifyOfflineWindow(proof);
+    const ingress = verifyOfflineWindow(proof);
     nft(["delete", "table", "inet", fenceTable]);
-    return proof;
+    return { proof, ingress };
   };
 }
 export function controlOperation(binding, mode) {

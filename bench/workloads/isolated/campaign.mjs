@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { validateCampaign, freeze, jsonPhase, mixedPhase } from "./campaign-contract.mjs";
+import { auditWaitMs, validateCampaign, freeze, jsonPhase, mixedPhase } from "./campaign-contract.mjs";
 import { verifyWorkingSources } from "./worker.mjs";
 import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, publishDurable, readRegular, syncDirectory, transferEvidence, tree } from "./evidence.mjs";
 import { supervise } from "./process.mjs";
@@ -51,6 +51,7 @@ export function createCampaign({ authorize }) {
     save(c, `${String(value.sequence).padStart(5, "0")}-${kind}.json`, value,
       kind === "phase-sealed" && data.transferDestination ? publishDurable : durable);
     c.sequence++;
+    return value;
   }
   function verifyPhases(c) {
     own(c.handle);
@@ -75,14 +76,15 @@ export function createCampaign({ authorize }) {
       controllerReady: false, isolation: "unverified", executionAuthorized: "separate-parent-policy",
       reservation: "retained-no-release-or-restart" });
   }
-  function halt(c, error) {
+  function halt(c, error, expiry) {
     c.state = "preserved-uncertain";
     for (const binding of c.plan.bindings.slice(c.index)) {
       if (!c.outcomes.some((r) => r.group === binding.request.group)) c.outcomes.push({ group: binding.request.group,
         outcome: c.attempted.has(binding.request.group) ? "preserved-uncertain" : "not-run", coverage: binding.coverage,
         blockers: ["campaign halted; no retry or assumed cleanup", error.message] });
     }
-    event(c, "halted", { error: error.message });
+    if (expiry) event(c, "offline-audit-expired", expiry);
+    else event(c, "halted", { error: error.message });
     save(c, "campaign-result.json", { status: status(c), wholeHostTerminal: "parent-must-observe", deletionAuthorized: false });
   }
   async function exclusive(handle, fn) {
@@ -207,7 +209,9 @@ export function createCampaign({ authorize }) {
     save(c, `${relative}/native-manifest.json`, manifest);
     if (c.offlineHandoff) {
       if (boundaryError) throw boundaryError;
-      save(c, `${relative}/control-ingress.json`, closeControlWindow());
+      const { proof, ingress } = closeControlWindow();
+      p.offlineIngress = ingress;
+      save(c, `${relative}/control-ingress.json`, proof);
     }
     event(c, "phase-sealed", { ...pending, nativeManifestSha256: manifest.sha256,
       phaseManifestSha256: phaseSnapshot(directory, binding.request.group === "json-api" && phaseName === "prepare").sha256 });
@@ -301,7 +305,8 @@ export function createCampaign({ authorize }) {
           const sourceRoot = join(c.directory, "mixed-audit-sources"), subject = await prepareMixedAudit(c.plan, repo, sourceRoot);
           verifyWorkingSources(c.plan.bindings[0]);
           c.mixedAudit = { sourceRoot, subject, accepted: false }; save(c, "mixed-audit-subject.json", subject);
-          c.state = "blocked-review-needed"; event(c, "mixed-review-needed", { subjectSha256: subject.subjectSha256 });
+          c.state = "blocked-review-needed";
+          c.reviewWait = event(c, "mixed-review-needed", { subjectSha256: subject.subjectSha256 });
           return status(c);
         }
         if (group === "json-api" && !c.audit) {
@@ -323,7 +328,7 @@ export function createCampaign({ authorize }) {
             const subject = auditSubject(c.plan, prepared, p.manifest, sources, images);
             c.audit = { subject, sourceRoot, prepared, accepted: false, phase: p };
             save(c, "json-audit-subject.json", subject); c.state = "blocked-review-needed";
-            event(c, "review-needed", { subjectSha256: subject.subjectSha256, nativeExit: 1, qualification: "blocked", cleanup: p.cleanup });
+            c.reviewWait = event(c, "review-needed", { subjectSha256: subject.subjectSha256, nativeExit: 1, qualification: "blocked", cleanup: p.cleanup });
             return status(c);
           }
         } else {
@@ -353,7 +358,8 @@ export function createCampaign({ authorize }) {
             assert.equal(observation.manifestSha256, hostManifestSha256);
             host = composeHostProof(effective, native, observation);
           }
-          c.outcomes.push({ group, ...composePhase(effective, native, host, p.commands, !["json-api", "mixed-production"].includes(group) || timingAudit.complete), host,
+          const auditedTiming = !["json-api", "mixed-production"].includes(group) || timingAudit.complete;
+          c.outcomes.push({ group, ...composePhase(effective, native, host, p.commands, auditedTiming, p.offlineIngress?.packets), host,
             nativeManifestSha256: p.manifest.sha256, cleanup: p.cleanup, isolation: "external-exclusive-host-policy" });
         }
         c.index++; event(c, "group-finished", c.outcomes.at(-1));
@@ -426,6 +432,20 @@ export function createCampaign({ authorize }) {
       return status(c);
     },
     verify(handle) { const c = own(handle); verifyPhases(c); return status(c); },
+    expireOfflineAudit(handle) {
+      const c = own(handle), group = c.plan.order[c.index];
+      assert.ok(c.offlineHandoff && !c.busy && c.state === "blocked-review-needed" && !c.pendingNative.length);
+      assert.ok(["json-api", "mixed-production"].includes(group) && c.reviewWait?.status.auditGroup === group);
+      assert.ok(Date.now() >= Date.parse(c.reviewWait.at) + auditWaitMs, "offline audit deadline has not expired");
+      assert.deepEqual([...c.controlEpochs], ["bootstrap"], "audit control already admitted");
+      const prefix = group === "json-api" ? "json" : "mixed";
+      for (const suffix of ["", "-pending", "-retained"])
+        assert.equal(lstatSync(join(c.directory, `${prefix}-audit-delivery${suffix}.json`), { throwIfNoEntry: false }), undefined,
+          "audit delivery may have started; preserve uncertainty");
+      verifyPhases(c);
+      halt(c, new Error("independent audit expired before timing"), { group, subjectSha256: c.reviewWait.subjectSha256 });
+      return freeze({ status: status(c), manifest: tree(c.directory), wholeHostTerminal: "parent-must-observe", deletionAuthorized: false });
+    },
     collect(handle) {
       const c = own(handle); assert.equal(c.busy, false); assert.equal(c.state, "finished", "whole campaign is not finished");
       verifyPhases(c); return freeze({ status: status(c), manifest: tree(c.directory), wholeHostTerminal: "parent-must-observe", deletionAuthorized: false });
