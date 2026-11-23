@@ -258,6 +258,8 @@ test("account settlement requires a clean exit strictly before the request deadl
       now = start + budget - (atDeadline ? 0 : 1);
     } });
     a.arm(false); assert.equal((await w.run(account, budget)).status, 0); a.arm(true);
+    // Only the exit handler sees the boundary; the later close check cannot substitute for it.
+    w.child.once("exit", () => { now = start + budget - 1; });
     if (atDeadline) {
       await assert.rejects(w.run(account, budget), (error) => error.controlUncertain === true);
       await assert.rejects(w.run.close(), (error) => error.controlUncertain === true);
