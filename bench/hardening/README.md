@@ -34,6 +34,14 @@ A passed row is not evidence that those protections exist.
 Connection-flood resistance: not measured.
 
 Use the [grouped benchmark procedure](../workloads/CLOUD.md) for an official round.
+Before the first cell, the runner prepares its Node upstream, Playwright checker,
+nginx edge and OpenSSL certificate images. It reuses successful local lookups
+and otherwise makes one bounded pull of the same reference. The Playwright
+reference follows the pinned browser-driver version. The runner records and
+uses the inspected image IDs; failure here is an apparatus failure, not a
+framework result. This setup does not warm any measured endpoint or alter the
+request schedule.
+
 Isolated grouped runs pin the service, upstream, optional proxy, apparatus and host
 command to separate CPU sets. Replay checks live Linux cgroups for the service
 containers and native probe at the two boundaries of the probe's work, including

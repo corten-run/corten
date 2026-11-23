@@ -166,12 +166,20 @@ test("client comparison requires recipe, native admission, valid host and per-ca
   assert.deepEqual(result.appOutcomes.map((r) => r.comparisonEligible), [false, true, false, false, false, false]);
   assert.deepEqual(result.appOutcomes.find((r) => r.app === "react").comparison, comparison);
   assert.ok(composePhase(b, replicated, host, [command]).appOutcomes.every((r) => !r.comparisonEligible && !r.comparison));
-  // Even independent native admission cannot waive the actual forced Remix edge.
+  // Only comparison-eligible current rows are emitted. Native admission
+  // still cannot waive a historical or other candidate freshness blocker.
   const allAdmitted = { ...replicated, comparisonEligibleApps: apps, comparisons: Object.fromEntries(apps.map((app) => [app, comparison])) };
-  const gated = composePhase(comparisonBinding, allAdmitted, host, [command]);
-  assert.equal(gated.appOutcomes.find((r) => r.app === "remix").comparisonEligible, false);
-  assert.ok(gated.appOutcomes.filter((r) => ["remix", "solid"].includes(r.app)).every((r) => r.comparison === undefined));
-  assert.equal(p.candidates.find((r) => r.app === "remix").status, "blocked");
+  const fresh = composePhase(comparisonBinding, allAdmitted, host, [command]);
+  assert.equal(fresh.appOutcomes.find((r) => r.app === "remix").comparisonEligible, true);
+  assert.equal(fresh.appOutcomes.find((r) => r.app === "solid").comparison, undefined);
+  const blocked = structuredClone(p);
+  Object.assign(blocked.candidates.find((r) => r.app === "remix"), {
+    status: "blocked", latestStableEligible: false, blockers: ["incompatible-dependency:node_modules/@remix-run/test:esbuild"],
+  });
+  const gated = composePhase({ ...comparisonBinding, latestStable: blocked }, allAdmitted, host, [command]);
+  const remix = gated.appOutcomes.find((r) => r.app === "remix");
+  assert.equal(remix.comparisonEligible, false);
+  assert.equal(remix.comparison, undefined);
   assert.equal(gated.appOutcomes.find((r) => r.app === "react").comparisonEligible, true);
   for (const [policy, hostState, audit] of [
     [null, host, true], [undefined, host, true], [{ ...qualified, schema: latestStableSchema }, host, true],

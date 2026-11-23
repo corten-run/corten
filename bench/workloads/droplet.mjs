@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleetRegion, ownedDroplet, reservation, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
+import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerCheckSeconds, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash, withVerifiedArchive } from "./cloud-local.mjs";
 import { campaignOutcome, controllerFailure, controllerState, fleetCatalogResult, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
@@ -66,6 +66,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     replace(staging, statePath); syncDirectory(local);
   };
   const save = () => { check(); writeState(state); };
+  let launchPeers;
   // Cancellation forbids further work, not recording how the owned monitor ended.
   // Record only the ending and, if cancellation beat the live-state write,
   // the registration already received from this stream. Never adopt a file alone.
@@ -148,6 +149,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(providerAccount(value), state.provider.accountId, "provider account identity changed; preserve uncertainty");
     };
     await account();
+    if (args[0] === "compute" && args[1] === "droplet" && args[2] === "create") {
+      // Check after the final account read, before recording or dispatching a create.
+      launchPeers = checkFleetAdmission?.(true);
+      state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
+    }
     const expiry = prepareDelete ? await prepareDelete.expiresAt() : deleteProofExpiresAtMs;
     const result = await invoke(scoped(args), allowFail, expiry);
     if (prepareDelete) assert.ok(result.status === 0 && !result.error, "delete outcome uncertain; preserve intent");
@@ -552,11 +558,43 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const evidence = unusedEvidence(raw, state, script, startedAtMs, finishedAtMs, knownHostsSha256);
     return retire("unused", evidence, finishedAtMs);
   };
+  const refuseSetup = (stage) => { throw Object.assign(new Error(stage), { controllerStage: stage }); };
+  const checkSetupCustody = (exit) => {
+    const custody = join(local, state.evidence, "control");
+    if (existsSync(custody) && readdirSync(custody).some((name) => /^watch-failure-[a-f0-9]{32}\.json$/.test(name)))
+      refuseSetup("setup-watcher-proof-missing");
+    // An acknowledged refusal is not a missing result. Do not append more
+    // controls on restart or treat the refusal as permission to retire.
+    const rows = state.control.ledger, last = rows.at(-1);
+    if (last?.setupProofRejected) refuseSetup("setup-host-proof-refused");
+    if (last?.localTerminal && last.code > 0 && last.code < 255 && last.request.epoch === "collection"
+      && last.request.invocation.channel === "ssh"
+      && last.request.invocation.requestSha256 === digest(`set -euo pipefail\n${terminalSetupScript(state, exit, rows.length - 1)}\n`))
+      refuseSetup("setup-host-proof-refused");
+  };
   const retireFailedSetup = async () => {
     assert.ok(["starting", "running"].includes(state.status) && !preserveOperationLock, "uncertain work cannot use setup retirement");
-    const exit = setupExit(), script = terminalSetupScript(state, exit), startedAtMs = Date.now();
-    const raw = (await ssh(script, 30000)).stdout, finishedAtMs = Date.now();
-    const evidence = setupEvidence(raw, state, script, exit, startedAtMs, finishedAtMs, local);
+    const exit = setupExit(), beforeEntry = !!state.preBootstrapTerminal;
+    if (beforeEntry) checkSetupCustody(exit);
+    const script = terminalSetupScript(state, exit), startedAtMs = Date.now();
+    const sequence = state.control?.ledger.length;
+    const result = await ssh(script, 30000, beforeEntry).catch((error) => {
+      // The SSH checkpoint may abort after saving the exit but before handing
+      // back the proof. Leave the lock: the reply was neither accepted nor rejected.
+      const row = beforeEntry && state.control.ledger[sequence];
+      if (row?.localTerminal && row.code === 0) preserveOperationLock = true;
+      throw error;
+    }), finishedAtMs = Date.now();
+    if (result.status !== 0 || result.error) refuseSetup("setup-host-proof-refused");
+    let evidence;
+    try { evidence = setupEvidence(result.stdout, state, script, exit, startedAtMs, finishedAtMs, local); }
+    catch (error) {
+      if (!beforeEntry) throw error;
+      // The command exited zero; its response did not prove safe retirement.
+      state.control.ledger.at(-1).setupProofRejected = true;
+      try { save(); } catch (writeError) { preserveOperationLock = true; throw writeError; }
+      refuseSetup("setup-host-proof-refused");
+    }
     return retire("setup-failed", evidence, finishedAtMs);
   };
   async function retireNativeFailure(controllerCommit, grouped) {
@@ -711,6 +749,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           ...(fleet ? { group: options.group, fleet } : {}),
           ...(remainingPlacement ? { remainingPlacement } : {}) }),
           provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false, benchPackage: true,
+          ...(fleet ? { quietBootstrap: "after-start" } : {}),
           control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
             monitor: { schema: "benchmark-supervised-control/v1", id: randomBytes(16).toString("hex"), phase: "pending" } } };
         controlEpoch = "bootstrap";
@@ -737,8 +776,6 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             fleetRegion(catalog, remainingPlacement?.region ?? fleet.host.region,
               { remainingOnly: remainingAdmission, staged: stagedFleet(fleet), group: fleet.single?.group });
           }
-          const peers = checkFleetAdmission?.(true);
-          state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
           const created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
             "--ssh-keys", options.sshKey, "--tag-names", [...tags, state.tag].join(","), "--wait", "--output", "json"], 10 * 60000, true);
           // Lost acknowledgement permits only identity reconciliation, never another create.
@@ -752,7 +789,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             const diagnostic = providerFailure(created);
             throw Object.assign(new Error("create completion was not proved; allocation retained for recovery"), diagnostic ? { providerDiagnostic: diagnostic } : {});
           }
-          assert.ok(!fleet?.single || !peers?.some((peer) => peer.id === state.id || peer.ip === state.ip),
+          assert.ok(!fleet?.single || !launchPeers?.some((peer) => peer.id === state.id || peer.ip === state.ip),
             "newly bound host duplicates a supervised peer; retain custody without provisioning");
           const completed = JSON.parse(created.stdout);
           assert.ok(Array.isArray(completed) && completed.length === 1 && Number.isSafeInteger(completed[0]?.id)
@@ -765,8 +802,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             durable(join(local, name), content); await scp(join(local, name), `root@${state.ip}:/bench/${name}`);
             await ssh(`printf '%s  %s\\n' '${digest(content)}' '/bench/${name}' | sha256sum --check --status`);
           }
-          await ssh(`bash -n /bench/job.sh && bash -n /bench/pack.sh && install -m 644 /bench/${state.unit} /etc/systemd/system/${state.unit} && systemd-analyze verify /etc/systemd/system/${state.unit} && systemctl daemon-reload`);
+          await ssh(installBenchmarkUnit(state));
           state.status = "starting"; save(); await ssh(`systemctl start ${state.unit}`);
+          // The start itself is a root login. Do not open the first status SSH
+          // while the service drains that login and checks the manager.
+          if (state.quietBootstrap) {
+            for (let second = 0; second < rootManagerDrainSeconds + rootManagerCheckSeconds; second++) {
+              check();
+              await sleep(1000);
+            }
+          }
           await requireActiveStartup("group ended before running admission; collect its evidence");
           state.status = "running"; save();
           try { await commonBootstrap(); }
@@ -892,6 +937,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           await confirmDeleted();
           state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
         }
+        if (setupCandidate && state.evidence) checkSetupCustody(setupExit());
         assert.ok(state.control?.monitor || !state.control?.sealed.includes("bootstrap"),
           "terminal status unavailable without SSH intrusion; preserve host; registered native collection needs an approved observation protocol");
         assert.ok(state.createIntentAt, "no create intent; reservation requires operator inspection");

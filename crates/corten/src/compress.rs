@@ -143,8 +143,8 @@ fn each_accepted(headers: &HeaderMap, mut f: impl FnMut(u16, Coding)) {
     }
 }
 
-fn compressible(content_type: &str) -> bool {
-    let essence = crate::api::media_type(content_type);
+/// Whether a media type (`essence`, without its parameters) is worth compressing.
+fn compressible(essence: &str) -> bool {
     (essence.starts_with("text/") && essence != "text/event-stream")
         || matches!(
             essence,
@@ -272,14 +272,15 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     }
     let headers = res.headers();
     let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
-    let event_stream = crate::api::media_type(content_type) == "text/event-stream";
-    if event_stream {
+    // Read once: every answer passes here, and the checks below ask about the same type.
+    let essence = crate::api::media_type(content_type);
+    if essence == "text/event-stream" {
         return stream(res, accepts.streamed());
     }
     // A `Media::stream`: a chunk at a time as it comes, never collected, when its type is worth
     // it. Only a body of no stated size can be one, so a buffered answer pays one size check.
     if http_body::Body::size_hint(res.body()).exact().is_none() && res.extensions().get::<crate::answer::Streamed>().is_some() {
-        if !varies(content_type, headers) || headers.contains_key(header::CONTENT_ENCODING) {
+        if !varies_as(essence, headers) || headers.contains_key(header::CONTENT_ENCODING) {
             return res;
         }
         // One whose length is too small to be worth it keeps it, as a buffered body does.
@@ -291,7 +292,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
         }
         return stream(res, accepts.streamed());
     }
-    if !varies(content_type, headers)
+    if !varies_as(essence, headers)
         || headers.contains_key(header::CONTENT_ENCODING)
         || headers.contains_key(header::CONTENT_RANGE)
         || matches!(res.status(), StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
@@ -508,7 +509,12 @@ impl Drop for StreamCoder {
 /// `accept-encoding`, whatever its size: a type worth compressing that does not say
 /// `no-transform`. A `304` in place of such an answer sends the same `Vary` (`cache::tag`).
 pub(crate) fn varies(content_type: &str, headers: &HeaderMap) -> bool {
-    compressible(content_type)
+    varies_as(crate::api::media_type(content_type), headers)
+}
+
+/// [`varies`], for a media type already read from its `Content-Type`.
+fn varies_as(essence: &str, headers: &HeaderMap) -> bool {
+    compressible(essence)
         && !headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("no-transform"))
 }
 
@@ -567,7 +573,7 @@ impl Precompressed {
     /// could use a compressed form starts making them; it and any request before they are done
     /// get the identity bytes (which `apply` compresses at the fast level).
     pub fn pick(&self, headers: &HeaderMap) -> (Bytes, Option<Coding>) {
-        if !compressible(self.content_type) || (self.identity.len() as u64) < MIN_SIZE {
+        if !compressible(crate::api::media_type(self.content_type)) || (self.identity.len() as u64) < MIN_SIZE {
             return (self.identity.clone(), None);
         }
         let Some(coding) = accepted(headers, &[Coding::Brotli, Coding::Gzip]) else {
@@ -674,7 +680,7 @@ fn held_worker() -> Option<&'static std::sync::mpsc::SyncSender<Job>> {
 
 /// Sets the headers for a body [`Precompressed::pick`] chose.
 pub(crate) fn encoded_headers(headers: &mut HeaderMap, content_type: &str, coding: Option<Coding>) {
-    if compressible(content_type) {
+    if compressible(crate::api::media_type(content_type)) {
         vary(headers);
     }
     if let Some(coding) = coding {

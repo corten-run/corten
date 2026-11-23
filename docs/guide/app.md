@@ -958,6 +958,27 @@ fewer), and the rest is axum's route lookup by id and its futures around the sta
 allocator every request in process costs 1,791 to 4,135 less. An unstaged route's checks have
 since moved from its handler to the router, which runs them around it, costing 71 to 86 more ([below](#a-route-outside-the-stages)).
 
+A text or bytes answer (`String`, `&'static str`, `Bytes`, a `Media`, a static file) used to
+make its header map with its `Content-Type`, with room for six headers, and the security headers
+grew it on every request. It now starts with room for twelve, as JSON's map already did (a
+page's starts with more): what the default policy leaves such an answer with, HSTS and a
+compressed body included (a header beyond those grows the map once, as before). The answer's media type is also read once
+where it was read twice. Counted with `crates/corten/tests/router_cost.rs` (callgrind, release
+build, in-process `oneshot`, the difference between 1,200 and 200 requests over 1,000, the
+median of three runs each, which differed by at most 2; before at `9201e6dd0` with the test as it is at the
+after commit, `89e1d0f16`):
+
+| Request | Before, glibc | After, glibc | Before, jemalloc | After, jemalloc |
+|---|---|---|---|---|
+| text from a route with a parameter | 13,045 | 12,600 | 11,475 | 10,675 |
+| text answering a `POST` | 13,734 | 13,122 | 11,851 | 11,057 |
+| unknown URL, HTML 404 page | 17,687 | 17,680 | 15,328 | 15,321 |
+| text from an [`unstaged`](#a-route-outside-the-stages) route (`ROUTER_TARGET=unstaged`) | 5,225 | 5,571 | 4,418 | 4,525 |
+
+The last row is the cost: an unstaged text answer gets the same room and holds three headers
+(its `Content-Type`, `nosniff` and `sandbox`), as an unstaged JSON answer already did, and the
+larger block is one glibc's thread cache does not hold.
+
 ## Your own middleware
 
 Every request goes through the same stages in the same order, outside in, each needing the one
@@ -1665,8 +1686,9 @@ an API (whose answers are not tagged), the tag's hash made once, and each coding
 app compresses it. What it saves is the handler with what it
 reads, the writing of the JSON, the hash and the compression, and once kept it is given to a
 request that accepts no coding as well. That request gets no tag, so where its handler makes
-nothing a kept body costs it more than the handler would: 1.5% to 5.0% more cycles in the cases
-measured. A smaller body is its handler's for every request: the hash a kept body saves grows
+nothing a kept body costs it more than the handler would: in a build with `compress`, 1.3% more
+cycles for a file of 8,000 bytes and 3.0% more for one of 1,024 at the mean of five builds of the
+same code on two CPUs, and up to 7.8% more in one of the ten. A smaller body is its handler's for every request: the hash a kept body saves grows
 with its size, and the instructions asking for it costs do not
 ([design Choice 70](../design.md#choice-kept-pages)). A route whose bodies are all under the size
 stops asking the store after 64 answers in a row of which none was kept (one left out for another

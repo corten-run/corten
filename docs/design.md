@@ -7348,9 +7348,10 @@ rules something out.
     PNG of 1 MiB 47.7% fewer; one of 1,024 bytes, the least kept, took the same (below).
     Once kept, a body is given to a request that accepts
     no coding too, which gets no tag and so saves nothing by it where its handler makes
-    nothing: that request pays for asking the store, and the kernel runs the same path slower
-    after it (below): 1.5% to 5.0% more cycles in the four
-    cases run, over the 3% set before the run in two of them (below). A body's size is known only once it is made, so a route whose bodies are
+    nothing: that request pays for asking the store. In a build with `compress` that was 1.3%
+    more cycles for a PNG of 8,000 bytes (1.2% fewer to 4.0% more) and 3.0% more for one of
+    1,024 (0.3% fewer to 7.8% more), the means and ranges of five builds of the same code each
+    run on two CPUs, the second at the 3% set for it and over it by 0.02 of a point (below). A body's size is known only once it is made, so a route whose bodies are
     all too small would ask the store and have each refused: after 64 answers in a row of
     which none was kept, with none between given from the store, the route's requests are its
     handler's as before, but for about one in 256, drawn on each thread, which asks and so
@@ -8024,7 +8025,9 @@ rules something out.
     kernel's part is the same work done slower, after an ask that touches more of the app's
     own memory and, on this load, with more threads to wake; how much is each was not
     separated, and why it showed more at 8,000 bytes than at 1,024 in the six starts above
-    was not found. It follows the ask, so what cuts the ask cuts it. The other splits: the 1,024 bytes
+    was not found. It was taken to follow the ask, so that what cut the ask would cut it; the
+    cuts below took about 500 user instructions a request from a kept answer under load, and
+    the kernel's cycles did not follow them (below). The other splits: the 1,024 bytes
     with four codings, user 23,550 against 23,655 and kernel 26,159 against 26,084; the CSV
     kept before, user 25,785 against 26,090 and kernel 27,711 against 27,847; the PNG of
     8,000 bytes with no coding without `compress`, user 19,694 against 18,665 and kernel
@@ -8032,12 +8035,115 @@ rules something out.
     at that price, on the bet below that clients naming a coding are most of what asks for
     an app's `Public` bodies. The app's resident memory, about 10 MB, was at most 352 kB more
     with a body kept, and 1,270 kB more with the 1 MiB file kept, its second copy.
+    Two cuts to what a kept answer given again costs followed (`a0267d8a6`). Its `Age` was
+    made from the number, two allocations for every answer; it is a slice of a table of the
+    numbers under 10,000 in decimal, 38,890 bytes of the binary, and an older answer's is made
+    as before. Four digits, 2 hours 46 minutes, take in a lifetime of an hour, which is what
+    `seo` writes; a table of three digits is 2,890 bytes and covers 16 minutes 39 seconds, and
+    the digits written to a buffer and copied into a value need no table and one allocation by
+    the libraries' code, and neither was counted. And the answer carried the cache's mark as an extension of its own beside the
+    one for what was kept, an allocation and a place in the map; the mark is read from what
+    was kept, which is a second lookup among the extensions for an answer that has some and
+    carries neither mark (the one answer counted that carries neither, a page that is not
+    `Public`, took 62,514 instructions where it took 62,582, the allocator's part with it, so
+    that lookup has no number of its own). A kept PNG given again makes 25 allocations
+    where it made 28 (its handler's answer makes 31). Under callgrind on one connection, with a browser's twelve header lines
+    and no coding named, a kept PNG of 8,000 bytes took 37,412 instructions a request where it
+    took 38,736, one of 1,024 bytes 37,412 where 38,766 and a kept page 41,235 where 42,542;
+    the PNG's URL with a session's cookie, which its handler answers, 38,881 where 38,873. A
+    page asked for with the runtime's header, which the store does not answer either, counted
+    67,787 where 67,050, all of it the allocator's (58,515 against 58,509 outside it), whose
+    own count moves by that much between builds that allocate alike, with the state its bins
+    are left in. With the three headers the load sends, the kept PNG of 8,000 bytes took
+    25,603 where main's took 26,148 and its handler 25,633. A third cut was counted and not
+    made: finding `Authorization`, the cookie and the runtime's header in the one pass over
+    the headers, where each is a lookup by its name before the pass. For `Authorization` it
+    spared every other request 41 to 157 instructions in the cases counted (89 and 112 for
+    the kept PNGs, 83 for the kept page) and cost a request that carries one
+    after a browser's headers 611 (its asking 926 where 315), since that request no longer
+    leaves before the pass, and the same holds for the other two; the three lookups stay.
+    In cycles the cuts are not shown to be a gain, and of the eight margins set before their
+    first run two were missed at the median and five at the one-sided 95% bound (below), two
+    of those five against main, on requests the cuts touch, which the rule for a pull
+    request holds to 1% with no allowance for where the code sits
+    ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2); the second run below
+    explains them and does not clear them. That run was of three builds (main's `7a275ef15`, the cuts, and
+    the cuts with no body kept, so its handler answers), six starts of eight pairs of turns,
+    those with `compress` on a c-8 with a Xeon Platinum 8358 and those without on one with a
+    Xeon Platinum 8280. Against its handler, held to 3% more: a kept PNG of 8,000 bytes 39,690
+    cycles a request against 38,694, 2.7% more (2.1% to 3.1% by start), and one of 1,024 bytes
+    38,686 against 35,911, 6.0% more (0.9% to 11.5%), which missed; without `compress` the PNG
+    of 8,000 bytes 48,559 against 48,012, 0.0% (0.7% fewer to 2.6% more), and the CSV 49,745
+    against 48,990, 2.5% more (0.4% to 4.9%). Against main, held to 1% more: the kept PNG of
+    8,000 bytes 39,757 against 39,721, 0.3% more (0.8% fewer to 2.6% more), and a kept page
+    43,903 against 42,792, 3.2% more (1.2% to 4.1%, more in 39 of 48 pairs), which missed;
+    without `compress` 48,260 against 48,864, 1.3% fewer (3.5% fewer to 1.4% more), and
+    49,877 against 51,556, 2.9% fewer (9.5% to 1.1% fewer). The same build against itself,
+    five of its six starts having finished: 0.1% more (1.7% fewer to 1.7% more by start) and
+    1.6% fewer (2.3% fewer to 2.1% more). The margins were set at the median. By the one-sided
+    95% bound on the median of the 48 pairs, the 31st of them sorted, the four against the
+    handler were 3.38%, 7.43%, 0.95% and 3.56%, three over the 3%, and the four against main
+    1.07%, 3.74%, 0.26% fewer and 1.97% fewer, two over the 1%: the kept page, and the kept
+    PNG of 8,000 bytes by 0.07 of a point. The
+    cuts ran 496 to 968 fewer user instructions a request than main in all four. The binaries
+    with `compress`, on another c-8 with the 8280 (three starts of eight pairs): the kept page
+    0.4% more than main (bound 1.65%) and the PNG of 1,024 bytes 2.1% more than its handler
+    (2.82%), both of which missed on the first host; the kept PNG of 8,000 bytes 2.9% more
+    than main (more in 22 of 24 pairs, bound 3.83%), which the first host had at 0.3%; and
+    the kept PNG of 1,024 bytes 0.2% fewer than main (0.69%). No request failed in
+    the 1,231 turns, and perf counted all of every turn. The table is read-only data, which
+    the linker puts before the code: the code of the cuts' binary starts 38,336 bytes after
+    main's, and every function in it moved. So the three were each built again with a block of
+    bytes no request runs in the crate's code, of 40, 1,000, 3,100, 12,000 and 40,000 bytes,
+    and run on one host of each CPU, one start of eight pairs for each comparison, with how it
+    would be read set out after the first run and before any of this one: the cuts dearer than
+    main at nine of a case's ten with a mean over 1% would be the cuts' cost, a sign that
+    changes across the ten or a mean within the spread of main against main would be where the
+    code sits; and the price against the handler would be the mean of a case's ten, held to
+    the same 3% (this last added when two placements of the cuts against main had been read,
+    before any of its own was run). Each of a case's ten is one start, so where the code sits
+    and how the process started are not told apart in it: in the first run six starts of one
+    pair of binaries ran from 0.9% to 11.5%. The cuts against main, the
+    mean of the ten: a kept page 1.3% fewer cycles (5.1% fewer to 3.3% more, more in 2 of the
+    10), the PNG of 1,024 bytes 0.9% fewer (3.7% fewer to 0.8% more, more in 3) and the one of
+    8,000 bytes 0.3% fewer (6.8% fewer to 3.8% more, more in 5), on 477, 524 and 522 fewer
+    user instructions and 31, 75 and 69 fewer user instruction-cache misses a request, and
+    with the kernel's cycles 4 fewer, 107 fewer and 124 more. Main with a block of each other
+    size against main with the 40, eight
+    for each case: 0.1% more (1.6% fewer to 2.2% more), 0.4% more (2.7% fewer to 4.0% more)
+    and 1.3% fewer (4.5% fewer to 0.6% more), on user instructions within 65 of each other at
+    the mean. So a pair of builds differs by where its code sits and how it started by as much
+    as these cuts are worth. The misses above are not shown to be the cuts', and stand as
+    measured; neither is a gain in cycles shown: what is shown is the instructions. A kept
+    body against its handler, in a build with `compress`,
+    the mean of the ten: the PNG of 8,000 bytes 1.3% more (1.2% fewer to 4.0% more, more in 9
+    of the 10; user cycles 237 more and kernel 301 more, on 334 more user instructions and 20
+    more of the kernel's, with 49 fewer user instruction-cache misses), which met the 3%; the
+    one of 1,024 bytes 3.0% more (0.3%
+    fewer to 7.8% more, more in 9; 3.6% on the 8358 and 2.5% on the 8280; user cycles 809 more
+    and kernel 355 more, on 424 and 55 more instructions, with 49 more misses), over the 3% by
+    0.02 of a point, which ten such values do not resolve, and so missed by the rule set. That
+    is the price of a kept body to a request that names no coding as it stands. The 1.5% to
+    5.0% above were each one build of each and its starts, as were the 0.0% to 6.0% of this
+    change's first run. The kernel's part goes with the placement and the start as the
+    user's does, from 261 fewer cycles a request to 1,447 more at 1,024 bytes (316 fewer to
+    848 more at 8,000); where it was most, 1,447 and 1,397 more on the 8358, it ran 170 and
+    229 more of its instructions. No request failed in the 1,184 turns, and perf
+    counted all of every turn. A profile of cycles by symbol on the 8280 (the PNG of 1,024
+    bytes, three sampled turns of each build) put about 1,300 cycles a request in the ask and
+    what it adds (402 finding the answer and making its head, 212 reading the request, 155
+    reading `Accept`, 131 the URL's hash) against about as many in what the handler and its
+    answer would have taken, and the rest in no one place.
     Not measured: a file kept for a handler that reads it from a disk, a database or a store
     of objects, where the read is what a kept file saves; a body between 1,024 and 8,000
     bytes, under 1,024 or over 1 MiB; a store that kept pictures or downloads fill, where
     pages are turned out for them; a picture asked for with `gzip` alone; a request with a
     cookie for a body route in a build without `compress`, which now passes the stage that
-    asks; the kernel's part of the price with no coding on a load whose threads do not sleep; a new URL for every request for a
+    asks; the kernel's part of the price with no coding on a load whose threads do not sleep;
+    the cuts of `a0267d8a6` in cycles apart from where a build's code sits, a pair of builds
+    having differed by more than they are worth, and at more than one placement without
+    `compress`; a kept answer older than 9,999 seconds, whose `Age` is made from the number;
+    a browser's twelve header lines under load, which sends three; a new URL for every request for a
     file, which takes the path a body's does above; a body kept for a handler that waits on a database or another service,
     where the wait and not the compression is what a kept body saves (the benchmark's handler
     reads memory, and the rule for bodies is drawn from it); a route of a few large bodies
@@ -8121,7 +8227,13 @@ rules something out.
 
     Last checked: 2026-11-22 for a change the app names (`KeptAnswers::changed`), by the tests
     beside it and, for what it costs a write that names one and the requests that do not, the
-    request-cost harness's counts under callgrind at `beea494fd` against `7a275ef15` (above); 2026-11-22 for a body kept whatever its type and its build, `e133aae42` (main's
+    request-cost harness's counts under callgrind at `beea494fd` against `7a275ef15` (above);
+    2026-11-22 for the cuts to a kept answer given again, `7794749ad` (main's
+    `7a275ef15` with five file routes and a kept page in the catalog benchmark) and `0a2dc9b32`
+    (this change's `a0267d8a6` with them), and for where the code sits `abbd6113f`, `9f628467d`
+    and `ba72c5f23` (those two, and the second with no body kept, each with a block of bytes
+    whose size is set when it is built), kept under the tag `evidence/cheaper-ask-1925`;
+    2026-11-22 for a body kept whatever its type and its build, `e133aae42` (main's
     `090b3048e` with five file routes in the catalog benchmark) and `af70bde86` (this change's
     `86be6a024` with them), kept under the tag `evidence/keep-any-body-1877`; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
@@ -8188,6 +8300,211 @@ rules something out.
     compressed, the tag. The commits after `f7e53a594` up to `24e61b4b0` change which writes count
     and nothing a page's `GET` runs. `tests/kept_memory.rs` at this change, with all features and
     with none.
+
+71. <a id="choice-layout-floor"></a>**The cycle gate allows a measured layout floor on a negative
+    control named before the run whose instructions are flat.** A request-path pull request holds a
+    workload it should leave as fast as it was to a margin of +1% in paired cycles, declared before
+    the run ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2). Placement alone moves
+    cycles by more than that: on a DigitalOcean c-8 whose CPU is a Xeon Platinum 8358, main built
+    against main with one never-called function added, which moved all 3,402 functions common to the
+    two binaries and changed the count of user instructions retired per request by at most 0.0102%
+    in any pair, took 1.16% more user and kernel cycles a request at the median of the pairs, with a
+    one-sided 95% bound of +1.62%, while main built twice met the margin at +0.59%. So the gate
+    makes one exception, for a negative control only: a workload the run's plan (its `margin.md`)
+    names before the run as one whose code paths the change does not touch, with the reason, which
+    the pull request's review accepts. If such a control's bound is at or above +1% but under the
+    floor that applies, and its user instructions pass a screen (the median of their paired changes
+    between -0.02% and +0.02%, its one-sided 95% bound at or below +0.02%), the pull request reports
+    it as "missed +1%; placement and regression not distinguished", with its user and kernel split
+    and no claim about its speed, and the miss does not block it, unless the run's plan made +1%
+    decisive for it before this exception existed or other evidence corroborates a regression. That
+    accepts a residual risk on
+    controls; it does not show they are unchanged, and a placement cost in the binary that ships is
+    still a cost. A workload the change touches keeps +1% with no floor, however flat its
+    instructions, since a change to the data a request reads, its allocation, the kernel's work or
+    its waiting can cost cycles on the same instructions; so does a workload not named before the
+    run, and the affected-route, memory and waiting measurements are required as before. This
+    answers
+    [#1923 Control workloads with flat instructions miss the +1% cycle margin by up to 2.8% of user cycles, so the gate blocks changes it cannot attribute](https://github.com/corten-run/corten/issues/1923),
+    whose pull requests missed by bounds of +1.13% to +1.67% on controls whose reported user
+    instruction counts changed by no more than 0.03%; as that issue proposed, a workload the change
+    touches keeps the margin.
+
+    The floor is +1.62%, the larger of the two layout bounds measured (+1.619274%, rounded up to two
+    places; a run's bound is compared with it unrounded). It applies to one workload, the one it was
+    calibrated on: `plain`, a `GET /private` with no request header of its own, sent by `wrk` to the
+    probe app that
+    [#1829 Run a kept page's handler once for requests that miss its copy together](https://github.com/corten-run/corten/pull/1829)
+    was measured with, which answers `200` with the record page for one visitor
+    (`cache-control: private, no-cache`, a 6,124-byte body). It applies to no other workload or
+    request, and only to a run that records a setup matching the calibration's in every item: a Xeon
+    Platinum 8358 (the exact model, not the family) with one thread a core; Linux 6.12.117 (Debian's
+    `6.12.117+deb13-amd64`); jemalloc 5.3.0 by `LD_PRELOAD=libjemalloc.so.2` with
+    `MALLOC_CONF=background_thread:true,tcache_max:65536` exactly; the server pinned to one CPU, the
+    load on two others and the driver and `perf` on a fourth, all four distinct; rustc 1.100.0 and
+    LLD 23.1.5, with the probe built as the receipt's `build.sh` builds it (the release profile,
+    features `json` and `compress`, zstd linked to the system's `libzstd`), the same third-party
+    crate versions as the receipt's `probe/Cargo.lock` (main `14471284c`'s) and Debian's `libzstd1`
+    1.5.7+dfsg-1 (these listed inputs must match; matching them does not show that every other
+    build input, such as the native compiler, is the same); and `wrk` 4.1.0
+    with `-t2 -c64` and 3 s turns, every turn, warm-up included, on a freshly started build, the
+    builds' order turned every pair, 100 recorded pairs after one that is not and the bound the 59th
+    of the 100 sorted per-pair changes. Any VM counts if it matches. A difference in any item, such
+    as another CPU model or each build started once, means no recorded floor. Any other negative
+    control, and `plain` on any other setup, gets a floor only from its own A/A layout control in
+    the same run, under the run's protocol and measured on each negative control whose miss it would
+    waive; one without a qualifying A/A in that run is held to +1%. That control is named in the
+    run's plan before the run, is built from the candidate's base commit with the candidate's build
+    inputs, and repeats this calibration on each such workload: main built twice and the receipt's same two pads, 100
+    recorded pairs each, read with the candidate's statistic, the 59th of the 100 sorted changes; a
+    comparison with fewer than 100 valid pairs gives no bound and the control no floor. It gives a
+    workload a floor of its larger pad bound there only if that bound is at or below +2%. A larger
+    bound above +2% gives no floor, and is not read as a floor of +2%: that run holds every workload
+    to +1%. The +2% limit leaves room above the +1.62% measured here for a host whose placement
+    costs a little more, and stops a noisy or unlucky layout control from making the gate whatever
+    it measured.
+
+    A layout control, the recorded one or a same-run one, gives a floor only if the run records that
+    it passes every check: each comparison's two builds answer the workload's request with
+    byte-identical status, headers but `Date`, and body, compared with only `Date` removed; main
+    built twice is byte-identical and meets +1% on that workload; the pad is in the padded binary
+    and moved code (the count of function symbols in both binaries whose addresses changed is above
+    zero); every counter ran 100% of every turn and the load tool reported no error in any turn; and
+    each pad comparison passes the user-instruction screen above, as a candidate must. If any check
+    fails, the control gives no floor and the run holds every workload to +1%: a pad whose answers
+    or instruction count moved measures more than placement, and a floor from it would waive a cost
+    it cannot attribute. The recorded calibration passes checks 2 to 5 as written. It passes the
+    first only as its kit compared, which normalized the whole `curl -i` output, headers and
+    body, before comparing it (carriage returns removed, `Date` lines dropped, `Age` and `ETag`
+    values masked): all three comparisons' answers to `/private` were identical after that
+    (7,098 bytes as compared, no `Age` or `ETag` present), and the bytes before it were not kept. It
+    is accepted with that weaker evidence, and only for this receipt, because the two builds of main
+    are one binary and each pad adds a function nothing calls, so no path that writes the answer
+    changed, and the pads' instruction counts agree with that; a later control, recorded or
+    same-run, is held to the comparison as written. The two builds of main were byte-identical and
+    met +1% at +0.59%. Each pad build held its one added function, which neither main build has, and
+    all 3,402 function symbols it shares with main moved (none in main built twice). All 1,818
+    counter readings in pass 1's 606 turns, warm-up pairs included, and all 496 in pass 2's 124 ran
+    100%, and `wrk` reported no connect, read, write, status or timeout error in any of those 730
+    turns. The pads' user instructions passed the screen: medians of +0.00082% (40 bytes) and
+    +0.00008% (3,100 bytes), bounds of +0.00130% and +0.00061%.
+
+    The screen is set by the A/A runs. In all three comparisons the count of user instructions
+    retired per request changed by at most 0.0102% in any pair (about four of the `plain` page's
+    39,455), the medians were between +0.0001% and +0.0008% and the bounds at most +0.0013%; 0.02%,
+    about eight instructions there, is twice the widest single pair. A count says how many
+    instructions a request retired, not which: these counts show the pads added no per-request work
+    a count can see, not that the same instructions ran in the same order. The screen is a
+    screening rule, not an equivalence test: it turns away a control whose instruction count
+    visibly moved, and passing it does not show the instruction stream or its CPU cost unchanged,
+    or make a touched workload a control.
+
+    A layout floor never applies to the benefit side: these runs measured how far placement raised
+    cycles on one route, not how far it can lower them, so a floor cannot establish a CPU-cost win.
+    The CPU-win rule in Pull requests decides wins as before.
+
+    The runs: one host with nothing else running (Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD
+    23.1.5 and the repository's release profile, jemalloc 5.3.0 preloaded), every binary built there
+    from main `14471284c`, under the protocol pull requests are gated on. The workload was `plain`:
+    a page for one visitor in a probe app that keeps pages, a control on which those pull requests
+    missed. Every turn ran on a freshly started build pinned to one CPU and loaded for 3 s by
+    `wrk -t2 -c64` on two others, the two builds' order turned every pair, their answers compared
+    first; 100 recorded pairs after one that was not, `cycles:u`, `cycles:k` and `instructions:u`
+    counted by `perf stat` at 100% running and divided by the requests answered; the bound is the
+    59th of the 100 sorted per-pair changes. The plan was written before the run and tested no
+    margin. The layout builds add a function marked `#[inline(never)]` whose body is 40 or 3,100 NOP
+    bytes after the imports of `crates/corten/src/router.rs`, kept by one `black_box` of its address
+    in `Router::new`, which runs once as the app starts; no request calls it. All 3,402 functions
+    common to the two binaries moved, by 64 to 160 bytes with 40 and by 64 to 3,216 with 3,100. The
+    two builds of main, each from an emptied target directory, were byte-identical (the same SHA-256
+    and 4,546,144 bytes), so `main twice` compares one binary with itself; the 40-byte and 3,100-byte
+    builds were 448 and 3,504 bytes larger.
+
+    | Comparison | User+kernel median | Bound | Range | User median / bound | Kernel median / bound | Instructions:u |
+    | --- | ---: | ---: | --- | ---: | ---: | ---: |
+    | main twice | +0.09% | +0.59% | -7.52% to +6.60% | -0.02% / +0.87% | +0.44% / +0.74% | +0.00% |
+    | 40-byte pad | +1.16% | +1.62% | -9.58% to +9.90% | +1.40% / +1.71% | +0.89% / +1.41% | +0.00% |
+    | 3,100-byte pad | +1.06% | +1.39% | -10.83% to +6.61% | +1.83% / +2.58% | +0.28% / +0.66% | +0.00% |
+
+    A second pass on the two layout comparisons, 30 recorded pairs each (the bound the 20th of 30),
+    counted user L1 instruction-cache misses, iTLB misses and branch misses beside user
+    instructions, each at 100% running. L1 instruction-cache misses fell, by 1.09% and 1.84% at the
+    median with bounds of -0.38% and -0.97%, of about 2,000 a request. iTLB misses moved by +2.24%
+    and +4.71% with bounds of +7.74% and +18.94%, of about 13 a request, too spread to resolve.
+    Branch misses rose by 9.85% and 7.45%, with bounds of +14.26% and +16.14%, of about 22 a
+    request. That is consistent with branch-predictor aliasing at the new addresses; it does not
+    show it is the mechanism, or the only one. What the runs do not show: the floor on another host,
+    another workload or another placement, any of which may be larger or smaller (one host, `plain`
+    alone, two pads in one place); how far a placement can lower cycles; a protocol with each build
+    started once; and latency, since these are cycles under load.
+
+    The receipt is commit `24c0d897`: the kit (its plan, scripts, probe and pads) and every result
+    file of the run (`results-b7`: `floor.md`, `host.txt`, `margin.md`, the CSVs and the logs), with
+    the aggregate tables also on
+    [#1923 Control workloads with flat instructions miss the +1% cycle margin by up to 2.8% of user cycles, so the gate blocks changes it cannot attribute](https://github.com/corten-run/corten/issues/1923).
+
+    Not chosen: the exception for any workload whose instructions are flat (this Choice as first
+    proposed), which would pass a real cost on a workload the change touches, such as data laid out
+    to miss the cache more, work in the kernel or waiting on a lock, whose instructions stay flat;
+    the margin raised to the floor for every workload, which would let a change that adds
+    instructions pass a cost of up to 1.62%; an instruction band of 0.05% either way, which the A/A
+    data do not support and which admits about 20 more instructions a request on `plain`; the miss
+    reported and the pull request held until a rerun met +1%, the rule until now, which held a pull
+    request whose same two builds (the same SHA-256s in both runs) missed with one start and with
+    fresh starts alike, and would pass a real cost of the same size on a lucky placement; a
+    same-run floor capped at +2% when the layout bound is above it (this Choice's second version),
+    since a capped floor would pass a miss on a run whose own placement measured more; the recorded
+    floor carried to the gate's other negative controls on a matching setup (this Choice's second
+    and third versions), since `plain` is the only workload measured and another hot path can be
+    more or less sensitive to the same pads; the recorded floor reused on another setup, or a
+    same-run A/A on a workload other than the one whose miss it waives, since neither measures the
+    placement that control saw; a layout control that gives a floor without checks that its pads
+    changed only placement, since a pad that changed the answers or the work would be read as
+    placement; a cycle reduction on flat instructions claimed as a win by a cutoff below minus the
+    floor or by a placement check reading the pads in both directions (the second and third
+    versions), since two pads read backwards do not bound what another placement does; more pairs,
+    pooled runs or a margin declared again after a run, since more pairs narrow the bound around the
+    placement's own offset (+1.16% here), not toward zero, and the others are what Values 9 rules
+    out; a layout control in every run, which adds about 35 minutes of host time a workload where
+    the recorded floor applies (main built twice and the two pads took 34 minutes 52 seconds here,
+    about 11 minutes 37 seconds for each comparison of 100 pairs), and is still asked of any run it
+    does not cover; and builds that pin placement (function alignment, a fixed link order), not
+    tried, which would gate a binary other than the one apps build.
+
+    Stands on: measured (the three comparisons and the second pass above, one run of each on one
+    host and one workload, 100 pairs for cycles and 30 for the misses, passing checks 2 to 5 as
+    written and the response check only after its kit's normalization, which review accepted for
+    this receipt alone); reasoned (the layout builds changed the count of user instructions retired
+    per request by no more than 0.0102% in any pair, so a control whose code the change does not
+    touch and whose instruction count passes the screen is, as far as a count shows, where the A/A
+    builds were in its user code; the screen shows no more than that); bet (a declaration, accepted
+    in review, that a control's code paths are untouched is right, so a cost the change adds through
+    data layout, the kernel or waiting does not fall on it); value (Fast, and proven fast: a cycle
+    change is attributed to the code that made it before it blocks a change or proves one fast;
+    Verified, not assumed: the floor is measured with A/A builds rather than argued, and is held to
+    the workload and setup it was measured on, README Values).
+
+    Revisit when: the gate runs on a CPU model it has no floor for (another droplet size, or a c-8
+    with another CPU: the c-8s used for the gate have also had a Xeon Platinum 8168 and 8280), whose
+    own layout control then gives a floor to record here; the gate's load protocol changes (its
+    starts, pinning, turn length, `wrk` threads or connections, pairs or statistic); the gate's
+    toolchain changes how code is placed, such as a rustc whose LLVM is a new major version
+    (LLVM 23 under rustc 1.100.0 here) or whose release notes change inlining or function alignment,
+    a linker other than LLD, or a release profile with other LTO, codegen units or opt-level; the
+    host's kernel, the allocator or its settings change (Linux 6.12.117, jemalloc 5.3.0 and its
+    `MALLOC_CONF` here); the probe's workloads or main's layout change materially; a later A/A of
+    main built twice under the same protocol has a bound at or above +1%, so the protocol and not the
+    placement fails the gate; a layout control on `plain` on another matching setup has a bound over
+    the recorded floor, or a same-run one has a larger bound over +2%, which gives that run no floor;
+    same-run layout controls on another workload give floors often enough to be worth recording one
+    here; an A/A's user instruction count moves by more than 0.02%, or a run cannot resolve that
+    band; or a control that missed inside the floor is later measured as a real cost.
+
+    Last checked: 2026-11-22, the runs above at `14471284c` on a DigitalOcean c-8 in sfo3 (Xeon
+    Platinum 8358, one thread a core, Linux 6.12.117), rustc 1.100.0, LLD 23.1.5, perf 6.12.117,
+    `wrk` 4.1.0 and Debian's libjemalloc2 5.3.0. The host's own record gives the CPU model, topology
+    and versions, but not the droplet size and region, which come from the account that made it and
+    which a later calibration records with the rest.
 
 ## Rules
 

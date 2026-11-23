@@ -5,7 +5,7 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { controllerState, full, parseDropletArgs, providerFailure, unsentDelete } from "./cloud-options.mjs";
+import { controllerFailure, controllerState, full, parseDropletArgs, providerFailure, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
@@ -16,7 +16,7 @@ import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckContinuationPeers, recheckIndexedLaunchCustody } from "./fleet-verify.mjs";
+  recheckContinuationPeers, recheckIndexedLaunchCustody, recheckSetupAttempt } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -277,7 +277,11 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       if (historicalIds.size) assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
       const root = dirname(current.fleetRoot), { indexSha256, indexedCustody, peers } = current.subject.continuation;
       const currentPeers = recheckContinuationPeers(root, indexSha256, manifest.provider, options.group, peers);
-      if (beforeCreate === true) recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
+      if (beforeCreate === true) {
+        recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
+        const checks = unconfirmed.filter((row) => row.root !== undefined).map((row) => recheckSetupAttempt(root, row, manifest));
+        for (const stillIdle of checks) stillIdle(); // Another attempt's archive may have taken time to hash.
+      }
       return currentPeers;
     }
   });
@@ -350,7 +354,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   stage = "controller-checkpoint";
   await controlCheckpoint(interrupted);
   return result;
-  } catch (error) { throw mark(error, stage); }
+  } catch (error) {
+    const detail = stage === "controller-collect" && controllerFailure(error);
+    throw mark(error, detail && detail.startsWith("setup-") ? detail : stage);
+  }
   finally {
     try { await providerRun?.close(); }
     catch (error) { throw mark(error, "provider-settlement"); }

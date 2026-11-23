@@ -30,7 +30,7 @@ const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
 let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observations = 0, authorizations = [], release, pendingStarted, abort, auditComplete = true, lifetimeFailure, replayLifetimeFailure;
 let lifetimeStartup;
 let lifetimeRun;
-let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSurvives;
+let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSurvives, settleNativeFails;
 let liveOutput, compilerScratch;
 const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
 const sourceStatus = (cwd) => sourceGit(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all");
@@ -230,6 +230,7 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
       if (mode === "abort-native" && native) abort.abort();
       const group = expectedPlan.bindings.find((b) => b.execution.invocation.argv[0] === invocation[0])?.request.group;
       child.close(invocation.includes("--check-only") ? 1 : mode === "process-fails" && native ? 9
+        : mode === "udev-settle" && settleNativeFails && native ? 1
         : liveOutput && native ? liveOutput.exit : mode === "complete" && group === "client-heavy" ? 2 : mode === "complete" && group === "live-delivery" ? 1 : 0);
     };
     if (mode === "pending") { release = finish; pendingStarted(); } else finish();
@@ -1074,7 +1075,7 @@ test("audit wait mutation and image replacement halt before timing", async () =>
 });
 
 for (const [group, scenario] of [
-  ["localized-marketplace", "settles"], ["localized-marketplace", "aborts"],
+  ["localized-marketplace", "settles"], ["localized-marketplace", "aborts"], ["localized-marketplace", "native failure"],
   ["json-api", "settles"], ["json-api", "aborts"], ["json-api", "worker survives"],
 ]) test(`v5 ${group} udev settlement: ${scenario}`, async (t) => {
   t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
@@ -1086,6 +1087,7 @@ for (const [group, scenario] of [
   const jsonPreparation = group === "json-api";
   settleWorkerTicks = jsonPreparation ? "10400" : "10601";
   settleSurvives = scenario === "worker survives";
+  settleNativeFails = scenario === "native failure";
   mode = "udev-settle";
   const { registration: fixture } = await import("../test-fixtures/control-stream-fixture.mjs");
   const { streamHash } = await import("./control-stream.mjs");
@@ -1151,6 +1153,13 @@ for (const [group, scenario] of [
     return;
   }
   assert.equal(status.state, "finished"); assert.ok(calls.indexOf("open") < calls.indexOf("close") && calls.indexOf("close") < calls.indexOf("seal"));
+  if (settleNativeFails) {
+    assert.equal(status.outcomes[0].outcome, "failed");
+    const events = fs.readdirSync(handle.directory).filter((name) => /^\d{5}-/.test(name)).sort()
+      .map((name) => JSON.parse(readFileSync(join(handle.directory, name))).kind);
+    assert.deepEqual(events.slice(-3), ["group-finished", "stream-sealed", "finished"]);
+    assert.ok(!events.includes("review-needed") && existsSync(join(handle.directory, "control-stream-seal.json")));
+  }
   assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, [{ pid: 62274, startTicks: settleWorkerTicks }]);
   const drain = { schema: "benchmark-control-stream-drain/v1", id: admittedApparatus.id, registrationSha256: streamHash(admittedApparatus),
     host: admittedHost, monoNs: "5017000000", identitiesAbsent: true, listener: admittedApparatus.listener,
@@ -1159,6 +1168,12 @@ for (const [group, scenario] of [
   writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(handle)));
   const inspected = await validateSavedCampaign(request);
   assert.notEqual(inspected.status, "invalid");
+  if (settleNativeFails) {
+    assert.equal(inspected.status, "failed");
+    assert.equal(inspected.collectionIntegrity, "manifest-verified");
+    assert.equal(inspected.commandLifecycle, "observed-terminal");
+    assert.deepEqual(inspected.uncollectedNativeRoots, []);
+  }
   assert.deepEqual(inspected.supervisedTerminal, { registrationSha256: streamHash(admittedApparatus),
     sealSha256: evidence.digest(readFileSync(join(handle.directory, "control-stream-seal.json"))) });
   const receipt = join(phase, "host-after-settled.json");

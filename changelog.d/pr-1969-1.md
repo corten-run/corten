@@ -1,0 +1,1 @@
+- Dedicated benchmark startup now lets the root login that starts the job drain before checking for an idle host. [#1967 Dedicated bootstrap reopens root SSH after its quiet window and r51 fails the first idle check](https://github.com/corten-run/corten/issues/1967)

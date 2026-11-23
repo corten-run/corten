@@ -115,6 +115,15 @@ with the listener still bound and no unknown login survivors. Earlier bootstrap/
 watchers likewise require actual unit/PID/cgroup termination before entry. Only after
 this final actual drainage may the entry write the collection manifest.
 
+An ordinary failed group can also reach this handoff. A clean SSH exit is not a
+drain proof and a verified drain does not make the failed group successful.
+After terminal publication, the campaign's fault line distinguishes revoked
+control (`campaign drain control invalid`), a probe that could not run or refused
+(`campaign drain probe refused`), a reply that failed parsing or verification
+(`campaign drain invalid proof`), and exhausting the wait for registered members
+to disappear (`campaign drain deadline`). No probe output is logged. The older
+`campaign drain` line alone does not identify which check failed.
+
 The collector waits for actual local closure plus a two-lease (30-second) embargo,
 then may attempt guarded collection. The embargo is not proof that remote work stopped.
 Remote guard admission additionally requires actual stream-drain evidence, or permanent

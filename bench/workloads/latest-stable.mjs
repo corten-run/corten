@@ -26,6 +26,7 @@ const canonical = (value) => value && typeof value === "object"
   ? Array.isArray(value) ? `[${value.map(canonical).join(",")}]`
     : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
   : JSON.stringify(value);
+const dependencyKinds = ["dependencies", "optionalDependencies", "peerDependencies", "peerDependenciesMeta"];
 
 /**
  * Offline, read-only policy evaluation of UTF-8 source strings or byte arrays.
@@ -110,13 +111,32 @@ function evaluateLegacy(input = {}) {
   return result;
 }
 
-// Reviewed primary-registry observation supplied on 2026-11-17. These facts
+// Reviewed primary-registry observation supplied on 2026-11-22. These facts
 // cannot be advanced by editing a policy date, a lock or an authored verdict.
 // New observations require source review; this is not a network latest resolver.
-const observedAt = "2026-11-17T14:50:31.991Z";
+const currentObservedAt = "2026-11-22T19:13:18.740Z";
+const previousObservedAt = "2026-11-17T14:50:31.991Z";
 // Exact primary response identities, not eligible verdicts. Below we also parse
 // their bytes and recompute targets, dependency paths and native-consumer scope.
 const reviewedRegistry = Object.freeze({
+  "@babel/core": ["8.1.3", "752efc828684eb735e3e212bb5f7cc3a00cc715758aebbef2b353c3a1ebf223f"],
+  "babel-preset-solid": ["1.9.19", "5607d3867fc265be88881506bd28b15e8ab14a961b5c9dabfcce3556684f8068"],
+  esbuild: ["0.28.2", "7a6838097b106ef5d8877fd543a1e25c46e5eb1730945fb7e57bc467c12c7c8c"],
+  react: ["19.3.1", "ecf8c02b9096a7813842d87fae50a707a8809c5c3d0ec6b359ac51d40188ff6f"],
+  "react-dom": ["19.3.1", "2d72d7d33a8b0fea5614e1b415d06470877efa8eebbdf638cee04e5b83c2c7a5"],
+  remix: ["3.3.0", "a9a2909f0f864315f895a393aa861a92220ad8645e3db46d0bc1e0e4a14b72cc"],
+  "solid-js": ["2.0.3", "361565891c754741113cc4ec3700b1b60ab9f0dfb9fb1bc291775343c2f7123b"],
+  svelte: ["5.59.1", "aabd653e7472de78a912e93f7af0cde8a75d6ccea77f9f29342e90a8894512ae"],
+  vue: ["3.5.46", "63e306e9ab6f1c75ed60d24303cfd0cd310a8ed17944e072f5615043c1cab563"],
+  "@vue/compiler-sfc": ["3.5.46", "05cd0961875d2b1cc6685aa4e1f3fe0c13798f3213926e5aa8b87828e8fce403"],
+  "@babel/parser": ["8.1.3", "3946934b5df97aee0244c0d18e7ac3750cb07ebb8186b66202c9ab6150eb937f"],
+  "babel-plugin-jsx-dom-expressions": ["0.40.14", "5b401b6520332ddd9fac5dc2d285e31d8bffa6d14b2c6e02dbf81e5174ce3ed5"],
+  "@solidjs/web": ["2.0.3", "de2af989c395747685ffaf815dcefa699cb45d76c4a64848dd885463a85973ef"],
+  "@remix-run/test": ["1.2.0", "ead3050b1573b90332c09ec7f2e8e3f5ee611e352d87a6c4da7aab7e33d0104e"],
+});
+// Retained v2 observation: do not replay its forced Remix resolution with the
+// private-tool rule, or reinterpret the previous blocked row as current.
+const previousRegistry = Object.freeze({
   "@babel/core": ["8.1.2", "ea4b870f29d90df7b3ada07d3f20dcb05ad15f0230608ef149c32c10f157f1ad"],
   "babel-preset-solid": ["1.9.19", "5607d3867fc265be88881506bd28b15e8ab14a961b5c9dabfcce3556684f8068"],
   esbuild: ["0.28.2", "7a6838097b106ef5d8877fd543a1e25c46e5eb1730945fb7e57bc467c12c7c8c"],
@@ -130,6 +150,13 @@ const reviewedRegistry = Object.freeze({
   "@babel/parser": ["8.1.2", "23bea21411dae23f43b3b3ab8fa846391329cf6d1eea2dac894f258e96ba6de1"],
   "babel-plugin-jsx-dom-expressions": ["0.40.14", "5b401b6520332ddd9fac5dc2d285e31d8bffa6d14b2c6e02dbf81e5174ce3ed5"],
   "@solidjs/web": ["2.0.0", "463c70691ccf608a7fb49f7d40a02b05044c563ea08637bd826668703c43a8d2"],
+});
+// Reviewed version response at https://registry.npmjs.org/esbuild/0.27.2.
+// Bind both the archive and its published dependency maps (including binaries).
+const privateEsbuild = Object.freeze({
+  version: "0.27.2", resolved: "https://registry.npmjs.org/esbuild/-/esbuild-0.27.2.tgz",
+  integrity: "sha512-HyNQImnsOC7X9PMNaCIeAm4ISCQXs5a5YasTXVliKv4uuBo1dKrG0A+uQS8M5eXjVMnLg3WgXaKvprHlFJQffw==",
+  dependencySha256: "6ddacbd6815df6ddbaff1acb08c11e0533693e7aa81735a18b1f40a679cce1af",
 });
 export const registryObservationSchema = "benchmark-npm-registry-observation/v1";
 export const unsupportedSolidReason = "latest-stable-solid-2-needs-compatible-stable-compiler";
@@ -150,13 +177,16 @@ function evaluateCandidates(input) {
   try {
     const record = read("policy");
     need(canonical(Object.keys(record).sort()) === canonical(["schema", "checkedOn", "observedAt", "observations", "candidates", "unsupported", "legacy"].sort()), "policy:unexpected-fields");
-    need(record.checkedOn === "2026-11-17" && record.observedAt === observedAt, "policy:unreviewed-observation-date");
+    const previous = record.observedAt === previousObservedAt;
+    const observedAt = previous ? previousObservedAt : currentObservedAt;
+    const expectedRegistry = previous ? previousRegistry : reviewedRegistry;
+    need(record.checkedOn === observedAt.slice(0, 10) && record.observedAt === observedAt, "policy:unreviewed-observation-date");
     const registry = record.observations;
     need(registry?.schema === registryObservationSchema && registry.observedAt === observedAt
       && canonical(Object.keys(registry).sort()) === canonical(["schema", "observedAt", "packages"].sort())
-      && canonical(Object.keys(registry.packages).sort()) === canonical(Object.keys(reviewedRegistry).sort()), "policy:unreviewed-observations");
+      && canonical(Object.keys(registry.packages).sort()) === canonical(Object.keys(expectedRegistry).sort()), "policy:unreviewed-observations");
     const observations = {};
-    for (const [name, [version, identity]] of Object.entries(reviewedRegistry)) {
+    for (const [name, [version, identity]] of Object.entries(expectedRegistry)) {
       const response = registry.packages[name];
       need(response && canonical(Object.keys(response).sort()) === canonical(["url", "observedAt", "status", "bytes", "sha256", "raw"].sort()), "policy:invalid-registry-response");
       const bytes = Buffer.from(response.raw ?? "");
@@ -188,7 +218,12 @@ function evaluateCandidates(input) {
     "tooling:parser-lock-mismatch");
     need(lock?.lockfileVersion === 3 && lock.packages?.[""], "lockfile:invalid-shape");
     need(manifest && typeof manifest === "object" && !Array.isArray(manifest), "manifest:invalid-shape");
-    need(canonical(manifest.overrides) === canonical({ "@remix-run/test": { esbuild: "$esbuild" } }), "manifest:unreviewed-overrides");
+    const remixTestVersion = reviewedRegistry["@remix-run/test"][0];
+    // Keep the private test tool in its published range and outside
+    // GHSA-g7r4-m6w7-qqqr, without changing the actual benchmark bundler.
+    const overrides = previous ? { "@remix-run/test": { esbuild: "$esbuild" } }
+      : { [`@remix-run/test@${remixTestVersion}`]: { esbuild: privateEsbuild.version } };
+    need(canonical(manifest.overrides) === canonical(overrides), "manifest:unreviewed-overrides");
     for (const kind of ["dependencies", "devDependencies", "optionalDependencies"]) need(canonical(manifest[kind] ?? {}) === canonical(lock.packages[""][kind] ?? {}), `lockfile:root-${kind}-mismatch`);
     const resolvePackage = (from, name) => {
       need(/^(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+$/i.test(name)
@@ -203,6 +238,15 @@ function evaluateCandidates(input) {
         if (base === ".") base = "";
       }
     };
+    const remixTest = "node_modules/@remix-run/test";
+    const remixTestEsbuild = previous ? null : `${remixTest}/node_modules/esbuild`;
+    if (remixTestEsbuild && Object.hasOwn(lock.packages, remixTestEsbuild)) {
+      const pkg = lock.packages[remixTestEsbuild];
+      need(pkg?.version === privateEsbuild.version && !pkg.link && pkg.resolved === privateEsbuild.resolved
+        && pkg.integrity === privateEsbuild.integrity, "lockfile:unreviewed-remix-test-esbuild-archive");
+      const edges = Object.fromEntries(dependencyKinds.map((kind) => [kind, pkg[kind] ?? {}]));
+      need(sha256(canonical(edges)) === privateEsbuild.dependencySha256, "lockfile:unreviewed-remix-test-esbuild-dependencies");
+    }
     for (const app of selectedApps("client-heavy")) {
       const closure = new Map(), pending = [], incompatible = [];
       for (const name of candidateDependencies[app]) {
@@ -217,16 +261,17 @@ function evaluateCandidates(input) {
         if (closure.has(path)) continue;
         const pkg = lock.packages[path], name = path.slice(path.lastIndexOf("node_modules/") + 13);
         need(pkg && !pkg.link && typeof pkg.version === "string" && semver.valid(pkg.version) !== null, `lockfile:${name}:invalid-or-linked-package`);
-        // Even an unused nested copy of a consumed package can shadow a future
-        // import. Do not certify a single-root closure while it is installed.
+        // Reject even unused shadows, except the private build tool npm resolves
+        // for @remix-run/test's independently observed esbuild dependency.
         if (candidateDependencies[app].includes(name) || Object.hasOwn(observations, name)) {
-          need(Object.keys(lock.packages).filter((key) => key === `node_modules/${name}` || key.endsWith(`/node_modules/${name}`)).length === 1,
+          need(Object.keys(lock.packages).filter((key) => key !== remixTestEsbuild
+            && (key === `node_modules/${name}` || key.endsWith(`/node_modules/${name}`))).length === 1,
             `lockfile:${name}:ambiguous-resolution`);
         }
         // A latest root/compiler retains the dependency declarations actually
         // published for that version. Internal dependencies are supported pins,
         // not new independent latest targets (e.g. Vue's Babel parser 7).
-        if (observations[name]?.version === pkg.version) for (const kind of ["dependencies", "optionalDependencies", "peerDependencies", "peerDependenciesMeta"]) {
+        if (observations[name]?.version === pkg.version) for (const kind of dependencyKinds) {
           need(canonical(pkg[kind] ?? {}) === canonical(observations[name][kind] ?? {}), `lockfile:${name}:${kind}-differs-from-registry`);
         }
         closure.set(path, { path, package: name, version: pkg.version });
@@ -240,6 +285,12 @@ function evaluateCandidates(input) {
             need(typeof range === "string" && semver.validRange(range) !== null, `lockfile:${dependency}:invalid-${kind}-range`);
             if (resolved) {
               const version = lock.packages[resolved]?.version;
+              if (resolved === remixTestEsbuild) {
+                need(path === remixTest && kind === "dependency" && pkg.version === remixTestVersion,
+                  "lockfile:unreviewed-remix-test-esbuild-consumer");
+                const { dist } = observations["@remix-run/test"];
+                need(pkg.resolved === dist.tarball && pkg.integrity === dist.integrity, "lockfile:unreviewed-remix-test-archive");
+              }
               if (typeof version !== "string" || !semver.satisfies(version, range)) incompatible.push({ from: path, kind, package: dependency, range, resolved, version });
               pending.push(resolved);
             }
@@ -253,7 +304,8 @@ function evaluateCandidates(input) {
       if (dependencies.some((d) => d.package === "@babel/core") && !targets.includes("@babel/core")) targets.push("@babel/core");
       incompatible.sort((a, b) => canonical(a).localeCompare(canonical(b), "en"));
       const blockers = [...targets.flatMap((name) => !observations[name] ? [`latest-not-observed:${name}`]
-        : dependencies.filter((d) => d.package === name).some((d) => d.version !== observations[name].version) ? [`not-latest-stable:${name}`] : []),
+        : dependencies.some((d) => d.package === name && d.path !== remixTestEsbuild
+          && d.version !== observations[name].version) ? [`not-latest-stable:${name}`] : []),
       ...incompatible.map((edge) => `incompatible-${edge.kind}:${edge.from}:${edge.package}`)];
       const row = { app, roots: [...candidateDependencies[app]], dependencies, status: blockers.length ? "blocked" : "satisfied",
         targets, incompatible,

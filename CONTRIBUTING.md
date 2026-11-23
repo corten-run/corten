@@ -130,6 +130,8 @@ their absence cannot establish framework or host qualification.
 
 `Catalog Contract` runs the harness and Corten parity for framework-only changes; app
 changes run the harness and the affected apps, including consumers of shared drivers.
+The listed fleet-controller files keep the harness, Corten's root-context build and both
+JSON jobs, but do not select unrelated app builds. Benchmark Evidence selection is unchanged.
 Changes to shared benchmark inputs or the workflow, and manual runs, test all 20 parity
 apps and both JSON jobs. A push to `main` is scoped the same way by its push diff, and tests
 everything when its base commit is unknown. This also applies to unknown app directories
@@ -352,8 +354,8 @@ and both sources and every browser/content profile for each admitted app before 
 The nightly suite measures CPU, memory,
 load and cold start only, with three short-window passes (`--duration 15 --warmup 10 --rate 150`)
 on a dedicated c-8, app CPU 1, upstream CPUs 2-3 and load CPUs 4-7, or on several such droplets
-when a [split round](bench/marketplace/nightly.md#split-rounds) is worth launching. Time pages in all three
-locales (`en-US`, `fr-FR`, `de-DE`) and locale-neutral JSON once per source per pass.
+when a [split round](bench/marketplace/nightly.md#split-rounds) is worth launching. Per source and
+pass, time one page profile cycling through `en-US`, `fr-FR`, `de-DE`, and one neutral JSON profile.
 Report medians, ranges and headroom limits, not a guaranteed finish by 7 am. Compare only
 compatible v2 rounds, with no r16 or catalog c1 delta; catalog is not a duplicate nightly run.
 Historical build, browser, byte and instruction evidence remains under its original workload
@@ -396,6 +398,87 @@ establish a general ranking.
       (`null`) in either build, or if the bound on the paired changes does not establish the
       predeclared margin. Say what the run did not resolve. Retired instructions measure work,
       not speed; fewer cycles per request show lower CPU cost, not lower request latency.
+
+      The no-regression margin is separate from that smallest worthwhile reduction: a workload the
+      change should leave as fast as it was is held to +1%, declared before the run. If the
+      one-sided 95% upper bound on the median per-pair change in user plus kernel cycles per
+      request is under +1%, the margin is met. If it is at or above +1%, the margin is not met,
+      with one exception, for a negative control: a workload the run's plan (its `margin.md`)
+      names before the run as one whose code paths the change does not touch, with the reason,
+      which the pull request's review accepts. A workload the change touches is held to +1% with
+      no floor, however flat its instructions, and so is a workload not named so before the run; a
+      declaration is never added or changed after a run to clear its result, and a plan that
+      made +1% decisive before this exception existed stays bound by it.
+
+      A negative control whose bound is at or above +1% but under the layout floor that applies
+      to it may go ahead when its user instructions pass a screen: the median of the paired
+      changes in user instructions per request is between -0.02% and +0.02% and its one-sided 95%
+      upper bound is at or below +0.02%, compared unrounded. The pull request reports it as
+      "missed +1%; placement and regression not distinguished", not as having met the margin or
+      as unchanged speed, with its user and kernel split. This is a screening rule, not an
+      equivalence test: it does not show that the control's instructions or CPU cost are
+      unchanged. The exception never covers a bound at or above the floor or a regression other
+      evidence corroborates, and does not replace the affected-route measurement above or the
+      memory and waiting measurements below.
+
+      A floor applies to a negative control in one of two ways; with neither, the control is held
+      to +1%.
+
+      The recorded floor, +1.62% ([design Choice 71](docs/design.md#choice-layout-floor)),
+      applies to one workload, the one it was calibrated on: `plain`, a `GET /private` with no
+      request header of its own to the probe app the Choice names, answered `200` with the record
+      page for one visitor. It applies to no other workload or request, and only to a run that
+      records a setup matching the calibration's in every item below. Any VM counts if it matches;
+      a difference in any item means no recorded floor.
+
+      1. CPU: Xeon Platinum 8358, one thread a core.
+      2. Kernel: Linux 6.12.117 (Debian's `6.12.117+deb13-amd64`).
+      3. Allocator: jemalloc 5.3.0 by `LD_PRELOAD=libjemalloc.so.2`, with
+         `MALLOC_CONF=background_thread:true,tcache_max:65536` exactly.
+      4. Pinning: the server on one CPU, the load on two others and the driver and `perf` on a
+         fourth, all four distinct.
+      5. Build: rustc 1.100.0 and LLD 23.1.5; the probe built as the receipt's `build.sh` builds it,
+         with the repository's release profile (`opt-level = 3`, thin LTO, one codegen unit),
+         features `json` and `compress`, and zstd linked to the system's `libzstd`
+         (`ZSTD_SYS_USE_PKG_CONFIG=1`); the same third-party crate versions as the receipt's
+         `probe/Cargo.lock` and Debian's `libzstd1` 1.5.7+dfsg-1.
+      6. Load: `wrk` 4.1.0 with `-t2 -c64` and 3 s turns; every turn, warm-up included, on a
+         freshly started build; the two builds' order turned every pair; 100 recorded pairs after
+         one that is not; the bound the 59th of the 100 sorted per-pair changes.
+
+      Any other negative control, and `plain` on any other setup, gets a floor only from its own
+      A/A layout control in the same run, under the run's protocol and measured on each negative
+      control whose miss it would waive, named in the run's plan before the run and built from the
+      candidate's base commit with the candidate's build inputs. On each such workload it makes
+      three comparisons: main
+      against main built twice, and main against main with each of the receipt's two pads (one
+      never-called function of 40 bytes, and one of 3,100 bytes, `variants/pad40.diff` and
+      `pad3100.diff`). Each is 100 recorded pairs after one that is not, read with the
+      candidate's statistic: the one-sided 95% upper bound on the median per-pair change in user
+      plus kernel cycles per request, the 59th of the 100 sorted changes. A comparison with fewer
+      than 100 valid pairs gives no bound, and the control gives no floor. If the control
+      qualifies, the larger of its two pad bounds on a workload is that workload's floor if it is
+      at or below +2%. A layout bound above +2%
+      gives no floor, not a floor of +2%: that run holds every workload to +1%. A negative control
+      without its own qualifying A/A in that run is held to +1%.
+
+      A layout control, the recorded one or a same-run one, qualifies only if the run records that
+      it passes every check below. If any check fails, the control gives no floor and the run
+      holds every workload to +1%.
+
+      1. Each comparison's two builds answer the workload's request with byte-identical status,
+         headers but `Date`, and body, compared with only the `Date` header removed. (The
+         recorded control passed this as its kit compared, with more normalized; the Choice says
+         why that is accepted for its receipt alone.)
+      2. Main built twice is byte-identical and meets +1% on that workload.
+      3. The pad is present in the padded binary and moved code: the count of function symbols in
+         both binaries whose addresses changed is above zero.
+      4. Every counter ran 100% of every turn, and the load tool reported no error in any turn.
+      5. Each pad comparison passes the user-instruction screen above, as a candidate must: its
+         median between -0.02% and +0.02% and its bound at or below +0.02%.
+
+      A layout floor never applies to the benefit side: it cannot establish a CPU-cost win, which
+      the rule above decides as before.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { withinNoise } from "../fullstack/passes.mjs";
 import { groupApps } from "./groups.mjs";
-import { phases, splitApps, splitSubject, timedProfiles } from "./run-contract.mjs";
+import { phases, splitApps, splitSubject } from "./run-contract.mjs";
 
 // A part's own outcome, as its summary records it. A merged round is finished and clean only
 // when every part is, so the merge refuses any other part and keeps each part's in split.parts,
@@ -84,7 +84,7 @@ export const differText = (pairs) => pairs.map(([a, b]) => `d${a} and d${b} diff
  */
 export function betweenDroplets(s) {
   const stages = [];
-  for (const { key } of timedProfiles) for (const phase of phases) for (const metric of Object.keys(subjectMetrics)) {
+  for (const { key } of s.measurement.profiles) for (const phase of phases) for (const metric of Object.keys(subjectMetrics)) {
     const cells = s.split.parts.map((p) => {
       const c = p.corten.phases[key][phase];
       return { index: p.index, passes: c.passes, range: c.passes ? c[metric] : null };
