@@ -1453,17 +1453,44 @@ Root SSH still needs a normal logind session, but not a separate user manager.
 For new dedicated reservations, the controller installs a runtime systemd
 drop-in with the job unit and waits for systemd to reload it. The drop-in skips
 new starts of `user@0.service` while the host's control binding exists. It does not stop
-the current manager or change SSH or PAM. After installation is acknowledged,
-the controller opens no SSH connections for two minutes to let the manager
-exit naturally. Only then does it start the job. The job checks the installed
-and effective policy and requires an inactive manager with no main PID before
-waiting for cloud-init and again before native entry. Saved reservations without
-`quietBootstrap` still regenerate their original job, with the drain check near
-native entry.
+the current manager or change SSH or PAM. For new reservations
+(`quietBootstrap: "after-start"`), the last login before the drain starts the
+unit. After that start is acknowledged, the controller opens no SSH session for
+135 seconds: two minutes for natural drain, then the existing 15-second idle
+check. The service uses its own monotonic exec-start timestamp for the window.
+The before-drain and after-drain snapshots record the manager's active state,
+main PID and monotonic activation time, not the time of either sample. A delayed
+job can take both samples back-to-back. Without boot-relative journal times for
+both samples, their spacing is unknown; do not infer what happened across the
+two-minute window. Two active samples with different nonzero PIDs show different
+manager processes, not why the process changed. Active followed by inactive
+with main PID zero is the expected drain, not evidence of reactivation.
+The job checks the installed and effective policy and requires an inactive
+manager with no main PID before cloud-init and again before native entry.
+A late early proof fails rather than admitting a sample from after polling
+could resume. Nothing retries the start, stops the manager or suppresses a failure.
+Saved `quietBootstrap: true` jobs retain the original check immediately after
+unit start; jobs without the marker retain their drain check near native entry.
 The run log records which property it is querying and the observed state and
 main PID, so a busy manager can be distinguished from a stalled query.
 If it stays busy the group fails setup, without terminating anyone's work.
 The normal login inventory and registered-monitor checks still apply.
+
+Before using this handoff across groups, rehearse on a disposable Ubuntu 24.04
+VM with the target image's systemd, sshd, PAM and logind settings, not a container.
+Use the production guarded upload/install/start and first status request. In the
+rehearsal job keep the generated supervisor, drain and both idle checks; replace
+the provisioning and workload body with a bounded stand-in. Record the rehearsal
+diff, image and controller commit. Do not register it as benchmark evidence.
+On a clean boot require both checks to pass and use boot-relative journal and
+guarded SSH timestamps to verify the first status login followed the early proof.
+On a second clean boot retain a fixture-owned root login with its active manager
+*before* installing the policy: the early check must fail before provisioning,
+with no second start. Bound each rehearsal to ten minutes, preserve the small
+logs and source hashes, then remove the VM and its disks and confirm absence.
+An ambiguous or failed result stops the rollout. Even a passing rehearsal needs
+one separately approved real group to pass the unchanged pre-timing gate and
+reach registration on the merged source before fan-out.
 
 On a newly allocated supervised dedicated group host, the controller's guarded
 workspace command captures the IPv4 peer of its authenticated OpenSSH
