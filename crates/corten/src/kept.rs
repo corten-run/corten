@@ -198,8 +198,8 @@ static DIGITS: &str = {
 
 /// An `Age` of `seconds`. Under [`AGES`] it is a slice of [`DIGITS`], where a value made from the
 /// number is two allocations for every answer given again: about 900 instructions of the 39,000
-/// a kept file's request took (docs/design.md#choice-kept-pages). An older answer's is made
-/// from the number.
+/// a kept file's request took (docs/design.md#choice-kept-pages). An older answer's is
+/// [`older`].
 fn age_value(seconds: u64) -> HeaderValue {
     // Where the numbers of this many digits begin in `DIGITS`, and the first of them.
     let (digits, from, first) = match seconds {
@@ -207,10 +207,29 @@ fn age_value(seconds: u64) -> HeaderValue {
         10..100 => (2, 10, 10),
         100..1_000 => (3, 190, 100),
         1_000..AGES => (4, 2_890, 1_000),
-        _ => return HeaderValue::from(seconds),
+        _ => return older(seconds),
     };
     let at = from + (seconds - first) as usize * digits;
     HeaderValue::from_static(&DIGITS[at..at + digits])
+}
+
+/// An `Age` past [`DIGITS`]: its digits written here and copied into a value, which is one
+/// allocation where a value made from the number is two (docs/design.md#choice-kept-pages).
+fn older(seconds: u64) -> HeaderValue {
+    // A `u64` is at most twenty digits.
+    let mut digits = [0; 20];
+    let (mut at, mut left) = (digits.len(), seconds);
+    loop {
+        at -= 1;
+        digits[at] = b'0' + (left % 10) as u8;
+        left /= 10;
+        if left == 0 {
+            break;
+        }
+    }
+    // Digits are a header value's bytes, so this does not fail; the number made into a value
+    // is the same value.
+    HeaderValue::from_bytes(&digits[at..]).unwrap_or_else(|_| HeaderValue::from(seconds))
 }
 
 /// A copy of a kept answer's `head`, each line where it was, with room for [`ADDED`] more
@@ -1285,8 +1304,8 @@ mod tests {
         route
     }
 
-    /// An `Age` reads as its number, whether it is a slice of the digits or made from the number:
-    /// every age the digits hold, and those past them.
+    /// An `Age` reads as its number, whether it is a slice of the digits or written to a buffer:
+    /// every age the digits hold, and those past them, to the longest.
     #[test]
     fn an_age_is_its_number_in_decimal() {
         assert_eq!(DIGITS.len(), 38_890);
