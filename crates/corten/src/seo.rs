@@ -1,7 +1,7 @@
 //! `robots.txt` and XML sitemaps, written as the search engine protocols define them. Each is the
 //! same for every crawler, so a handler returns it as it comes, `Public<seo::File>`, which shared
-//! caches keep for an hour. So does the app, for one it compresses (1,024 bytes or more, in a
-//! build with the `compress` feature), as it keeps any `Public` text
+//! caches keep for an hour. So does the app, for one of 1,024 bytes or more, as it keeps any
+//! `Public` text
 //! ([`App::kept_answers`](crate::App::kept_answers)): a sitemap's handler then does not run for
 //! every crawler that asks without credentials, and a URL added since may wait that hour to show.
 //! `.shared(..)` on the answer says another time for shared caches and the app

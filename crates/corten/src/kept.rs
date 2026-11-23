@@ -39,12 +39,14 @@
 //!
 //! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`), text or a file (`Media`,
 //! a sitemap or `robots.txt` of [`crate::seo`]) is kept the same
-//! way, under the same rules and by the same key, where the app compresses the answer: its
-//! whole body, of 1,024 bytes or more, in a build with the `compress` feature, for a `GET` that
+//! way, under the same rules and by the same key, from a size: its whole body, of 1,024 bytes
+//! or more ([`BODY_FROM`]), whatever its type and in every build, for a `GET` that
 //! shows nothing about who is asking ([`Shape::Body`]). A kept body saves its handler, its
-//! writing and its compression, and one the app does not compress saves too little of the first
-//! two, where the handler reads only memory, to pay for asking the store ([`compresses`]); so a
-//! build that does not compress keeps no body, and a route whose bodies are all too small stops
+//! writing, its compression where the app compresses it, and the hash of its tag, which a
+//! request that names a coding pays for whether or not the body is compressed. A smaller body
+//! is left to its handler: the hash grows with the body and the instructions asking the store
+//! costs do not (by their counts a body named with a coding gains from about 350 bytes; no
+//! size under 1,024 was run). A route whose bodies are all too small stops
 //! asking ([`Unkept`]). Once kept, a body is given to a request that accepts no coding as well.
 //! Which answers are whole bodies is known from the
 //! route's type when the app compiles ([`crate::answer::Answer::WHOLE`], which an answer type of
@@ -58,8 +60,9 @@
 //! other way, on the thread that runs it (`form::watched`). JSON the app holds as bytes
 //! (`json::Raw`) carries its own compressed forms in a build that compresses, a mark this does
 //! not replay, so it is its handler's for every request, which costs it no writing and no
-//! compression. A file is kept by its type as text is, so a picture of a type the app does not
-//! compress (PNG, JPEG, WebP) is its handler's for every request, and so are a file sent as a
+//! compression. A file is kept as text is, whatever its type: a picture no build compresses
+//! (PNG, JPEG, WebP) is kept for its tag's hash. Left to its handler for every request are a
+//! file sent as a
 //! stream (`Media::stream`), which has no body to hold, and one at a URL that names its content
 //! (`Public::immutable`), which says no lifetime the app keeps it for and is left to the caches
 //! that keep it for a year. A kept file is sent with the headers its handler gave it, its
@@ -157,6 +160,59 @@ static LAST_EVENT_ID: header::HeaderName = header::HeaderName::from_static("last
 /// [`crate::page::NOTICE_HEADER`], held once for the same reason.
 static NOTICE: header::HeaderName = crate::page::NOTICE_HEADER;
 
+/// The ages, in seconds, whose `Age` is written without an allocation: those of up to four
+/// digits, two hours and three quarters, which takes in a lifetime of an hour.
+const AGES: u64 = 10_000;
+
+/// Every whole number under [`AGES`] in decimal, one after another (`0123456789101112`, on to
+/// `9999`): an `Age` is a slice of it.
+static DIGITS: &str = {
+    const LENGTH: usize = 10 + 90 * 2 + 900 * 3 + 9_000 * 4;
+    static BYTES: [u8; LENGTH] = {
+        let mut bytes = [0; LENGTH];
+        let (mut at, mut number) = (0, 0);
+        while number < AGES {
+            let mut place = match number {
+                0..10 => 1,
+                10..100 => 10,
+                100..1_000 => 100,
+                _ => 1_000,
+            };
+            while place > 0 {
+                bytes[at] = b'0' + (number / place % 10) as u8;
+                at += 1;
+                place /= 10;
+            }
+            number += 1;
+        }
+        // A length that is not the digits' fails the build: too short is an index past the
+        // end above, too long is this.
+        assert!(at == LENGTH);
+        bytes
+    };
+    match std::str::from_utf8(&BYTES) {
+        Ok(digits) => digits,
+        Err(_) => panic!("digits are text"),
+    }
+};
+
+/// An `Age` of `seconds`. Under [`AGES`] it is a slice of [`DIGITS`], where a value made from the
+/// number is two allocations for every answer given again: about 900 instructions of the 39,000
+/// a kept file's request took (docs/design.md#choice-kept-pages). An older answer's is made
+/// from the number.
+fn age_value(seconds: u64) -> HeaderValue {
+    // Where the numbers of this many digits begin in `DIGITS`, and the first of them.
+    let (digits, from, first) = match seconds {
+        0..10 => (1, 0, 0),
+        10..100 => (2, 10, 10),
+        100..1_000 => (3, 190, 100),
+        1_000..AGES => (4, 2_890, 1_000),
+        _ => return HeaderValue::from(seconds),
+    };
+    let at = from + (seconds - first) as usize * digits;
+    HeaderValue::from_static(&DIGITS[at..at + digits])
+}
+
 /// A copy of a kept answer's `head`, each line where it was, with room for [`ADDED`] more
 /// names: a copy made by `clone` holds its lines in a vector as long as they are, which grows on
 /// the first name a stage adds. (A head with more than four lines beyond the first of their
@@ -201,10 +257,10 @@ thread_local! {
     static DRAWN: Cell<u32> = const { Cell::new(DRAWN_FROM) };
 }
 
-/// A route of whole bodies, by what became of the answers it made last. A body is kept where
-/// the app compresses it ([`compresses`]), which its size and its media type decide and no type
-/// of the route's shows, so a route whose bodies are all under that size, or all pictures the app
-/// does not compress, streams or files their URLs name, would ask the store, find nothing, and have every
+/// A route of whole bodies, by what became of the answers it made last. A body is kept from
+/// a size ([`BODY_FROM`]), which no type
+/// of the route's shows, so a route whose bodies are all under that size, or all
+/// streams or files their URLs name, would ask the store, find nothing, and have every
 /// answer refused: about as much again as a handler that answers a constant costs. After
 /// [`UNKEPT_RUN`] answers in a row of which none was kept, and with none between given from
 /// the store, the route's requests are its handler's, as they were before the app kept
@@ -270,7 +326,7 @@ impl Unkept {
 
     /// How many requests of a route that left the store out this thread leaves to their
     /// handlers before one asks, set to `left` for a test that counts them.
-    #[cfg(all(test, feature = "compress"))]
+    #[cfg(test)]
     pub(crate) fn leaves_next(left: usize) {
         while Self::left_before_one_asks() != left {
             DRAWN.set(draw(DRAWN.get()));
@@ -315,20 +371,17 @@ impl Drop for Told {
     }
 }
 
-/// Whether the app compresses a `200` of `length` bytes under these headers for a request that
-/// accepts a coding (1,024 bytes or more of a type worth it, in a build that compresses): a
-/// whole body is kept only then. Kept, it saves its handler, its writing and its compression,
-/// and a body the app does not compress saves so little of the first two on the benchmark's
-/// JSON that a handler which does next to nothing is slower kept than made.
-fn compresses(headers: &HeaderMap, length: u64) -> bool {
-    #[cfg(feature = "compress")]
-    return crate::compress::compresses(headers, length);
-    #[cfg(not(feature = "compress"))]
-    {
-        let _ = (headers, length);
-        false
-    }
-}
+/// The least bytes of a whole body the app keeps. Kept, a body saves its handler, its writing,
+/// its compression where the app compresses it, and the hash of its tag, which is made for every
+/// request that names a coding, as a browser's does, whether or not the body is compressed
+/// (docs/design.md#limit-etag). The hash grows with the body and the instructions asking the store
+/// costs do not, so a small body is left to its handler (docs/design.md#choice-kept-pages has
+/// what was measured at this size). It is also the size the app compresses from.
+const BODY_FROM: u64 = 1024;
+
+// One size in the guide for both: a build in which they differ does not compile.
+#[cfg(feature = "compress")]
+const _: () = assert!(BODY_FROM == crate::compress::MIN_SIZE);
 
 /// How many words of marks ([`Store::asked`]) a store of `bound` bytes has, made when it first
 /// fills: a mark is one bit, and there is one for every 32 bytes of the bound, rounded up to a
@@ -607,6 +660,12 @@ pub(crate) struct Entry {
 pub(crate) struct Kept(Arc<Entry>);
 
 impl Kept {
+    /// The cache's mark of the kept answer these are the extensions of, which its handler's
+    /// answer carried as an extension of its own (`crate::cache::Typed`).
+    pub(crate) fn typed(extensions: &http::Extensions) -> Option<crate::cache::Typed> {
+        extensions.get::<Kept>().map(|Kept(entry)| entry.cache)
+    }
+
     fn of<'a>(extensions: &'a http::Extensions, body: &Bytes) -> Option<&'a Entry> {
         let Kept(entry) = extensions.get::<Kept>()?;
         (entry.body.as_ptr() == body.as_ptr() && entry.body.len() == body.len()).then_some(&**entry)
@@ -960,6 +1019,10 @@ impl<'a> Sent<'a> {
     fn read(headers: &'a HeaderMap, shape: Shape) -> Option<Self> {
         // By their names and first, since they are what most requests a page is not kept for
         // carry: a session's cookie, and the runtime's header on a navigation inside the app.
+        // Each is a lookup of about 100 instructions that the pass below could make in its
+        // stride, and is not: found there, after a browser's other headers, an `Authorization`
+        // cost its request 611 more to spare every other one that lookup
+        // (docs/design.md#choice-kept-pages).
         if crate::cache::Credentials::read(headers).personal(|| headers.contains_key(header::AUTHORIZATION))
             || headers.contains_key(crate::page::MODE_HEADER)
         {
@@ -1042,10 +1105,11 @@ impl<'a> Asked<'a> {
         let mut res = Response::new(Body::from(entry.body.clone()));
         let mut head = with_room(&entry.head);
         // So a cache after this one, the browser's too, does not start the lifetime over.
-        head.insert(header::AGE, HeaderValue::from(age));
+        head.insert(header::AGE, age_value(age));
         *res.headers_mut() = head;
+        // The cache's mark is the entry's ([`Kept::typed`]): an extension is an allocation and
+        // a place in the map, and this answer has one for the entry already.
         let extensions = res.extensions_mut();
-        extensions.insert(entry.cache);
         if let Some(style) = &entry.style {
             extensions.insert(style.clone());
         }
@@ -1130,8 +1194,8 @@ impl Missed {
             return res;
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
-        // A whole body is kept where the app compresses it.
-        if self.told.0.is_some() && !compresses(res.headers(), length) {
+        // A whole body is kept from a size, whatever its type.
+        if self.told.0.is_some() && length < BODY_FROM {
             return res;
         }
         let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
@@ -1219,6 +1283,20 @@ mod tests {
             route.made(false);
         }
         route
+    }
+
+    /// An `Age` reads as its number, whether it is a slice of the digits or made from the number:
+    /// every age the digits hold, and those past them.
+    #[test]
+    fn an_age_is_its_number_in_decimal() {
+        assert_eq!(DIGITS.len(), 38_890);
+        for seconds in (0..AGES).chain([AGES, AGES + 1, 86_400, 31_536_000, u64::MAX]) {
+            assert_eq!(age_value(seconds).to_str().ok(), Some(seconds.to_string().as_str()), "{seconds}");
+        }
+        // No allocation under `AGES`: the value's bytes are the digits' own.
+        let (digits, held) = (DIGITS.as_bytes().as_ptr_range(), age_value(AGES - 1));
+        assert!(digits.contains(&held.as_bytes().as_ptr()));
+        assert!(!digits.contains(&age_value(AGES).as_bytes().as_ptr()));
     }
 
     /// Of a route that left the store out, about one request in 256 asks all the same, and none

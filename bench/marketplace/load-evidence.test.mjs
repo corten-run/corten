@@ -7,26 +7,49 @@ import { runInNewContext } from "node:vm";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { retainLoadEvidence, validateLoadExecution } from "./load-evidence.mjs";
-import { containerReceipt, k6Image, nodeImage } from "./raw-contract.mjs";
+import { containerReceipt, k6Image, nodeImage, validateLocaleCounters } from "./raw-contract.mjs";
 import { readLoadSummary, readOutcome } from "./run-contract.mjs";
 
 // Execute the producer's actual k6 callback, mocking only the k6 runtime imports
 // and Docker transport. Do not substitute the synthetic saved-folder generator.
-function producerCallback() {
+function producer(env = { TARGET: "page", LOCALE: "rotating" }) {
   const source = readFileSync(new URL("./load.js", import.meta.url), "utf8")
     .replace('import http from "k6/http";', "").replace('import { check } from "k6";', "")
+    .replace('import exec from "k6/execution";', "").replace('import { Counter } from "k6/metrics";', "")
     .replace("export const options", "const options").replace("export function handleSummary", "function handleSummary")
     .replace("export default function ()", "function iteration()");
-  return runInNewContext(`${source}\nhandleSummary;`, {
-    __ENV: { TARGET: "page", MODE: "fixed", RATE: "150", DURATION: "15s", VUS: "64" },
-    http: { expectedStatuses: () => {}, setResponseCallback: () => {} },
+  const scenario = {}, calls = [];
+  const callbacks = runInNewContext(`${source}\n({handleSummary, iteration});`, {
+    __ENV: { MODE: "fixed", BASE: "http://app", RATE: "150", DURATION: "15s", VUS: "64", ...env },
+    exec: { scenario }, check() {}, Counter: class {
+      constructor(name) { this.name = name; }
+      add(n) { calls.push([this.name, n]); }
+    },
+    http: { expectedStatuses: () => {}, setResponseCallback: () => {}, get(url) { calls.push(url); return { status: 503 }; } },
   });
+  return { ...callbacks, calls, scenario };
 }
+
+test("producer marks the selected page before its only GET, by scenario iteration rather than VU or response status", () => {
+  const page = producer(), json = producer({ TARGET: "json" });
+  for (const index of [5, 0, 7, 3, 11]) {
+    const locale = ["en-US", "fr-FR", "de-DE"][index % 3];
+    page.scenario.iterationInTest = index; page.iteration();
+    assert.deepEqual(page.calls.shift(), [`marketplace_locale_${locale.replace("-", "_")}`, 1]);
+    assert.match(page.calls.shift(), new RegExp(`^http://app/marketplace/${locale}/item_[0-9]+$`));
+    assert.deepEqual(page.calls, []);
+    json.scenario.iterationInTest = index; json.iteration();
+    assert.match(json.calls.shift(), /^http:\/\/app\/api\/marketplace\/item_[0-9]+$/); assert.deepEqual(json.calls, []);
+  }
+  for (const env of [{ TARGET: "page" }, { TARGET: "page", LOCALE: "en-US" }, { TARGET: "json", LOCALE: "" }, { TARGET: "json", LOCALE: "rotating" }]) {
+    assert.throws(() => producer(env), /locale/i);
+  }
+});
 
 test("real producer callback and copy path retain k6 engine elapsed, including graceful completion and sub-ms clocks", async (t) => {
   const folder = mkdtempSync(join(tmpdir(), "marketplace-load-test-"));
   t.after(() => rmSync(folder, { recursive: true, force: true }));
-  const handleSummary = producerCallback(), count = 1500;
+  const { handleSummary } = producer(), count = 1500;
   for (const nanoseconds of [14999999999, 15000000001, 15137123456, 24999999999]) {
     // k6's CounterSink.Format uses duration.Seconds(); handleSummary exports
     // float64(duration)/float64(time.Millisecond). Keep their independent math.
@@ -104,6 +127,24 @@ test("execution bounds conserve arrival slots and latency work without rejecting
   assert.throws(() => validateLoadExecution(edge), /schedule capacity/);
 });
 
+test("locale selection evidence distinguishes normal graceful completion from interrupted VUs at cutoff", () => {
+  const replay = (counts, requests, completed, elapsed, vus = 2) => {
+    const metrics = { http_reqs: { count: requests }, iterations: { count: completed }, vus_max: { max: vus } };
+    ["en_US", "fr_FR", "de_DE"].forEach((locale, i) => {
+      if (counts[i] !== undefined) metrics[`marketplace_locale_${locale}`] = { count: counts[i] };
+    });
+    validateLocaleCounters({ target: "page", locale: "rotating" }, metrics, elapsed, 15, { MODE: "closed" });
+  };
+  replay([1], 1, 1, 15100);
+  replay([2, 2, 1], 5, 5, 23000);
+  assert.throws(() => replay([1, 2, 2], 5, 5, 23000), /rotation/);
+  assert.throws(() => replay([2, 2, 1], 4, 4, 23000), /differ from HTTP/);
+  replay([2, 2, 1], 4, 3, 25001); // two VUs still active; one HTTP sample absent
+  replay([1, 2, 1], 4, 3, 25001); // fifth index selected; one earlier VU never counted
+  assert.throws(() => replay([2, 2, 1], 4, 2, 25001), /exceeds active VUs/);
+  assert.throws(() => replay([1, 1, 1], 4, 2, 25001), /cover HTTP/);
+});
+
 // Both images must already be cached; no pulls, external networking or ports.
 test("pinned real k6 producer exports replayable elapsed against an isolated HTTP mock", { skip: process.env.MARKETPLACE_PRODUCER_MOCK !== "1" }, async (t) => {
   const folder = mkdtempSync(join(tmpdir(), "marketplace-k6-mock-"));
@@ -122,13 +163,13 @@ test("pinned real k6 producer exports replayable elapsed against an isolated HTT
     created.push(id); return id;
   };
   const mock = await create(`${prefix}-http`, ["--network", "none", "--cpus", "1", "--memory", "128m", nodeImage, "node", "-e",
-    "require('http').createServer((q,r)=>setTimeout(()=>{r.statusCode=q.url.startsWith('/marketplace/fr-FR/')?503:200;r.setHeader('Content-Type','text/html');r.end('<html>mock</html>')},200)).listen(8080,'127.0.0.1')"]);
+    "require('http').createServer((q,r)=>setTimeout(()=>{r.statusCode=q.url.startsWith('/failed/')?503:200;r.setHeader('Content-Type','text/html');r.end('<html>mock</html>')},200)).listen(8080,'127.0.0.1')"]);
   await docker(["start", mock]);
   await docker(["exec", mock, "node", "-e", "fetch('http://127.0.0.1:8080').then(r=>{if(!r.ok)process.exit(1)})"]);
-  for (const [phase, locale] of [["served", "en-US"], ["failed", "fr-FR"]]) {
+  for (const phase of ["served", "failed"]) {
     const start = Date.now();
     const load = await create(`${prefix}-k6-${phase}`, ["--network", `container:${mock}`, "--cpus", "4", "--memory", "2g", "-v", `${resolve("bench")}:/bench:ro`,
-      ...Object.entries({ TARGET: "page", MODE: "fixed", BASE: "http://127.0.0.1:8080", LOCALE: locale, RATE: "150", VUS: "64", DURATION: "15s" }).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+      ...Object.entries({ TARGET: "page", MODE: "fixed", BASE: `http://127.0.0.1:8080/${phase}`, LOCALE: "rotating", RATE: "150", VUS: "64", DURATION: "15s" }).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
       k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/load.js"]);
     await docker(["start", "-a", load]);
     const summary = await retainLoadEvidence(docker, load, folder, phase);
@@ -136,6 +177,7 @@ test("pinned real k6 producer exports replayable elapsed against an isolated HTT
     const receipt = containerReceipt(JSON.parse(await docker(["inspect", load]))[0]);
     validateLoadExecution({ load: receipt, summary, clock, start, end: Date.now(), seconds: 15 });
     const traffic = readLoadSummary(summary);
+    validateLocaleCounters({ target: "page", locale: "rotating" }, summary.metrics, clock.testRunDurationMs, 15, receipt.env);
     assert.equal(traffic.failed, phase === "failed" ? traffic.requests : 0);
     if (phase === "failed") assert.throws(() => readOutcome(summary), /no request succeeded/);
     else assert.equal(readOutcome(summary).failed, 0);

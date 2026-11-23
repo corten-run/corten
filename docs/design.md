@@ -7251,7 +7251,7 @@ rules something out.
     [the request path](guide/app.md#your-own-middleware) says it does, and the security headers,
     `Cache-Control`, the tag and the compression treat a kept page as the handler's answer, so no
     rule about what may be shared is written twice. Only a route typed `Public` whose answer is
-    a page, or JSON, text or a file in a build that compresses, asks the store at all, which is known when the route is made, so no
+    a page, or JSON, text or a file, asks the store at all, which is known when the route is made, so no
     other route's `GET` pays for it. A write pays a hash of its path and a count, and only in an
     app with such a route that has made an answer it may keep: whether an app has such a route
     is known when the router is made, and an app with none makes no store and counts no writes;
@@ -7329,19 +7329,29 @@ rules something out.
     where the rule loses.
 
     A route whose answer is JSON, text or a file (`Media`, or a sitemap or `robots.txt` of
-    `seo`) is kept the same way where the app compresses the answer
-    ([#1794 `Public` text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794)):
-    its whole body, by a page's key and under a page's rules, in a build with the `compress`
-    feature, when it is one the app would compress (1,024 bytes or more, of a type it
-    compresses, with no `no-transform` and no coding of its own). What a kept body saves is its
-    handler, its writing and its compression, and the benchmark's handler reads only memory, so
-    there the compression is most of it: with nothing compressed, keeping saved such a body
-    3.9% of its cycles and cost one from a handler that makes nothing 13.8% more (below), and
-    the rule keeps a body where the saving is one the app can count on whatever its handler
-    does. Once kept, a body is given to a request that accepts
-    no coding too, which saves that request less. A build that does not compress keeps no body
-    and its body routes ask the store nothing, which is known when the route is made. In a
-    build that does, a body's size is known only once it is made, so a route whose bodies are
+    `seo`) is kept the same way from a size
+    ([#1794 `Public` text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794),
+    [#1877 The tag's hash is a third of a request for a file the app does not compress: about 2.5 instructions a byte, made again for every answer that is not kept](https://github.com/corten-run/corten/issues/1877)):
+    its whole body, by a page's key and under a page's rules, when it is 1,024 bytes or more
+    and has no coding of its own, whatever its type and whether or not the build has the
+    `compress` feature. What a kept body saves is its
+    handler, its writing, its compression where the app compresses it, and the hash of its
+    tag. The rule was first "where the app compresses it", drawn from requests that named no
+    coding: there, with nothing compressed, keeping saved the benchmark's JSON
+    3.9% of its cycles and cost a body from a handler that makes nothing 13.8% more (below). A
+    browser names a coding, and for such a request the app tags the answer whether or not it
+    compresses it, reading the whole body for the hash ([Limit 21](#limit-etag)), so a body
+    that was not kept paid that for every request: a third of the request for a PNG of 8,000
+    bytes. A kept body is hashed once.
+    With a browser's four codings named, a kept PNG of 8,000 bytes took 8.9% fewer cycles a
+    request than one made each time, a CSV in a build without `compress` 8.1% fewer and a
+    PNG of 1 MiB 47.7% fewer; one of 1,024 bytes, the least kept, took the same (below).
+    Once kept, a body is given to a request that accepts
+    no coding too, which gets no tag and so saves nothing by it where its handler makes
+    nothing: that request pays for asking the store. In a build with `compress` that was 1.3%
+    more cycles for a PNG of 8,000 bytes (1.2% fewer to 4.0% more) and 3.0% more for one of
+    1,024 (0.3% fewer to 7.8% more), the means and ranges of five builds of the same code each
+    run on two CPUs, the second at the 3% set for it and over it by 0.02 of a point (below). A body's size is known only once it is made, so a route whose bodies are
     all too small would ask the store and have each refused: after 64 answers in a row of
     which none was kept, with none between given from the store, the route's requests are its
     handler's as before, but for about one in 256, drawn on each thread, which asks and so
@@ -7360,9 +7370,9 @@ rules something out.
     and gives up what those would have saved. While a route leaves the store out, a body it
     kept earlier stays, and may be given after a newer one its handler made, within the
     lifetime the route wrote, as two instances may answer. An app whose only `Public` routes
-    answer JSON, text or files has a store in a build that compresses,
-    also when every body turns out too small or of a type the app does not compress, which is
-    known only as each is made: an app whose one `Public` route is its `robots.txt`, or a
+    answer JSON, text or files has a store,
+    also when every body turns out too small, which is
+    known only as each is made: an app whose one `Public` route is a short `robots.txt`, or a
     picture at a URL that names its content, has one and keeps nothing in it.
     Its writes are counted by path once it has made an answer it may keep, and not before
     ([#1874 A write is counted for the app's store before anything is kept: an app whose `Public` routes keep nothing pays about 1,080 instructions a write](https://github.com/corten-run/corten/issues/1874)):
@@ -7388,18 +7398,24 @@ rules something out.
     nothing. A file is a whole body by its type, and which files are kept is settled as each
     is made, by the rule for any body and nothing of a file's own: one sent as a stream
     (`Media::stream`) has no size and carries a mark the store does not replay; a picture of a
-    type the app does not compress (a PNG, a JPEG) is left out with every body it does not
-    compress; and a file at a URL that names its content (`Public::immutable`) says no
+    type no build compresses (a PNG, a JPEG) is kept from the same size as any body, as it
+    is, and the app then holds its bytes a second time while it is kept (past its lifetime too,
+    until its room is needed), within the bound,
+    so one larger than an eighth of the bound is not kept, as a page that large is not.
+    Eight files near that size fill the default bound and turn pages out, and each query
+    string asked for is a copy of its own: no bound apart from the pages' is set for files,
+    which is accepted with the rule and named below as a reason to revisit it;
+    and a file at a URL that names its content (`Public::immutable`) says no
     lifetime for the app, as before this, and is left to the caches that keep it for a year.
-    A route of such files leaves the store out after its first 64 answers, as a route of small
+    A route of streams or of such files leaves the store out after its first 64 answers, as a route of small
     bodies does. A kept file is sent with the headers its handler gave it, its
     `Content-Disposition` among them, and an unstaged route's file is never kept: its handler is routed
     bare, with no stage to ask the store, and counts for nothing in whether the app has one. What a page route answers in a page's place is kept as the page would be, as it was
     before this: a file of a known size from a route that says it answers a page or a file
     (`PageOr`), and an answer type of the app's own that says it is a page. So a file is kept
-    by its route's rule: from a route of files where the app compresses it, and from a page
-    route whatever its type and its build, as the page at that URL is. A picture typed
-    `PageOr` is therefore kept where the same picture from a route of files is not, and a
+    by its route's rule: from a route of files from 1,024 bytes, and from a page
+    route also under that, as the page at that URL is. A small file typed
+    `PageOr` is therefore kept where the same file from a route of files is not, and a
     request for data is kept for a route of files and not for a page route, which
     this leaves as it was.
     One thing differs from a page. A page route has three answers at its URL (the document, its
@@ -7420,7 +7436,8 @@ rules something out.
     seen, and such an answer is kept with it, as every cache in front already
     keeps it for the lifetime its route wrote. `Json` of bytes the app holds (`json::Raw`) is
     left out by its type: it keeps its compressed forms itself, so the store would refuse
-    every one. An API's `Access-Control-Allow-Origin` is
+    every one. In a build without `compress` it holds none and is left out all the same, so
+    outside an API its tag is hashed for each request there, as before this. An API's `Access-Control-Allow-Origin` is
     written from the request's `Origin` by the stage after the handler, so it is no part of a
     kept answer and no site is sent another's. Outside an API the stages send a request that
     asks for JSON first for the browser alone (`private`), as one form of a page's URL; the app
@@ -7486,9 +7503,9 @@ rules something out.
     `Public` page as its parts) take that word with it, so that the page drew its visitor's
     layout values, where the separate mark stays whatever is put over the cache mark; and, left for changes of their own, a call
     that drops a page for a change no write to its path made, a way for an extractor of the
-    app's own to say it reads only the URL, a `Public` file of a type the app does not compress kept for the hash of its tag (which is 20,347 of the 61,024 instructions the PNG's request costs below with a coding named, by callgrind's count for the hash's function in `73f38661f`, at the price of a second copy of bytes the app may hold; [#1877 The tag's hash is a third of a request for a file the app does not compress: about 2.5 instructions a byte, made again for every answer that is not kept](https://github.com/corten-run/corten/issues/1877) has the ways to make the hash cheaper for every answer), every `Public` body kept whatever its size and its build
-    (what this first did, for the 3.9% and at the price of the 13.8% below), a size of the store's own apart
-    from the compressor's (no round supports one), a way for a route to say its bodies are
+    app's own to say it reads only the URL, every `Public` body kept whatever its size
+    (what this first did, for the 3.9% and at the price of the 13.8% below), a least size other than the one the
+    compressor starts at (by instruction counts a body asked for with a coding named gains from about 350 bytes, and at 1,024 it gained nothing shown in cycles; no size under 1,024 was run), a way for a route to say its bodies are
     worth keeping (a second way to say what `Public` says, until an app shows the handler it
     would be for), a count over all of a route's answers in place of a run (a route whose
     bodies grew would wait on its past), one copy
@@ -8001,7 +8018,7 @@ rules something out.
     makes nothing and a body that is not compressed; the 2 bytes, which are not kept, 38,388
     against 38,376 at the medians of five runs (38,264 to 38,842 and 38,319 to 38,812). A new
     URL for every request took 170,490 against 154,551 with room and 157,703 against 154,535
-    in a full store. In a build that does not compress, which keeps no body, the JSON took
+    in a full store. In a build that does not compress, which kept no body then, the JSON took
     48,925 against 48,877 and the 2 bytes 35,518 against 35,481 at the medians of five
     (48,911 to 49,891 and 48,860 to 49,882, 35,481 to 35,888 and 35,471 to 35,491), the 2
     bytes' difference in two functions whose code the change does not touch, by their own
@@ -8041,8 +8058,8 @@ rules something out.
     A kept file, with three file routes added to the catalog benchmark (`05ead69a7`, this
     change's `8db0885c7` with them, against `73f38661f`, main's `e7e89add8` with them): a
     sitemap of 500 URLs (44,497 bytes) its handler writes for each request, a CSV of 6,820
-    bytes the app holds and its handler hands over, and a PNG of 8,000 bytes it holds, which is
-    not kept. Under callgrind (valgrind 3.19.0, rustc 1.99.1, release with line tables) with a
+    bytes the app holds and its handler hands over, and a PNG of 8,000 bytes it holds, which was
+    not kept then. Under callgrind (valgrind 3.19.0, rustc 1.99.1, release with line tables) with a
     browser's request headers, as (instructions at 1,300 requests less those at 300) over
     1,000: the sitemap took 46,438 instructions a request against 897,238 with a browser's four
     codings, 45,834 against 1,436,298 with `gzip` alone and 41,732 against 577,195 with no
@@ -8076,8 +8093,203 @@ rules something out.
     resident memory, about 10 MB, differed by at most 124 kB either way. A kept file is held as a copy
     of its own, so bytes the app holds are held twice while the copy is kept, with each coded
     form made of them.
+    A body kept whatever its type and its build, with five file routes added to the catalog
+    benchmark (`af70bde86`, this change's `86be6a024` with them, against `e133aae42`, main's
+    `090b3048e` with them): the CSV above and a PNG of 8,000 bytes, of 1,024 bytes and of
+    1 MiB, each held by the app and handed over by a handler that makes nothing, so what
+    keeping one saves here is the hash of its tag and nothing of a handler. Under callgrind
+    as above, three runs of each: the PNG of 8,000 bytes took 42,370 to 42,384 instructions a
+    request against 61,508 to 61,596 with a browser's four codings, and 38,473 to 38,690
+    against 37,576 to 37,598 with no coding; the 1,024 bytes 42,347 to 42,384 against 44,044
+    to 44,053, and with no coding 38,675 to 38,726 against 37,586 to 38,006; the 1 MiB, one
+    run, 42,591 against 2,663,170; the CSV, kept before and after, 45,231 to 45,260 against
+    45,186 to 45,228. In a build without `compress`: the PNG of 8,000 bytes 41,041 to 41,082
+    against 60,338 to 60,982, and with no coding 38,032 to 38,063 against 37,057 to 37,075;
+    the CSV 41,172 to 41,194 against 57,414 to 57,443, and with no coding 38,039 to 38,059
+    against 37,080 to 37,589. The hash is 2.5 instructions a byte between the two smaller
+    sizes and asking the store about 1,000 a request, so by these counts a body asked for
+    with a coding named gains from about 350 bytes. Under load as above, on two such hosts,
+    one for each build (six starts of both builds, eight pairs of 3 s turns in each with the
+    order turned about), cycles a request, each build's at its median turn and the change at
+    the median of the 48 changes within a pair. In a build that compresses: the PNG of 8,000
+    bytes with four codings 55,035 against 60,560, 8.9% fewer (23.0% fewer to 1.9% more by
+    pair, fewer in 47 of 48; 7.3% to 10.3% by start; user cycles 23,986 against 29,761,
+    kernel 31,042 against 30,773), and with no coding 51,289 against 48,653, 5.0% more (17.9%
+    fewer to 27.8% more by pair, more in 41 of 48; 3.4% to 9.2% by start; user 20,898 against
+    19,410, kernel 30,356 against 29,215); the 1,024 bytes with four codings 49,623 against
+    49,751, 0.6% fewer (16.7% fewer to 6.9% more by pair, fewer in 28 of 48; 1.8% fewer to
+    1.0% more by start), and with no coding 46,162 against 45,217, 1.5% more (9.9% fewer to
+    43.7% more by pair, more in 37 of 48; 0.0% to 3.6% by start); the 1 MiB with four codings
+    968,510 against 1,847,203, 47.7% fewer (46.6% to 49.5% by pair, 47.2% to 47.9% by start;
+    user 59,870 against 921,370, kernel 908,066 against 920,835, the copy to the socket);
+    the CSV, kept before and after, 53,475 against 53,919, 0.8% fewer (3.0% fewer to 1.6%
+    more by start); and the same build against itself 0.6% fewer (2.1% fewer to 1.8% more by
+    start). In a build without `compress`: the PNG of 8,000 bytes with four codings 53,830
+    against 59,461, 9.7% fewer (32.1% fewer to 17.7% more by pair, fewer in 47 of 48; 8.3% to
+    11.7% by start; user 22,796 against 28,467, kernel 30,930 against 30,892), and with no
+    coding 48,971 against 47,670, 2.6% more (9.3% fewer to 22.4% more by pair, more in 35 of
+    48; 0.1% to 5.5% by start); the CSV with four codings 53,100 against 57,908, 8.1% fewer
+    (17.5% fewer to 13.1% more by pair, fewer in 45 of 48; 6.2% to 9.4% by start; user 22,643
+    against 27,740, kernel 30,460 against 30,251), and with no coding 50,292 against 48,797,
+    3.8% more (5.7% fewer to 47.0% more by pair, more in 41 of 48; 1.4% to 4.8% by start;
+    user 20,252 against 19,185, kernel 30,125 against 29,626); and the same build against
+    itself 0.3% more (1.8% fewer to 2.9% more by start). No request failed in the 1,152
+    turns, and perf counted all of every turn. Set before any count or run of this build,
+    from one run of the rule's one line on `0b52cb4e2` (the PNG of 8,000 bytes 11.1% fewer
+    with four codings, 9.0% to 12.7% by start, and 2.3% more with none, 1.1% fewer to 7.1%
+    more by start): where a body newly kept is asked for with codings, at least 5% fewer
+    with every start fewer (20% for the 1 MiB); at 1,024 bytes not more than 1% more; the CSV
+    kept before within 2%; and with no coding not more than 3% more. Eight of the ten were
+    met. Two were not: the PNG of 8,000 bytes with no coding, 5.0% more, and the CSV with no
+    coding in a build without `compress`, 3.8% more. So the price of a kept body to a
+    request that names no coding, where its handler makes nothing, is not shown to be under
+    3%: it was 1.5% to 5.0% in these four cases and 2.3% in the run before. Not resolved: with
+    no coding a kept body took 927 to 1,095 more user instructions a request under load
+    whatever its size (24,667 against 23,725 for the PNG of 8,000 bytes and 24,670 against
+    23,743 for the 1,024; 24,033 against 22,980 and 24,037 against 22,942 without `compress`)
+    and 98 to 226 more user instruction-cache misses (2,529 against 2,303, 2,539 against
+    2,354, 2,403 against 2,305, 2,473 against 2,374), but 945 more cycles at 1,024 bytes
+    (user 20,466 against 19,684, kernel 25,619 against 25,471) and 2,637 more at 8,000, of
+    which 1,141 are the kernel's on 229 more of its instructions. A second
+    look at the kernel's part, on one host of the same kind (the same two builds, the PNG of
+    8,000 bytes and the one of 1,024, no coding; six pairs of turns for each count, two
+    sampled turns of each build; `strace` on one answer), found no other path through
+    the kernel: 2.02 system calls a request in both builds, one `writev` of the head and the
+    body in both (the kept answer's head is the 8 bytes of its `Age` longer), 1.001 packets
+    sent and received a request in both, kernel instructions 17,173 against 17,058 at 8,000
+    bytes and 15,764 against 15,744 at 1,024, and no kernel symbol whose cycles differ by
+    more than its own spread between two turns of one build (the copy to the socket, 979 and
+    1,376 cycles a request in the kept build's two turns, 1,057 and 1,238 in the other's).
+    The kernel's cycles were again more where kept, 31,367 against 30,518 at 8,000 bytes and
+    26,657 against 26,431 at 1,024. What differed: the data-cache misses, the user's 797
+    against 751 a request and the kernel's 1,123 against 1,102 at 8,000 bytes (793 against
+    754 and 730 against 727 at 1,024); and how often an answer woke a thread of the load
+    that slept, 0.92 against 0.89 and 0.92 against 0.86 of the requests in two starts at
+    8,000 bytes (0.92 against 0.95 at 1,024), where a turn with more of them took more
+    kernel cycles in either build. With the wake-ups held equal by least squares over each
+    start's twelve turns, 377 to 585 kernel cycles a request were left where kept. So the
+    kernel's part is the same work done slower, after an ask that touches more of the app's
+    own memory and, on this load, with more threads to wake; how much is each was not
+    separated, and why it showed more at 8,000 bytes than at 1,024 in the six starts above
+    was not found. It was taken to follow the ask, so that what cut the ask would cut it; the
+    cuts below took about 500 user instructions a request from a kept answer under load, and
+    the kernel's cycles did not follow them (below). The other splits: the 1,024 bytes
+    with four codings, user 23,550 against 23,655 and kernel 26,159 against 26,084; the CSV
+    kept before, user 25,785 against 26,090 and kernel 27,711 against 27,847; the PNG of
+    8,000 bytes with no coding without `compress`, user 19,694 against 18,665 and kernel
+    29,367 against 28,797. The rule stands
+    at that price, on the bet below that clients naming a coding are most of what asks for
+    an app's `Public` bodies. The app's resident memory, about 10 MB, was at most 352 kB more
+    with a body kept, and 1,270 kB more with the 1 MiB file kept, its second copy.
+    Two cuts to what a kept answer given again costs followed (`a0267d8a6`). Its `Age` was
+    made from the number, two allocations for every answer; it is a slice of a table of the
+    numbers under 10,000 in decimal, 38,890 bytes of the binary, and an older answer's is made
+    as before. Four digits, 2 hours 46 minutes, take in a lifetime of an hour, which is what
+    `seo` writes; a table of three digits is 2,890 bytes and covers 16 minutes 39 seconds, and
+    the digits written to a buffer and copied into a value need no table and one allocation by
+    the libraries' code, and neither was counted. And the answer carried the cache's mark as an extension of its own beside the
+    one for what was kept, an allocation and a place in the map; the mark is read from what
+    was kept, which is a second lookup among the extensions for an answer that has some and
+    carries neither mark (the one answer counted that carries neither, a page that is not
+    `Public`, took 62,514 instructions where it took 62,582, the allocator's part with it, so
+    that lookup has no number of its own). A kept PNG given again makes 25 allocations
+    where it made 28 (its handler's answer makes 31). Under callgrind on one connection, with a browser's twelve header lines
+    and no coding named, a kept PNG of 8,000 bytes took 37,412 instructions a request where it
+    took 38,736, one of 1,024 bytes 37,412 where 38,766 and a kept page 41,235 where 42,542;
+    the PNG's URL with a session's cookie, which its handler answers, 38,881 where 38,873. A
+    page asked for with the runtime's header, which the store does not answer either, counted
+    67,787 where 67,050, all of it the allocator's (58,515 against 58,509 outside it), whose
+    own count moves by that much between builds that allocate alike, with the state its bins
+    are left in. With the three headers the load sends, the kept PNG of 8,000 bytes took
+    25,603 where main's took 26,148 and its handler 25,633. A third cut was counted and not
+    made: finding `Authorization`, the cookie and the runtime's header in the one pass over
+    the headers, where each is a lookup by its name before the pass. For `Authorization` it
+    spared every other request 41 to 157 instructions in the cases counted (89 and 112 for
+    the kept PNGs, 83 for the kept page) and cost a request that carries one
+    after a browser's headers 611 (its asking 926 where 315), since that request no longer
+    leaves before the pass, and the same holds for the other two; the three lookups stay.
+    In cycles the cuts are not shown to be a gain, and of the eight margins set before their
+    first run two were missed at the median and five at the one-sided 95% bound (below), two
+    of those five against main, on requests the cuts touch, which the rule for a pull
+    request holds to 1% with no allowance for where the code sits
+    ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2); the second run below
+    explains them and does not clear them. That run was of three builds (main's `7a275ef15`, the cuts, and
+    the cuts with no body kept, so its handler answers), six starts of eight pairs of turns,
+    those with `compress` on a c-8 with a Xeon Platinum 8358 and those without on one with a
+    Xeon Platinum 8280. Against its handler, held to 3% more: a kept PNG of 8,000 bytes 39,690
+    cycles a request against 38,694, 2.7% more (2.1% to 3.1% by start), and one of 1,024 bytes
+    38,686 against 35,911, 6.0% more (0.9% to 11.5%), which missed; without `compress` the PNG
+    of 8,000 bytes 48,559 against 48,012, 0.0% (0.7% fewer to 2.6% more), and the CSV 49,745
+    against 48,990, 2.5% more (0.4% to 4.9%). Against main, held to 1% more: the kept PNG of
+    8,000 bytes 39,757 against 39,721, 0.3% more (0.8% fewer to 2.6% more), and a kept page
+    43,903 against 42,792, 3.2% more (1.2% to 4.1%, more in 39 of 48 pairs), which missed;
+    without `compress` 48,260 against 48,864, 1.3% fewer (3.5% fewer to 1.4% more), and
+    49,877 against 51,556, 2.9% fewer (9.5% to 1.1% fewer). The same build against itself,
+    five of its six starts having finished: 0.1% more (1.7% fewer to 1.7% more by start) and
+    1.6% fewer (2.3% fewer to 2.1% more). The margins were set at the median. By the one-sided
+    95% bound on the median of the 48 pairs, the 31st of them sorted, the four against the
+    handler were 3.38%, 7.43%, 0.95% and 3.56%, three over the 3%, and the four against main
+    1.07%, 3.74%, 0.26% fewer and 1.97% fewer, two over the 1%: the kept page, and the kept
+    PNG of 8,000 bytes by 0.07 of a point. The
+    cuts ran 496 to 968 fewer user instructions a request than main in all four. The binaries
+    with `compress`, on another c-8 with the 8280 (three starts of eight pairs): the kept page
+    0.4% more than main (bound 1.65%) and the PNG of 1,024 bytes 2.1% more than its handler
+    (2.82%), both of which missed on the first host; the kept PNG of 8,000 bytes 2.9% more
+    than main (more in 22 of 24 pairs, bound 3.83%), which the first host had at 0.3%; and
+    the kept PNG of 1,024 bytes 0.2% fewer than main (0.69%). No request failed in
+    the 1,231 turns, and perf counted all of every turn. The table is read-only data, which
+    the linker puts before the code: the code of the cuts' binary starts 38,336 bytes after
+    main's, and every function in it moved. So the three were each built again with a block of
+    bytes no request runs in the crate's code, of 40, 1,000, 3,100, 12,000 and 40,000 bytes,
+    and run on one host of each CPU, one start of eight pairs for each comparison, with how it
+    would be read set out after the first run and before any of this one: the cuts dearer than
+    main at nine of a case's ten with a mean over 1% would be the cuts' cost, a sign that
+    changes across the ten or a mean within the spread of main against main would be where the
+    code sits; and the price against the handler would be the mean of a case's ten, held to
+    the same 3% (this last added when two placements of the cuts against main had been read,
+    before any of its own was run). Each of a case's ten is one start, so where the code sits
+    and how the process started are not told apart in it: in the first run six starts of one
+    pair of binaries ran from 0.9% to 11.5%. The cuts against main, the
+    mean of the ten: a kept page 1.3% fewer cycles (5.1% fewer to 3.3% more, more in 2 of the
+    10), the PNG of 1,024 bytes 0.9% fewer (3.7% fewer to 0.8% more, more in 3) and the one of
+    8,000 bytes 0.3% fewer (6.8% fewer to 3.8% more, more in 5), on 477, 524 and 522 fewer
+    user instructions and 31, 75 and 69 fewer user instruction-cache misses a request, and
+    with the kernel's cycles 4 fewer, 107 fewer and 124 more. Main with a block of each other
+    size against main with the 40, eight
+    for each case: 0.1% more (1.6% fewer to 2.2% more), 0.4% more (2.7% fewer to 4.0% more)
+    and 1.3% fewer (4.5% fewer to 0.6% more), on user instructions within 65 of each other at
+    the mean. So a pair of builds differs by where its code sits and how it started by as much
+    as these cuts are worth. The misses above are not shown to be the cuts', and stand as
+    measured; neither is a gain in cycles shown: what is shown is the instructions. A kept
+    body against its handler, in a build with `compress`,
+    the mean of the ten: the PNG of 8,000 bytes 1.3% more (1.2% fewer to 4.0% more, more in 9
+    of the 10; user cycles 237 more and kernel 301 more, on 334 more user instructions and 20
+    more of the kernel's, with 49 fewer user instruction-cache misses), which met the 3%; the
+    one of 1,024 bytes 3.0% more (0.3%
+    fewer to 7.8% more, more in 9; 3.6% on the 8358 and 2.5% on the 8280; user cycles 809 more
+    and kernel 355 more, on 424 and 55 more instructions, with 49 more misses), over the 3% by
+    0.02 of a point, which ten such values do not resolve, and so missed by the rule set. That
+    is the price of a kept body to a request that names no coding as it stands. The 1.5% to
+    5.0% above were each one build of each and its starts, as were the 0.0% to 6.0% of this
+    change's first run. The kernel's part goes with the placement and the start as the
+    user's does, from 261 fewer cycles a request to 1,447 more at 1,024 bytes (316 fewer to
+    848 more at 8,000); where it was most, 1,447 and 1,397 more on the 8358, it ran 170 and
+    229 more of its instructions. No request failed in the 1,184 turns, and perf
+    counted all of every turn. A profile of cycles by symbol on the 8280 (the PNG of 1,024
+    bytes, three sampled turns of each build) put about 1,300 cycles a request in the ask and
+    what it adds (402 finding the answer and making its head, 212 reading the request, 155
+    reading `Accept`, 131 the URL's hash) against about as many in what the handler and its
+    answer would have taken, and the rest in no one place.
     Not measured: a file kept for a handler that reads it from a disk, a database or a store
-    of objects, where the read is what a kept file saves; a new URL for every request for a
+    of objects, where the read is what a kept file saves; a body between 1,024 and 8,000
+    bytes, under 1,024 or over 1 MiB; a store that kept pictures or downloads fill, where
+    pages are turned out for them; a picture asked for with `gzip` alone; a request with a
+    cookie for a body route in a build without `compress`, which now passes the stage that
+    asks; the kernel's part of the price with no coding on a load whose threads do not sleep;
+    the cuts of `a0267d8a6` in cycles apart from where a build's code sits, a pair of builds
+    having differed by more than they are worth, and at more than one placement without
+    `compress`; a kept answer older than 9,999 seconds, whose `Age` is made from the number;
+    a browser's twelve header lines under load, which sends three; a new URL for every request for a
     file, which takes the path a body's does above; a body kept for a handler that waits on a database or another service,
     where the wait and not the compression is what a kept body saves (the benchmark's handler
     reads memory, and the rule for bodies is drawn from it); a route of a few large bodies
@@ -8113,7 +8325,11 @@ rules something out.
     `Accept-Language`, which is the key, and of a body's `GET` those and whether JSON was asked
     for first, which is in its key too; the stages after the handler read the request and the
     answer and nothing the handler held, so they treat a kept answer as its own); bet (an app that
-    marks a page `Public` means the lifetime it wrote also with no CDN in front, and the hour
+    marks a page `Public` means the lifetime it wrote also with no CDN in front, an app's
+    `Public` bodies are asked for mostly by clients that name a coding and carry no cookie
+    but the time zone's (a browser with a session, consent or analytics cookie is its
+    handler's, as for a page, and gains nothing by this), and
+    are worth a second copy in memory while kept, and the hour
     `seo` writes for a sitemap or `robots.txt` where it wrote none, and does in its
     handler nothing that must happen for every request; markup with a form's new submit key is rendered by the handler itself on the thread that
     runs it, not by a task it spawned, one it handed a render to, or a thread of its own; no app finishes work again and again on the
@@ -8124,11 +8340,16 @@ rules something out.
     setting for the bound, README Values).
 
     Revisit when: apps report pages shown past what they meant, so the default should be off
-    or the lifetime the app's to set apart from `s-maxage`; an app's handler for bodies the
-    app does not compress (small ones, ones of a type it leaves as it is, as a feed's
-    `application/rss+xml`, a PDF or a picture is, or any in a build without `compress`) waits on a
+    or the lifetime the app's to set apart from `s-maxage`; an app's handler for bodies under
+    1,024 bytes waits on a
     database or another service, so keeping them would save more than asking costs and the
-    rule should be the route's to widen; an app's page route answers pictures or small files
+    rule should be the route's to widen; an app's kept pictures or downloads turn its pages
+    out of its store, or hold more memory than its handler's own copy of them is worth, so
+    files should have a bound or a rule of their own; most requests for an app's kept files
+    name no coding (a CDN or a client that asks for none), which pay for asking the store
+    and gain no tag by it, so the rule should read how a route's files are asked for; most
+    of an app's visitors carry a cookie, so its kept files are given to few of them and the
+    second copy is held for little; an app's page route answers pictures or small files
     in its page's place (`PageOr`) often enough that keeping them, which the page's rule does
     whatever their type, costs more than their handler saves, so a file there should be kept
     by the rule for a file; apps report a sitemap or `robots.txt` an hour behind their data
@@ -8179,7 +8400,14 @@ rules something out.
     tree, three rounds with glibc's allocator and three with jemalloc, the builds' order turned
     about from each round to the next, every count within three instructions of the others of
     its build, and the functions of the two cases with five policies counted once with glibc's;
-    2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
+    2026-11-22 for the cuts to a kept answer given again, `7794749ad` (main's
+    `7a275ef15` with five file routes and a kept page in the catalog benchmark) and `0a2dc9b32`
+    (this change's `a0267d8a6` with them), and for where the code sits `abbd6113f`, `9f628467d`
+    and `ba72c5f23` (those two, and the second with no body kept, each with a block of bytes
+    whose size is set when it is built), kept under the tag `evidence/cheaper-ask-1925`;
+    2026-11-22 for a body kept whatever its type and its build, `e133aae42` (main's
+    `090b3048e` with five file routes in the catalog benchmark) and `af70bde86` (this change's
+    `86be6a024` with them), kept under the tag `evidence/keep-any-body-1877`; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
     `evidence/kept-file-1794`; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
     request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
@@ -8244,6 +8472,211 @@ rules something out.
     compressed, the tag. The commits after `f7e53a594` up to `24e61b4b0` change which writes count
     and nothing a page's `GET` runs. `tests/kept_memory.rs` at this change, with all features and
     with none.
+
+71. <a id="choice-layout-floor"></a>**The cycle gate allows a measured layout floor on a negative
+    control named before the run whose instructions are flat.** A request-path pull request holds a
+    workload it should leave as fast as it was to a margin of +1% in paired cycles, declared before
+    the run ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2). Placement alone moves
+    cycles by more than that: on a DigitalOcean c-8 whose CPU is a Xeon Platinum 8358, main built
+    against main with one never-called function added, which moved all 3,402 functions common to the
+    two binaries and changed the count of user instructions retired per request by at most 0.0102%
+    in any pair, took 1.16% more user and kernel cycles a request at the median of the pairs, with a
+    one-sided 95% bound of +1.62%, while main built twice met the margin at +0.59%. So the gate
+    makes one exception, for a negative control only: a workload the run's plan (its `margin.md`)
+    names before the run as one whose code paths the change does not touch, with the reason, which
+    the pull request's review accepts. If such a control's bound is at or above +1% but under the
+    floor that applies, and its user instructions pass a screen (the median of their paired changes
+    between -0.02% and +0.02%, its one-sided 95% bound at or below +0.02%), the pull request reports
+    it as "missed +1%; placement and regression not distinguished", with its user and kernel split
+    and no claim about its speed, and the miss does not block it, unless the run's plan made +1%
+    decisive for it before this exception existed or other evidence corroborates a regression. That
+    accepts a residual risk on
+    controls; it does not show they are unchanged, and a placement cost in the binary that ships is
+    still a cost. A workload the change touches keeps +1% with no floor, however flat its
+    instructions, since a change to the data a request reads, its allocation, the kernel's work or
+    its waiting can cost cycles on the same instructions; so does a workload not named before the
+    run, and the affected-route, memory and waiting measurements are required as before. This
+    answers
+    [#1923 Control workloads with flat instructions miss the +1% cycle margin by up to 2.8% of user cycles, so the gate blocks changes it cannot attribute](https://github.com/corten-run/corten/issues/1923),
+    whose pull requests missed by bounds of +1.13% to +1.67% on controls whose reported user
+    instruction counts changed by no more than 0.03%; as that issue proposed, a workload the change
+    touches keeps the margin.
+
+    The floor is +1.62%, the larger of the two layout bounds measured (+1.619274%, rounded up to two
+    places; a run's bound is compared with it unrounded). It applies to one workload, the one it was
+    calibrated on: `plain`, a `GET /private` with no request header of its own, sent by `wrk` to the
+    probe app that
+    [#1829 Run a kept page's handler once for requests that miss its copy together](https://github.com/corten-run/corten/pull/1829)
+    was measured with, which answers `200` with the record page for one visitor
+    (`cache-control: private, no-cache`, a 6,124-byte body). It applies to no other workload or
+    request, and only to a run that records a setup matching the calibration's in every item: a Xeon
+    Platinum 8358 (the exact model, not the family) with one thread a core; Linux 6.12.117 (Debian's
+    `6.12.117+deb13-amd64`); jemalloc 5.3.0 by `LD_PRELOAD=libjemalloc.so.2` with
+    `MALLOC_CONF=background_thread:true,tcache_max:65536` exactly; the server pinned to one CPU, the
+    load on two others and the driver and `perf` on a fourth, all four distinct; rustc 1.100.0 and
+    LLD 23.1.5, with the probe built as the receipt's `build.sh` builds it (the release profile,
+    features `json` and `compress`, zstd linked to the system's `libzstd`), the same third-party
+    crate versions as the receipt's `probe/Cargo.lock` (main `14471284c`'s) and Debian's `libzstd1`
+    1.5.7+dfsg-1 (these listed inputs must match; matching them does not show that every other
+    build input, such as the native compiler, is the same); and `wrk` 4.1.0
+    with `-t2 -c64` and 3 s turns, every turn, warm-up included, on a freshly started build, the
+    builds' order turned every pair, 100 recorded pairs after one that is not and the bound the 59th
+    of the 100 sorted per-pair changes. Any VM counts if it matches. A difference in any item, such
+    as another CPU model or each build started once, means no recorded floor. Any other negative
+    control, and `plain` on any other setup, gets a floor only from its own A/A layout control in
+    the same run, under the run's protocol and measured on each negative control whose miss it would
+    waive; one without a qualifying A/A in that run is held to +1%. That control is named in the
+    run's plan before the run, is built from the candidate's base commit with the candidate's build
+    inputs, and repeats this calibration on each such workload: main built twice and the receipt's same two pads, 100
+    recorded pairs each, read with the candidate's statistic, the 59th of the 100 sorted changes; a
+    comparison with fewer than 100 valid pairs gives no bound and the control no floor. It gives a
+    workload a floor of its larger pad bound there only if that bound is at or below +2%. A larger
+    bound above +2% gives no floor, and is not read as a floor of +2%: that run holds every workload
+    to +1%. The +2% limit leaves room above the +1.62% measured here for a host whose placement
+    costs a little more, and stops a noisy or unlucky layout control from making the gate whatever
+    it measured.
+
+    A layout control, the recorded one or a same-run one, gives a floor only if the run records that
+    it passes every check: each comparison's two builds answer the workload's request with
+    byte-identical status, headers but `Date`, and body, compared with only `Date` removed; main
+    built twice is byte-identical and meets +1% on that workload; the pad is in the padded binary
+    and moved code (the count of function symbols in both binaries whose addresses changed is above
+    zero); every counter ran 100% of every turn and the load tool reported no error in any turn; and
+    each pad comparison passes the user-instruction screen above, as a candidate must. If any check
+    fails, the control gives no floor and the run holds every workload to +1%: a pad whose answers
+    or instruction count moved measures more than placement, and a floor from it would waive a cost
+    it cannot attribute. The recorded calibration passes checks 2 to 5 as written. It passes the
+    first only as its kit compared, which normalized the whole `curl -i` output, headers and
+    body, before comparing it (carriage returns removed, `Date` lines dropped, `Age` and `ETag`
+    values masked): all three comparisons' answers to `/private` were identical after that
+    (7,098 bytes as compared, no `Age` or `ETag` present), and the bytes before it were not kept. It
+    is accepted with that weaker evidence, and only for this receipt, because the two builds of main
+    are one binary and each pad adds a function nothing calls, so no path that writes the answer
+    changed, and the pads' instruction counts agree with that; a later control, recorded or
+    same-run, is held to the comparison as written. The two builds of main were byte-identical and
+    met +1% at +0.59%. Each pad build held its one added function, which neither main build has, and
+    all 3,402 function symbols it shares with main moved (none in main built twice). All 1,818
+    counter readings in pass 1's 606 turns, warm-up pairs included, and all 496 in pass 2's 124 ran
+    100%, and `wrk` reported no connect, read, write, status or timeout error in any of those 730
+    turns. The pads' user instructions passed the screen: medians of +0.00082% (40 bytes) and
+    +0.00008% (3,100 bytes), bounds of +0.00130% and +0.00061%.
+
+    The screen is set by the A/A runs. In all three comparisons the count of user instructions
+    retired per request changed by at most 0.0102% in any pair (about four of the `plain` page's
+    39,455), the medians were between +0.0001% and +0.0008% and the bounds at most +0.0013%; 0.02%,
+    about eight instructions there, is twice the widest single pair. A count says how many
+    instructions a request retired, not which: these counts show the pads added no per-request work
+    a count can see, not that the same instructions ran in the same order. The screen is a
+    screening rule, not an equivalence test: it turns away a control whose instruction count
+    visibly moved, and passing it does not show the instruction stream or its CPU cost unchanged,
+    or make a touched workload a control.
+
+    A layout floor never applies to the benefit side: these runs measured how far placement raised
+    cycles on one route, not how far it can lower them, so a floor cannot establish a CPU-cost win.
+    The CPU-win rule in Pull requests decides wins as before.
+
+    The runs: one host with nothing else running (Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD
+    23.1.5 and the repository's release profile, jemalloc 5.3.0 preloaded), every binary built there
+    from main `14471284c`, under the protocol pull requests are gated on. The workload was `plain`:
+    a page for one visitor in a probe app that keeps pages, a control on which those pull requests
+    missed. Every turn ran on a freshly started build pinned to one CPU and loaded for 3 s by
+    `wrk -t2 -c64` on two others, the two builds' order turned every pair, their answers compared
+    first; 100 recorded pairs after one that was not, `cycles:u`, `cycles:k` and `instructions:u`
+    counted by `perf stat` at 100% running and divided by the requests answered; the bound is the
+    59th of the 100 sorted per-pair changes. The plan was written before the run and tested no
+    margin. The layout builds add a function marked `#[inline(never)]` whose body is 40 or 3,100 NOP
+    bytes after the imports of `crates/corten/src/router.rs`, kept by one `black_box` of its address
+    in `Router::new`, which runs once as the app starts; no request calls it. All 3,402 functions
+    common to the two binaries moved, by 64 to 160 bytes with 40 and by 64 to 3,216 with 3,100. The
+    two builds of main, each from an emptied target directory, were byte-identical (the same SHA-256
+    and 4,546,144 bytes), so `main twice` compares one binary with itself; the 40-byte and 3,100-byte
+    builds were 448 and 3,504 bytes larger.
+
+    | Comparison | User+kernel median | Bound | Range | User median / bound | Kernel median / bound | Instructions:u |
+    | --- | ---: | ---: | --- | ---: | ---: | ---: |
+    | main twice | +0.09% | +0.59% | -7.52% to +6.60% | -0.02% / +0.87% | +0.44% / +0.74% | +0.00% |
+    | 40-byte pad | +1.16% | +1.62% | -9.58% to +9.90% | +1.40% / +1.71% | +0.89% / +1.41% | +0.00% |
+    | 3,100-byte pad | +1.06% | +1.39% | -10.83% to +6.61% | +1.83% / +2.58% | +0.28% / +0.66% | +0.00% |
+
+    A second pass on the two layout comparisons, 30 recorded pairs each (the bound the 20th of 30),
+    counted user L1 instruction-cache misses, iTLB misses and branch misses beside user
+    instructions, each at 100% running. L1 instruction-cache misses fell, by 1.09% and 1.84% at the
+    median with bounds of -0.38% and -0.97%, of about 2,000 a request. iTLB misses moved by +2.24%
+    and +4.71% with bounds of +7.74% and +18.94%, of about 13 a request, too spread to resolve.
+    Branch misses rose by 9.85% and 7.45%, with bounds of +14.26% and +16.14%, of about 22 a
+    request. That is consistent with branch-predictor aliasing at the new addresses; it does not
+    show it is the mechanism, or the only one. What the runs do not show: the floor on another host,
+    another workload or another placement, any of which may be larger or smaller (one host, `plain`
+    alone, two pads in one place); how far a placement can lower cycles; a protocol with each build
+    started once; and latency, since these are cycles under load.
+
+    The receipt is commit `24c0d897`: the kit (its plan, scripts, probe and pads) and every result
+    file of the run (`results-b7`: `floor.md`, `host.txt`, `margin.md`, the CSVs and the logs), with
+    the aggregate tables also on
+    [#1923 Control workloads with flat instructions miss the +1% cycle margin by up to 2.8% of user cycles, so the gate blocks changes it cannot attribute](https://github.com/corten-run/corten/issues/1923).
+
+    Not chosen: the exception for any workload whose instructions are flat (this Choice as first
+    proposed), which would pass a real cost on a workload the change touches, such as data laid out
+    to miss the cache more, work in the kernel or waiting on a lock, whose instructions stay flat;
+    the margin raised to the floor for every workload, which would let a change that adds
+    instructions pass a cost of up to 1.62%; an instruction band of 0.05% either way, which the A/A
+    data do not support and which admits about 20 more instructions a request on `plain`; the miss
+    reported and the pull request held until a rerun met +1%, the rule until now, which held a pull
+    request whose same two builds (the same SHA-256s in both runs) missed with one start and with
+    fresh starts alike, and would pass a real cost of the same size on a lucky placement; a
+    same-run floor capped at +2% when the layout bound is above it (this Choice's second version),
+    since a capped floor would pass a miss on a run whose own placement measured more; the recorded
+    floor carried to the gate's other negative controls on a matching setup (this Choice's second
+    and third versions), since `plain` is the only workload measured and another hot path can be
+    more or less sensitive to the same pads; the recorded floor reused on another setup, or a
+    same-run A/A on a workload other than the one whose miss it waives, since neither measures the
+    placement that control saw; a layout control that gives a floor without checks that its pads
+    changed only placement, since a pad that changed the answers or the work would be read as
+    placement; a cycle reduction on flat instructions claimed as a win by a cutoff below minus the
+    floor or by a placement check reading the pads in both directions (the second and third
+    versions), since two pads read backwards do not bound what another placement does; more pairs,
+    pooled runs or a margin declared again after a run, since more pairs narrow the bound around the
+    placement's own offset (+1.16% here), not toward zero, and the others are what Values 9 rules
+    out; a layout control in every run, which adds about 35 minutes of host time a workload where
+    the recorded floor applies (main built twice and the two pads took 34 minutes 52 seconds here,
+    about 11 minutes 37 seconds for each comparison of 100 pairs), and is still asked of any run it
+    does not cover; and builds that pin placement (function alignment, a fixed link order), not
+    tried, which would gate a binary other than the one apps build.
+
+    Stands on: measured (the three comparisons and the second pass above, one run of each on one
+    host and one workload, 100 pairs for cycles and 30 for the misses, passing checks 2 to 5 as
+    written and the response check only after its kit's normalization, which review accepted for
+    this receipt alone); reasoned (the layout builds changed the count of user instructions retired
+    per request by no more than 0.0102% in any pair, so a control whose code the change does not
+    touch and whose instruction count passes the screen is, as far as a count shows, where the A/A
+    builds were in its user code; the screen shows no more than that); bet (a declaration, accepted
+    in review, that a control's code paths are untouched is right, so a cost the change adds through
+    data layout, the kernel or waiting does not fall on it); value (Fast, and proven fast: a cycle
+    change is attributed to the code that made it before it blocks a change or proves one fast;
+    Verified, not assumed: the floor is measured with A/A builds rather than argued, and is held to
+    the workload and setup it was measured on, README Values).
+
+    Revisit when: the gate runs on a CPU model it has no floor for (another droplet size, or a c-8
+    with another CPU: the c-8s used for the gate have also had a Xeon Platinum 8168 and 8280), whose
+    own layout control then gives a floor to record here; the gate's load protocol changes (its
+    starts, pinning, turn length, `wrk` threads or connections, pairs or statistic); the gate's
+    toolchain changes how code is placed, such as a rustc whose LLVM is a new major version
+    (LLVM 23 under rustc 1.100.0 here) or whose release notes change inlining or function alignment,
+    a linker other than LLD, or a release profile with other LTO, codegen units or opt-level; the
+    host's kernel, the allocator or its settings change (Linux 6.12.117, jemalloc 5.3.0 and its
+    `MALLOC_CONF` here); the probe's workloads or main's layout change materially; a later A/A of
+    main built twice under the same protocol has a bound at or above +1%, so the protocol and not the
+    placement fails the gate; a layout control on `plain` on another matching setup has a bound over
+    the recorded floor, or a same-run one has a larger bound over +2%, which gives that run no floor;
+    same-run layout controls on another workload give floors often enough to be worth recording one
+    here; an A/A's user instruction count moves by more than 0.02%, or a run cannot resolve that
+    band; or a control that missed inside the floor is later measured as a real cost.
+
+    Last checked: 2026-11-22, the runs above at `14471284c` on a DigitalOcean c-8 in sfo3 (Xeon
+    Platinum 8358, one thread a core, Linux 6.12.117), rustc 1.100.0, LLD 23.1.5, perf 6.12.117,
+    `wrk` 4.1.0 and Debian's libjemalloc2 5.3.0. The host's own record gives the CPU model, topology
+    and versions, but not the droplet size and region, which come from the account that made it and
+    which a later calibration records with the rest.
 
 ## Rules
 
@@ -8619,7 +9052,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     Details), and a panic is logged and answered 500 (plain, or the API's JSON under its prefix).
 13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel, a tunnel a `2xx` to `CONNECT` opens) only over HTTP/1.1 served by
     `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten answers as the route
-    says (its `101` to a WebSocket handshake, its `2xx` to `CONNECT`) and hands over the bytes: frames, message limits, buffering, per-message checks and how long
+    says (its `101` to a WebSocket handshake, its `2xx` to `CONNECT` less any body,
+    `Content-Length` and `Transfer-Encoding`, which RFC 9110 9.3.6 forbids there) and hands over
+    the bytes: frames, message limits, buffering, per-message checks and how long
     the connection may sit idle are the WebSocket library's and the route's, though
     `App::send_timeout` still ends a write the client makes no room for. `App::header_timeout`
     no longer applies and the deadline covered only the handler, so a switched connection on which
@@ -8707,7 +9142,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
     every other client, since its `304` saves the whole body. Its `Vary` does not name `Accept-Encoding`, though
     whether it carries a tag depends on it, so a shared cache whose fetch of a public file accepted
     no compression and named no tag keeps a copy it cannot revalidate: a whole fetch, never a wrong
-    answer. A file is hashed on each such request, about 2.5 instructions a byte (a 1 MiB PNG
+    answer. A `Public` file of 1,024 bytes or more from a route of files is kept by the app, and its tag
+    is made once for as long as it is kept, for the requests the kept copy is given to
+    ([Choice 70](#choice-kept-pages)): a `GET` with no cookie but the time zone's and no
+    `Authorization`. Any other is hashed on each such request (a private file, one over an
+    eighth of what the app keeps, one from an unstaged route, a kept one asked for with a
+    cookie or by `HEAD`, one whose route left the store out or whose URL is new to a full
+    store), about 2.5 instructions a byte (a 1 MiB PNG
     `Media` took 2,645,906 instructions a request on `f56bef59` where it took 20,824 on `cdce43c7`,
     callgrind, release build, five runs, ranges under 0.01%), so a large file whose URL can name its
     content is better sent `Public::immutable`, which is never tagged. Other headers of the app's

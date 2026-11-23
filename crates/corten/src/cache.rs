@@ -549,7 +549,8 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
             PRIVATE
         }
     };
-    let typed = res.extensions().get::<Typed>().copied();
+    // A kept answer given again carries its mark with what was kept, not as an extension.
+    let typed = res.extensions().get::<Typed>().copied().or_else(|| crate::kept::Kept::typed(res.extensions()));
     let bug = if seen.nonce {
         Some("its HTML has this request's CSP nonce (req.nonce() in the layout, or a handler that takes Nonce)")
     } else if res

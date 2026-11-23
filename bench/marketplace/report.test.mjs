@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { apps, locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
-import { aggregate, appStop, cpuSettings, phases, resultSchema, sources, stageAggregate, timedProfiles } from "./run-contract.mjs";
+import { aggregate, appStop, cpuSettings, phases, resultSchema, sources, stageAggregate, timedProfilesFor, v4Schema, v5Schema } from "./run-contract.mjs";
 import { report, validateSummary } from "./report.mjs";
 import { compare, comparisonKey } from "./compare.mjs";
 import { groupApps } from "./groups.mjs";
 import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, produceBoundedQualification, qualification, qualificationSettings } from "./feature-contract.mjs";
 import { boundedQualificationProbes, qualificationProbes } from "./qualification-fixture.mjs";
-function synthetic() {
-  const s = { schema: resultSchema, workload, round: "r17", commit: "a".repeat(40), dirty: false, complete: true, checksPassed: true,
+function synthetic(schema = resultSchema) {
+  const timedProfiles = timedProfilesFor(schema);
+  const s = { schema, workload, round: "r17", commit: "a".repeat(40), dirty: false, complete: true, checksPassed: true,
     failures: [], cleanupFailures: [], finishedCommit: "a".repeat(40), finishedDirty: false,
     startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T01:00:00Z", options: { round: "r17", build: true, apps, checkOnly: false, passes: 3, duration: 60, warmup: 30, rate: 150, startupTimeout: 120 }, apps: {},
     host: { cpu: "Synthetic test only", onlineCpus: "0-7", platform: "test", release: "test", node: "test", docker: "test" }, tools: Object.fromEntries(["upstream", "checker", "k6"].map((k) => [k, { imageId: `sha256:${"b".repeat(64)}` }])),
@@ -24,7 +26,7 @@ function synthetic() {
         const metric = { requests: 1000, rps: 1000, p50: 1, p95: 2, p99: 3, failed: 0, failedRate: 0, dropped: 0, checksFailed: 0, appOutcome: false };
         const stats = { cpuUsec: 1000000, samples: 3, cpuAvgPct: 100, cpuMaxPct: 110, memAvgMiB: 10, memMaxMiB: 11 };
         a.runs[key] = [1, 2, 3].map((pass) => ({ pass, locale, complete: true, startedAt: "2026-01-01T00:01:00Z", finishedAt: "2026-01-01T00:03:00Z",
-          cold: { containerStartedAt: "2026-01-01T00:02:00Z", first200At: "2026-01-01T00:02:01Z", first200MsFromContainerStart: 1000, measuredBeforeReadinessOrWarmup: true, path: target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale}/item_1`, attempts: 1, bytes: 100, successfulRequestMs: 1 },
+          cold: { containerStartedAt: "2026-01-01T00:02:00Z", first200At: "2026-01-01T00:02:01Z", first200MsFromContainerStart: 1000, measuredBeforeReadinessOrWarmup: true, path: target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale === "rotating" ? "en-US" : locale}/item_1`, attempts: 1, bytes: 100, successfulRequestMs: 1 },
           warmup: metric, phases: Object.fromEntries(phases.map((p) => [p, { ...metric, ...stats, requests: 1000 + pass, rps: 1000 + pass, perCpuSecond: 1000 + pass, upstream: source === "api" ? { ...stats, highCpu: true } : null }])) }));
         a.phases[key] = Object.fromEntries(phases.map((p) => [p, stageAggregate(a.runs[key], p, 3)]));
       }
@@ -33,8 +35,8 @@ function synthetic() {
   return s;
 }
 
-function grouped(group, round, { historical = true } = {}) {
-  const s = synthetic(); s.round = round; s.options.round = round;
+function grouped(group, round, { schema = resultSchema, historical = schema === v5Schema } = {}) {
+  const s = synthetic(schema); s.round = round; s.options.round = round;
   s.options.group = group; s.options.apps = groupApps(group);
   s.apps = Object.fromEntries(s.options.apps.map((a) => [a, s.apps[a]]));
   s.measurement.featureProfile = historical ? featureProfile : boundedFeatureProfile;
@@ -45,11 +47,11 @@ function grouped(group, round, { historical = true } = {}) {
 }
 
 test("historical named groups require exact evidence and compare only with the same group", () => {
-  const s = grouped("production", "r24"); validateSummary(s);
+  const s = grouped("production", "r24", { schema: v5Schema }); validateSummary(s);
   assert.match(report(s), /Group: production/);
-  assert.equal(compare(s, grouped("production", "r20"), { unchangedApps: ["aspnet"] }).compatible, true);
-  assert.equal(compare(s, grouped("production-performant", "r22")).compatible, false);
-  assert.equal(compare(s, grouped("production", "r20"), { unchangedApps: ["axum-maud"] }).compatible, false);
+  assert.equal(compare(s, grouped("production", "r20", { schema: v5Schema }), { unchangedApps: ["aspnet"] }).compatible, true);
+  assert.equal(compare(s, grouped("production-performant", "r22", { schema: v5Schema })).compatible, false);
+  assert.equal(compare(s, grouped("production", "r20", { schema: v5Schema }), { unchangedApps: ["axum-maud"] }).compatible, false);
   for (const mutate of [
     (v) => { delete v.apps.nextjs; },
     (v) => { v.options.group = "full"; },
@@ -67,6 +69,15 @@ test("historical named groups require exact evidence and compare only with the s
   const loss = compare({ ...excluded, round: "r25", options: { ...excluded.options, round: "r25" } }, s);
   assert.equal(loss.compatible, false);
   assert.equal(loss.qualificationLosses[0].app, "nextjs");
+  const rotating = grouped("production", "r26");
+  const candidate = rotating.apps.nextjs;
+  const missingCsp = boundedQualificationProbes("api"); delete missingCsp.page.headers["content-security-policy"];
+  candidate.qualification.api = produceBoundedQualification(missingCsp, "api");
+  candidate.runs = {}; candidate.phases = {};
+  const transition = compare(rotating, grouped("production", "r24", { schema: v5Schema, historical: false }));
+  assert.deepEqual(transition.rows, []);
+  assert.equal(transition.compatible, false);
+  assert.deepEqual(transition.qualificationLosses, loss.qualificationLosses);
   const forged = structuredClone(excluded); forged.apps.nextjs.qualification.api.eligible = true;
   assert.throws(() => validateSummary(forged));
   const lone = structuredClone(s);
@@ -77,7 +88,7 @@ test("historical named groups require exact evidence and compare only with the s
 });
 
 test("bounded qualification reports what is unmeasured and cannot mix with v1", () => {
-  const group = "production", previous = grouped(group, "r20");
+  const group = "production", previous = grouped(group, "r20", { schema: v5Schema });
   const active = grouped(group, "r24", { historical: false });
   const text = report(active);
   assert.match(text, /Feature contract: marketplace-production\/v2\./);
@@ -115,11 +126,11 @@ test("bounded qualification reports what is unmeasured and cannot mix with v1", 
 });
 test("read-only reporter requires every app, locale, source and three complete passes", () => {
   const s = synthetic(); validateSummary(s);
-  const text = report(s); for (const locale of locales) assert.ok(text.includes(`## ${locale}`));
-  for (const change of [(v) => { v.dirty = true; }, (v) => { delete v.apps.drogon; }, (v) => { v.options.checkOnly = true; }, (v) => { v.apps.corten.runs["fixture-fr-FR-page"].pop(); },
-    (v) => { v.apps.corten.checks.api.profiles[1] = v.apps.corten.checks.api.profiles[0]; }, (v) => { v.apps.corten.phases["fixture-en-US-page"].sat64.rps.median++; }, (v) => { v.failures.push("broken"); },
+  const text = report(s); assert.match(text, /^## Rotating pages \(en-US\/fr-FR\/de-DE\)$/m);
+  for (const change of [(v) => { v.dirty = true; }, (v) => { delete v.apps.drogon; }, (v) => { v.options.checkOnly = true; }, (v) => { v.apps.corten.runs["fixture-rotating-page"].pop(); },
+    (v) => { v.apps.corten.checks.api.profiles[1] = v.apps.corten.checks.api.profiles[0]; }, (v) => { v.apps.corten.phases["fixture-rotating-page"].sat64.rps.median++; }, (v) => { v.failures.push("broken"); },
     (v) => { v.apps.corten.builtDirty = true; }, (v) => { delete v.apps.corten.builtDirty; },
-    (v) => { v.apps.corten.runs["fixture-en-US-page"][0].failed = "broken"; }, (v) => { delete v.finishedAt; }, (v) => { delete v.measurement.cpus; }, (v) => { delete v.apps.corten.runs["api-en-US-page"][0].phases.sat64.upstream; }, (v) => { delete v.apps.corten.runs["fixture-en-US-page"][0].phases.fixed.p95; }]) {
+    (v) => { v.apps.corten.runs["fixture-rotating-page"][0].failed = "broken"; }, (v) => { delete v.finishedAt; }, (v) => { delete v.measurement.cpus; }, (v) => { delete v.apps.corten.runs["api-rotating-page"][0].phases.sat64.upstream; }, (v) => { delete v.apps.corten.runs["fixture-rotating-page"][0].phases.fixed.p95; }]) {
     const bad = structuredClone(s); change(bad); assert.throws(() => validateSummary(bad));
   }
 });
@@ -138,6 +149,8 @@ test("strict report rejects missing or duplicate JSON runs, profiles, phases and
     (v) => { delete v.apps.corten.phases["api-neutral-json"]; },
     (v) => { v.apps.corten.runs["api-neutral-json"].pop(); },
     (v) => { v.apps.corten.runs["api-neutral-json"][0].locale = "en-US"; },
+    (v) => { v.apps.corten.runs["fixture-rotating-page"][0].locale = "en-US"; },
+    (v) => { v.apps.corten.runs["api-rotating-page"][0].cold.path = "/marketplace/rotating/item_1"; },
     (v) => { v.apps.corten.runs["api-en-US-json"] = v.apps.corten.runs["api-neutral-json"]; },
     (v) => { v.apps.corten.phases["api-fr-FR-json"] = v.apps.corten.phases["api-neutral-json"]; },
     (v) => { v.apps.corten.runs["api-neutral-json"][2].pass = 2; },
@@ -160,23 +173,39 @@ test("report shows all phases and cost/latency ranges without locale-duplicated 
   const s = synthetic();
   const text = report(s);
   assert.equal(text.match(/^## Locale-neutral JSON$/gm).length, 1);
-  assert.equal(text.match(/^### (Memory|HTTP) source$/gm).length, 8);
-  assert.equal(text.match(/^#### Cold start$/gm).length, 8);
+  assert.equal(text.match(/^### (Memory|HTTP) source$/gm).length, 4);
+  assert.equal(text.match(/^#### Cold start$/gm).length, 4);
   assert.ok(text.includes("First 200 from container start ms"));
   assert.ok(text.includes("1000.00 [1000.00-1000.00]"));
-  assert.equal(text.match(/^#### Fixed 150 req\/s$/gm).length, 8);
-  for (const users of [64, 256]) assert.equal(text.match(new RegExp(`^#### ${users}-user closed loop$`, "gm")).length, 8);
+  assert.equal(text.match(/^#### Fixed 150 req\/s$/gm).length, 4);
+  for (const users of [64, 256]) assert.equal(text.match(new RegExp(`^#### ${users}-user closed loop$`, "gm")).length, 4);
   for (const heading of ["p50 ms", "p95 ms", "p99 ms", "CPU %", "CPU us/request", "Steady MiB", "Peak MiB", "Requests/CPU-second"]) assert.ok(text.includes(heading));
   assert.ok(text.includes("1002.00 [1001.00-1003.00]"));
   assert.ok(text.includes("busy single-process upstream"));
   assert.ok(text.includes("not proven maximum capacity"));
   assert.ok(text.includes("do not measure browser interactivity"));
-  for (const locale of locales) {
-    const section = text.split(`## ${locale}\n`)[1].split("\n## ")[0];
-    assert.doesNotMatch(section, /neutral-json/);
-  }
+  assert.doesNotMatch(text, /^## (en-US|fr-FR|de-DE)$/m);
+  assert.match(text, /not per-locale throughput/);
   s.round = s.options.round = "w1";
   assert.match(report(s), /^# Marketplace v2 w1 \(development\)/);
+});
+
+test("r20 still validates and renders its actual per-locale measurements", () => {
+  const saved = (name) => readFileSync(new URL(`./results/r20/${name}`, import.meta.url), "utf8");
+  const s = JSON.parse(saved("summary.json"));
+  assert.equal(s.schema, v5Schema);
+  assert.equal(report(s), saved("report.md").replaceAll("\r\n", "\n"));
+  // The regression key produced by the v5 reader for this saved round.
+  assert.equal(comparisonKey(s), "ac1de5eaa9eabbfd993d3dc68eab0526eed883f240a2aac9cf2988e759b3d853");
+  const next = grouped("production", "r21");
+  const incompatible = compare(next, s, { unchangedApps: ["aspnet"] });
+  assert.equal(incompatible.compatible, false);
+  assert.notEqual(incompatible.comparisonKeys.current, incompatible.comparisonKeys.baseline);
+  assert.match(incompatible.warnings.join("\n"), /Incompatible timed profile matrices/);
+  assert.deepEqual([incompatible.rows, incompatible.cold, incompatible.cohort.rows, incompatible.cohort.cold, incompatible.newOutcomes], [[], [], [], [], []]);
+  for (const [wrong, schema] of [[s, resultSchema], [next, v5Schema]]) {
+    assert.throws(() => validateSummary({ ...wrong, schema }), /timed profile matrix/);
+  }
 });
 
 test("counted CPU cost is aggregated per pass, not derived by dividing medians", () => {
@@ -189,7 +218,7 @@ test("compatible official rounds always compare Corten, with optional caller-att
   current.options.build = false;
   const result = compare(current, old, { unchangedApps: ["corten"] });
   assert.equal(result.compatible, true);
-  assert.equal(result.rows.length, 8 * 3);
+  assert.equal(result.rows.length, 4 * 3);
   assert.ok(result.rows.every((r) => r.app === "corten"));
   assert.equal(result.rows.filter((r) => r.profile.endsWith("json")).length, 2 * 3);
   assert.equal(result.rows[0].metrics.rps.percentChange, 0);
@@ -199,8 +228,8 @@ test("compatible official rounds always compare Corten, with optional caller-att
   assert.ok(result.warnings.some((w) => w.includes("not declared unchanged")));
   assert.ok(result.rows.some((r) => r.warnings.some((w) => w.includes("busy upstream"))));
   const subjectOnly = compare(current, old);
-  assert.equal(subjectOnly.rows.length, 8 * 3);
-  assert.equal(subjectOnly.cold.length, 8);
+  assert.equal(subjectOnly.rows.length, 4 * 3);
+  assert.equal(subjectOnly.cold.length, 4);
   assert.ok(subjectOnly.rows.every((r) => r.app === "corten"));
   assert.deepEqual(subjectOnly.cohort, { apps: [], rows: [], cold: [] });
   assert.equal(compare(current, null, { unchangedApps: ["corten"] }).compatible, false);
@@ -211,36 +240,36 @@ test("changed Corten remains the subject; reference context is the median of non
   current.commit = current.finishedCommit = "c".repeat(40);
   for (const a of Object.values(current.apps)) a.builtCommit = current.commit;
   for (const [app, factor, coldDelay] of [["corten", 0.8, 2000], ["nextjs", 1.1, 1000], ["rails", 1.3, 3000]]) {
-    for (const run of current.apps[app].runs["fixture-en-US-page"]) {
+    for (const run of current.apps[app].runs["fixture-rotating-page"]) {
       run.phases.sat64.rps *= factor;
       run.cold.first200MsFromContainerStart += coldDelay;
       run.cold.first200At = new Date(Date.parse(run.cold.containerStartedAt) + run.cold.first200MsFromContainerStart).toISOString();
     }
-    current.apps[app].phases["fixture-en-US-page"].sat64 = stageAggregate(current.apps[app].runs["fixture-en-US-page"], "sat64", 3);
+    current.apps[app].phases["fixture-rotating-page"].sat64 = stageAggregate(current.apps[app].runs["fixture-rotating-page"], "sat64", 3);
   }
-  for (const run of old.apps.nextjs.runs["fixture-en-US-page"]) run.phases.sat64.p50 = 0;
-  old.apps.nextjs.phases["fixture-en-US-page"].sat64 = stageAggregate(old.apps.nextjs.runs["fixture-en-US-page"], "sat64", 3);
+  for (const run of old.apps.nextjs.runs["fixture-rotating-page"]) run.phases.sat64.p50 = 0;
+  old.apps.nextjs.phases["fixture-rotating-page"].sat64 = stageAggregate(old.apps.nextjs.runs["fixture-rotating-page"], "sat64", 3);
   const result = compare(current, old, { unchangedApps: ["nextjs", "rails"] });
   assert.equal(result.compatible, true);
   assert.equal(result.subject, "corten");
   assert.deepEqual(result.cohort.apps, ["nextjs", "rails"]);
-  assert.equal(result.rows.length, 3 * 8 * 3);
-  assert.equal(result.cold.length, 3 * 8);
-  assert.equal(result.cohort.rows.length, 8 * 3);
-  assert.equal(result.cohort.cold.length, 8);
+  assert.equal(result.rows.length, 3 * 4 * 3);
+  assert.equal(result.cold.length, 3 * 4);
+  assert.equal(result.cohort.rows.length, 4 * 3);
+  assert.equal(result.cohort.cold.length, 4);
   assert.ok(result.rows.every((r) => ["corten", "nextjs", "rails"].includes(r.app)));
-  const subject = result.rows.find((r) => r.app === "corten" && r.profile === "fixture-en-US-page" && r.phase === "sat64");
+  const subject = result.rows.find((r) => r.app === "corten" && r.profile === "fixture-rotating-page" && r.phase === "sat64");
   assert.ok(Math.abs(subject.metrics.rps.percentChange - -20) < 1e-10);
-  const context = result.cohort.rows.find((r) => r.profile === "fixture-en-US-page" && r.phase === "sat64");
+  const context = result.cohort.rows.find((r) => r.profile === "fixture-rotating-page" && r.phase === "sat64");
   assert.equal(context.metrics.rps.apps, 2);
   assert.ok(Math.abs(context.metrics.rps.medianPercentChange - 20) < 1e-10);
   assert.ok(Math.abs(context.metrics.rps.minPercentChange - 10) < 1e-10);
   assert.ok(Math.abs(context.metrics.rps.maxPercentChange - 30) < 1e-10);
   assert.deepEqual(context.metrics.p50, { apps: 1, excludedApps: ["nextjs"], medianPercentChange: 0, minPercentChange: 0, maxPercentChange: 0 });
-  const cold = result.cold.find((r) => r.app === "corten" && r.profile === "fixture-en-US-page");
+  const cold = result.cold.find((r) => r.app === "corten" && r.profile === "fixture-rotating-page");
   assert.equal(cold.metrics.first200MsFromContainerStart.percentChange, 200);
   assert.deepEqual(cold.metrics.first200MsFromContainerStart.current, { median: 3000, min: 3000, max: 3000 });
-  const coldContext = result.cohort.cold.find((r) => r.profile === "fixture-en-US-page");
+  const coldContext = result.cohort.cold.find((r) => r.profile === "fixture-rotating-page");
   assert.equal(coldContext.metrics.first200MsFromContainerStart.medianPercentChange, 200);
   assert.equal(coldContext.metrics.first200MsFromContainerStart.minPercentChange, 100);
   assert.equal(coldContext.metrics.first200MsFromContainerStart.maxPercentChange, 300);
@@ -250,13 +279,13 @@ test("changed Corten remains the subject; reference context is the median of non
 
 test("comparison reports measured median direction and null for a zero baseline, with both ranges", () => {
   const old = synthetic(), current = synthetic(); current.round = current.options.round = "r18";
-  for (const run of old.apps.corten.runs["fixture-en-US-page"]) run.phases.sat64.p50 = 0;
-  old.apps.corten.phases["fixture-en-US-page"].sat64 = stageAggregate(old.apps.corten.runs["fixture-en-US-page"], "sat64", 3);
-  for (const run of current.apps.corten.runs["fixture-en-US-page"]) run.phases.sat64.rps *= 2;
-  current.apps.corten.phases["fixture-en-US-page"].sat64 = stageAggregate(current.apps.corten.runs["fixture-en-US-page"], "sat64", 3);
+  for (const run of old.apps.corten.runs["fixture-rotating-page"]) run.phases.sat64.p50 = 0;
+  old.apps.corten.phases["fixture-rotating-page"].sat64 = stageAggregate(old.apps.corten.runs["fixture-rotating-page"], "sat64", 3);
+  for (const run of current.apps.corten.runs["fixture-rotating-page"]) run.phases.sat64.rps *= 2;
+  current.apps.corten.phases["fixture-rotating-page"].sat64 = stageAggregate(current.apps.corten.runs["fixture-rotating-page"], "sat64", 3);
   const result = compare(current, old, { unchangedApps: ["corten"] });
   assert.equal(result.compatible, true);
-  const row = result.rows.find((r) => r.profile === "fixture-en-US-page" && r.phase === "sat64");
+  const row = result.rows.find((r) => r.profile === "fixture-rotating-page" && r.phase === "sat64");
   assert.equal(row.metrics.rps.percentChange, 100);
   assert.equal(row.metrics.rps.rangesOverlap, false);
   assert.equal(row.metrics.p50.percentChange, null);
@@ -316,7 +345,7 @@ test("nightly short-window pinned matrix validates, but has a different comparis
   const old = nightly("r17"), current = nightly("r18");
   validateSummary(current);
   const runs = Object.values(current.apps).flatMap((a) => Object.values(a.runs).flat());
-  assert.equal(runs.length, 20 * 8 * 3);
+  assert.equal(runs.length, 20 * 4 * 3);
   assert.equal(runs.filter((r) => r.locale === null).length, 20 * 2 * 3);
   assert.match(report(current), /Short 15s phase windows \(10s warmup\)/);
   const key = comparisonKey(old);
@@ -344,23 +373,23 @@ test("nightly short-window pinned matrix validates, but has a different comparis
 
 test("an app that cannot serve a phase is recorded and marked, and the round still validates (#1128)", () => {
   const s = synthetic();
-  const runs = s.apps.rails.runs["fixture-en-US-page"];
+  const runs = s.apps.rails.runs["fixture-rotating-page"];
   for (const [i, phase] of [[0, "fixed"], [1, "sat256"]]) Object.assign(runs[i].phases[phase], { failed: 50, failedRate: 50 / runs[i].phases[phase].requests, dropped: phase === "fixed" ? 300 : 0, checksFailed: 50, appOutcome: true });
-  for (const phase of ["fixed", "sat256"]) s.apps.rails.phases["fixture-en-US-page"][phase] = stageAggregate(runs, phase, 3);
+  for (const phase of ["fixed", "sat256"]) s.apps.rails.phases["fixture-rotating-page"][phase] = stageAggregate(runs, phase, 3);
   validateSummary(s);
   const text = report(s);
   assert.ok(text.includes("| rails * (1 of 3 passes) |"), "the stage is marked in its table");
-  assert.ok(text.includes("App outcome: rails fixture-en-US-page fixed pass 1: 50 of 1001 requests failed (5.00%), 300 fixed-rate iterations dropped, 50 checks failed."));
-  assert.equal(s.apps.rails.phases["fixture-en-US-page"].fixed.appOutcomes, 1);
-  Object.assign(s.apps.rails.runs["fixture-en-US-page"][2].warmup, { failed: 5, failedRate: 0.005, checksFailed: 5, appOutcome: true });
-  assert.ok(report(s).includes("App outcome in warmup (not measured): rails fixture-en-US-page pass 3: 5 of 1000 requests failed (0.50%)"));
+  assert.ok(text.includes("App outcome: rails fixture-rotating-page fixed pass 1: 50 of 1001 requests failed (5.00%), 300 fixed-rate iterations dropped, 50 checks failed."));
+  assert.equal(s.apps.rails.phases["fixture-rotating-page"].fixed.appOutcomes, 1);
+  Object.assign(s.apps.rails.runs["fixture-rotating-page"][2].warmup, { failed: 5, failedRate: 0.005, checksFailed: 5, appOutcome: true });
+  assert.ok(report(s).includes("App outcome in warmup (not measured): rails fixture-rotating-page pass 3: 5 of 1000 requests failed (0.50%)"));
   for (const change of [
-    (v) => { v.apps.rails.runs["fixture-en-US-page"][0].phases.fixed.appOutcome = false; },
-    (v) => { v.apps.corten.runs["fixture-en-US-page"][0].phases.fixed.appOutcome = true; },
-    (v) => { v.apps.rails.runs["fixture-en-US-page"][0].phases.fixed.failedRate = 0.5; },
-    (v) => { Object.assign(v.apps.rails.runs["fixture-en-US-page"][0].phases.fixed, { failed: 1001, failedRate: 1 }); },
-    (v) => { v.apps.rails.phases["fixture-en-US-page"].fixed.appOutcomes = 0; },
-    (v) => { v.apps.rails.runs["fixture-en-US-page"][0].phases.fixed.checksFailed = 100; },
+    (v) => { v.apps.rails.runs["fixture-rotating-page"][0].phases.fixed.appOutcome = false; },
+    (v) => { v.apps.corten.runs["fixture-rotating-page"][0].phases.fixed.appOutcome = true; },
+    (v) => { v.apps.rails.runs["fixture-rotating-page"][0].phases.fixed.failedRate = 0.5; },
+    (v) => { Object.assign(v.apps.rails.runs["fixture-rotating-page"][0].phases.fixed, { failed: 1001, failedRate: 1 }); },
+    (v) => { v.apps.rails.phases["fixture-rotating-page"].fixed.appOutcomes = 0; },
+    (v) => { v.apps.rails.runs["fixture-rotating-page"][0].phases.fixed.checksFailed = 100; },
   ]) { const bad = structuredClone(s); change(bad); assert.throws(() => validateSummary(bad)); }
 });
 
@@ -372,31 +401,31 @@ test("a stage that fails requests now and failed none before is a new outcome, a
     Object.assign(runs[0].phases[phase], { failed: 10, failedRate: 10 / runs[0].phases[phase].requests, checksFailed: 10, appOutcome: true });
     s.apps[app].phases[key][phase] = stageAggregate(runs, phase, 3);
   };
-  outcome(current, "corten", "fixture-en-US-page", "sat256");
-  outcome(current, "rails", "fixture-en-US-page", "sat64");
+  outcome(current, "corten", "fixture-rotating-page", "sat256");
+  outcome(current, "rails", "fixture-rotating-page", "sat64");
   const result = compare(current, old, { unchangedApps: ["rails", "nextjs"] });
   assert.equal(result.compatible, true);
-  assert.deepEqual(result.newOutcomes.map((o) => [o.app, o.profile, o.phase]), [["corten", "fixture-en-US-page", "sat256"], ["rails", "fixture-en-US-page", "sat64"]]);
-  const group = result.cohort.rows.find((g) => g.profile === "fixture-en-US-page" && g.phase === "sat64");
+  assert.deepEqual(result.newOutcomes.map((o) => [o.app, o.profile, o.phase]), [["corten", "fixture-rotating-page", "sat256"], ["rails", "fixture-rotating-page", "sat64"]]);
+  const group = result.cohort.rows.find((g) => g.profile === "fixture-rotating-page" && g.phase === "sat64");
   assert.deepEqual(group.outcomeApps, ["rails"]);
   assert.equal(group.metrics.rps.apps, 1, "only nextjs is in the cohort for that stage");
   // above a baseline that already failed, only a range wholly above it is new
   const again = compare(current, current, { unchangedApps: [] });
   assert.equal(again.compatible, false, "a round is not its own baseline");
   const later = structuredClone(current); later.round = later.options.round = "r19";
-  const runs = later.apps.corten.runs["fixture-en-US-page"];
+  const runs = later.apps.corten.runs["fixture-rotating-page"];
   runs[1].phases.sat256 = { ...runs[1].phases.sat256, failed: 11, failedRate: 11 / runs[1].phases.sat256.requests, checksFailed: 11, appOutcome: true };
-  later.apps.corten.phases["fixture-en-US-page"].sat256 = stageAggregate(runs, "sat256", 3);
+  later.apps.corten.phases["fixture-rotating-page"].sat256 = stageAggregate(runs, "sat256", 3);
   assert.ok(compare(later, current).newOutcomes.some((o) => o.app === "corten"), "one more pass with an outcome is new");
   const higher = structuredClone(current); higher.round = higher.options.round = "r19";
-  const same = higher.apps.corten.runs["fixture-en-US-page"];
+  const same = higher.apps.corten.runs["fixture-rotating-page"];
   same[0].phases.sat256 = { ...same[0].phases.sat256, failed: 12, failedRate: 12 / same[0].phases.sat256.requests, checksFailed: 12 };
-  higher.apps.corten.phases["fixture-en-US-page"].sat256 = stageAggregate(same, "sat256", 3);
+  higher.apps.corten.phases["fixture-rotating-page"].sat256 = stageAggregate(same, "sat256", 3);
   assert.ok(!compare(higher, current).newOutcomes.some((o) => o.app === "corten"), "a higher failure in ranges that overlap, with the same passes, is not new");
   const failing = (s, round, n) => {
     const v = structuredClone(s); v.round = v.options.round = round;
-    for (const r of v.apps.corten.runs["fixture-en-US-page"]) r.phases.sat256 = { ...r.phases.sat256, failed: n, failedRate: n / r.phases.sat256.requests, checksFailed: n, appOutcome: true };
-    v.apps.corten.phases["fixture-en-US-page"].sat256 = stageAggregate(v.apps.corten.runs["fixture-en-US-page"], "sat256", 3);
+    for (const r of v.apps.corten.runs["fixture-rotating-page"]) r.phases.sat256 = { ...r.phases.sat256, failed: n, failedRate: n / r.phases.sat256.requests, checksFailed: n, appOutcome: true };
+    v.apps.corten.phases["fixture-rotating-page"].sat256 = stageAggregate(v.apps.corten.runs["fixture-rotating-page"], "sat256", 3);
     return v;
   };
   const base = failing(current, "r19", 10);
@@ -421,34 +450,34 @@ const oom = { Running: false, OOMKilled: true, ExitCode: 137 };
 
 test("an app whose container stops under load is that app's recorded outcome, and the round still validates (#1128)", () => {
   const s = synthetic();
-  stopProfile(s, "rails", "fixture-en-US-page", 2, "sat64", oom);
+  stopProfile(s, "rails", "fixture-rotating-page", 2, "sat64", oom);
   stopProfile(s, "phoenix", "api-neutral-json", 1, "warmup", { Running: false, OOMKilled: false, ExitCode: 1 });
   validateSummary(s);
   assert.equal(s.complete, true);
-  const p = s.apps.rails.phases["fixture-en-US-page"];
+  const p = s.apps.rails.phases["fixture-rotating-page"];
   assert.deepEqual([p.fixed.passes, p.sat64.passes, p.sat256.passes], [2, 1, 1]);
   assert.deepEqual(p.sat64.stopped, { pass: 2, phase: "sat64", exitCode: 137, oomKilled: true });
   const text = report(s);
-  const en = text.split("## en-US\n")[1].split("\n## ")[0];
+  const pages = text.split("## Rotating pages (en-US/fr-FR/de-DE)\n")[1].split("\n## ")[0];
   // fewer than three passes say what the number is: of two the lower value in each column on its
   // own (spread), so not one pass's numbers; of one, that pass
-  assert.ok(en.includes("| rails (stopped: 2 of 3 passes; the lower of two values per column, not a median) | 1000.00 [1000.00-1000.00] |"), "the cold starts keep the passes before the stop, marked");
-  assert.ok(en.includes("| rails (stopped: 2 of 3 passes; the lower of two values per column, not a median) | 1001.00 [1001.00-1002.00] |"), "so does the fixed stage");
+  assert.ok(pages.includes("| rails (stopped: 2 of 3 passes; the lower of two values per column, not a median) | 1000.00 [1000.00-1000.00] |"), "the cold starts keep the passes before the stop, marked");
+  assert.ok(pages.includes("| rails (stopped: 2 of 3 passes; the lower of two values per column, not a median) | 1001.00 [1001.00-1002.00] |"), "so does the fixed stage");
   assert.doesNotMatch(text, /lower pass/, "the mark does not say the numbers come from one pass");
   assert.ok(text.includes("of two passes each number is the lower of the two values in its column"));
-  assert.ok(en.includes("| rails (stopped: 1 of 3 passes; one pass, no range) | 1001.00 [1001.00-1001.00] |"));
+  assert.ok(pages.includes("| rails (stopped: 1 of 3 passes; one pass, no range) | 1001.00 [1001.00-1001.00] |"));
   assert.ok(text.includes("except in a row marked stopped, which has fewer"), "the header does not call every number a three-pass median");
-  assert.ok(en.includes("App stopped: rails fixture-en-US-page sat64: its container was OOM-killed (exit code 137) during sat64 in pass 2."));
+  assert.ok(pages.includes("App stopped: rails fixture-rotating-page sat64: its container was OOM-killed (exit code 137) during sat64 in pass 2."));
   assert.doesNotMatch(text, /GiB limit/, "OOMKilled does not say whose limit was hit");
-  assert.equal(en.match(/^App stopped: rails /gm).length, 3, "every stage that lost a pass names the stop");
-  assert.doesNotMatch(en, /\| (corten|nextjs|phoenix)[^|]*stopped/, "other apps keep their results unmarked");
-  assert.doesNotMatch(text.split("## fr-FR\n")[1].split("\n## ")[0], /stopped:/, "the app's other profiles still ran");
+  assert.equal(pages.match(/^App stopped: rails /gm).length, 3, "every stage that lost a pass names the stop");
+  assert.doesNotMatch(pages, /\| (corten|nextjs|phoenix)[^|]*stopped/, "other apps keep their results unmarked");
+  assert.doesNotMatch(pages.split("### HTTP source\n")[1], /stopped:/, "the app's other profiles still ran");
   assert.ok(text.includes("| phoenix (stopped: 0 of 3 passes) | - | - | - | - | - | - | - | - | - | - |"), "a stage with no pass shows no number");
   assert.ok(text.includes("App stopped: phoenix api-neutral-json fixed: its container exited with code 1 during warmup in pass 1."));
-  const runs = (v) => v.apps.rails.runs["fixture-en-US-page"];
+  const runs = (v) => v.apps.rails.runs["fixture-rotating-page"];
   for (const change of [
-    (v) => { v.apps.rails.phases["fixture-en-US-page"].sat64.stopped = null; },
-    (v) => { v.apps.corten.phases["fixture-en-US-page"].fixed.stopped = structuredClone(p.sat64.stopped); },
+    (v) => { v.apps.rails.phases["fixture-rotating-page"].sat64.stopped = null; },
+    (v) => { v.apps.corten.phases["fixture-rotating-page"].fixed.stopped = structuredClone(p.sat64.stopped); },
     (v) => { runs(v)[1].stopped.pass = 1; },
     (v) => { runs(v)[1].stopped.phase = "sat256"; },
     (v) => { runs(v)[1].stopped.reason = "killed"; },
@@ -457,7 +486,7 @@ test("an app whose container stops under load is that app's recorded outcome, an
     (v) => { runs(v)[1].complete = true; },
     (v) => { runs(v)[1].failed = "broken"; },
     (v) => { runs(v)[1].phases.sat64 = runs(v)[1].phases.fixed; },
-    (v) => { runs(v).push({ ...structuredClone(v.apps.corten.runs["fixture-en-US-page"][2]) }); },
+    (v) => { runs(v).push({ ...structuredClone(v.apps.corten.runs["fixture-rotating-page"][2]) }); },
     (v) => { v.apps.phoenix.runs["api-neutral-json"][0].warmup = structuredClone(v.apps.corten.runs["api-neutral-json"][0].warmup); },
     (v) => { v.apps.rails.failures = [{ stage: "load page pass 2" }]; },
   ]) { const bad = structuredClone(s); change(bad); assert.throws(() => validateSummary(bad)); }
@@ -465,28 +494,28 @@ test("an app whose container stops under load is that app's recorded outcome, an
 
 test("a stage the app stopped in is an outcome, not a comparable number, and new when the baseline's had no stop (#1128)", () => {
   const old = synthetic(), current = synthetic(); current.round = current.options.round = "r18";
-  stopProfile(current, "corten", "fixture-en-US-page", 3, "sat256", oom);
-  stopProfile(current, "rails", "fixture-en-US-page", 3, "sat256", { Running: false, OOMKilled: false, ExitCode: 1 });
+  stopProfile(current, "corten", "fixture-rotating-page", 3, "sat256", oom);
+  stopProfile(current, "rails", "fixture-rotating-page", 3, "sat256", { Running: false, OOMKilled: false, ExitCode: 1 });
   const result = compare(current, old, { unchangedApps: ["rails", "nextjs"] });
   assert.equal(result.compatible, true, result.warnings.join("\n"));
-  assert.deepEqual(result.newOutcomes.map((o) => [o.app, o.profile, o.phase]), [["corten", "fixture-en-US-page", "sat256"], ["rails", "fixture-en-US-page", "sat256"]]);
+  assert.deepEqual(result.newOutcomes.map((o) => [o.app, o.profile, o.phase]), [["corten", "fixture-rotating-page", "sat256"], ["rails", "fixture-rotating-page", "sat256"]]);
   assert.deepEqual(result.newOutcomes[0].stopped, { baseline: null, current: { pass: 3, phase: "sat256", exitCode: 137, oomKilled: true } });
-  const row = (r, app, phase) => r.rows.find((x) => x.app === app && x.profile === "fixture-en-US-page" && x.phase === phase);
+  const row = (r, app, phase) => r.rows.find((x) => x.app === app && x.profile === "fixture-rotating-page" && x.phase === phase);
   assert.equal(row(result, "corten", "sat256").metrics, null, "no delta from the passes before a stop");
   assert.ok(row(result, "corten", "sat256").warnings.some((w) => w.includes("current pass 3: app container OOM-killed during sat256")));
   assert.equal(row(result, "corten", "sat64").metrics.rps.percentChange, 0, "the stages it served in every pass still compare");
-  const group = result.cohort.rows.find((g) => g.profile === "fixture-en-US-page" && g.phase === "sat256");
+  const group = result.cohort.rows.find((g) => g.profile === "fixture-rotating-page" && g.phase === "sat256");
   assert.deepEqual(group.outcomeApps, ["rails"]); assert.equal(group.metrics.rps.apps, 1);
   // a pass-3 stop came after all three cold starts were measured: the cold rows still compare
-  const cold = (r, app) => r.cold.find((c) => c.app === app && c.profile === "fixture-en-US-page");
+  const cold = (r, app) => r.cold.find((c) => c.app === app && c.profile === "fixture-rotating-page");
   assert.deepEqual(cold(result, "corten").stopped, { baseline: null, current: null });
   assert.equal(cold(result, "corten").metrics.first200MsFromContainerStart.percentChange, 0);
-  const coldGroup = (r) => r.cohort.cold.find((g) => g.profile === "fixture-en-US-page");
+  const coldGroup = (r) => r.cohort.cold.find((g) => g.profile === "fixture-rotating-page");
   assert.equal(coldGroup(result).outcomeApps, undefined); assert.equal(coldGroup(result).metrics.first200MsFromContainerStart.apps, 2);
   // a pass-2 stop lost the third cold start: no cold number, for Corten and the cohort alike
   const earlier = structuredClone(old); earlier.round = earlier.options.round = "r18";
-  stopProfile(earlier, "corten", "fixture-en-US-page", 2, "fixed", oom);
-  stopProfile(earlier, "rails", "fixture-en-US-page", 2, "fixed", oom);
+  stopProfile(earlier, "corten", "fixture-rotating-page", 2, "fixed", oom);
+  stopProfile(earlier, "rails", "fixture-rotating-page", 2, "fixed", oom);
   const lost = compare(earlier, old, { unchangedApps: ["rails", "nextjs"] });
   assert.deepEqual(cold(lost, "corten").stopped.current, { pass: 2, phase: "fixed", exitCode: 137, oomKilled: true });
   assert.equal(cold(lost, "corten").metrics, null);
@@ -501,15 +530,15 @@ test("a stage the app stopped in is an outcome, not a comparable number, and new
   assert.ok(!recovered.newOutcomes.some((o) => o.app === "corten")); assert.equal(row(recovered, "corten", "sat256").metrics, null);
   // a stop where the baseline only failed requests is new, whatever the failure counts
   const failing = structuredClone(old); failing.round = failing.options.round = "r19";
-  for (const r of failing.apps.corten.runs["fixture-en-US-page"]) Object.assign(r.phases.fixed, { failed: 10, failedRate: 10 / r.phases.fixed.requests, checksFailed: 10, appOutcome: true });
-  failing.apps.corten.phases["fixture-en-US-page"].fixed = stageAggregate(failing.apps.corten.runs["fixture-en-US-page"], "fixed", 3);
+  for (const r of failing.apps.corten.runs["fixture-rotating-page"]) Object.assign(r.phases.fixed, { failed: 10, failedRate: 10 / r.phases.fixed.requests, checksFailed: 10, appOutcome: true });
+  failing.apps.corten.phases["fixture-rotating-page"].fixed = stageAggregate(failing.apps.corten.runs["fixture-rotating-page"], "fixed", 3);
   const dies = structuredClone(old); dies.round = dies.options.round = "r20";
-  stopProfile(dies, "corten", "fixture-en-US-page", 1, "warmup", oom);
+  stopProfile(dies, "corten", "fixture-rotating-page", 1, "warmup", oom);
   assert.deepEqual(compare(dies, failing).newOutcomes.map((o) => o.phase), ["fixed", "sat64", "sat256"]);
 });
 
 test("a stop earlier than the baseline's is a new outcome; the same or a later one is not (#1128)", () => {
-  const round = (name, pass, phase) => { const v = synthetic(); v.round = v.options.round = name; if (pass) stopProfile(v, "corten", "fixture-en-US-page", pass, phase, oom); return v; };
+  const round = (name, pass, phase) => { const v = synthetic(); v.round = v.options.round = name; if (pass) stopProfile(v, "corten", "fixture-rotating-page", pass, phase, oom); return v; };
   const news = (current, baseline) => compare(current, baseline).newOutcomes.filter((o) => o.app === "corten").map((o) => o.phase);
   const base = round("r19", 3, "sat256");
   assert.deepEqual(news(round("r20", 3, "sat256"), base), [], "the same stop");
@@ -530,14 +559,14 @@ function asV3(s, round) {
 }
 
 test("a v3 summary is read as v4 with no stop records: it validates and reports with no stop lines", () => {
-  const s = asV3(synthetic(), "r19");
+  const s = asV3(synthetic(v4Schema), "r19");
   validateSummary(s);
   const text = report(s);
   assert.ok(text.includes("Schema: `marketplace-results/v3` (read as v4"));
   assert.doesNotMatch(text, /^App stopped:/m, "no stop line");
   assert.doesNotMatch(text, /^\| [^|]+\(stopped:/m, "no stopped mark beside any numbers");
   assert.equal(text.match(/^#### Fixed 150 req\/s$/gm).length, 8);
-  const stopped = synthetic(); stopProfile(stopped, "rails", "fixture-en-US-page", 2, "sat64", oom);
+  const stopped = synthetic(v4Schema); stopProfile(stopped, "rails", "fixture-en-US-page", 2, "sat64", oom);
   for (const bad of [
     asV3(stopped, "r19"),
     (() => { const v = structuredClone(s); v.apps.corten.phases["fixture-en-US-page"].fixed.stopped = null; return v; })(),
@@ -549,8 +578,8 @@ test("a v3 summary is read as v4 with no stop records: it validates and reports 
 });
 
 test("a v3 baseline compares with a v4 round, and a stop in the v4 round is a new outcome", () => {
-  const baseline = asV3(synthetic(), "r19");
-  const current = synthetic(); current.round = current.options.round = "r20";
+  const baseline = asV3(synthetic(v4Schema), "r19");
+  const current = synthetic(v4Schema); current.round = current.options.round = "r20";
   stopProfile(current, "corten", "fixture-en-US-page", 3, "sat256", oom);
   stopProfile(current, "rails", "api-de-DE-page", 1, "warmup", { Running: false, OOMKilled: false, ExitCode: 1 });
   const result = compare(current, baseline, { unchangedApps: ["rails", "nextjs"] });
@@ -563,5 +592,5 @@ test("a v3 baseline compares with a v4 round, and a stop in the v4 round is a ne
   assert.equal(row("corten", "fixture-en-US-page", "sat256").metrics, null);
   assert.deepEqual(row("corten", "fixture-en-US-page", "sat64").stopped, { baseline: null, current: null });
   assert.equal(row("corten", "fixture-en-US-page", "sat64").metrics.rps.percentChange, 0);
-  assert.equal(compare(asV3(synthetic(), "r20"), baseline).compatible, true, "two v3 rounds still compare");
+  assert.equal(compare(asV3(synthetic(v4Schema), "r20"), baseline).compatible, true, "two v3 rounds still compare");
 });

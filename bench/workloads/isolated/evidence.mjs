@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { deploymentSha256 } from "../deployments.mjs";
+import { contractSha256, definition } from "../registry.mjs";
 import { validateCollected } from "../../catalog/droplet-contract.mjs";
 import { inspectCatalog } from "../../catalog/report.mjs";
 import { groupDescriptor } from "../../catalog/group.mjs";
@@ -169,6 +170,17 @@ export function verifyJsonProducer(binding, summary) {
   }
 }
 
+// The native reader can replay both matrices. The selected group, not the
+// archive, decides which one this request requires. Neither waives qualification.
+export function checkMarketplaceContract(binding, summary) {
+  const group = "localized-marketplace", selected = binding.selection.contractSha256;
+  const perLocale = "e7196bc53d5d9a48543dacdfa245c672d5dda68c514f43339779de58f022c9eb";
+  assert.ok(selected === perLocale || selected === contractSha256(group), "unknown marketplace group contract");
+  assert.equal(summary.schema, selected === perLocale ? "marketplace-results/v5" : definition(group).nativeResultSchema,
+    "native marketplace result schema differs from the selected group contract");
+  assert.equal(summary.measurement.featureProfile, boundedFeatureProfile, "current group requires bounded qualification");
+}
+
 /** Native APIs are independent gates; a process exit or complete flag is insufficient. */
 export function inspectEvidence(binding, root) {
   assert.ok(supportedGroups.includes(binding.request.group), "native validator not integrated");
@@ -190,7 +202,7 @@ export function inspectEvidence(binding, root) {
     assert.equal(report.attemptComplete, true, "strict JSON native attempt incomplete");
   } else {
     validateSummary(summary);
-    assert.equal(summary.measurement.featureProfile, boundedFeatureProfile, "current group requires bounded qualification");
+    checkMarketplaceContract(binding, summary);
     assert.equal(summary.split, undefined, "split evidence is not this isolated native command");
     report = rawProofBlocked(group, { outcomes: Object.fromEntries(binding.selection.apps.map((app) => [app,
       admitted(summary.apps[app]) ? "admitted-native-outcome" : "excluded-not-timed"])) }, inspectRawSupport(group, summary, root, before));

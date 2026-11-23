@@ -103,7 +103,7 @@ pub trait Answer: IntoResponse + Sized {
     /// and its layout's places draw nothing.
     const PAGE: bool = false;
     /// The answer is one whole body that only the handler's inputs decide (JSON, text, a file): what the
-    /// app keeps for a [`Public`] route where it compresses the body, as it keeps a page
+    /// app keeps for a [`Public`] route from 1,024 bytes, as it keeps a page
     /// ([`crate::kept`]). Not a public API:
     /// its type is one an app cannot name, so an answer type of the app's own is never kept this way
     /// (`Json` of a type of the app's is `Json`'s answer, kept under the checks every kept answer
@@ -1532,14 +1532,16 @@ impl Answer for Relay {
 /// which sends no `Cache-Control` unless the handler says one. At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
 /// keep it for a year, as Corten's own versioned files are; its handler cannot read who is asking,
-/// as any `Public` handler cannot. A [`Public::new`] one the app compresses (1,024 bytes or
-/// more of a type such as CSV or SVG, in a build with the `compress` feature) is kept by the app
+/// as any `Public` handler cannot. A [`Public::new`] one of 1,024 bytes or more, whatever its
+/// type (a CSV, an SVG, a PNG, a PDF), is kept by the app
 /// as `Public` text is, with its headers, and given again in the handler's place to a request
 /// that shows nothing about who asks, until its lifetime ends
-/// ([`App::kept_answers`](crate::App::kept_answers)); any other from such a route is the
-/// handler's for every request: a smaller one, a picture of a type the app does not compress, a
-/// stream, an immutable one, and any from an unstaged route. One a page route answers in its
-/// page's place ([`PageOr`]) is kept as that page would be, whatever its type.
+/// ([`App::kept_answers`](crate::App::kept_answers)): the app then holds a second copy of its
+/// bytes while it is kept, and makes its `ETag` once and not for each such request. Any other from such
+/// a route is the handler's for every request: a smaller one, a stream, an immutable one, one
+/// larger than an eighth of what the app keeps, and any from an unstaged route. One a page
+/// route answers in its page's place ([`PageOr`]) is kept as that page would be, also under
+/// 1,024 bytes.
 ///
 /// ```
 /// use corten::{prelude::*, Media};
@@ -2720,8 +2722,7 @@ where
         if O::PAGE {
             Some(crate::kept::Shape::Page)
         } else {
-            // A whole body is kept where the app compresses it: none in a build that does not.
-            (O::WHOLE.0 && cfg!(feature = "compress")).then_some(crate::kept::Shape::Body)
+            O::WHOLE.0.then_some(crate::kept::Shape::Body)
         }
     }
 

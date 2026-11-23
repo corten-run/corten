@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,7 @@ import * as audit from "./test-fixtures/campaign-audit.mjs";
 import * as nativeReplay from "./native-replay.mjs";
 import { composePhase } from "./composition.mjs";
 import * as actualLifetime from "./host-lifetime.mjs";
+import { reserveCompilerTarget } from "../../client-heavy/compiler.mjs";
 import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
 import { ioError } from "./test-fixtures/host-durable-writer-control.mjs";
 import * as actualHost from "./host-observation.mjs";
@@ -29,8 +30,8 @@ const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
 let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observations = 0, authorizations = [], release, pendingStarted, abort, auditComplete = true, lifetimeFailure, replayLifetimeFailure;
 let lifetimeStartup;
 let lifetimeRun;
-let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSurvives;
-let liveOutput;
+let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSurvives, settleNativeFails;
+let liveOutput, compilerScratch;
 const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
 const sourceStatus = (cwd) => sourceGit(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all");
 mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
@@ -135,12 +136,14 @@ mock.module("./host-lifetime.mjs", { exports: {
     const { directory, command, startupSignal } = args;
     const startup = lifetimeStartup;
     mkdirSync(directory); writeFileSync(join(directory, "raw.json"), "{}");
-    const observer = { attach() { if (startup) startup.attached++; }, dispose() { if (startup) startup.disposed++; }, finish(result, retainTerminalClock) {
+    const observer = { attach() { if (startup) startup.attached++; }, dispose() { if (startup) startup.disposed++; }, finish(result, retainTerminalClock, settled) {
       const checks = { accounting: true, terminal: result.terminal, empty: true, observer: true,
         unforced: !result.cancelled && !result.forced, leader: true };
       if (lifetimeFailure?.command === command) Object.assign(checks, lifetimeFailure.checks);
       if (retainTerminalClock) { assert.equal(mode, "udev-settle"); assert.equal(command, 1); assert.equal(observations, 2); }
+      if (compilerScratch && command === 1) assert.ok(existsSync(join(compilerScratch.target, "scratch")), "target must exist during descriptor sealing");
       writeFileSync(join(directory, "terminal.json"), JSON.stringify({ ...checks, ...(retainTerminalClock ? { terminalClock: udevClock() } : {}) }));
+      if (checks.terminal && checks.empty) settled?.();
       return evidence.tree(directory);
     } };
     if (!startup) return observer;
@@ -197,6 +200,15 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
     if (lifetimeRun) { lifetimeRun.started = true; lifetimeRun.start(); return; }
     const native = !invocation[0].endsWith("fixtures.mjs");
     const finish = () => {
+      if (compilerScratch) {
+        const id = options.env.CORTEN_ISOLATED_COMPILER_TARGET_ID;
+        if (native) {
+          const { target, scenario } = compilerScratch, stat = fs.lstatSync(target, { bigint: true });
+          assert.equal(id, `${stat.dev}:${stat.ino}`);
+          if (scenario === "substituted") { renameSync(target, `${target}.original`); mkdirSync(target); }
+          writeFileSync(join(target, "scratch"), "not native output");
+        } else assert.equal(id, undefined);
+      }
       if (native) {
         const group = expectedPlan.bindings.find((b) => b.execution.invocation.argv[0] === invocation[0]).request.group;
         const binding = group === "json-api" ? jsonPhase(expectedPlan, invocation.includes("--check-only") ? "prepare" : "timing", invocation.at(-1))
@@ -218,6 +230,7 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
       if (mode === "abort-native" && native) abort.abort();
       const group = expectedPlan.bindings.find((b) => b.execution.invocation.argv[0] === invocation[0])?.request.group;
       child.close(invocation.includes("--check-only") ? 1 : mode === "process-fails" && native ? 9
+        : mode === "udev-settle" && settleNativeFails && native ? 1
         : liveOutput && native ? liveOutput.exit : mode === "complete" && group === "client-heavy" ? 2 : mode === "complete" && group === "live-delivery" ? 1 : 0);
     };
     if (mode === "pending") { release = finish; pendingStarted(); } else finish();
@@ -245,7 +258,7 @@ const { validateCampaign: validateSavedCampaign } = await import("./campaign-ver
 let round = 100;
 function setup(policy = () => true) {
   admittedHost = null; admittedApparatus = null; controlWindows = []; settleAbort = null;
-  liveOutput = null;
+  liveOutput = null; compilerScratch = null;
   round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null; lifetimeRun = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
@@ -652,6 +665,98 @@ test("live output is not transferred without proven command cleanup", async () =
   assert.equal(s.campaign.status(h).uncollectedNativeRoots.length, 1);
 });
 
+for (const [label, status, collision] of [["collision exit 0", 0, true], ["collision exit 1", 1, true],
+  ["move failure without collision", 1, false], ["launch failure with existing target", null, true]]) {
+  test(`client-heavy compiler target: mv -n ${label}`, { skip: process.platform === "win32" }, (t) => {
+    const root = mkdtempSync(join(temporary, "mv-status-")), target = join(root, "build.compiler");
+    const failure = Object.assign(new Error("move failed"), { status, signal: null, ...(status === null ? { code: "EACCES" } : {}) });
+    let foreign;
+    const hook = t.mock.method(childProcess, "execFileSync", (file, [option, staged, parent]) => {
+      assert.equal(file, "/bin/mv"); assert.equal(option, "-n"); assert.equal(parent, root); assert.ok(existsSync(staged));
+      if (collision) {
+        mkdirSync(target); writeFileSync(join(target, "keep"), "foreign");
+        foreign = fs.lstatSync(target, { bigint: true }).ino;
+      }
+      if (status !== 0) throw failure;
+    });
+    syncBuiltinESMExports();
+    try {
+      assert.throws(() => reserveCompilerTarget(target), collision && status !== null
+        ? { message: "compiler target already exists" } : (error) => error === failure);
+    } finally { hook.mock.restore(); syncBuiltinESMExports(); }
+    assert.deepEqual(fs.readdirSync(root), collision ? ["build.compiler"] : []);
+    if (collision) {
+      assert.equal(fs.lstatSync(target, { bigint: true }).ino, foreign);
+      assert.equal(readFileSync(join(target, "keep"), "utf8"), "foreign");
+    }
+  });
+}
+
+test("client-heavy compiler target: public replacement before pin is never adopted or removed", async (t) => {
+  const root = mkdtempSync(join(temporary, "pre-pin-")), target = join(root, "build.compiler");
+  const open = fs.openSync;
+  let foreign;
+  const hook = t.mock.method(fs, "openSync", (path, ...args) => {
+    if (foreign === undefined) {
+      if (existsSync(target)) renameSync(target, join(root, "displaced"));
+      mkdirSync(target); // Even an empty foreign directory must survive.
+      foreign = fs.lstatSync(target, { bigint: true }).ino;
+    }
+    return open(path, ...args);
+  });
+  syncBuiltinESMExports();
+  let reservation;
+  try {
+    assert.throws(() => { reservation = reserveCompilerTarget(target); }, /already exists|EEXIST/);
+  } finally {
+    hook.mock.restore(); syncBuiltinESMExports(); await reservation?.close(true);
+  }
+  assert.equal(fs.lstatSync(target, { bigint: true }).ino, foreign);
+  assert.deepEqual(fs.readdirSync(root), ["build.compiler"]);
+});
+
+for (const scenario of ["success", "native failure", "incomplete proof", "not drained", "substituted", "raced", "preexisting"]) test(`client-heavy compiler target: ${scenario}`, async (t) => {
+  const s = setupGroup("client-heavy"), h = await begin(s);
+  const target = `${join(repo, s.plan.bindings[0].validation.artifactRoot)}.compiler`;
+  compilerScratch = { target, scenario };
+  if (scenario === "native failure") mode = "process-fails";
+  if (scenario === "incomplete proof") lifetimeFailure = { command: 1, checks: { observer: false } };
+  if (scenario === "not drained") lifetimeFailure = { command: 1, checks: { empty: false } };
+  if (scenario === "preexisting") { mkdirSync(target, { recursive: true }); writeFileSync(join(target, "scratch"), "foreign"); }
+  let moved;
+  if (scenario === "raced") {
+    const rename = fs.renameSync;
+    const hook = t.mock.method(fs, "renameSync", (from, to) => {
+      if (from === target) {
+        rename(target, `${target}.original`); mkdirSync(target);
+        writeFileSync(join(target, "scratch"), "foreign"); moved = to;
+      }
+      return rename(from, to);
+    });
+    syncBuiltinESMExports();
+    t.after(() => { hook.mock.restore(); syncBuiltinESMExports(); });
+  }
+  if (scenario === "success" || scenario === "native failure") {
+    const status = await s.campaign.advance(h);
+    assert.equal(status.state, "finished");
+    const paths = evidence.tree(h.directory).entries.map(({ path }) => path);
+    assert.ok(paths.includes("00-client-heavy-timing/native/raw.log"));
+    assert.ok(!paths.some((path) => path.includes("scratch") || path.includes(".compiler")));
+  } else {
+    await assert.rejects(s.campaign.advance(h), scenario === "preexisting" ? /compiler target already exists/ : ["substituted", "raced"].includes(scenario)
+      ? /compiler target replaced/ : /command lifetime or cleanup unproven/);
+    assert.equal(s.campaign.status(h).state, "preserved-uncertain");
+  }
+  if (["not drained", "substituted", "preexisting"].includes(scenario)) {
+    assert.equal(readFileSync(join(target, "scratch"), "utf8"), scenario === "preexisting" ? "foreign" : "not native output");
+    if (scenario === "substituted") assert.ok(existsSync(`${target}.original`));
+  } else assert.equal(existsSync(target), false);
+  if (scenario === "raced") {
+    assert.equal(readFileSync(join(moved, "scratch"), "utf8"), "foreign");
+    assert.equal(readFileSync(join(`${target}.original`, "scratch"), "utf8"), "not native output");
+  }
+});
+
 for (const failure of ["moved bytes", "seal open", "seal file sync", "seal directory sync"]) test(`live transfer keeps both pending paths after I/O failure: ${failure}`,
   { skip: failure === "seal directory sync" && process.platform === "win32" }, async (t) => {
   const group = "recoverable-live", s = setupLiveOutput(group, 0), h = await begin(s);
@@ -970,7 +1075,7 @@ test("audit wait mutation and image replacement halt before timing", async () =>
 });
 
 for (const [group, scenario] of [
-  ["localized-marketplace", "settles"], ["localized-marketplace", "aborts"],
+  ["localized-marketplace", "settles"], ["localized-marketplace", "aborts"], ["localized-marketplace", "native failure"],
   ["json-api", "settles"], ["json-api", "aborts"], ["json-api", "worker survives"],
 ]) test(`v5 ${group} udev settlement: ${scenario}`, async (t) => {
   t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
@@ -982,6 +1087,7 @@ for (const [group, scenario] of [
   const jsonPreparation = group === "json-api";
   settleWorkerTicks = jsonPreparation ? "10400" : "10601";
   settleSurvives = scenario === "worker survives";
+  settleNativeFails = scenario === "native failure";
   mode = "udev-settle";
   const { registration: fixture } = await import("../test-fixtures/control-stream-fixture.mjs");
   const { streamHash } = await import("./control-stream.mjs");
@@ -1047,6 +1153,13 @@ for (const [group, scenario] of [
     return;
   }
   assert.equal(status.state, "finished"); assert.ok(calls.indexOf("open") < calls.indexOf("close") && calls.indexOf("close") < calls.indexOf("seal"));
+  if (settleNativeFails) {
+    assert.equal(status.outcomes[0].outcome, "failed");
+    const events = fs.readdirSync(handle.directory).filter((name) => /^\d{5}-/.test(name)).sort()
+      .map((name) => JSON.parse(readFileSync(join(handle.directory, name))).kind);
+    assert.deepEqual(events.slice(-3), ["group-finished", "stream-sealed", "finished"]);
+    assert.ok(!events.includes("review-needed") && existsSync(join(handle.directory, "control-stream-seal.json")));
+  }
   assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, [{ pid: 62274, startTicks: settleWorkerTicks }]);
   const drain = { schema: "benchmark-control-stream-drain/v1", id: admittedApparatus.id, registrationSha256: streamHash(admittedApparatus),
     host: admittedHost, monoNs: "5017000000", identitiesAbsent: true, listener: admittedApparatus.listener,
@@ -1055,6 +1168,12 @@ for (const [group, scenario] of [
   writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(handle)));
   const inspected = await validateSavedCampaign(request);
   assert.notEqual(inspected.status, "invalid");
+  if (settleNativeFails) {
+    assert.equal(inspected.status, "failed");
+    assert.equal(inspected.collectionIntegrity, "manifest-verified");
+    assert.equal(inspected.commandLifecycle, "observed-terminal");
+    assert.deepEqual(inspected.uncollectedNativeRoots, []);
+  }
   assert.deepEqual(inspected.supervisedTerminal, { registrationSha256: streamHash(admittedApparatus),
     sealSha256: evidence.digest(readFileSync(join(handle.directory, "control-stream-seal.json"))) });
   const receipt = join(phase, "host-after-settled.json");

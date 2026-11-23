@@ -314,7 +314,11 @@ export async function validateCampaign(input) {
       uncollectedNativeRoots: replay.pending, archiveTreeSha256: snapshot.sha256,
       reservationSha256: digest(readRegular(join(folder, ".host-attempt.json"))) };
     if (complete) return { ...common, status: "verified" };
+    // A sealed group can precede a halted campaign. Check its full commitment
+    // above, but expose only dispositions until the whole archive is verified.
     return { ...common, status: replay.processFailure || status.outcomes.some((r) => r.outcome === "failed") ? "failed" : "blocked",
+      groups: verifiedGroups.map((group) => ({ ...group, appOutcomes: group.appOutcomes.map(({ app, outcome }) =>
+        ({ app, outcome, comparisonEligible: false })) })),
       round, commit, campaign: id, controllerReady: false, qualified: false, isolation: "unverified", blockers, diagnostics,
       collectionIntegrity: collectionEntry && !replay.incomplete && replay.pending.length === 0 ? "manifest-verified" : "unsealed-partial",
       commandLifecycle: replay.incomplete ? "incomplete-preserved" : "observed-terminal",
