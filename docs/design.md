@@ -7597,7 +7597,22 @@ rules something out.
     ms, every job with room must put its bytes in and every one without must find none, and every
     declared sample of both builds must be there once, or the pass cannot be used. A bound at or
     over its limit, or a pass that cannot be used, blocks the merge as the cycles' margin does; the
-    79 KB value is reported with no bound. Until it runs, the wait on a quiet host is not measured.
+    79 KB value is reported with no bound. That run ran on 2026-11-23 on a DigitalOcean c-8 with a
+    Xeon Platinum 8280 (Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), at `76a9dc1e4`
+    (this change with the test-only hook; a release build of the app compiles `ef8587ca0`'s code)
+    against main's `7a275ef15`, its plan written before it ran, and its gate was met for those
+    commits: every declared sample of both builds was there, every job with room put its bytes in
+    and every one without found none, and every one of this change's 1,680 samples behind the
+    insertion showed the lock held when the job asked for it, each insertion evicting 3,802 pages.
+    On the 4 KB value the bounds were 0.05 ms with no job (under +0.5 ms), 2.08 ms with room and
+    2.06 ms with none (under H, 8.92 ms) and 5.29 ms behind the insertion (under H plus I, 8.92
+    plus 3.46 ms), the medians of the 40 added times 1.99, 1.98 and 5.10 ms; at 79 KB, held to no
+    bound, the bounds were 0.01, 1.66, 1.59 and 5.10 ms. From the job's failed probe of the lock to
+    its hook after the second check took 3.44 ms at the median (2.80 to 5.56) behind the insertion
+    and under 0.02 ms otherwise; that interval includes signalling the writer and the scheduling
+    after it, so it shows the contention, not the lock wait alone. The run's kit, results and
+    receipts are kept under the tag `evidence/53fa534d`. It times the job for those commits only:
+    this change merged with a later main is another binary, which it did not time.
 
     Before the bound, an earlier probe (`cde42e710` against main's `a0eeeacca`, the same machine,
     five alternated runs of 11 and three runs of 15 for the sizes between) timed a job's encoding
@@ -7876,22 +7891,37 @@ rules something out.
     historical as well, a result for its own pins: main has since kept a `Public` whole body of
     1,024 bytes or more whatever its type (`7a275ef15`), which changes which bodies the store
     keeps, and this change merged it with conflicts, so the third run does not measure the merge
-    candidate and its bounds are no evidence for it. The merge candidate is gated by a run of its
-    own, the fourth: this change merged with main's `7a275ef15` against that main, with the third
-    run's workloads, starts, fence and margin, a one-sided 95% bound under +1% in user plus kernel
-    cycles a request on each; a bound at or above it, or a workload that fails or cannot be used,
-    blocks the merge. Its fence also fails on any panic in the probe's process before the port
-    opens, one the compression thread caught included, and so does a start whose log prints one;
-    its second pass counts user first-level instruction-cache misses as the third's did. Its third
-    pass timed the held value's wait, and is replaced by the run of the wait alone (above), which
-    is not pooled with it. The fourth run was under way when this was written; until its first
-    pass and the wait's run clear their bounds this change does not merge. The first two runs on a quiet host did not count
+    candidate and its bounds are no evidence for it. A fourth run measured this change merged with
+    main's `7a275ef15` (`ef8587ca0`, whose production sources are the merge's, `c6cd89e64`)
+    against that main, on 2026-11-22 on a DigitalOcean c-8 with a Xeon Platinum 8280 (Linux
+    6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), with the third run's workloads, starts,
+    fence and margin, set before it ran: a one-sided 95% bound under +1% in user plus kernel cycles
+    a request on each. Its fence also failed on any panic in the probe's process before the port
+    opened, one the compression thread caught included, and so did a start whose log printed one;
+    no start of either build printed one, and the fence closed and the refused page was a kept
+    1,819-byte zstd 1 in all 102 starts of each build for the cycles and all 32 for the second
+    pass (at a bound of 64,576 bytes calibrated on the head). The median change within a pair, its
+    bound and range: `browser` -1.03% (bound -0.68%, -5.68% to +4.57%), `gzip` -0.85% (bound
+    -0.53%, -7.42% to +3.98%), `refused` -0.68% (bound -0.29%, -5.02% to +6.16%) and
+    `json-browser` -1.57% (bound -1.14%, -6.01% to +5.26%), with user instructions -0.05% to
+    +0.02% at the median; perf ran every counter for all of every turn and no turn failed, so the
+    gate declared for it was met for those commits. Its second pass counted user first-level
+    instruction-cache misses a request, a diagnostic held to no margin: `browser` 2,699.5 against
+    2,717.0 (+0.34% at the median a pair, bound +1.33%), `gzip` 2,645.9 against 2,697.3 (+1.51%,
+    bound +3.87%), `refused` 2,680.9 against 2,671.5 (-0.36%, bound +0.38%) and `json-browser`
+    2,866.1 against 2,814.7 (-2.00%, bound +0.17%). Its third pass timed the held value's wait and
+    is superseded by the run of the wait alone (above), which is not pooled with it. Its kit,
+    results and receipts are kept under the tag `evidence/1ccc71a3`. As declared, a bound under
+    +1% shows neither a lower cost nor what caused a difference, and the run is a result for
+    `ef8587ca0` against `7a275ef15` only: this change merged with main's `fef1f83de`
+    (`a14a80294`), whose main side changes how a kept answer is given again and how answers' header
+    maps are made, is another binary, and neither this run nor the wait's measures it. The first two runs on a quiet host did not count
     user first-level instruction-cache misses, which CONTRIBUTING.md asks for as a diagnostic when
     code is added or moved: each turn counted `cycles:u`, `cycles:k` and `instructions:u` alone,
     so that no turn's counters were multiplexed and perf ran all three for the whole of every turn;
     the simulated instruction misses above (callgrind's, 1,811 against 1,798 an answer) are another
     measure and do not stand in for them, and the third and fourth runs' second passes count them.
-    Each workload's 100 per-pair changes in the three runs are listed in the description of
+    Each workload's 100 per-pair changes in the four runs are listed in the description of
     [#1846 Send a kept page in brotli 5, made off the request after its second answer](https://github.com/corten-run/corten/pull/1846).
     The levels'
     bytes and instructions above are a probe's that compresses as `compress::encode` does, whose
@@ -8454,8 +8484,9 @@ rules something out.
     reads memory, and the rule for bodies is drawn from it); a route of a few large bodies
     among many small, in cycles (how often it leaves the store out is reasoned from the run's
     length); the time a held value waits for the kept answer's job the thread is running
-    when it is queued on a quiet host (it was timed on a workstation, above), and behind a job
-    that waits for more than one writer to the store; how often an answer in an app's store at its bound goes without its brotli for want
+    when it is queued, on a quiet host, for this change merged with a main later than
+    `7a275ef15` (it was timed there for `76a9dc1e4` against `7a275ef15`, above), and behind a
+    job that waits for more than one writer to the store; how often an answer in an app's store at its bound goes without its brotli for want
     of room; how the URLs of an app in use are spread,
     so how often one first asked for in a full store is asked for again (the simulation's
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
@@ -8535,7 +8566,12 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-22 for the cuts to a kept answer given again, `7794749ad` (main's
+    Last checked: 2026-11-23 for how long a held value waits behind a kept page's whole job on a
+    quiet host, `76a9dc1e4` against `7a275ef15` on a DigitalOcean c-8 (Xeon Platinum 8280, Linux
+    6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), kept under the tag `evidence/53fa534d`;
+    2026-11-22 for the fourth run's cycles and user first-level instruction-cache misses under load,
+    `ef8587ca0` against `7a275ef15` on such a host, every turn on a newly started build, kept
+    under the tag `evidence/1ccc71a3`; 2026-11-22 for the cuts to a kept answer given again, `7794749ad` (main's
     `7a275ef15` with five file routes and a kept page in the catalog benchmark) and `0a2dc9b32`
     (this change's `a0267d8a6` with them), and for where the code sits `abbd6113f`, `9f628467d`
     and `ba72c5f23` (those two, and the second with no body kept, each with a block of bytes
