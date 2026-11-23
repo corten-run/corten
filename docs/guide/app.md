@@ -1628,7 +1628,7 @@ else a page could differ by, and the answer nothing made for one request:
 | the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
-| what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
+| what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
@@ -1677,7 +1677,12 @@ page stands is the app's to say. Give a page whose changes must show at once a s
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
 counted is each page's key (its URL once, its `Host`, and its `Accept-Language` where the page
 varies on it), headers and body and each compressed form made of it, with an allowance for what
-holds them. Earlier releases counted the URL twice, so under the same bound a page with a long
+holds them. The allowance is generous: in one measured example under jemalloc, the template's
+allocator, a kept page of 6,124 bytes with four header lines and no compressed form made took
+7,112 bytes of allocations (about 7,270 of resident memory) and counted for about 7,800
+([design Choice 70](../design.md#choice-kept-pages)); a page with more or longer headers, or
+with compressed forms, takes more. Earlier
+releases counted the URL twice, so under the same bound a page with a long
 URL near its share (an eighth of the bound) may now be kept where it was not, and the store
 reaches the point where it is full a little later. Past the bound, a page not read since room was last made goes
 first. With room, every page is kept the first time it is made. Once the kept pages are within
