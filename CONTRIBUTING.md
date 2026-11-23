@@ -531,8 +531,8 @@ establish a general ranking.
       and its A/A's one-sided 95% lower bound (the (K + 1 - j)-th smallest placement median, the
       11th of 30) above it. The reading measures the change across placements, not the release
       binary, whose placement is one of them. A run of K = 30 placements of R = 8 pairs, for the
-      change and the A/A on `kept` and an A/A on `plain`, takes about TODO(evidence) on a c-8
-      (about 2 hours estimated, 100 minutes of it turns).
+      change and the A/A on `kept` and an A/A on `plain`, takes about 2 hours on a c-8 (the first
+      run: 99 minutes of turns after 2 minutes of checks, besides setup and builds).
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,

@@ -8563,9 +8563,9 @@ rules something out.
     the pull request reads that workload across placements, under a plan written before that run.
     A single-build bound outside the spread, or on a workload with no recorded spread, is the
     reading, and a placement run declared after it does not clear its miss. So a change whose
-    single-build reading no placement could flip keeps the cheaper run. Recorded spreads:
-    TODO(evidence: `plain` and `kept` from the first run's A/As, lowest and highest placement
-    median, with the run's commit and host).
+    single-build reading no placement could flip keeps the cheaper run. Recorded spreads: `plain` -2.42% to +2.92% and
+    `kept` -2.98% to +3.33% (the first run's A/As below: main `a02c81e86`, a c-8, 2026-11-23,
+    tag `evidence/ee7b0b41`).
 
     What ships is one placement. A release binary is one draw of where the linker put the code, and
     the next change to anything before a function moves it again, so the placement a change lands in
@@ -8580,8 +8580,8 @@ rules something out.
     placement differences of the same kind. One run also reads main's unpadded build against eight
     of its padded ones, a diagnostic of where the build that ships sits among them.
 
-    The kit for the first run is TODO(evidence: the receipt commit or tag of kit 1965, with its
-    `margin.md`, scripts and results). Before any turn it checks that each side's captured link run
+    The kit for the first run, with its `margin.md`, scripts, sources and results, is tag
+    `evidence/ee7b0b41`. Before any turn it checks that each side's captured link run
     again without a pad is byte-identical to cargo's binary; that every placement has exactly that
     binary's function symbols and the pad, the pad at the start of `.text`, every function moved,
     every pair of neighbours still next to each other in order and a SHA-256 of its own; that one
@@ -8594,11 +8594,23 @@ rules something out.
     by exactly its pad (68,060 of 68,060) and every pair of neighbours stayed next to each other in
     order (66,680 of 66,680; on main 3,335 of 3,335 at every pad), the sections after `.text`
     (`.data`, `.got`, `.bss` and the rest) moved by the pad as well, all 23 binaries had distinct
-    SHA-256s, one pad relinked twice gave one binary, and all 20 answered as their unpadded binary. On a c-8: TODO(evidence: CPU
-    model and kernel; for `aa-plain`, `aa-kept` and `change-kept`, the median of placement
-    medians, the bound, the range of medians, the t bound, and the between- and within-placement
-    spread; whether each A/A resolved; the change's reading; the unpadded diagnostic; the run's
-    time).
+    SHA-256s, one pad relinked twice gave one binary, and all 20 answered as their unpadded binary. On a c-8 (Intel Xeon
+    Platinum 8358, Debian 13, Linux 6.12.117, 2026-11-23), K = 30 and R = 8: all 120 placements
+    passed the checks above (every function moved by exactly its pad, 408,360 of 408,360, and every
+    pair of neighbours kept, 400,080 of 400,080), and every one of the 1,772 turns had its counters
+    at 100% and no `wrk` error. Main against main on `plain`: median of placement medians +0.23%,
+    bound +0.92%, placement medians from -2.42% to +2.92%, t bound +0.61%, their standard deviation
+    1.48% against 1.34% that a median of 8 pairs would have from the pairs' own spread (3.03%)
+    alone; on `kept`: -0.49%, bound +0.02%, -2.98% to +3.33%, t bound +0.05%, 1.44% against 1.26%
+    (2.85%). Both resolve +1%.
+    [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
+    on `kept`: -0.07%, bound +0.28%, placement medians from
+    -3.06% to +3.49%, user instructions -1.52% at every placement, so it **meets +1%** read across
+    placements, where its single-build run missed. Main's unpadded build against eight padded ones
+    on `kept`: the padded ones cost a median 2.14% fewer cycles (-3.19% to +0.19%; 7 of 8 fewer,
+    two-sided sign test p = 0.070), which eight placements do not resolve either way; it is near
+    the Revisit-when on the unpadded build below, so a later run reads more of them. The three
+    comparisons' turns took 99 minutes and the diagnostic's 8 more.
 
     Not chosen: a seeded shuffle of the function order (LLD's `--shuffle-sections`, this Choice's
     first version), since in the dry run's placement of main with seed 1 all 3,404 functions moved,
@@ -8630,7 +8642,7 @@ rules something out.
     Stands on: measured (the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
     in [design Choice 70](#choice-kept-pages); the dry run's layouts above; and the first placement
-    run, TODO(evidence)); platform (LLD places the sections of the symbols an ordering file names
+    run above, tag `evidence/ee7b0b41`); platform (LLD places the sections of the symbols an ordering file names
     first in their output section and the rest in their default order, rustc 1.100.0 puts each
     function in its own `.text` section, aligns them to 16 bytes and links through LLD 23 on Linux
     by default, so a pad of a multiple of 16 bytes moves every function by exactly its size);
@@ -8660,7 +8672,8 @@ rules something out.
     placement is asked to be checked.
 
     Last checked: 2026-11-23, the dry run of kit 1965 at `a02c81e86` in a Debian 13 container with
-    rustc 1.100.0 and LLD 23.1.5, and TODO(evidence: the droplet run's date, commit and versions).
+    rustc 1.100.0 and LLD 23.1.5, and its run on a c-8 the same day (main `a02c81e86`, base `bd6b7741f`, head
+    `5a22836fc`, rustc 1.100.0 with LLD 23.1.5, Linux 6.12.117, tag `evidence/ee7b0b41`).
 
 ## Rules
 
