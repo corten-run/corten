@@ -115,11 +115,12 @@ pub(crate) fn accepted(headers: &HeaderMap, offered: &[Coding]) -> Option<Coding
 }
 
 /// The `Accept-Encoding` lines browsers send, each with the codings of Corten's it names, none
-/// with a weight: Chrome, Edge, Firefox and Safari 26 over HTTPS; Safari before 26; and all of them
-/// over plain HTTP. A line that is one of these byte for byte is not parsed ([`each_accepted`]),
-/// and `the_browsers_accept_encoding_lines_are_read_as_the_parser_reads_them` holds each to what
-/// the parser makes of it.
-pub(crate) const BROWSER_LINES: [(&[u8], &[Coding]); 3] = [
+/// with a weight. Playwright 1.65.1's browsers sent these three on 2026-11-23: Chromium 159 and
+/// Firefox 159 the first, WebKit 27.2 the second over HTTPS and the third over plain HTTP. A line
+/// that is one of these byte for byte is not parsed ([`each_accepted`]), and
+/// `a_browsers_line_is_read_as_the_parser_reads_it` holds each to what the parser makes of it; a
+/// browser that sends another line is parsed as any client's is.
+const BROWSER_LINES: [(&[u8], &[Coding]); 3] = [
     (b"gzip, deflate, br, zstd", &[Coding::Gzip, Coding::Brotli, Coding::Zstd]),
     (b"gzip, deflate, br", &[Coding::Gzip, Coding::Brotli]),
     (b"gzip, deflate", &[Coding::Gzip]),
@@ -141,7 +142,7 @@ fn each_accepted(headers: &HeaderMap, mut f: impl FnMut(u16, Coding)) {
 }
 
 /// [`each_accepted`] for one line, parsed.
-pub(crate) fn each_listed(header: &[u8], mut f: impl FnMut(u16, Coding)) {
+fn each_listed(header: &[u8], mut f: impl FnMut(u16, Coding)) {
     for range in crate::http::list_items(header) {
         let item = &header[range];
         let (name, params) = match item.iter().position(|&b| b == b';') {
@@ -539,14 +540,15 @@ fn varies_as(essence: &str, headers: &HeaderMap) -> bool {
 
 /// Whether a `Cache-Control` line says `no-transform`. The line the stages give an answer that
 /// says nothing of caching is compared first: most answers carry it, and `str::contains` prepares
-/// a search made for long text before it looks (242 instructions on those 17 bytes).
+/// a search made for long text before it looks. A test holds that line to what the search says
+/// of it.
 fn no_transform(line: &HeaderValue) -> bool {
     *line != crate::cache::PRIVATE && line.to_str().is_ok_and(|line| line.contains("no-transform"))
 }
 
 /// Adds `accept-encoding` to `Vary`, so a cache keeps one copy per coding. A page's own line
 /// (`page::VARY`, `page::VARY_LANGUAGE`) does not name it, and every page has one: a line is
-/// compared with those before it is split.
+/// compared with those before it is split, and a test holds the two to what splitting them finds.
 pub(crate) fn vary(headers: &mut HeaderMap) {
     let page = |line: &&HeaderValue| {
         let line = line.as_bytes();
@@ -765,6 +767,53 @@ mod tests {
         assert_eq!(accepted(&accept("GZIP, Br;Q=0.5"), &all), Some(Coding::Gzip), "names are case-insensitive");
         assert_eq!(accepted(&HeaderMap::new(), &all), None);
         assert_eq!(accepted(&accept("zstd, gzip"), &[Coding::Brotli, Coding::Gzip]), Some(Coding::Gzip));
+    }
+
+    /// A browser's line is found in a list, not parsed ([`BROWSER_LINES`]): each is read as the
+    /// parser reads it, weights included, alone and beside a second line that has weights.
+    #[test]
+    fn a_browsers_line_is_read_as_the_parser_reads_it() {
+        let read = |headers: &HeaderMap| {
+            let mut read = Vec::new();
+            each_accepted(headers, |q, coding| read.push((q, coding)));
+            read
+        };
+        for (line, _) in BROWSER_LINES {
+            let text = std::str::from_utf8(line).unwrap();
+            let mut parsed = Vec::new();
+            each_listed(line, |q, coding| parsed.push((q, coding)));
+            assert!(!parsed.is_empty(), "{text}");
+            assert_eq!(read(&accept(text)), parsed, "{text}");
+            // In another case the line is not in the list, so it is parsed.
+            let upper = text.to_uppercase();
+            assert_eq!(read(&accept(&upper)), parsed, "{text}");
+            let second = |mut headers: HeaderMap| {
+                headers.append(header::ACCEPT_ENCODING, HeaderValue::from_static("zstd;q=0.5, br;q=0.25"));
+                headers
+            };
+            assert_eq!(read(&second(accept(text))), read(&second(accept(&upper))), "{text}");
+            assert_eq!(negotiate(&second(accept(text))), negotiate(&second(accept(&upper))), "{text}");
+        }
+    }
+
+    /// The lines the stages compare whole before they search one ([`no_transform`], [`vary`]) say
+    /// what the search finds in them, so comparing them changes no answer.
+    #[test]
+    fn the_lines_compared_whole_say_what_a_search_of_them_finds() {
+        let default = crate::cache::PRIVATE;
+        assert!(!default.to_str().unwrap().contains("no-transform"));
+        assert!(!no_transform(&default));
+        assert!(no_transform(&HeaderValue::from_static("private, no-cache, no-transform")));
+        for line in [crate::page::VARY, crate::page::VARY_LANGUAGE] {
+            // The same line in another case is not compared whole: it is split.
+            for line in [line.to_string(), line.to_uppercase()] {
+                let mut headers = HeaderMap::new();
+                headers.insert(header::VARY, HeaderValue::from_str(&line).unwrap());
+                vary(&mut headers);
+                let lines: Vec<_> = headers.get_all(header::VARY).iter().map(|v| v.to_str().unwrap()).collect();
+                assert_eq!(lines, [line.as_str(), "accept-encoding"]);
+            }
+        }
     }
 
     #[test]

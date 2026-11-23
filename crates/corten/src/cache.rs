@@ -742,6 +742,16 @@ mod tests {
         Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false }
     }
 
+    /// [`tag`] compares a `Cache-Control` line with the default before it searches the line for
+    /// what would leave the answer untagged: the default says neither.
+    #[test]
+    fn the_default_cache_control_says_nothing_that_leaves_an_answer_untagged() {
+        let line = PRIVATE;
+        let line = line.as_bytes();
+        assert!(!mentions_no_store(line));
+        assert!(!directives(line).any(|d| d.trim_ascii().eq_ignore_ascii_case(b"immutable")));
+    }
+
     #[test]
     fn if_none_match_names_a_tag_weakly_in_a_list_that_parses() {
         let ours = br#""0123456789abcdef""#;

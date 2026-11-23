@@ -185,8 +185,9 @@ impl Mode {
     /// mode. With them, that `Accept` as text, empty where it was not asked for, not sent or not
     /// text. The rule is written here and nowhere else in the request's path: [`Mode::asked`]
     /// looks the two up and `crate::kept` gives them from its pass over a request's headers, so
-    /// a header this function is made to read is an argument each of them has to give. Browsers
-    /// never put JSON first for a navigation.
+    /// a header this function is made to read is an argument each of them has to give. A request
+    /// under an API is the one that does not pass here: the stages ask nothing of its mode
+    /// ([`RequestPage::read`]). Browsers never put JSON first for a navigation.
     pub(crate) fn said<'a>(
         runtime: Option<&HeaderValue>,
         accept: impl FnOnce() -> Option<&'a HeaderValue>,
@@ -899,6 +900,9 @@ pub(crate) struct Credentials {
 /// What the stages know about the page before dispatch. A handler or its extractors see the
 /// actual, possibly changed request, not this snapshot.
 pub(crate) struct RequestPage {
+    /// The request's mode where it is under no API. Under one it is `(Mode::Data, false)` and
+    /// `accepts_html` is `false` whatever the request said ([`RequestPage::read`]), so a stage
+    /// that reads either for a request under an API reads the request's headers instead.
     pub mode: (Mode, bool),
     pub accepts_html: bool,
     pub credentials: Credentials,
@@ -909,8 +913,8 @@ pub(crate) struct RequestPage {
 impl RequestPage {
     /// `is_page`: the request is under no API. Under one, the stages ask nothing of the mode
     /// (every failure there is JSON, no answer a document the runtime swaps in, and a handler's
-    /// `Req` reads the request itself), so neither header is looked up: a data client's, which
-    /// is what an API answers.
+    /// `Req` reads the request itself), so neither header is looked up and the mode is set to a
+    /// data client's, whatever the request said.
     pub(crate) fn read(headers: &HeaderMap, is_page: bool) -> Self {
         let (mode, accepts_html) = if is_page { Mode::read(headers, true) } else { ((Mode::Data, false), false) };
         RequestPage {

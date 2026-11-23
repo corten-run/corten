@@ -729,7 +729,7 @@ pub(crate) const PROBLEM: &str = "application/problem+json";
 /// may have around it) trimmed. A header's text is ASCII, so no other whitespace can be there.
 pub(crate) fn media_type(value: &str) -> &str {
     // Byte by byte: a media type is a few bytes long, and `split_once` starts a search made for
-    // long text (147 instructions on `text/plain; charset=utf-8`).
+    // long text.
     let end = value.bytes().position(|b| b == b';').unwrap_or(value.len());
     value[..end].trim_ascii()
 }
