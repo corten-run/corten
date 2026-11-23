@@ -1351,12 +1351,12 @@ export async function fragmentTargets(browser) {
   const seen = await page.evaluate(async (precommit) => {
     (/** @type {any} */ (window)).__marker = 1;
     const drawn = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
-    /** @param {string} url */
-    const to = async (url) => {
+    /** @param {string} url @param {string} [place] a selector for the element the fragment names */
+    const to = async (url, place) => {
       const error = await (/** @type {any} */ (window)).navigation.navigate(url).finished.then(() => "", (/** @type {Error} */ e) => String(e));
       await drawn();
       const target = document.querySelector(":target");
-      const top = target?.getBoundingClientRect().top ?? -1;
+      const top = (place && document.querySelector(place)?.getBoundingClientRect().top) ?? -1;
       return {
         url: location.pathname + location.search + location.hash,
         target: target ? target.id || `name=${target.getAttribute("name")}` : null,
@@ -1370,12 +1370,12 @@ export async function fragmentTargets(browser) {
     scrollTo(0, document.documentElement.scrollHeight);
     const before = Math.round(scrollY);
     const top = { ...(await to("/news?mine=on")), before };
-    const id = await to("/news#briefing");
-    const named = await to("/news?mine=on#smoke-named");
-    const decoded = await to("/news#smoke-caf%C3%A9");
+    const id = await to("/news#briefing", "#briefing");
+    const named = await to("/news?mine=on#smoke-named", 'a[name="smoke-named"]');
+    const decoded = await to("/news#smoke-caf%C3%A9", '[id="smoke-caf\u00e9"]');
     // A full load keeps the link's #fragment on the redirect's page, and so does the address
     // where it waits for the answer.
-    const redirected = precommit ? await to("/smoke-to-news#briefing") : null;
+    const redirected = precommit ? await to("/smoke-to-news#briefing", "#briefing") : null;
     return { top, id, named, decoded, redirected };
   }, precommit);
   const { top, id, named, decoded, redirected } = seen;
