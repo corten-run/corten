@@ -1,0 +1,30 @@
+#!/bin/sh
+# dry/perf: a stand-in for `perf stat` in a container, which has no counters (DRYRUN=1 only;
+# plan.sh puts this directory first on PATH). It runs the command after `--` and writes one line
+# per event of -e to the file after -o, in perf's -x, form with made-up counts running 100%, so
+# the pipeline can be tested end to end. Nothing it writes is a measurement.
+[ "$1" = stat ] || { echo "dry/perf: only stat is stood in for" >&2; exit 2; }
+shift
+events=; out=/dev/stdout
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -e) events=$2; shift 2 ;;
+        -o) out=$2; shift 2 ;;
+        -p) shift 2 ;;
+        -x*) shift ;;
+        --) shift; break ;;
+        *) shift ;;
+    esac
+done
+"$@"
+n=$(date +%N | sed 's/^0*//'); n=${n:-1}
+: >"$out"
+for e in $(echo "$events" | tr ',' ' '); do
+    case "$e" in
+        cycles:u) v=$((2400000000 + n % 90000000)) ;;
+        cycles:k) v=$((5100000000 + n % 190000000)) ;;
+        instructions:u) v=$((2900000000 + n % 9000000)) ;;
+        *) v=$((300000000 + n % 30000000)) ;;
+    esac
+    echo "$v,,$e,3400000000,100.00,," >>"$out"
+done

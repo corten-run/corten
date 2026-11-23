@@ -1,0 +1,2920 @@
+//! Markup in Rust: [`html!`], [`component`] and the [`Render`] trait.
+//!
+//! `html!` reads like JSX and compiles to string pushes: static markup is merged into one
+//! `push_str` per run at compile time, expressions are escaped as they are written, and nothing
+//! is rendered until the response is built. A view is a value that implements [`Render`]; a
+//! component is a function that returns one, or a struct from [`component`].
+//!
+//! ```ignore
+//! use corten::prelude::*;
+//!
+//! #[component]
+//! fn PriceRow<'a>(card: &'a Card, highlight: bool) -> impl Render {
+//!     html! {
+//!         <tr class={highlight.then_some("hot")}>
+//!             <td>{card.name}</td>
+//!             <td class="price" data-id={card.id}>{card.price}</td>
+//!         </tr>
+//!     }
+//! }
+//!
+//! fn price_table(cards: &[Card]) -> impl Render + '_ {
+//!     html! {
+//!         <table>
+//!             for card in cards { <PriceRow card={card} highlight={card.price_cents > 50_000} /> }
+//!             if cards.is_empty() { <tr><td colspan="2">"Nothing to watch yet."</td></tr> }
+//!         </table>
+//!     }
+//! }
+//! ```
+//!
+//! Syntax:
+//!
+//! - Text is a string literal: `"Price"`. Source whitespace between tags is never output.
+//! - `{expr}` prints an expression, escaped: anything that implements [`Render`] (strings,
+//!   numbers, `Option`, other views) or else `Display`. [`raw`] prints trusted HTML as is.
+//! - Attributes: `class="x"`, `required`, `href={url::Item { id: &item.id }}` (a link is a route,
+//!   [`crate::route`]), `aria-label={("Remove ", &item.name)}` (a tuple prints its parts in order,
+//!   without building a string). A `bool` value prints the bare name when true and nothing when
+//!   false; `None` leaves the attribute out. `{..attrs}` spreads an [`Attrs`] value
+//!   (`<input {..e.aria(field)}>`, [`crate::Errors::within`]). A path in the app written as text in
+//!   a URL attribute (`href="/items"`) does not compile: see [`html!`].
+//! - `for`, `if`/`else`, `match` and `let` are written as in Rust, with markup in their braces.
+//! - `class={..}` takes a list: a class constant of the component's stylesheet (`class={Title}`,
+//!   see [`crate::style`]), utility classes, text, an `Option` of one, or a tuple of them, joined
+//!   with spaces; an empty list leaves the attribute out.
+//! - In a component with a script ([`crate::script`]), `ref={save}` names an element for its
+//!   handlers and `on:click={js::confirm(event, dialog)}` calls one of them.
+//! - A view owns what it uses and renders once, so it can be returned from a function and markup
+//!   can move or match the values it captured. A view lent to a prop inside another view
+//!   (`action={&html! { .. }}`) or to a call in its markup (`{f(&html! { .. })}`) renders inside it, so it borrows what it uses and the rest of the
+//!   markup can read the same locals.
+//! - `<Card title="x" compact>children</Card>` builds the struct `Card` (from [`component`] or
+//!   written by hand) with those fields, `compact` meaning `compact: true`, and the children in
+//!   its `children` field. A missing or misspelled prop is a compile error.
+//! - Void elements (`<input>`, `<br>`, `<img>`, ...) need no closing tag; other elements close
+//!   with `</name>` or `/>`. `<>...</>` groups nodes. `<!DOCTYPE html>` is allowed.
+//! - Literal text inside `<script>` and `<style>` is raw in HTML, escaped in foreign content,
+//!   and must not contain `<` or `&` when the context is unknown.
+//! - An element written inside one whose content a browser parsing HTML reads as text
+//!   (`<textarea>`, an HTML `<title>`, `<script>`, `<style>`), or one a browser takes out of an
+//!   `<svg>` (`<div>`, `<p>`) written straight into it, does not compile: see [`html!`].
+
+use std::{
+    borrow::Cow,
+    cell::Cell,
+    fmt,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
+
+/// JSX-like markup that compiles to string pushes. See the [module docs](self).
+///
+/// A name assistive technology would drop does not compile: `aria-label` or `aria-labelledby` on
+/// a `<div>` or `<span>` with no `role`, or on an `<a>` with no `href` (ARIA prohibits a name
+/// on an element with no role). The name goes in the element as text instead, or the element gets
+/// the role it plays:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <span aria-label="Unread">"3"</span> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a aria-label="Previous">"<"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div ARIA-LABELLEDBY="total">"3"</div> };
+/// ```
+///
+/// An `<a>` named by a written-out `aria-label` or `aria-labelledby` takes an `href={..}` that is
+/// always written: an `Option` (or `bool`) leaves it no link when it writes nothing, so it does
+/// not compile either.
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// let before: Option<&str> = None;
+/// let _ = html! { <a href={before} aria-label="Previous shipment">"<"</a> };
+/// ```
+///
+/// A role, a spread (which may write one), an `href` always written, a name that is text or an
+/// expression (which may be absent with the href), and SVG (whose `<a>` with no href is a group,
+/// which may be named) all compile:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[derive(Route)]
+/// #[route("/")]
+/// struct Home;
+///
+/// #[derive(Route)]
+/// #[route("/items/{id}")]
+/// struct Item<'a> { id: &'a str }
+///
+/// let before: Option<&str> = Some("https://carrier.example/track/1");
+/// let spread: [(&str, &str); 1] = [("role", "img")];
+/// let _ = html! { <span role="img" aria-label="3 unread">"3"</span> };
+/// let _ = html! { <span aria-label="3 unread" {..spread}>"3"</span> };
+/// let _ = html! { <a href={Home} aria-label="Home">"<"</a> };
+/// let _ = html! { <a href={before.unwrap_or("https://carrier.example/track")} aria-label="Previous shipment">"<"</a> };
+/// let _ = html! { <a href={before}>"Previous shipment"</a> };
+/// let _ = html! { <a href={before} aria-label={before.map(|_| "Previous shipment")}>"<"</a> };
+/// let _ = html! { <svg><a aria-label="Chart"><g></g></a><a xlink:href="#x" aria-label="X"></a></svg> };
+/// let item = 7;
+/// let _ = html! { <a href={Item { id: &item.to_string() }} aria-label="Item">"7"</a> };
+/// macro_rules! next { ($h:ident) => { html! { <a href={$h} aria-label="Next">">"</a> } } }
+/// let to = Item { id: "8" };
+/// let _ = next!(to);
+/// ```
+///
+/// The check reads the `href`'s type where `html!` is written, so generic code that passes it a
+/// type parameter (`fn link<H: AttrValue>(h: &H)`) is not checked, nor an `AttrValue` of the
+/// app's own that writes nothing. SVG is told by an enclosing `<svg>` in the same `html!`: a
+/// component that draws an SVG fragment names its `<a>` with `role="group"` (or `role="link"`
+/// with its href).
+///
+/// A path in the app written as text in an element's URL attribute does not compile: a link is a
+/// route (`href={url::Items}`, [`crate::route`]) and a static file is named by its constant
+/// (`src={req.asset(Static::LOGO_SVG)}`, [`crate::assets`]), so a typo or a route whose path
+/// changed is a compile error rather than a link that answers 404. The URL attributes are `href`,
+/// `src`, `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping` and
+/// `xlink:href`, in any case, and a path is a URL that starts with one `/` (or `\`, which a
+/// browser reads as `/`), after the spaces a browser drops, or `http:` or `https:` without the
+/// `//` of a host (`https:/items`: on a page of that scheme a browser reads it as `/items`, and on
+/// a page of the other scheme as the host `items`, so it is a mistake either way). The value is text,
+/// `href="/items"`, or one string literal in braces, `href={"/items"}`. The error names the form
+/// the attribute takes: a tuple that keeps a `srcset`'s descriptors
+/// (`srcset={(req.asset(Static::PHOTO_PNG), " 1x, ", req.asset(Static::PHOTO_2X_PNG), " 2x")}`),
+/// or a static file's constant and its fragment (`href={(req.asset(Static::SPRITE_SVG), "#arrow")}`):
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href="/items">"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <form method="post" action="/watch"><button>"Watch"</button></form> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <form method="post"><button formaction="/unwatch">"Remove"</button></form> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <img src="/logo.svg" alt="Corten"> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <img srcset="https://cdn.example/logo.svg 1x, /logo-2x.svg 2x" alt="Corten"> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href={"/items"}>"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a HREF="/items">"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href="\\items">"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href=" /items">"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href="https:/items">"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><use xlink:href="/sprite.svg#arrow" /></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <video poster="/clip.jpg"></video> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <object data="/doc.pdf"></object> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href="https://example.com" ping="/seen">"Example"</a> };
+/// ```
+///
+/// A fragment, a URL with a scheme (`https:`, `mailto:`, `tel:`, `data:`) and one on another
+/// host (`//cdn.example`) are not paths in the app, and compile, as does the same markup with one
+/// of them:
+///
+/// ```
+/// use corten::prelude::*;
+/// let _ = html! { <a href="#top">"Back to the top"</a> };
+/// let _ = html! { <a href="https://example.com">"Example"</a> };
+/// let _ = html! { <a href="mailto:help@example.com">"Write to us"</a> };
+/// let _ = html! { <a href="tel:+15550100">"Call us"</a> };
+/// let _ = html! { <form method="post" action="https://example.com/watch"><button formaction="https://example.com/unwatch">"Remove"</button></form> };
+/// let _ = html! { <img src="//cdn.example/logo.svg" srcset="data:image/jpeg;base64,/9j/4AAQ 1x, https://cdn.example/logo-2x.svg 2x" alt="Corten"> };
+/// let _ = html! { <a href={"#top"}>"Back to the top"</a> };
+/// let _ = html! { <a HREF="https://example.com" ping="https://stats.example/seen">"Example"</a> };
+/// let _ = html! { <svg><use xlink:href="#arrow" /></svg> };
+/// let _ = html! { <video poster="https://cdn.example/clip.jpg"></video> };
+/// let _ = html! { <object data="https://cdn.example/doc.pdf"></object> };
+/// ```
+///
+/// A path on this origin that the app does not route (another service behind the same proxy, an
+/// `/oauth2/sign_out` a proxy answers) is a [`crate::Local`], the type a test names such a path
+/// with. It is an explicit opt-out the compiler takes on trust: a `Local` of a path the app does
+/// route compiles too, and nothing checks that the path exists. [`crate::Local::parse`] refuses
+/// text that is not a path on this site (`None`), and a `Local` keeps its query and `#fragment`:
+///
+/// ```
+/// use corten::{prelude::*, Local};
+/// let sign_out = Local::parse("/oauth2/sign_out").expect("a path on this site");
+/// let help = Local::parse("/proxy/help?topic=billing#refunds").expect("a path on this site");
+/// let view = html! { <a href={sign_out}>"Sign out"</a><a href={&help}>"Refunds"</a> };
+/// assert_eq!(
+///     view.to_html(),
+///     r#"<a href="/oauth2/sign_out">Sign out</a><a href="/proxy/help?topic=billing#refunds">Refunds</a>"#
+/// );
+/// ```
+///
+/// Only a value whose text the macro sees is read. Any other expression in braces is known only
+/// when the page renders, so `href={format!("/items/{id}")}`, a tuple of a path's parts
+/// (`href={("/items/", &id)}`) and a `&str` compile, as do a spread, a component's prop, a
+/// relative path (`items/7`, `?page=2`) and a URL inside another attribute's text
+/// (`<meta http-equiv="refresh" content="0; url=/items">`). Write a route there too.
+///
+/// A literal HTML attribute name may be written only once per element, case-insensitively,
+/// including names whose values are expressions. A spread's names are not known here and are
+/// not checked. Handler calls (`on:..`) share one generated attribute and still combine:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <input name="first" NAME={"second"}> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <input disabled disabled> };
+/// ```
+///
+/// Pseudo-attributes are compared by their generated names: `ref` writes `data-ref`, bare
+/// `page` writes `data-corten-page`, and `key` writes `data-key`. Repeating one is still a
+/// duplicate:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <my-widget Key="first" KEY="second"></my-widget> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <my-widget key="first" key="second"></my-widget> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn Marked() -> impl Render {
+///     let node = refs();
+///     html! { <div ref={node} ref={node}></div> }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct NavId;
+/// let _ = html! {
+///     <html><head><title>"Page"</title><Corten /></head>
+///         <body><nav page page id={NavId}></nav><main></main></body></html>
+/// };
+/// ```
+///
+/// `data-key` is printed by Corten: give a keyed ref its key with `key={..}` instead:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn Row() -> impl Render {
+///     let row = refs();
+///     html! { <div ref={row} data-key="first"></div> }
+/// }
+/// ```
+///
+/// Literal nesting that makes the browser close or discard an open HTML element is refused.
+/// Put the elements beside one another, or use a container that can hold them (`<div>` rather
+/// than `<p>` for a block). A refusal rests only on literal markup of the same `html!` between
+/// the two elements, followed through control flow. What the markup does not show may write
+/// anything: an expression (`raw` among them), a component, with or without children
+/// (`<Corten />` too: the macro knows it only by its name, which a component of the app's may
+/// share), and a `<script>` or `<style>` whose literal text can end it early or keep it open.
+/// What it writes may close the open elements, open others, or leave a browser reading a
+/// script's text past any later literal end tag (`<!--<script>` does), so no nesting refusal acts
+/// after it in the same `html!`, whatever it shows: `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
+/// compiles, as browsers keep it. Nor does a literal `<svg>` or `<math>` show its namespace where
+/// the markup does not (a `<math>` an `<svg>` holds is SVG's), so its integration points do not
+/// show HTML there, nor is what an element HTML reads as text holds read there (`<iframe>`,
+/// `<textarea>`, `<style>` ..: as HTML's it is text), nor what a `<noscript>` holds anywhere. A
+/// `<template>`'s content and an `<svg>`'s or a `<math>`'s start with nothing open, so an `<a>`
+/// in a `<foreignObject>` inside another `<a>` compiles, as browsers keep it. Every refusal
+/// assumes `html!` output, a component's included, is drawn where a browser reads tags: writing a
+/// component into script or style text a caller left open (after `raw("<script>")`) is not
+/// supported, since a script's text comes from a string, not markup. These do not compile:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><script type="text/plain">"a < b"</script><div>"Detail"</div></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn Summary() -> impl Render {
+///     let detail = refs();
+///     html! { <p><div ref={detail}>"Detail"</div></p> }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><span>if true { <section>"Detail"</section> }</span></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <ul><li><span><li>"Next"</li></span></li></ul> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <dl><dt><dd>"Definition"</dd></dt></dl> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><a href="#one"><span><a href="#two">"Two"</a></span></a></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><button><span><button>"Again"</button></span></button></div> };
+/// ```
+///
+/// A nested `<form>` is not refused: a browser ignores one only outside every `<template>`, which
+/// no markup shows. A fragment's caller may write it into one, and a document's body follows
+/// `<Corten />`, which the check does not see.
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <h1><h2>"Heading"</h2></h1> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><nobr><span><nobr>"Text"</nobr></span></nobr></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><input></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><select aria-label="Nested"></select></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><option><option>"Next"</option></option></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><optgroup label="One"><optgroup label="Two"></optgroup></optgroup></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><option>"Choice"<hr></option></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><ruby>"Base"<rt><rt>"Reading"</rt></rt></ruby></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><ruby><rtc><rb>"Base"</rb></rtc></ruby></div> };
+/// ```
+///
+/// The doctype is not a second root of a scoped document, but another element still is:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn BadDocument() -> impl Document {
+///     let lead = refs();
+///     html! {
+///         <!DOCTYPE html>
+///         <html><head><title>"Page"</title><Corten /></head><body><main><p ref={lead}>"Lead"</p></main></body></html>
+///         <div>"Outside the root"</div>
+///     }
+/// }
+/// ```
+///
+/// Three kinds of markup a browser parses differently from how it is written do not compile, where
+/// the markup shows how the browser parses it, before anything it does not show (above): an
+/// element inside one whose content a browser reads as text, a `<plaintext>`, and an element a
+/// browser takes out of an `<svg>` or a `<math>` (and a patch's top level a browser loses, under
+/// [`Patch`]).
+/// Table foster parenting (a `<div>` straight in a `<table>`) is not checked here.
+/// An element written inside one whose content a browser parsing HTML reads as
+/// text would show its tags as text, or put them in a field's value, rather than make an element.
+/// Those are `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`, `<xmp>`, `<noembed>`
+/// and `<noframes>`, and `<plaintext>` itself does not compile (it makes the rest of the page
+/// text, its end tag included). That holds under an element that is HTML's wherever it lands (a
+/// `<div>`, a `<p>`, a document's `<head>`), in the `<foreignObject>`, `<desc>` and `<title>` of
+/// an `<svg>` such an element holds, which hold HTML, a `<title>` nested in an `<svg>`'s
+/// `<title>` included, and in a
+/// `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (but for a `<mglyph>` or a
+/// `<malignmark>` in them, which stay MathML's) and an `<annotation-xml>` whose first `encoding`
+/// is `text/html` or `application/xhtml+xml`, which hold HTML too:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><textarea name="note"><b>"Draft"</b></textarea></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><title>"Shop "<span>"3"</span></title></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><title>if true { <em>"New"</em> }</title></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><svg><desc><title><span>"Chart"</span></title></desc></svg></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><svg><title><title><span>"Chart"</span></title></title></svg></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><svg><foreignObject><textarea name="note"><b>"Draft"</b></textarea></foreignObject></svg></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><mi><title><b>"x"</b></title></mi></math></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><annotation-xml encoding="text/html"><title><b>"x"</b></title></annotation-xml></math></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><plaintext>"Raw"</plaintext></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><script type="text/x-template"><b>"Draft"</b></script></div> };
+/// ```
+///
+/// An ordinary comparison in the literal does not end the script:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><script type="text/plain">"a < b"<b>"Draft"</b></script></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><style><b>"Draft"</b></style></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><style>"/* a < b */"<b>"Draft"</b></style></div> };
+/// ```
+///
+/// A script that can consume its own closing tag still reads a nested start tag as text:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><script type="text/plain">"<!--<script>"<b>"Draft"</b></script></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><iframe title="Preview"><b>"Draft"</b></iframe></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><xmp><b>"Draft"</b></xmp></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noembed><b>"Draft"</b></noembed></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noframes><b>"Draft"</b></noframes></div> };
+/// ```
+///
+/// Nor does an element the HTML standard's rules for foreign content take out of an `<svg>` or a
+/// `<math>` (`<b>`, `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a
+/// `<font>` with `color`, `face` or `size`) written straight into one, or into an
+/// `<annotation-xml>` whose first `encoding` is not an HTML one (or that has none), which holds MathML:
+/// the browser closes the `<svg>` or the MathML elements before it, so it and what follows land
+/// outside them. HTML in a drawing goes in a `<foreignObject>`, and in a formula in an `<mtext>`:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><rect width="4" height="4" /><p>"Total"</p></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><g><font color="red"><style>"&lt;"</style></font></g></svg> };
+/// ```
+///
+/// A dynamic `color`, `face` or `size` (including a spread) may or may not take a `<font>`
+/// out of foreign content. A script or style literal with `<` or `&` needs a known context:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let color = Some("red");
+/// let _ = html! { <div><svg><font color={color}><style>"a < b && c"</style></font></svg></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let attrs = [("face", "serif")];
+/// let _ = html! { <div><svg><font {..attrs}></font><style>"&lt;"</style></svg></div> };
+/// ```
+///
+/// Escaped text in a foreign `<style>` cannot change how the tags after it are parsed:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><style>"<g>"</style><p>"Total"</p></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><mrow><div>"x"</div></mrow></math></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><annotation-xml><div>"x"</div></annotation-xml></math></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><annotation-xml encoding="application/mathml+xml"><div>"x"</div></annotation-xml></math></p> };
+/// ```
+///
+/// A browser keeps the first of an attribute written twice, so an `<annotation-xml>` whose first
+/// `encoding` is not an HTML one holds MathML, whatever follows:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><annotation-xml encoding="x" encoding="text/html"><div>"x"</div></annotation-xml></math></p> };
+/// ```
+///
+/// Text and expressions in a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
+/// `<noframes>` compile, written escaped (which a `<textarea>` and a `<title>` read back). In a
+/// `<script>` or a `<style>` an expression does not compile, so a data block
+/// (`<script type="text/x-template">`) gives its markup as a string literal. Its text is written
+/// as is in HTML. In a known foreign context, `html!`
+/// escapes `<` and `&` in those literals so the browser reads the literal text, not tags or
+/// character references. If the context is unknown, a literal containing either character is
+/// refused. Use a component's CSS file or `#[component(js)]`, or move the literal to markup
+/// whose parsing context is known. For a fixed HTML-only data slot, pass the complete static
+/// tag as trusted `raw` markup without untrusted interpolation.
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <style>"a < b && c"</style> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn HtmlChildren(children: impl Render) -> impl Render {
+///     html! { <div>{children}</div> }
+/// }
+/// let _ = html! { <svg><HtmlChildren><style>"&lt;"</style></HtmlChildren></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let encoding = "text/html";
+/// let _ = html! { <div><math><annotation-xml encoding={encoding}><style>"&lt;"</style></annotation-xml></math></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let attrs = [("encoding", "application/mathml+xml")];
+/// let _ = html! { <div><math><annotation-xml {..attrs} encoding="text/html"><style>"&lt;"</style></annotation-xml></math></div> };
+/// ```
+///
+/// A direct stylesheet in a known HTML `<noscript>` can stay raw, but only if no opaque
+/// output precedes it there and its literal text cannot close either tag early:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <noscript><style>"a < b"</style></noscript> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noscript>{raw("<svg>")}<style>"a < b"</style></noscript></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noscript><style>"<""/NoScript>"</style></noscript></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noscript><style>"<""/StYlE>"</style></noscript></div> };
+/// ```
+///
+/// An earlier conditional can change how later markup parses. In a loop, even a literal at the
+/// start of the body needs the same context on every iteration:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let close = true;
+/// let _ = html! { <div><svg>if close { {raw("</svg>")} } <style>"&lt;"</style></svg></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let open = true;
+/// let _ = html! { <div>if open { <script>"</script><svg>"</script> } <style>"&lt;"</style></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! {
+///     <div><svg>
+///         for i in 0..2 {
+///             <style>"a < b && c"</style>
+///             {raw(if i == 0 { "</svg>" } else { "<svg>" })}
+///         }
+///     </svg></div>
+/// };
+/// ```
+///
+/// What an
+/// `<svg>` holds compiles too: its `<textarea>` and `<style>` are SVG's elements, whose
+/// children are elements, and its `<title>` holds HTML; so does a `<math>`'s, outside its text
+/// integration points, a `<title>` in a `<mglyph>` or `<malignmark>` there, and an
+/// `<annotation-xml>`'s whose first `encoding` is not an HTML one (or that has none), which holds
+/// MathML and where an `<svg>` is SVG's. Where the markup does not show how it is parsed, at the
+/// top of a component's markup (whose parent may write it into an `<svg>`), among a component's
+/// children (which go where it writes them), after an expression or a component (which may open
+/// or close an `<svg>`, or the element read as text), in the integration points of an `<svg>` or
+/// a `<math>` written there (a `<math>` an `<svg>` holds is SVG's, and its `<mtext>` holds no
+/// HTML) and in an `<annotation-xml>` whose `encoding` an expression or a spread may write first,
+/// no element is refused on this account, but for an element taken out of foreign content written straight into
+/// a literal `<svg>` or `<math>`, which is foreign wherever it lands; so a component that draws
+/// an SVG fragment without its `<svg>` compiles:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[component]
+/// fn Bar() -> impl Render {
+///     html! { <rect width="4" height="42"><title>"Sales "<b>"42"</b></title></rect> }
+/// }
+///
+/// fn main() {
+///     let draft = "<b>Draft</b>";
+///     let view = html! {
+///         <div>
+///             <textarea name="note">{draft}</textarea>
+///             <svg><title><span>"Chart"</span></title><style><g></g></style><textarea><g></g></textarea><Bar /></svg>
+///         </div>
+///     };
+///     assert_eq!(
+///         view.to_html(),
+///         concat!(
+///             r#"<div><textarea name="note">&lt;b&gt;Draft&lt;/b&gt;</textarea>"#,
+///             r#"<svg><title><span>Chart</span></title><style><g></g></style><textarea><g></g></textarea>"#,
+///             r#"<rect width="4" height="42"><title>Sales <b>42</b></title></rect></svg></div>"#,
+///         )
+///     );
+/// }
+/// ```
+///
+/// So do a data block, a component's children (which `Wrap` writes into an `<svg>`), a
+/// `<math>` with text in its `<mi>`, a `<div>` in its `<mtext>` and a `<title>` holding
+/// elements in a `<mglyph>` and a `<malignmark>` there, an `<svg>` straight in a `<math>`
+/// (MathML's, as a browser reads it), an `<annotation-xml>` holding HTML (its first `encoding`
+/// `text/html`, in any letter case), ones with a MathML `encoding` and with none holding a MathML
+/// `<title>` and an `<svg>` with HTML in its `<foreignObject>`, one whose `encoding` an
+/// expression writes and one where a spread comes before the written `encoding` (which the
+/// markup does not show, so nothing in them is refused; this spread writes `text/html` first,
+/// the one a browser keeps), and a link named by `aria-label` in an `<svg>`'s `<title>` whose
+/// `href` may write nothing (the accessible-name and `href` checks keep their older rule: they
+/// look at nothing in an `<svg>` but what its `<foreignObject>` holds):
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[component]
+/// fn Wrap(children: impl Render) -> impl Render {
+///     html! { <svg>{children}</svg> }
+/// }
+///
+/// fn main() {
+///     let home: Option<&str> = Some("#top");
+///     let encoding = "application/mathml+xml";
+///     let html_encoding = [("encoding", "text/html")];
+///     let view = html! {
+///         <div>
+///             <script type="text/x-template">"<b>Draft</b>"</script>
+///             <Wrap><title>"a"<b>"b"</b></title></Wrap>
+///             <math><mrow><mi>"x"</mi></mrow></math>
+///             <math><mtext><div>"x"</div></mtext></math>
+///             <math><mi><mglyph><title><mrow></mrow></title></mglyph></mi></math>
+///             <math><mi><malignmark><title><mrow></mrow></title></malignmark></mi></math>
+///             <math><svg><g></g></svg></math>
+///             <math><annotation-xml encoding="text/html"><b>"x"</b></annotation-xml></math>
+///             <math><annotation-xml encoding="TEXT/HTML"><b>"x"</b></annotation-xml></math>
+///             <math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>"x"</b></foreignObject></svg></annotation-xml></math>
+///             <math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math>
+///             <math><annotation-xml encoding={encoding}><title><mrow></mrow></title></annotation-xml></math>
+///             <math><annotation-xml {..html_encoding} encoding="x"><div>"x"</div></annotation-xml></math>
+///             <svg><title><a aria-label="Home" href={home}>"x"</a></title></svg>
+///         </div>
+///     };
+///     assert_eq!(
+///         view.to_html(),
+///         concat!(
+///             r#"<div><script type="text/x-template"><b>Draft</b></script>"#,
+///             r#"<svg><title>a<b>b</b></title></svg><math><mrow><mi>x</mi></mrow></math>"#,
+///             r#"<math><mtext><div>x</div></mtext></math>"#,
+///             r#"<math><mi><mglyph><title><mrow></mrow></title></mglyph></mi></math>"#,
+///             r#"<math><mi><malignmark><title><mrow></mrow></title></malignmark></mi></math>"#,
+///             r#"<math><svg><g></g></svg></math>"#,
+///             r#"<math><annotation-xml encoding="text/html"><b>x</b></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="TEXT/HTML"><b>x</b></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>x</b></foreignObject></svg></annotation-xml></math>"#,
+///             r#"<math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="text/html" encoding="x"><div>x</div></annotation-xml></math>"#,
+///             r##"<svg><title><a aria-label="Home" href="#top">x</a></title></svg></div>"##,
+///         )
+///     );
+/// }
+/// ```
+pub use corten_macros::html;
+
+/// Turns a function into a component: a struct with one field per parameter, which `html!`
+/// builds from a tag (`<PriceRow card={c} highlight />`) and renders in place.
+///
+/// ```ignore
+/// #[component]
+/// pub fn Panel(title: &str, children: impl Render) -> impl Render {
+///     html! { <section><h2>{title}</h2>{children}</section> }
+/// }
+/// ```
+///
+/// A parameter written `impl Render` (or any `impl Trait`) is a type parameter of the struct.
+/// Parameters that are `Copy` (references, numbers, `bool`) arrive with their declared type;
+/// others arrive by reference. The function body runs when the component renders.
+///
+/// Every prop is written where the component is used, even an empty one (`head=""`, an
+/// `Option` as `None`), so the markup says what the component gets. A prop left out does not
+/// compile:
+///
+/// ```compile_fail,E0063
+/// use corten::prelude::*;
+///
+/// #[component]
+/// fn Panel<'a>(title: &'a str, children: impl Render) -> impl Render {
+///     html! { <section><h2>{title}</h2>{children}</section> }
+/// }
+///
+/// let _ = html! { <Panel>"Sold out"</Panel> };
+/// ```
+///
+/// `#[component(css)]` gives the component the stylesheet named after it, next to it
+/// (`panel.css`), and `#[component(css = Panel)]` shares another component's; see
+/// [`crate::style`]. `#[component(js)]` gives it the script named after it, and
+/// `#[component(js = Panel)]` another component's handlers, for a part of it; see
+/// [`crate::script`].
+pub use corten_macros::component;
+
+/// Something that writes HTML. Strings and numbers escape themselves; views from `html!` write
+/// their markup.
+#[diagnostic::on_unimplemented(
+    note = "if `{Self}` is a look (it returns `impl ClassList`), write it as the classes of the element it styles: `class={{{Self} {{ .. }}}}`"
+)]
+pub trait Render {
+    fn render(&self, out: &mut String);
+
+    /// Renders into a new string.
+    fn to_html(&self) -> String {
+        let mut out = String::new();
+        self.render(&mut out);
+        out
+    }
+}
+
+/// A view from `html!`: markup that renders when it is used, once. It owns what it captured
+/// (references are copied in), so markup can move and match those values freely, except a view
+/// lent to a prop or a call inside another (`action={&html! { .. }}`, `{f(&html! { .. })}`), which
+/// borrows from the view around it; build the view again to render it again.
+pub struct Html<F> {
+    render: Cell<Option<F>>,
+    /// The size this `html!` call last rendered to on its own, so the next string it renders into
+    /// is allocated once at the right size.
+    size: &'static AtomicUsize,
+}
+
+static NO_SIZE: AtomicUsize = AtomicUsize::new(0);
+
+impl<F> Html<F> {
+    /// Used by `html!`, which gives every call site its own `size`.
+    pub fn new(size: &'static AtomicUsize, render: F) -> Self {
+        Html { render: Cell::new(Some(render)), size }
+    }
+
+    /// Markup that only ever renders into its parent's string (a component's children).
+    pub fn child(render: F) -> Self {
+        Html { render: Cell::new(Some(render)), size: &NO_SIZE }
+    }
+}
+
+// The closure returns the view's shape (see `Patch`): `()` for children, which are never a patch.
+impl<F: FnOnce(&mut String) -> S, S> Render for Html<F> {
+    #[inline]
+    fn render(&self, out: &mut String) {
+        match self.render.take() {
+            Some(render) => {
+                render(out);
+            }
+            None => panic!("a view from html! renders once; call the function that builds it again"),
+        }
+    }
+
+    fn to_html(&self) -> String {
+        let mut out = String::with_capacity(self.size.load(Ordering::Relaxed).max(256));
+        self.render(&mut out);
+        self.size.store(out.len() + out.len() / 8, Ordering::Relaxed);
+        out
+    }
+}
+
+/// Which part of a [`Document`] to render.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Part {
+    /// The whole document, for a browser's first load.
+    Full,
+    /// What a client navigation swaps: the `<title>`, the tags the page puts in `<head>`,
+    /// Corten's tags and the children of `<main>`.
+    Swap,
+    /// The text of the `<title>` alone (escaped), for [`crate::Req::screen`].
+    Title,
+}
+
+/// A whole HTML document: what [`crate::Req::page`] sends. `html!` markup whose root is
+/// `<html>` is one, and so is a component that returns one (`-> impl Document`), used as
+/// `html! { <Layout title="Home">..</Layout> }`. Besides the whole document it renders the
+/// parts a client navigation and a data client need, without running the rest of the layout.
+///
+/// The markup is checked when it compiles: one `<head>` holding one `<title>` and `<Corten />`
+/// (where Corten's tags go), and one `<main>`, which a navigation swaps:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// let doc = html! {
+///     <!DOCTYPE html>
+///     <html lang="en">
+///         <head><title>"Home"</title><Corten /></head>
+///         <body><main><h1>"Home"</h1></main></body>
+///     </html>
+/// };
+/// assert_eq!(doc.to_html(), "<!DOCTYPE html><html lang=\"en\"><head><title>Home</title></head><body><main><h1>Home</h1></main></body></html>");
+/// ```
+///
+/// A document without a `<title>` does not compile:
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// let doc = html! { <html><head><Corten /></head><body><main></main></body></html> };
+/// ```
+///
+/// Nor does one without `<Corten />` in its `<head>`, or without a `<main>`:
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// let doc = html! { <html><head><title>"Home"</title></head><body><main></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// let doc = html! { <html><head><title>"Home"</title><Corten /></head><body></body></html> };
+/// ```
+///
+/// And a page that is not a document is not a page:
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// async fn home(req: Req) -> HtmlResult {
+///     req.page(html! { <h1>"Home"</h1> })
+/// }
+/// ```
+///
+/// An element of the layout around `<main>` that depends on the page (a section's nav, drawn from
+/// the page's section) is marked `page`: a navigation sends it with `<main>`'s children, and the
+/// runtime puts it in place of the one on screen, found by its id. It has a `#[derive(Id)]` id and
+/// is on every page of the layout, so it is not inside `for`, `if` or `match` (what is in it may be):
+///
+/// ```
+/// use corten::{prelude::*, view::Part};
+///
+/// #[derive(Id)]
+/// struct SectionNavId;
+///
+/// let doc = html! {
+///     <html>
+///         <head><title>"Returns"</title><Corten /></head>
+///         <body>
+///             <header>"Admin"</header>
+///             <nav page id={SectionNavId}>"Commerce pages"</nav>
+///             <main><h1>"Returns"</h1></main>
+///         </body>
+///     </html>
+/// };
+/// let mut swap = String::new();
+/// doc.render_part(&mut swap, Part::Swap);
+/// assert_eq!(swap, r#"<title>Returns</title><nav data-corten-page id="section-nav">Commerce pages</nav><h1>Returns</h1>"#);
+/// ```
+///
+/// One without a typed id does not compile, since the runtime could not find it:
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><nav page id="section-nav"></nav><main></main></body></html> };
+/// ```
+///
+/// ```compile_fail,E0277
+/// # use corten::prelude::*;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><nav page id={"section-nav"}></nav><main></main></body></html> };
+/// ```
+///
+/// Nor does one inside `<main>`, which is the page's already, one some pages lack, or one outside a
+/// document, where nothing says it is the layout's:
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct SectionNavId;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><main><nav page id={SectionNavId}></nav></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct SectionNavId;
+/// let section = true;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body>if section { <nav page id={SectionNavId}></nav> }<main></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct SectionNavId;
+/// let nav = html! { <nav page id={SectionNavId}>"Commerce pages"</nav> };
+/// ```
+///
+/// Its id is one without a key, the same on every page: a keyed one (`RowId<'a>(&'a str)`) would
+/// differ between sections, and the runtime would find no element on screen with the new one:
+///
+/// ```compile_fail,E0277
+/// # use corten::prelude::*;
+/// #[derive(Id)]
+/// struct SectionPartId<'a>(&'a str);
+/// let section = "catalog";
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><nav page id={SectionPartId(section)}></nav><main></main></body></html> };
+/// ```
+///
+/// It is beside `<main>`: not `<main>`, `<head>` or `<title>` themselves, which a navigation sends
+/// already, nor around `<main>`, inside `<head>`, inside another part, or in a component's
+/// children, which the component places:
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct MainId;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><main page id={MainId}></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct HeadId;
+/// let doc = html! { <html><head page id={HeadId}><title>"A"</title><Corten /></head><body><main></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct FrameId;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><div page id={FrameId}><main></main></div></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct TagId;
+/// let doc = html! { <html><head><title>"A"</title><Corten /><meta page id={TagId} /></head><body><main></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct SectionNavId;
+/// # #[derive(Id)] struct SectionLinksId;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><nav page id={SectionNavId}><ul page id={SectionLinksId}></ul></nav><main></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct SectionNavId;
+/// #[component]
+/// fn Frame(children: impl Render) -> impl Render {
+///     html! { <div>{children}</div> }
+/// }
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><Frame><nav page id={SectionNavId}></nav></Frame><main></main></body></html> };
+/// ```
+pub trait Document: Render {
+    /// Writes `part` of the document.
+    fn render_part(&self, out: &mut String, part: Part);
+}
+
+impl<T: Document + ?Sized> Document for &T {
+    #[inline]
+    fn render_part(&self, out: &mut String, part: Part) {
+        (**self).render_part(out, part)
+    }
+}
+
+/// A document view from `html!` (see [`Document`]).
+pub struct DocHtml<F> {
+    render: Cell<Option<F>>,
+    size: &'static AtomicUsize,
+    shell: u64,
+}
+
+impl<F: FnOnce(&mut String, Part)> DocHtml<F> {
+    /// Used by `html!`, which gives every call site its own `size`, and `shell`, a hash of where
+    /// the call site is: which layout rendered the page.
+    pub fn new(size: &'static AtomicUsize, shell: u64, render: F) -> Self {
+        DocHtml { render: Cell::new(Some(render)), size, shell }
+    }
+}
+
+thread_local! {
+    /// The `shell` of the last [`DocHtml`] rendered on this thread: the layout of the page being
+    /// rendered, part of its shell key, so a client navigation to a page in another layout loads
+    /// it in full.
+    pub(crate) static SHELL: Cell<u64> = const { Cell::new(0) };
+}
+
+impl<F: FnOnce(&mut String, Part)> Render for DocHtml<F> {
+    #[inline]
+    fn render(&self, out: &mut String) {
+        self.render_part(out, Part::Full)
+    }
+
+    fn to_html(&self) -> String {
+        let mut out = String::with_capacity(self.size.load(Ordering::Relaxed).max(256));
+        self.render(&mut out);
+        self.size.store(out.len() + out.len() / 8, Ordering::Relaxed);
+        out
+    }
+}
+
+impl<F: FnOnce(&mut String, Part)> Document for DocHtml<F> {
+    #[inline]
+    fn render_part(&self, out: &mut String, part: Part) {
+        SHELL.set(self.shell);
+        match self.render.take() {
+            Some(render) => render(out, part),
+            None => panic!("a view from html! renders once; call the function that builds it again"),
+        }
+    }
+}
+
+/// Copies `html`, the tags a page put in a document's `<head>`, to `out` with
+/// `data-corten-head` at the end of each top-level element's start tag, so a client navigation
+/// replaces them with the next page's. `html` is markup Corten wrote: text and attribute values
+/// are escaped, so every `<` starts a tag, a comment or the end of one and every `>` ends one;
+/// `<script>` and `<style>` text is copied as it is.
+fn mark_head_tags(html: &str, out: &mut String) {
+    const VOID: &[&str] = &["base", "link", "meta", "area", "br", "col", "embed", "hr", "img", "input", "source", "track", "wbr"];
+    let bytes = html.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0;
+    // `str::find` of an ASCII character skips a word at a time.
+    while let Some(at) = html[i..].find('<') {
+        let lt = i + at;
+        match bytes.get(lt + 1) {
+            Some(b'/') => {
+                depth = depth.saturating_sub(1);
+                out.push_str(&html[i..lt + 2]);
+                i = lt + 2;
+            }
+            Some(c) if c.is_ascii_alphabetic() => {
+                let end = bytes[lt + 1..]
+                    .iter()
+                    .position(|b| !(b.is_ascii_alphanumeric() || *b == b'-'))
+                    .map_or(bytes.len(), |n| lt + 1 + n);
+                let name = &html[lt + 1..end];
+                // The start tag's `>`, or its `/>`.
+                let gt = html[end..].find('>').map_or(bytes.len(), |n| end + n);
+                let gt = if gt > end && bytes[gt - 1] == b'/' { gt - 1 } else { gt };
+                out.push_str(&html[i..gt]);
+                if depth == 0 {
+                    out.push_str(" data-corten-head");
+                }
+                i = gt;
+                if name.eq_ignore_ascii_case("script") || name.eq_ignore_ascii_case("style") {
+                    // Raw text: copied to its end tag, which closes the element.
+                    let close = if name.eq_ignore_ascii_case("script") { "</script>" } else { "</style>" };
+                    let stop = html[i..].find(close).map_or(html.len(), |n| i + n + close.len());
+                    out.push_str(&html[i..stop]);
+                    i = stop;
+                } else if !VOID.iter().any(|v| name.eq_ignore_ascii_case(v)) {
+                    depth += 1;
+                }
+            }
+            _ => {
+                out.push_str(&html[i..lt + 1]);
+                i = lt + 1;
+            }
+        }
+    }
+    out.push_str(&html[i..]);
+}
+
+/// An element id as a type, from `#[derive(Id)]`: the markup that renders an element and the
+/// patch that replaces or removes it name it the same way, so they cannot drift.
+///
+/// A unit struct is one element; a struct holding a key is one per key. The id is the type's
+/// name without a trailing `Id`, in kebab case, then the key (a library's ids start with its
+/// prefix, `ui-`). Ids print with `id={..}`, and anywhere an attribute names an element:
+/// `for`, `popovertarget`, `commandfor`, `aria-controls`.
+///
+/// ```
+/// use corten::{prelude::*, view::{Id, Remove}};
+///
+/// #[derive(Id)]
+/// struct RowId<'a>(&'a str);
+///
+/// #[derive(Id)]
+/// struct DeskStatusId;
+///
+/// let row = html! { <tr id={RowId("i7")}><td>"Lamp"</td></tr> };
+/// assert_eq!(row.to_html(), r#"<tr id="row-i7"><td>Lamp</td></tr>"#);
+/// let status = html! { <p id={DeskStatusId} role="status">"Saved"</p> };
+/// assert_eq!(status.to_html(), r#"<p id="desk-status" role="status">Saved</p>"#);
+/// assert_eq!(html! { {Remove(RowId("i7"))} }.to_html(), r#"<template id="row-i7" data-remove></template>"#);
+/// ```
+///
+/// Two ids with the same name in one program fail to build (each name is a linker symbol,
+/// `corten__two_ids_are__row`, which the error names), in two crates too once a debug build
+/// writes both. A
+/// library's ids (a crate with `[package.metadata.corten] scripts = "prefix"`) are told apart by
+/// version too, so two incompatible versions of one library still build together. Their ids are
+/// the same in the page, so render only one of them on a page. In one crate `cargo check` reports
+/// the pair too, at both (E0428, the name `corten__two_ids_are__row` defined twice):
+///
+/// ```compile_fail,E0428
+/// mod grid {
+///     #[derive(corten::view::Id)]
+///     pub struct RowId<'a>(pub &'a str);
+/// }
+/// mod list {
+///     #[derive(corten::view::Id)]
+///     pub struct RowId<'a>(pub &'a str);
+/// }
+/// fn main() {}
+/// ```
+///
+/// An id holds one key, or none:
+///
+/// ```compile_fail
+/// #[derive(corten::view::Id)]
+/// struct CellId<'a> { row: &'a str, column: u8 }
+/// ```
+///
+/// A component that renders an element for its parent takes the id as a prop of any id type,
+/// so the parent names it once and points a button at it (`commandfor`, `for`):
+///
+/// ```
+/// use corten::{prelude::*, view::Id};
+///
+/// #[component]
+/// fn Confirm<I: Id>(id: I, title: &'static str) -> impl Render {
+///     html! { <dialog id={id}><h2>{title}</h2></dialog> }
+/// }
+///
+/// #[derive(Id)]
+/// struct ArchiveDialogId;
+///
+/// let page = html! {
+///     <button type="button" command="show-modal" commandfor={ArchiveDialogId}>"Archive"</button>
+///     <Confirm id={ArchiveDialogId} title="Archive?" />
+/// };
+/// assert_eq!(
+///     page.to_html(),
+///     r#"<button type="button" command="show-modal" commandfor="archive-dialog">Archive</button><dialog id="archive-dialog"><h2>Archive?</h2></dialog>"#
+/// );
+/// // A keyed id, borrowed, works the same.
+/// #[derive(Id)]
+/// struct RowDialogId<'a>(&'a str);
+/// let row = RowDialogId("i7");
+/// assert_eq!(html! { <Confirm id={&row} title="Edit?" /> }.to_html(), r#"<dialog id="row-dialog-i7"><h2>Edit?</h2></dialog>"#);
+/// ```
+///
+/// Such a prop does not take text:
+///
+/// ```compile_fail
+/// use corten::{prelude::*, view::Id};
+///
+/// #[component]
+/// fn Confirm<I: Id>(id: I) -> impl Render {
+///     html! { <dialog id={id}></dialog> }
+/// }
+///
+/// let page = html! { <Confirm id="archive-dialog" /> };
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not an element id",
+    label = "an element id is a `#[derive(Id)]` type, like `RowId(&item.id)`"
+)]
+pub trait Id: AttrValue + Render {
+    /// The id without its key: `"row"`.
+    const NAME: &'static str;
+    /// Writes the id (escaped for an attribute).
+    fn write_id(&self, out: &mut String);
+
+    /// A link to this element on the same page, `#id`: a validation summary's link to the field
+    /// it names, a skip link. The id is written as [`Route::at`](crate::route::Route::at) writes
+    /// another page's place, so the link and the element cannot differ.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Id)]
+    /// struct FeedbackId;
+    ///
+    /// #[derive(Id)]
+    /// struct RowId<'a>(&'a str);
+    ///
+    /// let form = html! {
+    ///     <a href={FeedbackId.fragment()}>"Your response"</a>
+    ///     <textarea id={FeedbackId} name="feedback"></textarea>
+    /// };
+    /// assert_eq!(form.to_html(), r##"<a href="#feedback">Your response</a><textarea id="feedback" name="feedback"></textarea>"##);
+    /// // Percent-encoded where the id needs it, as the browser reads a fragment.
+    /// let row = RowId("7 & 8");
+    /// assert_eq!(html! { <a href={row.fragment()}>"Row"</a> }.to_html(), r##"<a href="#row-7%20%26%208">Row</a>"##);
+    /// ```
+    ///
+    /// It takes the id's type, so text does not compile:
+    ///
+    /// ```compile_fail,E0599
+    /// use corten::prelude::*;
+    ///
+    /// let _ = html! { <a href={"feedback".fragment()}>"Your response"</a> };
+    /// ```
+    ///
+    /// A place on the current page is not an address, so the server does not redirect to one:
+    /// a redirect takes [`Route::at`](crate::route::Route::at).
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Id)]
+    /// struct FeedbackId;
+    ///
+    /// async fn reply(req: Req) -> HtmlResult {
+    ///     req.redirect(&FeedbackId.fragment())
+    /// }
+    /// ```
+    fn fragment(&self) -> InPage<'_, Self> {
+        InPage(self)
+    }
+}
+
+/// A link to an element on the same page, `#id`, made by [`Id::fragment`]: an attribute value
+/// (`href={FeedbackId.fragment()}`), not an address.
+pub struct InPage<'a, I: ?Sized>(&'a I);
+
+impl<I: Id + ?Sized> Render for InPage<'_, I> {
+    fn render(&self, out: &mut String) {
+        out.push('#');
+        crate::route::write_fragment(self.0, out);
+    }
+}
+
+impl<I: Id + ?Sized> AttrValue for InPage<'_, I> {
+    fn write_attr(&self, name: &str, out: &mut String) {
+        quoted(name, self, out)
+    }
+}
+
+pub use corten_macros::Id;
+
+impl<T: Id + ?Sized> Id for &T {
+    const NAME: &'static str = T::NAME;
+    fn write_id(&self, out: &mut String) {
+        (**self).write_id(out)
+    }
+}
+
+/// In a patch, removes the element with this id: `<template id="row-7" data-remove></template>`.
+/// It takes an [`Id`], the type the element's markup prints its id with.
+///
+/// ```
+/// use corten::{prelude::*, view::{Id, Remove}};
+///
+/// #[derive(Id)]
+/// struct RowId<'a>(&'a str);
+///
+/// let archived = ["7", "9"];
+/// let patch = html! { for id in archived { {Remove(RowId(id))} } };
+/// assert_eq!(
+///     patch.to_html(),
+///     r#"<template id="row-7" data-remove></template><template id="row-9" data-remove></template>"#
+/// );
+/// ```
+///
+/// An id written as text does not compile:
+///
+/// ```compile_fail
+/// use corten::{prelude::*, view::Remove};
+///
+/// let patch = html! { {Remove(("row-", "7"))} };
+/// ```
+pub struct Remove<T>(pub T);
+
+impl<T: Id> Render for Remove<T> {
+    fn render(&self, out: &mut String) {
+        out.push_str("<template id=\"");
+        self.0.write_id(out);
+        out.push_str("\" data-remove></template>");
+    }
+}
+
+/// In a patch, adds `children` at the end of the element with this id, after what it has:
+/// `<template id="results" data-append>..</template>`. A list that grows (Load more, the next
+/// page of results) gets only its new rows: the server reads and renders one page, and the rows
+/// the page has stay as they are, with what the user did to them.
+///
+/// ```
+/// use corten::{prelude::*, view::{Append, Id}};
+///
+/// #[derive(Id)]
+/// struct ResultsId;
+///
+/// #[derive(Id)]
+/// struct ResultId(u32);
+///
+/// let more = [25, 26];
+/// let patch = html! { {Append(ResultsId, html! { for n in more { <li id={ResultId(n)}>{n}</li> } })} };
+/// assert_eq!(
+///     patch.to_html(),
+///     r#"<template id="results" data-append><li id="result-25">25</li><li id="result-26">26</li></template>"#
+/// );
+/// ```
+///
+/// The list is named by its id type, so an id written as text does not compile:
+///
+/// ```compile_fail
+/// use corten::{prelude::*, view::Append};
+///
+/// let patch = html! { {Append("results", html! { <li>"25"</li> })} };
+/// ```
+pub struct Append<T, V>(pub T, pub V);
+
+impl<T: Id, V: Render> Render for Append<T, V> {
+    fn render(&self, out: &mut String) {
+        out.push_str("<template id=\"");
+        self.0.write_id(out);
+        out.push_str("\" data-append>");
+        self.1.render(out);
+        out.push_str("</template>");
+    }
+}
+
+/// What a `<form data-patch>` answer sends ([`crate::Action::patch`]): elements the runtime puts in
+/// place of the page's elements with the same ids. An element without an id would be dropped in
+/// the browser, so a view is a patch only when the compiler can see that each of its top-level
+/// elements has one:
+///
+/// - `html!` whose top-level elements each have `id={..}` with a [`#[derive(Id)]`](Id) type, and
+///   whose other top-level parts (expressions, components, the bodies of `for`, `if` and
+///   `match`) are patches too. `let` is allowed; text is not.
+/// - A component declared `-> impl Patch`, whose markup is such an `html!`.
+/// - [`Remove`], and a reference, `Option` (`None` sends nothing), `Vec` or slice of patches.
+///
+/// ```
+/// use corten::{prelude::*, view::Remove};
+///
+/// #[derive(Id)]
+/// struct RowId<'a>(&'a str);
+/// #[derive(Id)]
+/// struct StatusId;
+///
+/// #[component]
+/// fn Status(text: &str) -> impl Patch {
+///     html! { <p id={StatusId} role="status">{text}</p> }
+/// }
+///
+/// fn archived<'a>(done: &'a [&'a str]) -> impl Patch + 'a {
+///     html! {
+///         for id in done { {Remove(RowId(id))} }
+///         <Status text="Archived." />
+///     }
+/// }
+/// # let _ = archived(&["7"]);
+/// ```
+///
+/// An element without an id is not a patch, and neither is one whose id is text, nor text:
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, view::Patch};
+/// fn send(_: impl Patch) {}
+/// send(html! { <p>"Saved"</p> });
+/// ```
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, view::Patch};
+/// fn send(_: impl Patch) {}
+/// send(html! { <p id={"status"}>"Saved"</p> });
+/// ```
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, view::Patch};
+/// #[derive(Id)]
+/// struct StatusId;
+/// fn send(_: impl Patch) {}
+/// send(html! { <p id={StatusId}>"Saved"</p> "and more" });
+/// ```
+///
+/// A branch counts too, whether or not it runs:
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, view::Patch};
+/// #[derive(Id)]
+/// struct StatusId;
+/// fn send(_: impl Patch) {}
+/// let saved = true;
+/// send(html! { if saved { <p id={StatusId}>"Saved"</p> } else { <p>"Not saved"</p> } });
+/// ```
+///
+/// A component is a patch only when it says so, and then its markup must be one:
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, view::Patch};
+/// #[derive(Id)]
+/// struct StatusId;
+/// #[component]
+/// fn Status(text: &str) -> impl Render {
+///     html! { <p id={StatusId}>{text}</p> }
+/// }
+/// fn send(_: impl Patch) {}
+/// send(Status { text: "Saved" });
+/// ```
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// #[component]
+/// fn Status(text: &str) -> impl Patch {
+///     html! { <p role="status">{text}</p> }
+/// }
+/// ```
+///
+/// `let`s and then one component are a patch when the component is one, and not otherwise:
+///
+/// ```
+/// use corten::{prelude::*, view::Patch};
+/// #[derive(Id)]
+/// struct StatusId;
+/// #[component]
+/// fn Status(text: &str) -> impl Patch {
+///     html! { <p id={StatusId} role="status">{text}</p> }
+/// }
+/// #[component]
+/// fn Counted(n: u32) -> impl Patch {
+///     html! {
+///         let text = n.to_string();
+///         <Status text={&text} />
+///     }
+/// }
+/// fn send(view: impl Patch) -> String { view.to_html() }
+/// assert_eq!(send(Counted { n: 3 }), r#"<p id="status" role="status">3</p>"#);
+/// ```
+///
+/// A loop over rows known from data is written where the rest of the patch is, with its
+/// `let`s and branches:
+///
+/// ```
+/// use corten::{prelude::*, view::Patch};
+/// #[derive(Id)]
+/// struct FieldId(u32);
+/// #[component]
+/// fn Field<'a>(sku: u32, label: &'a str) -> impl Patch {
+///     html! { <label id={FieldId(sku)}>{label}</label> }
+/// }
+/// fn send(view: impl Patch) -> String { view.to_html() }
+/// let taken = [(4, 2), (9, 0)];
+/// let redrawn = html! {
+///     for (sku, count) in taken {
+///         let label = format!("SKU {sku}");
+///         if count == 0 {
+///             <Field sku={sku} label="none left" />
+///         } else {
+///             <Field sku={sku} label={&label} />
+///         }
+///         for again in 0..1 {
+///             match again {
+///                 0 => {}
+///                 _ => <Field sku={again} label="" />
+///             }
+///         }
+///     }
+/// };
+/// assert_eq!(send(redrawn), r#"<label id="field-4">SKU 4</label><label id="field-9">none left</label>"#);
+/// ```
+///
+/// A part that is not a patch is refused there too, however deep (the error names its kind,
+/// here `ComponentOrExpressionNotAPatch`):
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, view::Patch};
+/// #[component]
+/// fn Field(sku: u32) -> impl Render {
+///     html! { <label>{sku}</label> }
+/// }
+/// fn send(_: impl Patch) {}
+/// let taken = [4, 9];
+/// send(html! { for sku in taken { if sku > 4 { <Field sku={sku} /> } } });
+/// ```
+///
+/// The same holds for a `match` inside a `for`, and a `for` inside a `for`:
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, view::Patch};
+/// #[component]
+/// fn Field(sku: u32) -> impl Render {
+///     html! { <label>{sku}</label> }
+/// }
+/// fn send(_: impl Patch) {}
+/// let taken = [4, 9];
+/// send(html! { for sku in taken { match sku { 4 => { <Field sku={sku} /> } _ => {} } } });
+/// ```
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, view::Patch};
+/// #[component]
+/// fn Field(sku: u32) -> impl Render {
+///     html! { <label>{sku}</label> }
+/// }
+/// fn send(_: impl Patch) {}
+/// let rows = [[4, 9], [1, 2]];
+/// send(html! { for row in rows { for sku in row { <Field sku={sku} /> } } });
+/// ```
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// #[component]
+/// fn Note(text: &str) -> impl Render {
+///     html! { <p>{text}</p> }
+/// }
+/// #[component]
+/// fn Counted(n: u32) -> impl Patch {
+///     html! {
+///         let text = n.to_string();
+///         <Note text={&text} />
+///     }
+/// }
+/// ```
+///
+/// The runtime parses a patch's top-level elements together, as a `<template>`'s content, where
+/// the first element decides how the rest is read. Some shapes are lost wherever they are
+/// written, so `html!` refuses them where it sees the top level
+/// ([design Choice 54](https://github.com/corten-run/corten/blob/main/docs/design.md#choice-html-parse-refusals)):
+/// a table part (`<tr>`, `<td>`, `<tbody>`, `<caption>`, `<col>` ..) after a first `<table>`, which
+/// the parse drops (or, where the patch began with a table part, takes the table apart); an
+/// element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after a first `<col>`;
+/// and after a first other table part, a `<table>`, at the top level or in a later element, which
+/// the parse takes apart, and a `<form>` there whose content it moves out, where an element HTML's
+/// wherever it lands is in or around the form:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct TotalsId;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// let _ = html! { <table id={TotalsId}></table> <tr id={RowId(7)}><td>"7"</td></tr> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct WidthId;
+/// #[derive(Id)]
+/// struct NoteId;
+/// let _ = html! { <col id={WidthId}> <p id={NoteId}>"Wide"</p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct TotalsId;
+/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <div id={TotalsId}><table><tr><td>"7"</td></tr></table></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct FilterId;
+/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <form id={FilterId}><p>"Filters"</p></form> };
+/// ```
+///
+/// Other shapes depend on what came first: a `<p>` and then a `<tr>` lose the row on their own,
+/// but a `<tr>` before both keeps them. `html!` can mark this shape, but it does not refuse the
+/// markup where it is written. [`Action::patch`](crate::Action::patch) checks the concrete view
+/// when a build generates code for sending it whole. A component remains free to write that
+/// markup as part of another view. A debug build checks the actual patch when sent:
+///
+/// ```
+/// use corten::{prelude::*, view::Patch};
+/// #[derive(Id)]
+/// struct StatusId;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[component]
+/// fn NoteAndRow() -> impl Patch {
+///     html! { <p id={StatusId}>"Saved"</p> <tr id={RowId(8)}><td>"8"</td></tr> }
+/// }
+/// fn send(view: impl Patch) -> String { view.to_html() }
+/// let patch = html! { <tr id={RowId(7)}><td>"7"</td></tr> <NoteAndRow /> };
+/// assert_eq!(send(patch), r#"<tr id="row-7"><td>7</td></tr><p id="status">Saved</p><tr id="row-8"><td>8</td></tr>"#);
+/// ```
+///
+/// A `<form>` in an `<svg>` or a `<math>` is foreign content's, which the table's reading never
+/// reaches, so it is kept as written after a first table part, a `<div>` around the drawing or not:
+///
+/// ```
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct ChartId;
+/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <div id={ChartId}><svg><form><g></g></form></svg></div> };
+/// ```
+///
+/// Like every refusal of `html!`, these rest only on the markup between the two elements: what an
+/// expression, a component, or a script or style literal that can end its holder early writes
+/// may leave an element open, as `raw("<table>")` keeps the row after it in its table, so with such output
+/// before the lost element's start tag (in the first element, between the two, or in a later
+/// element that holds the lost one, before it) the shape compiles and the debug check reads what
+/// is sent:
+///
+/// ```
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct TotalsId;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// let opened = corten::raw("<table>");
+/// let patch = html! { <table id={TotalsId}></table> {opened} <tr id={RowId(7)}><td>"7"</td></tr> };
+/// assert_eq!(patch.to_html(), r#"<table id="totals"></table><table><tr id="row-7"><td>7</td></tr>"#);
+/// ```
+///
+/// ```
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct SummaryId;
+/// let opened = corten::raw("<template>");
+/// let patch = html! { <tr id={RowId(7)}><td>"7"</td></tr> <div id={SummaryId}>{opened}<table></table></div> };
+/// assert_eq!(patch.to_html(), r#"<tr id="row-7"><td>7</td></tr><div id="summary"><template><table></table></div>"#);
+/// ```
+///
+/// What a lost top-level element holds does not save it, since the parse loses it at its start tag:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct SummaryId;
+/// let text = "Totals";
+/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <table id={SummaryId}>{text}</table> };
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a patch",
+    label = "a patch replaces elements by id",
+    note = "give each top-level element an id={{..}} with a #[derive(Id)] type, and declare a component sent as a patch `-> impl Patch`"
+)]
+pub trait Patch: Render + __private::PatchSealed {}
+
+impl<F: FnOnce(&mut String) -> S, S: __private::PatchShape> __private::PatchSealed for Html<F> {
+    #[inline(always)]
+    fn __check_whole_patch(&self) {
+        const { S::CHECK_WHOLE }
+    }
+}
+impl<F: FnOnce(&mut String) -> S, S: __private::PatchShape> Patch for Html<F> {}
+impl<T: Id> __private::PatchSealed for Remove<T> {}
+impl<T: Id> Patch for Remove<T> {}
+impl<T: Id, V: Render> __private::PatchSealed for Append<T, V> {}
+impl<T: Id, V: Render> Patch for Append<T, V> {}
+impl<T: Patch + ?Sized> __private::PatchSealed for &T {}
+impl<T: Patch + ?Sized> Patch for &T {}
+impl<T: Patch> __private::PatchSealed for Option<T> {}
+impl<T: Patch> Patch for Option<T> {}
+impl<T: Patch> __private::PatchSealed for [T] {}
+impl<T: Patch> Patch for [T] {}
+impl<T: Patch> __private::PatchSealed for Vec<T> {}
+impl<T: Patch> Patch for Vec<T> {}
+
+/// Trusted HTML, written without escaping. Only for markup the app produced itself.
+pub struct Raw<T>(pub T);
+
+/// Prints `html` as is: `{raw(&markup)}`. Never pass it user input. Markup a view rendered goes
+/// in a [`Rendered`] (`req.rendered(view)`) instead, which keeps what the render noted (sizes from data, the script
+/// modules its handlers use) for the page it is placed in; text placed with `raw` carries only
+/// its attributes, so under `corten dev` a page whose `data-vars` have no rule is an error.
+pub fn raw<T: AsRef<str>>(html: T) -> Raw<T> {
+    Raw(html)
+}
+
+impl<T: AsRef<str>> Render for Raw<T> {
+    fn render(&self, out: &mut String) {
+        out.push_str(self.0.as_ref());
+    }
+}
+
+/// A view rendered once, to place in several answers: a page's body that is also a live stream's
+/// fragment, a part kept while it has not changed. [`crate::Req::rendered`] renders it as the page
+/// would (in the visitor's time zone under [`crate::App::zoned_dates`]), and placed in a page
+/// (`{placed}`, a reference to it) it brings, beside its markup, what its render noted: the values its `style={..}`
+/// wrote (a full page's style block has a rule for each, so sizes from data paint without a
+/// script), the script modules its handlers use (the page loads them) and, in debug builds, the
+/// components that rendered (checked in debug builds). Its dates are the visitor's who asked,
+/// and only that request's answer is marked private for them: place it in that answer, not in
+/// another visitor's or a [`crate::Public`] one.
+///
+/// ```
+/// use corten::{prelude::*, Fragment, Rendered};
+///
+/// #[derive(Id)]
+/// struct CountId;
+///
+/// fn answers(req: &Req) -> (String, Fragment) {
+///     let body: Rendered = req.rendered(html! { <p id={CountId}>"3 open"</p> });
+///     let placed = &body; // a reference: html! takes what it names by value
+///     let page = html! { <main>{placed}</main> }.to_html(); // in the handler: req.page(..)
+///     (page, Fragment::new(body.into_string())) // the same markup, for a live stream
+/// }
+/// # let _ = answers;
+/// ```
+pub struct Rendered {
+    html: String,
+    vars: crate::style::Written,
+    modules: Vec<&'static str>,
+    components: Vec<&'static crate::Component>,
+    /// It drew a form's submit key, so the answer it is placed in is not tagged (a new key each render).
+    drew_key: bool,
+    /// The hints it drew, which a debug build's page checks where it is placed.
+    #[cfg(debug_assertions)]
+    hints: Vec<String>,
+}
+
+impl Rendered {
+    /// Renders `view`, keeping what its render noted ([`crate::Req::rendered`]).
+    pub(crate) fn new(view: impl Render) -> Self {
+        // Rendered inside a page's render, the page keeps what it drew before.
+        let drawing = crate::form::Drawing::start();
+        #[cfg(debug_assertions)]
+        let ((((html, components), modules), vars), hints) = crate::form::collect_hints(|| {
+            crate::style::capture_vars(|| crate::script::collect(|| crate::style::collect(|| view.to_html())))
+        });
+        #[cfg(not(debug_assertions))]
+        let (((html, components), modules), vars) =
+            crate::style::capture_vars(|| crate::script::collect(|| crate::style::collect(|| view.to_html())));
+        let drew_key = drawing.drew();
+        Rendered {
+            html,
+            vars,
+            modules,
+            components,
+            drew_key,
+            #[cfg(debug_assertions)]
+            hints,
+        }
+    }
+
+    /// The markup.
+    pub fn as_str(&self) -> &str {
+        &self.html
+    }
+
+    /// The markup, without a copy (a live stream's `Fragment::new`).
+    pub fn into_string(self) -> String {
+        self.html
+    }
+}
+
+impl Render for Rendered {
+    fn render(&self, out: &mut String) {
+        out.push_str(&self.html);
+        crate::style::replay_vars(&self.vars);
+        for module in &self.modules {
+            crate::script::uses(module);
+        }
+        for component in &self.components {
+            crate::style::__private::rendered(component);
+        }
+        if self.drew_key {
+            crate::form::DREW_KEY.set(true);
+        }
+        #[cfg(debug_assertions)]
+        for hint in &self.hints {
+            crate::form::drew_hint(hint);
+        }
+    }
+}
+
+/// For each byte, 0 when it is written as is, else the index of its entity in `ENTITIES` plus one.
+static ESCAPES: [u8; 256] = {
+    let mut table = [0u8; 256];
+    table[b'&' as usize] = 1;
+    table[b'<' as usize] = 2;
+    table[b'>' as usize] = 3;
+    table[b'"' as usize] = 4;
+    table[b'\'' as usize] = 5;
+    table
+};
+const ENTITIES: [&str; 5] = ["&amp;", "&lt;", "&gt;", "&quot;", "&#39;"];
+
+/// Appends `text` to `out`, escaped for HTML text and double-quoted attribute values.
+#[inline]
+pub fn escape_into(text: &str, out: &mut String) {
+    // Most text has nothing to escape; a short string is one test (`next_escaped` would check
+    // anything under eight bytes one byte at a time). The loop is a function of its own, so text
+    // with nothing to escape does not save and restore the registers the loop needs.
+    if crate::ascii::any(text.as_bytes(), crate::ascii::html) {
+        escape_each(text, out)
+    } else {
+        out.push_str(text)
+    }
+}
+
+/// [`escape_into`] for text that may have a byte to escape.
+#[inline(never)]
+fn escape_each(text: &str, out: &mut String) {
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    while let Some(i) = next_escaped(bytes, start) {
+        out.push_str(&text[start..i]);
+        out.push_str(ENTITIES[ESCAPES[bytes[i] as usize] as usize - 1]);
+        start = i + 1;
+    }
+    out.push_str(&text[start..]);
+}
+
+/// The index of the first byte from `from` on that `escape_into` replaces. Most text has none, so
+/// it skips eight bytes at a time while none of them is one, and finds it in those eight with the
+/// table.
+#[inline]
+fn next_escaped(bytes: &[u8], from: usize) -> Option<usize> {
+    let escaped = |chunk: &[u8]| chunk.iter().position(|&byte| ESCAPES[byte as usize] != 0);
+    let mut i = from;
+    while let Some(chunk) = bytes.get(i..i + 8) {
+        // The word test can also stop at a `#`; the table then finds nothing and the skip goes on.
+        if crate::ascii::html(u64::from_le_bytes(chunk.try_into().expect("eight bytes"))) {
+            if let Some(at) = escaped(chunk) {
+                return Some(i + at);
+            }
+        }
+        i += 8;
+    }
+    escaped(&bytes[i..]).map(|at| i + at)
+}
+
+/// `value`'s `Display` output, escaped, without an intermediate string.
+pub fn escape_display(value: &(impl fmt::Display + ?Sized), out: &mut String) {
+    struct Escaping<'a>(&'a mut String);
+    impl fmt::Write for Escaping<'_> {
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            escape_into(s, self.0);
+            Ok(())
+        }
+    }
+    let _ = fmt::write(&mut Escaping(out), format_args!("{value}"));
+}
+
+impl Render for str {
+    #[inline]
+    fn render(&self, out: &mut String) {
+        escape_into(self, out)
+    }
+}
+
+impl Render for String {
+    #[inline]
+    fn render(&self, out: &mut String) {
+        escape_into(self, out)
+    }
+}
+
+impl Render for Cow<'_, str> {
+    fn render(&self, out: &mut String) {
+        escape_into(self, out)
+    }
+}
+
+impl Render for char {
+    fn render(&self, out: &mut String) {
+        escape_into(self.encode_utf8(&mut [0; 4]), out)
+    }
+}
+
+impl<T: Render + ?Sized> Render for &T {
+    #[inline]
+    fn render(&self, out: &mut String) {
+        (**self).render(out)
+    }
+
+    /// The view's own, so a view passed by reference keeps its size.
+    fn to_html(&self) -> String {
+        (**self).to_html()
+    }
+}
+
+impl<T: Render + ?Sized> Render for Box<T> {
+    fn render(&self, out: &mut String) {
+        (**self).render(out)
+    }
+
+    fn to_html(&self) -> String {
+        (**self).to_html()
+    }
+}
+
+impl<T: Render + ?Sized> Render for Rc<T> {
+    fn render(&self, out: &mut String) {
+        (**self).render(out)
+    }
+}
+
+impl<T: Render + ?Sized> Render for Arc<T> {
+    fn render(&self, out: &mut String) {
+        (**self).render(out)
+    }
+}
+
+/// Nothing for `None`.
+impl<T: Render> Render for Option<T> {
+    fn render(&self, out: &mut String) {
+        if let Some(value) = self {
+            value.render(out)
+        }
+    }
+
+    /// The view's own, so an optional view keeps its size.
+    fn to_html(&self) -> String {
+        self.as_ref().map_or_else(String::new, Render::to_html)
+    }
+}
+
+/// Each item in order.
+impl<T: Render> Render for [T] {
+    fn render(&self, out: &mut String) {
+        for item in self {
+            item.render(out)
+        }
+    }
+}
+
+impl<T: Render> Render for Vec<T> {
+    fn render(&self, out: &mut String) {
+        self.as_slice().render(out)
+    }
+}
+
+impl Render for () {
+    fn render(&self, _: &mut String) {}
+}
+
+/// Each part in order, without building a string: `aria-label={("Remove ", &item.name)}`.
+macro_rules! tuples {
+    ($(($($name:ident),+)),*) => {$(
+        impl<$($name: Render),+> Render for ($($name,)+) {
+            #[allow(non_snake_case)]
+            fn render(&self, out: &mut String) {
+                let ($($name,)+) = self;
+                $($name.render(out);)+
+            }
+        }
+
+        impl<$($name: Render),+> AttrValue for ($($name,)+) {
+            fn write_attr(&self, name: &str, out: &mut String) {
+                quoted(name, self, out)
+            }
+        }
+    )*};
+}
+tuples!((A, B), (A, B, C), (A, B, C, D));
+
+pub(crate) fn push_u64(mut n: u64, out: &mut String) {
+    // One or two digits, most of a page's counts and quantities: pushed with no buffer.
+    if n < 100 {
+        if n >= 10 {
+            out.push(char::from(b'0' + (n / 10) as u8));
+        }
+        out.push(char::from(b'0' + (n % 10) as u8));
+        return;
+    }
+    // Two digits per division, lowest first, then written highest first as two-digit text: one
+    // `push_str` a pair, whose text was checked once when the table was made, in place of a `push`
+    // a digit. Rust 1.98's `NumBuffer` is faster for long numbers but measured no faster on a page
+    // (#1089).
+    let mut pairs = [0u8; 10];
+    let mut len = 0;
+    while n >= 100 {
+        pairs[len] = (n % 100) as u8;
+        n /= 100;
+        len += 1;
+    }
+    out.reserve(2 * len + 2);
+    if n >= 10 {
+        out.push_str(crate::ascii::pair(n as u8));
+    } else {
+        out.push(char::from(b'0' + n as u8));
+    }
+    for &pair in pairs[..len].iter().rev() {
+        out.push_str(crate::ascii::pair(pair));
+    }
+}
+
+macro_rules! unsigned {
+    ($($t:ty),*) => {$(
+        impl Render for $t {
+            #[inline]
+            fn render(&self, out: &mut String) {
+                push_u64(*self as u64, out)
+            }
+        }
+    )*};
+}
+unsigned!(u8, u16, u32, u64, usize);
+
+macro_rules! signed {
+    ($($t:ty),*) => {$(
+        impl Render for $t {
+            #[inline]
+            fn render(&self, out: &mut String) {
+                if *self < 0 {
+                    out.push('-');
+                }
+                push_u64(self.unsigned_abs() as u64, out)
+            }
+        }
+    )*};
+}
+signed!(i8, i16, i32, i64, isize);
+
+// Digits and `-`: nothing to escape, so written as they are.
+macro_rules! display {
+    ($($t:ty),*) => {$(
+        impl Render for $t {
+            fn render(&self, out: &mut String) {
+                let _ = fmt::Write::write_fmt(out, format_args!("{self}"));
+            }
+        }
+    )*};
+}
+display!(u128, i128);
+
+impl Render for f32 {
+    fn render(&self, out: &mut String) {
+        let _ = fmt::Write::write_fmt(out, format_args!("{self}"));
+    }
+}
+
+impl Render for f64 {
+    #[inline]
+    fn render(&self, out: &mut String) {
+        if may_tie(*self) {
+            let _ = fmt::Write::write_fmt(out, format_args!("{self}"));
+        } else {
+            push_float(*self, out)
+        }
+    }
+}
+
+/// True when `value` might lie exactly halfway between its two nearest shortest forms, where
+/// zmij keeps the even digit and `Display` rounds up (`312985.125f32` is `312985.12` to one and
+/// `312985.13` to the other), or be too large to check. A tie needs an exact decimal of at most
+/// 18 significant digits ending in 5 at least two places after the point: a short binary
+/// fraction (`x.25`, `n / 2048`). Prices and other decimals are never exact in binary, so they
+/// stay on the fast path.
+fn may_tie(value: f64) -> bool {
+    if !value.is_finite() || value == 0.0 {
+        return false;
+    }
+    if value.abs() >= 9_007_199_254_740_992.0 {
+        return true;
+    }
+    let bits = value.to_bits();
+    let biased = ((bits >> 52) & 0x7ff) as i32;
+    let fraction = bits & ((1 << 52) - 1);
+    let (mantissa, exponent) = if biased == 0 { (fraction, -1074) } else { (fraction | (1 << 52), biased - 1075) };
+    let zeros = mantissa.trailing_zeros();
+    // `value` is `odd * 2^exponent` exactly, so its decimal is `odd * 5^-exponent` digits long.
+    let (odd, exponent) = (mantissa >> zeros, exponent + zeros as i32);
+    if exponent > -2 {
+        return false;
+    }
+    exponent >= -27 && u128::from(odd) * 5u128.pow(exponent.unsigned_abs()) < 10u128.pow(19)
+}
+
+/// Writes `value` as its `Display` does (unless `may_tie`): the shortest digits that read back
+/// as the same value, never an exponent, no `.0` on a whole number, `NaN`, `inf` and `-inf`.
+/// The digits come from zmij (a dependency with none of its own), several times faster
+/// than `core::fmt`'s float path; zmij writes `1e+21` and `3.0` where `Display` writes
+/// `1000000000000000000000` and `3`, so the digits are laid out again here.
+fn push_float(value: f64, out: &mut String) {
+    let mut buffer = zmij::Buffer::new();
+    let text = buffer.format(value);
+    let Some((mantissa, exponent)) = text.split_once('e') else {
+        out.push_str(text.strip_suffix(".0").unwrap_or(text));
+        return;
+    };
+    let exponent: i32 = exponent.parse().expect("zmij writes a decimal exponent");
+    let (sign, mantissa) = mantissa.strip_prefix('-').map_or(("", mantissa), |rest| ("-", rest));
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    // At most 17 significant digits, the first before the point.
+    let mut digits = [0u8; 24];
+    let count = whole.len() + fraction.len();
+    digits[..whole.len()].copy_from_slice(whole.as_bytes());
+    digits[whole.len()..count].copy_from_slice(fraction.as_bytes());
+    let digits = std::str::from_utf8(&digits[..count]).expect("ASCII digits");
+    // How many digits come before the decimal point.
+    let point = whole.len() as i32 + exponent;
+    out.push_str(sign);
+    if point <= 0 {
+        out.push_str("0.");
+        out.extend(std::iter::repeat_n('0', point.unsigned_abs() as usize));
+        out.push_str(digits);
+    } else if point as usize >= count {
+        out.push_str(digits);
+        out.extend(std::iter::repeat_n('0', point as usize - count));
+    } else {
+        out.push_str(&digits[..point as usize]);
+        out.push('.');
+        out.push_str(&digits[point as usize..]);
+    }
+}
+
+/// An attribute value. `true` prints the bare name and `false` nothing; `None` leaves the
+/// attribute out; text, numbers and `#[derive(UrlValue)]` enums print ` name="value"`, escaped.
+/// Types that implement only `Display` work in an `html!` attribute too, but not inside an
+/// `Option` (`Option<T>` needs `T: AttrValue`): write `.map(|v| v.to_string())` for one.
+pub trait AttrValue {
+    /// Writes ` name="value"` (`name` already has its leading space), or nothing.
+    fn write_attr(&self, name: &str, out: &mut String);
+}
+
+pub(crate) fn quoted(name: &str, value: &(impl Render + ?Sized), out: &mut String) {
+    out.push_str(name);
+    out.push_str("=\"");
+    value.render(out);
+    out.push('"');
+}
+
+impl AttrValue for bool {
+    fn write_attr(&self, name: &str, out: &mut String) {
+        if *self {
+            out.push_str(name)
+        }
+    }
+}
+
+impl<T: AttrValue> AttrValue for Option<T> {
+    fn write_attr(&self, name: &str, out: &mut String) {
+        if let Some(value) = self {
+            value.write_attr(name, out)
+        }
+    }
+}
+
+impl<T: AttrValue + ?Sized> AttrValue for &T {
+    fn write_attr(&self, name: &str, out: &mut String) {
+        (**self).write_attr(name, out)
+    }
+}
+
+macro_rules! attr_text {
+    ($($t:ty),*) => {$(
+        impl AttrValue for $t {
+            #[inline]
+            fn write_attr(&self, name: &str, out: &mut String) {
+                quoted(name, self, out)
+            }
+        }
+    )*};
+}
+attr_text!(str, String, Cow<'_, str>, char, u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize, f32, f64);
+
+/// Attributes spread into a start tag with `{..value}`.
+///
+/// A start tag that writes an attribute the spread's type writes as well (as [`aria`] writes
+/// `aria-describedby`) does not compile, since a browser keeps an attribute's first value and
+/// drops the rest:
+///
+/// ```compile_fail,E0080
+/// use corten::prelude::*;
+///
+/// #[derive(Id)]
+/// struct SignUpId;
+/// #[derive(Id)]
+/// struct EmailHintId;
+/// #[derive(Fields)]
+/// struct SignUp { email: String }
+///
+/// let errors = Errors::new();
+/// let e = errors.within(SignUpId);
+/// let f = SignUp::FIELDS;
+/// // The hint goes to `aria` instead: `{..e.aria(f.email).hint(&EmailHintId)}`.
+/// let view = html! { <input name={f.email} aria-describedby={EmailHintId} {..e.aria(f.email)}> };
+/// # let _ = view.to_html();
+/// ```
+///
+/// [`aria`]: crate::form::Within::aria
+pub trait Attrs {
+    fn render_attrs(&self, out: &mut String);
+}
+
+impl<T: Attrs + ?Sized> Attrs for &T {
+    fn render_attrs(&self, out: &mut String) {
+        (**self).render_attrs(out)
+    }
+}
+
+impl<T: Attrs> Attrs for Option<T> {
+    fn render_attrs(&self, out: &mut String) {
+        if let Some(attrs) = self {
+            attrs.render_attrs(out)
+        }
+    }
+}
+
+/// The attributes a spread of pairs skips, compared as whole names in any case: the script
+/// wiring, `data-ref`, `data-ref-value`, `data-key`, `data-on` and `data-scope`, which only `ref=`,
+/// `key=`, `on:` and a component's root write, and `data-vars`, which only `style={..}` writes.
+/// These are not every name `html!` refuses written by hand: `data-nav`, `data-nav-group` and
+/// `data-corten-page` still pass through a spread.
+const PRINTED_BY_CORTEN: [&str; 6] = ["data-vars", "data-ref", "data-ref-value", "data-key", "data-on", "data-scope"];
+
+/// `[("data-id", id), ("title", title)]`: each pair as an attribute. Names come from the app's
+/// code; a name with characters an attribute name cannot have is skipped, and so are the names in
+/// `PRINTED_BY_CORTEN`: the script wiring (`data-ref`, `data-ref-value`, `data-key`, `data-on`,
+/// `data-scope`), so a spread cannot hand a script a value or a key its ref's type does not hold,
+/// and `data-vars` (a full page's style block has rules for its values alone). Each pair costs at
+/// most six comparisons, each one a length check before any bytes; spreads of other kinds compare
+/// nothing.
+impl<N: AsRef<str>, V: AttrValue> Attrs for [(N, V)] {
+    fn render_attrs(&self, out: &mut String) {
+        for (name, value) in self {
+            let name = name.as_ref();
+            if !name.is_empty()
+                && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.'))
+                && !PRINTED_BY_CORTEN.iter().any(|printed| name.eq_ignore_ascii_case(printed))
+            {
+                value.write_attr(&format!(" {name}"), out);
+            }
+        }
+    }
+}
+
+impl<N: AsRef<str>, V: AttrValue, const L: usize> Attrs for [(N, V); L] {
+    fn render_attrs(&self, out: &mut String) {
+        self.as_slice().render_attrs(out)
+    }
+}
+
+impl<N: AsRef<str>, V: AttrValue> Attrs for Vec<(N, V)> {
+    fn render_attrs(&self, out: &mut String) {
+        self.as_slice().render_attrs(out)
+    }
+}
+
+/// Used by the code `html!` and `#[component]` generate. Not a public API.
+#[doc(hidden)]
+pub mod __private {
+    use std::fmt::Display;
+
+    /// The `href={..}` of an `<a>` that `aria-label` or `aria-labelledby` names: a value that can
+    /// write no href (`None`, `false`) would leave an element with no role, whose name assistive
+    /// technology drops, so it does not compile (`MayWriteNone` picks it before `HrefAlways`).
+    pub struct NamedHref<'a, T: ?Sized>(pub &'a T);
+
+    pub trait NamedHrefMaybe {
+        fn __named_href(&self)
+        where
+            Self: HrefWritten;
+    }
+
+    impl<T: MayWriteNone + ?Sized> NamedHrefMaybe for NamedHref<'_, T> {
+        #[inline]
+        fn __named_href(&self)
+        where
+            Self: HrefWritten,
+        {
+        }
+    }
+
+    pub trait NamedHrefAlways {
+        fn __named_href(&self);
+    }
+
+    impl<T: ?Sized> NamedHrefAlways for &NamedHref<'_, T> {
+        #[inline]
+        fn __named_href(&self) {}
+    }
+
+    /// The value of a URL attribute that is not a form's address (`href`, `src`, `ping`): a page's
+    /// post's address (`route::Action`), which only a form sends to, does not compile there
+    /// (`IsPost` picks it before `NotPostAny`).
+    pub struct NotPost<'a, T: ?Sized>(pub &'a T);
+
+    pub trait NotPostOwn {
+        fn __not_post(&self)
+        where
+            Self: PostNotLink;
+    }
+
+    impl<T: IsPost + ?Sized> NotPostOwn for NotPost<'_, T> {
+        #[inline]
+        fn __not_post(&self)
+        where
+            Self: PostNotLink,
+        {
+        }
+    }
+
+    pub trait NotPostAny {
+        fn __not_post(&self);
+    }
+
+    impl<T: ?Sized> NotPostAny for &NotPost<'_, T> {
+        #[inline]
+        fn __not_post(&self) {}
+    }
+
+    /// A page's post's address, or a value that may hold one.
+    pub trait IsPost {}
+    impl<R: ?Sized> IsPost for crate::route::Action<'_, R> {}
+    impl<T: IsPost> IsPost for Option<T> {}
+    impl<T: IsPost + ?Sized> IsPost for &T {}
+
+    #[diagnostic::on_unimplemented(
+        message = "a page's post's address is where a form sends, not a link or a file to load",
+        label = "a post's address (page.save()) here",
+        note = "write it as a form's action or a button's formaction, <form method=\"post\" action={{page.save()}}>, and link to the page itself, href={{page}}"
+    )]
+    pub trait PostNotLink {}
+
+    /// An attribute value that may write nothing.
+    pub trait MayWriteNone {}
+    impl<T> MayWriteNone for Option<T> {}
+    impl MayWriteNone for bool {}
+    impl<T: MayWriteNone + ?Sized> MayWriteNone for &T {}
+
+    #[diagnostic::on_unimplemented(
+        message = "an <a> named by aria-label or aria-labelledby takes an href that is always written, not an `Option` or `bool`",
+        label = "may write no href, which leaves the <a> no link, and a screen reader drops its name",
+        note = "put the name in the link as text instead, `<span class={{VisuallyHidden {{}}}}>\"..\"</span>`, which stays when there is no href"
+    )]
+    pub trait HrefWritten {}
+
+    /// The attributes a start tag writes besides its spread, lowercase.
+    pub trait Written {
+        const NAMES: &'static [&'static str];
+    }
+
+    /// The attributes a spread's type may write, lowercase. A type that writes fixed attributes
+    /// declares them here, and `html!` refuses a start tag that writes one of them as well.
+    pub trait Writes {
+        /// A type without the spread's borrows that writes what it does (the type itself at
+        /// `'static` with its parameters `()`), which a later spread in the tag is checked
+        /// against after this one's borrows end.
+        type Static: Writes + 'static;
+        const WRITES: &'static [&'static str];
+    }
+
+    impl<T: Writes + ?Sized> Writes for &T {
+        type Static = T::Static;
+        const WRITES: &'static [&'static str] = T::WRITES;
+    }
+
+    impl<T: Writes> Writes for Option<T> {
+        type Static = T::Static;
+        const WRITES: &'static [&'static str] = T::WRITES;
+    }
+
+    /// What a spread whose attributes are only known when it renders declares: nothing.
+    pub struct Nothing;
+
+    impl Writes for Nothing {
+        type Static = Self;
+        const WRITES: &'static [&'static str] = &[];
+    }
+
+    /// A spread in a start tag that writes other attributes: `(&Spread(&attrs)).check::<N>()`
+    /// meets [`Declared`] when the spread's type is [`Writes`], else [`Undeclared`] (a type
+    /// whose attributes are only known when it renders, or a `dyn Attrs`).
+    pub struct Spread<'a, T: ?Sized>(pub &'a T);
+
+    pub trait Declared {
+        fn check<N: Written>(&self);
+        /// A spread before it in the tag (its [`Spread::marker`]): does not compile when both
+        /// declare a name.
+        fn after<M: Writes>(&self, earlier: &core::marker::PhantomData<M>);
+        /// What a later spread in the tag is checked against.
+        type Marker: Writes + 'static;
+        fn marker(&self) -> core::marker::PhantomData<Self::Marker> {
+            core::marker::PhantomData
+        }
+    }
+
+    impl<T: Writes + ?Sized> Declared for Spread<'_, T> {
+        type Marker = T::Static;
+
+        #[inline(always)]
+        fn check<N: Written>(&self) {
+            const {
+                assert!(
+                    !overlap(T::WRITES, N::NAMES),
+                    "corten: a start tag writes an attribute its spread writes too, and a browser keeps only the first; let the spread write it (a hint goes to the spread: `.hint()` on `e.control(field)`, `.hint(&HintId)` on `e.aria(field)`)"
+                )
+            }
+        }
+
+        #[inline(always)]
+        fn after<M: Writes>(&self, _: &core::marker::PhantomData<M>) {
+            const {
+                assert!(
+                    !overlap(T::WRITES, M::WRITES),
+                    "corten: two spreads in a start tag write the same attribute, and a browser keeps only the first; keep one (`e.control(field)` writes what `e.aria(field)` does)"
+                )
+            }
+        }
+    }
+
+    pub trait Undeclared {
+        #[inline(always)]
+        fn check<N: Written>(&self) {}
+        #[inline(always)]
+        fn after<M: Writes>(&self, _: &core::marker::PhantomData<M>) {}
+        #[inline(always)]
+        fn marker(&self) -> core::marker::PhantomData<Nothing> {
+            core::marker::PhantomData
+        }
+    }
+
+    impl<T: ?Sized> Undeclared for &Spread<'_, T> {}
+
+    /// Whether a name is in both lists (both lowercase).
+    const fn overlap(a: &[&str], b: &[&str]) -> bool {
+        let mut i = 0;
+        while i < a.len() {
+            let mut j = 0;
+            while j < b.len() {
+                if same(a[i].as_bytes(), b[j].as_bytes()) {
+                    return true;
+                }
+                j += 1;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    const fn same(a: &[u8], b: &[u8]) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < a.len() {
+            if a[i] != b[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    /// Which `html!` document this is, from where it is written (FNV-1a): the same in every build
+    /// of the same source, so every instance of a deploy gives a layout the same key.
+    pub const fn shell_id(file: &str, line: u32, column: u32) -> u64 {
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+        let bytes = file.as_bytes();
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut i = 0;
+        while i < bytes.len() {
+            hash = (hash ^ bytes[i] as u64).wrapping_mul(PRIME);
+            i += 1;
+        }
+        hash = (hash ^ line as u64).wrapping_mul(PRIME);
+        (hash ^ column as u64).wrapping_mul(PRIME)
+    }
+
+    use super::{escape_display, AttrValue, Render};
+
+    thread_local! {
+        static HEAD_SCRATCH: std::cell::Cell<String> = const { std::cell::Cell::new(String::new()) };
+    }
+
+    /// What a page puts in its document's `<head>` (an expression or component there), written
+    /// with each element marked for client navigations (see `mark_head_tags`).
+    pub fn head_slot(render: impl FnOnce(&mut String), out: &mut String) {
+        let mut scratch = HEAD_SCRATCH.take();
+        scratch.clear();
+        render(&mut scratch);
+        super::mark_head_tags(&scratch, out);
+        HEAD_SCRATCH.set(scratch);
+    }
+
+    /// The id of an element of the layout that is the page's (`page`), which the runtime finds on
+    /// screen by it: a `#[derive(Id)]` type without a key, not text, so it is the same on every
+    /// page.
+    #[inline]
+    pub fn page_id<I: super::Id + Keyless + ?Sized>(id: &I, out: &mut String) {
+        out.push_str(" id=\"");
+        id.write_id(out);
+        out.push('"');
+    }
+
+    /// A `#[derive(Id)]` unit struct (`struct SectionNavId;`): one id on every page.
+    #[diagnostic::on_unimplemented(
+        message = "an element marked page has one id on every page: `{Self}` is not a #[derive(Id)] unit struct",
+        label = "a keyed id (`struct RowId<'a>(&'a str)`) or text differs from page to page, so the runtime would not find the one on screen",
+        note = "write `#[derive(Id)] struct SectionNavId;` and `<nav page id={{SectionNavId}}>`"
+    )]
+    pub trait Keyless {}
+
+    /// Implemented only by Corten and `#[component]`: what makes [`super::Patch`] a promise
+    /// the compiler checked.
+    pub trait PatchSealed {
+        /// Only a direct `html!` shape can supply a verdict. Wrappers and components still use
+        /// the debug check of what they draw; a component may be only part of a patch.
+        #[inline(always)]
+        fn __check_whole_patch(&self)
+        where
+            Self: Sized,
+        {
+        }
+    }
+
+    // The shape of a view from `html!`, returned by its closure: one per top-level part, `Yes`
+    // when the part is a patch and a type that says why when it is not (the error names it), a
+    // `for`, `if` or `match` body's as an `Option` (it may not run), in nested pairs that end in
+    // `End`. A view is a patch when all of its shape is. Each is a zero-sized type, so working it
+    // out costs nothing at run time, and `Copy`, so a block's shape is read on every pass of a
+    // `for` around it.
+    #[derive(Clone, Copy)]
+    pub struct Yes;
+    /// A component or expression that is not a patch: a component declared `-> impl Render`, text.
+    #[derive(Clone, Copy)]
+    pub struct ComponentOrExpressionNotAPatch;
+    /// An element whose `id={..}` is not a `#[derive(Id)]` type (text, a number).
+    #[derive(Clone, Copy)]
+    pub struct IdNotADeriveIdType;
+    /// Text, or an element with no `id={..}`, at the view's top level.
+    #[derive(Clone, Copy)]
+    pub struct TextOrElementWithoutId;
+    #[derive(Clone, Copy)]
+    pub struct End;
+
+    #[diagnostic::on_unimplemented(
+        message = "this view is not a patch: one of its top-level parts is not an element with a #[derive(Id)] id",
+        label = "a patch replaces elements by id",
+        note = "the type this says is not a PatchShape tells which part: `ComponentOrExpressionNotAPatch` (declare that component -> impl Patch; an expression must be a Patch), `IdNotADeriveIdType` (give the element an id={{..}} of a #[derive(Id)] type) or `TextOrElementWithoutId` (text and elements without an id cannot be a patch's top level); it names the kind of part, not its place, so look for that kind among the view's top-level parts (rustc's `required for` line, when it prints it in full, lists them in order: `Yes` for each that is a patch, an `Option` for the body of a for, if or match)"
+    )]
+    pub trait PatchShape {
+        const CHECK_WHOLE: () = ();
+    }
+    impl PatchShape for Yes {}
+    impl PatchShape for End {}
+    impl<T: PatchShape> PatchShape for Option<T> {}
+    impl<A: PatchShape, B: PatchShape> PatchShape for (A, B) {}
+
+    // `(&Proof(&value)).__shape()` is `Yes` when the value is a patch (`ProofPatch` matches
+    // without an extra reference) and `ComponentOrExpressionNotAPatch` otherwise; `IdProof`
+    // likewise for an element id (`IdNotADeriveIdType`).
+    pub struct Proof<'a, T: ?Sized>(pub &'a T);
+    pub trait ProofPatch {
+        #[inline(always)]
+        fn __shape(&self) -> Yes {
+            Yes
+        }
+    }
+    impl<T: super::Patch + ?Sized> ProofPatch for Proof<'_, T> {}
+    pub trait ProofOther {
+        #[inline(always)]
+        fn __shape(&self) -> ComponentOrExpressionNotAPatch {
+            ComponentOrExpressionNotAPatch
+        }
+    }
+    impl<T: ?Sized> ProofOther for &Proof<'_, T> {}
+
+    pub struct IdProof<'a, T: ?Sized>(pub &'a T);
+    pub trait ProofId {
+        #[inline(always)]
+        fn __id_shape(&self) -> Yes {
+            Yes
+        }
+    }
+    impl<T: super::Id + ?Sized> ProofId for IdProof<'_, T> {}
+    pub trait ProofNotId {
+        #[inline(always)]
+        fn __id_shape(&self) -> IdNotADeriveIdType {
+            IdNotADeriveIdType
+        }
+    }
+    impl<T: ?Sized> ProofNotId for &IdProof<'_, T> {}
+
+    /// A component declared `-> impl Patch` renders its markup through this, so markup that is
+    /// not a patch does not compile.
+    #[inline(always)]
+    pub fn render_patch<T: super::Patch + ?Sized>(view: &T, out: &mut String) {
+        view.render(out)
+    }
+
+    /// `html!` that is `let`s and then one component: built when it renders, as any view is, so
+    /// its props may borrow what the `let`s made. The closure returns [`IsDoc`] when the
+    /// component is a [`super::Document`] (a layout), so the view is one too, [`IsPatch`] when it
+    /// is a [`super::Patch`], so the view is one too, and [`IsView`] otherwise.
+    pub struct One<F> {
+        render: std::cell::Cell<Option<F>>,
+        size: &'static std::sync::atomic::AtomicUsize,
+    }
+
+    /// The component of a [`One`] is a document.
+    pub struct IsDoc;
+    /// The component of a [`One`] is a patch.
+    pub struct IsPatch;
+    /// The component of a [`One`] is a view.
+    pub struct IsView;
+
+    // A `One` is a patch when its component is: `IsPatch` is a patch's shape, `IsView` is not,
+    // so a component that is not a patch gets the same error as any view that is not one.
+    impl PatchShape for IsPatch {}
+    impl<F: FnOnce(&mut String, Option<super::Part>) -> K, K: PatchShape> PatchSealed for One<F> {}
+    impl<F: FnOnce(&mut String, Option<super::Part>) -> K, K: PatchShape> super::Patch for One<F> {}
+
+    impl<F> One<F> {
+        /// Used by `html!`, which gives every call site its own `size`.
+        #[inline]
+        pub fn new(size: &'static std::sync::atomic::AtomicUsize, render: F) -> Self {
+            One { render: std::cell::Cell::new(Some(render)), size }
+        }
+
+        #[inline]
+        fn take(&self) -> F {
+            match self.render.take() {
+                Some(render) => render,
+                None => panic!("a view from html! renders once; call the function that builds it again"),
+            }
+        }
+    }
+
+    impl<F: FnOnce(&mut String, Option<super::Part>) -> K, K> Render for One<F> {
+        #[inline]
+        fn render(&self, out: &mut String) {
+            (self.take())(out, None);
+        }
+
+        fn to_html(&self) -> String {
+            use std::sync::atomic::Ordering;
+            let mut out = String::with_capacity(self.size.load(Ordering::Relaxed).max(256));
+            self.render(&mut out);
+            self.size.store(out.len() + out.len() / 8, Ordering::Relaxed);
+            out
+        }
+    }
+
+    impl<F: FnOnce(&mut String, Option<super::Part>) -> IsDoc> super::Document for One<F> {
+        #[inline]
+        fn render_part(&self, out: &mut String, part: super::Part) {
+            (self.take())(out, Some(part));
+        }
+    }
+
+    // Inside a `One`'s closure: `(&&&OneOf(&component)).__one(out, part)` picks `ViaDocument`
+    // when the component is a document, else `ViaPatch` when it is a patch, else `ViaView`: each
+    // impl is on one reference fewer, so method resolution tries them in that order.
+    pub struct OneOf<'a, T: ?Sized>(pub &'a T);
+
+    pub trait ViaDocument {
+        fn __one(&self, out: &mut String, part: Option<super::Part>) -> IsDoc;
+    }
+
+    impl<T: super::Document + ?Sized> ViaDocument for &&OneOf<'_, T> {
+        #[inline]
+        fn __one(&self, out: &mut String, part: Option<super::Part>) -> IsDoc {
+            match part {
+                Some(part) => self.0.render_part(out, part),
+                None => self.0.render(out),
+            }
+            IsDoc
+        }
+    }
+
+    pub trait ViaPatch {
+        fn __one(&self, out: &mut String, part: Option<super::Part>) -> IsPatch;
+    }
+
+    impl<T: super::Patch + ?Sized> ViaPatch for &OneOf<'_, T> {
+        #[inline]
+        fn __one(&self, out: &mut String, _: Option<super::Part>) -> IsPatch {
+            self.0.render(out);
+            IsPatch
+        }
+    }
+
+    pub trait ViaView {
+        fn __one(&self, out: &mut String, part: Option<super::Part>) -> IsView;
+    }
+
+    impl<T: Render + ?Sized> ViaView for OneOf<'_, T> {
+        #[inline]
+        fn __one(&self, out: &mut String, _: Option<super::Part>) -> IsView {
+            self.0.render(out);
+            IsView
+        }
+    }
+    // Method resolution picks `ViaRender` when the value implements Render (it matches without
+    // an extra reference) and falls back to `ViaDisplay`, so `{x}` works for both.
+    pub struct Wrap<'a, T: ?Sized>(pub &'a T);
+
+    pub trait ViaRender {
+        fn __render(&self, out: &mut String);
+    }
+
+    impl<T: Render + ?Sized> ViaRender for Wrap<'_, T> {
+        #[inline]
+        fn __render(&self, out: &mut String) {
+            self.0.render(out)
+        }
+    }
+
+    pub trait ViaDisplay {
+        fn __render(&self, out: &mut String);
+    }
+
+    impl<T: Display + ?Sized> ViaDisplay for &Wrap<'_, T> {
+        #[inline]
+        fn __render(&self, out: &mut String) {
+            escape_display(self.0, out)
+        }
+    }
+
+    pub struct Attr<'a, T: ?Sized>(pub &'a T);
+
+    pub trait AttrViaValue {
+        fn __attr(&self, name: &str, out: &mut String);
+    }
+
+    impl<T: AttrValue + ?Sized> AttrViaValue for Attr<'_, T> {
+        #[inline]
+        fn __attr(&self, name: &str, out: &mut String) {
+            self.0.write_attr(name, out)
+        }
+    }
+
+    // Tried when the value is no `AttrValue`: text written with `Display`. It matches any value,
+    // so one that is neither is an error about attributes (`AttrText`), not a private method.
+    pub trait AttrViaDisplay {
+        fn __attr(&self, name: &str, out: &mut String)
+        where
+            Self: AttrText;
+    }
+
+    impl<T: ?Sized> AttrViaDisplay for &Attr<'_, T> {
+        #[inline]
+        fn __attr(&self, name: &str, out: &mut String)
+        where
+            Self: AttrText,
+        {
+            self.__text(name, out)
+        }
+    }
+
+    #[diagnostic::on_unimplemented(
+        message = "this value cannot be written in an attribute",
+        label = "not text, a link, an id or an attribute value",
+        note = "an attribute takes text (a type that implements `Display`), a link (a typed route, `&dyn Href` or `Box<dyn Href>`), a `#[derive(Id)]` id, or a type that implements `AttrValue`",
+        note = "if the value is an `Option`: it leaves the attribute out when `None`, and its `Some` takes text (`&str`, `String`, a number), a `#[derive(UrlValue)]` enum or another `AttrValue`, so an `Option` of other `Display` text is written `.map(|v| v.to_string())`"
+    )]
+    pub trait AttrText {
+        fn __text(&self, name: &str, out: &mut String);
+    }
+
+    // Not named in the error: a value that is not text is told what an attribute takes, not that
+    // it lacks `Display`.
+    #[diagnostic::do_not_recommend]
+    impl<T: Display + ?Sized> AttrText for &Attr<'_, T> {
+        fn __text(&self, name: &str, out: &mut String) {
+            out.push_str(name);
+            out.push_str("=\"");
+            escape_display(self.0, out);
+            out.push('"');
+        }
+    }
+
+    // A component parameter that is Copy arrives as its own type; anything else by reference.
+    pub struct Param<'a, T: ?Sized>(pub &'a T);
+
+    pub trait ParamCopy<T> {
+        fn __param(&self) -> T;
+    }
+
+    impl<T: Copy> ParamCopy<T> for Param<'_, T> {
+        #[inline]
+        fn __param(&self) -> T {
+            *self.0
+        }
+    }
+
+    pub trait ParamRef<'a, T: ?Sized> {
+        fn __param(&self) -> &'a T;
+    }
+
+    impl<'a, T: ?Sized> ParamRef<'a, T> for &Param<'a, T> {
+        #[inline]
+        fn __param(&self) -> &'a T {
+            self.0
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

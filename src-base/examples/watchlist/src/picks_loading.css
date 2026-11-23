@@ -1,0 +1,24 @@
+/* The link to the page with the picks read in shows unless a read is bringing them, and the line
+   saying they are on their way only while one is: the runtime's part module marks the picks
+   `aria-busy` then. So the link shows without JavaScript, which reads nothing, when the module
+   does not load, and once the read has failed (offline, or no patch came back), which the module
+   marks `data-corten-read-failed`. The two share one cell, as tall as the taller, so the one that
+   shows takes the other's place and nothing around them moves; the hidden one cannot be focused or
+   clicked, and assistive technology skips it. */
+.waiting {
+  display: grid;
+  justify-items: start;
+}
+.finding,
+.show {
+  grid-area: 1 / 1;
+}
+.finding {
+  visibility: hidden;
+}
+[aria-busy] > .finding {
+  visibility: visible;
+}
+[aria-busy] > .show {
+  visibility: hidden;
+}

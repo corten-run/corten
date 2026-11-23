@@ -1,0 +1,25 @@
+/* Element defaults. The colors are the kit's theme (tokens/ui.tokens.json, light and dark); the
+   header, the bulk bar's and dialog's buttons, the search field, the dialog and the statement table
+   are the kit's components (src/ui/), and each view's own rules are next to it (src/views/*.css). */
+*, *::before, *::after { box-sizing: border-box; }
+/* The root keeps the reader's font size, which the kit's rem sizes follow; the desk's text is a
+   step smaller (on body). */
+:root {
+  color-scheme: light;
+  font: 100%/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--foreground);
+  background: var(--background);
+}
+/* The system's scheme when the page chose none, else the one chosen, as the theme's tokens do. */
+:root:not([data-theme]) { color-scheme: light dark; }
+[data-theme="dark"] { color-scheme: dark; }
+[data-theme="light"] { color-scheme: light; }
+body { margin: 0; font-size: .875rem; }
+main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+h1 { font-size: 1.375rem; margin: 0 0 16px; letter-spacing: -0.01em; }
+h2 { font-size: 1rem; margin: 0 0 8px; }
+button, input { font: inherit; color: inherit; }
+input[type="checkbox"] { accent-color: var(--primary); width: 16px; height: 16px; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+[role="status"]:empty { display: none; }
+[role="status"] { margin: 0 0 12px; padding: 8px 12px; border-radius: var(--radius); background: var(--accent); color: var(--accent-foreground); }

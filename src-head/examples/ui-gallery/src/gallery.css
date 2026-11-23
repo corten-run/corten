@@ -1,0 +1,22 @@
+/* The page: an introduction, then the listing form beside a column of the draft's other cards
+   (one column on a phone), so cards of different heights leave no holes. The components' look is
+   the kit's (src/ui.rs); this is the layout and the parts the kit has no component for. */
+.intro { margin-block-end: 1.5rem; }
+.intro p { margin: .25rem 0 0; color: var(--muted-foreground); }
+.intro nav { max-width: 32rem; margin-block-start: 1.25rem; }
+.grid { display: grid; gap: 1rem; align-items: start; }
+@media (min-width: 52rem) { .grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } }
+.aside { display: grid; gap: 1rem; }
+.order { display: grid; gap: 1.25rem; }
+.row { display: flex; flex-wrap: wrap; align-items: start; gap: 1rem 1.25rem; }
+/* The lowest offer is hidden for a fixed price by the radio's own state, so it is right before the
+   script runs and without it; the script (RequiredWhen) only makes it required or disabled. */
+.order:has(input[value="fixed"]:checked) .floor { display: none; }
+.floor > fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.facts { display: grid; gap: .5rem; font-size: .875rem; }
+.facts > p { margin: 0; }
+.buttons { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.buttons form { margin: 0; }
+@position-try --above { position-area: block-start span-inline-end; }
+.buttons [role="menu"] { position-try-fallbacks: --above, flip-inline; }
+.rename { display: grid; gap: 1rem; margin: 0; }

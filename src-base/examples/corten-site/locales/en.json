@@ -1,0 +1,19 @@
+{
+  "wall": {
+    "ordered": "{count} samples put in order: {ms} ms of script, {frame} ms from the click to the next frame drawn. Requests sent: {requests}.",
+    "scattered": "{count} samples scattered: {ms} ms of script, {frame} ms from the click to the next frame drawn. Requests sent: {requests}."
+  },
+  "ledger": {
+    "drew": "{micros} µs for this page",
+    "load_one": "{count} request, {kb} KB, ready in {ms} ms",
+    "load_other": "{count} requests, {kb} KB, ready in {ms} ms",
+    "since_one": "{count} request, {kb} KB",
+    "since_other": "{count} requests, {kb} KB",
+    "last": "{path}: {kb} KB in {ms} ms"
+  },
+  "answer": {
+    "absent": "not sent on this response",
+    "status": "HTTP {status}",
+    "read": "This page's response headers and its JSON are written in below."
+  }
+}
