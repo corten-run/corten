@@ -1,0 +1,30 @@
+## lscpu
+CPU(s):                                  48
+Model name:                              Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz
+BIOS Model name:                         pc-i440fx-6.1  CPU @ 2.0GHz
+Thread(s) per core:                      1
+Core(s) per socket:                      48
+Socket(s):                               1
+Hypervisor vendor:                       KVM
+L1i cache:                               1.5 MiB (48 instances)
+L2 cache:                                192 MiB (48 instances)
+## uname
+Linux 7.0.0-43-generic x86_64
+## os
+PRETTY_NAME="Ubuntu 24.04.5 LTS"
+## docker
+29.10.0
+## images
+[httparena-corten:gz-base] sha256:5f7b3f72cf09bc63d1800ab47032ec5b1e32ce4dac809cc05fac123e64c0cdca 127832184
+[httparena-corten:gz-cand] sha256:08b8adba6c9f44cf9c9b77e9b4b34b96c1535cb3e7881b5d13ce26e772a495c1 127979236
+[httparena-corten:gzd-cand-pad3100] sha256:4d5c33833241c202e295ee844f802ff37e1405585c7e1d245a6576465fe28245 127983847
+[httparena-corten:gzd-base-pad3100] sha256:aad8cf20211d63c18a0736c784d66ac7bc5947f3c88503d784ab20a0055c301f 127832299
+[httparena-gcannon:gap] sha256:dda3c5b7480c231e0dc1d72e7dcb5c4cf8d03a5cae6d4c019c93d6072c400b2a 117712366
+[httparena-gap-perf:gap] sha256:b61b822c9c2b3ac739fd12722b66065cff1f47948f18040a52211b4d186a5207 327537024
+## perf
+perf version 6.12.118
+## HttpArena clone
+986128bbf527b3b5bf5bc62a0924e377090507a1
+https://github.com/MDA2AV/HttpArena.git
+## rustc in the build image
+FROM rust:1-trixie AS build

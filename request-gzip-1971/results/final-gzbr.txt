@@ -1,0 +1,11 @@
+# 03:10:45 json-gzbr pairs=41 secs=3 conns=4096 load=1.35 env=
+# answers identical but ^(date|content-encoding|etag|content-length|transfer-encoding): (8715 bytes, 9 header lines)
+# done 03:23:04
+pairs used: 40 (skipped the first 1); pairs with failed requests or a counter under 100%: none
+user+kernel cycles/request: before median 403,571 best 371,978 range 371,978-412,221; after median 284,990 best 271,239 range 271,239-290,310
+user cycles/request: before median 335,155 best 308,071 range 308,071-342,041; after median 219,414 best 207,703 range 207,703-222,742
+kernel cycles/request: before median 68,285 best 63,907 range 63,907-71,048; after median 65,618 best 63,095 range 63,095-67,650
+user instructions/request: before median 400,807 best 399,457 range 399,457-402,416; after median 271,224 best 270,120 range 270,120-271,851
+total: per-pair change median -29.22%, range -33.79% to -21.96%, one-sided 95% upper bound on the median -28.76% (the 26th of 40 sorted); pairs lower in B: 40 of 40
+instr: per-pair change median -32.36%, range -32.68% to -32.03%, one-sided 95% upper bound on the median -32.31% (the 26th of 40 sorted); pairs lower in B: 40 of 40
+per-pair total changes: -28.11 -28.69 -28.96 -31.30 -30.19 -28.01 -27.54 -27.83 -29.86 -29.89 -30.87 -25.89 -29.55 -29.22 -30.48 -28.98 -31.99 -30.73 -30.43 -29.41 -27.98 -28.97 -31.94 -28.71 -29.21 -32.05 -28.60 -30.06 -28.99 -27.28 -29.44 -29.92 -28.51 -33.79 -21.96 -29.77 -30.34 -26.96 -28.76 -27.80

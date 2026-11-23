@@ -1,0 +1,10 @@
+round 0 cand 71.4 s |     Finished `release` profile [optimized] target(s) in 1m 10s binary 7445480 bytes 
+round 1 base 70.7 s |     Finished `release` profile [optimized] target(s) in 1m 10s binary 7353952 bytes 
+round 1 cand 71.2 s |     Finished `release` profile [optimized] target(s) in 1m 10s binary 7445480 bytes 
+round 2 cand 71.4 s |     Finished `release` profile [optimized] target(s) in 1m 11s binary 7445480 bytes 
+round 2 base 71.3 s |     Finished `release` profile [optimized] target(s) in 1m 11s binary 7353952 bytes 
+round 3 base 71.2 s |     Finished `release` profile [optimized] target(s) in 1m 10s binary 7353952 bytes 
+round 3 cand 71.3 s |     Finished `release` profile [optimized] target(s) in 1m 10s binary 7445480 bytes 
+round 4 cand 70.9 s |     Finished `release` profile [optimized] target(s) in 1m 10s binary 7445480 bytes 
+round 4 base 70.6 s |     Finished `release` profile [optimized] target(s) in 1m 10s binary 7353952 bytes 
+# buildtime done

@@ -1,0 +1,18 @@
+[package]
+name = "compbench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+brotli = "9"
+flate2 = "1"
+zstd = { version = "0.14", default-features = false }
+libdeflater = "1"
+
+[features]
+zlibrs = ["flate2/zlib-rs"]
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = true

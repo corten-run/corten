@@ -1,0 +1,15 @@
+# 04:20:08 json-zstd pairs=61 secs=3 conns=4096 load=19.58 env=
+# answers identical but Date (8761 bytes, 11 header lines)
+# done 04:38:25
+pairs used: 60 (skipped the first 1); pairs with failed requests or a counter under 100%: none
+user+kernel cycles/request: before median 236,959 best 226,713 range 226,713-244,100; after median 239,144 best 225,677 range 225,677-245,825
+user cycles/request: before median 175,052 best 168,734 range 168,734-179,866; after median 176,704 best 166,810 range 166,810-181,163
+kernel cycles/request: before median 62,136 best 57,979 range 57,979-64,234; after median 62,432 best 58,667 range 58,667-64,662
+user instructions/request: before median 232,876 best 232,261 range 232,261-233,735; after median 232,950 best 232,144 range 232,144-233,772
+user L1 instruction-cache misses/request: before median 4,285 best 4,119.9 range 4,119.9-4,377.7; after median 4,267 best 4,045.8 range 4,045.8-4,394.3
+total: per-pair change median +0.71%, range -4.05% to +4.66%, one-sided 95% upper bound on the median +1.15% (the 37th of 60 sorted); pairs lower in B: 21 of 60
+user: per-pair change median +0.84%, range -3.89% to +4.93%, one-sided 95% upper bound on the median +1.29% (the 37th of 60 sorted); pairs lower in B: 20 of 60
+kernel: per-pair change median +0.36%, range -5.57% to +4.23%, one-sided 95% upper bound on the median +0.98% (the 37th of 60 sorted); pairs lower in B: 27 of 60
+instr: per-pair change median +0.02%, range -0.48% to +0.48%, one-sided 95% upper bound on the median +0.08% (the 37th of 60 sorted); pairs lower in B: 29 of 60
+l1i: per-pair change median -0.30%, range -4.33% to +3.16%, one-sided 95% upper bound on the median +0.07% (the 37th of 60 sorted); pairs lower in B: 35 of 60
+per-pair total changes: +0.27 +1.34 +0.67 +2.39 +0.63 +1.60 +0.28 +3.70 -3.35 -1.53 +0.03 -1.64 -3.47 +1.04 +2.27 +2.41 +0.46 +3.84 -2.29 +0.10 -4.05 +2.45 -0.67 +1.15 +1.48 +1.39 +0.71 +1.87 +2.16 +0.96 -2.54 -0.56 -0.73 +0.94 +0.71 -0.31 +3.87 +3.74 -1.47 -2.07 +3.18 -3.02 +2.26 +3.67 +0.15 +2.93 +4.66 -0.09 +1.70 -0.72 -0.94 -0.55 +2.03 +2.84 +0.86 -0.17 -1.72 +0.84 -0.36 +2.60

@@ -1,0 +1,3 @@
+# 02:15:21 get-only pairs=61 secs=3 conns=4096 load=12.19 env=
+# answers identical but Date (355 bytes, 9 header lines)
+pair 1: httparena-corten:gz-base requests=2530562 failed=0 cycles_user=36026 cycles_kernel=49556 total=85582 instr_user=19411 running=100.00/100.00/100.00

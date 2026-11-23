@@ -1,0 +1,198 @@
+Unable to find image 'python:3-slim' locally
+3-slim: Pulling from library/python
+f01b8d07ba2a: Pulling fs layer
+37fb86c2a767: Pulling fs layer
+490d435ea363: Pulling fs layer
+ba56bf6127ad: Pulling fs layer
+37fb86c2a767: Already exists
+f01b8d07ba2a: Download complete
+490d435ea363: Download complete
+ba56bf6127ad: Download complete
+490d435ea363: Pull complete
+2dca94a5358b: Download complete
+81b0e42c04f5: Download complete
+ba56bf6127ad: Pull complete
+f01b8d07ba2a: Pull complete
+Digest: sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
+Status: Downloaded newer image for python:3-slim
+total 1724
+drwxr-xr-x  2 root root   4096 Nov 23 02:00 .
+drwx------ 15 root root   4096 Nov 23 02:00 ..
+-rw-r--r--  1 root root  13298 Nov 23 01:59 dataset.json
+-rw-r--r--  1 root root  31344 Nov 23 01:48 demo.json
+-rw-r--r--  1 root root 879728 Nov 23 02:00 design.html
+-rw-r--r--  1 root root 251684 Nov 23 02:00 guide-app.html
+-rw-r--r--  1 root root  82208 Nov 23 02:00 guide-views.html
+-rw-r--r--  1 root root   1203 Nov 23 01:02 home.html
+-rw-r--r--  1 root root  32501 Nov 23 01:49 item-long.html
+-rw-r--r--  1 root root   9793 Nov 23 01:02 item.html
+-rw-r--r--  1 root root   9793 Nov 23 01:02 item.json
+-rw-r--r--  1 root root   1203 Nov 23 01:04 page-1.html
+-rw-r--r--  1 root root   1649 Nov 23 01:04 page-2.html
+-rw-r--r--  1 root root 231153 Nov 23 01:48 plan.json
+-rw-r--r--  1 root root  28367 Nov 23 02:00 readme.html
+-rw-r--r--  1 root root  68465 Nov 23 01:48 smoke.json
+-rw-r--r--  1 root root  82923 Nov 23 01:48 workloads.json
+file                           bytes  brotli1      ld1 flate2-1    zstd1  ld1/br1
+home.html                       1024      512      472      504      488  -7.8%
+home.html                       1203      588      545      588      568  -7.3%
+item.html                       1024      423      388      407      399  -8.3%
+item.html                       1536      593      551      591      566  -7.1%
+item.html                       2048      782      719      778      760  -8.1%
+item.html                       3072     1224     1140     1244     1189  -6.9%
+item.html                       4096     1378     1288     1401     1320  -6.5%
+item.html                       6144     1678     1573     1710     1553  -6.3%
+item.html                       8192     2194     2012     2228     1989  -8.3%
+item.html                       9793     2475     2307     2612     2250  -6.8%
+item-long.html                  1024      423      388      407      399  -8.3%
+item-long.html                  1536      593      551      591      566  -7.1%
+item-long.html                  2048      782      719      778      760  -8.1%
+item-long.html                  3072     1224     1140     1244     1189  -6.9%
+item-long.html                  4096     1378     1288     1401     1320  -6.5%
+item-long.html                  6144     1678     1573     1710     1553  -6.3%
+item-long.html                  8192     2194     2012     2228     1989  -8.3%
+item-long.html                 10240     2486     2319     2579     2255  -6.7%
+item-long.html                 12288     2743     2582     2863     2456  -5.9%
+item-long.html                 16384     3242     3092     3452     2840  -4.6%
+item-long.html                 20480     3479     3670     4116     3241  +5.5%
+item-long.html                 24576     3816     4202     4605     3501  +10.1%
+item-long.html                 32501     4440     5367     5587     3981  +20.9%
+guide-app.html                  1024      632      588      608      609  -7.0%
+guide-app.html                  1536      854      794      839      829  -7.0%
+guide-app.html                  2048     1065      974     1042     1015  -8.5%
+guide-app.html                  3072     1506     1379     1491     1434  -8.4%
+guide-app.html                  4096     1931     1769     1950     1835  -8.4%
+guide-app.html                  6144     2759     2542     2850     2624  -7.9%
+guide-app.html                  8192     3638     3345     3809     3419  -8.1%
+guide-app.html                 10240     4463     4092     4756     4179  -8.3%
+guide-app.html                 12288     5313     4880     5680     4969  -8.1%
+guide-app.html                 16384     7052     6469     7652     6569  -8.3%
+guide-app.html                 20480     8709     8092     9662     8336  -7.1%
+guide-app.html                 24576    10337     9615    11607     9914  -7.0%
+guide-app.html                 32768    13782    12833    15673    13254  -6.9%
+guide-app.html                 49152    19992    18819    23351    19434  -5.9%
+guide-app.html                 65536    26809    25446    31597    26206  -5.1%
+guide-app.html                 98304    39026    37411    46854    38781  -4.1%
+guide-app.html                131072    51009    49427    62337    51042  -3.1%
+guide-app.html                251684    94871    94186   119688    93943  -0.7%
+guide-views.html                1024      594      547      586      566  -7.9%
+guide-views.html                1536      851      782      855      809  -8.1%
+guide-views.html                2048     1100     1007     1104     1048  -8.5%
+guide-views.html                3072     1510     1379     1545     1443  -8.7%
+guide-views.html                4096     1955     1788     2018     1862  -8.5%
+guide-views.html                6144     2686     2449     2790     2549  -8.8%
+guide-views.html                8192     3444     3133     3628     3214  -9.0%
+guide-views.html               10240     4232     3843     4501     3961  -9.2%
+guide-views.html               12288     4903     4432     5263     4553  -9.6%
+guide-views.html               16384     6463     5823     7018     5923  -9.9%
+guide-views.html               20480     7770     7277     8772     7516  -6.3%
+guide-views.html               24576     9123     8631    10485     8853  -5.4%
+guide-views.html               32768    12625    11914    14545    12208  -5.6%
+guide-views.html               49152    18606    17802    22162    18145  -4.3%
+guide-views.html               65536    25517    24481    30344    24977  -4.1%
+guide-views.html               82208    32230    31012    38542    31901  -3.8%
+readme.html                     1024      551      518      528      528  -6.0%
+readme.html                     1536      821      777      809      801  -5.4%
+readme.html                     2048     1073     1008     1075     1047  -6.1%
+readme.html                     3072     1534     1440     1577     1478  -6.1%
+readme.html                     4096     2054     1902     2121     1956  -7.4%
+readme.html                     6144     3028     2787     3143     2869  -8.0%
+readme.html                     8192     3845     3529     4029     3648  -8.2%
+readme.html                    10240     4664     4290     4953     4407  -8.0%
+readme.html                    12288     5666     5246     6001     5370  -7.4%
+readme.html                    16384     7508     6858     7995     7043  -8.7%
+readme.html                    20480     8915     8254     9756     8639  -7.4%
+readme.html                    24576    10459     9720    11604    10115  -7.1%
+readme.html                    28367    12052    11223    13520    11653  -6.9%
+design.html                     1024      602      556      593      579  -7.6%
+design.html                     1536      853      793      860      816  -7.0%
+design.html                     2048     1094      999     1096     1023  -8.7%
+design.html                     3072     1564     1441     1613     1474  -7.9%
+design.html                     4096     1990     1824     2075     1856  -8.3%
+design.html                     6144     2990     2737     3135     2771  -8.5%
+design.html                     8192     3832     3508     4065     3550  -8.5%
+design.html                    10240     4758     4366     5074     4425  -8.2%
+design.html                    12288     5650     5165     6030     5224  -8.6%
+design.html                    16384     7368     6714     7919     6794  -8.9%
+design.html                    20480     8685     8189     9742     8406  -5.7%
+design.html                    24576    10332     9716    11665     9971  -6.0%
+design.html                    32768    13445    12643    15369    12958  -6.0%
+design.html                    49152    19293    18622    23065    18770  -3.5%
+design.html                    65536    24852    24083    30127    24251  -3.1%
+design.html                    98304    35964    35031    44277    35455  -2.6%
+design.html                   131072    48697    47435    60064    48165  -2.6%
+design.html                   879728   312312   312520   400869   315378  +0.1%
+dataset.json                    1024      374      353      376      355  -5.6%
+dataset.json                    1536      477      455      481      461  -4.6%
+dataset.json                    2048      582      550      589      544  -5.5%
+dataset.json                    3072      778      715      776      694  -8.1%
+dataset.json                    4096      911      844      919      813  -7.4%
+dataset.json                    6144     1181     1083     1188     1017  -8.3%
+dataset.json                    8192     1418     1307     1432     1208  -7.8%
+dataset.json                   10240     1670     1524     1691     1426  -8.7%
+dataset.json                   12288     1953     1753     1949     1643  -10.2%
+dataset.json                   13298     2081     1865     2076     1733  -10.4%
+demo.json                       1024      504      459      495      485  -8.9%
+demo.json                       1536      642      594      634      616  -7.5%
+demo.json                       2048      803      749      807      768  -6.7%
+demo.json                       3072      917      872      962      883  -4.9%
+demo.json                       4096     1108     1049     1169     1046  -5.3%
+demo.json                       6144     1413     1332     1507     1293  -5.7%
+demo.json                       8192     1628     1537     1780     1484  -5.6%
+demo.json                      10240     1883     1772     2069     1696  -5.9%
+demo.json                      12288     2050     1928     2246     1824  -6.0%
+demo.json                      16384     2484     2338     2712     2198  -5.9%
+demo.json                      20480     2595     2702     3140     2435  +4.1%
+demo.json                      24576     2940     3082     3600     2750  +4.8%
+demo.json                      31344     3545     3743     4429     3290  +5.6%
+smoke.json                      1024      419      390      412      405  -6.9%
+smoke.json                      1536      536      506      538      526  -5.6%
+smoke.json                      2048      596      556      607      584  -6.7%
+smoke.json                      3072      815      764      834      801  -6.3%
+smoke.json                      4096      849      809      914      819  -4.7%
+smoke.json                      6144      924      919     1047      882  -0.5%
+smoke.json                      8192     1004     1032     1194      937  +2.8%
+smoke.json                     10240     1064     1138     1299      989  +7.0%
+smoke.json                     12288     1131     1242     1395     1038  +9.8%
+smoke.json                     16384     1329     1483     1668     1181  +11.6%
+smoke.json                     20480     1284     1675     1893     1226  +30.5%
+smoke.json                     24576     1817     2282     2565     1722  +25.6%
+smoke.json                     32768     2928     3610     4015     2747  +23.3%
+smoke.json                     49152     4367     5549     5906     3972  +27.1%
+smoke.json                     65536     6072     7677     8130     5506  +26.4%
+smoke.json                     68465     6509     8328     8890     5855  +27.9%
+workloads.json                  1024      658      620      633      638  -5.8%
+workloads.json                  1536      951      899      924      919  -5.5%
+workloads.json                  2048     1172     1092     1149     1135  -6.8%
+workloads.json                  3072     1382     1297     1393     1337  -6.2%
+workloads.json                  4096     1801     1680     1826     1728  -6.7%
+workloads.json                  6144     2670     2489     2754     2527  -6.8%
+workloads.json                  8192     3303     3089     3454     3116  -6.5%
+workloads.json                 10240     4064     3838     4278     3858  -5.6%
+workloads.json                 12288     5048     4799     5302     4796  -4.9%
+workloads.json                 16384     6098     5815     6676     5759  -4.6%
+workloads.json                 20480     6912     6676     7780     6701  -3.4%
+workloads.json                 24576     7893     7643     8883     7622  -3.2%
+workloads.json                 32768     9082     8890    10265     8705  -2.1%
+workloads.json                 49152    12700    12608    15149    12284  -0.7%
+workloads.json                 65536    17019    17240    21075    16544  +1.3%
+workloads.json                 82923    20307    20625    25635    19853  +1.6%
+plan.json                       1024      570      519      553      545  -8.9%
+plan.json                       1536      720      664      717      695  -7.8%
+plan.json                       2048      798      734      799      766  -8.0%
+plan.json                       3072      934      866      949      885  -7.3%
+plan.json                       4096     1148     1064     1187     1083  -7.3%
+plan.json                       6144     1422     1324     1490     1279  -6.9%
+plan.json                       8192     1668     1536     1759     1436  -7.9%
+plan.json                      10240     1877     1731     2006     1563  -7.8%
+plan.json                      12288     2113     1936     2267     1698  -8.4%
+plan.json                      16384     2547     2316     2735     1951  -9.1%
+plan.json                      20480     2606     2698     3216     2189  +3.5%
+plan.json                      24576     2958     3069     3680     2441  +3.8%
+plan.json                      32768     3644     3822     4622     2929  +4.9%
+plan.json                      49152     5020     5247     6431     3841  +4.5%
+plan.json                      65536     6314     6656     8264     4742  +5.4%
+plan.json                      98304     9249     9406    11933     6592  +1.7%
+plan.json                     131072    11977    12120    15502     8420  +1.2%
+plan.json                     231153    21420    21634    27623    15670  +1.0%
+# prefixes done

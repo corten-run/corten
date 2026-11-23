@@ -1,0 +1,73 @@
+round 1 | corten-card-market-base | tuned | gzip, br | sent br, 2475 bytes | 0.00 faults a request | 133 us CPU a request | failed 0
+round 1 | corten-card-market-base | tuned | gzip | sent gzip, 2612 bytes | 1.63 faults a request | 173 us CPU a request | failed 0
+round 1 | corten-card-market-base | tuned | br | sent br, 2475 bytes | 0.00 faults a request | 133 us CPU a request | failed 0
+round 1 | corten-card-market-base | tuned | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 107 us CPU a request | failed 0
+round 1 | corten-card-market-base | jemalloc-defaults | gzip, br | sent br, 2475 bytes | 19.35 faults a request | 230 us CPU a request | failed 0
+round 1 | corten-card-market-base | jemalloc-defaults | gzip | sent gzip, 2612 bytes | 11.93 faults a request | 177 us CPU a request | failed 0
+round 1 | corten-card-market-base | jemalloc-defaults | br | sent br, 2475 bytes | 19.37 faults a request | 213 us CPU a request | failed 0
+round 1 | corten-card-market-base | jemalloc-defaults | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 97 us CPU a request | failed 0
+round 1 | corten-card-market-base | glibc | gzip, br | sent br, 2475 bytes | 2.00 faults a request | 180 us CPU a request | failed 0
+round 1 | corten-card-market-base | glibc | gzip | sent gzip, 2612 bytes | 53.01 faults a request | 230 us CPU a request | failed 0
+round 1 | corten-card-market-base | glibc | br | sent br, 2475 bytes | 2.00 faults a request | 170 us CPU a request | failed 0
+round 1 | corten-card-market-base | glibc | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 87 us CPU a request | failed 0
+round 1 | corten-card-market-cand | tuned | gzip, br | sent gzip, 2307 bytes | 0.00 faults a request | 97 us CPU a request | failed 0
+round 1 | corten-card-market-cand | tuned | gzip | sent gzip, 2307 bytes | 0.00 faults a request | 103 us CPU a request | failed 0
+round 1 | corten-card-market-cand | tuned | br | sent br, 2475 bytes | 0.00 faults a request | 150 us CPU a request | failed 0
+round 1 | corten-card-market-cand | tuned | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 87 us CPU a request | failed 0
+round 1 | corten-card-market-cand | jemalloc-defaults | gzip, br | sent gzip, 2307 bytes | 0.00 faults a request | 100 us CPU a request | failed 0
+round 1 | corten-card-market-cand | jemalloc-defaults | gzip | sent gzip, 2307 bytes | 0.00 faults a request | 97 us CPU a request | failed 0
+round 1 | corten-card-market-cand | jemalloc-defaults | br | sent br, 2475 bytes | 19.37 faults a request | 203 us CPU a request | failed 0
+round 1 | corten-card-market-cand | jemalloc-defaults | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 80 us CPU a request | failed 0
+round 1 | corten-card-market-cand | glibc | gzip, br | sent gzip, 2307 bytes | 0.00 faults a request | 170 us CPU a request | failed 0
+round 1 | corten-card-market-cand | glibc | gzip | sent gzip, 2307 bytes | 0.00 faults a request | 100 us CPU a request | failed 0
+round 1 | corten-card-market-cand | glibc | br | sent br, 2475 bytes | 2.00 faults a request | 173 us CPU a request | failed 0
+round 1 | corten-card-market-cand | glibc | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 87 us CPU a request | failed 0
+round 2 | corten-card-market-base | tuned | gzip, br | sent br, 2475 bytes | 0.00 faults a request | 147 us CPU a request | failed 0
+round 2 | corten-card-market-base | tuned | gzip | sent gzip, 2612 bytes | 1.62 faults a request | 153 us CPU a request | failed 0
+round 2 | corten-card-market-base | tuned | br | sent br, 2475 bytes | 0.00 faults a request | 147 us CPU a request | failed 0
+round 2 | corten-card-market-base | tuned | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 83 us CPU a request | failed 0
+round 2 | corten-card-market-base | jemalloc-defaults | gzip, br | sent br, 2475 bytes | 19.39 faults a request | 203 us CPU a request | failed 0
+round 2 | corten-card-market-base | jemalloc-defaults | gzip | sent gzip, 2612 bytes | 11.92 faults a request | 193 us CPU a request | failed 0
+round 2 | corten-card-market-base | jemalloc-defaults | br | sent br, 2475 bytes | 19.37 faults a request | 193 us CPU a request | failed 0
+round 2 | corten-card-market-base | jemalloc-defaults | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 87 us CPU a request | failed 0
+round 2 | corten-card-market-base | glibc | gzip, br | sent br, 2475 bytes | 2.00 faults a request | 163 us CPU a request | failed 0
+round 2 | corten-card-market-base | glibc | gzip | sent gzip, 2612 bytes | 53.01 faults a request | 223 us CPU a request | failed 0
+round 2 | corten-card-market-base | glibc | br | sent br, 2475 bytes | 2.01 faults a request | 167 us CPU a request | failed 0
+round 2 | corten-card-market-base | glibc | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 90 us CPU a request | failed 0
+round 2 | corten-card-market-cand | tuned | gzip, br | sent gzip, 2307 bytes | 0.00 faults a request | 97 us CPU a request | failed 0
+round 2 | corten-card-market-cand | tuned | gzip | sent gzip, 2307 bytes | 0.00 faults a request | 113 us CPU a request | failed 0
+round 2 | corten-card-market-cand | tuned | br | sent br, 2475 bytes | 0.00 faults a request | 150 us CPU a request | failed 0
+round 2 | corten-card-market-cand | tuned | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 87 us CPU a request | failed 0
+round 2 | corten-card-market-cand | jemalloc-defaults | gzip, br | sent gzip, 2307 bytes | 0.00 faults a request | 100 us CPU a request | failed 0
+round 2 | corten-card-market-cand | jemalloc-defaults | gzip | sent gzip, 2307 bytes | 0.00 faults a request | 93 us CPU a request | failed 0
+round 2 | corten-card-market-cand | jemalloc-defaults | br | sent br, 2475 bytes | 19.38 faults a request | 193 us CPU a request | failed 0
+round 2 | corten-card-market-cand | jemalloc-defaults | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 83 us CPU a request | failed 0
+round 2 | corten-card-market-cand | glibc | gzip, br | sent gzip, 2307 bytes | 0.00 faults a request | 97 us CPU a request | failed 0
+round 2 | corten-card-market-cand | glibc | gzip | sent gzip, 2307 bytes | 0.00 faults a request | 100 us CPU a request | failed 0
+round 2 | corten-card-market-cand | glibc | br | sent br, 2475 bytes | 2.01 faults a request | 177 us CPU a request | failed 0
+round 2 | corten-card-market-cand | glibc | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 87 us CPU a request | failed 0
+round 3 | corten-card-market-base | tuned | gzip, br | sent br, 2475 bytes | 0.00 faults a request | 160 us CPU a request | failed 0
+round 3 | corten-card-market-base | tuned | gzip | sent gzip, 2612 bytes | 1.62 faults a request | 163 us CPU a request | failed 0
+round 3 | corten-card-market-base | tuned | br | sent br, 2475 bytes | 0.00 faults a request | 147 us CPU a request | failed 0
+round 3 | corten-card-market-base | tuned | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 80 us CPU a request | failed 0
+round 3 | corten-card-market-base | jemalloc-defaults | gzip, br | sent br, 2475 bytes | 19.35 faults a request | 233 us CPU a request | failed 0
+round 3 | corten-card-market-base | jemalloc-defaults | gzip | sent gzip, 2612 bytes | 11.95 faults a request | 180 us CPU a request | failed 0
+round 3 | corten-card-market-base | jemalloc-defaults | br | sent br, 2475 bytes | 19.37 faults a request | 200 us CPU a request | failed 0
+round 3 | corten-card-market-base | jemalloc-defaults | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 80 us CPU a request | failed 0
+round 3 | corten-card-market-base | glibc | gzip, br | sent br, 2475 bytes | 2.00 faults a request | 167 us CPU a request | failed 0
+round 3 | corten-card-market-base | glibc | gzip | sent gzip, 2612 bytes | 53.04 faults a request | 233 us CPU a request | failed 0
+round 3 | corten-card-market-base | glibc | br | sent br, 2475 bytes | 2.01 faults a request | 163 us CPU a request | failed 0
+round 3 | corten-card-market-base | glibc | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 80 us CPU a request | failed 0
+round 3 | corten-card-market-cand | tuned | gzip, br | sent gzip, 2307 bytes | 0.00 faults a request | 93 us CPU a request | failed 0
+round 3 | corten-card-market-cand | tuned | gzip | sent gzip, 2307 bytes | 0.00 faults a request | 87 us CPU a request | failed 0
+round 3 | corten-card-market-cand | tuned | br | sent br, 2475 bytes | 0.00 faults a request | 200 us CPU a request | failed 0
+round 3 | corten-card-market-cand | tuned | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 90 us CPU a request | failed 0
+round 3 | corten-card-market-cand | jemalloc-defaults | gzip, br | sent gzip, 2307 bytes | 0.00 faults a request | 90 us CPU a request | failed 0
+round 3 | corten-card-market-cand | jemalloc-defaults | gzip | sent gzip, 2307 bytes | 0.00 faults a request | 117 us CPU a request | failed 0
+round 3 | corten-card-market-cand | jemalloc-defaults | br | sent br, 2475 bytes | 19.37 faults a request | 200 us CPU a request | failed 0
+round 3 | corten-card-market-cand | jemalloc-defaults | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 80 us CPU a request | failed 0
+round 3 | corten-card-market-cand | glibc | gzip, br | sent gzip, 2307 bytes | 0.00 faults a request | 103 us CPU a request | failed 0
+round 3 | corten-card-market-cand | glibc | gzip | sent gzip, 2307 bytes | 0.00 faults a request | 97 us CPU a request | failed 0
+round 3 | corten-card-market-cand | glibc | br | sent br, 2475 bytes | 2.00 faults a request | 190 us CPU a request | failed 0
+round 3 | corten-card-market-cand | glibc | gzip, deflate, br, zstd | sent zstd, 2250 bytes | 0.00 faults a request | 100 us CPU a request | failed 0
+# faults done
