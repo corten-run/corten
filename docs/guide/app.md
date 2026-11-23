@@ -147,14 +147,23 @@ connections wait in each listener's queue (up to 511 from `corten::listeners` on
 Linux queues them (reasoned, not measured), the kernel keeps what each has sent so far, up to its
 receive buffer, in the host's TCP memory, and charges it to the container when the app accepts
 the connection, so it lands as the cap frees room. The Dockerfile `corten new` writes preloads jemalloc in the image's last
-stage with that background thread and a 64 KiB thread cache, which keeps brotli's buffers between
-responses ([design Choice 23](../design.md#choice-jemalloc-image)). An image of the app's own adds
+stage with that background thread and a 512 KiB thread cache, which keeps brotli's buffers between
+responses for a page up to about 200 KB ([design Choice 23](../design.md#choice-jemalloc-image));
+with it, on a quiet Linux host, the floods above left 9.3 to 10.3 MiB where glibc's allocator left
+329 to 354 (card-market's image of `bcf4aa073`, three runs each, as are the figures that follow).
+The cache holds what its threads used and an idle app does not give it back: on eight CPUs
+card-market held 38 to 40 MiB at rest after brotli pages of 9.8 KB to 496 KB, and 40 to 54 after
+bursts of 2,000 slow readers of those pages uncompressed, where it held 14 and 16 with a 64 KiB
+cache (and 34 to 35 and 399 to 426 on glibc's allocator). So count 3 to 5 MiB a CPU for it in the
+container's memory when responses run to hundreds of KB. jemalloc's own rule, up to 20 buffers of
+each size a thread, allows 57 MiB a thread at the most; no run here came near that and none was
+built to reach it. An image of the app's own adds
 the same three lines, before any `USER` line; removing them runs the app on glibc's allocator:
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
-ENV MALLOC_CONF=background_thread:true,tcache_max:65536
+ENV MALLOC_CONF=background_thread:true,tcache_max:524288
 ```
 
 Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of
