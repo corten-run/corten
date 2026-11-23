@@ -2217,14 +2217,18 @@ on the page it is in (a validation summary's link to the field it names, a skip 
 `href={FeedbackId.fragment()}`, a bare `#feedback` written the same way: it is a jump within the
 document, never a request, so it is an attribute value and not an address `req.redirect` takes.
 The browser scrolls to a route's place after a full load and after the runtime's navigation
-alike: once the new page is drawn, the runtime has the browser run its own scroll to the fragment
-(the Navigation API's `NavigateEvent.scroll()`), so the element matches `:target` either way (a
-section CSS shows or highlights when linked to), an `<a name>` anchor is found as an `id` is, and a
-page without a place starts at its top. Firefox (159) does this only for the first place in a
-document, a full load's included: for a later one the runtime scrolls to the element itself and
-`:target` matches nothing, so a section that must show when linked to does not rely on `:target`
-alone there. The runtime fetches the page again even when only the `#id` differs from the
-address, since the write may have changed it.
+alike. A link, a form or a redirect the runtime follows (a push or a replace) runs the browser's
+own scroll to the fragment once the new page is drawn (the Navigation API's
+`NavigateEvent.scroll()`), so the element matches `:target` either way (a section CSS shows or
+highlights when linked to), an `<a name>` anchor is found as an `id` is, the fragment is
+percent-decoded as HTML decodes it, and a page without a place starts at its top. Back and
+forward put back the scroll position instead, and a `data-keep-place` navigation keeps it.
+Firefox (159) may skip that scroll, as it does after a document's first fragment scroll (a full
+load's included): the runtime then scrolls to the element itself, so the page is still at it, but
+`:target` may match nothing, or still match an element the swap left in place (outside
+`<main>`). A section that must show when linked to does not rely on `:target` alone there. The
+runtime fetches the page again even when only the `#id` differs from the address, since the
+write may have changed it.
 A client navigation the server sends to a place gets `corten-location` instead of a 303,
 because `fetch` follows a redirect but drops its fragment, and so does the whole page the
 runtime fetches after a write (`corten: page`), so a page a write leads to that sends the browser

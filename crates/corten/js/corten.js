@@ -2691,18 +2691,17 @@ function posts(event) {
 const sourceIn = (event, selector) => event.sourceElement instanceof Element && !!closestOf(event.sourceElement, selector);
 
 /**
- * The element a page's `#fragment` names, found as the browser finds the one it scrolls to: an id,
- * else an `<a name>`, as written, then percent-decoded.
- * @param {string} fragment
+ * The element a page's `#fragment` names, found as HTML finds the one a full load scrolls to: an
+ * id, else an `<a name>`, as written, then percent-decoded. Decoded as HTML does, never throwing: a
+ * `%` without two hex digits stays as written, and bytes that are not UTF-8 read as U+FFFD.
+ * @param {string} fragment an address's, which is ASCII: the URL parser escapes every other character
  */
 function fragmentOf(fragment) {
   const find = (/** @type {string} */ name) =>
     name ? (document.getElementById(name) ?? Array.from(document.getElementsByName(name)).find((el) => localNameOf(el) === "a")) : undefined;
-  let decoded = fragment;
-  try {
-    decoded = decodeURIComponent(fragment);
-  } catch {}
-  return find(fragment) ?? find(decoded);
+  // One character per byte: each escape's, and each ASCII character's own.
+  const bytes = fragment.replace(/%([\da-f]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+  return find(fragment) ?? find(new TextDecoder(undefined, { ignoreBOM: true }).decode(Uint8Array.from(bytes, (c) => c.charCodeAt(0))));
 }
 
 // Only this module has these symbol keys; another script's info has none of them.
@@ -2762,14 +2761,18 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
     // A new page starts at its `#id`, else at the top, by the browser's own scroll to the fragment
     // (`scroll()`), as a full load does: it makes the element `:target`, finds an `<a name>` too,
     // and reads the address the navigation committed (a redirect's). Called here once the page is
-    // swapped in (`scroll: "manual"`), so the element can be checked after it: Firefox's goes to a
-    // document's fragment only the first time (a full load at one counts), and later neither
-    // scrolls there nor sets `:target`, so the element is scrolled to here, still without one.
+    // swapped in (`scroll: "manual"`), so the element can be checked after it: Firefox's may
+    // neither scroll there nor set `:target` (as after a document's first fragment scroll, a full
+    // load's included), so the element is scrolled to here, still without one.
+    // Only a `:target` that `scroll()` set shows it scrolled: Firefox keeps an element the swap
+    // left in place (outside `<main>`) as the target without scrolling to it again, so that one is
+    // scrolled to here too (where the browser scrolled, to the same place again).
     const after = () => {
       if (event.signal.aborted) return;
+      const was = document.querySelector(":target");
       event.scroll();
       const at = fragmentOf(location.hash.slice(1));
-      if (at && document.querySelector(":target") !== at) elementOwn.scrollIntoView.call(at);
+      if (at && (at === was || document.querySelector(":target") !== at)) elementOwn.scrollIntoView.call(at);
     };
     interceptVisit(event, (precommit) => visit(url, event.signal, redirected, false, undefined, startedBy(event), written, through, precommit), after, { scroll: "manual" });
     return;
