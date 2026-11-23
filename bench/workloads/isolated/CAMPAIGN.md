@@ -412,6 +412,16 @@ timing or ownership, a new login or benchmark process, or a changed Docker basel
 still stops sequencing. This does not alter a measured window, prove the host was
 quiet, or repair historical evidence.
 
+An [offline single-group handoff](../CLOUD.md#offline-handoff) writes execution
+version 6. It uses the registered bootstrap and audit epochs without a stream.
+Each phase seal includes the guest SSH fence readbacks before and after work;
+replay requires the exact zero-hit policy and the ordinary native lifetimes,
+workload evidence and audit gates. The two udev-settle cases use monotonic
+bookends taken on that boot, not workstation timestamps. For a finished archive
+the replay result can bind the boot, hostname, ownership token and exact
+bootstrap seal ledger to the collector's reservation. That binding is not a
+whole-host terminal observation or permission to destroy the host.
+
 ## Awaitable intrinsic API
 
 `await validateCampaign({folder,round,commit})` from campaign-verify.mjs accepts the extracted

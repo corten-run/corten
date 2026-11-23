@@ -6,8 +6,8 @@ import { liveGroup } from "./native-roles.mjs";
 
 // Recorded authorization/review events constrain order; they confer no authority.
 export function replayJournal(plan, id, events, status) {
-  const groups = [2, 3, 4, 5].includes(status.executionVersion) ? executionGroups : supportedGroups;
-  assert.ok(status.executionVersion === undefined || [2, 3, 4, 5].includes(status.executionVersion));
+  const groups = [2, 3, 4, 5, 6].includes(status.executionVersion) ? executionGroups : supportedGroups;
+  assert.ok(status.executionVersion === undefined || [2, 3, 4, 5, 6].includes(status.executionVersion));
   const controlAdmissions = new Map();
   let streamSeal;
   let authorized = false, started = false, terminal = false, index = 0, phase = null, command = null, review = "none", commandNumber = 0;
@@ -31,7 +31,7 @@ export function replayJournal(plan, id, events, status) {
       assert.equal(authorized, true, "journal lacks initial authorization record");
       switch (event.kind) {
         case "control-admitted": {
-          assert.ok([4, 5].includes(status.executionVersion), "legacy journal cannot claim registered session proof");
+          assert.ok([4, 5, 6].includes(status.executionVersion), "legacy journal cannot claim registered session proof");
           assert.ok(!controlAdmissions.has(event.epoch), "control epoch admitted twice");
           if (status.executionVersion === 5 && event.epoch !== "bootstrap") assert.equal(event.channel, "stream");
           else assert.equal(event.channel, undefined);
@@ -47,16 +47,16 @@ export function replayJournal(plan, id, events, status) {
           controlAdmissions.set(event.epoch, event); break;
         }
         case "started":
-          if ([4, 5].includes(status.executionVersion)) assert.ok(controlAdmissions.has("bootstrap"), "bootstrap control seal missing");
+          if ([4, 5, 6].includes(status.executionVersion)) assert.ok(controlAdmissions.has("bootstrap"), "bootstrap control seal missing");
           assert.equal(started, false); assert.equal(phases.size, 0); started = true; break;
         case "native-output-reserved": {
           assert.equal(started, true); assert.equal(event.group, plan.order[index]); assert.ok(groups.includes(event.group));
           assert.ok(event.phase === "timing" || (event.group === "json-api" && event.phase === "prepare"));
           if (phase) { phaseComplete(); assert.equal(phase.phase, "prepare"); assert.equal(review, "accepted"); }
           if (event.group === "json-api") assert.equal(event.phase, review === "accepted" ? "timing" : "prepare");
-          if ([3, 4, 5].includes(status.executionVersion) && event.group === "mixed-production") assert.ok(mixedReviewNeeded && mixedAuditStaged);
+          if ([3, 4, 5, 6].includes(status.executionVersion) && event.group === "mixed-production") assert.ok(mixedReviewNeeded && mixedAuditStaged);
           const binding = event.group === "json-api" ? jsonPhase(plan, event.phase, `/bench/campaign/${id}/json-native-audits.json`)
-            : [3, 4, 5].includes(status.executionVersion) && event.group === "mixed-production" ? mixedPhase(plan, id) : plan.bindings[index];
+            : [3, 4, 5, 6].includes(status.executionVersion) && event.group === "mixed-production" ? mixedPhase(plan, id) : plan.bindings[index];
           assert.equal(event.artifactRoot, binding.validation.artifactRoot);
           const key = `${String(index).padStart(2, "0")}-${event.group}-${event.phase}`;
           assert.equal(phases.has(key), false, "native phase repeated");
@@ -96,7 +96,7 @@ export function replayJournal(plan, id, events, status) {
           assert.equal(event.artifactRoot, phase.binding.validation.artifactRoot);
           assert.equal(event.transferDestination, phase.transferDestination);
           assert.match(event.nativeManifestSha256 ?? "", /^[a-f0-9]{64}$/);
-          if ([2, 3, 4, 5].includes(status.executionVersion)) assert.match(event.phaseManifestSha256 ?? "", /^[a-f0-9]{64}$/);
+          if ([2, 3, 4, 5, 6].includes(status.executionVersion)) assert.match(event.phaseManifestSha256 ?? "", /^[a-f0-9]{64}$/);
           phase.phaseManifestSha256 = event.phaseManifestSha256;
           phase.manifestSha256 = event.nativeManifestSha256; phase.sealed = true; break;
         case "review-needed":
@@ -106,15 +106,15 @@ export function replayJournal(plan, id, events, status) {
           assert.equal(event.nativeExit, 1); assert.equal(event.qualification, "blocked");
           reviewNeeded = event; review = "waiting"; break;
         case "audit-staged":
-          if ([4, 5].includes(status.executionVersion)) assert.ok(controlAdmissions.has("audit-json-api"), "audit control seal missing");
+          if ([4, 5, 6].includes(status.executionVersion)) assert.ok(controlAdmissions.has("audit-json-api"), "audit control seal missing");
           assert.equal(review, "waiting"); assert.ok(!command); auditStaged = event; review = "accepted"; break;
         case "mixed-review-needed":
-          assert.ok([3, 4, 5].includes(status.executionVersion)); assert.equal(started, true);
+          assert.ok([3, 4, 5, 6].includes(status.executionVersion)); assert.equal(started, true);
           assert.equal(plan.order[index], "mixed-production"); assert.equal(phase, null); assert.equal(command, null);
           assert.equal(mixedReviewNeeded, null); assert.match(event.subjectSha256 ?? "", /^[a-f0-9]{64}$/);
           mixedReviewNeeded = event; break;
         case "mixed-audit-staged":
-          if ([4, 5].includes(status.executionVersion)) assert.ok(controlAdmissions.has("audit-mixed-production"), "mixed control seal missing");
+          if ([4, 5, 6].includes(status.executionVersion)) assert.ok(controlAdmissions.has("audit-mixed-production"), "mixed control seal missing");
           assert.ok(mixedReviewNeeded); assert.equal(mixedAuditStaged, null); assert.equal(plan.order[index], "mixed-production");
           assert.equal(phase, null); assert.equal(command, null); mixedAuditStaged = event; break;
         case "group-finished": {
@@ -127,7 +127,7 @@ export function replayJournal(plan, id, events, status) {
               if (phase.phase === "prepare") { assert.equal(event.outcome, "failed"); assert.equal(review, "none"); }
               else assert.equal(review, "accepted");
             }
-            if (failedGroups.has(event.group)) assert.ok(event.outcome === "failed" || ([2, 3, 4, 5].includes(status.executionVersion) && event.outcome === "native-validated"), "failed command promoted without native replay");
+            if (failedGroups.has(event.group)) assert.ok(event.outcome === "failed" || ([2, 3, 4, 5, 6].includes(status.executionVersion) && event.outcome === "native-validated"), "failed command promoted without native replay");
             const field = phase.phase === "prepare" ? "manifest" : "nativeManifestSha256";
             assert.match(event[field] ?? "", /^[a-f0-9]{64}$/);
             assert.equal(saved[field], event[field]);
@@ -160,7 +160,7 @@ export function replayJournal(plan, id, events, status) {
   }
   assert.equal(terminal, true, "terminal journal event missing");
   for (const group of failedGroups) assert.ok(status.outcomes.some((r) => r.group === group &&
-    (["failed", "preserved-uncertain"].includes(r.outcome) || [2, 3, 4, 5].includes(status.executionVersion) && r.outcome === "native-validated")));
+    (["failed", "preserved-uncertain"].includes(r.outcome) || [2, 3, 4, 5, 6].includes(status.executionVersion) && r.outcome === "native-validated")));
   const pending = [], seen = new Set();
   for (const item of status.uncollectedNativeRoots) {
     const recorded = [...phases.values()].find((p) => p.group === item.group && p.phase === item.phase);

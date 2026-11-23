@@ -140,9 +140,10 @@ mock.module("./host-lifetime.mjs", { exports: {
       const checks = { accounting: true, terminal: result.terminal, empty: true, observer: true,
         unforced: !result.cancelled && !result.forced, leader: true };
       if (lifetimeFailure?.command === command) Object.assign(checks, lifetimeFailure.checks);
-      if (retainTerminalClock) { assert.equal(mode, "udev-settle"); assert.equal(command, 1); assert.equal(observations, 2); }
+      if (retainTerminalClock && mode !== "offline-fence") { assert.equal(mode, "udev-settle"); assert.equal(command, 1); assert.equal(observations, 2); }
       if (compilerScratch && command === 1) assert.ok(existsSync(join(compilerScratch.target, "scratch")), "target must exist during descriptor sealing");
-      writeFileSync(join(directory, "terminal.json"), JSON.stringify({ ...checks, ...(retainTerminalClock ? { terminalClock: udevClock() } : {}) }));
+      writeFileSync(join(directory, "terminal.json"), JSON.stringify({ ...checks,
+        ...(retainTerminalClock && mode !== "offline-fence" ? { terminalClock: udevClock() } : {}) }));
       if (checks.terminal && checks.empty) settled?.();
       return evidence.tree(directory);
     } };
@@ -317,6 +318,68 @@ test("v4 live campaign retains actual bootstrap proof before baseline and bracke
   writeFileSync(collectionPath, JSON.stringify(collection));
   assert.equal((await validateSavedCampaign({ folder: root, round: "r21", commit: s.plan.commit })).status, "invalid",
     "rehashed journal/collection cannot substitute for watcher termination");
+});
+
+test("offline native phase fences SSH on support CPU, then replays the archived ingress policy", async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
+    { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024 });
+  assert.equal(result.status, 0, result.stderr);
+  const { binding, admission } = JSON.parse(result.stdout), s = setupGroup("localized-marketplace");
+  s.plan.round = "r21"; admittedHost = admission.host; mode = "offline-fence";
+  s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2" }, load: { cpuset: "3-7" } };
+  const table = "corten_bench_native", policy = { nftables: [
+    { metainfo: { json_schema_version: 1 } },
+    { table: { handle: 1, family: "inet", name: table } },
+    { chain: { handle: 2, family: "inet", table, name: "input", type: "filter", hook: "input", prio: 10, policy: "accept" } },
+    { rule: { handle: 3, family: "inet", table, chain: "input", expr: [
+      { match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 22 } },
+      { counter: { packets: 0, bytes: 0 } }, { drop: null },
+    ] } },
+  ] };
+  const events = [];
+  t.mock.method(childProcess, "spawnSync", (program, args, opts) => {
+    if (program === "/usr/bin/python3") {
+      const op = args.at(-2);
+      assert.ok(["window-open", "window-close"].includes(op));
+      assert.equal(calls.length, op === "window-open" ? 0 : 2);
+      assert.equal(args.at(-1), binding.token);
+      events.push(op);
+    } else {
+      assert.equal(program, "/usr/bin/taskset");
+      assert.deepEqual(args.slice(0, 3), ["-c", "0", "/usr/sbin/nft"]);
+      events.push(args[3]);
+      if (args[3] === "-f") assert.match(opts.input, /tcp dport 22 counter drop\n$/);
+      else assert.deepEqual(args.slice(-3), ["table", "inet", table]);
+    }
+    return { status: 0, stdout: JSON.stringify(policy) };
+  });
+  syncBuiltinESMExports();
+  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding, admission, offlineHandoff: true } });
+  assert.equal(s.campaign.status(handle).executionVersion, 6);
+  assert.equal((await s.campaign.advance(handle)).state, "finished");
+  assert.deepEqual(events, ["-f", "-j", "window-open", "window-close", "-j", "delete"]);
+  const collection = join(handle.directory, "collection-manifest.json");
+  writeFileSync(collection, JSON.stringify(s.campaign.collect(handle)));
+  const validate = () => validateSavedCampaign({ folder: root, round: "r21", commit: s.plan.commit });
+  const saved = await validate();
+  assert.equal(saved.status, "blocked", JSON.stringify(saved));
+  assert.deepEqual(saved.offlineTerminal, { ...admission.host, token: binding.token,
+    bootstrapSealSha256: evidence.digest(JSON.stringify(admission.seal.ledger)) });
+  const phase = "00-localized-marketplace-timing", raw = join(handle.directory, phase, "control-ingress.json");
+  const changed = JSON.parse(readFileSync(raw));
+  changed.after.nftables[3].rule.expr[1].counter = { packets: 1, bytes: 60 };
+  assert.throws(() => controlAdmission.verifyOfflineWindow(changed));
+  // Matching hashes cannot repair a bad fence observation.
+  writeFileSync(raw, JSON.stringify(changed));
+  const phaseSeal = evidence.tree(handle.directory).entries.find(({ path }) => /^\d{5}-phase-sealed\.json$/.test(path));
+  const sealPath = join(handle.directory, phaseSeal.path), event = JSON.parse(readFileSync(sealPath));
+  event.phaseManifestSha256 = evidence.phaseSnapshot(join(handle.directory, phase)).sha256;
+  writeFileSync(sealPath, JSON.stringify(event));
+  const retained = JSON.parse(readFileSync(collection)), entries = evidence.tree(handle.directory).entries.filter(({ path }) => path !== "collection-manifest.json");
+  writeFileSync(collection, JSON.stringify({ ...retained, manifest: { entries, sha256: evidence.digest(JSON.stringify(entries)) } }));
+  assert.equal((await validate()).status, "invalid");
 });
 
 test("v5 browser campaign carries the native roles through streamed bookends and saved drain replay", async (t) => {

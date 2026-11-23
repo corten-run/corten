@@ -59,7 +59,14 @@ export function bootstrapControl(input) {
   assert.equal(marker.schema, "benchmark-common-bootstrap/v2", "new native entry requires registered bootstrap");
   assert.equal(marker.round, input.round); assert.equal(marker.commit, input.commit);
   assert.equal(marker.controlHelperSha256, guardianSha256);
-  return { round: input.round, commit: input.commit, token: marker.token, helperSha256: guardianSha256 };
+  assert.equal(marker.group, input.group ?? "all");
+  if (marker.offlineHandoff !== undefined) {
+    assert.equal(marker.offlineHandoff, true);
+    assert.equal(marker.monitorId, undefined);
+    assert.ok(input.group);
+  }
+  return { round: input.round, commit: input.commit, token: marker.token, helperSha256: guardianSha256,
+    ...(marker.offlineHandoff ? { offlineHandoff: true } : {}) };
 }
 export async function waitControlAdmission(binding, epoch, { signal, deadline } = {}) {
   const root = controlRoot(binding), stat = lstatSync(root);
@@ -85,6 +92,58 @@ export async function waitControlAdmission(binding, epoch, { signal, deadline } 
 export function beginControlWindow(binding) {
   controlOperation(binding, "window-open");
   return () => controlOperation(binding, "window-close");
+}
+
+const fenceTable = "corten_bench_native";
+const fenceRules = `create table inet ${fenceTable}
+add chain inet ${fenceTable} input { type filter hook input priority 10; policy accept; }
+add rule inet ${fenceTable} input tcp dport 22 counter drop
+`;
+const nft = (args, input = "") => {
+  const result = spawnSync("/usr/bin/taskset", ["-c", "0", "/usr/sbin/nft", ...args],
+    { cwd: "/bench", encoding: "utf8", input, timeout: 10000, maxBuffer: 8192,
+      env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" } });
+  assert.ok(!result.error && !result.signal && result.status === 0, "native SSH fence unavailable");
+  return result.stdout;
+};
+const fenceRead = () => JSON.parse(nft(["-j", "-a", "list", "table", "inet", fenceTable]));
+export function verifyOfflineFence(sample) {
+  assert.deepEqual(Object.keys(sample), ["nftables"]);
+  const [meta, ...rules] = sample.nftables;
+  assert.equal(meta?.metainfo?.json_schema_version, 1);
+  // Kernel-assigned handles are not policy. All other table, chain and rule
+  // fields, including order and the absence of other rules, are exact.
+  assert.deepEqual(rules.map((row) => {
+    const [[kind, { handle, ...body }], ...rest] = Object.entries(row);
+    assert.equal(rest.length, 0);
+    assert.ok(Number.isSafeInteger(handle) && handle > 0);
+    return { [kind]: body };
+  }), [
+    { table: { family: "inet", name: fenceTable } },
+    { chain: { family: "inet", table: fenceTable, name: "input", type: "filter", hook: "input", prio: 10, policy: "accept" } },
+    { rule: { family: "inet", table: fenceTable, chain: "input",
+      expr: [{ match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 22 } },
+        { counter: { packets: 0, bytes: 0 } }, { drop: null }] } },
+  ]);
+}
+export function verifyOfflineWindow(proof) {
+  assert.deepEqual(Object.keys(proof).sort(), ["after", "before"]);
+  verifyOfflineFence(proof.before); verifyOfflineFence(proof.after);
+  assert.deepEqual(proof.before, proof.after, "native SSH fence changed during phase");
+}
+export function beginOfflineWindow(binding) {
+  // Block new SSH input before checking that the preceding guarded epoch
+  // drained. On uncertainty leave the fence to systemd's terminal stop hook.
+  nft(["-f", "-"], fenceRules);
+  const before = fenceRead(); verifyOfflineFence(before);
+  const close = beginControlWindow(binding);
+  return () => {
+    close();
+    const proof = { before, after: fenceRead() };
+    verifyOfflineWindow(proof);
+    nft(["delete", "table", "inet", fenceTable]);
+    return proof;
+  };
 }
 export function controlOperation(binding, mode) {
   assert.ok(["activate", "window-open", "window-close"].includes(mode));

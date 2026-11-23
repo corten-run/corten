@@ -62,17 +62,18 @@ export async function runCampaignEntry(args) {
       && readAuditInbox(handle.directory, transport.group)?.sha256 === transport.sha256;
   } });
   try {
-    const control = bootstrapControl(input);
-    if (control.offlineHandoff) assert.ok(input.group, "offline handoff requires one group");
+    const { offlineHandoff, ...control } = bootstrapControl(input);
+    if (offlineHandoff) assert.ok(input.group, "offline handoff requires one group");
     const admission = await waitControlAdmission(control, "bootstrap", { signal: abort.signal, deadline: Date.now() + 45 * 60000 });
-    if (control.offlineHandoff) assert.equal(admission.apparatus, undefined, "offline handoff has a stream apparatus");
+    if (offlineHandoff) assert.equal(admission.apparatus, undefined, "offline handoff has a stream apparatus");
     if (admission.apparatus) {
       stream = await superviseControlStream(control, admission, abort);
     }
     controlOperation(control, "activate");
     const request = { round: input.round, commit: input.commit };
     const plan = input.group === undefined ? bindCampaign(request) : bindGroupCampaign({ ...request, group: input.group }, input.loadLayout ?? input.placement);
-    handle = await campaign.begin(plan, { stateRoot: input.stateRoot, signal: abort.signal, control: { binding: control, admission, stream } });
+    handle = await campaign.begin(plan, { stateRoot: input.stateRoot, signal: abort.signal,
+      control: { binding: control, admission, stream, ...(offlineHandoff ? { offlineHandoff: true } : {}) } });
     let status = campaign.status(handle), deadline = null;
     while (status.state === "active" || status.state === "blocked-review-needed") {
       stream?.progress(status);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { beginControlWindow, verifyControlAdmission } from "./control-admission.mjs";
+import { beginControlWindow, beginOfflineWindow, verifyControlAdmission } from "./control-admission.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
@@ -66,7 +66,7 @@ export function createCampaign({ authorize }) {
     own(c.handle);
     return freeze({ schema: "benchmark-isolated-campaign-status/v1", campaign: c.handle.id, round: c.plan.round,
       campaignSha256: c.plan.campaignSha256, state: c.state, nextGroup: c.plan.order[c.index] ?? null,
-      executionVersion: c.stream ? 5 : c.control ? 4 : 3,
+      executionVersion: c.offlineHandoff ? 6 : c.stream ? 5 : c.control ? 4 : 3,
       outcomes: structuredClone(c.outcomes), auditSubjectSha256: c.audit?.subject.subjectSha256 ?? null,
       uncollectedNativeRoots: structuredClone(c.pendingNative),
       mixedAuditSubjectSha256: c.mixedAudit?.subject.subjectSha256 ?? null,
@@ -152,15 +152,15 @@ export function createCampaign({ authorize }) {
     const pending = { group: binding.request.group, phase: phaseName, artifactRoot: binding.validation.artifactRoot,
       ...(transfer ? { transferDestination: `${relative}/native` } : {}) };
     c.pendingNative.push(pending); event(c, "native-output-reserved", pending);
-    if (c.stream) {
+    if (c.stream || c.offlineHandoff) {
       const { cpus, roles } = nativeControlPartition(binding);
-      c.stream.open(cpus, roles);
+      c.stream?.open(cpus, roles);
     }
-    const closeControlWindow = c.control ? beginControlWindow(c.control) : null;
-    const settlePolicy = c.stream ? udevSettlePolicy(binding.request.group, phaseName) : null;
+    const closeControlWindow = c.offlineHandoff ? beginOfflineWindow(c.control) : c.control ? beginControlWindow(c.control) : null;
+    const settlePolicy = c.stream || c.offlineHandoff ? udevSettlePolicy(binding.request.group, phaseName) : null;
     const retainUdev = settlePolicy !== null;
-    const before = observeHost(c.stream?.registration, retainUdev); save(c, `${relative}/host-before.json`, before);
-    if (c.stream) verifyHostBoundary(before, before);
+    const before = observeHost(c.stream?.registration, retainUdev, c.offlineHandoff); save(c, `${relative}/host-before.json`, before);
+    if (c.stream || c.offlineHandoff) verifyHostBoundary(before, before);
     const commands = [];
     for (const invocation of [...binding.preparation.fixtures, binding.execution.invocation]) {
       if (signal?.aborted) throw new Error("campaign cancelled");
@@ -188,14 +188,14 @@ export function createCampaign({ authorize }) {
     const terminalClock = commands.at(-1)?.terminalClock;
     try {
       if (!transfer) verifyWorkingSources(c.plan.bindings[0]);
-      after = observeHost(c.stream?.registration, retainUdev);
+      after = observeHost(c.stream?.registration, retainUdev, c.offlineHandoff);
       if (terminalClock) after.terminalClock = terminalClock;
       save(c, `${relative}/host-after.json`, after);
-      if (retainUdev && terminalClock && !signal?.aborted && udevSettleCandidates(before, after, terminalClock, settlePolicy)) {
+      if (retainUdev && terminalClock && !signal?.aborted && udevSettleCandidates(before, after, terminalClock, settlePolicy, c.offlineHandoff)) {
         await delay(udevSettleMs, undefined, { signal });
-        c.stream.check();
+        c.stream?.check();
         signal?.throwIfAborted();
-        settled = observeHost(c.stream.registration, true);
+        settled = observeHost(c.stream?.registration, true, c.offlineHandoff);
         save(c, `${relative}/host-after-settled.json`, settled);
       }
     } catch (error) { boundaryError = error; }
@@ -205,6 +205,10 @@ export function createCampaign({ authorize }) {
     else { assert.ok(commands.some((r) => !r.success), "native output missing"); mkdirSync(native, { mode: 0o700 }); manifest = tree(native); }
     const p = { relative, native, original, manifest, retainsOriginal: present && !transfer, commands, cleanup: null };
     save(c, `${relative}/native-manifest.json`, manifest);
+    if (c.offlineHandoff) {
+      if (boundaryError) throw boundaryError;
+      save(c, `${relative}/control-ingress.json`, closeControlWindow());
+    }
     event(c, "phase-sealed", { ...pending, nativeManifestSha256: manifest.sha256,
       phaseManifestSha256: phaseSnapshot(directory, binding.request.group === "json-api" && phaseName === "prepare").sha256 });
     c.phases.push(p);
@@ -213,9 +217,10 @@ export function createCampaign({ authorize }) {
     // The live runners write Git-visible result trees. Recheck every source
     // only after the exact reserved tree is in external phase custody.
     if (transfer) verifyWorkingSources(c.plan.bindings[0]);
-    closeControlWindow?.();
+    if (!c.offlineHandoff) closeControlWindow?.();
     c.stream?.close();
-    p.cleanup = settled ? verifySettledHostBoundary(before, after, settled, terminalClock, settlePolicy) : verifyHostBoundary(before, after);
+    p.cleanup = settled ? verifySettledHostBoundary(before, after, settled, terminalClock, settlePolicy, c.offlineHandoff)
+      : verifyHostBoundary(before, after);
     return p;
   }
   function cancelled(c, phase, signal) {
@@ -247,10 +252,13 @@ export function createCampaign({ authorize }) {
       const info = lstatSync(directory), handle = Object.freeze({ id, directory });
       const c = { handle, root, directory, inode: info.ino, device: info.dev, lockHash: digest(lock), plan,
         control: control ? freeze(structuredClone(control.binding)) : null, controlEpochs: new Set(), stream: control?.stream ?? null,
+        offlineHandoff: control?.offlineHandoff === true,
         files: [], sequence: 0, commandIndex: 0, busy: false, index: 0, phases: [], outcomes: [], attempted: new Set(), pendingNative: [], state: "active", audit: null, mixedAudit: null };
       owned.set(handle, c); save(c, "plan.json", plan); event(c, "authorized", { subject, trustBoundary: "explicit trusted parent policy, not review data" });
       try {
         if (control) {
+          if (c.offlineHandoff) assert.ok(plan.order.length === 1 && !control.admission.apparatus && !c.stream,
+            "offline handoff requires one group without a stream");
           assert.equal(control.binding.commit, plan.commit); assert.equal(control.binding.round, plan.round);
           verifyControlAdmission(control.binding, "bootstrap", control.admission);
           c.control = freeze(structuredClone(control.binding));

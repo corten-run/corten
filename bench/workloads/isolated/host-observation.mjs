@@ -30,7 +30,7 @@ const t = (value) => {
   return match && BigInt(match[1] + match[2]);
 };
 const monotonic = (value) => typeof value === "string" && /^(0|[1-9]\d{0,19})$/.test(value) ? BigInt(value) : null;
-const apparatusTime = (observation) => monotonic(observation.controlApparatus?.sample?.monoNs);
+const boundaryTime = (observation, offline) => monotonic(offline ? observation.offlineMonoNs : observation.controlApparatus?.sample?.monoNs);
 const identityOf = (p) => `${p.pid}:${p.startTicks}`;
 const sameProcess = (a, b) => a && b && a.pid === b.pid && a.startTicks === b.startTicks;
 
@@ -71,7 +71,7 @@ export function dockerRead(args) {
     windowsHide: true, env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(),
       LANG: "C.UTF-8", TZ: "UTC", GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" }, stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
-export function observeHost(apparatus, retainUdev = false) {
+export function observeHost(apparatus, retainUdev = false, offline = false) {
   assert.equal(os.platform(), "linux");
   const processes = [];
   for (const pid of readdirSync("/proc").filter((p) => /^\d+$/.test(p))) {
@@ -97,7 +97,8 @@ export function observeHost(apparatus, retainUdev = false) {
     containers: dockerRead(["ps", "-aq", "--no-trunc"]).split("\n").filter(Boolean).sort(),
     networks: dockerRead(["network", "ls", "--no-trunc", "--format", "{{.ID}}"]).split("\n").filter(Boolean).sort(),
     processes: processes.sort((a, b) => a.pid - b.pid), isolation: "unverified",
-    ...(apparatus ? { controlApparatus } : {}), ...(retainUdev ? { uptime: uptime() } : {}) };
+    ...(apparatus ? { controlApparatus } : {}),
+    ...(retainUdev ? { uptime: uptime(), ...(offline ? { offlineMonoNs: String(process.hrtime.bigint()) } : {}) } : {}) };
 }
 function newHostProcesses(before, after) {
   assert.equal(!!before.controlApparatus, !!after.controlApparatus, "apparatus appeared/disappeared across boundary");
@@ -165,13 +166,13 @@ export function udevSettlePolicy(group, phase) {
 
 // Only a cohort entirely attributable to the existing daemon earns another
 // read. Untimed preparation can use the baseline cutoff; timing cannot.
-export function udevSettleCandidates(before, after, terminal, policy = "post-terminal") {
+export function udevSettleCandidates(before, after, terminal, policy = "post-terminal", offline = false) {
   assert.ok(policy === "post-terminal" || policy === "preparation");
   const remaining = newHostProcesses(before, after);
   if (!remaining.length || !terminal || terminal.bootId !== before.bootId || terminal.ticksPerSecond !== 100) return null;
   const start = t(before.uptime), end = t(terminal.uptime), first = t(after.uptime);
   if (start === null || end === null || first === null || !(start < end && end < first)) return null;
-  const startMono = apparatusTime(before), endMono = monotonic(terminal.monoNs), firstMono = apparatusTime(after);
+  const startMono = boundaryTime(before, offline), endMono = monotonic(terminal.monoNs), firstMono = boundaryTime(after, offline);
   if (startMono === null || endMono === null || firstMono === null || !(startMono < endMono && endMono < firstMono)) return null;
   const cutoff = policy === "preparation" ? start : end;
   const baseline = processInventory(before), observed = processInventory(after), workers = remaining.map((p) => observed.get(p.pid));
@@ -183,15 +184,15 @@ export function udevSettleCandidates(before, after, terminal, policy = "post-ter
   return { daemon, workers };
 }
 
-export function verifySettledHostBoundary(before, after, settled, terminal, policy) {
+export function verifySettledHostBoundary(before, after, settled, terminal, policy, offline = false) {
   assert.deepEqual(after.terminalClock, terminal, "terminal clock differs from the sealed first boundary");
-  const candidates = udevSettleCandidates(before, after, terminal, policy);
+  const candidates = udevSettleCandidates(before, after, terminal, policy, offline);
   assert.ok(candidates, "initial host boundary is not eligible for udev settling");
   const first = t(after.uptime), last = t(settled.uptime);
   // Allow the procfs clock's 10 ms rounding at the lower edge, but no second retry.
   assert.ok(last !== null && last - first >= BigInt(udevSettleMs / 10 - 1) && last - first <= 1000n,
     "settled host observation outside the bounded interval");
-  const settledMono = apparatusTime(settled), firstMono = apparatusTime(after);
+  const settledMono = boundaryTime(settled, offline), firstMono = boundaryTime(after, offline);
   const wait = BigInt(udevSettleMs) * 1000000n;
   assert.ok(settledMono !== null && settledMono - firstMono >= wait && settledMono - firstMono <= 10000000000n,
     "settled host observation outside the bounded monotonic interval");

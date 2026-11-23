@@ -16,7 +16,7 @@ import { udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from 
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { verifyControlAdmission } from "./control-admission.mjs";
+import { verifyControlAdmission, verifyOfflineWindow } from "./control-admission.mjs";
 import { apparatusProof, nativeControlPartition, verifyStreamAudit, verifyStreamDrain, verifyStreamSeal } from "./control-stream.mjs";
 
 export async function validateCampaign(input) {
@@ -40,7 +40,9 @@ export async function validateCampaign(input) {
     assert.equal(status.schema, "benchmark-isolated-campaign-status/v1");
     assert.equal(status.campaign, id); assert.equal(status.round, round); assert.equal(status.campaignSha256, plan.campaignSha256);
     assert.equal(status.controllerReady, false); assert.equal(status.isolation, "unverified");
-    const currentExecution = [2, 3, 4, 5].includes(status.executionVersion), mixedStaging = [3, 4, 5].includes(status.executionVersion), groups = currentExecution ? executionGroups : supportedGroups;
+    const offline = status.executionVersion === 6, currentExecution = [2, 3, 4, 5, 6].includes(status.executionVersion);
+    const mixedStaging = [3, 4, 5, 6].includes(status.executionVersion), groups = currentExecution ? executionGroups : supportedGroups;
+    if (offline) assert.ok(groupScoped && plan.order.length === 1, "offline handoff must be a single group");
     assert.ok(!groupScoped || mixedStaging, "group campaigns require current audit and host lifetime gates");
     assert.ok(["finished", "preserved-uncertain"].includes(status.state));
     assert.deepEqual(status.outcomes.map((r) => r.group), plan.order, "every fixed registry group must be retained once");
@@ -61,7 +63,7 @@ export async function validateCampaign(input) {
       journal.push(event);
     }
     const replay = replayJournal(plan, id, journal, status);
-    let controlHost, apparatus, streamSeal, supervisedTerminal;
+    let controlHost, apparatus, streamSeal, supervisedTerminal, offlineTerminal, bootstrapSealSha256;
     for (const [epoch, event] of replay.controlAdmissions) {
       const bytes = readRegular(join(folder, id, event.path)); assert.equal(digest(bytes), event.sha256);
       const admission = JSON.parse(bytes);
@@ -73,6 +75,7 @@ export async function validateCampaign(input) {
         assert.equal(digest(delivery), admission.intent.sha256); assert.equal(delivery.length, admission.intent.bytes); continue;
       }
       verifyControlAdmission(event.binding, epoch, admission);
+      if (offline && epoch === "bootstrap") bootstrapSealSha256 = digest(JSON.stringify(admission.seal.ledger));
       if (status.executionVersion === 5) { assert.equal(epoch, "bootstrap"); assert.ok(admission.apparatus); apparatus = admission.apparatus; }
       else assert.equal(admission.apparatus, undefined, "legacy execution cannot claim supervised apparatus");
       if (controlHost) assert.deepEqual(admission.host, controlHost);
@@ -90,6 +93,10 @@ export async function validateCampaign(input) {
     if (controlHost && journal.some((event) => event.kind === "started")) {
       const initial = read(`${id}/host-initial.json`);
       for (const field of ["hostname", "bootId"]) assert.equal(initial[field], controlHost[field]);
+    }
+    if (offline && status.state === "finished") {
+      assert.ok(controlHost);
+      offlineTerminal = { ...controlHost, token: replay.controlAdmissions.get("bootstrap").binding.token, bootstrapSealSha256 };
     }
     const lastEvent = read(`${id}/${events.at(-1).path}`);
     assert.ok(isDeepStrictEqual(lastEvent.status, status), "terminal journal and result disagree");
@@ -117,6 +124,11 @@ export async function validateCampaign(input) {
         assert.equal(phaseSnapshot(join(folder, id, entry.path), group === "json-api" && phase === "prepare").sha256,
           recorded.phaseManifestSha256, "phase host/native evidence differs from journal seal");
         hostBefore = read(`${id}/${entry.path}/host-before.json`);
+        if (offline) {
+          assert.equal(hostBefore.controlApparatus, undefined);
+          nativeControlPartition(recorded.binding);
+          verifyOfflineWindow(read(`${id}/${entry.path}/control-ingress.json`));
+        }
         if (status.executionVersion === 5) {
           assert.deepEqual(hostBefore.controlApparatus?.registration, apparatus);
           const after = read(`${id}/${entry.path}/host-after.json`);
@@ -152,19 +164,21 @@ export async function validateCampaign(input) {
       if (hostBefore) {
         try {
           const after = read(`${id}/${entry.path}/host-after.json`);
+          if (offline) assert.equal(after.controlApparatus, undefined);
           const settlePath = `${entry.path}/host-after-settled.json`;
           if (subtree.entries.some((e) => e.path === settlePath)) {
-            const settlePolicy = status.executionVersion === 5 ? udevSettlePolicy(group, phase) : null;
+            const settlePolicy = status.executionVersion === 5 || offline ? udevSettlePolicy(group, phase) : null;
             const lifetime = hostObservations.at(recorded.results.length - 1);
             assert.ok(settlePolicy && recorded.results.length === recorded.invocations.length && lifetime?.status === "verified"
               && lifetime.cleanupComplete && lifetime.terminalClock, "udev settle lacks an eligible sealed terminal lifetime");
             const settled = read(`${id}/${settlePath}`);
+            if (offline) assert.equal(settled.controlApparatus, undefined);
             if (streamSeal) assert.ok(BigInt(settled.controlApparatus.sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
-            boundary = verifySettledHostBoundary(hostBefore, after, settled, lifetime.terminalClock, settlePolicy);
+            boundary = verifySettledHostBoundary(hostBefore, after, settled, lifetime.terminalClock, settlePolicy, offline);
           } else boundary = verifyHostBoundary(hostBefore, after);
         }
         catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
-        if (status.executionVersion === 5 && phase === "prepare" && replay.reviewNeeded)
+        if ((status.executionVersion === 5 || offline) && phase === "prepare" && replay.reviewNeeded)
           assert.ok(boundary && isDeepStrictEqual(replay.reviewNeeded.cleanup, boundary), "JSON preparation cleanup boundary differs");
         if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }
       }
@@ -307,6 +321,7 @@ export async function validateCampaign(input) {
       ...(loadLayout ? { loadLayout } : {}),
       ...(placement ? { placement } : {}),
       ...(supervisedTerminal ? { supervisedTerminal } : {}),
+      ...(offlineTerminal ? { offlineTerminal } : {}),
       selection: currentExecution ? { schema: registrySchema, groups: plan.bindings.map((b) => ({ group: b.request.group,
         contractSha256: b.selection.contractSha256, apps: b.selection.apps })) } : undefined, groups: verifiedGroups, blockers,
       collectionIntegrity: collectionEntry && !replay.incomplete && replay.pending.length === 0 ? "manifest-verified" : "unsealed-partial",

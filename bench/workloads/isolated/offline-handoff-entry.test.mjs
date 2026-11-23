@@ -12,7 +12,7 @@ mock.module("./campaign-contract.mjs", { exports: { ...contracts, bindGroupCampa
 mock.module("./control-admission.mjs", { exports: {
   bootstrapControl: () => ({ ...binding, offlineHandoff: true }),
   waitControlAdmission: async (control, epoch) => {
-    assert.equal(control.offlineHandoff, true);
+    assert.deepEqual(control, binding);
     fixture.steps.push("admit:" + epoch);
     return fixture.apparatus ? { apparatus: {} } : {};
   },
@@ -36,6 +36,7 @@ mock.module("./campaign.mjs", { exports: { createCampaign({ authorize }) {
   return {
     async begin(_plan, { control }) {
       assert.equal(control.stream, undefined);
+      assert.equal(control.offlineHandoff, true);
       fixture.steps.push("begin");
       return fixture.handle;
     }, status,
