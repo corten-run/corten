@@ -114,31 +114,53 @@ pub(crate) fn accepted(headers: &HeaderMap, offered: &[Coding]) -> Option<Coding
     best.map(|(_, _, coding)| coding)
 }
 
+/// The `Accept-Encoding` lines browsers send, each with the codings of Corten's it names, none
+/// with a weight: Chrome, Edge, Firefox and Safari 26 over HTTPS; Safari before 26; and all of them
+/// over plain HTTP. A line that is one of these byte for byte is not parsed ([`each_accepted`]),
+/// and `the_browsers_accept_encoding_lines_are_read_as_the_parser_reads_them` holds each to what
+/// the parser makes of it.
+pub(crate) const BROWSER_LINES: [(&[u8], &[Coding]); 3] = [
+    (b"gzip, deflate, br, zstd", &[Coding::Gzip, Coding::Brotli, Coding::Zstd]),
+    (b"gzip, deflate, br", &[Coding::Gzip, Coding::Brotli]),
+    (b"gzip, deflate", &[Coding::Gzip]),
+];
+
 /// Calls `f` with each coding `Accept-Encoding` allows and its q-value (in thousandths).
 /// Read as bytes, and a q-value parsed only where an item has one: every request reads this header.
+/// A browser's line is compared whole first ([`BROWSER_LINES`]), which costs less than parsing its
+/// four items.
 fn each_accepted(headers: &HeaderMap, mut f: impl FnMut(u16, Coding)) {
     for value in headers.get_all(header::ACCEPT_ENCODING) {
         let header = value.as_bytes();
-        for range in crate::http::list_items(header) {
-            let item = &header[range];
-            let (name, params) = match item.iter().position(|&b| b == b';') {
-                Some(at) => (&item[..at], Some(&item[at + 1..])),
-                None => (item, None),
-            };
-            let is = |coding: &[u8]| name.trim_ascii().eq_ignore_ascii_case(coding);
-            let coding = if is(b"zstd") {
-                Coding::Zstd
-            } else if is(b"br") {
-                Coding::Brotli
-            } else if is(b"gzip") || is(b"x-gzip") {
-                Coding::Gzip
-            } else {
-                continue;
-            };
-            // A malformed weight skips its coding, so it cannot make that coding preferable.
-            if let Some(q @ 1..) = params.map_or(Some(1000), crate::http::weight) {
-                f(q, coding);
-            }
+        if let Some((_, codings)) = BROWSER_LINES.iter().find(|(line, _)| *line == header) {
+            codings.iter().for_each(|&coding| f(1000, coding));
+            continue;
+        }
+        each_listed(header, &mut f);
+    }
+}
+
+/// [`each_accepted`] for one line, parsed.
+pub(crate) fn each_listed(header: &[u8], mut f: impl FnMut(u16, Coding)) {
+    for range in crate::http::list_items(header) {
+        let item = &header[range];
+        let (name, params) = match item.iter().position(|&b| b == b';') {
+            Some(at) => (&item[..at], Some(&item[at + 1..])),
+            None => (item, None),
+        };
+        let is = |coding: &[u8]| name.trim_ascii().eq_ignore_ascii_case(coding);
+        let coding = if is(b"zstd") {
+            Coding::Zstd
+        } else if is(b"br") {
+            Coding::Brotli
+        } else if is(b"gzip") || is(b"x-gzip") {
+            Coding::Gzip
+        } else {
+            continue;
+        };
+        // A malformed weight skips its coding, so it cannot make that coding preferable.
+        if let Some(q @ 1..) = params.map_or(Some(1000), crate::http::weight) {
+            f(q, coding);
         }
     }
 }
