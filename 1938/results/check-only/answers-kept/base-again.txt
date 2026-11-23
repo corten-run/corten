@@ -1,0 +1,18 @@
+HTTP/1.1 200 OK
+content-type: text/html; charset=utf-8
+vary: corten, accept
+vary: cookie
+vary: accept-encoding
+corten-shell: a74bbed6a0d3f407
+cache-control: public, max-age=600
+age: *
+content-security-policy: default-src 'self'; script-src 'self' 'sha256-nTNh/j5EVR4pQkMgDuFT9GSiOyFTeTGtewV4aHnYbhI='; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+x-frame-options: DENY
+cross-origin-opener-policy: same-origin
+permissions-policy: accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), window-management=()
+content-length: 371
+
+body 371 bytes, sha256 5f568f25cbc3f63b534862de11fddeb62fc674aa1ce11e90d503303264fb5e45
+home after: kept

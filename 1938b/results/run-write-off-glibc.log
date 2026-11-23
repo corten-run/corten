@@ -1,0 +1,13 @@
+checked write-off-glibc (glibc): base twice the same; head the same: HTTP/1.1 200 OK, body 5 bytes, sha256 d81c55f49c5bb0d36bc11e3966ec4efab66f8dfefbbc1761161ca9d230e5466a,  home after: none kept
+write-off-glibc: warm-up took about 6 s a pair; 100 pairs should take about 11 minutes
+write-off-glibc: pair 10 of 100 done 00:37:01
+write-off-glibc: pair 20 of 100 done 00:38:02
+write-off-glibc: pair 30 of 100 done 00:39:04
+write-off-glibc: pair 40 of 100 done 00:40:05
+write-off-glibc: pair 50 of 100 done 00:41:07
+write-off-glibc: pair 60 of 100 done 00:42:08
+write-off-glibc: pair 70 of 100 done 00:43:09
+write-off-glibc: pair 80 of 100 done 00:44:10
+write-off-glibc: pair 90 of 100 done 00:45:12
+write-off-glibc: pair 100 of 100 done 00:46:13
+write-off-glibc: done, /m/1938b/results/cycles-write-off-glibc.csv

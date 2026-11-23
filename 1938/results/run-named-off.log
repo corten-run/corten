@@ -1,0 +1,13 @@
+checked named-off: base twice the same; head the same: HTTP/1.1 200 OK, body 5 bytes, sha256 d81c55f49c5bb0d36bc11e3966ec4efab66f8dfefbbc1761161ca9d230e5466a, head's home after: none kept
+named-off: warm-up took about 6 s a pair; 100 pairs should take about 11 minutes
+named-off: pair 10 of 100 done 23:43:53
+named-off: pair 20 of 100 done 23:44:55
+named-off: pair 30 of 100 done 23:45:56
+named-off: pair 40 of 100 done 23:46:57
+named-off: pair 50 of 100 done 23:47:59
+named-off: pair 60 of 100 done 23:49:00
+named-off: pair 70 of 100 done 23:50:02
+named-off: pair 80 of 100 done 23:51:03
+named-off: pair 90 of 100 done 23:52:05
+named-off: pair 100 of 100 done 23:53:06
+named-off: done, /m/1938/results/cycles-named-off.csv

@@ -1,0 +1,10 @@
+checked named: base twice the same; head the same but /home dropped by its write, by design: HTTP/1.1 200 OK, body 5 bytes, sha256 d81c55f49c5bb0d36bc11e3966ec4efab66f8dfefbbc1761161ca9d230e5466a, head's home after: not kept
+named: done, /m/1938/results/check-only/cycles-named.csv
+checked named-off: base twice the same; head the same: HTTP/1.1 200 OK, body 5 bytes, sha256 d81c55f49c5bb0d36bc11e3966ec4efab66f8dfefbbc1761161ca9d230e5466a, head's home after: none kept
+named-off: done, /m/1938/results/check-only/cycles-named-off.csv
+checked write: base twice the same; head the same: HTTP/1.1 200 OK, body 5 bytes, sha256 d81c55f49c5bb0d36bc11e3966ec4efab66f8dfefbbc1761161ca9d230e5466a, head's home after: kept
+write: done, /m/1938/results/check-only/cycles-write.csv
+checked kept: base twice the same; head the same: HTTP/1.1 200 OK, body 371 bytes, sha256 5f568f25cbc3f63b534862de11fddeb62fc674aa1ce11e90d503303264fb5e45, head's home after: kept
+kept: done, /m/1938/results/check-only/cycles-kept.csv
+checked plain: base twice the same; head the same: HTTP/1.1 200 OK, body 4 bytes, sha256 4a33eacd5fa65f2b2e2871cd131286b53c415b131666d71173bb6e3fe59361b3, head's home after: kept
+plain: done, /m/1938/results/check-only/cycles-plain.csv

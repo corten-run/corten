@@ -1,0 +1,13 @@
+checked write: base twice the same; head the same: HTTP/1.1 200 OK, body 5 bytes, sha256 d81c55f49c5bb0d36bc11e3966ec4efab66f8dfefbbc1761161ca9d230e5466a, head's home after: kept
+write: warm-up took about 7 s a pair; 100 pairs should take about 12 minutes
+write: pair 10 of 100 done 23:54:14
+write: pair 20 of 100 done 23:55:16
+write: pair 30 of 100 done 23:56:18
+write: pair 40 of 100 done 23:57:20
+write: pair 50 of 100 done 23:58:22
+write: pair 60 of 100 done 23:59:23
+write: pair 70 of 100 done 00:00:25
+write: pair 80 of 100 done 00:01:27
+write: pair 90 of 100 done 00:02:29
+write: pair 100 of 100 done 00:03:31
+write: done, /m/1938/results/cycles-write.csv

@@ -1,0 +1,51 @@
+== 1938b check start 00:25:13
+checked write-off (jemalloc): base twice the same; head the same: HTTP/1.1 200 OK, body 5 bytes, sha256 d81c55f49c5bb0d36bc11e3966ec4efab66f8dfefbbc1761161ca9d230e5466a,  home after: none kept
+checked write-off-glibc (glibc): base twice the same; head the same: HTTP/1.1 200 OK, body 5 bytes, sha256 d81c55f49c5bb0d36bc11e3966ec4efab66f8dfefbbc1761161ca9d230e5466a,  home after: none kept
+checked new (jemalloc): base twice the same; head the same: HTTP/1.1 200 OK, body 371 bytes, sha256 1cdb61b40a849cb6b07bdf053b0faad7288318bb0f8c6ae7b681bea02a25ae1f, again: kept home after: kept
+== 1938b checks ok 00:25:32
+== 1938b write-off start 00:25:32
+/m/1938b/results/cycles-write-off.csv: 100 pairs; the one-sided 95% upper bound is the 59th smallest change
+| per request | base median | head median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cycles user+kernel | 38485 | 38687 | +0.57% | +1.04% | -5.53% to +4.65% |
+| cycles user | 15890 | 16201 | +1.86% | +2.72% | -6.01% to +7.56% |
+| cycles kernel | 22643 | 22547 | -0.23% | -0.01% | -5.79% to +3.88% |
+| instructions user | 20110.1 | 20110.1 | +0.00% | +0.00% | -0.10% to +0.10% |
+| L1 icache misses user (diagnostic) | 2117.2 | 2106.7 | -0.29% | +0.26% | -7.42% to +8.42% |
+base: median requests/s 86422, server busy 98.4% of the turn (task-clock), failed requests 0
+head: median requests/s 86094, server busy 98.3% of the turn (task-clock), failed requests 0
+cycles margin (bound on user+kernel change under +1%): NOT met (+1.04%)
+instructions:u per request (medians): 20110.1 -> 20110.1 (-0.0); bound on the change +0.00%
+JSON {"file":"/m/1938b/results/cycles-write-off.csv","pairs":100,"boundRank":59,"measures":{"cycles user+kernel":{"base":38485.33912261251,"head":38686.80352306334,"change":0.005718144045549489,"bound":0.010416951655667583,"min":-0.05527603270706183,"max":0.046549383747445994},"cycles user":{"base":15890.04916176517,"head":16200.983747391896,"change":0.018628956823763865,"bound":0.02724772093236516,"min":-0.060095686392475534,"max":0.07555574775262364},"cycles kernel":{"base":22643.229271244294,"head":22546.582724054475,"change":-0.002318786718445931,"bound":-0.00006147832460579039,"min":-0.0579131882399857,"max":0.03878933424350617},"instructions user":{"base":20110.103554963818,"head":20110.10082743603,"change":0.000004092267489319568,"bound":0.000009263349160404388,"min":-0.0009506983560664262,"max":0.0009726257251940762},"L1 icache misses user (diagnostic)":{"base":2117.1775058959493,"head":2106.7481230653093,"change":-0.0028610004890484153,"bound":0.0025594739946916967,"min":-0.07424788497945045,"max":0.08415893178728329}},"baseRequestsPerSecond":86422.23671212935,"baseServerBusy":0.983547212354219,"baseFailures":0,"headRequestsPerSecond":86093.88535515466,"headServerBusy":0.9834075365573232,"headFailures":0,"cyclesMarginMet":false}
+== 1938b write-off ok 00:35:53
+== 1938b write-off-glibc start 00:35:53
+/m/1938b/results/cycles-write-off-glibc.csv: 100 pairs; the one-sided 95% upper bound is the 59th smallest change
+| per request | base median | head median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cycles user+kernel | 39016 | 39185 | +0.09% | +0.98% | -8.72% to +12.09% |
+| cycles user | 16294 | 16529 | +1.05% | +2.88% | -10.22% to +17.80% |
+| cycles kernel | 22658 | 22678 | -0.38% | -0.12% | -7.73% to +8.27% |
+| instructions user | 21298.7 | 21270.8 | -0.02% | +0.08% | -8.14% to +8.20% |
+| L1 icache misses user (diagnostic) | 2128.1 | 2119.2 | -0.59% | +0.32% | -10.53% to +10.09% |
+base: median requests/s 85671, server busy 98.4% of the turn (task-clock), failed requests 0
+head: median requests/s 85090, server busy 98.4% of the turn (task-clock), failed requests 0
+cycles margin (bound on user+kernel change under +1%): met (+0.98%)
+instructions:u per request (medians): 21298.7 -> 21270.8 (-27.9); bound on the change +0.08%
+JSON {"file":"/m/1938b/results/cycles-write-off-glibc.csv","pairs":100,"boundRank":59,"measures":{"cycles user+kernel":{"base":39015.52652390041,"head":39184.69413190524,"change":0.0009233735645183261,"bound":0.009764168756346336,"min":-0.0872458503523027,"max":0.12091554556930562},"cycles user":{"base":16293.564583299329,"head":16528.814068737975,"change":0.010519086397659305,"bound":0.028769909973074492,"min":-0.1021702342389258,"max":0.17798641821038252},"cycles kernel":{"base":22658.30655598356,"head":22678.193742556457,"change":-0.003835568096494102,"bound":-0.0011703712991135706,"min":-0.07732193521725306,"max":0.08271819047156592},"instructions user":{"base":21298.660935191074,"head":21270.776051677552,"change":-0.00022968220031055475,"bound":0.0008162705122123359,"min":-0.08135157637905999,"max":0.0820141105334975},"L1 icache misses user (diagnostic)":{"base":2128.071776261243,"head":2119.194647915583,"change":-0.005887188208825722,"bound":0.0032314826883861336,"min":-0.10527577437978053,"max":0.10092207819801113}},"baseRequestsPerSecond":85671.04390410417,"baseServerBusy":0.9842053307008884,"baseFailures":0,"headRequestsPerSecond":85089.80375251202,"headServerBusy":0.9841845140032949,"headFailures":0,"cyclesMarginMet":true}
+== 1938b write-off-glibc ok 00:46:13
+== 1938b new start 00:46:13
+/m/1938b/results/cycles-new.csv: 100 pairs; the one-sided 95% upper bound is the 59th smallest change
+| per request | base median | head median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cycles user+kernel | 56603 | 56412 | -0.21% | +0.09% | -14.99% to +8.10% |
+| cycles user | 28647 | 28543 | -0.32% | -0.09% | -17.76% to +9.88% |
+| cycles kernel | 27977 | 27911 | -0.18% | +0.05% | -11.73% to +5.98% |
+| instructions user | 32790.4 | 32789.9 | -0.00% | +0.00% | -0.05% to +0.02% |
+| L1 icache misses user (diagnostic) | 3282.2 | 3254.7 | -0.93% | -0.28% | -6.74% to +5.16% |
+base: median requests/s 59133, server busy 98.5% of the turn (task-clock), failed requests 0
+head: median requests/s 59411, server busy 98.4% of the turn (task-clock), failed requests 0
+cycles margin (bound on user+kernel change under +1%): met (+0.09%)
+instructions:u per request (medians): 32790.4 -> 32789.9 (-0.6); bound on the change +0.00%
+JSON {"file":"/m/1938b/results/cycles-new.csv","pairs":100,"boundRank":59,"measures":{"cycles user+kernel":{"base":56603.44001930609,"head":56411.64083713314,"change":-0.002052500613768382,"bound":0.0008557403902038629,"min":-0.1498967647759254,"max":0.08101997893699542},"cycles user":{"base":28646.910991467383,"head":28543.005271441976,"change":-0.003193937650583345,"bound":-0.0008750603946241498,"min":-0.17757289033400447,"max":0.09883392323123519},"cycles kernel":{"base":27976.63319725264,"head":27911.192202188882,"change":-0.0018283998892195674,"bound":0.0004750736617635809,"min":-0.11729724207629766,"max":0.059843573571443986},"instructions user":{"base":32790.421056251726,"head":32789.87061200932,"change":-0.00000893377586030919,"bound":0.000004148921426860852,"min":-0.0004725395127247456,"max":0.00017322276285280935},"L1 icache misses user (diagnostic)":{"base":3282.189205493207,"head":3254.7249805395454,"change":-0.009262540177899403,"bound":-0.0027665624754206197,"min":-0.06740737559655674,"max":0.05161081183005889}},"baseRequestsPerSecond":59132.587491990096,"baseServerBusy":0.98456992777413,"baseFailures":0,"headRequestsPerSecond":59410.71863102354,"headServerBusy":0.9842260654160826,"headFailures":0,"cyclesMarginMet":true}
+== 1938b new ok 00:57:06
+COMPLETE: every declared workload recorded 100 pairs and was summarised

@@ -1,0 +1,13 @@
+checked plain: base twice the same; head the same: HTTP/1.1 200 OK, body 4 bytes, sha256 4a33eacd5fa65f2b2e2871cd131286b53c415b131666d71173bb6e3fe59361b3, head's home after: kept
+plain: warm-up took about 6 s a pair; 100 pairs should take about 11 minutes
+plain: pair 10 of 100 done 00:15:02
+plain: pair 20 of 100 done 00:16:04
+plain: pair 30 of 100 done 00:17:06
+plain: pair 40 of 100 done 00:18:08
+plain: pair 50 of 100 done 00:19:09
+plain: pair 60 of 100 done 00:20:11
+plain: pair 70 of 100 done 00:21:13
+plain: pair 80 of 100 done 00:22:14
+plain: pair 90 of 100 done 00:23:16
+plain: pair 100 of 100 done 00:24:18
+plain: done, /m/1938/results/cycles-plain.csv

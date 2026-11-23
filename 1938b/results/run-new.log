@@ -1,0 +1,13 @@
+checked new (jemalloc): base twice the same; head the same: HTTP/1.1 200 OK, body 371 bytes, sha256 1cdb61b40a849cb6b07bdf053b0faad7288318bb0f8c6ae7b681bea02a25ae1f, again: kept home after: kept
+new: warm-up took about 6 s a pair; 100 pairs should take about 11 minutes
+new: pair 10 of 100 done 00:47:25
+new: pair 20 of 100 done 00:48:29
+new: pair 30 of 100 done 00:49:34
+new: pair 40 of 100 done 00:50:38
+new: pair 50 of 100 done 00:51:43
+new: pair 60 of 100 done 00:52:48
+new: pair 70 of 100 done 00:53:52
+new: pair 80 of 100 done 00:54:57
+new: pair 90 of 100 done 00:56:02
+new: pair 100 of 100 done 00:57:06
+new: done, /m/1938b/results/cycles-new.csv

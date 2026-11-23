@@ -1,0 +1,13 @@
+checked kept: base twice the same; head the same: HTTP/1.1 200 OK, body 371 bytes, sha256 5f568f25cbc3f63b534862de11fddeb62fc674aa1ce11e90d503303264fb5e45, head's home after: kept
+kept: warm-up took about 6 s a pair; 100 pairs should take about 11 minutes
+kept: pair 10 of 100 done 00:04:39
+kept: pair 20 of 100 done 00:05:41
+kept: pair 30 of 100 done 00:06:42
+kept: pair 40 of 100 done 00:07:44
+kept: pair 50 of 100 done 00:08:46
+kept: pair 60 of 100 done 00:09:48
+kept: pair 70 of 100 done 00:10:49
+kept: pair 80 of 100 done 00:11:51
+kept: pair 90 of 100 done 00:12:53
+kept: pair 100 of 100 done 00:13:54
+kept: done, /m/1938/results/cycles-kept.csv
