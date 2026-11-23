@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { bootstrapWorkspaceScript, fleetPlan, preloginUserData, reservation, selection } from "./cloud-contract.mjs";
 import { commit } from "./cloud-fixtures.mjs";
-import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
+import { controlRequest, guardianSha256, guardianSource } from "./cloud-control-runtime.mjs";
 import { failedNativeScript, setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { digest } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
@@ -320,7 +321,7 @@ test("settled bootstrap probe requires exact requests, terminal watchers, dead s
   assert.equal(r.stdout.trim(), "drain fixtures passed");
 });
 
-test("lost first upload requires an absent job and a dead, unregistered transfer on the bound guest", { skip: !available }, () => {
+function lostUploadState() {
   const state = { ...firstGroupSetupState(), createIntentAt: "2026-11-18T00:00:00.000Z", status: "preparing", launchHostKeySha256: "e".repeat(64),
     control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, sealed: [], ledger: [],
       monitor: { schema: "benchmark-supervised-control/v1", id: "b".repeat(32), phase: "pending" } } };
@@ -329,6 +330,25 @@ test("lost first upload requires an absent job and a dead, unregistered transfer
     ["scp", ["/fixture/job.sh", "root@192.0.2.10:/bench/job.sh"], 900000]]) {
     state.control.ledger.push({ request: controlRequest(state, binary, args, ms, "bootstrap"), localTerminal: binary === "ssh", ...(binary === "ssh" ? { code: 0 } : {}) });
   }
+  return state;
+}
+
+test("complete lost-upload guest stdout is accepted as unused retirement evidence", { skip: !available }, () => {
+  const state = { ...lostUploadState(), quietBootstrap: "prelogin" };
+  const script = unusedHostScript(state, { bootstrap: true }), at = 1000000;
+  const requests = state.control.ledger.map(r => r.request);
+  const guest = fileURLToPath(new URL("./test-fixtures/unused-upload-guest.py", import.meta.url));
+  const r = spawnSync(python, ["-I", guest], { input: JSON.stringify({ script, requests, guardianSource, preloginUserData,
+    hostId: state.id, unit: state.unit }), encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true });
+  assert.equal(r.error, undefined); assert.equal(r.status, 0, r.stderr + r.stdout);
+  const record = unusedEvidence(r.stdout, state, script, at, at, state.launchHostKeySha256);
+  assert.deepEqual(record.observation.refusedUpload, { invocationId: requests[2].invocation.id, jobPresent: false,
+    failureSha256: digest('{"helperLine":318}\n') });
+  verifyUnusedEvidence(record, state);
+});
+
+test("lost first upload requires an absent job and a dead, unregistered transfer on the bound guest", { skip: !available }, () => {
+  const state = lostUploadState();
   const script = unusedHostScript(state, { bootstrap: true }), program = script.split("<<'CORTEN_UNUSED_HOST'\n")[1].split("\nCORTEN_UNUSED_HOST")[0];
   assert.ok(script.startsWith(`/usr/bin/timeout 25 /usr/bin/python3 - '${state.id}' '${state.unit}' '{}'`));
   const requests = state.control.ledger.map(r => r.request);
