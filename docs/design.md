@@ -8136,7 +8136,7 @@ rules something out.
     and none of them named a negative control; by the plan of
     the workstation kit 1865p (each side compiled once and relinked at 30 pad sizes, 8 recorded
     pairs a placement after one not recorded, every turn on a freshly started build with its
-    counters enabled only while its load runs, and each workload's own A/A in the same run): it
+    counters enclosing its load, and each workload's own A/A in the same run): it
     passes when the change's one-sided 95% upper bound across placements is under +1% and its A/A
     resolves +1% both ways, every placement having passed its binary, layout, answer, load,
     counter and server-log checks, the rotating routes' own answers compared phase by phase from
@@ -8148,8 +8148,20 @@ rules something out.
     by hash, with every counter, user L1 instruction-cache misses among them, at 100% running: no
     placement spread recorded in [Choice 72](#choice-placement-runs)
     applies to that program, request and protocol, so its bound under +1%, exact, is the
-    reading. Each run stops before its first request on a host where perf cannot count every
-    event it reads. Until both pass, this change does not merge. The misses of the run above
+    reading. In both runs the counters enclose the load with bounded overhead: perf starts with
+    counting off, acknowledges its enable before the load starts and its disable after the
+    load's last request, and one process reads every edge from one monotonic clock, each gap at
+    most 50 ms; a count's counters on the catalog app's cgroup must also have run for its CPU
+    time over the load. A turn or count that does not show this is refused, and a qualification
+    on the run's own host, which decides nothing, stops the run before its first deciding turn
+    unless every gap stays within 25 ms. Each run stops before its first request on a host where
+    perf cannot count every event it reads. Until both pass, this change does not merge.
+    Neither gate reads allocations or request times. The allocations and bytes a request on
+    card-market's item page and item JSON, counted in process for both sides of the pair, are in
+    the pull request's description, and the same in both builds (27 allocations and 22,295 bytes
+    a page request, 20 and 15,997 a JSON request, with the system allocator); the catalog run
+    records k6's median and 99th-percentile latency over each counted load beside its counts,
+    for reading. The misses of the run above
     stand for its own pair and are not reread by either.
     Set aside, counted the same way on the unstaged route with
     five policies and with one, each against main: a thread that stops looking in its four
@@ -8670,7 +8682,9 @@ rules something out.
     [#1983 An older kept answer's Age written to a buffer missed the cycle margins on single builds; read it across placements](https://github.com/corten-run/corten/issues/1983)
     asks.
 
-    Last checked: 2026-11-23 for the cycles of the cut of what a kept answer holds, `d3bb2e0e4`
+    Last checked: 2026-11-23 for the allocations a request, `6b6b38ef1` against `14126d2a8` in
+    process (a counting allocator over the system allocator, 2,000 requests a target) with rustc
+    1.99.1; 2026-11-23 for the cycles of the cut of what a kept answer holds, `d3bb2e0e4`
     against `04530f7e0` on the Xeon Platinum 8280 with jemalloc 5.3.0, kept under the tag
     `evidence/611749e1`; 2026-11-23 for what a kept answer holds, `23a98a7e9` against `a02c81e86`
     under jemalloc 5.3.0, and for its instructions, `4e53ff290` against `04530f7e0` under
