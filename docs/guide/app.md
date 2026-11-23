@@ -1472,7 +1472,9 @@ above, whoever wrote them. The same holds for the error page in place of the rou
 to a request no handler takes (the 404 of an unknown URL, the 405 of a method the route lacks,
 the 501 of one no route has, the 400 of a post whose `do` names none of the page's posts or
 names two), the PWA's offline page included, which its service worker keeps
-whatever its `Cache-Control` says; a handler's own 404 is its answer, under the rules above. Nor
+whatever its `Cache-Control` says, and for the 404 of a request for the app's static files that
+names no file (one the version served lacks, an old version's included) or its 400 for a path that
+is not one; a handler's own 404 is its answer, under the rules above. Nor
 is the router's own failure shared as it is or as JSON (an API's 404 for a path under its prefix
 that a route outside it matched included), whatever a middleware wrote into it or made of it in
 place (another status, a redirect, a body of its own): the router marks the answer as it makes it.

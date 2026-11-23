@@ -165,6 +165,13 @@ mod layout_reads {
         Err(Error::not_found())
     }
 
+    /// A page whose body fails as it is read.
+    async fn breaks_secret(req: Req) -> crate::response::Response {
+        let (head, _) = refused(&req, "secret").into_response().into_parts();
+        let body = Body::from_stream(futures_util::stream::iter([Err::<bytes::Bytes, _>(std::io::Error::other("cut off"))]));
+        crate::response::Response::from_parts(head, body)
+    }
+
     /// The shop's routes `#[corten::routes]` makes, which say what they answer.
     #[crate::routes]
     mod shop_url {
@@ -179,6 +186,9 @@ mod layout_reads {
 
         #[route("/forgot", get = forgets_count, gives(CartCount, SignedIn))]
         pub struct Forgot;
+
+        #[route("/forgot-secret", get = forgets_count, gives(CartCount, SignedIn), no_store)]
+        pub struct ForgotSecret;
 
         #[route("/given-gone", get = gives_but_gone, gives(CartCount))]
         pub struct GivenGone;
@@ -472,6 +482,39 @@ mod layout_reads {
         } else {
             assert_eq!(status, StatusCode::OK);
             assert!(body.contains("<header>Cart </header>") && body.contains("<p>forgot</p>"), "{body}");
+        }
+        // A `no_store` route's: what is sent in its page's place is kept by no cache either, whatever
+        // the app's middleware makes of its caching headers.
+        for cache in [None, Some("public, max-age=60"), Some("private, max-age=60")] {
+            let router = App::new(shop_url::router())
+                .layout_read(CartCount::default())
+                .layout_read(SignedIn)
+                .middleware(crate::tests::cache::CdnRecaches(cache))
+                .dev(false)
+                .router();
+            let (status, headers, body) = call_with(router, "GET", "/forgot-secret", None, None).await;
+            let sent = if cfg!(debug_assertions) { StatusCode::INTERNAL_SERVER_ERROR } else { StatusCode::OK };
+            assert_eq!(status, sent, "{cache:?}: {body}");
+            let wrong = crate::tests::cache::kept_from_cdns(&headers, "private, no-store");
+            assert!(wrong.is_empty(), "{cache:?}: a no_store page's replacement, open to a cache: {wrong:?}");
+        }
+    }
+
+    /// A `no_store` page whose body fails as it is read to be filled: the failure sent in its place
+    /// is kept by no cache either, whatever the app's middleware makes of its caching headers.
+    #[tokio::test]
+    async fn a_no_store_page_that_cannot_be_read_to_be_filled_stays_no_store() {
+        for cache in [None, Some("public, max-age=60"), Some("private, max-age=60")] {
+            let routes = Table::new().route("/broken-secret", get(|req: Req| async move { NoStore(breaks_secret(req).await) }));
+            let router = App::new(Routes::from(routes))
+                .layout_read(CartCount::default())
+                .layout_read(SignedIn)
+                .middleware(crate::tests::cache::CdnRecaches(cache))
+                .router();
+            let (status, headers, body) = call_with(router, "GET", "/broken-secret", None, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{cache:?}: {body}");
+            let wrong = crate::tests::cache::kept_from_cdns(&headers, "private, no-store");
+            assert!(wrong.is_empty(), "{cache:?}: a no_store page's failure, open to a cache: {wrong:?}");
         }
     }
 
@@ -2185,6 +2228,9 @@ mod layout_reads {
     mod wrapped_url {
         #[route("/wrapped", get = wrapped, post = wrapped)]
         pub struct Wrapped;
+
+        #[route("/wrapped-secret", get = wrapped, no_store)]
+        pub struct WrappedSecret;
     }
 
     /// A page from an answer type that does not say it is one starts no read: a debug build says
@@ -2202,6 +2248,19 @@ mod layout_reads {
             // Named where a router test, with no logger and outside `corten dev`, sees it.
             assert!(body.contains("layout_reads::CartCount&gt;()") && body.contains("(Answer::PAGE)"), "{body}");
             assert_eq!(count.started.load(Ordering::SeqCst), 0, "{method} {mode:?}");
+        }
+        // A `no_store` route's: kept by no cache, whatever the app's middleware makes of it.
+        for cache in [None, Some("public, max-age=60"), Some("private, max-age=60")] {
+            let router = App::new(wrapped_url::router())
+                .layout_read(CartCount::default())
+                .layout_read(SignedIn)
+                .middleware(crate::tests::cache::CdnRecaches(cache))
+                .dev(false)
+                .router();
+            let (status, headers, body) = call_with(router, "GET", "/wrapped-secret", None, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{cache:?}: {body}");
+            let wrong = crate::tests::cache::kept_from_cdns(&headers, "private, no-store");
+            assert!(wrong.is_empty(), "{cache:?}: a no_store page's replacement, open to a cache: {wrong:?}");
         }
     }
 

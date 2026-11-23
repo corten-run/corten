@@ -832,7 +832,7 @@ impl StartHere {
                     let message = format!(
                         "the page draws later::<{name}>(), but its route's answer type says it is not a page (Answer::PAGE), so no read is started for it: return HtmlResult, or set const PAGE: bool = true on the answer type (or forward its page's)"
                     );
-                    return crate::page::unserved(dev, message).into_response();
+                    return marked_as(res.extensions(), crate::page::unserved(dev, message).into_response());
                 }
             }
             // A route that says its page gives a read (`gives(..)`) did not start it, so a page that
@@ -854,7 +854,7 @@ impl StartHere {
                             "the page draws later::<{0}>() and its route says gives({0}), so the read is not started, but the page did not give it: give it (page.give::<{0}>(..)), or take gives({0}) off the route",
                             slot.name
                         );
-                        return crate::page::unserved(dev, message).into_response();
+                        return marked_as(res.extensions(), crate::page::unserved(dev, message).into_response());
                     }
                 }
             }
@@ -870,7 +870,7 @@ impl StartHere {
             Err(error) => {
                 let error: &(dyn std::error::Error + 'static) = &*error;
                 tracing::error!(error, "corten: a page with layout reads could not be read to fill it");
-                return crate::Error::new("corten: the page could not be read").into_response();
+                return marked_as(&head.extensions, crate::Error::new("corten: the page could not be read").into_response());
             }
         };
         // Not text: a layer inside the route changed the body (compressed it), so its places
@@ -934,6 +934,15 @@ impl StartHere {
         }
         res
     }
+}
+
+/// `failed`, sent in the place of the page whose extensions are `page`, with that page's marks
+/// ([`crate::cache::Marks`]): in a `NoStore` page's place it is `NoStore` too, and in a refusal's
+/// never shared, whatever the app's middleware then makes of its headers.
+#[cold]
+fn marked_as(page: &http::Extensions, mut failed: Response) -> Response {
+    crate::cache::Marks::of(page).put(&mut failed);
+    failed
 }
 
 /// A release build's page from a route whose answer type does not say it is a page

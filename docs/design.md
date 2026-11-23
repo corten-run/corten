@@ -1741,9 +1741,20 @@ rules something out.
     to drop (`cache::drop_cdn_caching`, 187). The named post's `400` costs 978 (18,002.0 against
     17,023.9), 284 more than at `57f2138a4`, and with the six CDN caching headers 2,416 (27,309.3
     against 24,893.2). Correctness comes first (the README's Values): a mark on the request was
-    lost when a middleware edited the answer in place, and a mark on the answer is not. Not
-    tried: moving the failed answer's map onto the error page when it holds the mark alone, which
-    would save one of the two allocations.
+    lost when a middleware edited the answer in place, and a mark on the answer is not. Since
+    round 11 of the review, the error page drawn in place of an answer whose extensions hold the
+    mark alone takes that map rather than a new one (`page::carried_from`); nothing else of the
+    failed answer's is carried. Against main `a138e2391` the router's `404` costs 1,152
+    instructions a request (19,257.6 in every run against 18,105.6; `custom` 1,153: 19,576.6
+    against 18,423.3) and the plain page 111 (16,509.6 against 16,398.6), the `404` 367 less than
+    the same head without the move (19,625.0; by function, `hashbrown`'s insert, rehash and drop,
+    `malloc` and `free`). Taking the map before the page is drawn kept it in the request's
+    future across that await and cost the plain page 12 (`memcpy`), so it is taken once the page
+    is drawn. In this Choice's own harness (step 2's, ported to the API of today's `App`), against
+    axum's router at `7e897bd68` in the same container, the PR's head counts a page's `404` at
+    17,417 against axum's 19,980 and an API's `404` at 11,932 against 14,101 (main `a138e2391`:
+    16,284 and 11,128), a page 12,991 and an API request 11,882 against 21,222 and 15,726: still
+    fewer than axum's on every request step 2 measured, so Revisit when is not met.
 
     Stands on: platform (RFC 9110 9.1: an origin server SHOULD answer `501` to a method it does
     not recognize or implement, and every server implements `GET` and `HEAD`; 15.5.6: `405` is
@@ -2012,7 +2023,13 @@ rules something out.
     `696d96a71`; 2026-11-22, the router's `404`, with and without the app's error page, and the
     named post's `400`, with and without the CDN headers, at `2960a7abe` against main `63e7c3314`
     (three rounds alternating the two builds, every run within 1.5 of the others), and the `404`
-    and the `400` by function against that main.
+    and the `400` by function against that main; 2026-11-22, the router's `404`, with and without
+    the app's error page, and the plain page at round 11's head, with and without the error page
+    taking the failed answer's map, against main `a138e2391` (three rounds alternating the
+    builds, every run within 2 of the others), and by function; and a page's and an API's `404`,
+    a page and an API request in step 2's harness at that head and that main against axum's router
+    at `7e897bd68` (jemalloc, three rounds alternating the three builds, every run within 16 of
+    the others).
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2236,7 +2253,8 @@ rules something out.
     dispatch consumes it to give the request to the first middleware or, when there is none,
     the route. The compiler rejects a stage that reads it after hand-off. An answer that is no handler's
     own (a refusal, an extractor's rejection, a panic's or the deadline's failure, and the page,
-    JSON failure or sign-in redirect Corten draws in place of one, the router's own failures, a
+    JSON failure or sign-in redirect Corten draws in place of one, the router's own failures, the
+    static files' `404` for a file the version lacks and `400` for a path that is not one, a
     refusal sent at another status with `Error::with_status`, and what an error page's own
     extractor answers in its place) carries a private mark in its
     extensions (`cache::Unshared`), put there by the code that made it, and the cache rule decides
@@ -2244,8 +2262,8 @@ rules something out.
     wherever the answer goes: out of a task the handler spawned, from before the request came in,
     from another app whose answer a middleware relays inline, under any status a middleware gives
     it, in place or by moving the answer's parts. Code that draws a new answer in place of one
-    (the error page, a debug build's error) copies the old one's marks onto it (`cache::Marks`),
-    `NoStore` included. It replaced a count of refusals on the thread compared before and after each poll
+    (the error page, a debug build's error, the failure sent for a page whose layout reads could
+    not be filled) copies the old one's marks onto it (`cache::Marks`), `NoStore` included. It replaced a count of refusals on the thread compared before and after each poll
     (`402a11a08`), which lost the answers other code drew in a refusal's place (another app's
     error page and sign-in redirect relayed inline, a JSON failure turned into a `200`) and a
     refusal made outside the stages; a mark on the answer is what the answer is, wherever it was

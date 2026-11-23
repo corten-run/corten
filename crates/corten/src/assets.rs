@@ -818,9 +818,11 @@ impl Assets {
                 let assets = assets.clone();
                 async move {
                     let (parts, _) = req.into_parts();
+                    // A path that is not one is no file's answer, as a missing file's is not:
+                    // the error page in its place may be about who is asking.
                     let (version, path) = match crate::route::read_path::<(String, String)>(&parts) {
                         Ok(read) => read,
-                        Err(rejection) => return rejection.into_response(),
+                        Err(rejection) => return crate::cache::unshared(rejection.into_response()),
                     };
                     let (cache, url) = if version == assets.version {
                         (IMMUTABLE, Url::Current)
@@ -833,10 +835,12 @@ impl Assets {
         )
     }
 
-    /// The file at `path`, asked for at a URL of the kind `url`.
+    /// The file at `path`, asked for at a URL of the kind `url`. None there: a `404` no file
+    /// answered, marked as the router's own is (`crate::cache::Unshared`), since the app's error
+    /// page drawn in its place may be about who is asking.
     fn serve(&self, path: &str, method: &Method, headers: &HeaderMap, cache: HeaderValue, url: Url) -> Response {
         let Some(file) = self.files.get(path) else {
-            return StatusCode::NOT_FOUND.into_response();
+            return crate::cache::unshared(StatusCode::NOT_FOUND.into_response());
         };
         #[cfg(feature = "compress")]
         let (body, coding) = file.body.pick(headers);

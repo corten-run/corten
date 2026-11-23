@@ -753,7 +753,7 @@ async fn answered(router: &Router, uri: &str, asked: &[(&'static str, &'static s
 /// What is wrong with an answer Corten should have kept from every shared cache: a `Cache-Control`
 /// other than `cache`, any caching header a CDN reads first, or a missing header a CDN reads for
 /// something else.
-fn kept_from_cdns(headers: &http::HeaderMap, cache: &str) -> Vec<String> {
+pub(super) fn kept_from_cdns(headers: &http::HeaderMap, cache: &str) -> Vec<String> {
     let mut wrong = Vec::new();
     if headers[header::CACHE_CONTROL] != cache {
         wrong.push(format!("Cache-Control {:?}, not {cache:?}", headers[header::CACHE_CONTROL]));
@@ -953,7 +953,7 @@ async fn a_public_page_in_a_partial_mode_keeps_no_cdn_caching_header() {
 
 /// Staged middleware that rewrites every answer's `Cache-Control` after the route made it (takes it
 /// out for `None`) and marks the answer for a CDN, as [`CdnWrites`] does.
-struct CdnRecaches(Option<&'static str>);
+pub(super) struct CdnRecaches(pub(super) Option<&'static str>);
 
 impl crate::Middleware for CdnRecaches {
     async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
@@ -1397,6 +1397,49 @@ async fn the_router_s_own_failure_page_is_not_shared() {
         }
     }
     assert!(wrong.is_empty(), "the router's own failure page, open to a CDN: {wrong:#?}");
+}
+
+/// A request for the app's static files that names no file (one the version being served lacks,
+/// or a path that is not one, which Corten's route refuses as it reads it) is no handler's answer
+/// either: the app's error page in its place can greet Ann by her cookie without reading a caller,
+/// so it goes out `private` whatever a staged middleware made of its `Cache-Control` (`private,
+/// no-store` where it names `no-store`), with none of the caching headers a CDN reads first. The
+/// file itself is everyone's and keeps them.
+#[tokio::test]
+async fn a_static_file_miss_s_error_page_is_not_shared() {
+    let routes = || Table::new().route("/style", get(|req: Req| async move { req.asset(RefusedStatic::STYLE_CSS).to_string() }));
+    let mut wrong = Vec::new();
+    for (cache, sent) in
+        [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
+    {
+        let router = App::new(Routes::from(routes()))
+            .assets(RefusedStatic)
+            .middleware(CdnRecaches(cache))
+            .error_page(greeting_error_page, ())
+            .router();
+        // The stylesheet's URL at the version the app serves: `/assets/{version}/style.css`.
+        let (_, _, href) = from_ann(&router, "GET", "/style", &[]).await;
+        assert!(href.starts_with("/assets/") && href.ends_with("/style.css"), "{href}");
+        let (status, headers, _) = from_ann(&router, "GET", &href, &[("accept", "text/html")]).await;
+        assert_eq!(status, StatusCode::OK, "{cache:?}: the file");
+        for name in CDN_OVERRIDES {
+            assert_eq!(headers[name], "public, max-age=60", "{cache:?}: the file keeps {name}");
+        }
+        let old = href.replacen(&href["/assets/".len().."/assets/".len() + 12], "000000000000", 1);
+        for (uri, status) in [
+            (href.replace("style.css", "missing.css"), StatusCode::NOT_FOUND),
+            (old.replace("style.css", "missing.css"), StatusCode::NOT_FOUND),
+            (href.replace("style.css", "%FF.css"), StatusCode::BAD_REQUEST),
+        ] {
+            let (got, headers, body) = from_ann(&router, "GET", &uri, &[("accept", "text/html")]).await;
+            assert_eq!(got, status, "{uri} {cache:?}");
+            assert!(body.contains("Sorry, ann."), "{uri} {cache:?}: {body}");
+            for what in kept_from_cdns(&headers, sent) {
+                wrong.push(format!("{uri}, {cache:?}: {what}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "a static file miss's error page, open to a CDN: {wrong:#?}");
 }
 
 /// Staged middleware that passes the request on rebuilt from its method, URI, version, headers and

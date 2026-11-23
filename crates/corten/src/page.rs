@@ -3738,7 +3738,8 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     // `Retry-After`, `WWW-Authenticate`, `Allow`) goes out with the error page.
     let kept = std::mem::take(res.headers_mut());
     if rejection {
-        let text = crate::body::to_bytes(res.into_body(), 16 * 1024).await.unwrap_or_default();
+        // The body alone: the answer's extensions are read again once the page is drawn.
+        let text = crate::body::to_bytes(std::mem::take(res.body_mut()), 16 * 1024).await.unwrap_or_default();
         let text = String::from_utf8_lossy(&text);
         tracing::debug!(status = status.as_u16(), "corten: request rejected: {text}");
         failed = Some(crate::Failed(Arc::from(text.trim())));
@@ -3747,7 +3748,7 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
         // The PWA's offline page, which the service worker keeps: a 200. It is the app's error page
         // in place of the router's `404`, so it is settled as one too; the worker's own cache keeps
         // it whatever its `Cache-Control` says.
-        return carried(kept, marks, error_page(shared, asked, Failure::Offline).await);
+        return carried_from(kept, marks, error_page(shared, asked, Failure::Offline).await, res.extensions_mut());
     }
     let detail = failed.map(|crate::Failed(message)| message);
     let failure = match cause {
@@ -3771,7 +3772,20 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     #[cfg(not(debug_assertions))]
     let shows = shared.dev;
     let failure = if shows { failure } else { failure.without_detail() };
-    carried(kept, marks, error_page(shared, asked, failure).await)
+    carried_from(kept, marks, error_page(shared, asked, failure).await, res.extensions_mut())
+}
+
+/// [`carried`], for the error page drawn in the place of the failed answer whose extensions are
+/// `answer`: when they hold its `Unshared` mark alone and the page has none (the router's `404`
+/// with the error page), the page takes that map, rather than a new one made for the same mark.
+/// Nothing else of the failed answer's is carried. `answer` is borrowed after the page is drawn,
+/// so the request's future holds nothing more across that await.
+fn carried_from(kept: HeaderMap, marks: crate::cache::Marks, mut res: Response, answer: &mut http::Extensions) -> Response {
+    if marks.unshared && !marks.no_store && answer.len() == 1 && res.extensions().is_empty() {
+        *res.extensions_mut() = std::mem::take(answer);
+        return carried(kept, crate::cache::Marks { unshared: false, no_store: false }, res);
+    }
+    carried(kept, marks, res)
 }
 
 /// [`Req::asset`] with no static directory: a bug, which panics in debug builds.
