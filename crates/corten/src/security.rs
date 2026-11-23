@@ -1102,6 +1102,9 @@ pub(crate) struct Csp {
     /// against ([`FormTargets`]).
     #[cfg(debug_assertions)]
     form_action: Vec<String>,
+    /// The whole header map of an answer that brought its type and nothing else, made the first
+    /// time one is answered ([`Applied::headers`]): one that is never a page, and a page route's.
+    typed: [OnceLock<HeaderMap>; 2],
 }
 
 impl Csp {
@@ -1135,6 +1138,7 @@ impl Csp {
             script_loads: policy.sources.script_loads(),
             #[cfg(debug_assertions)]
             form_action: policy.sources.form_action.clone(),
+            typed: Default::default(),
         }
     }
 
@@ -1371,9 +1375,40 @@ impl Applied {
     /// the app's opener policy, and still the area's referrer policy. `vary` says whether the
     /// answer has a `Vary` already, as the app's last stage found when it settled the language
     /// (`crate::page::vary_on_language`).
+    ///
+    /// An answer that brought its `Content-Type` and no other header (text, JSON, bytes) with no
+    /// nonce taken and no style block gets the same headers whatever it is, so they are written
+    /// once for each policy, below, and each such answer takes a copy of that map with its own type
+    /// in it: copying a map does not hash its names again, which is most of what adding them one at
+    /// a time costs.
     pub fn headers(&self, res: &mut Response, nonce: Option<&NonceSlot>, csp: &Csp, vary: bool) {
+        let block = if nonce.is_some() { res.extensions_mut().remove::<StyleBlock>() } else { None };
+        let headers = res.headers();
+        let typed = headers.len() == 1 && headers.keys().next() == Some(&header::CONTENT_TYPE);
+        if typed && block.is_none() && nonce.is_none_or(|slot| slot.taken().is_none()) {
+            let whole = csp.typed[usize::from(nonce.is_some())].get_or_init(|| {
+                let mut typed = Response::new(crate::body::Body::empty());
+                let headers = typed.headers_mut();
+                headers.reserve(crate::response::APP_HEADERS);
+                headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(""));
+                self.write(&mut typed, nonce, csp, vary, None);
+                std::mem::take(typed.headers_mut())
+            });
+            let mut whole = whole.clone();
+            // The type is the first header of both maps.
+            if let (Some(kind), Some(ours)) = (res.headers_mut().values_mut().next(), whole.values_mut().next()) {
+                std::mem::swap(kind, ours);
+            }
+            *res.headers_mut() = whole;
+            return;
+        }
+        self.write(res, nonce, csp, vary, block);
+    }
+
+    /// [`Applied::headers`], each header added to what the answer brought. `block` is the
+    /// answer's style block, taken off it.
+    fn write(&self, res: &mut Response, nonce: Option<&NonceSlot>, csp: &Csp, vary: bool, block: Option<StyleBlock>) {
         let page = nonce.map(|nonce| (nonce, csp));
-        let block = if page.is_some() { res.extensions_mut().remove::<StyleBlock>() } else { None };
         let headers = res.headers_mut();
         // Room for the headers below and `Cache-Control` (`Vary` from compression is appended to an
         // existing one, or added): the map grows at most once, and not at all when a page reserved
