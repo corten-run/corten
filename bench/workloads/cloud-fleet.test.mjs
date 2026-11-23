@@ -574,7 +574,7 @@ test("dedicated startup starts once, then leaves the host's idle check free of r
           assert.equal(started, false, "unit start retried");
           assert.equal(elapsed, 0, "fresh root login opened at the end of the drain");
           started = true;
-          assert.equal(h.saved().quietBootstrap, "after-start");
+          assert.equal(h.saved().quietBootstrap, "prelogin");
           assert.match(readFileSync(join(h.local, "job.sh"), "utf8"), /^bootstrap_stage=root-manager-drain$/m);
           if (mode === "quiet") { startSent.resolve(); await startAck.promise; }
           if (mode === "busy") h.flags.active = false;

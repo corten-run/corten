@@ -17,7 +17,7 @@ import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
-import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, reservation, savedLoadLayout, savedPlacement, verifySshIngress } from "./cloud-contract.mjs";
+import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, preloginUserData, reservation, savedLoadLayout, savedPlacement, verifySshIngress } from "./cloud-contract.mjs";
 import { readFleet, recheckSetupAttempt, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { unitQuery } from "./cloud-options.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
@@ -199,6 +199,7 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     assert.equal(fs.existsSync(path.join(p.h.base, group, "groups-r21/operation.lock")), false);
     const post = events.find((row) => row.group === group && row.method === "POST");
     assert.equal(post.body.name, job.name); assert.deepEqual(post.body.ssh_keys, [42]);
+    assert.equal(saved.quietBootstrap, "prelogin"); assert.equal(post.body.user_data, preloginUserData);
     assert.equal(post.body.size, "c-16"); assert.equal(post.body.region, "sfo2");
     assert.deepEqual(saved.host, { size: post.body.size, region: post.body.region, image: post.body.image });
     assert.deepEqual(events.filter((row) => row.group === group && (row.method === "POST" || row.path?.startsWith("/v2/actions/")))
