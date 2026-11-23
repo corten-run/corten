@@ -8259,14 +8259,18 @@ rules something out.
     again), and the cycles it added were about 1.42 for each instruction it added where a request's
     own were 0.71, kernel cycles most of the difference: both are estimates from the run's medians,
     not counted per job. A probe that encodes as `Level::Kept` does (brotli 9.1.3, on a thread of
-    its own, on a busy workstation, so its times are good for ratios only) counted 224 to 272 minor
-    page faults a job under jemalloc 5.3.0, whatever the pause between jobs, and none under
-    glibc's allocator, and its jobs took 1.2 to 3.3 times as long under jemalloc, the most at 1
-    KiB: as `corten new`'s Dockerfile runs an app, each job faults in about a megabyte of brotli's
-    tables afresh, a cost that does not grow with the body and that callgrind, which counts user
-    space, does not see. That count was taken before [Choice 23](#choice-jemalloc-image) set the
-    image's thread cache to 512 KiB, which keeps brotli 1's buffers between responses; whether it
-    keeps any of a brotli 5 job's, which would make that part smaller, is not measured.
+    its own, on a busy workstation, so its times are good for ratios only), run before
+    [Choice 23](#choice-jemalloc-image) set the image's thread cache to 512 KiB, counted 224 to 272
+    minor page faults a job under jemalloc 5.3.0 with the 64 KiB thread cache `corten new`'s
+    Dockerfile then set, whatever the pause between jobs, and none under glibc's allocator, and its
+    jobs took 1.2 to 3.3 times as long under jemalloc, the most at 1 KiB: under that setting each
+    job faulted in about a megabyte of brotli's tables afresh, a cost that did not grow with the
+    body and that callgrind, which counts user space, does not see. Those are the old probe's
+    counts, not today's image's: the 512 KiB thread cache keeps brotli 1's buffers between
+    responses, and whether it keeps any of a brotli 5 job's, which would make that part smaller,
+    and so how many faults a job takes now, is not measured. The eighth run (below) does not
+    measure it either: it counts user plus kernel cycles over each turn's requests, which takes in
+    whatever faults its jobs take, not faults a job.
     So the job is queued only for a kept copy asked for often enough to spread its cost thin
     (`kept::due`): 8,192 answers to clients that rank brotli first, and three more for each byte
     of the body. The count spreads the cost; the answers before it do not repay it, and a copy
@@ -8278,8 +8282,8 @@ rules something out.
     user instructions for each answer that counted among those 36 (prose of 32 KiB: 12,363,878
     over 106,496), about 0.46% (0.462%) of the 25,136 one answer given again took on the 6,124-byte
     reference page under callgrind, a reference and not each body's own answer, and 45.19 at 1 KiB (the
-    table: 509,048 over 11,264); the faults, about 250 a job whatever the body, are spread over
-    11,264 answers or more. That is the most among the bodies measured, averaged over a copy's whole
+    table: 509,048 over 11,264); the faults the old probe counted under the 64 KiB thread cache,
+    about 250 a job whatever the body, would be spread over 11,264 answers or more. That is the most among the bodies measured, averaged over a copy's whole
     count: a body of another kind may take more, and over a span shorter than the count the job's
     cost lands at once, when it runs, not spread. One asked for more spends less, and twice its due
     half. As an estimate and not a bound, taken at the seventh run's rate of 1.42 cycles for each
@@ -8291,8 +8295,12 @@ rules something out.
     the zstd 1 it had before this change, and one asked for more gets it only after its due: at
     6,124 bytes the 184 bytes a browser's answer saves begin after 26,564 answers, so a page kept
     for a minute must be asked for about 443 times a second to get it at all, and one asked for
-    ten times its due in a lifetime can send at most nine tenths of its browser answers in brotli
-    5, and that many only if the queue takes the job at the due and its encoding is published
+    ten times its due in a lifetime can send at most nine tenths of those answers in brotli 5, of
+    all its answers to clients that rank brotli first taken together, browsers and clients that
+    accept `br` alone; not of its browser answers alone, since clients that accept `br` alone can
+    make the whole due before a browser asks, after which every browser answer can be brotli 5. It
+    is nine tenths of the browser answers only where browsers make all ten dues. And that many
+    only if the queue takes the job at the due and its encoding is published
     promptly, the store admits the bytes, and they are smaller than the form made for the coding
     each answer would get otherwise: a full queue is asked again only a whole due later, a late or
     refused encoding sends none, and a smaller form already made wins. Every
@@ -9203,8 +9211,10 @@ rules something out.
     most of its pages' dues, so the asking it refuses, once in each due, should be measured, or a
     measured app's kept pages rarely reach their due in a lifetime while most of its bytes go to
     browsers, so it should fall, or the job's part that does not grow with the body (brotli's
-    tables and, under jemalloc, about 250 page faults a job) is made smaller, as by an encoder the
-    thread keeps from job to job, so its 8,192 should fall with it, or most clients of a
+    tables and, under jemalloc, the page faults a job takes, which the old probe counted at about
+    250 a job under the 64 KiB thread cache and nothing has counted under 512 KiB) is measured
+    smaller, as by an encoder the thread keeps from job to job or by a count of a job's faults
+    under the image's setting well under that 250, so its 8,192 should fall with it, or most clients of a
     measured app prefer zstd to brotli, so a level made after the answer is worth having for zstd;
     the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
