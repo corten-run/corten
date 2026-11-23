@@ -1458,9 +1458,13 @@ the current manager or change SSH or PAM. For new reservations
 unit. After that start is acknowledged, the controller opens no SSH session for
 135 seconds: two minutes for natural drain, then the existing 15-second idle
 check. The service uses its own monotonic exec-start timestamp for the window.
-It samples only the manager's active state, main PID and monotonic activation
-time at the two ends of the drain. A changed PID or activation time distinguishes
-a new activation; matching values do not say why the manager remained active.
+The before-drain and after-drain snapshots record the manager's active state,
+main PID and monotonic activation time, not the time of either sample. A delayed
+job can take both samples back-to-back. Without boot-relative journal times for
+both samples, their spacing is unknown; do not infer what happened across the
+two-minute window. Two active samples with different nonzero PIDs show different
+manager processes, not why the process changed. Active followed by inactive
+with main PID zero is the expected drain, not evidence of reactivation.
 The job checks the installed and effective policy and requires an inactive
 manager with no main PID before cloud-init and again before native entry.
 A late early proof fails rather than admitting a sample from after polling
