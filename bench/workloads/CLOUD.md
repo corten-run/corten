@@ -23,17 +23,27 @@ views share evidence; they do not launch a second campaign.
 
 ## Public Source Permissions
 
-Fresh measured hosts install stable Git from the Ubuntu Git maintainers' PPA.
-They fetch its public key over bounded HTTPS, require
-the exact primary fingerprint `F911AB184317630C59970973E363C90F8F1B6217`, and scope
-APT trust to that source with `signed-by`. This avoids the Launchpad metadata API
-whose truncated responses stopped image preparation before tests. A failed
-download, key parse or fingerprint check stops setup; distribution Git is not a
-fallback. The existing immutable-source Git capability check still runs.
-`git-ppa.test.mjs` executes the host setup with local command fixtures, including
-wrong, extra and missing primary keys and failed downloads/parsing. This is not
-native framework or official-run qualification. The [CI tools image](../../docs/guide/deploy.md)
-builds a pinned upstream Git release instead; it is not used on measured hosts.
+New reservations save `gitSource: true`. Their guests build Git 2.56.1 from the
+signed upstream release before checkout, without the unavailable Launchpad PPA
+([#1993 Fresh benchmark guests depend on the unavailable Git PPA before checkout](https://github.com/corten-run/corten/issues/1993)).
+The generated job embeds the exact [CI verifier](../../scripts/benchmark-evidence-git.sh):
+it checks the pinned kernel.org archive SHA-256, then requires a valid detached
+signature with the pinned signing subkey and primary fingerprint. Extraction
+and the two-job, no-Rust build follow verification; package install, download
+verification, extraction, build and capability checks all have deadlines.
+The installed `/usr/local/bin/git` must have its HTTPS helper, the exact version,
+and demonstrate both no lazy fetch of an absent blob and no replacement of an
+original object. The host record keeps the version, release URL, SHA-256 and
+signer fingerprints. The CI tools image itself is not used on measured hosts.
+
+A failed step stops at `git-install`, with no fallback to distribution Git,
+checkout, native entry or bootstrap-ready marker. The job removes its private
+build tree on normal failure and uses the existing pre-entry exit archive;
+the exact-host cleanup requirements do not change. The `git-source.test.mjs`
+Linux fixture executes the generated stage and failure packer with local
+commands, not an upstream download or guest qualification.
+Reservations without the marker regenerate their original PPA job bytes.
+Keep the marked recipe fixed too; a future Git pin needs a distinct saved recipe.
 
 The production adapter in `cloud-remote.mjs` keeps the job at `umask 077` but
 runs only the fixed public Git clone, fetch and exact detached checkout in a
