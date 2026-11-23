@@ -1321,12 +1321,18 @@ export async function fragmentTargets(browser) {
     "a #fragment that is not UTF-8 once decoded finds what a full load finds",
     "a #fragment that starts with an escaped U+FEFF finds the id that keeps it, not the one without",
     "a #fragment that is one id as written and another decoded finds the one as written",
+    "a focus handler that changes the address in the scroll to a #fragment ends the navigation, which scrolls no further",
+    "the browser's scroll to a kept :target that runs a focus handler is not scrolled again",
+    "Tab after a client navigation to a heading's #fragment goes where it goes after a full load",
+    "a client navigation to a #fragment that names nothing moves focus off the link kept outside <main>",
   ];
   // Two spellings of one fragment, each an id, far enough apart that one is out of view when the
   // other is in it: the one HTML finds, and the one it would find if it dropped a leading U+FEFF
   // or decoded before trying the fragment as written.
   const apart = `<p>${"<br>".repeat(24)}</p>`;
   const spellings = `<p id="smoke-bom">BOM dropped</p>${apart}<p id="\ufeffsmoke-bom">BOM kept</p>${apart}<p id="smoke-%41">As written</p>${apart}<p id="smoke-A">Decoded</p>`;
+  // A heading Tab goes on from, and a button a focus handler is on, far from the place it sends the address to.
+  const focusing = `<h2 id="smoke-heading">Heading</h2><button id="smoke-after-heading">After heading</button>${apart}<button id="smoke-focus-inside">Inside</button>${apart}<p id="smoke-after-focus">After focus</p>`;
   const open = async () => {
     const page = await browser.newPage({ viewport: { width: 360, height: 200 } });
     await page.route(
@@ -1343,9 +1349,9 @@ export async function fragmentTargets(browser) {
         // At the end of <main>: before its end tag in a whole page, and at the end of a navigation's
         // answer, which ends with what <main> holds and has no <main> tag. The id after <main> is in
         // the whole page only.
-        const anchors = `<p><a name="smoke-named">Named</a></p><p id="smoke-caf\u00e9">Decoded</p><p id="caf\u00e9%xx">Malformed</p><p id="bad\ufffd">Not UTF-8</p>${spellings}`;
+        const anchors = `<p><a name="smoke-named">Named</a></p><p id="smoke-caf\u00e9">Decoded</p><p id="caf\u00e9%xx">Malformed</p><p id="bad\ufffd">Not UTF-8</p>${spellings}${focusing}`;
         const text = await res.text();
-        const body = text.includes("</main>") ? text.replace("</main>", `${anchors}</main><p id="smoke-outside">Outside</p>`) : text + anchors;
+        const body = text.includes("</main>") ? text.replace("</main>", `${anchors}</main><p id="smoke-outside">Outside</p>${apart}<button id="smoke-outside-button">Outside</button>`) : text + anchors;
         await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
       },
     );
@@ -1373,6 +1379,19 @@ export async function fragmentTargets(browser) {
         };
       };
       w.__drawn = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+      // The id or text of the focused element, else "body".
+      w.__focus = () => {
+        const el = document.activeElement;
+        return !el || el === document.body ? "body" : el.id || `${el.localName}: ${el.textContent?.trim()}`;
+      };
+      // The elements scrolled to with `scrollIntoView`, which the runtime uses, captured before it loads.
+      /** @type {string[]} */
+      w.__scrolledInto = [];
+      const into = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function (/** @type {any} */ ...args) {
+        w.__scrolledInto.push(this.id);
+        return into.apply(this, args);
+      };
       /**
        * @param {string} url @param {string} [place] a selector for the element the fragment names
        * @param {"push" | "replace"} [history] @param {string} [other] a selector for one it must not be at
@@ -1513,6 +1532,98 @@ export async function fragmentTargets(browser) {
     await page.close();
     check(names[index], at(client, want) && !client.otherInView, JSON.stringify({ client, full }));
   }
+
+  // The browser's scroll focuses a button the fragment names, and a focus handler of the page's
+  // changes the address: that ends the navigation (its `finished` rejects), and the runtime then
+  // scrolls to neither fragment, the address's new one included. The change is the page's own.
+  page = await open();
+  await page.goto(`${base}/news`);
+  const focused = await page.evaluate(async () => {
+    const w = /** @type {any} */ (window);
+    w.__marker = 1;
+    scrollTo(0, 0);
+    let fired = false;
+    addEventListener("focusin", (e) => {
+      if (fired || /** @type {Element} */ (e.target).id !== "smoke-focus-inside") return;
+      fired = true;
+      history.replaceState(null, "", "#smoke-after-focus");
+    });
+    /** @type {Step} */
+    const step = await w.__to("/news?mine=on#smoke-focus-inside", "#smoke-focus-inside", "push", "#smoke-after-focus");
+    return { ...step, fired, scrolledInto: /** @type {string[]} */ (w.__scrolledInto) };
+  });
+  await page.close();
+  check(
+    names[10],
+    focused.fired && /abort/i.test(focused.error) && focused.url === "/news?mine=on#smoke-after-focus" && focused.inView && !focused.otherInView && focused.scrolledInto.length === 0,
+    JSON.stringify(focused),
+  );
+
+  // A button the swap leaves in place (after <main>) is the target, then focus leaves it, and a
+  // later address has its #fragment again. A browser whose scroll goes there focuses it, and the
+  // page's focus handler scrolls elsewhere: the runtime must not scroll to it on top. Whether it
+  // did is read from its `scrollIntoView` calls, not the position: Chromium's own scroll comes
+  // after the focus handler's, and WebKit's comes again after layout. Firefox's goes neither there
+  // nor to the button, and the runtime scrolls to it.
+  page = await open();
+  await page.goto(`${base}/news`);
+  const handled = await page.evaluate(async () => {
+    const w = /** @type {any} */ (window);
+    w.__marker = 1;
+    /** @type {Step} */
+    const first = await w.__to("/news?mine=on#smoke-outside-button", "#smoke-outside-button");
+    /** @type {HTMLElement} */ (document.activeElement).blur();
+    scrollTo(0, 0);
+    await w.__drawn();
+    w.__scrolledInto.length = 0;
+    let fired = false;
+    addEventListener("focusin", (e) => {
+      if (/** @type {Element} */ (e.target).id !== "smoke-outside-button") return;
+      fired = true;
+      scrollTo(0, 500);
+    });
+    /** @type {Step} */
+    const again = await w.__to("/news?sector=energy#smoke-outside-button", "#smoke-outside-button", "replace");
+    return { first, again, fired, scrolledInto: /** @type {string[]} */ ([...w.__scrolledInto]) };
+  });
+  await page.close();
+  check(
+    names[11],
+    at(handled.first, "smoke-outside-button", true) && handled.again.swapped && !handled.again.error && (handled.fired ? handled.scrolledInto.length === 0 : handled.again.inView),
+    JSON.stringify(handled),
+  );
+
+  // A full load at a heading's #fragment starts the next Tab from the heading (HTML's sequential
+  // focus navigation starting point). A client navigation there, from a link kept outside <main>
+  // that has focus, must too: the focus reset after it would start Tab at the top.
+  /** @param {string} fragment @param {boolean} client */
+  const tabbed = async (fragment, client) => {
+    page = await open();
+    await page.goto(`${base}/news${client ? "" : `?mine=on#${fragment}`}`);
+    const was = await page.evaluate(
+      async ([fragment, client]) => {
+        const w = /** @type {any} */ (window);
+        await w.__drawn();
+        if (!client) return { focus: w.__focus(), target: document.querySelector(":target")?.id ?? null, swapped: false, error: "" };
+        w.__marker = 1;
+        /** @type {HTMLElement} */ (document.querySelector("header a[href]")).focus();
+        /** @type {Step} */
+        const step = await w.__to(`/news?mine=on#${fragment}`);
+        return { focus: w.__focus(), target: step.target, swapped: step.swapped, error: step.error };
+      },
+      /** @type {const} */ ([fragment, client]),
+    );
+    await page.keyboard.press("Tab");
+    const tab = await page.evaluate(() => /** @type {any} */ (window).__focus());
+    await page.close();
+    return { ...was, tab };
+  };
+  const [heading, headingFull] = [await tabbed("smoke-heading", true), await tabbed("smoke-heading", false)];
+  check(names[12], heading.swapped && !heading.error && heading.target === "smoke-heading" && heading.tab === "smoke-after-heading" && heading.tab === headingFull.tab, JSON.stringify({ client: heading, full: headingFull }));
+  // With no element to scroll to, the focus the reset would have moved is moved off the link. The
+  // next Tab is in the detail only: in Chromium and Firefox it goes on from the link, not the top.
+  const [nothing, nothingFull] = [await tabbed("smoke-nothing", true), await tabbed("smoke-nothing", false)];
+  check(names[13], nothing.swapped && !nothing.error && nothing.focus === "body", JSON.stringify({ client: nothing, full: nothingFull }));
 }
 
 export async function earlyNavigation(browser) {

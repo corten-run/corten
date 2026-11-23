@@ -2760,21 +2760,34 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
     }
     // A new page starts at its `#id`, else at the top, by the browser's own scroll to the fragment
     // (`scroll()`), as a full load does: it makes the element `:target`, finds an `<a name>` too,
-    // and reads the address the navigation committed (a redirect's). Called here once the page is
-    // swapped in (`scroll: "manual"`), so the element can be checked after it: Firefox's may
-    // neither scroll there nor set `:target` (as after a document's first fragment scroll, a full
-    // load's included), so the element is scrolled to here, still without one.
-    // Only a `:target` that `scroll()` set shows it scrolled: Firefox keeps an element the swap
-    // left in place (outside `<main>`) as the target without scrolling to it again, so that one is
-    // scrolled to here too (where the browser scrolled, to the same place again).
+    // moves focus to it (or off the control it was on, and starts the next Tab from it), and reads
+    // the address the navigation committed (a redirect's). Called here once the page is swapped in
+    // (`scroll: "manual"`), so what it did can be checked after it: Firefox's may neither scroll
+    // there nor set `:target` (as after a document's first fragment scroll, a full load's
+    // included), may scroll to the top instead, or keeps an element the swap left in place
+    // (outside `<main>`) as the target without scrolling to it again. Only a focus it moved or a
+    // `:target` it set shows that it went there; else the element is scrolled to here. When it
+    // moved focus, the page's own code ran in it (a focus handler), and what it did stands: a
+    // scroll of its own, or a change to the address, which ends this navigation (its fragment is
+    // read before).
     const after = () => {
       if (event.signal.aborted) return;
-      const was = document.querySelector(":target");
+      const fragment = location.hash.slice(1);
+      const [was, focused] = [document.querySelector(":target"), document.activeElement];
       event.scroll();
-      const at = fragmentOf(location.hash.slice(1));
-      if (at && (at === was || document.querySelector(":target") !== at)) elementOwn.scrollIntoView.call(at);
+      if (event.signal.aborted || !fragment || focused !== document.activeElement) return;
+      const at = fragmentOf(fragment);
+      if (at && at !== was && document.querySelector(":target") === at) return;
+      if (at) elementOwn.scrollIntoView.call(at);
+      // Focus is still on the control it was on (a link kept outside `<main>`): moved off it, as
+      // the browser's scroll or, with nothing to scroll to, the focus reset would have. HTMLElement's
+      // own `blur`, past a form control named like it.
+      if (focused instanceof HTMLElement) HTMLElement.prototype.blur.call(focused);
     };
-    interceptVisit(event, (precommit) => visit(url, event.signal, redirected, false, undefined, startedBy(event), written, through, precommit), after, { scroll: "manual" });
+    // Focus is reset after a page with no fragment, as a full load's starts at the top. One with a
+    // fragment leaves it to the scroll, which starts the next Tab from the element: the reset
+    // comes after it, and would start it at the top again.
+    interceptVisit(event, (precommit) => visit(url, event.signal, redirected, false, undefined, startedBy(event), written, through, precommit), after, { scroll: "manual", focusReset: url.hash ? "manual" : "after-transition" });
     return;
   }
   const after = () => {
