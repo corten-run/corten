@@ -1,0 +1,28 @@
+wrk debian/4.1.0-4+b1 [epoll] Copyright (C) 2012 Will Glozer
+tcpdump version 4.99.5
+v20.19.2
+16
+STATE-SELFTEST-OK
+base turn 1: 157751 requests, no error; AFTER thread 1: request() called 78920 times, GET /wait from the first 512;AFTER thread 2: request() called 78895 times, GET /wait from the first 512; STATE holds: 64 connections; requests for /wait before a connection's first for /private: least 15, most 16, 1023 in all, the last sent 47.9 ms after the turn's first request; requests for /private: least 2437, most 2441, 156177 in all, the first sent at 47.8 ms and the last at 2988.2 ms
+base turn 2: 160946 requests, no error; AFTER thread 1: request() called 80049 times, GET /wait from the first 512;AFTER thread 2: request() called 80961 times, GET /wait from the first 512; STATE holds: 64 connections; requests for /wait before a connection's first for /private: least 15, most 16, 1023 in all, the last sent 67.1 ms after the turn's first request; requests for /private: least 2483, most 2500, 159452 in all, the first sent at 67.1 ms and the last at 3007.3 ms
+base turn 3: 160109 requests, no error; AFTER thread 1: request() called 80139 times, GET /wait from the first 512;AFTER thread 2: request() called 80033 times, GET /wait from the first 512; STATE holds: 64 connections; requests for /wait before a connection's first for /private: least 15, most 16, 1023 in all, the last sent 50.3 ms after the turn's first request; requests for /private: least 2479, most 2488, 158797 in all, the first sent at 50.2 ms and the last at 2993.3 ms
+state: 3 turns reach and keep the state
+state.sh exit 0
+== the wrk output of the first turn
+Running 3s test @ http://127.0.0.1:18083/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.22ms  179.66us   4.10ms   96.90%
+    Req/Sec    26.45k     1.60k   27.71k    96.67%
+  157751 requests in 3.02s, 1.05GB read
+Requests/sec:  52257.49
+Transfer/sec:    356.23MB
+AFTER thread 1: request() called 78920 times, GET /wait from the first 512
+AFTER thread 2: request() called 78895 times, GET /wait from the first 512
+RESULT 157751 0 0 0 0 0
+== tcpdump
+tcpdump: listening on lo, link-type EN10MB (Ethernet), snapshot length 128 bytes
+157200 packets captured
+315628 packets received by filter
+0 packets dropped by kernel
+# TRIAL-DONE

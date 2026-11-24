@@ -1,0 +1,17 @@
+== base (newbase.tgz) 23:53:39
+    Finished `release` profile [optimized] target(s) in 47.07s
+C archives the build made: 0
+/root/n-map-remote.sh: 19: readelf: not found
+libzstd: 1; linker: 
+sha256 532dc5c4beb972ed; map 15408 lines
+.text: 3266 input sections; by alignment: 3041 at 16, 23 at 8, 42 at 4, 160 at 1
+no input section of .text is aligned beyond 16 bytes
+== head (merge.tgz) 23:54:32
+    Finished `release` profile [optimized] target(s) in 47.24s
+C archives the build made: 0
+/root/n-map-remote.sh: 19: readelf: not found
+libzstd: 1; linker: 
+sha256 80d04743ed6c5161; map 15460 lines
+.text: 3276 input sections; by alignment: 3051 at 16, 23 at 8, 42 at 4, 160 at 1
+no input section of .text is aligned beyond 16 bytes
+# MAP-DONE 23:55:25

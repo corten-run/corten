@@ -1,0 +1,192 @@
+== break: never-taken; tests: a_served_request_waits_on_its_connections_timer a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runtime_has_shut_down; cargo test rc=101
+test tests::server::a_served_request_waits_on_its_connections_timer ... FAILED
+test tests::server::a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runtime_has_shut_down ... FAILED
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1080 filtered out; finished in 0.39s
+error: test failed, to rerun pass `-p corten-run --lib`
+thread 'tests::server::a_served_request_waits_on_its_connections_timer' (1869) panicked at crates/corten/src/tests/server.rs:2549:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+thread 'tests::server::a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runtime_has_shut_down' (1868) panicked at crates/corten/src/tests/server.rs:2972:5:
+assertion `left == right` failed: answered 500 once the connection's runtime has shut down
+  left: Ok(503)
+ right: Ok(500)
+== break: no-restore-on-panic; tests: a_connection_whose_poll_panics_has_its_timer_back; cargo test rc=101
+test tests::server::a_connection_whose_poll_panics_has_its_timer_back ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p corten-run --lib`
+thread 'tests::server::a_connection_whose_poll_panics_has_its_timer_back' (696) panicked at crates/corten/src/tests/server.rs:2673:13:
+assertion `left != right` failed: the third poll panics, as a handler no catch is around
+  left: 3
+ right: 3
+thread 'tests::server::a_connection_whose_poll_panics_has_its_timer_back' (696) panicked at crates/corten/src/tests/server.rs:2684:9:
+assertion `left == right` failed: back, as the deadline that panicked set it
+  left: (1, None)
+ right: (1, Some(Instant { tv_sec: 2572, tv_nsec: 408882796 }))
+== break: given-to-any-connection; tests: a_timer_dropped_in_another_connections_poll_is_not_given_to_that_connection; cargo test rc=101
+test tests::server::a_timer_dropped_in_another_connections_poll_is_not_given_to_that_connection ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p corten-run --lib`
+thread 'tests::server::a_timer_dropped_in_another_connections_poll_is_not_given_to_that_connection' (696) panicked at crates/corten/src/tests/server.rs:2732:5:
+assertion `left == right` failed: dropped, not given to the connection being polled
+  left: (2, Some(Instant { tv_sec: 2600, tv_nsec: 72174169 }))
+ right: (1, None)
+== break: taken-without-asking-whose; tests: a_new_connection_polled_inside_anothers_poll_does_not_take_its_timer; cargo test rc=101
+test tests::server::a_new_connection_polled_inside_anothers_poll_does_not_take_its_timer ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p corten-run --lib`
+thread 'tests::server::a_new_connection_polled_inside_anothers_poll_does_not_take_its_timer' (696) panicked at crates/corten/src/tests/server.rs:2773:9:
+assertion `left == right` failed: the inner connection's first deadline makes its own
+  left: Some(true)
+ right: Some(false)
+== break: kept-timer-keeps-no-waker; tests: a_kept_timer_wakes_what_polled_it_last; cargo test rc=101
+test tests::server::a_kept_timer_wakes_what_polled_it_last ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p corten-run --lib`
+thread 'tests::server::a_kept_timer_wakes_what_polled_it_last' (696) panicked at crates/corten/src/tests/server.rs:2828:5:
+assertion `left == right` failed: woken where it was polled last
+  left: (0, 0)
+ right: (0, 1)
+== break: drained-unwrapped; tests: a_connection_draining_at_shutdown_makes_its_timer_as_before; cargo test rc=101
+test tests::server::a_connection_draining_at_shutdown_makes_its_timer_as_before ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.03s
+error: test failed, to rerun pass `-p corten-run --lib`
+thread 'tests::server::a_connection_draining_at_shutdown_makes_its_timer_as_before' (696) panicked at crates/corten/src/tests/server.rs:2605:5:
+assertion `left == right` failed: made in the poll its second deadline first waited in
+  left: 0
+ right: 1
+== break: asks-first-and-no-catch; tests: a_runtime_with_no_clock_answers_500_and_goes_on_serving_the_connection; cargo test rc=101
+test tests::server::a_runtime_with_no_clock_answers_500_and_goes_on_serving_the_connection ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.01s
+error: test failed, to rerun pass `-p corten-run --lib`
+thread 'tests::server::a_runtime_with_no_clock_answers_500_and_goes_on_serving_the_connection' (696) panicked at crates/corten/src/tests/server.rs:1539:9:
+assertion `left == right` failed: the connection closed: 
+  left: 0
+ right: 1
+== break: no-catch; tests: a_connection_polled_where_there_is_no_clock_makes_no_timer; cargo test rc=101
+test tests::server::a_connection_polled_where_there_is_no_clock_makes_no_timer ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p corten-run --lib`
+== break: not-moved; tests: deadlines_on_four_threads_fire_and_none_before_its_limit; cargo test rc=101
+test tests::server::deadlines_on_four_threads_fire_and_none_before_its_limit ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 60.00s
+error: test failed, to rerun pass `-p corten-run --lib`
+thread 'tests::server::deadlines_on_four_threads_fire_and_none_before_its_limit' (696) panicked at crates/corten/src/tests/server.rs:2914:62:
+every deadline fired: Elapsed(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+== break: made-at-the-first; tests: a_connections_timer_is_made_once_and_dropped_with_the_connection a_deadline_waits_on_its_connections_timer_from_the_third_that_waits a_served_request_waits_on_its_connections_timer a_connection_makes_its_timer_only_when_a_second_deadline_waits; cargo test rc=101
+test tests::server::a_deadline_waits_on_its_connections_timer_from_the_third_that_waits ... FAILED
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... FAILED
+test tests::server::a_served_request_waits_on_its_connections_timer ... FAILED
+test tests::server::a_connections_timer_is_made_once_and_dropped_with_the_connection ... FAILED
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 1078 filtered out; finished in 0.32s
+error: test failed, to rerun pass `-p corten-run --lib`
+thread 'tests::server::a_deadline_waits_on_its_connections_timer_from_the_third_that_waits' (698) panicked at crates/corten/src/tests/server.rs:2380:9:
+assertion `left == right` failed: one deadline has waited: no timer
+  left: (1, Some(Instant { tv_sec: 946082841, tv_nsec: 452883417 }))
+ right: (0, None)
+thread 'tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits' (696) panicked at crates/corten/src/tests/server.rs:2418:13:
+assertion `left == right` failed
+  left: (1, Some(Instant { tv_sec: 946082841, tv_nsec: 452877565 }))
+ right: (0, None)
+thread 'tests::server::a_served_request_waits_on_its_connections_timer' (699) panicked at crates/corten/src/tests/server.rs:2543:5:
+assertion `left == right` failed: the connection's first to wait makes its own
+  left: (0, 1)
+ right: (0, 0)
+thread 'tests::server::a_connections_timer_is_made_once_and_dropped_with_the_connection' (697) panicked at crates/corten/src/tests/server.rs:2295:5:
+assertion `left == right` failed: nor has one a single request of whose has waited
+  left: 40
+ right: 0
+== break: made-when-polled; tests: a_connection_makes_its_timer_only_when_a_second_deadline_waits a_connections_timer_is_made_once_and_dropped_with_the_connection; cargo test rc=101
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... FAILED
+test tests::server::a_connections_timer_is_made_once_and_dropped_with_the_connection ... FAILED
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1080 filtered out; finished in 0.33s
+error: test failed, to rerun pass `-p corten-run --lib`
+thread 'tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits' (696) panicked at crates/corten/src/tests/server.rs:2418:13:
+assertion `left == right` failed
+  left: (1, Some(Instant { tv_sec: 946082870, tv_nsec: 118464659 }))
+ right: (0, None)
+thread 'tests::server::a_connections_timer_is_made_once_and_dropped_with_the_connection' (697) panicked at crates/corten/src/tests/server.rs:2295:5:
+assertion `left == right` failed: nor has one a single request of whose has waited
+  left: 40
+ right: 0
+== break: never-made; tests: a_connections_timer_is_made_once_and_dropped_with_the_connection a_deadline_waits_on_its_connections_timer_from_the_third_that_waits a_served_request_waits_on_its_connections_timer; cargo test rc=101
+test tests::server::a_deadline_waits_on_its_connections_timer_from_the_third_that_waits ... FAILED
+test tests::server::a_served_request_waits_on_its_connections_timer ... FAILED
+test tests::server::a_connections_timer_is_made_once_and_dropped_with_the_connection ... FAILED
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 1079 filtered out; finished in 0.51s
+error: test failed, to rerun pass `-p corten-run --lib`
+thread 'tests::server::a_deadline_waits_on_its_connections_timer_from_the_third_that_waits' (697) panicked at crates/corten/src/tests/server.rs:2382:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+thread 'tests::server::a_served_request_waits_on_its_connections_timer' (698) panicked at crates/corten/src/tests/server.rs:2546:5:
+assertion `left == right` failed: and its second, at which the connection makes its timer
+  left: (0, 0)
+ right: (0, 1)
+thread 'tests::server::a_connections_timer_is_made_once_and_dropped_with_the_connection' (696) panicked at crates/corten/src/tests/server.rs:2300:9:
+assertion `left == right` failed: one a connection after 2 requests that waited
+  left: 0
+ right: 40
+== break: thread-local-unchecked; tests: a_deadline_polled_while_its_thread_ends_makes_its_own_timer; cargo test rc=101
+fatal runtime error: thread local panicked on drop, aborting
+error: test failed, to rerun pass `-p corten-run --lib`
+  process didn't exit successfully: `/target/debug/build/corten-run/03072fc088ecfe1b/out/corten-03072fc088ecfe1b 'tests::server::a_deadline_polled_while_its_thread_ends_makes_its_own_timer'` (signal: 6, SIGABRT: process abort signal)
+== break: none; tests: ; cargo test rc=0
+test tests::server::a_connection_done_where_its_second_deadline_waited_makes_no_timer ... ok
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... ok
+test tests::server::a_connection_polled_inside_anothers_poll_keeps_its_own_timer ... ok
+test tests::server::a_connection_polled_where_there_is_no_clock_makes_no_timer ... ok
+test tests::server::a_connection_whose_poll_panics_has_its_timer_back ... ok
+test tests::server::a_connect_answered_with_success_has_no_body ... ok
+test tests::server::a_deadline_polled_while_its_thread_ends_makes_its_own_timer ... ok
+test tests::server::a_panic_in_finished_work_is_the_handlers ... ok
+test tests::server::a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts ... ok
+test tests::server::a_connect_answered_with_a_length_is_sent_without_it ... ok
+test tests::server::a_kept_timer_wakes_what_polled_it_last ... ok
+test tests::server::a_deadline_waits_on_its_connections_timer_from_the_third_that_waits ... ok
+test tests::server::a_new_connection_polled_inside_anothers_poll_does_not_take_its_timer ... ok
+test tests::server::a_connect_answered_chunked_is_sent_without_transfer_encoding ... ok
+test tests::server::a_server_dropped_without_a_shutdown_closes_its_connections ... ok
+test tests::server::a_runtime_with_no_clock_answers_500_and_goes_on_serving_the_connection ... ok
+test tests::server::a_connection_draining_at_shutdown_makes_its_timer_as_before ... ok
+test tests::server::a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit ... ok
+test tests::server::a_switched_connection_stops_counting_when_its_route_drops_the_socket ... ok
+test tests::server::a_taken_ipv6_loopback_port_is_an_error ... ok
+test tests::server::a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runtime_has_shut_down ... ok
+test tests::server::a_tcp_connection_is_accepted_with_nagle_off ... ok
+test tests::server::a_task_past_the_grace_is_ended_and_one_that_panics_ends_alone ... ok
+test tests::server::a_timer_dropped_in_another_connections_poll_is_not_given_to_that_connection ... ok
+test tests::server::a_timer_whose_deadline_is_dropped_away_from_its_connection_is_dropped ... ok
+test tests::server::a_wrong_websocket_version_keeps_its_headers_in_an_apis_error_shape ... ok
+test tests::server::a_switched_connection_after_a_step_counts_against_max_connections ... ok
+test tests::server::a_switched_connection_counts_against_max_connections_until_it_closes ... ok
+test tests::server::an_upgrade_without_a_switchable_connection_is_a_400_without_upgrade ... ok
+test tests::server::a_switched_connection_is_held_to_the_send_timeout ... ok
+test tests::server::an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites ... ok
+test tests::server::a_body_that_stalls_after_requests_that_waited_is_the_clients_408_at_its_own_deadline ... ok
+test tests::server::a_request_head_is_held_only_as_large_as_the_app_allows ... ok
+test tests::server::a_served_request_waits_on_its_connections_timer ... ok
+test tests::server::a_runtime_that_ends_drops_its_connections_timers ... ok
+test tests::server::deadlines_on_four_threads_fire_and_none_before_its_limit ... ok
+test tests::server::the_client_ip_is_the_peer_or_what_a_trusted_proxy_forwards ... ok
+test tests::server::without_a_connection_there_is_no_client_ip ... ok
+test tests::server::without_a_host_the_app_listens_on_both_loopback_addresses ... ok
+test tests::server::shutdown_tells_the_tasks_and_waits_for_them ... ok
+test tests::server::a_request_served_on_another_runtime_inside_a_handler_has_its_deadline ... ok
+test tests::server::shutdown_closes_connections_still_answering_once_the_grace_and_deadline_have_passed ... ok
+test tests::server::a_request_still_arriving_at_shutdown_has_its_own_deadline ... ok
+test tests::server::a_step_before_http_is_counted_and_timed_as_the_connection ... ok
+test tests::server::a_connection_is_held_only_as_long_and_as_many_as_the_app_allows ... ok
+test tests::server::shutdown_holds_a_connection_whose_requests_waited_to_its_requests_deadline ... ok
+test tests::server::finished_work_releases_what_it_holds_when_the_handler_is_dropped ... ok
+test tests::server::shutdown_holds_a_connection_to_its_own_requests_deadline ... ok
+test tests::server::every_request_of_a_connection_has_its_own_deadline ... ok
+test tests::server::a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does_not ... ok
+test tests::server::a_connections_timer_is_made_once_and_dropped_with_the_connection ... ok
+test tests::server::a_thread_that_serves_one_runtime_after_another_holds_each_to_the_deadline ... ok
+test tests::server::a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_timeout ... ok
+test tests::server::an_answer_waits_for_its_client_only_as_long_as_the_app_allows ... ok
+test result: ok. 54 passed; 0 failed; 2 ignored; 0 measured; 1026 filtered out; finished in 10.22s
+# MUT-DONE

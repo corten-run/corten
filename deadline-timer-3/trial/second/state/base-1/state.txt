@@ -1,0 +1,1 @@
+STATE holds: 159513 requests captured of 159450 answered; 64 connections; requests for /wait before a connection's first for /private: least 15, most 16, 1023 in all, the last sent 73.4 ms after the turn's first request; requests for /private: least 2474, most 2479, 158490 in all, the first sent at 73.3 ms and the last at 2999.8 ms
