@@ -29,6 +29,13 @@ pub enum Shelf<'a> {
 /// Items the home page lists at most.
 const SHELF: usize = 50;
 
+/// How long a connection to the item API may sit idle in the pool before a read opens a new one
+/// instead. The benchmark's item API (`bench/fullstack/item-api/server.mjs`, Node's HTTP server)
+/// answers `Keep-Alive: timeout=5` and closes a connection idle for those 5 s plus Node's 1 s
+/// buffer; a read written to a pooled connection as it closes fails in the send (reqwest keeps an
+/// idle connection 90 s unless told otherwise). Not a retry: each read is still one request.
+pub const UPSTREAM_IDLE: std::time::Duration = std::time::Duration::from_secs(4);
+
 impl Source {
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         if std::env::var("ITEM_SOURCE").as_deref() == Ok("fixture") {
@@ -36,9 +43,24 @@ impl Source {
             return Self::fixture(&std::fs::read_to_string(path)?);
         }
         match std::env::var("API_BASE") {
-            Ok(base) => Ok(Source::Api { client: reqwest::Client::new(), base: base.into() }),
+            Ok(base) => Ok(Self::api(&base)),
             Err(_) => Ok(Self::demo()),
         }
+    }
+
+    /// Items read from the item API at `base`.
+    pub fn api(base: &str) -> Self {
+        Self::api_pooled(base, Some(UPSTREAM_IDLE))
+    }
+
+    /// [`Source::api`] with `idle` as the pool's idle bound. `None` leaves reqwest's default of 90 s,
+    /// the policy before #1569, which a test keeps as the control that fails.
+    pub(crate) fn api_pooled(base: &str, idle: Option<std::time::Duration>) -> Self {
+        let mut client = reqwest::Client::builder();
+        if let Some(idle) = idle {
+            client = client.pool_idle_timeout(idle);
+        }
+        Source::Api { client: client.build().expect("HTTP client"), base: base.into() }
     }
 
     /// The demo catalog built into the app, with the store's own art for each of its cards

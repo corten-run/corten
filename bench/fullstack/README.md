@@ -2137,7 +2137,39 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    connection cap (httpx's default keeps 20 idle and allows 100 in all), Phoenix's Req client uses
    a Finch pool of 1,024 connections to the item API, opened as needed (Req's own pool holds Finch's
    50 per host), and Drogon keeps one `HttpClient` (one connection) per request in flight on each
-   thread. Drogon also hands the fixture
+   thread. No app in this matrix reuses a pooled upstream connection idle for 5 s: the item API and
+   the catalog and marketplace fixtures are Node HTTP servers that answer `Keep-Alive: timeout=5`
+   and close an idle connection after those 5 s plus Node's 1 s buffer, and a request written to a
+   connection as it closes can be lost before the upstream sees it. Where a client's default keeps
+   idle connections longer, the app does not reuse one idle for 4 s: reqwest (Corten, axum + Maud,
+   topcoat, Leptos), Go's transport (Gin), httpx (FastAPI, whose default is the advertised 5 s),
+   .NET's `SocketsHttpHandler` (both ASP.NET apps) and Finch (Phoenix, `conn_max_idle_time`)
+   close it; urllib3 under `requests` (Django, which otherwise keeps a connection until it sees
+   the close) and Drogon's clients skip it when they next take a connection from the pool. The JDK
+   client (Spring) gets 1 s, since it drops an expired connection late (with 4 s set, it reused
+   connections idle 4.8 to 5.3 s in four of five runs of the check). Node's `fetch` (the JavaScript apps) and Rails' `Net::HTTP` (2 s by
+   default) already stay under 5 s, and Laravel's client opens a connection per request. None of
+   these adds a retry; Go's transport and the JDK client retry a request lost on a reused connection
+   on their own, which hides the loss without preventing it. The Express-on-Bun deployment
+   (`bench/deployments/express-bun`) is an exception: it runs the same Express handlers under Bun
+   1.4.5, whose `fetch` keeps an idle connection for 5 minutes unless told otherwise (the
+   pinned source's `arm_idle_timeout` in `src/http/HTTPContext.rs`). It is a functional
+   qualification with no timed load, and the shared Express source is left unchanged for it, so no
+   idle bound is claimed or checked there; a timed Bun run would need its own bound and this check
+   first. `node bench/fullstack/idle-close.mjs <image>` checks an image against an upstream that
+   resets any connection reused after 5 s idle: it probes each read once its warmed connections
+   are idle 4.5 s and fails a client that still reuses a connection, so it verifies that idle
+   connections are dropped by the probe, under the upstream's 5 s close, not the configured 4 s
+   itself, which a pool expiring between 4 s and the probe would also pass. The probe is judged at
+   the upstream: when each of its requests arrives, every connection that answered the read's
+   warm-up must have been idle 4.5 to below 4.75 s, or closed under 4.75 s idle before the probe;
+   when the app replies does not matter. A request arrives when the read that completes its head
+   reaches the upstream, before the upstream prepares its answer. A probe outside that window (a
+   late timer, an app that holds a request before sending it upstream, the still-open warmed
+   connections' answers spread over 250 ms or more), or after any upstream request between the
+   warm-up and the probe, is
+   inconclusive and fails the check (`--bound-ms` sets the bound; see the script's header). It also requires the
+   pool to reuse a connection before the idle, so Laravel's image needs `--no-reuse`. Drogon also hands the fixture
    parser's freed memory back to the system after loading (`malloc_trim`), so its memory with items
    in memory is the items' rather than the parser's peak, which the Rust apps avoid by parsing one
    item at a time. Drogon's JSON is JsonCpp's, Drogon's default, which writes 17 significant digits

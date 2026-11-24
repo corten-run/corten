@@ -152,7 +152,10 @@ mod api {
             return Ok(items.get(id).cloned());
         }
         let base = std::env::var("API_BASE").unwrap_or_else(|_| "http://localhost:8080".into());
-        let client = CLIENT.get_or_init(reqwest::Client::new);
+        // Idle connections dropped under the item API's keep-alive (`catalog::source::UPSTREAM_IDLE`).
+        let client = CLIENT.get_or_init(|| {
+            reqwest::Client::builder().pool_idle_timeout(crate::catalog::source::UPSTREAM_IDLE).build().expect("HTTP client")
+        });
         let res = client
             .get(format!("{base}/api/discovery/items/{id}"))
             .send()

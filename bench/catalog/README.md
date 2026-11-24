@@ -29,6 +29,27 @@ records return 404; upstream errors are errors, not an empty 200. `GET /api/cata
 serializes the same record through the framework's normal JSON support. It does not return a
 pre-serialized body. No marketplace view-model conversion is in either path.
 
+The stand-in upstream is Node's HTTP server: it answers with `Keep-Alive: timeout=5` and, on the
+pinned Node 26, closes a connection idle for that 5 s keep-alive timeout plus Node's 1 s buffer
+(observed at 5,999 to 6,045 ms after the last answer). A read written to a pooled connection as
+the upstream closes it can fail in the send, before the upstream's handler sees it. That is a
+possible mechanism for a failed upstream read, reproduced here only against a test double that
+closes at 5 s; it is not a diagnosis of the saved r21 catalog or r27 marketplace failures, whose
+cause remains unattributed. The Corten app and every fullstack app whose client would keep idle
+connections longer (reqwest's default is 90 s) are configured not to reuse a connection idle 4 s,
+a second under what the upstream advertises. Spring is the exception at 1 s, since the JDK client
+drops an expired connection late, and Drogon and Django check the idle time when they take a
+connection from the pool, so an expired one is skipped at checkout rather than closed at 4 s. The
+full-stack [Caveats](../fullstack/README.md#caveats), item 5, list each client's setting.
+`bench/fullstack/idle-close.mjs` checks that an image had dropped them when its probe requests
+reached the upstream with every warmed connection idle 4.5 to 4.75 s (or closed under 4.75 s
+idle before the probe) and nothing sent upstream since the warm-up, under the upstream's 5 s
+close; it does not measure the configured 4 s itself. This is the pool policy alone: no retry, no
+cache, and still one upstream GET per record
+read. It is a correctness-only change to the timed request path: the apps' pool bounds, and the
+class counters below, are timed inputs for groups measured from this point, with no performance
+claim; their cost is not measured, and saved results are unchanged.
+
 The stand-in upstream alone pre-serializes and UTF-8 encodes its records at
 startup. Canonical record GETs reuse those bytes without URL parsing or an
 asynchronous handler; other URL forms retain normal URL parsing. Controlled
@@ -385,7 +406,22 @@ or plain text, but remain failed requests, never successful pages. Unknown trans
 errors, other status codes and incorrect content types on 200 responses are not
 completed target outcomes. Each active VU initializes all four counter series with
 zero once, then increments only the request's classified outcome. This retains
-zero-valued categories without four counter updates on every request. Counts,
+zero-valued categories without four counter updates on every request. A failed
+request also adds one to its class: `catalog_failed_http_429`, `_http_502`,
+`_http_503` and `_http_5xx` split the HTTP errors, and an invalid response is
+`_transport` (k6 got no response for a network reason: a non-TCP network, TCP, TLS or
+HTTP/2 error code) or `_other` (a generic, invalid-URL, DNS, blocked-host or
+response-decompression error code, another status or a wrong content type). A success
+never reaches that classification and no class series receives a sample, so a run
+without failures emits exactly the samples it did before the split; k6 reports only
+series that received a sample. The six class Counters are still created at init and a
+success makes one more comparison; that cost is not measured, and the counters are a timed input
+for groups measured from this point (a correctness-only exception, with no performance claim;
+saved results are unchanged). A replay reads the classes when any is present, requires
+them to account exactly for the HTTP errors and invalid responses, and names a transport
+error when it refuses a phase; without any (no failures, or a producer from before the
+split) the split is unknown, and the phase replays to the same metrics either way. Any
+other series named `catalog_failed_...` is refused, alone or beside the known ones. Counts,
 root checks, rates, completed iterations and all three threshold results must
 agree exactly. Existing full page/JSON content and browser correctness gates
 remain mandatory; timed requests still discard bodies and check status/type,

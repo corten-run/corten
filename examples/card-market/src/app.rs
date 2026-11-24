@@ -655,6 +655,147 @@ mod tests {
         Source::fixture(&json!({ "item_9": item, "item_10": bare }).to_string()).unwrap()
     }
 
+    /// How long the benchmark item API (`bench/fullstack/item-api/server.mjs`, Node's HTTP server)
+    /// keeps an idle connection open: it answers `Keep-Alive: timeout=5`.
+    const API_KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// What the item API double did, in order.
+    #[derive(Clone, Debug, PartialEq)]
+    enum Seen {
+        Answered,
+        /// A request arrived on a connection idle for `API_KEEP_ALIVE`, and met the close.
+        ClosedIdle,
+    }
+
+    /// The item API's idle close, made certain: a request that arrives on a connection idle for
+    /// `API_KEEP_ALIVE` or more is dropped unread, which resets the connection, and nothing answers
+    /// it. Any other request is answered with one item, on a connection kept open. Each answer is
+    /// logged before it is written; [`ClosingApi::stop`] joins every thread before the log is read,
+    /// and dropping it (also when a test fails early) stops and joins them too.
+    struct ClosingApi {
+        at: String,
+        stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        accepting: Option<std::thread::JoinHandle<()>>,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<Seen>>>,
+    }
+
+    /// How often a connection's thread, waiting for a request, checks whether the double is stopping.
+    const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+    /// How long a connection's thread waits to write an answer before it gives up.
+    const WRITE: std::time::Duration = std::time::Duration::from_secs(2);
+
+    impl ClosingApi {
+        fn start() -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let at = format!("http://{}", listener.local_addr().unwrap());
+            let seen = std::sync::Arc::<std::sync::Mutex<Vec<Seen>>>::default();
+            let stopping = std::sync::Arc::<std::sync::atomic::AtomicBool>::default();
+            let (log, stop) = (seen.clone(), stopping.clone());
+            let accepting = std::thread::spawn(move || {
+                let (mut connections, mut failure) = (Vec::new(), None);
+                while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((socket, _)) => {
+                            let (log, stop) = (log.clone(), stop.clone());
+                            connections.push(std::thread::spawn(move || serve_item(socket, &log, &stop)));
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(5))
+                        }
+                        Err(error) => {
+                            failure = Some(format!("accept: {error}"));
+                            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                }
+                let panicked = connections.into_iter().map(std::thread::JoinHandle::join).filter(Result::is_err).count();
+                assert!(failure.is_none() && panicked == 0, "{failure:?}; {panicked} connection threads panicked");
+            });
+            Self { at, stopping, accepting: Some(accepting), seen }
+        }
+
+        /// Stops accepting and waits for every thread to end: each connection's thread checks within
+        /// [`POLL`] while it waits for a request, and a write gives up after [`WRITE`].
+        fn halt(&mut self) -> std::thread::Result<()> {
+            self.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.accepting.take().map_or(Ok(()), std::thread::JoinHandle::join)
+        }
+
+        fn stop(mut self) -> Vec<Seen> {
+            self.halt().expect("an item API thread panicked");
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    impl Drop for ClosingApi {
+        fn drop(&mut self) {
+            // A panic here while a failed test unwinds would abort; that failure is already reported.
+            if self.halt().is_err() && !std::thread::panicking() {
+                panic!("an item API thread panicked");
+            }
+        }
+    }
+
+    fn serve_item(mut socket: std::net::TcpStream, log: &std::sync::Mutex<Vec<Seen>>, stopping: &std::sync::atomic::AtomicBool) {
+        use std::io::{ErrorKind, Read, Write};
+        let waiting = |error: &std::io::Error| matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut);
+        let stopped = || stopping.load(std::sync::atomic::Ordering::SeqCst);
+        socket.set_nonblocking(false).unwrap();
+        socket.set_read_timeout(Some(POLL)).unwrap();
+        socket.set_write_timeout(Some(WRITE)).unwrap();
+        let body = r#"{"catalog_item_id":"item_1","title":"Item one","market_summary":null}"#;
+        let mut answered: Option<std::time::Instant> = None;
+        loop {
+            match socket.peek(&mut [0]) {
+                Ok(1) => {}
+                Err(error) if waiting(&error) && !stopped() => continue,
+                _ => return,
+            }
+            if answered.is_some_and(|at| at.elapsed() >= API_KEEP_ALIVE) {
+                return log.lock().unwrap().push(Seen::ClosedIdle);
+            }
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                match socket.read(&mut byte) {
+                    Ok(1) => head.push(byte[0]),
+                    Err(error) if waiting(&error) && !stopped() => {}
+                    Err(error) if waiting(&error) => return,
+                    other => panic!("the request head ended early: {other:?}"),
+                }
+            }
+            let length = body.len();
+            let answer = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {length}\r\nkeep-alive: timeout=5\r\n\r\n{body}"
+            );
+            log.lock().unwrap().push(Seen::Answered);
+            socket.write_all(answer.as_bytes()).unwrap();
+            answered = Some(std::time::Instant::now());
+        }
+    }
+
+    /// An item page whose item API connection sat idle past the API's keep-alive is answered from
+    /// a new connection, not failed (#1569). The control is the same page through the same handler
+    /// with the pool policy before that change (reqwest's default of 90 s): it reuses the connection
+    /// the API closed, and the page fails.
+    #[tokio::test]
+    async fn an_item_page_after_the_apis_keep_alive_does_not_reuse_its_closed_connection() {
+        assert!(crate::source::UPSTREAM_IDLE < API_KEEP_ALIVE);
+        let (fixed_api, old_api) = (ClosingApi::start(), ClosingApi::start());
+        let keys = || Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" };
+        let fixed = super::app_with(Source::api(&fixed_api.at), keys(), WRITES_PER_MINUTE).test();
+        let old = super::app_with(Source::api_pooled(&old_api.at, None), keys(), WRITES_PER_MINUTE).test();
+        let item = items::Item { id: "item_1", view: ItemQuery { offers: None } };
+        assert_eq!(fixed.get(&item).await.status(), StatusCode::OK);
+        assert_eq!(old.get(&item).await.status(), StatusCode::OK);
+        tokio::time::sleep(API_KEEP_ALIVE + std::time::Duration::from_millis(250)).await;
+        let (status, failed) = (fixed.get(&item).await.status(), old.get(&item).await.status());
+        let (seen, old_seen) = (fixed_api.stop(), old_api.stop());
+        assert_eq!((failed, &old_seen[..]), (StatusCode::INTERNAL_SERVER_ERROR, &[Seen::Answered, Seen::ClosedIdle][..]));
+        assert_eq!((status, &seen[..]), (StatusCode::OK, &[Seen::Answered, Seen::Answered][..]));
+    }
+
     /// The alert form on `item`, posted from the page: the title, the address and the price.
     fn alert<'c>(app: &'c App, item: &items::Item, title: &str, price: &str) -> Call<'c, FormBody> {
         let f = AlertInput::FIELDS;
