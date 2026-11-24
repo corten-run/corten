@@ -461,7 +461,10 @@ establish a general ranking.
       and headers before measuring, and report any failed requests.
 
       Compare the change in **user plus kernel cycles per request within each pair** against
-      the smallest worthwhile reduction, declared before running. Report the number of pairs,
+      the smallest worthwhile reduction, declared before running. A run's plan, with everything
+      item 2 has declared before a run, is declared when it is posted on its pull request or
+      issue, or pushed under a tag, and names the commits it reads (a change's base and head); a
+      plan older than this sentence on `main` is declared as it was. Report the number of pairs,
       best, median and range, and the per-pair changes. Report the user and kernel split and,
       when adding or moving code, user L1 instruction-cache misses per request as diagnostics.
       The counter records perf's running percentage and requires a reported 100% for every
@@ -590,7 +593,10 @@ establish a general ranking.
       win, and reads the workload across placements in a run whose plan is written before that
       run. Outside, the single-build bound is
       the reading by the rules above, binding by policy, not because placement is shown unable to
-      move it. A workload with no single-build bound (a run that failed, too few pairs)
+      move it. Each threshold a plan declared for a workload, its margin and a reduction, is
+      tested on its own distance: one outside stays as one build read it, whatever a placement
+      run then reads, and that run reads only those left inside.
+      A workload with no single-build bound (a run that failed, too few pairs)
       does not pass, as before, and a control the plan declared keeps
       [design Choice 71](docs/design.md#choice-layout-floor)'s rule. Item 2's other requirements
       apply to a run read across placements as to any other: every counter at 100%; the user and
@@ -638,7 +644,8 @@ establish a general ranking.
          per-pair change B / A - 1 read as A / B - 1), since a list whose placements happened to
          run faster would lower one reading's bound and raise the other's. Its bounds in the two
          readings are what the run can resolve, and its lowest and highest placement median as
-         recorded are the spread the Choice records for the workload. If either bound is at or
+         recorded are the spread the Choice records for the workload, if the plan declares
+         before the run that it records one. If either bound is at or
          above +1%, the workload is **not resolved**, and not resolved does not pass, whatever the
          change's own bound. Only a complete, resolved A/A records or replaces a spread, through a
          pull request that changes the Choice; a run reads the spread recorded in the Choice on
