@@ -9408,7 +9408,7 @@ rules something out.
     written 16 bytes on, a pad the ordering file does not name, a function written 16 bytes
     further into a section that is in its place, a function after the first such section
     whose symbol names one of the side's own crates, and one of theirs in `.init`) are under
-    the tag `evidence/placement-aligned-code-3`. `synthetic.sh` there runs the checks with
+    the tag `evidence/placement-aligned-code-4`. `synthetic.sh` there runs the checks with
     node alone, on placements written by LLD's rule from the two unpadded maps, which are
     line for line the maps LLD made for the twelve placements compared. That run's own
     readings stay as they were, with no bound under this point: its plan predates the point
@@ -9419,11 +9419,12 @@ rules something out.
     the pad ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2, the plan's fifth
     point), on both sides: after the first pad's, the same input sections in the same order
     with the same sizes and alignments, each at the first multiple of its alignment after the
-    one before, every section before the first one aligned beyond 16 bytes moved by exactly
-    the pad, and every function in its section as far from the section's start as it was, so
-    that every function before that first section moved by exactly the pad, each of Corten's
-    and the program's among them. The first two conditions admit one layout, the unpadded
-    link's with the pad first. On a side with no such section this is "every function moved by
+    one before, and every function in its section as far from the section's start as it was.
+    The first two conditions admit one layout, the unpadded link's with the pad first, so
+    every section before the first one aligned beyond 16 bytes moved by exactly the pad (the
+    point does not ask it apart; the check under the tag counts it), and with the third so
+    did every function before that first section, each of Corten's and the program's among
+    them. On a side with no such section that is every section and "every function moved by
     exactly the pad", said of sections as well. The check it stands in for never asked where a
     section was. It asked how far each function with a name of its own had moved. This one
     asks both, because a check of sections alone passed a map in which a function sat 16
@@ -9433,27 +9434,33 @@ rules something out.
     that the unpadded link run again is the build's own binary is made, in every run, on the
     link that writes its map. So the rule asks no second link of each placement.
 
-    What the plan declares and what it restates. The list of crates that are Corten's and the
-    program's is the plan's own choice and stays for every head: were it restated, a side
-    refused for a function of its own after the first such section could be restated with a
-    shorter list. Four things are read from a build and follow it: the counts of sections by
-    alignment, the sections aligned beyond 16 bytes, the first of them, and the functions
-    from it on. A later head has other counts (that change alone took `.text` from 3,442
-    input sections to 3,483), so facts stated once and held would stop the run on every later
-    head. The run records the four from each build before its first turn that counts cycles,
-    a pilot's included, and where they are not the plan's the pull request restates them
-    before such a turn. Restating copies what the map says: it chooses nothing, though
-    results on an earlier head are known by then. A dry run's turns are not such turns, so
-    facts found to differ in one are restated like any other. A build measured with facts
-    that were not the
-    plan's gives no bound. Two things the point asked before are gone. The toolchain by
-    version: each build's facts are read from its own map and the check is of the measured
-    binary, so a build by another compiler is described and checked as it is, and "version"
-    never said whether a distribution's revision of gcc was part of it. And the sentence
-    that facts are not restated for a commit already measured: the first point compiles each
-    side once, so a measured commit has no second build to restate for. A later head keeps
-    the plan's crates, pads, K, R, statistic, workloads and margins; the second pads' sizes
-    are no part of the plan (below).
+    What the plan declares and what it restates. A pull request has one plan for its
+    placement run, and later heads keep it: a plan written again for a later head would be
+    written with an earlier head's results known, which a plan before its run is there to
+    prevent. The point names the little a later head restates. Three things are read from a
+    build and follow it: the sections aligned beyond 16 bytes, the first of them, and the
+    functions from it on. Facts stated once and held would stop the run on a later head that
+    changes such code. The run records the three from each build before that build's first
+    turn that counts cycles, whatever the run that turn is in is called, and where they are
+    not the ones stated the pull request's description restates them before that turn; a
+    build that had such a turn before then gives no bound. Restating copies what the map
+    says: it chooses nothing, though results on an earlier head are known by then. Two
+    statements are equal when they name the same sections, alignments, symbols and object
+    files. A map's directories and the hashes cargo puts in file names differ between two
+    builds of one commit and are left out: `replay.mjs --stated` under the tag prints the
+    three so, and printed one line for that head's unpadded link and for a placement of it
+    written by LLD's rule.
+    The list of crates that are Corten's and the program's stays, and may gain a crate a
+    later head adds and never lose one: a list that could shrink would let a side refused for
+    a function of its own after the first such section be restated until it passed. One list
+    is first written with an earlier head's results known: that of a plan that said its
+    sides had no such section and whose later build has one, as an open pull request's will
+    once a change that links such code is on `main` and its branch takes it. It does no harm
+    there. What belongs on the list is no choice, the repository's crates and the program's,
+    which the review reads against the workspace, and the refusal the list feeds reads
+    symbols, which the author does not choose. A later head keeps the plan's pads, K, R,
+    statistic, workloads and margins; the second pads' sizes are no part of the plan
+    (below).
 
     Whose a function is, the symbol decides. In that head's map 3,440 of `.text`'s 3,483
     input sections come from 41 objects named for the program and one code unit each, not
@@ -9463,25 +9470,41 @@ rules something out.
     function is. A symbol that names a crate does, and that includes another crate's generic
     function made for one of the crate's types. A function given a name that names no crate
     (`#[no_mangle]`) is not seen by this test, and neither is a dependency's code, though a
-    request may run it. Both are on the plan's list of functions from the first such section
-    on, and that is what the review reads the list for. It refuses the side where a function
-    the pull request changes or adds is on the list and a workload's request runs it, unless
-    the plan gave a reason why that function's fixed place in a line does not bear on the
-    reading. The reason is one the review accepts, as it accepts a negative control's, and it
-    is in the plan before the first turn that counts cycles: one added after a result, or
-    one nobody has to accept, would be met by any sentence. libdeflate's functions in that
-    pull request are the case: it adds them, its gzip requests run them, and the paragraph on
-    the pads below is the kind of reason a plan would give. The named crates' functions must
+    request may run it. Both are on the side's list of functions from the first such section
+    on, and that is what the review reads the list for. A workload whose request runs a
+    function on a list that the pull request changes, adds or removes has no reading across
+    placements, unless the plan gave a reason why that function's fixed place in a line does
+    not bear on that workload's reading. Removed counts as added does: a base whose request
+    runs code at a fixed place against a head whose request runs code the pads move is the
+    same comparison turned round. The refusal is the workload's and not the side's, since a
+    request that never reaches the function reads nothing of its place. The reason is one
+    the review accepts, as it accepts a negative control's, and it is in the plan before the
+    first turn that counts cycles on any build of the pull request: one added after a
+    result, or one nobody has to accept, would be met by any sentence. So no reason can be
+    in time for a function that first comes onto a list on a later head, or in a plan
+    written after the pull request's builds had such turns. The review comes after the run
+    and may refuse. The workload then has no reading across placements under the plan, as
+    when no reason was given, and what a single build of each side decides for it is what
+    the spread test above says of any workload, which this point does not change. The
+    paragraph on the pads below is reason enough, with no judgment asked, for a function in
+    a section aligned beyond 16 bytes and for one laid after such a section with only that
+    library's code between, as libdeflate's 38 are: its place in a line is set by an
+    alignment and the library's own code, in an app's builds as under the pads. It is not
+    enough for a function with another crate's or library's code between it and the aligned
+    section before it, as the two built-ins laid after libdeflate have: a change to that
+    code moves it by 16 bytes where no pad does, and the review judges what its place can be
+    worth to the request. The named crates' functions must
     also all be in `.text`: one in another output section would pass "same input section, as
     far from its start" and move with the data.
 
-    Four kinds of side have no reading. One with a section aligned beyond 64 bytes: that
+    Three kinds of side have no reading, for any workload, since what fails is the placement
+    and not one request's code. One with a section aligned beyond 64 bytes: that
     limit is where the readings stop, since none has been linked or read, not a finding about
     such builds, and a pull request that reads one moves it. One with a function of a named
     crate from the first such section on, or outside `.text`: code a pull request changes,
     laid after such a section, would take places in a line from build to build that the pads
     cannot give it. One where none of the four second-pad sizes puts a placement's data
-    where the rule says (below). And one the review refuses. A workload that needs a reading
+    where the rule says (below). A workload that needs a reading
     on such a side is not decided. A side whose largest alignment is 32 bytes is under the
     same rule as one with 64: a first pad moves its data by a multiple of 32, and the second
     pad's size is found for each placement from its own map, whatever the first pad did.
@@ -9539,17 +9562,20 @@ rules something out.
     bet on what one place is worth. The second pad is a function nothing calls that the
     ordering file does not name, given last on the link line, which LLD lays last in
     `.text`, after the C code: it moves the sections after `.text` and none of `.text`'s
-    code. One rule sizes it on both sides: `.data` begins further into a 64-byte line than
-    in the side's unpadded link by the first pad's size mod 64, which is where a first pad
+    code. One rule sizes it on both sides: `.data`'s offset in a 64-byte line is the
+    unpadded link's plus the first pad's size, mod 64, which is where a first pad
     alone puts it on a side with no such code. Across a plan's pads the data then takes the
     four places as often as the code before the first such section does, on both sides, and
     the phases the first and fourth points ask of the pads' sizes are the data's phases
     again. Both sides carry it, the one with no such code too, and so do both lists of the
-    A/A and of a pilot that sizes the run's K, which is an A/A on the run's setup: a second
+    A/A: a second
     pad on one side alone would put whatever a pad costs on that side, and
     whether a pad costs something of its own is what
     [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
-    asks.
+    asks. Where one side has no such code, its A/A does not test that the sides' second pads
+    cost alike: that base took one size in every placement, so both of its A/A's lists carry
+    the same second pad, and the bet below that a difference in size costs nothing is one
+    the run's own control cannot show.
 
     It was tried on real links, with no cycle counted. First 25 links of that head: a
     second pad of each of 13 sizes behind a first pad of 320 bytes, and four of the sizes
@@ -9557,8 +9583,9 @@ rules something out.
     base's 60 and the head's 30, each linked with second pads of 16, 32, 48 and 64 bytes
     (360 links) and the one that puts `.data` where the rule says kept and linked once more
     without the map, to the same bytes each time. In every link the second pad was last in
-    `.text`, 10 bytes after the end of the code before it, and every other section and function was where the placement
-    with the first pad alone has it. On both builds a second pad of s bytes, s a multiple of
+    `.text`, 10 bytes after the end of the code before it, and every other input section of
+    `.text`, with the functions in it, was where the placement with the first pad alone has
+    it. On both builds a second pad of s bytes, s a multiple of
     16, moved `.data` by s + 16 bytes: both `.text`s end 6 bytes past a multiple of 16, and
     `.init` (23 bytes, aligned to 4), `.fini` (9, aligned to 4) and `.plt` (aligned to 16)
     round what follows. So the base, whose first pad already moves the data by its own
@@ -9567,28 +9594,47 @@ rules something out.
     Each of the 90 passed the check with `.data` where the rule says, each side's binaries
     have SHA-256s no other placement of the side has, and the check refused, on real links
     of each side, a second pad that puts the data elsewhere, a second pad the ordering file
-    names, which LLD lays second and not last, and a placement with no second pad. `.plt`
-    moves with the data. `.init` and `.fini` do not always: with second pads of 16, 32 and
-    48 bytes they moved 8 bytes less than the data. No request runs them.
+    names, which LLD lays second and not last, and a placement with no second pad. The rule
+    reads `.data` for the data: in all 90 every output section from `.plt` to `.bss` moved
+    as `.data` did, which the check does not ask. `.init` and `.fini` moved 8 bytes less
+    than the data in all 90, and as far as it only behind second pads that are not multiples
+    of 16, which the rule does not use. No request runs them. The data's place in a page is
+    not the same on the two sides throughout: the base's `.data` moved by its first pad plus
+    64 bytes in all 60 placements, and the head's by its first pad plus 64 in 23 and by its
+    first pad alone in the 7 whose first pad is 32 mod 64, so in those 7 the sides' data
+    sits at one offset in a line and 64 bytes apart in the page, against their unpadded
+    links.
 
     The sizes are a build's and not the plan's. They follow where `.text` ends: by LLD's
     rule a `.text` ending 14 bytes past a multiple of 16 would take other sizes for the same
     places (worked out, not linked). So the plan states the rule, and a later head keeps
-    the rule with whatever sizes its build takes. The kit finds each placement's size by
-    trying the four: while the sections between `.text` and the data are aligned to 16
+    the rule with whatever sizes its build takes. The run finds each placement's size by
+    trying the four and keeps the smallest that fits: while the sections between `.text`
+    and the data, and the data's own, are aligned to 16
     bytes or less, a second pad of a multiple of 16 moves the data by itself plus a constant
-    of the build, so 16, 32, 48 and 64 give the four places. Working the size out from the
+    of the build, so 16, 32, 48 and 64 give the four places, one size each (exactly one
+    fitted each of the 90). The check takes no other size, wherever it puts the data: a
+    second pad of 112 bytes behind a first of 320 left that head's data in its place, and
+    the bet below is stated for 16 to 64 bytes. Working the size out from the
     sections' sizes and alignments would be the linker's layout written a second time, and
     four links a placement ask the linker: the 90 placements' 450 links, the fifth of each
     the one without the map, took 646 seconds with their checks (measured, in a container).
     Where a section between `.text` and the data, or the data's own, is aligned beyond 16
     bytes, a placement may have no size that fits, and the rule then gives the side no
-    reading.
+    reading. That refuses a build for its data's alignment, whatever the pull request did,
+    and a `.data` aligned to 64 bytes begins a line in every build, which is the reason
+    above for leaving code so aligned where it is. None has been linked (on both sides here
+    every output section after `.text` is aligned to 16 bytes or less), so the rule refuses
+    such a build and does not describe it, and a pull request that reads one moves the
+    limit.
 
     Whether the data's place costs a request anything is then no duty of a pull request:
     the rule varies the place and reads across it, as it does the code's. What one place is
     worth by itself is a question for that issue, whose own controls include a pad laid
-    last in `.text`.
+    last in `.text`. A plan with no such code is not asked where its data begins: its
+    first pad moves the end of `.text` by its own size, and the first point reads
+    functions. A data section aligned beyond 16 bytes in such a build would hold what
+    follows it at one place all the same, and none has been seen.
 
     A recorded spread is read for a run with second pads as for any other. A spread passes
     nothing: it sends a single-build reading that lands inside it to a placement run. One
@@ -9596,8 +9642,12 @@ rules something out.
     placement could account for. The spreads here were read with one pad, on builds with no
     such code, and a run whose data a second pad moves as a first pad moved theirs is not
     expected to spread further, which is a bet until an A/A with second pads is recorded
-    here. A K sized from an eligible A/A read with one pad is taken for a run with two on
-    the same bet. The floor of
+    here. The pads are no part of a spread's setup either way, so one recorded with second
+    pads is read for a run without them on the same bet. A K sized from an eligible A/A
+    read with one pad is taken for a run with two on it as well, and that covers the pilot
+    of a head that first brings such code: a pilot is an A/A with a plan of its own, its
+    sides are the base's, and where they have no such section the point asks no second pad
+    of it. The floor of
     [design Choice 71](#choice-layout-floor) is not touched: its recorded floor is for its
     receipt's crate versions, which a build with another dependency does not match, and a
     same-run control's pads are in the source, where a change is.
@@ -9670,8 +9720,9 @@ rules something out.
     request, and 0.71% fewer against 0.02% more on its uncompressed one); such a side read
     with its data at one place and a sentence beside each bound saying so, a bet stated in
     every pull request where a second pad varies the place for four links a placement; the
-    data's place measured before a second pad was adopted, which this Choice asked until
-    its review: the head against itself in three comparisons of 60 placements, or 100 where
+    data's place measured by the first pull request with such code, and a second pad asked
+    of later runs only if it showed an effect: the head against itself in three comparisons
+    of 60 placements, or 100 where
     an A/A recorded here spread 1.75% or more, both builds with a second pad, the control's
     leaving the data's place and the other's moving it 16, 32 and 48 bytes, read as held
     (all six bounds under +1%), shown (not held, with 40 of 60 or 63 of 100 medians on one
@@ -9694,15 +9745,29 @@ rules something out.
     sizes listed in the plan, which are a build's and change when `.text` ends elsewhere,
     so a later head could not keep them; the size worked out from the sizes and alignments
     of the sections after `.text`, the linker's layout written a second time, where four
-    links ask the linker; a second link of each placement without the map, which 182 links
-    showed to be the same binary; the toolchain declared by version, and facts barred from
-    being restated for a commit already measured, which each build's own map and the first
-    point's one build a side make unnecessary; whose a function is decided by its input
+    links ask the linker; a second pad of any size that fits, which passed one of 112
+    bytes where the bet on its cost is stated for 16 to 64; a second link of each placement
+    without the map, which 182 links
+    showed to be the same binary; the toolchain declared in the plan by version, since each
+    build's facts are read from its own map and the check is of the measured binary, so a
+    build by another compiler is described and checked as it is, and a version does not say
+    whether a distribution's revision of a compiler is part of it; the facts barred from
+    being restated for a commit a build of which was already measured, since a pilot and
+    its gated run each build the base, and a restated fact is copied from a map and chooses
+    nothing; the count of `.text`'s input sections by alignment among the facts, which no
+    refusal and no review reads and which changes with every change to the code (that
+    change alone took `.text` from 3,442 input sections to 3,483), so every head of every
+    pull request would restate; a second pad asked of a pilot by the run it sizes, since a
+    pilot's plan and sides are its own, and an A/A read without second pads would size the
+    run all the same once read; the turns of a dry run left out of the turns that count
+    cycles, since that pull request's dry run counted them for its change's comparison on
+    five placements, and nothing bounds what a run so named does; a reason for a listed
+    function given on a later head, which is written with results known; a new plan for a
+    later head, which is too; whose a function is decided by its input
     file, which under thin LTO names a code unit of the program and not the crate a
     function is from; the crate list restated with a build's facts, which lets a side that
     was refused be described until it passes; and a side's facts stated once and held for
-    every later head, which no later head can match, since a change to the code changes
-    the counts.
+    every later head, which a head that changes such code cannot match.
 
     Stands on: measured (the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
@@ -9718,7 +9783,7 @@ rules something out.
     of 90 placements two hosts built alike, tag `evidence/request-gzip-1971-placed`, and that
     kit built again four times with every link read from its map, its head linked 25 times
     with a second pad last, and each of its 90 placements linked with the second pad the
-    rule asks, tag `evidence/placement-aligned-code-3`: layouts alone, with no cycle counted
+    rule asks, tag `evidence/placement-aligned-code-4`: layouts alone, with no cycle counted
     under that check or with a second pad);
     platform (LLD
     places the sections of the symbols an ordering file names
@@ -9748,11 +9813,12 @@ rules something out.
     place is one draw; a second pad sized by the first pad's size mod 64 gives the data, on
     a side whose first pad cannot, the place a first pad gives it on any other side, so the
     plan's phases are the data's again; a second pad on both sides of every comparison puts
-    whatever a pad costs on both; while the sections between `.text` and the data are
-    aligned to 16 bytes or less, a second pad of a multiple of 16 moves the data by itself
-    plus a constant of the build, so four sizes give the four places; and the four facts
-    restated for a later head are copied from its map and choose nothing, each side being
-    compiled once);
+    whatever a pad costs on both; while the sections between `.text` and the data, and the
+    data's own, are aligned to 16 bytes or less, a second pad of a multiple of 16 moves the
+    data by itself plus a constant of the build, so four sizes give the four places; the
+    three facts restated for a later head are copied from its map and choose nothing; and a
+    crate list first written on a later head is read against the workspace, and feeds a
+    refusal that reads symbols);
     bet
     (moving the whole of the code by declared offsets varies placement about as much as real
     changes do, though a real change moves only the code after it and by sizes no plan chose, so
@@ -9773,12 +9839,16 @@ rules something out.
     protocol and code;
     a second never-called function of 16 to 64 bytes laid last in `.text` costs a request
     alike on both sides of a comparison, though the two sides' second pads can differ by up
-    to 48 bytes, which no run has measured; moving the data's place in a line with a pad
+    to 48 bytes and their data can lie 64 bytes apart in the page, which no run has
+    measured and an A/A whose lists take one size cannot show; moving the data's place in a
+    line with a pad
     stands in for the places a relink of other code would give it, as the first pad's
     offsets stand in for real changes, though a real change also resizes the sections
     between the code and the data, which a pad does not; a spread recorded with one pad,
-    and a K sized from an A/A read with one, hold for a run with two; and the review can
-    tell which functions on a plan's list the pull request changes and a request runs);
+    and a K sized from an A/A read with one, hold for a run with two, and a spread recorded
+    with two for a run with one; and the review can
+    tell which functions on a side's list the pull request changes, adds or removes and a
+    request runs);
     value
     (Fast, and proven fast: a touched
     request's cost is read from the change, not from where one build put it; Verified, not
@@ -9814,8 +9884,11 @@ rules something out.
     pad's cost is found to change with its size or with where in `.text` it lies (that
     issue's controls include a pad laid last), since the two sides' second pads differ in
     size and their cost is then one the sides may not share; a build where none of the four
-    second-pad sizes gives a placement's data the place the rule asks, or a side whose largest
-    alignment is 32 bytes failing the check on its first run; an A/A with second pads has
+    second-pad sizes gives a placement's data the place the rule asks, as one whose data, or
+    a section between `.text` and it, is aligned beyond 16 bytes, or a side whose largest
+    alignment is 32 bytes failing the check on its first run; a data section aligned beyond
+    16 bytes found in a build with no code so aligned, whose data's place no point looks
+    at; an A/A with second pads has
     placement medians that reach past the spread recorded for a setup it otherwise matches,
     so such a run needs a spread of its own; a function with a name that names no crate
     (`#[no_mangle]`) of Corten's or a program's is found from the first such section on,
@@ -9861,10 +9934,12 @@ rules something out.
     90 placements linked with second pads of four sizes and the rule's one checked, the
     checks run on placements written by LLD's rule, one file of `libdeflate-sys` 1.26.1
     compiled by hand under eleven sets of flags, the input files of the head's map counted,
-    five A/As' placement medians read by their pads' place in a line, and the three
-    outcomes of the measurement this Choice no longer asks drawn 200,000 times at each size
-    and spread, the scripts and what they print at `5659d30c4` (tag
-    `evidence/placement-aligned-code-3`); 2026-11-24, the third run's time read from its
+    five A/As' placement medians read by their pads' place in a line, the three outcomes
+    of a measurement of the data's place (Not chosen) drawn 200,000 times at each size and
+    spread, the check refusing a second pad outside the four sizes, the three facts printed
+    for both sides, and the sections after `.text` read in the 90 placements, the scripts
+    and what they print at `b1bbd52e8` (tag
+    `evidence/placement-aligned-code-4`); 2026-11-24, the third run's time read from its
     log at `2fb31fbaa` (tag `evidence/stage-header-checks-2002`).
 
 ## Rules
