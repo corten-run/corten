@@ -265,7 +265,8 @@ machine can reach the app, that is the access model it would break, so the check
 rather than a setting to remember.
 
 The same check answers `400 Bad Request` to a request HTTP does not allow, whatever names the
-app has and with `Policy::any_host()` too, and nothing of the app runs for it either:
+app has and with `Policy::any_host()` too, and nothing of the app runs for it either. The
+first two are what HTTP requires, the third what it recommends, and the fourth Corten's reading:
 
 1. an HTTP/1.1 request with no `Host` line, or a request with more than one, the same value or
    not, which [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112#section-3.2) (3.2) requires;
@@ -277,11 +278,15 @@ app has and with `Policy::any_host()` too, and nothing of the app runs for it ei
    default name. So is a user in a target that names its host
    (`GET http://user@shop.example/ HTTP/1.1`), which HTTP says a server should treat as an
    error;
-3. a request-target with a byte outside ASCII, or `*` with a method other than `OPTIONS`: two
-   of the request-lines the same section says a server should refuse (or redirect), and the
-   only two Corten looks for. A browser percent-encodes those bytes, as in `/caf%C3%A9`, which
-   is answered as before; a client that sends them as they are was routed before and is not
-   now. Any other target the parse lets through is routed as before.
+3. a request-target with a byte outside ASCII, an invalid request-line, which the same section
+   says a server should refuse (or redirect). A browser percent-encodes those bytes, as in
+   `/caf%C3%A9`, which is answered as before; a client that sends them as they are was routed
+   before and is not now;
+4. `*` with a method other than `OPTIONS`, by Corten's reading: HTTP keeps that target for
+   `OPTIONS` and does not say what a server answers to another method.
+
+These are the only targets Corten looks for: any other the parse lets through (a `|` in a
+path, a host alone with a method other than `CONNECT`) is routed as before.
 
 The connection stays open after it, as after the `421`: the server knows where the request
 ends, so the next one on the connection is answered (one whose body had not all arrived is
@@ -290,8 +295,11 @@ all (a target that is not UTF-8) never reaches the check: the server answers its
 and closes. A request with no `Host` is still answered when it is HTTP/1.0, and when Corten's
 server did not read it off a connection: a test's `app().test()`, or a `Router` another
 library's server calls as a tower `Service`, which answers for the requests it reads (every
-other case above is a `400` there too). The first request refused this way is logged, with its
-target and its `Host` lines.
+other case above is a `400` there too). What reaches the server is what counts: a proxy that
+speaks HTTP/1.1 to the app and passes on no `Host` for a client that sent none sends a request
+that gets the `400` (nginx's documentation says it leaves out a header it is given an empty
+value for, as `proxy_set_header Host $http_host` then is; this was not run). The first request
+refused for each of these reasons is logged, with its path and the reason, and never its query.
 
 A deployed app lists the names it is served under, where the deploy sets `HOST` and `PORT`:
 
@@ -1334,13 +1342,15 @@ glibc), and wall times did not tell them apart.
 The host check, with what
 carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
 check's read of `Host` and its match against the app's names. Refusing what HTTP does not allow
-([Host names](#host-names)) added about 100 to it, and the same change took about 140 back from
-a request whose first header line is `Host`, which is no longer searched for: such a request
-costs about 40 fewer than before at an unstaged route and 17 to 46 fewer through the stages,
-one with `Host` after another line about 90 more (134 more with it last of a browser's eight
-lines, about where Playwright's WebKit on Linux writes it; its Chromium and Firefox write it
-first), and one to an app that answers to any host, which now reads `Host` too, about 225 more
-(counted over a socket at `290062890`; [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+([Host names](#host-names)) added about 100 to a request whose first header line is not `Host`:
+77 to 98 with `Host` second, and 127 to 137 with it last of a browser's eight lines, about
+where Playwright's WebKit on Linux writes it (its Chromium and Firefox write it first). A
+request with `Host` first is no longer searched for it and costs 15 to 51 fewer than before
+when the app holds its name as written (`localhost`, a name in `HOSTS`), and 4 to 22 fewer for
+a subdomain of one. An app that answers to any host now reads `Host` too, about 230 more
+(counted over a socket at `c4c19eee5`, with no control beside it, so the smaller of these are
+within what two builds of the same code differ by;
+[design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 
