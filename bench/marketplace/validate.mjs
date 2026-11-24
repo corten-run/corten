@@ -11,12 +11,12 @@ import { imageProvenance, inventory, loadPhases, parseArgs, passPlan, phaseEnd, 
 import { validateLoadExecution } from "./load-evidence.mjs";
 import { evidenceVersion, k6Image, loadEnvironment, maxStatsSamples, nodeImage, producerSchema, sourceTree, upstreamInterpretation, validateLocaleCounters } from "./raw-contract.mjs";
 import { savedFiles } from "./saved-files.mjs";
-import { verifyK6Provenance } from "../load-tool.mjs";
+import { assertSameEvidence, verifyK6Provenance } from "../load-tool.mjs";
 
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "invalid receipt timestamp"); return n; };
 const exactKeys = (v, keys) => assert.deepEqual(Object.keys(v ?? {}).sort(), [...keys].sort(), "missing/extra raw participants");
 const id = (s) => assert.match(s, /^[a-f0-9]{64}$/);
-const imageId = (s) => assert.match(s, /^sha256:[a-f0-9]{64}$/);
+const imageId = (s) => assert.ok(typeof s === "string" && /^sha256:[a-f0-9]{64}$/.test(s), "malformed image ID");
 function cpuSet(value) {
   assert.match(value, /^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/, "invalid observed CPU inventory");
   const used = new Set();
@@ -168,16 +168,17 @@ function replay({ folder, round, commit }) {
   mounts(cpu, [["/bench", benchMount], ["/sys/fs/cgroup", "/sys/fs/cgroup"]]);
   assert.deepEqual(cpu.cmd, ["node", "-e", "setInterval(() => {}, 1000)"]);
   const toolImages = files.json("tools.json"); exactKeys(toolImages, ["upstream", "checker", "k6"]);
-  verifyK6Provenance(s.tools.k6);
-  for (const field of ["platform", "version", "versionOutput"]) assert.equal(toolImages.k6[field], s.tools.k6[field], "retained k6 executable probe differs");
+  // Saved tool receipts are refused by field, never printed.
+  verifyK6Provenance(s.tools.k6, { verb: "validate", commit });
+  for (const field of ["platform", "version", "versionOutput"]) assert.ok(toolImages.k6[field] === s.tools.k6[field], `retained k6 executable probe differs at k6.${field}`);
   for (const tool of Object.keys(toolImages)) {
-    imageId(toolImages[tool].id); assert.equal(toolImages[tool].id, s.tools[tool].imageId, "tool image receipt differs");
+    imageId(toolImages[tool].id); assert.ok(toolImages[tool].id === s.tools[tool].imageId, "tool image receipt differs");
   }
-  pinned(s.tools.k6.image, k6Image); assert.deepEqual(toolImages.k6.repoDigests, s.tools.k6.repoDigests);
+  pinned(s.tools.k6.image, k6Image); assertSameEvidence(toolImages.k6.repoDigests, s.tools.k6.repoDigests, "tool image receipt differs", "k6.repoDigests");
   assert.ok(toolImages.k6.repoDigests.includes(k6Image), "k6 image does not carry the pinned digest");
-  assert.deepEqual(toolImages.k6.entrypoint, ["k6"]);
-  assert.deepEqual(toolImages.upstream.entrypoint, ["docker-entrypoint.sh"]);
-  assert.equal(toolImages.checker.entrypoint, null);
+  assertSameEvidence(toolImages.k6.entrypoint, ["k6"], "tool image receipt differs", "k6.entrypoint");
+  assertSameEvidence(toolImages.upstream.entrypoint, ["docker-entrypoint.sh"], "tool image receipt differs", "upstream.entrypoint");
+  assert.ok(toolImages.checker.entrypoint === null, "tool image receipt differs at checker.entrypoint");
   assert.deepEqual(upstream.entrypoint, toolImages.upstream.entrypoint); assert.deepEqual(cpu.entrypoint, toolImages.upstream.entrypoint);
   function appRuntime(c, app, source, { running = true } = {}) {
     const a = s.apps[app], rawImage = images[app];

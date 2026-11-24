@@ -3,7 +3,9 @@ import test from "node:test";
 import { summaryFixture, writeSavedFixture } from "./saved-fixture.mjs";
 import { report, validateSummary } from "./report.mjs";
 import { validateSaved } from "./validate.mjs";
-import { containerReceipt, evidenceVersion, imageReceipt, nodeImage, producerSchema, sourceTree } from "./raw-contract.mjs";
+import { containerReceipt, evidenceVersion, imageReceipt, k6Image, nodeImage, producerSchema, sourceTree } from "./raw-contract.mjs";
+import { ImagePinRefusal } from "../load-tool.mjs";
+import { inspect } from "node:util";
 import childProcess, { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
@@ -125,6 +127,25 @@ test("saved evidence replays from a checkout of its measured commit, never again
   assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
     && e.message.includes(`retained image is not this checkout's pin ${nodeImage}; validate from a checkout of the measured commit ${commit}`)
     && !e.message.includes(earlier));
+});
+
+test("a saved k6 image other than the pin is refused by the pin and hint, and a tool receipt difference by its field, never the saved text", (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit }, saved = "grafana/k6:SAVED-IMAGE-CANARY";
+  writeSavedFixture(folder, commit, sourceTree(commit));
+  assert.ok(validateSaved(args), "the measuring checkout replays its own evidence");
+  const probe = (path, edit, expected) => {
+    const file = join(folder, path), bytes = readFileSync(file), v = JSON.parse(bytes);
+    try { edit(v); writeFileSync(file, JSON.stringify(v)); assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID" && expected(e.cause)
+      && e.message === `invalid marketplace saved evidence: ${e.cause.message}` && !inspect(e).includes(saved)); }
+    finally { writeFileSync(file, bytes); }
+  };
+  probe("summary.json", (v) => { v.tools.k6.image = saved; }, (cause) => cause instanceof ImagePinRefusal
+    && cause.message === `retained k6 image is not this checkout's pin ${k6Image}; validate from a checkout of the measured commit ${commit}`);
+  for (const [edit, field] of [[(v) => { v.k6.repoDigests.push(saved); }, "k6.repoDigests"], [(v) => { v.k6.entrypoint = [saved]; }, "k6.entrypoint"],
+    [(v) => { v.k6.versionOutput = saved; }, "k6.versionOutput"]]) {
+    probe("tools.json", edit, (cause) => !(cause instanceof ImagePinRefusal) && cause.message.endsWith(` differs at ${field}`));
+  }
+  assert.ok(validateSaved(args), "restored evidence replays");
 });
 
 test("native replay admits the producer's decimal sum overshoot, not an inconsistent mean", async (t) => {
