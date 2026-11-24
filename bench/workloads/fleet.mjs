@@ -349,7 +349,8 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
       assert.ok(!busy, "continuation operation busy");
     }
     preIntentStage = "continuation-admission; custody-read";
-    const continuation = await continuationAdmission(root, options.group, { repo, interrupted: deps.interrupted, inspect: deps.inspect });
+    const continuation = await continuationAdmission(root, options.group, { repo, interrupted: deps.interrupted, inspect: deps.inspect,
+      admissionFailure(error, check) { preIntentFailures?.set(error, `continuation-admission; ${check}`); } });
     const row = continuation.rows.find(({ group }) => group === options.group);
     preIntentStage = "continuation-admission; group-selection";
     assert.ok(!row.knownResult, "group already verified or pinned; never allocate again");
@@ -387,7 +388,7 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
     }, preIntentFailures);
   } catch (error) {
     uncertain = error?.controlUncertain === true || error?.controlTreeUncertain === true;
-    if (preIntentStage) preIntentFailures?.set(error, preIntentStage);
+    if (preIntentStage && !preIntentFailures?.has(error)) preIntentFailures?.set(error, preIntentStage);
     throw error;
   } finally {
     // A contained worker may leave its fleet lock even when the batch returns
