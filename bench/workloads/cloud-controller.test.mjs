@@ -81,9 +81,11 @@ test("preflight dirty/wrong HEAD/source/capacity/busy host rejects before create
   const h = harness(t); h.hosts(); await assert.rejects(h.launch().launch(), /already exists/); assert.equal(h.creates, 0);
 });
 test("a full account has a closed capacity refusal before create or bootstrap", { timeout: 5000 }, async (t) => {
-  for (const limit of [1, -1, "SYNTHETIC_MALFORMED_LIMIT", 2]) {
+  for (const [limit, occupied, capacityRefusal] of [
+    [1, 1, true], [1, 2, true], [-1, 1, false], ["SYNTHETIC_MALFORMED_LIMIT", 1, false], [2, 1, false],
+  ]) {
     const h = harness(t, { active: true });
-    h.hosts([{ id: 901, name: "synthetic-unrelated-capacity-host", tags: [] }]);
+    h.hosts(Array.from({ length: occupied }, (_, i) => ({ id: 901 + i, name: `synthetic-unrelated-capacity-host-${i}`, tags: [] })));
     const launch = h.launch({ run(binary, args, ...rest) {
       const result = h.run(binary, args, ...rest);
       if (binary === "doctl" && args[0] === "account") result.stdout = JSON.stringify({ ...JSON.parse(result.stdout), droplet_limit: limit });
@@ -94,12 +96,12 @@ test("a full account has a closed capacity refusal before create or bootstrap", 
       assert.equal(h.creates, 1, "one free slot permits exactly one create");
       continue;
     }
-    const diagnostic = limit === 1 ? { code: "account-capacity" } : undefined;
+    const diagnostic = capacityRefusal ? { code: "account-capacity" } : undefined;
     await assert.rejects(launch.launch(), (error) => {
       assert.deepEqual(providerFailure(error), diagnostic);
       assert.equal(publicError(error), publicError() + (diagnostic ? " Provider failure: account-capacity." : ""));
       return true;
-    });
+    }, `census of ${occupied} with limit ${limit} must refuse`);
     const saved = h.saved();
     assert.equal(saved.status, "reserved"); assert.equal(saved.createIntentAt, undefined); assert.equal(saved.id, undefined);
     assert.deepEqual(saved.control.ledger, []);
