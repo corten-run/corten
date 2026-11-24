@@ -302,8 +302,8 @@ that gets the `400` (nginx's documentation says it leaves out a header it is giv
 value for, as `proxy_set_header Host $http_host` then is; this was not run). The first request
 refused for each reason is logged, with its method, its path and the reason: never its query,
 and of a `Host` or a target's host that is none only the name in it, without a user before or a
-path after (no name at all where an `@` comes after a `/` or a `?`, so which part is the user
-cannot be told; a list or a name with a space in it is logged as sent).
+path after (no name at all where an `@` comes after a `/`, a `?` or a `#`, since which part is
+the user cannot then be told; a list or a name with a space in it is logged as sent).
 
 A deployed app lists the names it is served under, where the deploy sets `HOST` and `PORT`:
 
