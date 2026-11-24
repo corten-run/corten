@@ -717,6 +717,30 @@ durable create intent. Even if identity is found, provisioning cannot begin with
 the exact completed create-action proof. A timed-out or unsettled mutation remains
 uncertain, retains locks and cannot take this recovery shortcut.
 
+A create the provider accepts and then fails has its own terminal outcome
+([#1689 Benchmark r21: catalog qualification droplet create errored before guest startup](https://github.com/corten-run/corten/issues/1689)).
+The launch records it only when four proofs hold within the create's original
+deadline: the polled action has the POST's action ID, `create` type, `droplet`
+resource type and the POST's droplet ID (`create-action-errored`); its status is
+`errored`; the saved account is read before and after the create and every later
+provider read; and the exact-ID GET returns 404 while a complete census lists no
+droplet with that ID, name or run tag. The controller then writes
+`provider-create-errored.json` (action identity, account, absence, one create, no
+replacement create, no DELETE, no guest, zero measurements), saves its hash as
+`createErrored` on the still-unbound `creating` reservation and stops with
+`create-errored-absent`. Its launch and operation locks are released, fleet
+receipts report `create-errored`, a later round in the same root is not blocked, and
+`--collect` only rechecks the receipt and absence before returning 1. It never
+retries the create or relaunches the round. A later successful attempt is separate
+evidence and does not qualify this one.
+
+Any missing or contradicting proof leaves the existing path unchanged: an unbound
+or non-`errored` action stays `create-action-response`, a GET that is not 404, an
+inventory row with the ID, name or tag, an account change or a transport failure
+preserves the `creating` reservation for inspection, and an action still pending at
+the deadline stays uncertain with its locks. Such a reservation still blocks later
+launches in its root.
+
 Ordinary `--collect` supports a separate unused-host retirement path only from
 the pre-start `preparing` state. A bounded read-only host probe must confirm exact
 metadata ID, an inactive never-started unit without a restart policy or pending
@@ -1510,7 +1534,10 @@ metadata a valid URI or use it as a fallback destination.
 Polling constructs `/v2/actions/ID` from the numeric ID, never fetches `href`, and
 requires the authoritative response to prove the action ID, create type, droplet
 resource type, exact POST droplet ID and completed status. Only the validated
-droplet ID is returned across provider IPC. The controller requires that ID to
+droplet ID is returned across provider IPC. The same exact action with status
+`errored` is a permitted create failure, `create-action-errored`, whose output is
+only that droplet ID and action ID; IPC rejects the code on any other command or
+with any other output, and it is not absence proof. The controller requires that ID to
 equal the fresh owned-host ID before any provisioning SSH. Numeric linked-action
 lookup also exists in
 [godo's ID-based linked-action lookup](https://github.com/digitalocean/godo/blob/147424adb9525690e45ac36401d993b8c71e6ebc/links.go).

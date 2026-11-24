@@ -358,12 +358,12 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       }
       return response.value;
     };
-    const refuseCreate = (diagnostic) => {
+    const refuseCreate = (diagnostic, identity) => {
       // A known semantic refusal is recoverable on this worker, not success.
       // Deadline/cancellation must never be converted into that narrow result.
       const current = now();
       if (!Number.isFinite(current) || !Number.isFinite(deadline) || current < listTime || current >= deadline || interrupted()) throw stopped(true);
-      throw Object.assign(stopped(false, diagnostic), { createSemanticFailure: true });
+      throw Object.assign(stopped(false, diagnostic), { createSemanticFailure: true }, identity ? { createIdentity: identity } : {});
     };
     try {
       let value;
@@ -474,6 +474,10 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
           // completion proof: only a completed action bound to this droplet is.
           if (!(action.resource_id === dropletId || action.status === "in-progress" && (action.resource_id === null || action.resource_id === 0))) refuseCreate({ code });
           if (action.status === "completed") { assert.equal(action.resource_id, dropletId); readRemaining(); break; }
+          // A provider-terminal failure of this exact action and POST droplet. Only
+          // their IDs leave the worker; absence is the controller's separate proof.
+          if (action.status === "errored" && action.resource_id === dropletId)
+            refuseCreate({ code: "create-action-errored" }, [{ id: dropletId, actionId }]);
           if (action.status !== "in-progress") refuseCreate({ code });
           code = "create-action-pending";
           await sleep(Math.min(1000, Math.max(0, deadline - now())));
@@ -511,8 +515,11 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       if (error?.controlUncertain) unsafe = true;
       if (error?.controlUncertain) throw stopped(true, diagnostic);
       if (allowFail && !reportUnsent && (error?.createSemanticFailure === true || error?.httpFailure
-        && (command[2] !== "get" || diagnostic.code === "get-http" && diagnostic.httpStatus === 404)))
-        return refused(diagnostic);
+        && (command[2] !== "get" || diagnostic.code === "get-http" && diagnostic.httpStatus === 404))) {
+        const result = refused(diagnostic);
+        if (diagnostic.code === "create-action-errored" && error.createIdentity) result.stdout = JSON.stringify(error.createIdentity);
+        return result;
+      }
       throw stopped(false, diagnostic);
     }
   };

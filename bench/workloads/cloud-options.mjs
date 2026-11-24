@@ -12,7 +12,7 @@ const providerCodes = ["provider-command", "provider-credential", "provider-outp
   "catalog-request", "catalog-http", "catalog-response",
   "create-request", "create-http", "create-response", "create-link", "create-action-request", "create-action-http",
   "create-link-shape", "create-link-count", "create-link-id", "create-link-rel", "create-link-href",
-  "create-action-response", "create-action-pending", "delete-request", "delete-http"];
+  "create-action-response", "create-action-pending", "create-action-errored", "create-errored-absent", "delete-request", "delete-http"];
 const providerStatuses = [200, 201, 202, 204, 301, 302, 303, 304, 307, 308, 400, 401, 403, 404, 405, 408, 409, 410, 413, 415, 422, 429, 500, 501, 502, 503, 504];
 const providerDetails = {
   "account-request": ["internal-refusal", "connect", "send", "request-error", "response-error", "response-aborted",
@@ -40,6 +40,17 @@ export function providerDiagnostic(value) {
 }
 export function providerFailure(error) {
   return error && typeof error === "object" ? providerDiagnostic(Object.getOwnPropertyDescriptor(error, "providerDiagnostic")?.value) : undefined;
+}
+
+// The engine's provider-terminal create failure: the exact action and the droplet
+// ID its single POST returned. Identity only, never proof that the droplet is gone.
+export function erroredCreate(result) {
+  if (!result || typeof result !== "object" || result.status !== 1 || providerFailure(result)?.code !== "create-action-errored") return undefined;
+  const stdout = result.stdout;
+  if (typeof stdout !== "string" || !/^\[\{"id":[1-9]\d{0,15},"actionId":[1-9]\d{0,15}\}\]$/.test(stdout)) return undefined;
+  const [{ id, actionId }] = JSON.parse(stdout);
+  if (!Number.isSafeInteger(id) || !Number.isSafeInteger(actionId)) return undefined;
+  return { dropletId: String(id), actionId: String(actionId) };
 }
 
 export function fleetCatalogResult(result) {
@@ -145,7 +156,7 @@ export function controllerState(s, round, options) {
   validateState(s, round, options);
   const allowed = ["schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "createdAt", "status", "id", "ip",
     "createIntentAt", "archiveSha256", "evidenceSha256", "extractionAttempts", "evidence", "evidenceOutcome", "collectedAt", "deletionIntentAt", "destroyedAt",
-    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "gitSource", "quietBootstrap", "remainingPlacement", "launchHostKeySha256"];
+    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "gitSource", "quietBootstrap", "remainingPlacement", "launchHostKeySha256", "createErrored"];
   assert.ok(Object.keys(s).every((k) => allowed.includes(k)), "unknown controller state field");
   providerIdentity(s.provider);
   if (s.fleet) assert.deepEqual(s.provider, s.fleet.provider, "fleet account/context differs");
@@ -209,6 +220,21 @@ export function controllerState(s, round, options) {
       for (const key of ["archiveSha256", "evidenceSha256", "evidence", "bootstrapReady"])
         assert.equal(s[key], undefined, "unused retirement cannot claim campaign evidence");
     } else assert.ok(s.archiveSha256 && s.evidenceSha256 && s.evidence, "failed setup requires preserved archive evidence");
+  }
+  if (s.createErrored !== undefined) {
+    // Terminal provider failure of the one create: never bound, provisioned or deleted.
+    const c = s.createErrored;
+    assert.ok(c && typeof c === "object" && !Array.isArray(c), "create failure record required");
+    assert.deepEqual(Object.keys(c).sort(), ["actionId", "dropletId", "evidenceSha256"]);
+    for (const key of ["actionId", "dropletId"]) assert.ok(Number.isSafeInteger(Number(full(c[key], /[1-9]\d{0,15}/, key))), key);
+    full(c.evidenceSha256, /[a-f0-9]{64}/, "create failure evidence hash");
+    assert.equal(s.status, "creating", "a provider-errored create is never bound");
+    for (const key of ["id", "ip", "archiveSha256", "evidenceSha256", "evidence", "extractionAttempts", "evidenceOutcome", "validation", "collectedAt",
+      "exitCode", "deletionIntentAt", "destroyedAt", "retirement", "bootstrapReady", "preBootstrapTerminal", "launchHostKeySha256", "mixedCancellation", "auditIntent", "auditIntents"])
+      assert.equal(s[key], undefined, "a provider-errored create cannot claim a host, deletion or campaign");
+    const m = s.control?.monitor;
+    assert.ok(!s.control || !s.control.ledger.length && !s.control.sealed.length && (!m || m.phase === "pending" && !m.registrationSha256),
+      "a provider-errored create cannot have guest control");
   }
   if (s.evidence) assert.ok(s.archiveSha256 && s.evidenceSha256, "unhashed evidence");
   if (s.collectedAt || s.status === "collected") assert.ok(s.evidence && s.validation && ["validated", "failed", "blocked"].includes(s.evidenceOutcome), "incomplete collection state");

@@ -1,0 +1,1 @@
+- A benchmark host create that the provider accepts and then fails is recorded as its own terminal outcome once the exact action, the account and the droplet's absence are verified; it never retries or deletes. [#1689 Benchmark r21: catalog qualification droplet create errored before guest startup](https://github.com/corten-run/corten/issues/1689)

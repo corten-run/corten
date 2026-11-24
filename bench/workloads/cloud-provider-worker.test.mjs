@@ -251,6 +251,39 @@ test("supported lifecycle real worker retains one private credential through kno
   });
 });
 
+test("provider-errored create crosses real worker IPC with only its exact IDs and leaves the worker usable", async (t) => {
+  const h = harness(t, "first-action-errored"), suffix = account.slice(-2);
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
+    "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...suffix];
+  assert.deepEqual(await h.run(create, 1000, true), { status: 1, stdout: '[{"id":123,"actionId":456}]', stderr: "",
+    providerDiagnostic: { code: "create-action-errored" } });
+  assert.deepEqual(await h.run(["compute", "droplet", "get", "123", "--output", "json", ...suffix], 1000, true),
+    { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } });
+  assert.deepEqual(JSON.parse((await h.run(["compute", "droplet", "list", "--output", "json", ...suffix])).stdout), []);
+  await h.run.close();
+  const state = h.state(); assert.equal(state.consumes, 1); assert.equal(h.launches, 1);
+  assert.ok(state.calls.every((call) => call.originalCredential));
+  assert.equal(state.calls.filter((call) => call.method === "POST").length, 1);
+  assert.equal(state.calls.some((call) => call.method === "DELETE"), false);
+});
+
+test("create-errored IPC output outside an allowed create or with any other shape fails closed", async (t) => {
+  const suffix = account.slice(-2), identity = '[{"id":123,"actionId":456}]';
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
+    "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...suffix];
+  const errored = (stdout = identity, code = "create-action-errored") => ({ status: 1, stdout, stderr: "", providerDiagnostic: { code } });
+  for (const [args, allowFail, result] of [
+    [account, true, errored()], [["compute", "droplet", "get", "123", "--output", "json", ...suffix], true, errored()],
+    [create, false, errored()], [create, true, errored("")], [create, true, errored('[{"id":123}]')],
+    [create, true, errored('[{"id":123,"actionId":456,"raw":"SYNTHETIC_RAW_BODY"}]')], [create, true, errored('[{"id":0,"actionId":456}]')],
+    [create, true, errored(' [{"id":123,"actionId":456}]')], [create, true, errored(identity, "create-action-response")],
+    [create, true, { ...errored(), stderr: "SYNTHETIC_RAW_BODY" }],
+  ]) {
+    const h = harness(t, "success", undefined, undefined, (message) => message.sequence === 1 && message.ok ? { ...message, result } : message);
+    await assert.rejects(h.run(args, 1000, allowFail), (error) => error.controlTreeUncertain === true);
+  }
+});
+
 test("supported lifecycle real worker GET404 is explicit absence and does not poison the credential worker", async (t) => {
   const h = harness(t), get = ["compute", "droplet", "get", "123", "--output", "json", ...account.slice(-2)];
   assert.deepEqual(await h.run(get, 1000, true), { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } });

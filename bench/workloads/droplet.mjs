@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerCheckSeconds, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash, withVerifiedArchive } from "./cloud-local.mjs";
-import { campaignOutcome, controllerFailure, controllerState, fleetCatalogResult, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
+import { campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
@@ -28,6 +28,28 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
   return r;
 }
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
+const createErroredReceipt = "provider-create-errored.json";
+// Rebuild the receipt from the saved state; only the census size and time come from the file.
+function verifyCreateErrored(local, s) {
+  const bytes = regular(join(local, createErroredReceipt), 64 * 1024), record = JSON.parse(bytes);
+  assert.equal(digest(bytes), s.createErrored.evidenceSha256, "create failure receipt changed; preserve reservation");
+  assert.ok(Number.isSafeInteger(record.absence?.inventory?.droplets) && record.absence.inventory.droplets >= 0
+    && typeof record.observedAt === "string" && new Date(record.observedAt).toISOString() === record.observedAt, "create failure receipt changed; preserve reservation");
+  assert.deepEqual(record, createErroredRecord(s, s.createErrored, record.absence.inventory.droplets, record.observedAt),
+    "create failure receipt changed; preserve reservation");
+  return true;
+}
+function createErroredRecord(s, { dropletId, actionId }, droplets, observedAt) {
+  return { schema: "benchmark-provider-create-errored/v1", round: s.round, commit: s.commit, ...(s.group === undefined ? {} : { group: s.group }),
+    name: s.name, tag: s.tag, host: s.host, createIntentAt: s.createIntentAt,
+    action: { id: Number(actionId), type: "create", resourceType: "droplet", resourceId: Number(dropletId), status: "errored" },
+    account: { id: s.provider.accountId, verified: "before-and-after-each-provider-call" },
+    absence: { exactGet: { id: Number(dropletId), httpStatus: 404 },
+      inventory: { complete: true, droplets, matchingId: 0, matchingName: 0, matchingTag: 0 } },
+    observedAt, dispatched: { create: 1, replacementCreate: 0, delete: 0, guest: false }, measurements: 0 };
+}
+const createErroredStop = () => Object.assign(new Error("provider create errored; exact allocation verified absent; no DELETE or replacement create"),
+  { providerDiagnostic: { code: "create-errored-absent" } });
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
   authorizeRecovery = authorizeAudit, unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission,
@@ -163,6 +185,17 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     return result;
   }
   const list = async () => { const d = JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--output", "json"])).stdout); assert.ok(Array.isArray(d)); return d; };
+  // A provider-errored create retires only on positive absence: exact-ID 404, then a
+  // complete census without its ID, name or run tag. execute() brackets each read
+  // with the saved account. Any other answer is not proof; the caller preserves.
+  const providerAbsent = async ({ dropletId }) => {
+    const exact = await execute("doctl", ["compute", "droplet", "get", dropletId, "--output", "json"], 60000, true);
+    const diagnostic = providerFailure(exact);
+    if (!(exact.status === 1 && !exact.error && diagnostic?.code === "get-http" && diagnostic.httpStatus === 404)) return undefined;
+    const rows = await list();
+    if (rows.some((d) => String(d?.id) === dropletId || d?.name === state.name || Array.isArray(d?.tags) && d.tags.includes(state.tag))) return undefined;
+    return rows.length;
+  };
   const exactHost = async (remaining) => {
     const result = await execute("doctl", ["compute", "droplet", "get", state.id, "--output", "json"], 60000, true, undefined, remaining);
     if (result.status === 1 && providerFailure(result)?.code === "get-http" && providerFailure(result)?.httpStatus === 404) return undefined;
@@ -779,7 +812,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         assert.ok(!existsSync(local), "round already reserved; never relaunch");
         for (const entry of readdirSync(base)) if (entry.startsWith("groups-")) {
           const match = /^groups-(r[1-9]\d{0,8})$/.exec(entry); assert.ok(match, "unknown reservation");
-          assert.ok(read(join(base, entry), match[1]).destroyedAt, "unresolved reservation blocks launch");
+          const prior = read(join(base, entry), match[1]);
+          assert.ok(prior.destroyedAt || prior.createErrored && verifyCreateErrored(join(base, entry), prior), "unresolved reservation blocks launch");
         }
         checkFleetAdmission?.();
         mkdirSync(local, { mode: 0o700 }); syncDirectory(base);
@@ -818,6 +852,18 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           }
           const created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
             "--ssh-keys", options.sshKey, "--tag-names", [...tags, state.tag].join(","), "--wait", "--output", "json"], 10 * 60000, true);
+          // A provider-terminal create failure retires this attempt only with all four
+          // proofs: exact action/droplet identity and errored status (worker), the saved
+          // account and exact absence (providerAbsent). Otherwise preserve as before.
+          const errored = erroredCreate(created);
+          const droplets = errored === undefined ? undefined : await providerAbsent(errored);
+          if (droplets !== undefined) {
+            check();
+            const bytes = `${JSON.stringify(createErroredRecord(state, errored, droplets, new Date().toISOString()), null, 2)}\n`;
+            durable(join(local, createErroredReceipt), bytes);
+            state.createErrored = { ...errored, evidenceSha256: digest(bytes) }; save();
+            throw createErroredStop();
+          }
           // Lost acknowledgement permits only identity reconciliation, never another create.
           try { bind(await own()); }
           catch (error) {
@@ -896,6 +942,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         state.destroyedAt ??= new Date().toISOString(); save(); return 1;
       });
       const observed = read();
+      if (observed.createErrored) return locked(async () => {
+        // Read-only: recheck the receipt and absence. Never DELETE, create or bind.
+        assert.ok(state.createErrored, "create failure record changed; preserve reservation");
+        verifyCreateErrored(local, state);
+        assert.ok(await providerAbsent(state.createErrored) !== undefined, "provider-errored allocation no longer verified absent; preserve reservation");
+        return 1;
+      });
       let failedMonitorRecovery = false;
       const neverProvisioned = (s) => s.control?.monitor?.phase === "pending" && !s.control.monitor.registrationSha256
         && s.id && s.ip && s.createIntentAt && !s.control.sealed.length
@@ -1187,6 +1240,9 @@ export function publicError(error) {
   const diagnostic = providerFailure(error), stage = controllerFailure(error);
   const detail = diagnostic?.httpStatus !== undefined ? ` (HTTP ${diagnostic.httpStatus})`
     : diagnostic?.detail !== undefined ? ` (${diagnostic.detail})` : "";
+  if (diagnostic?.code === "create-errored-absent") return "Provider create errored before guest startup; the exact allocation was verified absent on the verified account."
+    + " No DELETE or replacement create was sent. Not a benchmark result; never relaunch this round."
+    + (stage ? ` Controller stage: ${stage}.` : "") + ` Provider failure: ${diagnostic.code}.`;
   return "Controller stopped; retained state/evidence requires inspection. Host/deletion state may be uncertain. Never relaunch."
     + (stage ? ` Controller stage: ${stage}.` : "")
     + (diagnostic ? ` Provider failure: ${diagnostic.code}${detail}.` : "");

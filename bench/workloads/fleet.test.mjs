@@ -1729,6 +1729,40 @@ test("fleet receipts retain all closed census predicates without replay", async 
   await assert.rejects(fleetMain(await p.approve("--collect"), p.deps), /EEXIST/);
 });
 
+test("fleet receipts name a provider-errored create only when its child saved that terminal state", async (t) => {
+  const flags = {}, p = fixture(t, flags); p.seedLegacy(...groupNames);
+  const approved = await p.approve("--collect");
+  const errored = (state) => {
+    state.status = "creating"; delete state.id; delete state.ip; delete state.bootstrapReady;
+    state.createErrored = { dropletId: "9", actionId: "8", evidenceSha256: "e".repeat(64) };
+  };
+  const stop = (fields, code = "create-errored-absent") => Object.assign(new Error("PRIVATE_MESSAGE"), { providerDiagnostic: { code } }, fields);
+  flags.child = ({ group }) => {
+    const i = groupNames.indexOf(group);
+    if (i === 3) throw stop(); // No saved terminal record.
+    if (i === 4) return 1; // Terminal code without a record.
+    p.seed(group, errored);
+    if (i === 0) return 1;
+    if (i === 1) throw stop();
+    if (i === 2) throw stop({ controlUncertain: true });
+    throw stop({}, "create-action-errored");
+  };
+  assert.equal(await fleetMain(approved, p.deps), 2);
+  const rows = p.output.at(-1).groups;
+  for (const [i, row] of rows.entries()) {
+    if (i < 2) {
+      assert.equal(row.outcome, "create-errored"); assert.equal(row.error, undefined); assert.equal(row.id, undefined);
+      if (i === 1) { assert.equal(row.uncertain, false); assert.deepEqual(row.providerDiagnostic, { code: "create-errored-absent" }); }
+    } else {
+      assert.equal(row.outcome, "error");
+      assert.equal(row.error, i === 4 ? "group-state-invalid" : "group-operation-failed");
+    }
+    const name = readdirSync(join(p.h.base, "receipts")).find((name) => name.endsWith(`-${row.group}.json`));
+    assert.ok(isDeepStrictEqual(JSON.parse(readFileSync(join(p.h.base, "receipts", name), "utf8")), row));
+  }
+  assert.ok(rows.length > 5); assert.ok(!JSON.stringify(p.output).includes("PRIVATE"));
+});
+
 test("fleet receipt sanitizer rejects raw fields and accessors without changing failure outcomes", async (t) => {
   const flags = {}, p = fixture(t, flags); p.seedLegacy(...groupNames);
   const approved = await p.approve("--collect");

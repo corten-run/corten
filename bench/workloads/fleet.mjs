@@ -526,13 +526,16 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       } catch { /* Only validated saved identity is public. */ }
       const diagnostic = providerFailure(failure);
       const stage = controllerFailure(failure);
-      const row = { group: job.group, outcome: job.outcome !== "planned" ? job.outcome : failure ? "error" : code === 0 ? "collected" : code === 1 ? "terminal-incomplete" : code === 3 ? "pending" : "error",
-        ...(saved?.state?.id ? { id: saved.state.id } : {}), ...(failure || job.outcome === "planned" && ![0, 1, 3].includes(code) ? { error: "group-operation-failed" } : {}),
+      // The child saved its terminal provider-errored create; the provider sent no host.
+      const createErrored = (failure ? !failure.controlTreeUncertain && !failure.controlUncertain && diagnostic?.code === "create-errored-absent" : !launching && code === 1)
+        && job.outcome === "planned" && saved?.outcome === "available" && saved.state.status === "creating" && !!saved.state.createErrored;
+      const row = { group: job.group, outcome: job.outcome !== "planned" ? job.outcome : createErrored ? "create-errored" : failure ? "error" : code === 0 ? "collected" : code === 1 ? "terminal-incomplete" : code === 3 ? "pending" : "error",
+        ...(saved?.state?.id ? { id: saved.state.id } : {}), ...(!createErrored && (failure || job.outcome === "planned" && ![0, 1, 3].includes(code)) ? { error: "group-operation-failed" } : {}),
         ...(failure ? { uncertain: !!(failure.controlTreeUncertain || failure.controlUncertain) } : {}),
         ...(diagnostic ? { providerDiagnostic: diagnostic } : {}), ...(stage ? { controllerStage: stage } : {}) };
       // Return codes cannot substitute for validated saved host state. In
       // particular, never print completion/deletion from a worker receipt alone.
-      if (!failure && job.outcome === "planned") {
+      if (!failure && job.outcome === "planned" && !createErrored) {
         const state = saved?.state;
         const first = job.group === preview.fleet.manifest.jobs[0].group;
         const bootstrapReady = state?.bootstrapReady;
@@ -612,7 +615,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
     await controlCheckpoint(cancelled);
     write(JSON.stringify({ schema: "benchmark-group-fleet-operation/v1", action: preview.subject.action, groups, fullGroupQualified: false }));
     if (groups.some((g) => ["error", "missing", "ambiguous", "busy", "not-admitted"].includes(g.outcome))) return 2;
-    return groups.some((g) => ["pending", "deferred"].includes(g.outcome)) ? 3 : groups.some((g) => ["terminal-incomplete", "unused-retired", "setup-failed-retired", "native-failed-retired"].includes(g.outcome)) ? 1 : 0;
+    return groups.some((g) => ["pending", "deferred"].includes(g.outcome)) ? 3 : groups.some((g) => ["terminal-incomplete", "unused-retired", "setup-failed-retired", "native-failed-retired", "create-errored"].includes(g.outcome)) ? 1 : 0;
   } catch (error) {
     if (error?.controlTreeUncertain || error?.controlUncertain) uncertain = true;
     if (preIntentStage) preIntentFailures?.set(error, preIntentStage);
