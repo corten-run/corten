@@ -1763,11 +1763,10 @@ fn read<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, boo
 /// a request refused for another; a later one costs the look for its reason and no more.
 #[cold]
 fn malformed(req: &Request) -> Asked {
-    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+    use std::sync::atomic::AtomicBool;
     static LOGGED: [AtomicBool; Refused::COUNT] = [const { AtomicBool::new(false) }; Refused::COUNT];
-    let reason = Refused::of(req);
-    if !LOGGED[reason as usize].swap(true, Relaxed) {
-        tracing::warn!("{}", reason.line(req));
+    if let Some(line) = Refused::first(req, &LOGGED) {
+        tracing::warn!("{line}");
     }
     Asked::Malformed
 }
@@ -1785,12 +1784,29 @@ enum Refused {
     Unnamed,
     /// A `Host` that is not a host and maybe a port.
     Host,
-    /// A target whose own host is not one: the last, which [`Refused::COUNT`] counts from.
+    /// A target whose own host is not one.
     TargetHost,
 }
 
 impl Refused {
-    const COUNT: usize = Refused::TargetHost as usize + 1;
+    /// How many reasons there are, counted from the last. A reason added is named here, or this
+    /// does not compile, so the one who adds it sees that the last is the one counted from.
+    const COUNT: usize = {
+        let last = Refused::TargetHost;
+        match last {
+            Refused::Target | Refused::Star | Refused::Lines | Refused::Unnamed | Refused::Host | Refused::TargetHost => {
+                last as usize + 1
+            }
+        }
+    };
+
+    /// The log's line for `req` when it is the first refused for its reason that `logged` has
+    /// seen, and nothing for a later one.
+    fn first(req: &Request, logged: &[std::sync::atomic::AtomicBool; Refused::COUNT]) -> Option<String> {
+        let reason = Refused::of(req);
+        let first = !logged[reason as usize].swap(true, std::sync::atomic::Ordering::Relaxed);
+        first.then(|| reason.line(req))
+    }
 
     fn of(req: &Request) -> Refused {
         let target = req.uri().path_and_query().map_or("", |target| target.as_str());
@@ -1813,13 +1829,19 @@ impl Refused {
 
     /// The log's line for `req`: its method, its path and the reason. Never its query, a user
     /// in its target or in a `Host`, or what follows a `/` or a `?` there, any of which may hold
-    /// what no log should; of a host only what names it.
+    /// what no log should; of a host only what names it. A `Host` that is none for another
+    /// reason (a list, a space) is given as sent: an operator needs it to see what sends it.
     fn line(self, req: &Request) -> String {
         /// What a `Host` or an authority names, without a user before it or a path after it.
+        /// Nothing where an `@` follows a `/`, `?` or `#`: it may end a user whose password
+        /// holds one, or be in a path or a query, and neither reading is safe to print.
         fn names(host: &[u8]) -> String {
             let host = String::from_utf8_lossy(host);
-            let host = host.rsplit('@').next().unwrap_or_default();
-            host.split(['/', '?', '#']).next().unwrap_or_default().to_owned()
+            let (host, after) = host.split_at(host.find(['/', '?', '#']).unwrap_or(host.len()));
+            if after.contains('@') {
+                return String::new();
+            }
+            format!(" (it names {:?})", host.rsplit('@').next().unwrap_or_default())
         }
         let why = match self {
             Refused::Target => "its request-target has a byte outside ASCII, which a client percent-encodes".to_owned(),
@@ -1832,11 +1854,11 @@ impl Refused {
             }
             Refused::Host => {
                 let host = req.headers().get(header::HOST).map(|host| names(host.as_bytes())).unwrap_or_default();
-                format!("its Host is not a host and maybe a port alone (it names {host:?})")
+                format!("its Host is not a host and maybe a port alone{host}")
             }
             Refused::TargetHost => {
                 let host = req.uri().authority().map(|target| names(target.as_str().as_bytes())).unwrap_or_default();
-                format!("its request-target's host is not a host and maybe a port alone (it names {host:?})")
+                format!("its request-target's host is not a host and maybe a port alone{host}")
             }
         };
         format!("corten: refused {} {:?} (400): {why}", req.method(), req.uri().path())
@@ -2735,6 +2757,33 @@ mod tests {
         assert_eq!(reason, Refused::Host);
         let (reason, _) = why("GET", "http://localhost/?token=secret", &[], true);
         assert_eq!(reason, Refused::Unnamed);
+        // An `@` after a `/` or a `?` may end a user or be in a path: neither part is printed.
+        for host in ["shop.example/reset?to=ann@hunter2", "user:hun/ter2@shop.example", "shop.example?hunter2@x#y"] {
+            let (reason, line) = why("GET", "/", &[host], true);
+            assert!(reason == Refused::Host && line.ends_with("(400): its Host is not a host and maybe a port alone"), "{line}");
+        }
+
+        // The first request refused for a reason has a line, a later one for it none, and one
+        // refused for another reason still has its own.
+        let logged = [const { std::sync::atomic::AtomicBool::new(false) }; Refused::COUNT];
+        let refused = |target: &str, hosts: &[&str]| {
+            let mut req = http::Request::builder().uri(target);
+            for host in hosts {
+                req = req.header("host", *host);
+            }
+            let mut req = req.body(crate::http::Body::empty()).unwrap();
+            mark_unnamed(&mut req);
+            Refused::first(&req, &logged)
+        };
+        assert!(refused("/", &[]).is_some_and(|line| line.contains("no Host line")));
+        assert_eq!(refused("/again", &[]), None);
+        assert!(refused("/", &["a, b"]).is_some_and(|line| line.contains("its Host is not a host")));
+        assert_eq!(refused("/", &["c, d"]), None);
+        assert!(refused("/", &["a", "b"]).is_some_and(|line| line.contains("2 Host lines")));
+        assert!(refused("/caf\u{e9}", &["a"]).is_some_and(|line| line.contains("outside ASCII")));
+        assert!(refused("*", &["a"]).is_some_and(|line| line.contains("OPTIONS")));
+        assert!(refused("http://user@localhost/", &["localhost"]).is_some_and(|line| line.contains("request-target's host")));
+        assert_eq!(refused("http://user@localhost/", &["localhost"]), None);
     }
 
     #[test]

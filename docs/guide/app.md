@@ -266,7 +266,8 @@ rather than a setting to remember.
 
 The same check answers `400 Bad Request` to a request HTTP does not allow, whatever names the
 app has and with `Policy::any_host()` too, and nothing of the app runs for it either. The
-first two are what HTTP requires, the third what it recommends, and the last two Corten's own:
+first two are what HTTP requires, the third what it recommends, the fourth Corten's reading, and
+the fifth its choice where HTTP leaves one:
 
 1. an HTTP/1.1 request with no `Host` line, or a request with more than one, the same value or
    not, which [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112#section-3.2) (3.2) requires;
@@ -300,7 +301,9 @@ speaks HTTP/1.1 to the app and passes on no `Host` for a client that sent none s
 that gets the `400` (nginx's documentation says it leaves out a header it is given an empty
 value for, as `proxy_set_header Host $http_host` then is; this was not run). The first request
 refused for each reason is logged, with its method, its path and the reason: never its query,
-and of a `Host` that is no host only the name in it, without a user before or a path after.
+and of a `Host` or a target's host that is none only the name in it, without a user before or a
+path after (no name at all where an `@` comes after a `/` or a `?`, so which part is the user
+cannot be told; a list or a name with a space in it is logged as sent).
 
 A deployed app lists the names it is served under, where the deploy sets `HOST` and `PORT`:
 

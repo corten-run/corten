@@ -2561,7 +2561,9 @@ rules something out.
     The next change was to the host check itself, which now also refuses what HTTP does not allow
     (the `400` of [the app guide](guide/app.md#host-names)), at an unstaged route as at every
     other: a `Host` line missing, repeated or not a host, which RFC 9112 (3.2) requires a server
-    to refuse; a request-target with a byte outside ASCII, an invalid request-line, which the
+    to refuse (with them, by Corten's choice, an empty `Host`, which 3.3 lets a server read as
+    its default name, and a user in a target that names its host, which RFC 9110 (4.2.4) says
+    a server should treat as an error); a request-target with a byte outside ASCII, an invalid request-line, which the
     same section says a server should refuse or redirect; and `*` with a method other than
     `OPTIONS`, which is Corten's reading of a target HTTP keeps for `OPTIONS`. It adds work to an
     unstaged route, so this was read again as it was for the host check's 494. In process,
@@ -2583,17 +2585,23 @@ rules something out.
     from none.
     The refusals stay. The three of `Host` are what HTTP requires, which is correctness and
     comes before the count (the README's Values), and a route that skipped them would answer a
-    request with two `Host` lines that every other route refuses. The two request-targets are
+    request with two `Host` lines that every other route refuses. The two by choice cost
+    nothing beside them, being answers of the same read: an empty `Host` names none of the
+    hosts an app answers to and was a `421` before, in an app that names its hosts, and the
+    user is found where the target's host is read. The two request-targets are
     refused for the RFC's reason for the first, that an invalid request-line may be written to
-    pass a filter on its way, which holds at an unstaged route as at any; they are at most the
-    41, the first refuses a request a client may send in good faith (a path's bytes as they
+    pass a filter on its way, which holds at an unstaged route as at any; for the profile's
+    19-byte target they are the 41 at the most and the 7 it has in the target's read (`http`'s
+    `as_str` and `path_and_query`) with the compare with `*`, which no line of it shows apart,
+    and more for a longer target; the first refuses a request a client may send in good faith (a path's bytes as they
     are, where a browser percent-encodes them), and they are the part of this to drop first if
     either is wanted back. The bound stays where it was for a request whose first header line
     is `Host` in an app that names its hosts, the lane's and step 4's 98 and 94 still counted
     against it. For a request with `Host` on a later line or none it moves by the about 100
     the refusals cost (127 at the most counted), and in an app that answers to any host by the
     229 to 423 counted, which is the read of `Host` every other app paid already (about 400 of
-    the host check's 494) come to it for the refusals; no further in either. The harness the bound's counts came from is not
+    the host check's 494) come to it for the refusals; no further in either for the requests counted, and by the
+    scan of its bytes for a longer target. The harness the bound's counts came from is not
     in the repository and was not run for this change, so what an unstaged route counts there
     now is not known; by the counts that were taken it is less than it was if the harness's
     request names its host first and about 100 more, past the bound as it stood, if it does
