@@ -746,25 +746,18 @@ struct Entry {
 
 impl Entry {
     /// The handler for `method`, and the `Allow` its answer gets when it is not one of the
-    /// route's own methods; and whether it is a `HEAD` given the handler of the route's `GET`,
-    /// its own or `any`'s, which answers a `HEAD` only where it answers the `GET` too.
+    /// route's own methods.
     #[inline]
-    fn pick<'a>(&'a self, method: &Method, dispatch: &'a Dispatch) -> (&'a Route, Option<&'a HeaderValue>, bool) {
-        let (own, of_get) = match *method {
-            Method::HEAD => match &self.slots[HEAD] {
-                Some(route) => (Some(route), false),
-                None => (self.slots[GET].as_ref(), true),
-            },
-            _ => (slot_of(method).and_then(|at| self.slots[at].as_ref()), false),
+    fn pick<'a>(&'a self, method: &Method, dispatch: &'a Dispatch) -> (&'a Route, Option<&'a HeaderValue>) {
+        let own = match *method {
+            Method::HEAD => self.slots[HEAD].as_ref().or(self.slots[GET].as_ref()),
+            _ => slot_of(method).and_then(|at| self.slots[at].as_ref()),
         };
         match own {
-            Some(route) => (route, None, of_get),
+            Some(route) => (route, None),
             None => match &self.fallback {
-                Some(fallback) => (fallback, self.allow.as_ref(), of_get),
-                None => {
-                    let (route, allow) = dispatch.refuse(method, self.allow.as_ref());
-                    (route, allow, false)
-                }
+                Some(fallback) => (fallback, self.allow.as_ref()),
+                None => dispatch.refuse(method, self.allow.as_ref()),
             },
         }
     }
@@ -887,12 +880,15 @@ impl Dispatch {
                 let mut matched = MatchedPath::new(&entry.path, req.uri(), &found.params);
                 // A segment without the text the route writes after its parameter is not the
                 // route's, whatever the method; no other route answers it either.
-                let (route, allow, of_get) = match entry.written {
-                    Some(written) if !crate::route::routes_path(written, path) => (&self.not_found, None, false),
+                let (route, allow) = match entry.written {
+                    Some(written) if !crate::route::routes_path(written, path) => (&self.not_found, None),
                     _ => entry.pick(req.method(), self),
                 };
                 // Marked here, as the handler is chosen: a middleware may change the method after.
-                matched.head_of_get = of_get;
+                // With no handler for `HEAD` of its own, a route gives a `HEAD` its `GET`'s handler,
+                // else its `any` handler, which then answers the `GET` too, else a refusal, which
+                // gives no kept answer.
+                matched.head_of_get = *req.method() == Method::HEAD && entry.slots[HEAD].is_none();
                 (route, allow, entry.stages.as_ref(), Some(matched))
             }
             Err(_) => (&self.not_found, None, self.stages.as_ref(), None),
@@ -1361,7 +1357,7 @@ mod tests {
         let Inner::Routes(dispatch) = &router.inner else { panic!("expected a router with no outer layer") };
         let matched = dispatch.paths.at("/small/one").unwrap();
         let entry = &dispatch.routes[*matched.value];
-        let (route, ..) = entry.pick(&Method::GET, dispatch);
+        let (route, _) = entry.pick(&Method::GET, dispatch);
         let request = || http::Request::builder().uri("/small/one").body(Body::empty()).unwrap();
         let stage = entry.stages.as_ref().unwrap().clone().run(request(), route);
         let handler = route.call(request());
