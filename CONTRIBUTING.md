@@ -594,8 +594,8 @@ establish a general ranking.
       1. Placements: each side is compiled once, and its K placements are that build's final link
          run again with one more object, a function of a declared size that nothing calls (a pad),
          placed first in `.text` by `-Wl,--symbol-ordering-file`, so every other function moves by
-         the pad and keeps its order and its neighbours. The plan lists every pad size, spread
-         across the phases of a 64-byte line and a 4 KiB page and up to about 40,000 bytes.
+         the pad and keeps its order and its neighbours. The plan lists every such pad's size,
+         spread across the phases of a 64-byte line and a 4 KiB page and up to about 40,000 bytes.
          Placement i of the change is base with pad p_i against head with pad p_i. Before
          anything is measured, the run records that the link run again without a pad is
          byte-identical to the build's own binary; that each placement has exactly that binary's
@@ -610,6 +610,9 @@ establish a general ranking.
          `ETag`). A header value the workload's cost depends on, as `kept`'s depends on `Age`, is
          masked for that comparison only if it can differ between starts, and is then checked
          separately against the value or range the plan states, not accepted as any number.
+         Before anything is measured the run also records, from the map of each side's unpadded
+         link, what the fifth point asks of every run, with code aligned beyond 16 bytes or
+         without.
       2. Pairs: R recorded pairs per placement after one that is not, every turn on a freshly
          started build, as above, so a placement and a process start are told apart.
       3. The statistic: per placement, the median of its R per-pair changes in user plus kernel
@@ -645,13 +648,15 @@ establish a general ranking.
          request whose placement runs predate this point). Before anything is measured, the run
          records from LLD's map (`-Wl,-Map`) of each build's unpadded link, and the pull request
          reports, each input section of `.text` aligned beyond 16 bytes, in order with its
-         alignment, and every function from the first of them on (the side's list), by symbol and
-         by its archive, or its object file where it is in none, less cargo's hashes; both maps
-         are kept with the run's results. A placement run whose plan was published before this
-         point was on `main` is read by the rule as it then stood; any other with no such record
-         has no reading across placements. A plan may not build the C code with other flags to be
-         read under the first point alone. Where either side has such a section, the rest of this
-         point holds for both, in the change comparison and the A/A (a pilot by its own sides).
+         alignment, and every function from the first of them on (the side's list), by symbol,
+         archive and archive member, or object file where it is in no archive, the files named
+         without their hashes; both maps are kept with the run's results. That record is
+         asked of every placement run, one with no such section too: a run whose plan was
+         declared before this point was on `main` is read by the rule as it then stood, and any
+         other with no such record has no reading across placements. A plan may not build the C
+         code with other flags to be read under the first point alone. Where either side has
+         such a section, the rest of this point holds for both, in the change comparison and the
+         A/A (a pilot by its own sides).
 
          Every placement then has a second pad, whose size no plan lists: a function nothing calls,
          aligned to 16 bytes, that the ordering file does not name and the link line gives last, so
@@ -674,21 +679,12 @@ establish a general ranking.
          function whose mangled symbol names a crate of this repository's workspace or the
          measured program's own crate lies at or after the first section aligned beyond 16 bytes,
          or outside `.text`; or none of the four sizes puts a placement's `.data` where the rule
-         says. A workload has none where its request runs, on either side, a listed function of
-         one of three kinds: one whose code differs between the two builds, shown by its section's
-         size or alignment in the two maps or by a diff that changes its source, version, flags or
-         compiler; one not on both sides' lists at one offset in their unpadded links modulo the
-         same largest alignment, the largest among `.text`'s input sections up to the function's
-         own; or one the request runs on one side and not on the other. None takes the reading
-         where, on each side that lists it, the function is in a section aligned beyond 16 bytes
-         that no input section of `.text` before it exceeds in alignment, or follows such a
-         section of its own archive with only that archive's code between. Where a listed function
-         is not so excused, the pull request reports, for each workload read across placements and
-         each side, which listed functions its request runs: those called between the workload's
-         first request and its last answer on the side's own unpadded binary, the measured probe
-         serving the workload's own requests (a count from process start that shows no call shows
-         none there). The command and its raw output are kept with the run's results; where the
-         report is asked, a workload without it has no reading either.
+         says. The pads do not vary where a function on a side's list lies in a 64-byte line as
+         they vary the code before it: from the first section aligned to 64 bytes on, a function
+         is in every placement where the side's unpadded link has it, and one listed before that
+         section, or on a side with none, is there or 32 bytes from there. That is a limit of the
+         reading and refuses none: what one such place costs a request no reading says, and each
+         side's list in the pull request shows which functions the limit covers.
 
       The margin stays +1% with no floor: the workload meets it when the change's bound across
       placements is under +1% and its A/A resolves. A placement that fails a check above, or has
