@@ -819,7 +819,15 @@ and no unpublished receipt claims its absence, the collect binds exactly that
 posted droplet, as the in-deadline launch does, and returns 3; the completed-action
 route below then applies. Another ID, missing ownership, a census match after a 404
 or an uncertain read refuses with nothing bound or deleted. An unpublished receipt
-beside that exact GET is contradicted, and takes the contradiction route below.
+beside that exact GET, or beside a census row with the posted ID, the saved name or
+the run tag after a 404, is contradicted: the collect writes the witness
+`provider-create-reappeared` first, so a later 404 and empty census never adopt that
+receipt, and takes the contradiction route below. A census row alone binds nothing.
+
+Run tags count only as exact members of a tag array of non-empty strings. A tag
+field that is a string (even one containing the tags) or an array with any other
+entry is not ownership, for a bind and for the fresh ownership read before every
+DELETE.
 
 A stop between writing the receipt and publishing `createErrored` leaves the receipt
 beside a state that still has `createPending`, and from a launch its locks (refused
@@ -869,18 +877,29 @@ unchanged. Every later path refuses on that lock until the custody step below: a
 for that collect's process tree, keep the lock bytes outside the state roots, and if
 `provider-create-reappeared` is absent (the witness write itself failed), create it
 (any content) before removing `operation.lock`. The next collect then sees the
-contradiction even if the droplet has gone again.
+contradiction even if the droplet has gone again. A reappearance stage the failed
+publication left stays in place: it is never read as state or removed, and the bind
+below records it.
 
 A contradicted receipt, published or unpublished, has one route. Collect reads only
 the exact GET of the posted droplet ID (never a census). If that one row is the
 posted ID and positively owned (the saved name, run tags, size and region, and
-exactly one public IPv4), it keeps the receipt and witness as evidence, replaces
-`createErrored` with `createContradicted` (posted IDs, receipt hash and the
-reappearance), binds exactly that droplet and returns 3. It never provisions. A
+exactly one public IPv4), it writes the witness if it is absent, keeps the receipt and
+witness as evidence, replaces `createErrored` with `createContradicted` and binds
+exactly that droplet and returns 3. It never provisions. `createContradicted` holds
+the posted IDs, the receipt hash, `receiptVerified`, the bind's own exact read
+(`reappeared`, always the posted ID), the witness hash (the witness keeps the first
+observation, which can be a census row with another ID and the saved name or tag)
+and, as `stages`, the name and hash of each reappearance stage left beside it.
+`receiptVerified` is true for a published receipt with its saved hash or an
+unpublished one whose bytes are exactly the canonical record for the saved state;
+other bytes (a partial write, say) are kept as an unverified artifact, not evidence
+that the create failed, and do not stop the bind of a positively owned droplet. A
 fresh collection then retires it only through the pinned unused-bootstrap preview and
 approval below (policy `contradicted-create-posted-droplet-unused-only-no-qualification`),
-which admits exactly the receipt with its saved hash and the witness beside the usual
-files, and keeps the never-started unit proof and the fresh-deletion fences. Regular
+which admits exactly the receipt, the witness and each recorded stage, each with its
+saved hash, beside the usual files (an unrecorded or changed one refuses), and keeps
+the never-started unit proof and the fresh-deletion fences. Regular
 `--collect` refuses it as an unused bootstrap needing that approval; an offline
 handoff refuses with stage `offline-never-started`. Until retired, the reservation
 blocks later rounds in its root. Any other answer, the posted ID absent, renamed,
@@ -900,9 +919,10 @@ more, after the account read that opens its create and immediately before it rec
 create intent and sends the POST, under the child's own locks: the attempt's
 manifest and state bytes, its receipt and no launch, operation or recheck lock. An
 old attempt that has taken custody again by then refuses the create. A collect of
-that attempt that starts after this check can only run the read-only receipt and
-absence recheck, since a recorded `createErrored` never leads to a create, bind or
-DELETE. The approval subject lists each such attempt's account and posted droplet
+that attempt that starts after this check never creates, provisions or deletes: it
+runs the read-only receipt and absence recheck, or records a reappearance and binds
+only the exact owned posted droplet (the contradiction route above). The approval
+subject lists each such attempt's account and posted droplet
 ID (`createFailures`, bound to its manifest, state and receipt for the selected
 group's retry), and separately every earlier provider-errored attempt's account and
 posted droplet ID in any group of the continuation (`postedCreates`, settled or
