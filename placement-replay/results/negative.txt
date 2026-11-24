@@ -1,0 +1,32 @@
+== the head's placement with a pad of 15120 bytes, as it is
+passed
+== the wrong pad size (15136 for a pad of 15120)
+replay.mjs: the first input section of .text is /m/1971/pads/pad-15120.o:(.text.corten_layout_pad), 15120 bytes at 0x15d5c0
+replay.mjs: 3443 input sections are not where the unpadded layout replayed with the pad puts them
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+replay.mjs: 3515 symbols before the first section aligned beyond 16 bytes moved by other than the pad
+refused
+== the base's unpadded link against the head's placement
+replay.mjs: .text has 3442 input sections unpadded and 3483 besides the pad in the placement
+replay.mjs: .text begins elsewhere in the placement
+replay.mjs: 3442 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== one section aligned to 64 bytes written 16 bytes on in the placement's map
+replay.mjs: 1 input sections of the placement's .text are not at the first multiple of their alignment after the one before
+replay.mjs: 1 input sections are not where the unpadded layout replayed with the pad puts them
+replay.mjs: 1 input sections moved by other than a multiple of their alignment
+replay.mjs: 1 symbols of .text are not the unpadded link's, in its order, as far from their section's start
+refused
+== the pad linked without being named in the ordering file
+replay.mjs: the first input section of .text is /usr/lib/gcc/x86_64-linux-gnu/14/../../../x86_64-linux-gnu/Scrt1.o:(.text), 34 bytes at 0x15d5c0
+replay.mjs: input section 0 differs: /usr/lib/gcc/x86_64-linux-gnu/14/../../../x86_64-linux-gnu/Scrt1.o:(.text) (34, 16) against /usr/lib/gcc/x86_64-linux-gnu/14/crtbeginS.o:(.text) (185, 16)
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== one function written 16 bytes further into a section that has not moved from its place
+replay.mjs: 1 symbols of .text are not the unpadded link's, in its order, as far from their section's start
+replay.mjs: 1 symbols before the first section aligned beyond 16 bytes moved by other than the pad
+refused
+== the head read with compiler_builtins named as one of its own crates
+replay.mjs: 2 input sections from the first one aligned beyond 16 bytes on hold a function of corten or corten_feed or corten_protocol or corten_ui or probe or compiler_builtins: libcompiler_builtins.rlib(compiler_builtins.compiler_builtins
+refused
+exit 0

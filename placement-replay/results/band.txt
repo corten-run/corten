@@ -1,0 +1,8 @@
+run1 aa-plain: K 30; placement medians from -2.42% to +2.92%
+run1 aa-kept: K 30; placement medians from -2.98% to +3.33%
+run2 aa-old: K 30; placement medians from -3.63% to +4.38%
+run2 aa-young: K 30; placement medians from -2.26% to +2.22%
+run3-api aa-api: K 60; placement medians from -5.47% to +4.15%
+run3-browser aa-browser: K 60; placement medians from -3.64% to +3.04%
+run3-plain aa-plain: K 60; placement medians from -1.96% to +2.10%
+lowest -5.47% (run3-api aa-api); highest +4.38% (run2 aa-old)

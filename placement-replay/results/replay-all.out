@@ -1,0 +1,4 @@
+base: 60 placements linked again with a map, each byte-identical to build.sh's, each passing replay.mjs
+head: 30 placements linked again with a map, each byte-identical to build.sh's, each passing replay.mjs
+REPLAY-DONE
+exit 0

@@ -1,5 +1,22 @@
-libdeflate-sys 1.26.1, lib/deflate_compress.c, cc (Debian 14.2.0-19) 14.2.0
-cc -O3 -ffunction-sections -fdata-sections -fPIC : .p2align 6 in the assembly 37 times; function sections by alignment: 12 at 64, 4 at 32, 1 at 1, 10 at 16, 
-cc -O3 -ffunction-sections -fdata-sections -fPIC -falign-functions=16: .p2align 6 in the assembly 37 times; function sections by alignment: 12 at 64, 4 at 32, 1 at 1, 10 at 16, 
-cc -O3 -ffunction-sections -fdata-sections -fPIC -falign-functions=16 -falign-loops=16 -falign-jumps=16 -falign-labels=16: .p2align 6 in the assembly 37 times; function sections by alignment: 12 at 64, 4 at 32, 1 at 1, 10 at 16, 
-the build own archive: sha256 84c5a4d1d42a713bd770ba704846934f9f052898602f79c8af05d115e3ac9afc; function sections by alignment: 17 at 64, 5 at 32, 11 at 1, 41 at 16, 
+libdeflate-sys-1.26.1, lib/deflate_compress.c, cc (Debian 14.2.0-19) 14.2.0
+cc -O3 -ffunction-sections -fdata-sections -fPIC : .p2align 6 in the assembly 37 times, .p2align 5 42 times; function sections by alignment: 12 at 64, 4 at 32, 1 at 1, 10 at 16, 
+cc -O3 -ffunction-sections -fdata-sections -fPIC -falign-functions=16: .p2align 6 in the assembly 37 times, .p2align 5 42 times; function sections by alignment: 12 at 64, 4 at 32, 1 at 1, 10 at 16, 
+cc -O3 -ffunction-sections -fdata-sections -fPIC -falign-functions=16 -falign-loops=16 -falign-jumps=16 -falign-labels=16: .p2align 6 in the assembly 37 times, .p2align 5 42 times; function sections by alignment: 12 at 64, 4 at 32, 1 at 1, 10 at 16, 
+cc -O3 -ffunction-sections -fdata-sections -fPIC -fno-align-loops: .p2align 6 in the assembly 37 times, .p2align 5 42 times; function sections by alignment: 12 at 64, 4 at 32, 1 at 1, 10 at 16, 
+cc -O3 -ffunction-sections -fdata-sections -fPIC -fno-align-loops -fno-align-jumps -fno-align-labels: .p2align 6 in the assembly 37 times, .p2align 5 42 times; function sections by alignment: 12 at 64, 4 at 32, 1 at 1, 10 at 16, 
+cc -O3 -ffunction-sections -fdata-sections -fPIC -fno-align-functions -fno-align-loops -fno-align-jumps -fno-align-labels: .p2align 6 in the assembly 37 times, .p2align 5 42 times; function sections by alignment: 12 at 64, 4 at 32, 10 at 1, 1 at 16, 
+cc -O3 -ffunction-sections -fdata-sections -fPIC -falign-loops=1 -falign-jumps=1 -falign-labels=1: .p2align 6 in the assembly 37 times, .p2align 5 42 times; function sections by alignment: 12 at 64, 4 at 32, 1 at 1, 10 at 16, 
+cc -O3 -ffunction-sections -fdata-sections -fPIC -mtune=generic -fno-align-loops: .p2align 6 in the assembly 37 times, .p2align 5 42 times; function sections by alignment: 12 at 64, 4 at 32, 1 at 1, 10 at 16, 
+cc -O3 -ffunction-sections -fdata-sections -fPIC -O2: .p2align 6 in the assembly 44 times, .p2align 5 50 times; function sections by alignment: 15 at 64, 1 at 32, 1 at 1, 7 at 16, 
+cc -O3 -ffunction-sections -fdata-sections -fPIC -O2 -fno-align-loops: .p2align 6 in the assembly 44 times, .p2align 5 50 times; function sections by alignment: 15 at 64, 1 at 32, 1 at 1, 7 at 16, 
+cc -O3 -ffunction-sections -fdata-sections -fPIC -Os: .p2align 6 in the assembly 0 times, .p2align 5 0 times; function sections by alignment: 35 at 1, 
+where the first .p2align 6 of the plain compile sits (the six lines before it):
+807-	movl	$4, %ecx
+808-	xorl	%edx, %edx
+809-	leaq	deflate_length_slot(%rip), %r9
+810-	xorl	%eax, %eax
+811-	leaq	deflate_extra_length_bits(%rip), %r8
+812-	jmp	.L65
+813:	.p2align 6
+--
+the build's own archive: sha256 84c5a4d1d42a713bd770ba704846934f9f052898602f79c8af05d115e3ac9afc; function sections by alignment: 17 at 64, 5 at 32, 11 at 1, 41 at 16, 

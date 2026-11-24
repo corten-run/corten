@@ -1,24 +1,24 @@
 rustc 1.100.0 (0ef1bc386 2026-11-09)
 pads: 60 objects, each one function of its size
-== base: 14126d2a8a12bccd173ec29032c1818d42904213, 03:54:50
+== base: 14126d2a8a12bccd173ec29032c1818d42904213, 13:29:56
 warning: `p1971` (bin "probe") generated 1 warning
-    Finished `release` profile [optimized] target(s) in 3m 05s
+    Finished `release` profile [optimized] target(s) in 1m 14s
 warning: linker stderr: link-capture: /m/target-1971-base/release/build/p1971/a890dbd0faa11206/out/probe: 99 arguments, 69 inputs copied to /m/1971/capture/base
 base: C archives the build made and linked: 
 base: the captured link run again unpadded is byte-identical to cargo's binary
 base 26f2d7f8eef22f887498269800b7b79e6d41090a9420d619fdf645ebd6dfb26d 4592040 bytes
-base built in 187 s
-== head: 498291116fe5d3e3088bb3a663d1afc4dd998898, 03:57:57
+base built in 76 s
+== head: 498291116fe5d3e3088bb3a663d1afc4dd998898, 13:31:12
 warning: `p1971` (bin "probe") generated 1 warning
-    Finished `release` profile [optimized] target(s) in 2m 52s
+    Finished `release` profile [optimized] target(s) in 1m 11s
 warning: linker stderr: link-capture: /m/target-1971-head/release/build/p1971/b10621b882971db2/out/probe: 104 arguments, 71 inputs copied to /m/1971/capture/head
 head: C archives the build made and linked: /m/target-1971-head/release/build/libdeflate-sys/b1e85f4af8ec3f13/out/lib/libdeflate.a
 head: the captured link run again unpadded is byte-identical to cargo's binary
 head 16c6181add0156af3d56d454fb74cf24e2d53237b5381b50311b5a73050748e1 4683712 bytes
-head built in 174 s
+head built in 72 s
 base pad 320 relinked again is byte-identical
 90 placements: functions moved by exactly their pad 306957 of 307860 (before any C code 306570 of 306570; from the C code on 1290, each by its pad or a multiple of 32 bytes less than 64 from it); neighbours kept 301650 of 301650
-92 binaries, every sha256 distinct; placements relinked in 167 s
+92 binaries, every sha256 distinct; placements relinked in 75 s
 == layout-base-p320.txt
 .text: A 2361750 bytes at 0x159a40; B 2362070 bytes at 0x159a40 (B - A 320 bytes; pad 320)
 other sections moved: .init +320, .fini +320, .plt +320, .tdata +320, .tbss +320, .fini_array +320, .init_array +320, .data.rel.ro +320, .dynamic +320, .got +320, .got.plt +320, .relro_padding +320, .tm_clone_table +320, .data +320, .bss +320

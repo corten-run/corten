@@ -1,0 +1,6 @@
+== the first version, on a map with one function written 16 bytes further into its section
+passed
+== this version, on the same map
+replay.mjs: 1 symbols of .text are not the unpadded link's, in its order, as far from their section's start
+replay.mjs: 1 symbols before the first section aligned beyond 16 bytes moved by other than the pad
+refused
