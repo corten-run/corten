@@ -102,13 +102,21 @@ This driver is test code only; no adapter imports it or uses a common alert stor
 When a script-enabled page's `goto` fails or its readiness mark never appears, the driver
 writes `compiled-alerts-APP-SOURCE-PROFILE-PID-hydration.json` under
 `bench/catalog/results/c1/` (uploaded with the catalog parity artifact) and rethrows the
-original error. It holds closed categories only: the failing stage, the goto's Chromium
-`net::ERR_*` code (or `other`), the main-frame status, each failed request's code, resource
-type, stage and time from the navigation's start, the driver's own `docker run`/`rm` calls
-and the host's Docker container and network lifecycle events from a minute before the
-navigation to the failure, on the same clock. Chromium aborts requests in flight with `ERR_NETWORK_CHANGED` when the host's
-network interfaces change, so these show whether a container change preceded a failure. No
-URL, page text, console text or container name is kept.
+original error. It holds closed categories only: the failing stage and when it failed, the
+`net::ERR_*` code at the head of the goto's error (or `other`), the main-frame status, each
+failed request's code, resource type, stage and time from the navigation's start, the driver's
+own `docker run`/`rm` calls and the host's Docker container and network lifecycle events from
+a minute before the navigation to the failure, on the same clock. Chromium aborts requests in
+flight with `ERR_NETWORK_CHANGED` when the host's network interfaces change, so these are
+evidence for telling whether a container change preceded a failure, not a record of its cause.
+No URL, page text, console text, container name, image, label or ID is kept.
+
+The Docker events are host-wide: each keeps its type, an allowlisted action, its time and
+whether the container is one of the driver's own. To decide that, the read-only
+`docker events` query prints container IDs (a container event's own, a network event's
+attached container, never a network's ID) to the reader's private stdout pipe, where they are
+compared in memory and never written. The reader kills the query at 2 s or 256 KiB; an
+unavailable or truncated result is inconclusive, not an absence of events.
 
 Alert POSTs require one complete upstream JSON document and the requested record
 identity. The native templ response is fully rendered into a buffer before a write;

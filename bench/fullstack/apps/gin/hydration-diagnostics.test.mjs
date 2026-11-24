@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
-import { containerTimeline, diagnosticLimits, failureCode, failureCodes, hydrationArtifactPath, observeHydration,
-  projectDockerEvents } from './hydration-diagnostics.mjs';
+import { containerTimeline, diagnosticLimits, failureCodes, gotoFailureCode, hydrationArtifactPath, observeHydration,
+  projectDockerEvents, readDockerEvents, requestFailureCode } from './hydration-diagnostics.mjs';
 
 class FakePage extends EventEmitter {
   calls = [];
@@ -33,7 +35,7 @@ function response(page, url, status, navigation = false) {
 function observer(page, overrides = {}) {
   const saved = [], summaries = [];
   const diagnostics = observeHydration(page, { app: 'leptos', source: 'fixture', profile: 'defaults',
-    container: 'compiled-alerts-leptos-fixture-123', artifactPath: 'ignored.json', now: () => 0, wall: () => 1_700_000_000_000,
+    artifactPath: 'ignored.json', now: () => 0, wall: () => 1_700_000_000_000,
     write: async (_path, text) => saved.push(text), log: summary => summaries.push(summary), ...overrides });
   return { diagnostics, saved, summaries };
 }
@@ -87,7 +89,7 @@ test('readiness negative preserves the identical original error and captures the
       failure: () => ({ errorText: 'net::ERR_ABORTED' }) });
     await assert.rejects(diagnostics.wait(), error => error === page.error);
     const raw = await readFile(artifactPath, 'utf8'), detail = JSON.parse(raw);
-    assert.equal(detail.container, 'compiled-alerts-leptos-fixture-123');
+    assert.equal('container' in detail, false, 'no container name is kept');
     assert.deepEqual(detail.navigation, { status: 200 });
     assert.ok(detail.events.some(event => event.kind === 'response' && event.resourceKind === 'wasm' && event.status === 404));
     assert.ok(detail.events.some(event => event.kind === 'pageerror' && event.errorClass === 'Error'));
@@ -269,7 +271,7 @@ test('closed diagnostic schema discards all unknown fields and variable browser 
   await assert.rejects(diagnostics.wait(), error => error === page.error);
   const detail = JSON.parse(saved[0]);
   const keys = (object, expected) => assert.deepEqual(Object.keys(object).sort(), expected.sort());
-  keys(detail, ['schema', 'app', 'source', 'profile', 'container', 'navigationIndex', 'stage', 'failure', 'navigation', 'errorClass', 'state',
+  keys(detail, ['schema', 'app', 'source', 'profile', 'navigationIndex', 'stage', 'failureMs', 'failure', 'navigation', 'errorClass', 'state',
     'events', 'dropped', 'containers', 'docker']);
   keys(detail.navigation, ['status']);
   keys(detail.state, ['readyState', 'hydratedType', 'hydratedAt', 'marketplace', 'scriptCount', 'resourceCount', 'scripts', 'resources']);
@@ -307,14 +309,18 @@ test('diagnostics never read console text or a readiness error\'s message/stack,
   page.emit('console', { type: () => 'error', text: forbidden, args: forbidden, location: forbidden });
   page.emit('pageerror', pageError);
   page.emit('requestfailed', { url: () => 'https://fixture.invalid/pkg/short-canary/app.wasm', resourceType: () => 'fetch',
-    failure: () => ({ errorText: 'net::ERR_CONNECTION_RESET at https://fixture.invalid/short-canary' }) });
+    failure: () => ({ errorText: 'net::ERR_CONNECTION_RESET' }) });
+  // An allowlisted code inside a URL is not the request's error code.
+  page.emit('requestfailed', { url: () => 'https://fixture.invalid/pkg/short-canary/app.wasm', resourceType: () => 'fetch',
+    failure: () => ({ errorText: 'failed https://fixture.invalid/short-canary/net::ERR_NETWORK_CHANGED' }) });
   await assert.rejects(diagnostics.wait(), error => error === original);
   const detail = JSON.parse(saved[0]);
   assert.equal(detail.dropped, 0, 'forbidden getters must not merely be swallowed');
   assert.equal(detail.errorClass, 'TimeoutError');
   assert.deepEqual(detail.events, [{ sequence: 1, kind: 'console', level: 'error' },
     { sequence: 2, kind: 'pageerror', errorClass: 'RuntimeError' },
-    { sequence: 3, kind: 'requestfailed', resourceKind: 'wasm', resourceType: 'fetch', failure: 'ERR_CONNECTION_RESET', stage: 'idle', ms: 0 }]);
+    { sequence: 3, kind: 'requestfailed', resourceKind: 'wasm', resourceType: 'fetch', failure: 'ERR_CONNECTION_RESET', stage: 'idle', ms: 0 },
+    { sequence: 4, kind: 'requestfailed', resourceKind: 'wasm', resourceType: 'fetch', failure: 'other', stage: 'idle', ms: 0 }]);
   assert.doesNotMatch(saved[0], /canary|\.invalid/);
 });
 
@@ -396,13 +402,20 @@ test('a goto error outside the allowlist, or without a net code, is recorded as 
   assert.equal(JSON.parse(saved[0]).failure, 'other');
 });
 
-test('a successful goto returns the navigation result and writes nothing', async () => {
+test('a successful goto starts the navigation synchronously, returns its result and queries nothing', async () => {
   const page = new FakePage(); page.hydrated = 1;
-  const { diagnostics, saved, summaries } = observer(page);
+  const queries = [];
+  const { diagnostics, saved, summaries } = observer(page, { timeline: containerTimeline(() => 0),
+    dockerEvents: async query => { queries.push(query); return ''; } });
   const result = { status: () => 200 };
-  assert.equal(await diagnostics.goto(async () => result), result);
+  let started = false;
+  const pending = diagnostics.goto(() => { started = true; return Promise.resolve(result); });
+  assert.equal(started, true, 'the navigation starts before goto returns its promise, with no await before it');
+  assert.equal(await pending, result);
   await diagnostics.wait();
   assert.deepEqual(saved, []); assert.deepEqual(summaries, []);
+  assert.equal(queries.length, 0, 'no Docker events query on success');
+  assert.equal(page.calls.filter(call => call[0] === 'snapshot').length, 0, 'no snapshot on success');
 });
 
 test('request failures are stamped with the stage they happened in (#1496, #1906)', async () => {
@@ -423,13 +436,40 @@ test('request failures are stamped with the stage they happened in (#1496, #1906
   assert.doesNotMatch(saved[0], /private\.invalid|static|x=1/);
 });
 
-test('failureCode keeps only allowlisted Chromium net codes', () => {
-  assert.equal(failureCode('net::ERR_NETWORK_CHANGED'), 'ERR_NETWORK_CHANGED');
-  assert.equal(failureCode(gotoMessage), 'ERR_NETWORK_CHANGED');
-  for (const code of failureCodes) assert.equal(failureCode(`net::${code}`), code);
-  for (const text of ['net::ERR_SOMETHING_NEW', 'ERR_ABORTED', 'net::err_aborted', 'failure-canary', '', 'x'.repeat(600) + 'net::ERR_ABORTED'])
-    assert.equal(failureCode(text), 'other', text.slice(0, 40));
-  for (const value of [undefined, null, 1, {}, ['net::ERR_ABORTED']]) assert.equal(failureCode(value), 'other');
+test('failure codes keep only allowlisted Chromium net codes, read as a whole token from the error itself', () => {
+  assert.equal(requestFailureCode('net::ERR_NETWORK_CHANGED'), 'ERR_NETWORK_CHANGED');
+  assert.equal(gotoFailureCode(gotoMessage), 'ERR_NETWORK_CHANGED');
+  assert.equal(gotoFailureCode('page.goto: net::ERR_ABORTED; maybe frame was detached?'), 'ERR_ABORTED');
+  for (const code of failureCodes) {
+    assert.equal(requestFailureCode(`net::${code}`), code);
+    assert.equal(gotoFailureCode(`page.goto: net::${code} at http://127.0.0.1:1/x`), code);
+  }
+  for (const text of ['net::ERR_SOMETHING_NEW', 'ERR_ABORTED', 'net::err_aborted', 'failure-canary', '', 'x'.repeat(600) + 'net::ERR_ABORTED',
+    'net::ERR_ABORTEDX', 'xnet::ERR_ABORTED', 'net::ERR_ABORTED at http://x/', 'http://x/net::ERR_NETWORK_CHANGED']) {
+    assert.equal(requestFailureCode(text), 'other', text.slice(0, 40));
+  }
+  for (const text of ['page.goto: net::ERR_SOMETHING_NEW at http://x/', 'page.goto: net::ERR_ABORTEDX at http://x/',
+    'page.goto: Timeout 30000ms exceeded at http://x/net::ERR_NETWORK_CHANGED', 'x'.repeat(600) + 'net::ERR_ABORTED',
+    'page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to "http://x/net::ERR_NETWORK_CHANGED"\n']) {
+    assert.equal(gotoFailureCode(text), 'other', text.slice(0, 40));
+  }
+  for (const value of [undefined, null, 1, {}, ['net::ERR_ABORTED']]) {
+    assert.equal(requestFailureCode(value), 'other'); assert.equal(gotoFailureCode(value), 'other');
+  }
+});
+
+test('a goto timeout whose call log names ERR_NETWORK_CHANGED only inside a URL is not a network change', async () => {
+  const page = new FakePage();
+  const { diagnostics, saved, summaries } = observer(page);
+  const original = new Error('page.goto: Timeout 30000ms exceeded.\nCall log:\n'
+    + '  - navigating to "http://127.0.0.1:32774/marketplace/net::ERR_NETWORK_CHANGED/item_1", waiting until "load"\n');
+  original.name = 'TimeoutError';
+  await assert.rejects(diagnostics.goto(async () => { throw original; }), error => error === original);
+  const detail = JSON.parse(saved[0]);
+  assert.equal(detail.failure, 'other');
+  assert.equal(detail.errorClass, 'TimeoutError');
+  assert.equal(summaries[0].failure, 'other');
+  assert.doesNotMatch(saved[0], /NETWORK_CHANGED|127\.0\.0\.1|item_1/);
 });
 
 test('the container timeline records only the check\'s own runs and removals, bounded', () => {
@@ -447,13 +487,13 @@ test('the container timeline records only the check\'s own runs and removals, bo
 
 test('docker events keep only type, allowlisted action, time and ownership', () => {
   const own = 'b'.repeat(64), foreign = 'c'.repeat(64), origin = 1_700_000_000_000;
-  // The shape readDockerEvents' --format writes: type, action, actor ID, a network event's container, time.
-  const line = (type, action, id, ms, container = '') => JSON.stringify([type, action, id, container, (origin + ms) * 1e6]);
+  // The shape readDockerEvents' --format writes: type, action, the event's container, time.
+  const line = (type, action, container, ms) => JSON.stringify([type, action, container, (origin + ms) * 1e6]);
   const text = [
     line('container', 'start', own, -2500),
-    line('network', 'connect', 'secret-network', -2499, own),
+    line('network', 'connect', own, -2499),
     line('container', 'exec_start: sh -c echo secret-command', foreign, -100),
-    line('network', 'disconnect', 'secret-network', 150, foreign),
+    line('network', 'disconnect', foreign, 150),
     line('image', 'pull', 'secret-image', 10),
     '{ not json', JSON.stringify({ Type: 'container', Action: 'start', secret: 'secret-object' }), '',
   ].join('\n');
@@ -466,6 +506,8 @@ test('docker events keep only type, allowlisted action, time and ownership', () 
     { type: 'other', action: 'other', ms: 10, own: false },
   ] });
   assert.doesNotMatch(JSON.stringify(projected), /secret|b{64}|c{64}/);
+  assert.deepEqual(projectDockerEvents(text, origin, new Set([own]), origin + 100).events.map(event => event.ms), [-2500, -2499, -100, 10],
+    'an event after the cutoff is excluded even if Docker returned it');
   const many = Array.from({ length: 100 }, (_, i) => line('container', 'die', foreign, i)).join('\n');
   const bounded = projectDockerEvents(many, origin, new Set());
   assert.equal(bounded.events.length, diagnosticLimits.dockerEvents);
@@ -484,10 +526,11 @@ test('the artifact places own containers and host Docker events on the navigatio
   const queries = [];
   const { diagnostics, saved } = observer(page, { timeline, now: () => clock, wall: () => origin,
     dockerEvents: async query => { queries.push(query);
-      return JSON.stringify(['network', 'connect', 'n', own, (origin - 2990) * 1e6]); } });
+      return JSON.stringify(['network', 'connect', own, (origin - 2990) * 1e6]); } });
   await assert.rejects(diagnostics.goto(async () => { throw new Error(gotoMessage); }));
   const detail = JSON.parse(saved[0]);
   assert.deepEqual(detail.containers, [{ op: 'run', startMs: -3000, endMs: -2400, ok: true }]);
+  assert.equal(detail.failureMs, 0);
   assert.deepEqual(detail.docker, { events: [{ type: 'network', action: 'connect', ms: -2990, own: true }], dropped: 0 });
   assert.equal(queries.length, 1);
   assert.equal(queries[0].since, (origin - diagnosticLimits.dockerWindowMs) / 1000);
@@ -512,4 +555,138 @@ test('a failing or stalled Docker events query cannot mask the original error', 
     assert.doesNotMatch(saved[0], /private detail/);
     if (mode === 'hang') assert.ok(aborted, 'the query is aborted at its budget');
   }
+});
+
+test('the Docker window ends when the gate rejects, even if the clock advances during the snapshot', async () => {
+  for (const gate of ['goto', 'readiness']) {
+    let mono = 1000, wall = 1_700_000_000_000;
+    const page = new FakePage();
+    const queries = [];
+    // The snapshot takes 900 ms; a container event lands during it, after the failure.
+    page.evaluate = async () => { mono += 900; wall += 900; return page.snapshot; };
+    const { diagnostics, saved } = observer(page, { now: () => mono, wall: () => wall,
+      dockerEvents: async query => { queries.push(query); return [
+        JSON.stringify(['container', 'die', 'e'.repeat(64), (1_700_000_000_000 + 200) * 1e6]),
+        JSON.stringify(['network', 'disconnect', 'e'.repeat(64), (1_700_000_000_000 + 700) * 1e6]),
+      ].join('\n'); } });
+    const original = new Error(gotoMessage);
+    if (gate === 'goto') {
+      await assert.rejects(diagnostics.goto(async () => { mono += 300; wall += 300; throw original; }), error => error === original);
+    } else {
+      page.duringWait = () => { mono += 300; wall += 300; };
+      await assert.rejects(diagnostics.wait(), error => error === page.error);
+    }
+    const detail = JSON.parse(saved[0]);
+    assert.equal(queries.length, 1);
+    assert.equal(queries[0].until, (1_700_000_000_000 + 300) / 1000, `${gate}: the cutoff is the rejection, not after the snapshot`);
+    assert.equal(detail.failureMs, 300);
+    assert.deepEqual(detail.docker.events, [{ type: 'container', action: 'die', ms: 200, own: false }],
+      'the post-failure event is excluded');
+  }
+});
+
+test('the artifact keeps no container name, image, label, container ID or URL', async () => {
+  const name = 'compiled-alerts-leptos-fixture-4242', image = 'cb-catalog-leptos', id = 'f'.repeat(64);
+  let clock = 0;
+  const timeline = containerTimeline(() => clock);
+  timeline.record(['run', '-d', '--name', name, '--label', 'agent.owner=codex', '--label', 'agent.task=compiled-alerts', image],
+    () => { clock = 10; return id; });
+  const page = new FakePage();
+  const { diagnostics, saved, summaries } = observer(page, { timeline, now: () => clock, container: name, image,
+    dockerEvents: async () => [JSON.stringify(['container', 'start', id, 1_700_000_000_000 * 1e6]),
+      JSON.stringify(['network', 'connect', id, 1_700_000_000_000 * 1e6])].join('\n') });
+  await assert.rejects(diagnostics.goto(async () => { throw new Error(gotoMessage); }));
+  const raw = saved[0] + JSON.stringify(summaries);
+  assert.equal('container' in JSON.parse(saved[0]), false);
+  assert.deepEqual(JSON.parse(saved[0]).docker.events.map(event => event.own), [true, true], 'ownership survives as a bit');
+  assert.doesNotMatch(raw, /compiled-alerts-(?:gin|drogon|topcoat|leptos)-|4242|cb-catalog|agent\.|codex|[0-9a-f]{64}|https?:|127\.0\.0\.1/);
+});
+
+// A stand-in docker executable: it ignores SIGTERM and holds stdout open until killed.
+// 'grandchild' also hands its stdout to a process that outlives it.
+const fakeDocker = `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const [mode, pidFile] = process.argv.slice(2);
+process.on('SIGTERM', () => {});
+const pids = [process.pid];
+if (mode === 'ok') { process.stdout.write(JSON.stringify(process.argv.slice(4)) + '\\n'); process.exit(0); }
+if (mode === 'grandchild') {
+  const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 8000)'], { stdio: ['ignore', 'inherit', 'ignore'] });
+  pids.push(holder.pid);
+}
+writeFileSync(pidFile, pids.join(' '));
+if (mode === 'flood') {
+  const chunk = 'x'.repeat(64 * 1024);
+  const pump = () => { while (process.stdout.write(chunk)); process.stdout.once('drain', pump); };
+  pump();
+} else process.stdout.write('["container","start","x",1]\\n');
+setInterval(() => {}, 1000);
+`;
+
+// A killed but unreaped (zombie) process has exited; an orphan's reaper may not be this process.
+const alive = pid => {
+  try { process.kill(pid, 0); } catch (error) { return error.code === 'EPERM'; }
+  try { return readFileSync(`/proc/${pid}/stat`, 'utf8').replace(/^.*\) /s, '')[0] !== 'Z'; } catch { return process.platform === 'win32'; }
+};
+
+test('the Docker events reader kills a subprocess that ignores SIGTERM and settles, and its process exits', { timeout: 30_000 }, async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'fake-docker-'));
+  const leftovers = [];
+  try {
+    const fake = join(folder, 'docker.mjs');
+    await writeFile(fake, fakeDocker);
+    const module = new URL('./hydration-diagnostics.mjs', import.meta.url).href;
+    for (const [mode, limit] of [['hold', diagnosticLimits.dockerEventsMs + 500], ['grandchild', diagnosticLimits.dockerEventsMs + 500],
+      ['flood', diagnosticLimits.dockerEventsMs]]) {
+      const pidFile = join(folder, `${mode}.pid`);
+      // The reader runs in its own Node process, so a handle it leaves behind would keep that process alive.
+      const script = `const { readDockerEvents } = await import(${JSON.stringify(module)});
+const started = performance.now();
+try { await readDockerEvents({ since: 0, until: 1, command: process.execPath, prefix: ${JSON.stringify([fake, mode, pidFile])} });
+  console.log(JSON.stringify({ settled: 'resolved' }));
+} catch (error) { console.log(JSON.stringify({ settled: error.message, ms: performance.now() - started })); }`;
+      const started = Date.now();
+      const runner = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'inherit'] });
+      let out = '';
+      runner.stdout.on('data', chunk => { out += chunk; });
+      const code = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { runner.kill('SIGKILL'); reject(new Error(`${mode}: the reader's process did not exit`)); }, limit + 4000);
+        runner.once('exit', code => { clearTimeout(timer); resolve(code); });
+      });
+      const exited = Date.now() - started;
+      assert.equal(code, 0);
+      const result = JSON.parse(out.trim());
+      const pids = (await readFile(pidFile, 'utf8')).split(' ').map(Number);
+      leftovers.push(...pids.slice(1));
+      assert.notEqual(result.settled, 'resolved', `${mode}: a deadline or overflow is a failure`);
+      assert.ok(result.ms < limit, `${mode}: settled in ${Math.round(result.ms)} ms`);
+      assert.match(result.settled, mode === 'flood' ? /exceeded its cap/ : /deadline/);
+      // Node startup is outside the reader's budget; the process must exit promptly after it settles.
+      assert.ok(exited < limit + 3000, `${mode}: the reader's process exited after ${exited} ms`);
+      const deadline = Date.now() + 3000;
+      while (alive(pids[0]) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+      assert.equal(alive(pids[0]), false, `${mode}: the SIGTERM-ignoring docker process is killed`);
+    }
+  } finally {
+    for (const pid of leftovers) { try { process.kill(pid, 'SIGKILL'); } catch { /* Already exited. */ } }
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
+test('the Docker events reader returns a complete query and asks for no network ID', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'fake-docker-'));
+  try {
+    const fake = join(folder, 'docker.mjs');
+    await writeFile(fake, fakeDocker);
+    const text = await readDockerEvents({ since: 1.5, until: 2.25, command: process.execPath, prefix: [fake, 'ok', join(folder, 'ok.pid')] });
+    const args = JSON.parse(text);
+    assert.deepEqual(args.slice(0, 5), ['events', '--since', '1.500', '--until', '2.250']);
+    const format = args[args.indexOf('--format') + 1];
+    assert.equal(format, '[{{json .Type}},{{json .Action}},{{if eq .Type "network"}}{{json (index .Actor.Attributes "container")}}'
+      + '{{else}}{{json .Actor.ID}}{{end}},{{json .TimeNano}}]');
+    assert.deepEqual(args.filter((arg, i) => args[i - 1] === '--filter' && arg.startsWith('type=')), ['type=container', 'type=network']);
+    const aborted = new AbortController(); aborted.abort();
+    await assert.rejects(readDockerEvents({ since: 0, until: 1, signal: aborted.signal, command: process.execPath, prefix: [fake, 'hold', join(folder, 'x.pid')] }),
+      /aborted/);
+  } finally { await rm(folder, { recursive: true, force: true }); }
 });

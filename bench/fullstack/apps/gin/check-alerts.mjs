@@ -9,7 +9,7 @@ import { join, resolve, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { records as marketplaceRecords } from '../../../marketplace/fixtures.mjs';
 import { records as catalogRecords } from '../../../catalog/fixtures.mjs';
-import { containerBase, startupFailure, writeFixtures } from './compiled-check.mjs';
+import { cleanUp, containerBase, startupFailure, writeFixtures } from './compiled-check.mjs';
 import { containerTimeline, hydrationArtifactPath, observeHydration, readDockerEvents } from './hydration-diagnostics.mjs';
 
 const { chromium } = createRequire(import.meta.url)('@playwright/test');
@@ -53,6 +53,8 @@ await new Promise(resolve => upstream.listen(0, '0.0.0.0', resolve));
 let browser;
 let active;
 const moneyFailures = [];
+// A cleanup failure is reported beside a check's own error and never replaces it.
+const outcome = { failed: false };
 try {
   await writeFixtures(folder, { 'items.json': {}, 'catalog.json': catalogRecords(), 'marketplace.json': records });
   browser = await chromium.launch({ headless: true });
@@ -78,6 +80,7 @@ try {
     // Pair the native confirmation with independent, exact JSON readback. JSON
     // numbers above 2^53 must not be rounded by the test client either.
     const moneyContext = await browser.newContext({ javaScriptEnabled: false });
+    const moneyOutcome = { failed: false };
     try {
       const page = await moneyContext.newPage();
       const expected = [];
@@ -114,10 +117,11 @@ try {
         }
       }
       console.log(`CHECKED ${app} ${source}: paired money confirmation/readback in all locales`);
-    } finally { await moneyContext.close(); }
+    } catch (error) { moneyOutcome.failed = true; throw error; } finally { await cleanUp(moneyOutcome, [() => moneyContext.close()]); }
     for (const javaScriptEnabled of focus === 'money' ? [] : [false, true]) {
       const context = await browser.newContext({ javaScriptEnabled });
       const other = await browser.newContext({ javaScriptEnabled: false });
+      const caseOutcome = { failed: false };
       try {
         const read = async (client = context) => {
           const before = fetched;
@@ -138,7 +142,7 @@ try {
         assert.deepEqual(await read(), []);
         const page = await context.newPage();
         const hydration = javaScriptEnabled ? observeHydration(page, {
-          app, source, profile, container: active, artifactPath: hydrationArtifactPath(app, source, profile),
+          app, source, profile, artifactPath: hydrationArtifactPath(app, source, profile),
           timeline, dockerEvents: readDockerEvents,
         }) : undefined;
         if (javaScriptEnabled) await hydration.goto(() => page.goto(pageURL)); else await page.goto(pageURL);
@@ -222,16 +226,22 @@ try {
         assert.equal(rows.length, 11); assert.deepEqual(rows.slice(0, 3), expected);
         assert.equal(new Set(rows.map(row => row.email)).size, 11, 'concurrent writes are neither lost nor duplicated');
         console.log(`PASS ${app} ${source} JS=${javaScriptEnabled}: native form, readback, locale validation, isolation, guards, concurrent writes`);
-      } finally { await context.close(); await other.close(); }
+      } catch (error) { caseOutcome.failed = true; throw error; } finally {
+        await cleanUp(caseOutcome, [() => context.close(), () => other.close()]);
+      }
     }
     docker('rm', '-f', '-v', active); active = undefined;
   }
   assert.deepEqual(moneyFailures, [], 'native money confirmation/readback regressions');
   console.log(`PASS ${app}: exact money confirmation and storage`);
-} finally {
-  if (browser) await browser.close();
-  if (active) docker('rm', '-f', '-v', active);
-  await new Promise(resolve => upstream.close(resolve));
-  assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep));
-  await rm(folder, { recursive: true, force: true });
+} catch (error) { outcome.failed = true; throw error; } finally {
+  await cleanUp(outcome, [
+    async () => { if (browser) await browser.close(); },
+    () => { if (active) docker('rm', '-f', '-v', active); },
+    () => new Promise(resolve => upstream.close(resolve)),
+    async () => {
+      assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep));
+      await rm(folder, { recursive: true, force: true });
+    },
+  ]);
 }

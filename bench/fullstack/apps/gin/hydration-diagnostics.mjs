@@ -47,9 +47,18 @@ const count = value => Number.isInteger(value) && value >= 0 && value <= 1e6 ? v
 const status = value => Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
 const offset = value => typeof value === 'number' && Number.isFinite(value) ? Math.max(-1e7, Math.min(1e7, Math.round(value))) : null;
 
-export function failureCode(text) {
+// A request's errorText is the whole token `net::ERR_*`; anything else is 'other'.
+export function requestFailureCode(text) {
+  if (typeof text !== 'string' || text.length > 128) return 'other';
+  return category(/^net::(ERR_[A-Z0-9_]{1,64})$/.exec(text.trim())?.[1], failureCodes);
+}
+
+// A goto error's code is read from its leading header line only (`page.goto: net::ERR_X at URL`);
+// a code that appears only in a URL or in the call log below it is 'other'.
+export function gotoFailureCode(text) {
   if (typeof text !== 'string') return 'other';
-  return category(/\bnet::(ERR_[A-Z0-9_]{1,64})\b/.exec(text.slice(0, 512))?.[1], failureCodes);
+  const header = text.slice(0, 512).split('\n', 1)[0];
+  return category(/^(?:page\.goto: )?net::(ERR_[A-Z0-9_]{1,64})(?=[\s;,]|$)/.exec(header)?.[1], failureCodes);
 }
 
 // Records the check's own container starts and removals on the observer's clock, so an
@@ -77,28 +86,54 @@ export function containerTimeline(now = () => performance.now()) {
 }
 
 // Replays the host's container and network lifecycle events for a closed window; read-only
-// and returns at --until. Each line is a JSON array of type, action, actor ID, the network
-// event's container and the time, of which projectDockerEvents keeps only type, allowlisted
-// action, time and whether the container is the check's own (no names, images or labels).
-export function readDockerEvents({ since, until, signal }) {
+// and returns at --until. Each line is a JSON array of type, action, the container the event
+// is about (a container event's actor, a network event's attached container; never the
+// network's own ID) and the time. That container ID passes through this reader's private
+// stdout only to be compared with the check's own; projectDockerEvents keeps only type,
+// allowlisted action, time and whether the container is the check's own.
+// The reader owns its subprocess: at the deadline, on abort or past the byte cap it kills the
+// child with SIGKILL, destroys its stdout and settles without waiting for the pipe to close.
+export function readDockerEvents({ since, until, signal, command = 'docker', prefix = [],
+  timeoutMs = diagnosticLimits.dockerEventsMs, maxBytes = diagnosticLimits.dockerEventsBytes }) {
   const actions = [...new Set([...containerActions, ...networkActions])].flatMap(action => ['--filter', `event=${action}`]);
   return new Promise((resolve, reject) => {
-    const child = spawn('docker', ['events', '--since', since.toFixed(3), '--until', until.toFixed(3),
-      '--filter', 'type=container', '--filter', 'type=network', ...actions, '--format',
-      '[{{json .Type}},{{json .Action}},{{json .Actor.ID}},{{json (index .Actor.Attributes "container")}},{{json .TimeNano}}]'],
-    { stdio: ['ignore', 'pipe', 'ignore'], signal });
-    let text = '', bytes = 0;
+    let child, timer, text = '', bytes = 0, settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      if (error && child) {
+        try { child.kill('SIGKILL'); } catch { /* Already gone. */ }
+        child.stdout?.destroy();
+        child.unref();
+      }
+      if (error) reject(error); else resolve(value);
+    };
+    const abort = () => finish(new Error('docker events aborted'));
+    if (signal?.aborted) { abort(); return; }
+    signal?.addEventListener('abort', abort, { once: true });
+    timer = setTimeout(() => finish(new Error('docker events deadline')), timeoutMs);
+    try {
+      child = spawn(command, [...prefix, 'events', '--since', since.toFixed(3), '--until', until.toFixed(3),
+        '--filter', 'type=container', '--filter', 'type=network', ...actions, '--format',
+        '[{{json .Type}},{{json .Action}},{{if eq .Type "network"}}{{json (index .Actor.Attributes "container")}}'
+          + '{{else}}{{json .Actor.ID}}{{end}},{{json .TimeNano}}]'],
+      { stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch (error) { finish(error); return; }
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', chunk => {
+      if (settled) return;
       bytes += Buffer.byteLength(chunk);
-      if (bytes > diagnosticLimits.dockerEventsBytes) child.kill('SIGKILL'); else text += chunk;
+      if (bytes > maxBytes) finish(new Error('docker events output exceeded its cap')); else text += chunk;
     });
-    child.once('error', reject);
-    child.once('close', code => code === 0 && bytes <= diagnosticLimits.dockerEventsBytes ? resolve(text) : reject(new Error('docker events failed')));
+    child.once('error', error => finish(error));
+    child.once('close', code => finish(code === 0 ? null : new Error('docker events failed'), text));
   });
 }
 
-export function projectDockerEvents(text, originWall, ownIds) {
+// Events after the cutoff (the failure) are excluded even if Docker returned them.
+export function projectDockerEvents(text, originWall, ownIds, untilWall = Infinity) {
   if (typeof text !== 'string') return { unavailable: true };
   const events = [];
   let dropped = 0;
@@ -107,11 +142,12 @@ export function projectDockerEvents(text, originWall, ownIds) {
     let raw;
     try { raw = JSON.parse(line); } catch { dropped = Math.min(dropped + 1, 1e9); continue; }
     if (!Array.isArray(raw)) { dropped = Math.min(dropped + 1, 1e9); continue; }
-    const [rawType, action, id, attached, timeNano] = raw;
+    const [rawType, action, container, timeNano] = raw;
+    const wallMs = Number(timeNano) / 1e6;
+    if (wallMs > untilWall) continue;
     const type = category(rawType, ['container', 'network']);
-    const container = type === 'network' ? attached : id;
     events.push({ type, action: category(action, type === 'network' ? networkActions : type === 'container' ? containerActions : []),
-      ms: offset(Number(timeNano) / 1e6 - originWall), own: typeof container === 'string' && ownIds.has(container) });
+      ms: offset(wallMs - originWall), own: typeof container === 'string' && ownIds.has(container) });
     if (events.length > diagnosticLimits.dockerEvents) { events.shift(); dropped = Math.min(dropped + 1, 1e9); }
   }
   return { events, dropped };
@@ -156,8 +192,9 @@ async function save(path, text, signal) {
 // type, the stage and the time from the navigation's start; the artifact also places the
 // check's own container starts and removals (timeline) and the host's Docker container and
 // network events (dockerEvents) on that clock, since Chromium aborts requests in flight with
-// ERR_NETWORK_CHANGED when the host's interfaces change.
-export function observeHydration(page, { artifactPath, app, source, profile, container, write = save,
+// ERR_NETWORK_CHANGED when the host's interfaces change. The Docker window ends at the failure
+// (failureMs), read when the gate rejects and before any diagnostic await.
+export function observeHydration(page, { artifactPath, app, source, profile, write = save,
   log = summary => console.error(JSON.stringify(summary)), timeline, dockerEvents, now = () => performance.now(), wall = Date.now }) {
   let events = [], eventBytes = 2, dropped = 0, sequence = 0, navigation = null, navigationIndex = 1, stage = 'idle';
   let origin = { mono: now(), wall: wall() };
@@ -187,7 +224,7 @@ export function observeHydration(page, { artifactPath, app, source, profile, con
   listen('pageerror', error => add({ kind: 'pageerror', errorClass: errorClass(error) }));
   listen('requestfailed', request => {
     let failure = 'other', resourceType = 'other';
-    try { failure = failureCode(request.failure()?.errorText); } catch { /* A broken accessor is 'other'. */ }
+    try { failure = requestFailureCode(request.failure()?.errorText); } catch { /* A broken accessor is 'other'. */ }
     try { resourceType = category(request.resourceType(), resourceTypes); } catch { /* Likewise. */ }
     add({ kind: 'requestfailed', resourceKind: resourceKind(request.url()), resourceType, failure, stage, ms: offset(now() - origin.mono) });
   });
@@ -200,7 +237,8 @@ export function observeHydration(page, { artifactPath, app, source, profile, con
   });
   page.once('close', dispose);
 
-  async function capture(error, failedStage) {
+  // `failed` is the clock reading taken when the gate rejected, before any diagnostic await.
+  async function capture(error, failedStage, failed) {
     let state;
     try {
       state = safeState(await bounded(() => page.evaluate(() => {
@@ -236,7 +274,7 @@ export function observeHydration(page, { artifactPath, app, source, profile, con
     } catch { state = { unavailable: true }; }
     // Only a goto's own error is read, and only for its net error code.
     let failure = null;
-    if (failedStage === 'goto') { try { failure = failureCode(error?.message); } catch { failure = 'other'; } }
+    if (failedStage === 'goto') { try { failure = gotoFailureCode(error?.message); } catch { failure = 'other'; } }
     let containers = [];
     const ownIds = new Set();
     try {
@@ -247,20 +285,19 @@ export function observeHydration(page, { artifactPath, app, source, profile, con
       }
     } catch { containers = []; }
     let docker = { unavailable: true };
-    if (typeof dockerEvents === 'function') {
+    if (typeof dockerEvents === 'function' && Number.isFinite(failed.wall)) {
       try {
         const text = await bounded(signal => dockerEvents({ since: (origin.wall - diagnosticLimits.dockerWindowMs) / 1000,
-          until: wall() / 1000, signal }), diagnosticLimits.dockerEventsMs);
-        docker = projectDockerEvents(text, origin.wall, ownIds);
+          until: failed.wall / 1000, signal }), diagnosticLimits.dockerEventsMs);
+        docker = projectDockerEvents(text, origin.wall, ownIds, failed.wall);
       } catch { docker = { unavailable: true }; }
     }
     const detail = { schema: 'compiled-alerts-hydration/v3',
       app: ['gin', 'drogon', 'topcoat', 'leptos'].includes(app) ? app : 'unknown',
       source: ['fixture', 'api'].includes(source) ? source : 'unknown',
       profile: ['defaults', 'matched'].includes(profile) ? profile : 'unknown',
-      container: typeof container === 'string' && container.length <= 96
-        && /^compiled-alerts-(?:gin|drogon|topcoat|leptos)-(?:fixture|api)-\d+$/.test(container) ? container : 'unknown',
-      navigationIndex, stage: failedStage, failure, navigation, errorClass: errorClass(error), state, events, dropped, containers, docker };
+      navigationIndex, stage: failedStage, failureMs: offset(failed.mono - origin.mono), failure, navigation,
+      errorClass: errorClass(error), state, events, dropped, containers, docker };
     let text = JSON.stringify(detail, null, 2) + '\n';
     // Also cap the complete encoding, including JSON escaping and pretty printing.
     while (Buffer.byteLength(text) > diagnosticLimits.artifactBytes && (events.length || docker.events?.length)) {
@@ -275,9 +312,11 @@ export function observeHydration(page, { artifactPath, app, source, profile, con
   }
 
   async function fail(error, failedStage) {
+    let failed;
+    try { failed = { mono: now(), wall: wall() }; } catch { failed = { mono: NaN, wall: NaN }; }
     stage = 'idle';
     try { dispose(); } catch { /* Original error wins even if the page is broken. */ }
-    try { await capture(error, failedStage); } catch { /* Diagnostics must never replace the gate's exception. */ }
+    try { await capture(error, failedStage, failed); } catch { /* Diagnostics must never replace the gate's exception. */ }
     throw error;
   }
 
