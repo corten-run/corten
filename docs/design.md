@@ -9035,30 +9035,59 @@ rules something out.
     8280. Its A/A on that request with the answer 10,005 seconds old did not resolve, so it
     records none.
 
-    How many placements. A plan declares K only once an A/A has sized it, for at most a 5% chance
-    that an A/A of a commit against itself fails one of its two readings, from the placement
-    medians of an A/A already read on the run's setup (each item a recorded spread must match,
-    above) and workload: the kit's `size.mjs` (tag `evidence/placement-sizing-1999`) gives that
-    chance at each K under the normal model, normal medians with a common median of zero at the
-    A/A's standard deviation, and under a smoothed resample of the A/A's own medians, each reading
-    centred on its median. If Shapiro-Wilk or Anderson-Darling rejects normality at 5%, the normal
-    model is not used; of the models left, the one that needs more placements sizes K. Both take
-    the medians as independent, alike over time and centred on zero, so an A/A whose medians drift
-    or depend on one another in the order they ran (lag-1 autocorrelation or Spearman's correlation
-    with run order at p < 0.05, its placements run in a seeded random order so that order is time),
-    or whose median's interval excludes zero, sizes no K. Where no A/A on the setup and workload
-    sizes K, the plan first reads a pilot: an A/A as this Choice reads one, under a plan of its own
-    declared before it, read only for the spread of its placement medians and never with a change's
-    comparison, whose turns and placements are no part of the run it sizes; it decides nothing
-    about a change, and the gated run reads its own A/A as before. A sized K is the least the plan
-    takes, not a promise: the run's own A/A decides what the run resolves, and one that does not
-    resolve does not pass. K = 30, the first two runs' size, is not one to take: on the normal
-    model it fails more than 5% at four of the five spreads worked out so far, in 18.1% and 20.8%
-    of draws at the first run's 1.44% and 1.48%, 55.5% at `old`'s 1.97% in the second run and
-    60.64% at the fourth run's 2.05%, and 4.6% only at `young`'s 1.17%. The fourth run's A/A, for
-    example, needs 69 placements for at most 5% by the smoothed resample, normality rejected,
-    where the normal model says 91: a size for `old` on that setup at that spread, not one for
-    another setup or workload.
+    How many placements. A plan declares each workload's K before the run, for at most a 5% chance
+    that an A/A of a commit against itself fails one of its two readings, sized from an eligible
+    A/A on the run's setup (each item a recorded spread must match, above), workload and R, the
+    last because R sets what a placement median is. An A/A is eligible when every placement its
+    plan declared was read with all R pairs; its placements ran in an order drawn from a seed its
+    plan declared and saved with its results, so that run order is time; and the diagnostics the
+    kit's `report.mjs` (tag `evidence/placement-sizing-1999`) prints for it do not reject what the
+    models below take: medians independent and alike over time (neither lag-1 autocorrelation nor
+    Spearman's correlation with run order at p < 0.05, each by permutation) and centred on zero
+    (zero inside the two-sided order-statistic interval of its K medians from the (K + 1 - j)-th
+    to the j-th smallest, j the gate's upper rank: the 42nd to the 59th of 100). Whether it
+    resolved +1% does not matter to sizing. The kit's `size.mjs` gives the chance at any K under
+    the normal model (normal medians with a common median of zero at the A/A's standard deviation)
+    and under a smoothed resample of the A/A's own medians, each reading centred on its median.
+    If Shapiro-Wilk or Anderson-Darling rejects normality at 5%, only the smoothed resample is
+    kept; otherwise both are. The K the plan declares is then checked at that K itself: under each
+    model kept, for each workload it covers, the chance is at most 5%. Neither a model's smallest
+    such K rounded up nor the largest of several workloads' smallest will do, since the bound is an
+    order statistic whose rank moves in steps, so a larger K can fail more often than a smaller
+    one: from the fourth run's medians below, as a model calculation with `size.mjs` (200,000
+    seeded draws each, not a run), the normal model fails in 4.5% at 91 (the 54th of 91) and 5.4%
+    at 92 (the 55th), and the smoothed resample in 5.0% at 69 and 6.1% at 70. A plan may instead
+    declare a separate K for each workload. The K must also admit the two lists of pads the
+    protocol asks for, 2K distinct multiples of 16 up to about 40,000 bytes whose q_i - p_i mod
+    4096 take K distinct values: no K over 256 does, since 16-byte steps take 256 values mod 4096,
+    and the kit's `pads.mjs` builds lists for K up to 254. A plan never takes a smaller K than the
+    models ask: if no K the pads allow meets the target, it declares none, the workload is not read
+    across placements on that setup at that R (a single-build reading the spread test leaves
+    inside then does not pass), and only a new eligible A/A, at another R or on another setup, can
+    size one.
+
+    Where no eligible A/A has been read on the setup, workload and R, none at all or none that
+    meets every condition above, the plan first reads a pilot: an A/A as this Choice reads one,
+    under a plan of its own declared before it, with the gated run's setup, workload and R, its
+    run order seeded and saved, and a K its plan chooses without sizing: 100, as the fourth run
+    took, unless the plan says why another of at least 30 that the pads allow serves. It is read
+    only for the spread of its placement medians and never with a change's comparison, and its
+    turns and placements are no part of the run it sizes; it decides nothing about a change, and
+    the gated run reads its own A/A as before. A pilot that does not resolve +1% still sizes K if
+    it is eligible, since it is not the gate's A/A. One that is not eligible sizes nothing, and
+    the plan may read another under a new plan, at a larger K or with what made it ineligible
+    changed; one whose models ask for more placements than the pads allow sizes none either, as
+    above. Until a pilot sizes K, the workload is not read across placements on that setup at
+    that R. A K sized this way is a model's estimate, not a promise: the run's own A/A decides
+    what the run resolves, and one that does not resolve does not pass. K = 30, the first two
+    runs' size, is not to be used by default: on the normal model it fails more than
+    5% at four of the five spreads worked out so far, in 18.1% and 20.8% of draws at the first
+    run's 1.44% and 1.48%, 55.5% at `old`'s 1.97% in the second run and 60.64% at the fourth run's
+    2.05%, and 4.6% only at `young`'s 1.17%, so a setup that spreads as `young` did may size 30
+    when an eligible A/A and every model kept agree. The fourth run's A/A, for example, gives an
+    estimated 69 placements for at most 5% by the smoothed resample, normality rejected, where
+    the normal model says 91; the run itself took the 100 its plan declared. That is a size for
+    `old` on that setup at that spread and R, not one for another setup or workload.
 
     What ships is one placement. A release binary is one draw of where the linker put the code, and
     the next change to anything before a function moves it again, so the placement a change lands in
@@ -9166,7 +9195,8 @@ rules something out.
     comparison chosen after the readings. Why one workload's medians spread further than
     another's was not separated: the placements its two lists of pads give, which an A/A is
     there to show, the answer's path, the clock's step and the 2 s wait after it, or chance.
-    What a spread of placement medians costs a run, on a model no run has tested: of 200,000
+    What a spread of placement medians costs a run, on a model no run had tested by then (the
+    fourth run, below, tested it on `old`, whose medians rejected normality): of 200,000
     seeded draws of K normal medians with a common median of zero, an A/A fails one of its two
     readings (at K = 30 the 20th smallest at or over +1%, or the 11th at or under -1%) in 55.5%
     at `old`'s 1.97%, in 4.6% at `young`'s 1.17% and in 18.1% and 20.8% at the first run's 1.44%
@@ -9188,11 +9218,12 @@ rules something out.
     one time in nine, as in this run, and the dearest or second dearest two in nine, as in the
     first. It met the Revisit-when on the unpadded build as it was first written;
     [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
-    asked what the pad itself changes, and the fourth run, below, did not reproduce it. The
-    Choice stands through it on this: the gate reads a
+    asks what the pad itself changes, which the fourth run, below, read in part without settling.
+    The Choice stands through it on this: the gate reads a
     change as the difference of two builds with one pad, so what a pad takes from both alike
-    leaves that reading where it was. That it is alike on a base and its head is not measured,
-    since both diagnostics read one side alone, and is now among the bets below. The four
+    leaves that reading where it was. That it is alike on a base and its head was not measured
+    by these two runs, since both diagnostics read one side alone, and is among the bets below;
+    the fourth run read both sides, without showing that a pad takes the same from each. The four
     comparisons' turns took 164 minutes and the diagnostic's 13 more. Two limits of this run: the
     clock library every server was started with, which a run preloads too if it is to match the
     spread recorded from it; and the logins for a line of status while it ran, about once a
@@ -9229,48 +9260,66 @@ rules something out.
     the 1,800 starts had its `Age` in 10,005 to 10,010. It resolves +1%: median of placement
     medians +0.18%, bound +0.38% (the 59th of 100); with the labels swapped -0.18%, bound +0.14%.
     Its placement medians ran from -3.98% to +13.10%, the next highest +3.89%, with a standard
-    deviation of 2.05% (1.96% with the labels swapped), 95% interval 1.80% to 2.38% (chi-square,
-    normal medians); the second run's 1.97% from 30 medians on the same CPU model is inside it
-    (two-sided F test p = 0.831), so that run's spread on `old` was not unusual for the setup. Its
-    plan declared it a measurement of the apparatus, not a spread to record, and this record enters
-    none, so `old` still has no recorded spread. The normal model does not fit these medians:
-    Shapiro-Wilk (W = 0.8340, p = 3.2e-9) and Anderson-Darling (A*2 = 1.673, p = 2.7e-4) reject
-    normality. Nothing showed dependence or drift in run order (lag-1 r1 = 0.061, permutation
-    p = 0.440; Spearman's rho with run order 0.089, p = 0.375), and a common median of zero is not
-    rejected (49 of 100 below zero, sign test p = 0.920; zero inside the interval -0.14% to +0.38%,
-    ranks 42 and 59, 91.14%). On the normal model at 2.05% the two-reading A/A fails in 60.64% of
-    draws at K = 30, 19.25% at K = 60 and 3.10% at K = 100, and needs 91 placements for at most
-    5%; resampling the 100 medians, smoothed, it fails in 0.95% at K = 100 and needs 69, which
-    sizes K by the rule above, normality being rejected. Eight pairs alone give a placement median
-    a standard deviation of about 1.69% (leave-one-out residuals rescaled, between 1.39% and
-    1.73%), where the normal formula gives 3.66%, which leaves about 1.17% of the 2.05% for
-    placement. The 30 pad pairs the two runs share did not carry their medians over (Spearman's rho
-    0.180, Pearson's r 0.098, one-sided permutation p = 0.169, on a base binary not byte-identical
-    to the second run's): noise, or a part of placement another host or build does not keep. What
-    sets one workload's spread wider than another's, that issue's third question, is still open:
-    the part that would have read one pad list against itself, to separate the pad lists'
-    placements from the rest, was cut for time before the run, and no run has stepped the clock
-    without the old answer's path.
+    deviation of 2.05% (1.96% with the labels swapped), descriptively close to the second run's
+    1.97% from 30 medians on the same CPU model. The kit printed two diagnostics beside them that
+    depend on a model: a 95% chi-square interval for the standard deviation, 1.80% to 2.38%, which
+    holds 1.97%, and a two-sided F test of the two variances, p = 0.831. Both take the medians as
+    normal, which these reject (below); the two runs share 30 pad pairs, so their medians are not
+    independent samples; and one CPU model does not make two hosts, or two base binaries that are
+    not byte-identical, interchangeable. So they are not calibrated evidence that the second run's
+    spread on `old` was usual for the setup. Its plan declared it a measurement of the apparatus,
+    not a spread to record, and this record enters none, so `old` still has no recorded spread.
+    The normal model does not fit these medians: Shapiro-Wilk (W = 0.8340, p = 3.2e-9) and
+    Anderson-Darling (A*2 = 1.673, p = 2.7e-4) reject normality. No test detected dependence or
+    drift in run order (lag-1 r1 = 0.061, permutation p = 0.440; Spearman's rho with run order
+    0.089, p = 0.375), and a common median of zero is not rejected (49 of 100 below zero, sign test
+    p = 0.920; zero inside the interval -0.14% to +0.38%, ranks 42 and 59, 91.14%). On the normal
+    model at 2.05% the two-reading A/A fails in 60.64% of draws at K = 30, 19.25% at K = 60 and
+    3.10% at K = 100, and needs an estimated 91 placements for at most 5%; resampling the 100
+    medians, smoothed, it fails in 0.95% at K = 100 and needs an estimated 69, the model the rule
+    above keeps, normality being rejected. From the spread of the pairs within each placement,
+    eight pairs alone are estimated to give a placement median a standard deviation of about 1.69%
+    (leave-one-out residuals rescaled, between 1.39% and 1.73%), where the normal formula gives
+    3.66%; if that part and placement's are independent and add in variance, about 1.17% of the
+    2.05% is left for placement. That is an estimate under the decomposition, not placement
+    isolated by a control: the part that would have read one pad list against itself was cut for
+    time before the run. Between the two runs' medians on their 30 shared pad pairs, Spearman's rho
+    is 0.180 and Pearson's r 0.098, one-sided permutation p = 0.169: the test did not detect a
+    pad pair's median carrying over, which does not show that none does, from 30 pairs, another
+    host and a base binary not byte-identical to the second run's. What sets one workload's spread
+    wider than another's, that issue's third question, is still open: that cut part was to
+    separate the pad lists' placements from the rest, and no run has stepped the clock without the
+    old answer's path.
 
     Its part C read four unpadded builds, each against padded builds at the first eight pad sizes,
     8 pairs each after one unrecorded: base's and head `8d02090bf`'s against their own, and two of
-    nearby commits, `92bc32678` and `705d14045`, against base's, whose user instructions a request
+    nearby commits, `92bc32678` and `705d14045`, against base's. Those two are not base's code:
+    each differs from it on `old`'s path in a small way, and their user instructions a request
     were -0.07% and +0.23% from base's padded builds, within the 0.5% the plan took as compiling
-    `old`'s path nearly as base. The padded builds' median offsets from their unpadded one, with
-    intervals of 92.97% coverage: base -0.56% (-1.13% to +1.90%, 5 of 8 cheaper, sign test
-    p = 0.727), `92bc32678` +0.86% (-0.82% to +1.32%, 3 of 8, p = 0.727), `705d14045` -0.59%
-    (-1.08% to +1.59%, 6 of 8, p = 0.289) and head -0.58% (-1.84% to -0.29%, 7 of 8, p = 0.070),
-    the one interval wholly below zero, for head's code against its own pads. Ranked among the
-    A/A's 200 padded placements of base's code, the three unpadded builds of base's code sit among
-    them: base at 46,096 cycles a request with 98 of 200 cheaper (one-sided p = 0.512), `92bc32678`
-    at 45,780 with 50 (p = 0.751) and `705d14045` at 46,551 with 159 (p = 0.209); head's 46,825
-    with 172 (p = 0.144) mixes its code with its placement; and the padded costs show no drift in
-    run order (Spearman's rho -0.067, p = 0.335). So with three more unpadded builds of base's
-    code, the first two runs' 15 of 16 does not reproduce: each sits among the padded placements,
-    not above them, and nothing here shows a pad moving cost as well as spreading it. Head's offset
-    less base's, pad by pad, is -0.38% (-2.90% to +0.55%; mean -0.93%, 90% t interval -2.17% to
-    +0.31%), zero inside: eight pads do not show a pad taking more from a change's head than from
-    its base, nor that it takes the same.
+    that path nearly as base, so they are near-base builds, not more builds of base. The padded
+    builds' median offsets from their unpadded one, with order-statistic intervals of 92.97%
+    nominal coverage: base -0.56% (-1.13% to +1.90%, 5 of 8 cheaper, sign test p = 0.727),
+    `92bc32678` +0.86% (-0.82% to +1.32%, 3 of 8, p = 0.727), `705d14045` -0.59% (-1.08% to
+    +1.59%, 6 of 8, p = 0.289) and head -0.58% (-1.84% to -0.29%, 7 of 8, p = 0.070). Ranked
+    among the A/A's 200 padded placements of base's code, base's unpadded build costs 46,096
+    cycles a request with 98 of 200 cheaper (one-sided p = 0.512), `92bc32678`'s 45,780 with 50
+    (p = 0.751) and `705d14045`'s 46,551 with 159 (p = 0.209); head's 46,825 with 172 (p = 0.144)
+    mixes its code with its layout, so says nothing of a pad on its own; and the padded costs show
+    no drift in run order (Spearman's rho -0.067, p = 0.335). So for one exact base build and two
+    near-base builds this run did not reproduce the earlier direction, padded builds under their
+    unpadded one: none of the three offsets' intervals excludes zero, and each unpadded build sits
+    among the 200 padded placements. Head against its own pads is the exception: 7 of 8 cheaper
+    and an interval wholly below zero. Head's offset less base's, pad by pad, is -0.38% (-2.90% to
+    +0.55%; mean -0.93%, 90% t interval -2.17% to +0.31%), zero inside, which establishes neither
+    that a pad takes more from a change's head than from its base nor that it takes the same. For
+    [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
+    this run adds three unpadded builds whose offsets do not repeat that direction, one (head's)
+    that does, and a first paired reading of head against base that is inconclusive. It leaves
+    open why the first two runs' unpadded builds sat above their padded ones; the controls that
+    issue asks for, the unpadded build against every placement of both lists, a pad of 16 bytes
+    first in `.text` and each pad last in `.text`, none of which ran (ranks against 200 padded
+    placements measured apart are not those paired controls); and whether any of it holds on a
+    workload with a recorded spread, which `old` is not. The issue stays open.
 
     Not chosen: a seeded shuffle of the function order (LLD's `--shuffle-sections`, this Choice's
     first version), since in that plan's container dry run seed 1 on main moved all 3,404
@@ -9304,7 +9353,8 @@ rules something out.
     counts their direction and not their size, so it turns away an A/A whose medians all lean a
     hair one way and passes one with a few large leans; and the A/A run again with its lists
     swapped, which measures the same pairs of binaries in the same alternating order and so adds
-    turns without adding a reading; a K fixed for every plan, such as the fourth run's 69 or 100,
+    turns without adding a reading; a K fixed for every plan, such as the 69 the fourth run's A/A
+    gives or the 100 it ran,
     since the K an A/A needs moves with the spread of its placement medians, which has differed by
     setup and workload (standard deviations of 0.96% to 2.05% so far); the normal model alone for
     sizing, since the fourth run's medians reject it; and a pilot read beside a change's comparison
@@ -9340,14 +9390,16 @@ rules something out.
     two functions' distance apart, which a pad keeps, can change too; an A/A that resolves under
     pads may understate a spread that comes from that; whatever a pad itself takes from a
     build's cycles, it takes from both sides of a comparison alike (the first two runs read padded
-    builds under their unpadded one in 15 of 16, against two unpadded builds; the fourth read three
-    more unpadded builds of base's code among their padded placements, and head's offset less
-    base's at -0.38%, zero inside an interval that eight pads leave wide); an A/A sized by the rule
-    above fails to resolve +1% no more often than it was sized for, which takes the medians of the
-    A/A it was sized from as independent and alike over time and the setup's spread as holding
-    from one run to the next
-    (the fourth run's 100 medians showed no drift or dependence, were not normal, and resolved at
-    the 100 its plan took); and a spread measured on one setup holds
+    builds under their unpadded one in 15 of 16, against two unpadded builds, each one side alone;
+    the fourth read one exact base and two near-base unpadded builds among their padded
+    placements and head's above its own, and head's offset less base's at -0.38%, zero inside an
+    interval that eight pads leave wide, which shows neither a difference nor its absence); an
+    A/A sized by the rule above fails to resolve +1% no more often than it was sized for, which
+    takes the medians of the A/A it was sized from as independent and alike over time and the
+    setup's spread as holding from one run to the next
+    (in the fourth run's 100 medians no test detected drift or dependence, normality was
+    rejected, and the A/A resolved at the 100 its plan took; no run has yet been read at a K the
+    rule gave); and a spread measured on one setup holds
     for another kernel or toolchain with the same CPU model, allocator and preloaded libraries,
     protocol and code); value
     (Fast, and proven fast: a touched
@@ -9370,10 +9422,11 @@ rules something out.
     take more from one side of a comparison than from the other, a base against its head or one
     list of pads against the other, so the difference of two padded builds is not the change's
     (this entry first named the unpadded build sitting clearly above or below its padded ones,
-    which the first two runs' diagnostics suggested and the fourth run's three unpadded builds of
-    base's code did not reproduce, above;
+    which the first two runs' diagnostics suggested and the fourth run's exact and two near-base
+    unpadded builds did not reproduce, though head's sat above its own pads, above;
     [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
-    asked it, and that run read head's offset less base's with zero inside, from eight pads);
+    asks it and stays open, its controls not run, and that run's head offset less base's, with
+    zero inside from eight pads, settles it neither way);
     rustc stops emitting a section per function or aligning functions to 16 bytes, the gate's
     linker is not LLD, or LLD stops placing an ordering file's sections first; a recorded spread
     is so wide that most single-build readings land inside it, so the protocol is the rule in
@@ -9403,7 +9456,11 @@ rules something out.
     the fourth run on a c-8 (base `14126d2a8` against itself, and unpadded builds of it, of head
     `8d02090bf`, of `92bc32678` and of `705d14045`, rustc 1.100.0 with LLD 23.1.5, Linux
     6.12.117, a Xeon Platinum 8280, tag `evidence/placement-sizing-1999`), with its sizing and
-    tests as the kit's `report.mjs` printed them from those results.
+    tests as the kit's `report.mjs` printed them from those results; 2026-11-24, the model
+    failure rates at K = 69, 70, 91 and 92 from that tag's `results/aa-old` at `912199b97`, by
+    `node size.mjs ../results/aa-old --K 69,70,91,92` in its `kit/` (200,000 draws, seed 1983),
+    and that its `pads.mjs` builds lists meeting the rule for every K from 5 to 254 and none from
+    255 to 400.
 
 ## Rules
 

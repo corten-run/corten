@@ -662,14 +662,20 @@ establish a general ranking.
       Choice works out, on a model of its own, that an A/A of 30 placements fails one of its two
       readings more often than not at the first figure and about one time in five at the first
       run's own. More placements narrow the bound wherever the spread comes from, and the plan
-      sizes K before the run as the Choice says: from an A/A already read on its setup and
-      workload, by the kit's sizing (the normal model, or a smoothed resample of that A/A's
-      medians when normality is rejected, whichever needs more placements), or, where none has
-      been read, from a pilot A/A read only for the spread of its placement medians, never with a
-      change's comparison, whose turns are no part of the gated run. The size is that setup and
-      workload's (the Choice's fourth run needed 69 placements on `old` at a standard deviation
-      of 2.05%, where the normal model said 91), not a constant, and the run's own A/A still
-      decides.
+      sizes each workload's K before the run as the Choice says: from an A/A already read on its
+      setup, workload and R that the Choice's checks find eligible, or, where there is none, from
+      a pilot A/A at a K its own plan declares, read only for the spread of its placement
+      medians, never with a change's comparison, whose turns are no part of the gated run. The
+      kit's sizing gives the chance that an A/A fails at each K under two models, the normal
+      model and a smoothed resample of the eligible A/A's medians: both are used when normality
+      is not rejected, the smoothed resample alone when it is. The K the plan declares must
+      itself meet 5% under each model used, for each workload it covers, and admit the pad lists
+      above; when no K the pads allow does, the plan declares none and does not read that
+      workload across placements, and it never takes a smaller K than the models ask. The size is
+      that setup, workload and R's, not a constant (the Choice's fourth run took 100 placements on
+      `old`, and its medians, at a standard deviation of 2.05%, give an estimated 69 by the
+      smoothed resample, where the normal model, which they reject, gives 91); K = 30 is not to be
+      used by default; and the run's own A/A still decides.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
