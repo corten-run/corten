@@ -8141,7 +8141,13 @@ rules something out.
     against 16,970.7 with glibc, 4.7 fewer (0.03%), and 15,385.0 against 15,381.0 with jemalloc,
     4.0 more (0.03%); a page made and kept took 30,879.3 against 30,881.4 with glibc, 2.1 fewer
     (0.01%), and 25,586.6 against 25,576.0 with jemalloc, 10.6 more (0.04%); every round within
-    2.5. Neither path claims a refresh or takes out a copy being made again.
+    2.5. Neither path claims a refresh or takes out a copy being made again. The fixes of the
+    fifth review (a copy's headers for its connection and its `Expires` removed as it is given for
+    a panic or a deadline, a refresh's retirement fenced by its deadline and shutdown, a claim
+    checked under the store's lock), `0a6fc7e28` against `1519eb092` with the same harness, image
+    and method: a kept page given again took 16,966.1 against 16,966.1 with glibc and 15,385.0
+    against 15,385.0 with jemalloc; a page made and kept took 30,878.5 against 30,878.1 with glibc,
+    0.4 more, and 25,579.9 against 25,582.9 with jemalloc, 3.0 fewer; every round within 8.7.
     What a write pays before the counts by path are made, under callgrind (valgrind 3.19.0,
     rustc 1.99.1, release with line tables, every feature) with the request-cost harness's
     write cases (`crates/corten/tests/router_cost.rs`: a `POST` sent in process as a form of
@@ -8745,7 +8751,8 @@ rules something out.
 
     Last checked: 2026-11-23 for what giving a page past its lifetime costs fresh hits and
     cacheable misses (not a page given stale or held, which no harness case asks for), the
-    callgrind rounds above at `9e3c19b34` against `b69072526`, at `668830bf3` against
+    callgrind rounds above at `0a6fc7e28` against `1519eb092`, at `9e3c19b34` against
+    `b69072526`, at `668830bf3` against
     `2f449f460`, at `9c203dcdd` and `14126d2a8`,
     and before the merge at `c08cf5aff`, `2cd19ea94` and
     `13fe3f987`; 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
