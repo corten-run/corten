@@ -137,7 +137,21 @@ export function readDockerEvents({ since, until, signal, command = 'docker', pre
   });
 }
 
-// Events after the cutoff (the failure) are excluded even if Docker returned them.
+// Whether the host-wide Docker event replay runs. It reads every container's and network's
+// lifecycle events on the daemon (keeping only type, action, time and the own bit), so it is
+// on only where the daemon belongs to this job: a GitHub-hosted runner, which is a fresh VM
+// per job (GitHub sets RUNNER_ENVIRONMENT=github-hosted), or when COMPILED_ALERTS_HOST_EVENTS=1.
+// COMPILED_ALERTS_HOST_EVENTS=0 turns it off; on a shared or self-hosted daemon it is off.
+export function hostEventsEnabled(env = process.env) {
+  if (env.COMPILED_ALERTS_HOST_EVENTS === '1') return true;
+  if (env.COMPILED_ALERTS_HOST_EVENTS === '0') return false;
+  return env.RUNNER_ENVIRONMENT === 'github-hosted';
+}
+
+// Events after the cutoff (the failure) are excluded even if Docker returned them. Docker keeps
+// only its most recent events (256 in current releases) before applying a query's filters, so
+// a replay is best effort even when nothing was dropped here: an empty or short list is not
+// evidence that nothing happened in the window, and `history: 'best-effort'` says so.
 export function projectDockerEvents(text, originWall, ownIds, untilWall = Infinity) {
   if (typeof text !== 'string') return { unavailable: true };
   const events = [];
@@ -155,7 +169,7 @@ export function projectDockerEvents(text, originWall, ownIds, untilWall = Infini
       ms: offset(wallMs - originWall), own: typeof container === 'string' && ownIds.has(container) });
     if (events.length > diagnosticLimits.dockerEvents) { events.shift(); dropped = Math.min(dropped + 1, 1e9); }
   }
-  return { events, dropped };
+  return { history: 'best-effort', events, dropped };
 }
 
 function safeState(raw) {
@@ -198,7 +212,9 @@ async function save(path, text, signal) {
 // check's own container starts and removals (timeline) and the host's Docker container and
 // network events (dockerEvents) on that clock, since Chromium aborts requests in flight with
 // ERR_NETWORK_CHANGED when the host's interfaces change. The Docker window ends at the failure
-// (failureMs), read when the gate rejects and before any diagnostic await.
+// (failureMs), read when the gate rejects and before any diagnostic await. Without dockerEvents
+// (the default off a GitHub-hosted runner, see hostEventsEnabled) the artifact's docker field is
+// { disabled: true }.
 export function observeHydration(page, { artifactPath, app, source, profile, write = save,
   log = summary => console.error(JSON.stringify(summary)), timeline, dockerEvents, now = () => performance.now(), wall = Date.now }) {
   let events = [], eventBytes = 2, dropped = 0, sequence = 0, navigation = null, navigationIndex = 1, stage = 'idle';
@@ -244,6 +260,24 @@ export function observeHydration(page, { artifactPath, app, source, profile, wri
 
   // `failed` is the clock reading taken when the gate rejected, before any diagnostic await.
   async function capture(error, failedStage, failed) {
+    let containers = [];
+    const ownIds = new Set();
+    try {
+      for (const entry of (Array.isArray(timeline?.entries) ? timeline.entries : []).slice(-diagnosticLimits.containers)) {
+        if (typeof entry?.id === 'string') ownIds.add(entry.id);
+        containers.push({ op: category(entry?.op, ['run', 'rm']), startMs: offset(entry?.start - origin.mono),
+          endMs: offset(entry?.end - origin.mono), ok: entry?.ok === true });
+      }
+    } catch { containers = []; }
+    // The replay's window is already closed at the failure, so it starts now and runs beside the
+    // snapshot under its own budget, rather than after it, while Docker still holds the events.
+    let replay = Promise.resolve({ disabled: true });
+    if (typeof dockerEvents === 'function') {
+      replay = Number.isFinite(failed.wall) ? bounded(signal => dockerEvents({ since: (origin.wall - diagnosticLimits.dockerWindowMs) / 1000,
+        until: failed.wall / 1000, signal }), diagnosticLimits.dockerEventsMs)
+        .then(text => projectDockerEvents(text, origin.wall, ownIds, failed.wall)).catch(() => ({ unavailable: true }))
+        : Promise.resolve({ unavailable: true });
+    }
     let state;
     try {
       state = safeState(await bounded(() => page.evaluate(() => {
@@ -280,23 +314,8 @@ export function observeHydration(page, { artifactPath, app, source, profile, wri
     // Only a goto's own error is read, and only for its net error code.
     let failure = null;
     if (failedStage === 'goto') { try { failure = gotoFailureCode(error?.message); } catch { failure = 'other'; } }
-    let containers = [];
-    const ownIds = new Set();
-    try {
-      for (const entry of (Array.isArray(timeline?.entries) ? timeline.entries : []).slice(-diagnosticLimits.containers)) {
-        if (typeof entry?.id === 'string') ownIds.add(entry.id);
-        containers.push({ op: category(entry?.op, ['run', 'rm']), startMs: offset(entry?.start - origin.mono),
-          endMs: offset(entry?.end - origin.mono), ok: entry?.ok === true });
-      }
-    } catch { containers = []; }
-    let docker = { unavailable: true };
-    if (typeof dockerEvents === 'function' && Number.isFinite(failed.wall)) {
-      try {
-        const text = await bounded(signal => dockerEvents({ since: (origin.wall - diagnosticLimits.dockerWindowMs) / 1000,
-          until: failed.wall / 1000, signal }), diagnosticLimits.dockerEventsMs);
-        docker = projectDockerEvents(text, origin.wall, ownIds, failed.wall);
-      } catch { docker = { unavailable: true }; }
-    }
+    let docker;
+    try { docker = await replay; } catch { docker = { unavailable: true }; }
     const detail = { schema: 'compiled-alerts-hydration/v3',
       app: ['gin', 'drogon', 'topcoat', 'leptos'].includes(app) ? app : 'unknown',
       source: ['fixture', 'api'].includes(source) ? source : 'unknown',

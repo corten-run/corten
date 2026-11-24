@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
-import { containerTimeline, diagnosticLimits, failureCodes, gotoFailureCode, hydrationArtifactPath, observeHydration,
+import { containerTimeline, diagnosticLimits, failureCodes, gotoFailureCode, hostEventsEnabled, hydrationArtifactPath, observeHydration,
   projectDockerEvents, readDockerEvents, requestFailureCode } from './hydration-diagnostics.mjs';
 
 class FakePage extends EventEmitter {
@@ -287,7 +287,7 @@ test('closed diagnostic schema discards all unknown fields and variable browser 
   assert.equal(detail.stage, 'readiness');
   assert.equal(detail.failure, null, 'a readiness timeout has no net error code');
   assert.deepEqual(detail.containers, []);
-  assert.deepEqual(detail.docker, { unavailable: true });
+  assert.deepEqual(detail.docker, { disabled: true }, 'no host event replay unless the caller enables it');
   assert.equal(detail.errorClass, 'TimeoutError');
   assert.deepEqual(detail.events, [
     { sequence: 1, kind: 'console', level: 'other' }, { sequence: 2, kind: 'pageerror', errorClass: 'unknown' },
@@ -343,9 +343,10 @@ test('checker observes before the original navigations and keeps both hydration 
   assert.equal(source.split(navigate).length - 1, 2, 'both navigations are observed only when JavaScript is enabled');
   assert.equal(source.match(/page\.goto\(/g)?.length, 4, 'the same goto, with no retry or added options');
   assert.equal(source.match(/if \(javaScriptEnabled\) await hydration\.wait\(\)/g)?.length, 2);
-  assert.ok(source.includes('hydration?.reset();\n        ' + navigate));
-  assert.match(source, /timeline, dockerEvents: readDockerEvents,/);
-  assert.match(source, /const docker = \(\.\.\.args\) => timeline\.record\(args, \(\) => \{/);
+  assert.ok(source.includes('hydration?.reset();\n          ' + navigate));
+  assert.match(source, /timeline, dockerEvents,/);
+  assert.match(source, /dockerEvents = hostEventsEnabled\(\) \? readDockerEvents : undefined,/);
+  assert.match(source, /const docker = \(args, options\) => timeline\.record\(args, \(\) => run\(args, options\)\);/);
 });
 
 const gotoMessage = 'page.goto: net::ERR_NETWORK_CHANGED at http://127.0.0.1:32774/marketplace/en-US/item_1\n'
@@ -499,7 +500,7 @@ test('docker events keep only type, allowlisted action, time and ownership', () 
     '{ not json', JSON.stringify({ Type: 'container', Action: 'start', secret: 'secret-object' }), '',
   ].join('\n');
   const projected = projectDockerEvents(text, origin, new Set([own]));
-  assert.deepEqual(projected, { dropped: 2, events: [
+  assert.deepEqual(projected, { history: 'best-effort', dropped: 2, events: [
     { type: 'container', action: 'start', ms: -2500, own: true },
     { type: 'network', action: 'connect', ms: -2499, own: true },
     { type: 'container', action: 'other', ms: -100, own: false },
@@ -517,6 +518,40 @@ test('docker events keep only type, allowlisted action, time and ownership', () 
   assert.deepEqual(projectDockerEvents(undefined, origin, new Set()), { unavailable: true });
 });
 
+test('a Docker replay is marked best effort even when it is empty and nothing was dropped', async () => {
+  // Docker keeps only its latest events before filtering, so an empty replay is not an empty window.
+  assert.deepEqual(projectDockerEvents('', 1_700_000_000_000, new Set()), { history: 'best-effort', events: [], dropped: 0 });
+  const page = new FakePage();
+  const { diagnostics, saved } = observer(page, { dockerEvents: async () => '' });
+  await assert.rejects(diagnostics.goto(async () => { throw new Error(gotoMessage); }));
+  assert.deepEqual(JSON.parse(saved[0]).docker, { history: 'best-effort', events: [], dropped: 0 });
+  const readme = await readFile(new URL('./README.md', import.meta.url), 'utf8');
+  assert.ok(readme.includes('`history: "best-effort"`') && readme.includes('latest 256'), 'the README documents the best-effort replay');
+});
+
+test('the Docker replay starts beside the snapshot, not after it', async () => {
+  const page = new FakePage();
+  let replayStarted;
+  const started = new Promise(resolve => { replayStarted = resolve; });
+  // This snapshot completes only once the replay has started. Run one after the other, it would
+  // wait out its budget and be recorded as unavailable.
+  page.evaluate = async () => { await started; return page.snapshot; };
+  const { diagnostics, saved } = observer(page, { dockerEvents: async () => { replayStarted(); return ''; } });
+  await assert.rejects(diagnostics.goto(async () => { throw new Error(gotoMessage); }));
+  const detail = JSON.parse(saved[0]);
+  assert.equal(detail.state.readyState, 'complete', 'the snapshot completed while the replay ran');
+  assert.deepEqual(detail.docker, { history: 'best-effort', events: [], dropped: 0 });
+});
+
+test('host-wide Docker events are opt-in: on for a GitHub-hosted runner or an explicit flag, off otherwise', () => {
+  assert.equal(hostEventsEnabled({}), false, 'a local or shared daemon');
+  assert.equal(hostEventsEnabled({ RUNNER_ENVIRONMENT: 'self-hosted' }), false);
+  assert.equal(hostEventsEnabled({ RUNNER_ENVIRONMENT: 'github-hosted' }), true);
+  assert.equal(hostEventsEnabled({ RUNNER_ENVIRONMENT: 'github-hosted', COMPILED_ALERTS_HOST_EVENTS: '0' }), false);
+  assert.equal(hostEventsEnabled({ COMPILED_ALERTS_HOST_EVENTS: '1' }), true);
+  assert.equal(hostEventsEnabled({ COMPILED_ALERTS_HOST_EVENTS: 'yes' }), false, 'only 1 opts in');
+});
+
 test('the artifact places own containers and host Docker events on the navigation clock', async () => {
   let clock = 5000;
   const timeline = containerTimeline(() => clock);
@@ -532,7 +567,7 @@ test('the artifact places own containers and host Docker events on the navigatio
   const detail = JSON.parse(saved[0]);
   assert.deepEqual(detail.containers, [{ op: 'run', startMs: -3000, endMs: -2400, ok: true }]);
   assert.equal(detail.failureMs, 0);
-  assert.deepEqual(detail.docker, { events: [{ type: 'network', action: 'connect', ms: -2990, own: true }], dropped: 0 });
+  assert.deepEqual(detail.docker, { history: 'best-effort', events: [{ type: 'network', action: 'connect', ms: -2990, own: true }], dropped: 0 });
   assert.equal(queries.length, 1);
   assert.equal(queries[0].since, (origin - diagnosticLimits.dockerWindowMs) / 1000);
   assert.equal(queries[0].until, origin / 1000);
@@ -604,24 +639,34 @@ test('the artifact keeps no container name, image, label, container ID or URL', 
 });
 
 // A stand-in docker executable: it ignores SIGTERM and holds stdout open until killed.
-// 'grandchild' also hands its stdout to a process that outlives it.
+// 'grandchild' also hands its stdout to a holder process (holder.mjs) that outlives it.
+// Arguments: mode, base (a per-attempt path prefix), holder script, then the docker arguments.
+// Every fixture process publishes its own PID as its first act (to BASE.docker.pid or
+// BASE.holder.pid, atomically) and exits once the test's BASE.stop file appears, or after 20 s
+// so a broken test cannot leak it for long. The test owns that stop file; no PID is signalled.
 const fakeDocker = `import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-const [mode, pidFile] = process.argv.slice(2);
+import { existsSync, renameSync, writeFileSync } from 'node:fs';
+const [mode, base, holder] = process.argv.slice(2);
 process.on('SIGTERM', () => {});
-const pids = [process.pid];
-if (mode === 'ok') { process.stdout.write(JSON.stringify(process.argv.slice(4)) + '\\n'); process.exit(0); }
-if (mode === 'grandchild') {
-  const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 8000)'], { stdio: ['ignore', 'inherit', 'ignore'] });
-  pids.push(holder.pid);
-}
-writeFileSync(pidFile, pids.join(' '));
+if (mode === 'ok') { process.stdout.write(JSON.stringify(process.argv.slice(5)) + '\\n'); process.exit(0); }
+writeFileSync(base + '.docker.pid.tmp', String(process.pid));
+renameSync(base + '.docker.pid.tmp', base + '.docker.pid');
+setInterval(() => { if (existsSync(base + '.stop')) process.exit(0); }, 25);
+setTimeout(() => process.exit(0), 20_000);
+// Detached, so on Windows it leaves libuv's kill-on-close job and outlives the reader's process there too.
+if (mode === 'grandchild') spawn(process.execPath, [holder, base], { stdio: ['ignore', 'inherit', 'ignore'], detached: true }).unref();
 if (mode === 'flood') {
   const chunk = 'x'.repeat(64 * 1024);
   const pump = () => { while (process.stdout.write(chunk)); process.stdout.once('drain', pump); };
   pump();
 } else process.stdout.write('["container","start","x",1]\\n');
-setInterval(() => {}, 1000);
+`;
+const holderScript = `import { existsSync, renameSync, writeFileSync } from 'node:fs';
+const [base] = process.argv.slice(2);
+writeFileSync(base + '.holder.pid.tmp', String(process.pid));
+renameSync(base + '.holder.pid.tmp', base + '.holder.pid');
+setInterval(() => { if (existsSync(base + '.stop')) process.exit(0); }, 25);
+setTimeout(() => process.exit(0), 20_000);
 `;
 
 // A killed but unreaped (zombie) process has exited; an orphan's reaper may not be this process.
@@ -629,59 +674,96 @@ const alive = pid => {
   try { process.kill(pid, 0); } catch (error) { return error.code === 'EPERM'; }
   try { return readFileSync(`/proc/${pid}/stat`, 'utf8').replace(/^.*\) /s, '')[0] !== 'Z'; } catch { return process.platform === 'win32'; }
 };
+const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+// Resolves with a promise's value, or rejects with `message` once `milliseconds` pass.
+const within = (promise, milliseconds, message) => {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), milliseconds); })])
+    .finally(() => clearTimeout(timer));
+};
 
-test('the Docker events reader kills a subprocess that ignores SIGTERM and settles, and its process exits', { timeout: 30_000 }, async () => {
+// The PIDs the attempt's fixture processes published, once all of `roles` have (the handshake).
+async function published(base, roles, milliseconds) {
+  const deadline = Date.now() + milliseconds;
+  for (;;) {
+    const pids = {};
+    for (const role of roles) {
+      try { pids[role] = Number(await readFile(`${base}.${role}.pid`, 'utf8')); } catch { /* Not yet. */ }
+    }
+    if (roles.every(role => Number.isInteger(pids[role]) && pids[role] > 0)) return pids;
+    if (Date.now() > deadline) throw new Error(`fixture processes did not publish their PIDs: ${roles.filter(role => !pids[role]).join(', ')}`);
+    await pause(25);
+  }
+}
+
+// The fixture's own teardown: the stop file every fixture process watches, then each published
+// process's exit, awaited under its own bound. Returns the PIDs still running at the bound.
+async function stopFixture(base, pids, milliseconds = 3000) {
+  await writeFile(`${base}.stop`, '');
+  const deadline = Date.now() + milliseconds;
+  while (pids.some(alive) && Date.now() < deadline) await pause(50);
+  return pids.filter(alive);
+}
+
+test('the Docker events reader kills a subprocess that ignores SIGTERM and settles, and its process exits', { timeout: 60_000 }, async () => {
   const folder = await mkdtemp(join(tmpdir(), 'fake-docker-'));
   try {
-    const fake = join(folder, 'docker.mjs');
+    const fake = join(folder, 'docker.mjs'), holder = join(folder, 'holder.mjs');
     await writeFile(fake, fakeDocker);
+    await writeFile(holder, holderScript);
     const module = new URL('./hydration-diagnostics.mjs', import.meta.url).href;
-    for (const [mode, limit] of [['hold', diagnosticLimits.dockerEventsMs + 500], ['grandchild', diagnosticLimits.dockerEventsMs + 500],
-      ['flood', diagnosticLimits.dockerEventsMs]]) {
-      const pidFile = join(folder, `${mode}.pid`);
+    // 'forced' is the grandchild fixture with the reader's process killed after the handshake,
+    // before the reader can kill anything: the fixture must still exit through its own teardown.
+    for (const [mode, limit, forced] of [['hold', diagnosticLimits.dockerEventsMs + 500], ['grandchild', diagnosticLimits.dockerEventsMs + 500],
+      ['flood', diagnosticLimits.dockerEventsMs], ['grandchild', diagnosticLimits.dockerEventsMs + 500, true]]) {
+      const name = forced ? 'forced' : mode, base = join(folder, name), roles = mode === 'grandchild' ? ['docker', 'holder'] : ['docker'];
       // The reader runs in its own Node process, so a handle it leaves behind would keep that process alive.
       const script = `const { readDockerEvents } = await import(${JSON.stringify(module)});
 const started = performance.now();
-try { await readDockerEvents({ since: 0, until: 1, command: process.execPath, prefix: ${JSON.stringify([fake, mode, pidFile])} });
+try { await readDockerEvents({ since: 0, until: 1, command: process.execPath, prefix: ${JSON.stringify([fake, mode, base, holder])} });
   console.log(JSON.stringify({ settled: 'resolved' }));
 } catch (error) { console.log(JSON.stringify({ settled: error.message, ms: performance.now() - started })); }`;
-      let runner;
+      const started = Date.now();
+      const runner = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'inherit'] });
+      let out = '';
+      runner.stdout.on('data', chunk => { out += chunk; });
+      // 'close' rather than 'exit', so the reader's final output has been read before it is parsed.
+      const closed = new Promise(resolve => runner.once('close', (code, signal) => resolve({ code, signal })));
+      let pids = {}, failure;
       try {
-        const started = Date.now();
-        runner = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'inherit'] });
-        let out = '';
-        runner.stdout.on('data', chunk => { out += chunk; });
-        // 'close' rather than 'exit', so the reader's final output has been read before it is parsed.
-        const code = await new Promise((resolve, reject) => {
-          const timer = setTimeout(() => { runner.kill('SIGKILL'); reject(new Error(`${mode}: the reader's process did not exit`)); }, limit + 4000);
-          runner.once('close', code => { clearTimeout(timer); resolve(code); });
-        });
+        pids = await published(base, roles, limit);
+        if (forced) runner.kill('SIGKILL');
+        const { code, signal } = await within(closed, limit + 4000, `${name}: the reader's process did not exit`);
         const exited = Date.now() - started;
-        assert.equal(code, 0);
-        const result = JSON.parse(out.trim());
-        const pids = (await readFile(pidFile, 'utf8')).split(' ').map(Number);
-        assert.notEqual(result.settled, 'resolved', `${mode}: a deadline or overflow is a failure`);
-        assert.ok(result.ms < limit, `${mode}: settled in ${Math.round(result.ms)} ms`);
-        assert.match(result.settled, mode === 'flood' ? /exceeded its cap/ : /deadline/);
-        // Node startup is outside the reader's budget; the process must exit promptly after it settles.
-        assert.ok(exited < limit + 3000, `${mode}: the reader's process exited after ${exited} ms`);
-        // Checked before this test's own teardown signals anything: the reader killed it.
-        const deadline = Date.now() + 3000;
-        while (alive(pids[0]) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
-        assert.equal(alive(pids[0]), false, `${mode}: the SIGTERM-ignoring docker process is killed`);
-      } finally {
-        // Whatever failed above, no fixture process (the stand-in docker or its holder) outlives the attempt.
-        if (runner && runner.exitCode === null && runner.signalCode === null) runner.kill('SIGKILL');
-        let pids = [];
-        try { pids = (await readFile(pidFile, 'utf8')).split(' ').map(Number).filter(pid => Number.isInteger(pid) && pid > 0); } catch { /* Never started. */ }
-        for (const pid of pids) { if (alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* Already exited. */ } } }
+        if (forced) assert.equal(signal, 'SIGKILL', `${name}: the reader's process was killed before it settled`);
+        else {
+          assert.equal(code, 0);
+          const result = JSON.parse(out.trim());
+          assert.notEqual(result.settled, 'resolved', `${name}: a deadline or overflow is a failure`);
+          assert.ok(result.ms < limit, `${name}: settled in ${Math.round(result.ms)} ms`);
+          assert.match(result.settled, mode === 'flood' ? /exceeded its cap/ : /deadline/);
+          // Node startup is outside the reader's budget; the process must exit promptly after it settles.
+          assert.ok(exited < limit + 3000, `${name}: the reader's process exited after ${exited} ms`);
+          // Checked before the fixture's own teardown: the reader killed it.
+          const deadline = Date.now() + 3000;
+          while (alive(pids.docker) && Date.now() < deadline) await pause(50);
+          assert.equal(alive(pids.docker), false, `${name}: the SIGTERM-ignoring docker process is killed`);
+        }
+      } catch (error) { failure = error; } finally {
+        // A reader process still running after a failure above is killed, and its exit awaited.
+        if (runner.exitCode === null && runner.signalCode === null) runner.kill('SIGKILL');
+        try { await within(closed, 5000, `${name}: the reader's process did not exit after SIGKILL`); } catch (error) { failure ??= error; }
       }
+      // Whatever happened above, every fixture process this attempt published exits through the
+      // fixture's own teardown within its bound.
+      const survivors = await stopFixture(base, Object.values(pids));
+      if (failure) throw failure;
+      assert.deepEqual(survivors, [], `${name}: fixture processes still running after teardown`);
     }
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
 });
-
 // A child whose stdout pipe fails; the child itself never closes or emits an error on its own.
 function brokenPipeChild(signals) {
   const child = new EventEmitter();
@@ -714,7 +796,7 @@ test('the Docker events reader returns a complete query and asks for no network 
   try {
     const fake = join(folder, 'docker.mjs');
     await writeFile(fake, fakeDocker);
-    const text = await readDockerEvents({ since: 1.5, until: 2.25, command: process.execPath, prefix: [fake, 'ok', join(folder, 'ok.pid')] });
+    const text = await readDockerEvents({ since: 1.5, until: 2.25, command: process.execPath, prefix: [fake, 'ok', join(folder, 'ok'), join(folder, 'holder.mjs')] });
     const args = JSON.parse(text);
     assert.deepEqual(args.slice(0, 5), ['events', '--since', '1.500', '--until', '2.250']);
     const format = args[args.indexOf('--format') + 1];
@@ -722,7 +804,7 @@ test('the Docker events reader returns a complete query and asks for no network 
       + '{{else}}{{json .Actor.ID}}{{end}},{{json .TimeNano}}]');
     assert.deepEqual(args.filter((arg, i) => args[i - 1] === '--filter' && arg.startsWith('type=')), ['type=container', 'type=network']);
     const aborted = new AbortController(); aborted.abort();
-    await assert.rejects(readDockerEvents({ since: 0, until: 1, signal: aborted.signal, command: process.execPath, prefix: [fake, 'hold', join(folder, 'x.pid')] }),
+    await assert.rejects(readDockerEvents({ since: 0, until: 1, signal: aborted.signal, command: process.execPath, prefix: [fake, 'hold', join(folder, 'x'), join(folder, 'holder.mjs')] }),
       /aborted/);
   } finally { await rm(folder, { recursive: true, force: true }); }
 });

@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
-import { cleanUp, closeServer, containerBase, recordedFirst, reportCleanupFailure, startupFailure, writeFixtures } from './compiled-check.mjs';
+import { inspect } from 'node:util';
+import { attemptKey, CleanupError, cleanUp, cleanupCodes, closeServer, containerBase, DockerCommandError, dockerCommand, ownedContainers,
+  ownerKey, recordedFirst, reportCleanupFailure, startupFailure, writeFixtures } from './compiled-check.mjs';
+import { checkAlerts } from './check-alerts.mjs';
 import { observeHydration, readDockerEvents } from './hydration-diagnostics.mjs';
 import './hydration-diagnostics.test.mjs';
 
@@ -92,11 +96,12 @@ test('a cleanup failure after an otherwise passing check fails it', async () => 
   await assert.rejects(checker({ body: async () => { ran.push('body'); },
     caseSteps: [['context', () => { ran.push('context'); throw closeFailure; }], ['other', () => { ran.push('other'); }]],
     checkSteps: [['browser', () => { ran.push('browser'); }]], report: () => assert.fail('nothing to report beside a passing check') }),
-  error => error === closeFailure);
+  error => error instanceof CleanupError && error.cause === undefined
+    && assert.deepEqual(error.failures, [{ step: 'context', errorClass: 'Error', code: 'none' }]) === undefined);
   assert.deepEqual(ran, ['body', 'context', 'other', 'browser']);
-  const first = new Error('browser.close failed'), second = new Error('docker rm failed');
+  const first = new Error('browser.close failed'), second = new DockerCommandError('rm', 'ERR_DOCKER_EXIT', 1);
   await assert.rejects(checker({ body: async () => {}, caseSteps: [], checkSteps: [['browser', () => { throw first; }], ['rm', () => { throw second; }]] }),
-    error => error instanceof AggregateError && error.errors[0] === first && error.errors[1] === second);
+    error => error instanceof CleanupError && error.message === 'cleanup failed: step=browser class=Error code=none; step=rm class=DockerCommandError code=ERR_DOCKER_EXIT');
   const passed = [];
   await checker({ body: async () => {}, caseSteps: [['case', () => passed.push('case')]], checkSteps: [['check', () => passed.push('check')]] });
   assert.deepEqual(passed, ['case', 'check']);
@@ -114,14 +119,227 @@ test('the default cleanup report prints a fixed step, an allowlisted class and c
   reportCleanupFailure(Object.assign(new Error(`x ${id}`), { name: `Evil\r${id}`, code: `ERR_X\r${id}` }), `step\r${id}`);
   reportCleanupFailure({ get name() { throw new Error('broken'); }, get code() { throw new Error('broken'); } }, 'browser.close');
   reportCleanupFailure('plain string host-canary', undefined);
+  // A code with the right shape that is not on the list is not printed either.
+  reportCleanupFailure(Object.assign(new Error('x'), { code: 'ERR_HOST_CANARY_TOKEN' }), 'browser.close');
+  reportCleanupFailure(new CleanupError([{ step: 'container.rm', errorClass: 'DockerCommandError', code: 'ERR_DOCKER_EXIT' },
+    { step: 'fixtures.rm', errorClass: 'Error', code: 'EBUSY' }]), 'cleanup');
   assert.deepEqual(lines, [
     'cleanup also failed after the check failed: step=container.rm class=AssertionError code=ERR_ASSERTION',
     'cleanup also failed after the check failed: step=upstream.close class=Error code=ERR_SERVER_NOT_RUNNING',
+    'cleanup also failed after the check failed: step=unknown class=unknown code=other',
+    'cleanup also failed after the check failed: step=browser.close class=unknown code=other',
     'cleanup also failed after the check failed: step=unknown class=unknown code=none',
-    'cleanup also failed after the check failed: step=browser.close class=unknown code=none',
-    'cleanup also failed after the check failed: step=unknown class=unknown code=none',
+    'cleanup also failed after the check failed: step=browser.close class=Error code=other',
+    'cleanup also failed after the check failed: step=container.rm class=DockerCommandError code=ERR_DOCKER_EXIT',
+    'cleanup also failed after the check failed: step=fixtures.rm class=Error code=EBUSY',
   ]);
-  for (const line of lines) assert.doesNotMatch(line, /[\u0000-\u001f\u007f]|host-canary|daemon|a{64}/);
+  for (const line of lines) assert.doesNotMatch(line, /[\u0000-\u001f\u007f]|host-canary|HOST_CANARY|daemon|a{64}/);
+  // The list is literal: every entry is printed as written and nothing else is.
+  assert.ok(cleanupCodes.every(code => /^[A-Z][A-Z0-9_]+$/.test(code)));
+  assert.ok(!cleanupCodes.includes('ERR_HOST_CANARY_TOKEN'));
+});
+
+// A stand-in docker client: 'fail' writes Docker-like stderr with a canary and exits 3, 'ok'
+// prints its arguments, 'hang' never answers.
+const dockerClient = `const [mode, ...args] = process.argv.slice(2);
+if (mode === 'fail') { process.stderr.write('Error response from daemon: stderr-canary ' + 'a'.repeat(64) + '\\n'); process.exit(3); }
+if (mode === 'ok') { process.stdout.write('  ' + args.join(' ') + '\\n'); process.stderr.write('log-err'); process.exit(0); }
+setTimeout(() => {}, 30_000);
+`;
+
+test('a failed Docker command names its subcommand and status, never Docker\'s stderr', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'docker-client-'));
+  try {
+    const client = join(folder, 'docker.mjs');
+    await writeFile(client, dockerClient);
+    const run = (mode, args, options = {}) => dockerCommand(args, { command: process.execPath, prefix: [client, mode], ...options });
+    assert.equal(run('ok', ['ps', '-a']), 'ps -a');
+    assert.equal(run('ok', ['logs', 'x'], { combined: true }), 'logs x\nlog-err');
+    let failure;
+    try { run('fail', ['rm', '-f', '-v', 'x']); } catch (error) { failure = error; }
+    assert.ok(failure instanceof DockerCommandError);
+    assert.equal(failure.message, 'docker rm: exit 3');
+    assert.deepEqual([failure.code, failure.status, failure.sent, failure.cause], ['ERR_DOCKER_EXIT', 3, true, undefined]);
+    assert.doesNotMatch(inspect(failure) + failure.stack, /stderr-canary|daemon|a{64}/);
+    assert.throws(() => run('hang', ['ps'], { timeout: 300 }), error => error.code === 'ERR_DOCKER_TIMEOUT' && error.sent === true
+      && error.message === 'docker ps: timed out');
+    assert.throws(() => dockerCommand(['ps'], { command: join(folder, 'missing-docker') }),
+      error => error.code === 'ENOENT' && error.sent === false && error.message === 'docker ps: not found');
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
+
+test('a cleanup failure after a passing check reaches Node\'s uncaught output without any error text', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'cleanup-uncaught-'));
+  try {
+    const client = join(folder, 'docker.mjs');
+    await writeFile(client, dockerClient);
+    const module = new URL('./compiled-check.mjs', import.meta.url).href;
+    // The check passed; both cleanup steps fail with Docker's stderr, or a message, carrying a canary.
+    const script = `const { cleanUp, dockerCommand } = await import(${JSON.stringify(module)});
+await cleanUp({ failed: false }, [
+  ['container.rm', () => dockerCommand(['rm', '-f', '-v', 'x'], { command: process.execPath, prefix: [${JSON.stringify(client)}, 'fail'] })],
+  ['browser.close', () => { throw Object.assign(new Error('Target closed: message-canary'), { code: 'ERR_MESSAGE_CANARY' }); }],
+]);`;
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 20_000 });
+    assert.equal(child.status, 1, child.error?.message);
+    assert.match(child.stderr, /CleanupError: cleanup failed: step=container\.rm class=DockerCommandError code=ERR_DOCKER_EXIT; step=browser\.close class=Error code=other/);
+    assert.doesNotMatch(child.stderr + child.stdout, /canary|CANARY|daemon|a{64}|Target closed/);
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
+
+// An in-memory Docker daemon for the owned-container helper and the driver: containers by ID
+// with a name and labels, the `run`, `ps`, `container inspect`, `logs` and `rm` shapes those
+// use, and every call recorded. `runFails` makes a run fail ('before-create' or 'after-create',
+// like a start failure after the daemon made the container); `rmFails` fails that many removals.
+function fakeDaemon({ runFails, rmFails = 0 } = {}) {
+  const containers = new Map(), calls = [];
+  let next = 0;
+  const exit = (op, status = 1) => { throw new DockerCommandError(op, 'ERR_DOCKER_EXIT', status); };
+  const add = (name, labels = {}, id = (++next).toString(16).padStart(64, '0')) => { containers.set(id, { name, labels }); return id; };
+  const docker = args => {
+    calls.push(args);
+    const [op] = args;
+    if (op === 'run') {
+      const name = args[args.indexOf('--name') + 1], labels = {};
+      args.forEach((arg, i) => { if (arg === '--label') { const at = args[i + 1].indexOf('='); labels[args[i + 1].slice(0, at)] = args[i + 1].slice(at + 1); } });
+      if ([...containers.values()].some(container => container.name === name)) exit('run', 125);
+      if (runFails === 'before-create') exit('run', 125);
+      const id = add(name, labels);
+      if (runFails === 'after-create') exit('run', 125);
+      return id;
+    }
+    if (op === 'ps') {
+      const filter = args[args.indexOf('--filter') + 1];
+      if (filter.startsWith('id=')) return containers.has(filter.slice(3)) ? filter.slice(3) : '';
+      const [key, value] = [filter.slice(6, filter.indexOf('=', 6)), filter.slice(filter.indexOf('=', 6) + 1)];
+      return [...containers].filter(([, container]) => container.labels[key] === value).map(([id]) => id).join('\n');
+    }
+    if (op === 'container' && args[1] === 'inspect') {
+      const container = containers.get(args[2]) ?? exit('container', 1);
+      return JSON.stringify([{ Id: args[2], Name: `/${container.name}`, Config: { Labels: container.labels },
+        State: { Running: true }, NetworkSettings: { Ports: { '8080/tcp': [{ HostPort: '18080' }] } } }]);
+    }
+    if (op === 'logs') return containers.has(args[1]) ? 'app log' : exit('logs', 1);
+    if (op === 'rm') {
+      const id = args.at(-1);
+      if (rmFails > 0) { rmFails--; exit('rm', 1); }
+      if (!containers.delete(id)) exit('rm', 1);
+      return id;
+    }
+    throw new Error(`unexpected docker ${args.join(' ')}`);
+  };
+  return { docker, calls, containers, add };
+}
+// A clock the reconciliation window runs on, advanced by each wait.
+const fakeClock = () => {
+  let clock = 0;
+  return { now: () => clock, wait: async milliseconds => { clock += milliseconds; } };
+};
+const ops = calls => calls.map(args => (args[0] === 'container' ? args.slice(0, 2) : args.slice(0, 1)).join(' '));
+
+test('caller labels in the owner namespace are refused before any Docker command; ordinary labels are kept', () => {
+  for (const labels of [[`${ownerKey}=x`], [`${attemptKey}=x`], [`${ownerKey}.other=x`], ['not a label'], ['a=b c']]) {
+    const daemon = fakeDaemon();
+    assert.throws(() => ownedContainers({ docker: daemon.docker, runId: 'run-1', labels }), assert.AssertionError);
+    assert.deepEqual(daemon.calls, [], `${labels}: no Docker command`);
+  }
+  const daemon = fakeDaemon();
+  const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1', labels: ['agent.owner=codex', `${ownerKey}-other=x`] });
+  assert.throws(() => owned.run(['--label', `${ownerKey}=other`, 'image'], 'n'), /labels go through the labels option/);
+  assert.deepEqual(daemon.calls, []);
+  const id = owned.run(['image'], 'compiled-alerts-test');
+  assert.deepEqual(daemon.containers.get(id).labels, { 'agent.owner': 'codex', [`${ownerKey}-other`]: 'x', [ownerKey]: 'run-1', [attemptKey]: 'run-1-1' });
+});
+
+test('a name collision never inspects or removes the container that holds the name', async () => {
+  const daemon = fakeDaemon(), clock = fakeClock();
+  const foreign = daemon.add('compiled-alerts-gin-fixture', { 'agent.owner': 'someone-else' }, 'f'.repeat(64));
+  const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1', window: 1000, ...clock });
+  assert.throws(() => owned.run(['image'], 'compiled-alerts-gin-fixture'), error => error.code === 'ERR_DOCKER_EXIT' && error.status === 125);
+  const record = await owned.teardown();
+  assert.equal(record.complete, false, 'an unacknowledged create is reported, not assumed absent');
+  assert.equal(record.unacknowledged[0].outcome, 'unconfirmed');
+  assert.deepEqual(record.failures.at(-1).code, 'ERR_CLEANUP_UNCONFIRMED');
+  assert.ok(daemon.containers.has(foreign), 'the foreign container is untouched');
+  assert.deepEqual([...new Set(ops(daemon.calls))], ['run', 'ps'], 'no inspect, log read or removal');
+  assert.equal(daemon.calls.filter(args => args.includes('compiled-alerts-gin-fixture')).length, 1, 'the name is only ever passed to run');
+});
+
+test('a name reused after removal is never removed by name, and an ID that lost its owner label is refused', async () => {
+  const daemon = fakeDaemon();
+  const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1' });
+  const id = owned.run(['image'], 'compiled-alerts-gin-fixture');
+  // Someone else removes it and starts a container under the same name.
+  daemon.containers.delete(id);
+  const foreign = daemon.add('compiled-alerts-gin-fixture', {}, 'e'.repeat(64));
+  owned.remove(id);
+  const record = await owned.teardown();
+  assert.equal(record.complete, true);
+  assert.deepEqual(record.removed, [id]);
+  assert.ok(daemon.containers.has(foreign));
+  assert.equal(daemon.calls.filter(args => args[0] === 'rm').length, 0, 'nothing was removed');
+  assert.equal(daemon.calls.filter(args => args.includes('compiled-alerts-gin-fixture')).length, 1);
+  // An ID whose owner label is not this run's is never removed, and teardown says so.
+  const other = fakeDaemon();
+  const second = ownedContainers({ docker: other.docker, runId: 'run-2' });
+  const relabelled = second.run(['image'], 'n');
+  other.containers.get(relabelled).labels[ownerKey] = 'someone-else';
+  assert.throws(() => second.inspect(relabelled), /refusing unowned container/);
+  assert.throws(() => second.remove(relabelled), /refusing unowned container/);
+  const incomplete = await second.teardown();
+  assert.equal(incomplete.complete, false);
+  assert.ok(other.containers.has(relabelled));
+  assert.equal(other.calls.filter(args => args[0] === 'rm').length, 0);
+});
+
+test('a run that failed after the daemon made its container is found by its attempt label and removed by ID', async () => {
+  const daemon = fakeDaemon({ runFails: 'after-create' }), clock = fakeClock();
+  const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1', window: 1000, ...clock });
+  assert.throws(() => owned.run(['image'], 'n'), error => error.code === 'ERR_DOCKER_EXIT');
+  const record = await owned.teardown();
+  assert.equal(record.complete, true);
+  assert.equal(record.unacknowledged[0].outcome, 'removed');
+  assert.equal(daemon.containers.size, 0);
+  const [rmCall] = daemon.calls.filter(args => args[0] === 'rm');
+  assert.match(rmCall.at(-1), /^[0-9a-f]{64}$/, 'removed by its ID');
+});
+
+// Browser, context and page stand-ins for the driver's money pass: each confirmation names no
+// email, so every paired check records a money regression.
+function moneyBrowser() {
+  const page = { setContent: async () => {}, locator: () => ({ innerText: async () => 'Alert saved' }) };
+  const context = { newPage: async () => page, close: async () => {},
+    request: { post: async () => ({ status: () => 200, text: async () => '<p class="marketplace__message">Alert saved</p>' }),
+      get: async () => ({ status: () => 200, text: async () => '[]' }) } };
+  return { launch: async () => ({ newContext: async () => context, close: async () => {} }) };
+}
+const driver = (daemon, reports, overrides = {}) => checkAlerts({ app: 'gin', image: 'cb-catalog-gin', focus: 'money', docker: daemon.docker,
+  browserType: moneyBrowser(), fetch: async () => ({ ok: true }), runId: 'compiled-alerts-test', dockerEvents: undefined,
+  report: (error, step) => reports.push([step, error]), log: () => {}, window: 1000, ...fakeClock(), ...overrides });
+
+test('the driver throws recorded money regressions ahead of a failed removal between sources', async () => {
+  const daemon = fakeDaemon({ rmFails: 1 }), reports = [];
+  await assert.rejects(driver(daemon, reports), error => error instanceof assert.AssertionError
+    && error.message.includes('native money confirmation/readback regressions') && error.message.includes('gin fixture en-US 1.005'));
+  // The failed removal was classified as a cleanup failure and reported; teardown removed the container.
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0][0], 'cleanup');
+  assert.deepEqual(reports[0][1].failures, [{ step: 'container.rm', errorClass: 'DockerCommandError', code: 'ERR_DOCKER_EXIT' }]);
+  const removals = daemon.calls.filter(args => args[0] === 'rm');
+  assert.equal(removals.length, 2, 'the between-source removal failed, the teardown removal succeeded');
+  assert.equal(removals[0].at(-1), removals[1].at(-1));
+  assert.equal(daemon.containers.size, 0);
+  assert.equal(daemon.calls.filter(args => args[0] === 'run').length, 1, 'the api source did not start');
+});
+
+test('the driver never touches a container that already holds its name', async t => {
+  t.mock.method(console, 'error', () => {});
+  const daemon = fakeDaemon(), reports = [];
+  const foreign = daemon.add('compiled-alerts-test-gin-fixture', {}, 'f'.repeat(64));
+  await assert.rejects(driver(daemon, reports), error => error instanceof DockerCommandError && error.status === 125);
+  assert.ok(daemon.containers.has(foreign));
+  assert.deepEqual([...new Set(ops(daemon.calls))], ['run', 'ps'], 'no inspect, log read or removal');
+  assert.deepEqual(reports.map(([step, error]) => [step, error.code]), [['container.teardown', 'ERR_CLEANUP_UNCONFIRMED']]);
 });
 
 test('the upstream close adapter fails a passing check and is reported after a failed one', async () => {
@@ -132,7 +350,8 @@ test('the upstream close adapter fails a passing check and is reported after a f
   assert.equal(server.listening, false);
   // A second close reports ERR_SERVER_NOT_RUNNING to its callback, which now rejects.
   await assert.rejects(checker({ body: async () => {}, caseSteps: [], checkSteps: [['upstream.close', () => closeServer(server)]],
-    report: () => assert.fail('nothing to report beside a passing check') }), error => error.code === 'ERR_SERVER_NOT_RUNNING');
+    report: () => assert.fail('nothing to report beside a passing check') }),
+  error => error instanceof CleanupError && error.failures[0].step === 'upstream.close' && error.failures[0].code === 'ERR_SERVER_NOT_RUNNING');
   const gate = new Error('page.goto: net::ERR_NETWORK_CHANGED');
   const reports = [];
   await assert.rejects(checker({ body: () => { throw gate; }, caseSteps: [], checkSteps: [['upstream.close', () => closeServer(server)]],
@@ -176,10 +395,12 @@ test('recorded regressions outrank a cleanup failure that ends the check before 
     recorded, report: (error, step) => reports.push([step, error]) }),
   error => error instanceof assert.AssertionError && error.message.includes('recorded regressions')
     && error.message.includes('accepted price must confirm its email'));
-  assert.deepEqual(reports, [['money-context.close', closeFailure]], 'the cleanup failure is reported, not lost');
+  assert.equal(reports.length, 1, 'the cleanup failure is reported, not lost');
+  assert.equal(reports[0][0], 'cleanup');
+  assert.deepEqual(reports[0][1].failures, [{ step: 'money-context.close', errorClass: 'Error', code: 'other' }]);
   // The cleanup failure stays primary when nothing was recorded.
   await assert.rejects(checker({ body: async () => {}, caseSteps: [['money-context.close', () => { throw closeFailure; }]], checkSteps: [],
-    report: () => assert.fail('nothing else failed') }), error => error === closeFailure);
+    report: () => assert.fail('nothing else failed') }), error => error instanceof CleanupError && error.failures[0].step === 'money-context.close');
   // A gate's own error is not a cleanup failure and stays the identical object thrown.
   const gate = new Error('page.waitForFunction: Timeout 30000ms exceeded.');
   await assert.rejects(checker({ body: () => { throw gate; }, caseSteps: [], checkSteps: [], recorded,
@@ -189,10 +410,17 @@ test('recorded regressions outrank a cleanup failure that ends the check before 
     error => error instanceof assert.AssertionError && error.message.includes('recorded regressions'));
 });
 
-test('the checker routes every cleanup through cleanUp', async () => {
+test('the checker routes every cleanup through cleanUp and surfaces recorded money regressions first', async () => {
   const source = await readFile(new URL('./check-alerts.mjs', import.meta.url), 'utf8');
   assert.equal(source.match(/finally \{/g)?.length, 3);
-  assert.equal(source.match(/\} catch \(error\) \{ \w*[oO]utcome\.failed = true; throw (?:error|recordedFirst\(error, moneyFailures, moneyMessage\)); \} finally \{\s*await cleanUp\(\w*[oO]utcome, \[\s*\['[a-z.-]+', /g)?.length, 3);
+  // The money context and each JS case rethrow their own error and clean up with named steps.
+  assert.equal(source.match(/\} catch \(error\) \{ (moneyOutcome|caseOutcome)\.failed = true; throw error; \} finally \{\s*await cleanUp\(\1, \[\s*\['[a-z.-]+', /g)?.length, 2);
+  // The outer catch rethrows through recordedFirst, so recorded money regressions outrank a cleanup failure.
+  assert.equal(source.match(/\} catch \(error\) \{ outcome\.failed = true; throw recordedFirst\(error, moneyFailures, moneyMessage, report\); \} finally \{\s*await cleanUp\(outcome, \[\s*\['browser\.close', /g)?.length, 1);
+  assert.doesNotMatch(source, /throw error; \} finally \{\s*await cleanUp\(outcome,/);
+  // The removal between sources is a cleanup step too; no container is removed or read by name.
+  assert.match(source, /await cleanUp\(\{ failed: false \}, \[\['container\.rm', \(\) => owned\.remove\(id\)\]\], report\);/);
+  assert.doesNotMatch(source, /docker\('rm'|\['rm',|docker\('inspect'|docker\('logs'/);
   assert.match(source, /\['upstream\.close', \(\) => closeServer\(upstream\)\]/);
   assert.doesNotMatch(source, /upstream\.close\(resolve\)/);
 });

@@ -95,7 +95,15 @@ node bench/fullstack/apps/gin/check-alerts.mjs gin IMAGE matched
 ```
 
 It starts and removes its own resource-limited containers and synthetic fixture/API
-source. JS and no-JS contexts use their own browser cookie jars for real readback,
+source. Each container carries a per-run owner label
+(`run.corten.fullstack.compiled-alerts=RUN`) and its create's own attempt label, and is
+known only by the 64-hex ID `docker run -d` returned: every inspect, log read and removal
+goes through that ID after confirming the owner label, never through the container's name,
+so a name collision or a reused name cannot make it touch another container. A `run` that
+returned no ID is looked for by its attempt label for 10 s at teardown and removed by
+confirmed ID if found; otherwise its cleanup is reported unconfirmed rather than guessed.
+Labels from the caller cannot use the owner key or its namespace. Every Docker command has a
+deadline. JS and no-JS contexts use their own browser cookie jars for real readback,
 including locale validation, isolation, cross-site rejection and concurrent writes.
 This driver is test code only; no adapter imports it or uses a common alert store.
 
@@ -115,15 +123,29 @@ The Docker events are host-wide: each keeps its type, an allowlisted action, its
 whether the container is one of the driver's own. To decide that, the read-only
 `docker events` query prints container IDs (a container event's own, a network event's
 attached container, never a network's ID) to the reader's private stdout pipe, where they are
-compared in memory and never written. The reader kills the query at 2 s, at 256 KiB or on an
-error from the query or its pipe; an unavailable or truncated result is inconclusive, not an
-absence of events.
+compared in memory and never written. Even so, the artifact records that other workloads on
+the daemon started or stopped containers and when, so the query assumes the daemon belongs to
+this job. It runs only on a GitHub-hosted runner (a fresh VM per job, where GitHub sets
+`RUNNER_ENVIRONMENT=github-hosted`), which is where `catalog.yml` runs the check, or when
+`COMPILED_ALERTS_HOST_EVENTS=1`; `COMPILED_ALERTS_HOST_EVENTS=0` turns it off. Elsewhere,
+including a shared or self-hosted daemon, the artifact's `docker` field is
+`{ "disabled": true }`. The query starts beside the page snapshot, as soon as the failure
+closes its window. The reader kills it at 2 s, at 256 KiB or on an error from the query or its
+pipe; an unavailable or truncated result is inconclusive, not an absence of events. A
+returned replay is marked `history: "best-effort"` even when nothing was dropped: the daemon
+keeps only its latest 256 events before applying the query's filters, so other activity can
+push the relevant event out, and an empty or short list is not evidence of a quiet window.
 
-Every cleanup step runs even when an earlier one fails. After the driver fails, its own error is
-the one thrown and a cleanup failure prints one line with the step's fixed name and only an
-allowlisted error class and code, never the error's text; after a passing run a cleanup failure
-fails it. Money confirmation regressions, collected and asserted at the end, are thrown ahead
-of a cleanup failure that would otherwise end the run before that assertion.
+Every cleanup step runs even when an earlier one fails, including the removal between the two
+sources. After the driver fails, its own error is the one thrown and a cleanup failure prints
+one line with the step's fixed name, an allowlisted error class and a code from a fixed list
+(`cleanupCodes` in `compiled-check.mjs`; any other code prints as `other`), never the error's
+text. After a passing run a cleanup failure fails it with a `CleanupError` that holds only
+those step, class and code values, with no cause or nested error. A failed Docker command's
+error names only the subcommand and its exit status or timeout; Docker's stderr is not kept,
+so neither can carry it into the output. Money confirmation regressions, collected and asserted
+at the end, are thrown ahead of a cleanup failure that would otherwise end the run before that
+assertion.
 
 Alert POSTs require one complete upstream JSON document and the requested record
 identity. The native templ response is fully rendered into a buffer before a write;
