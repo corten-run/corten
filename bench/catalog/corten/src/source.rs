@@ -51,18 +51,21 @@ impl Source {
 
     /// The records of the API at `base`, which must be a URL a path can be added to.
     pub fn api(base: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::api_pooled(base, Some(UPSTREAM_IDLE))
+    }
+
+    /// [`Source::api`] with `idle` as the pool's idle bound. `None` leaves reqwest's default of 90 s,
+    /// the policy before #1569, which a test keeps as the control that fails.
+    pub(crate) fn api_pooled(base: &str, idle: Option<Duration>) -> Result<Self, Box<dyn std::error::Error>> {
         let base = reqwest::Url::parse(base.trim_end_matches('/')).map_err(|error| format!("API_BASE is not a URL: {error}"))?;
         if base.cannot_be_a_base() {
             return Err(NOT_A_BASE.into());
         }
-        Ok(Self::Api {
-            client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(10))
-                .pool_idle_timeout(UPSTREAM_IDLE)
-                .build()?,
-            base: Arc::new(base),
-        })
+        let mut client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(10));
+        if let Some(idle) = idle {
+            client = client.pool_idle_timeout(idle);
+        }
+        Ok(Self::Api { client: client.build()?, base: Arc::new(base) })
     }
 
     pub async fn record(&self, id: &str) -> corten::Result<Option<Arc<Record>>> {

@@ -403,8 +403,8 @@ mod tests {
         assert_eq!(app.get(&unsupported).await.status(), StatusCode::BAD_REQUEST);
     }
 
-    /// How long the marketplace fixture (`bench/marketplace/upstream.mjs`, Node's HTTP server) says
-    /// it keeps an idle connection open: it answers with `Keep-Alive: timeout=5`.
+    /// How long the marketplace fixture (`bench/marketplace/upstream.mjs`, Node's HTTP server) says it
+    /// keeps an idle connection open: it answers with `Keep-Alive: timeout=5`.
     const FIXTURE_KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(5);
 
     /// What the upstream did, in milliseconds from its start, on which of its connections.
@@ -426,7 +426,8 @@ mod tests {
     /// which resets it, and nothing answers. A request on a fresh or recently used connection is
     /// answered with `body`, and the connection kept open. Each answer is logged before it is
     /// written, and [`ClosingUpstream::stop`] joins every thread before the log is read, so the log
-    /// is complete when the test inspects it.
+    /// is complete when the test inspects it. Dropping it (also when a test fails early) stops and
+    /// joins every thread as well.
     struct ClosingUpstream {
         at: String,
         started: std::time::Instant,
@@ -444,7 +445,7 @@ mod tests {
                 (std::time::Instant::now(), Log::default(), Arc::<std::sync::atomic::AtomicBool>::default());
             let (log, stop) = (seen.clone(), stopping.clone());
             let accepting = std::thread::spawn(move || {
-                let mut connections = Vec::new();
+                let (mut connections, mut failure) = (Vec::new(), None);
                 while !stop.load(std::sync::atomic::Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((socket, _)) => {
@@ -454,12 +455,14 @@ mod tests {
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             std::thread::sleep(std::time::Duration::from_millis(5))
                         }
-                        Err(error) => panic!("accept: {error}"),
+                        Err(error) => {
+                            failure = Some(format!("accept: {error}"));
+                            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
                     }
                 }
-                for connection in connections {
-                    connection.join().expect("an upstream connection thread panicked");
-                }
+                let panicked = connections.into_iter().map(std::thread::JoinHandle::join).filter(Result::is_err).count();
+                assert!(failure.is_none() && panicked == 0, "{failure:?}; {panicked} connection threads panicked");
             });
             Self { at, started, stopping, accepting: Some(accepting), seen }
         }
@@ -468,23 +471,33 @@ mod tests {
             self.started.elapsed().as_millis()
         }
 
-        /// Stops accepting, waits for every connection's thread to end (each checks within
-        /// [`POLL`]), and returns everything the upstream did.
-        fn stop(mut self) -> Vec<(u128, usize, Seen)> {
+        /// Stops accepting and waits for every thread to end: each connection's thread checks within
+        /// [`POLL`] while it waits for a request, and a write gives up after [`WRITE`].
+        fn halt(&mut self) -> std::thread::Result<()> {
             self.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
-            self.accepting.take().unwrap().join().expect("the upstream's accept thread panicked");
+            self.accepting.take().map_or(Ok(()), std::thread::JoinHandle::join)
+        }
+
+        /// Stops, then returns everything the upstream did.
+        fn stop(mut self) -> Vec<(u128, usize, Seen)> {
+            self.halt().expect("an upstream thread panicked");
             self.seen.lock().unwrap().clone()
         }
     }
 
     impl Drop for ClosingUpstream {
         fn drop(&mut self) {
-            self.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+            // A panic here while a failed test unwinds would abort; that failure is already reported.
+            if self.halt().is_err() && !std::thread::panicking() {
+                panic!("an upstream thread panicked");
+            }
         }
     }
 
     /// How often a connection's thread, waiting for a request, checks whether the upstream is stopping.
     const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+    /// How long a connection's thread waits to write an answer before it gives up.
+    const WRITE: std::time::Duration = std::time::Duration::from_secs(2);
 
     /// The connections that answered a `line` request.
     fn connections(seen: &[(u128, usize, Seen)], line: &str) -> Vec<usize> {
@@ -493,6 +506,11 @@ mod tests {
         found.sort_unstable();
         found.dedup();
         found
+    }
+
+    /// The idle closes logged at or after `from` ms.
+    fn closed_since(seen: &[(u128, usize, Seen)], from: u128) -> usize {
+        seen.iter().filter(|(at, _, s)| matches!(s, Seen::ClosedIdle(_)) && *at >= from).count()
     }
 
     fn serve(
@@ -510,6 +528,7 @@ mod tests {
         record(Seen::Accepted);
         socket.set_nonblocking(false).unwrap();
         socket.set_read_timeout(Some(POLL)).unwrap();
+        socket.set_write_timeout(Some(WRITE)).unwrap();
         let mut answered: Option<std::time::Instant> = None;
         loop {
             match socket.peek(&mut [0]) {
@@ -527,6 +546,7 @@ mod tests {
                 match socket.read(&mut byte) {
                     Ok(1) => head.push(byte[0]),
                     Err(error) if waiting(&error) && !stopped() => {}
+                    Err(error) if waiting(&error) => return,
                     other => panic!("the request head ended early: {other:?}"),
                 }
             }
@@ -540,35 +560,27 @@ mod tests {
     }
 
     /// An item's JSON whose upstream connection sat idle past the fixture's keep-alive is answered
-    /// from a new connection with one upstream request, not failed with a 500 (#1893). A client that
-    /// keeps idle connections for reqwest's default 90 seconds, sending at the same moment, shows
-    /// the upstream does close the reused connection.
+    /// from a new connection with one upstream request, not failed with a 500 (#1893). The control
+    /// is the same item through the same handler with the pool policy before that change (reqwest's
+    /// default of 90 s): it reuses the connection the upstream closed, and the item fails.
     #[tokio::test]
     async fn json_after_the_upstream_s_keep_alive_does_not_reuse_its_closed_connection() {
+        const ITEM: &str = include_str!("../tests/marketplace.json");
         assert!(source::UPSTREAM_IDLE < FIXTURE_KEEP_ALIVE);
-        let upstream = ClosingUpstream::start(include_str!("../tests/marketplace.json"));
-        let app = app(Source::api(&upstream.at).unwrap()).test();
+        let (fixed_upstream, old_upstream) = (ClosingUpstream::start(ITEM), ClosingUpstream::start(ITEM));
+        let fixed = app(Source::api(&fixed_upstream.at).unwrap()).test();
+        let old = app(Source::api_pooled(&old_upstream.at, None).unwrap()).test();
         let item = api::Record { id: "item_1" };
-        let unbounded = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap();
-        let control = format!("{}/marketplace/records/control", upstream.at);
-        assert_eq!(app.get(&item).await.status(), StatusCode::OK);
-        assert!(unbounded.get(&control).send().await.unwrap().status().is_success());
+        assert_eq!(fixed.get(&item).await.status(), StatusCode::OK);
+        assert_eq!(old.get(&item).await.status(), StatusCode::OK);
         tokio::time::sleep(FIXTURE_KEEP_ALIVE + std::time::Duration::from_millis(250)).await;
-        let sent = upstream.now();
-        let reused = unbounded.get(&control).send().await;
-        let answer = app.get(&item).await;
-        let (seen, line) = (upstream.stop(), "GET /marketplace/records/item_1 HTTP/1.1");
-        let closed = |connections: Vec<usize>| {
-            seen.iter().filter(|(at, c, s)| connections.contains(c) && matches!(s, Seen::ClosedIdle(_)) && *at >= sent).count()
-        };
-        assert!(reused.is_err(), "the upstream did not close an idle connection: {seen:?}");
-        assert_eq!(closed(connections(&seen, "GET /marketplace/records/control HTTP/1.1")), 1, "{seen:?}");
-        assert_eq!(answer.status(), StatusCode::OK, "sent at {sent} ms; upstream: {seen:?}");
-        assert_eq!(closed(connections(&seen, line)), 0, "{seen:?}");
+        let sent = (fixed_upstream.now(), old_upstream.now());
+        let (answer, failed) = (fixed.get(&item).await.status(), old.get(&item).await.status());
+        let (seen, old_seen, line) = (fixed_upstream.stop(), old_upstream.stop(), "GET /marketplace/records/item_1 HTTP/1.1");
+        assert_eq!(failed, StatusCode::INTERNAL_SERVER_ERROR, "old policy, sent at {} ms: {old_seen:?}", sent.1);
+        assert_eq!((closed_since(&old_seen, sent.1), connections(&old_seen, line).len()), (1, 1), "{old_seen:?}");
+        assert_eq!(answer, StatusCode::OK, "sent at {} ms; upstream: {seen:?}", sent.0);
+        assert_eq!(closed_since(&seen, sent.0), 0, "{seen:?}");
         let answers = seen.iter().filter(|(_, _, s)| *s == Seen::Answered(line.into())).count();
         assert_eq!(
             (answers, connections(&seen, line).len()),

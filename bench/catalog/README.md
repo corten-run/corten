@@ -35,14 +35,15 @@ pinned Node 26, closes a connection idle for that 5 s keep-alive timeout plus No
 the upstream closes it can fail in the send, before the upstream's handler sees it. That is a
 possible mechanism for a failed upstream read, reproduced here only against a test double that
 closes at 5 s; it is not a diagnosis of the saved r21 catalog or r27 marketplace failures, whose
-cause remains unattributed. Every HTTP source avoids it by not reusing a connection idle 4 s, a
-second under what the upstream advertises: the Corten app and every fullstack app whose client
-would keep idle connections longer (reqwest's default is 90 s). Spring is the exception at 1 s,
-since the JDK client drops an expired connection late, and Drogon and Django check the idle time
-when they take a connection from the pool, so an expired one is skipped at checkout rather than
-closed at 4 s. The full-stack [Caveats](../fullstack/README.md#caveats), item 5, list each
-client's setting. This is the pool policy alone: no retry, no cache, and still one upstream GET
-per record read.
+cause remains unattributed. The Corten app and every fullstack app whose client would keep idle
+connections longer (reqwest's default is 90 s) are configured not to reuse a connection idle 4 s,
+a second under what the upstream advertises. Spring is the exception at 1 s, since the JDK client
+drops an expired connection late, and Drogon and Django check the idle time when they take a
+connection from the pool, so an expired one is skipped at checkout rather than closed at 4 s. The
+full-stack [Caveats](../fullstack/README.md#caveats), item 5, list each client's setting.
+`bench/fullstack/idle-close.mjs` checks that an image has dropped them by 4.5 s idle, under the
+upstream's 5 s close; it does not measure the configured 4 s itself. This is the pool policy
+alone: no retry, no cache, and still one upstream GET per record read.
 
 The stand-in upstream alone pre-serializes and UTF-8 encodes its records at
 startup. Canonical record GETs reuse those bytes without URL parsing or an
@@ -395,9 +396,10 @@ request also adds one to its class: `catalog_failed_http_429`, `_http_502`,
 `_transport` (k6 got no response for a network reason: a non-TCP network, TCP, TLS or
 HTTP/2 error code) or `_other` (a generic, invalid-URL, DNS, blocked-host or
 response-decompression error code, another status or a wrong content type). A success
-never reaches that classification, and no class series is initialized, so a run
+never reaches that classification and no class series receives a sample, so a run
 without failures emits exactly the samples it did before the split; k6 reports only
-series that received a sample. A replay reads the classes when any is present, requires
+series that received a sample. The six class Counters are still created at init and a
+success makes one more comparison; that cost is not measured. A replay reads the classes when any is present, requires
 them to account exactly for the HTTP errors and invalid responses, and names a transport
 error when it refuses a phase; without any (no failures, or a producer from before the
 split) the split is unknown, and the phase replays to the same metrics either way. Counts,

@@ -99,6 +99,77 @@ test("a create acknowledged late is found by its attempt label and removed by it
   assert.deepEqual(docker.calls.filter((args) => args[0] === "rm"), [["rm", "-f", "-v", late]]);
 });
 
+test("a stalled attempt lookup gets only the time left in the window, none starts after it, and the owner sweep still runs", async () => {
+  const window = 400, lookups = [], owner = `label=${ownerKey}=r6`;
+  const docker = fakeDocker(async (args, options) => {
+    if (args[0] === "create") throw new Error("docker create: timeout after 30000 ms");
+    if (args[0] === "ps" && args.includes(`label=${attemptKey}=r6`)) {
+      assert.ok(Number.isInteger(options.timeout), "an attempt lookup carries a timeout");
+      const begun = performance.now();
+      lookups.push({ begun, timeout: options.timeout });
+      // A daemon that never answers: the lookup ends only at its own timeout, empty-handed.
+      await new Promise((done) => setTimeout(done, options.timeout));
+      return "";
+    }
+    if (args[0] === "ps") { assert.deepEqual(options, {}, "the owner sweep keeps the normal deadline"); return ""; }
+    assert.fail(args.join(" "));
+  });
+  const error = await checkImage("img", { names: ["catalog"], docker: docker.run, runId: "r6", window }).then(() => assert.fail("passed"), (e) => e);
+  const settled = performance.now();
+  assert.ok(lookups.length >= 1, "the attempt was looked for");
+  // The window opens just before the first lookup, so no lookup may run past the first's start plus the window.
+  const first = lookups[0].begun;
+  for (const { begun, timeout } of lookups) assert.ok(begun - first + timeout <= window + 5, JSON.stringify({ begun: begun - first, timeout }));
+  assert.ok(lookups.reduce((sum, l) => sum + l.timeout, 0) <= window, JSON.stringify(lookups));
+  assert.ok(settled - first < window + 250, `the search and sweep took ${Math.round(settled - first)} ms for a ${window} ms window`);
+  const ps = docker.calls.filter((args) => args[0] === "ps");
+  assert.equal(ps.at(-1).at(-3), owner, "the owner sweep runs after the search");
+  assert.equal(error.cleanup.unacknowledged.outcome, "unconfirmed");
+  assert.equal(error.cleanup.complete, false);
+});
+
+test("a failed attempt lookup is kept, the owner sweep still runs and removes what it finds by confirmed ID", async () => {
+  const late = id(5);
+  const docker = fakeDocker((args) => {
+    if (args[0] === "create") throw new Error("docker create: timeout after 30000 ms");
+    if (args[0] === "ps") {
+      const filter = args[args.indexOf("--filter") + 1];
+      if (filter === `label=${attemptKey}=r7`) throw new Error("docker ps: exit 1\nCannot connect to the Docker daemon");
+      return filter === `label=${ownerKey}=r7` || filter === `id=${late}` ? late : "";
+    }
+    if (args[0] === "container") return owned("r7", { Id: late });
+    if (args[0] === "rm") return args.at(-1);
+    assert.fail(args.join(" "));
+  });
+  const error = await checkImage("img", { names: ["catalog"], docker: docker.run, runId: "r7", window: 5000 }).then(() => assert.fail("passed"), (e) => e);
+  assert.equal(docker.calls.filter((args) => args.includes(`label=${attemptKey}=r7`)).length, 1, "a failed lookup ends the search");
+  assert.deepEqual(error.cleanup.recovered, [late]);
+  assert.deepEqual(docker.calls.filter((args) => args[0] === "rm"), [["rm", "-f", "-v", late]]);
+  assert.equal(error.cleanup.unacknowledged.outcome, "unconfirmed");
+  assert.ok(error.cleanup.failures.some((f) => f.resource.includes(attemptKey) && /Cannot connect/.test(f.error)), JSON.stringify(error.cleanup.failures));
+  assert.equal(error.cleanup.complete, false);
+});
+
+test("a lookup line that is not a full container ID is a failure and is never inspected or removed", async () => {
+  const created = "ab3".repeat(22).slice(0, 64);
+  for (const odd of ["abc123", "i1569-name", created.slice(0, 12), created.toUpperCase(), `${created}0`]) {
+    let removed = false;
+    const docker = fakeDocker((args) => {
+      if (args[0] === "create") return created;
+      if (args[0] === "container") return owned("r8", { Id: created });
+      if (args[0] === "start") throw new Error("docker start: exit 1\nno such image");
+      if (args[0] === "ps") return removed ? "" : `${odd}\n${created}`;
+      if (args[0] === "rm") { removed = true; return args.at(-1); }
+      assert.fail(args.join(" "));
+    });
+    const error = await checkImage("img", { names: ["catalog"], docker: docker.run, runId: "r8", window: 50 }).then(() => assert.fail("passed"), (e) => e);
+    for (const args of docker.calls.filter((a) => ["container", "rm", "start", "logs"].includes(a[0]))) assert.equal(args.at(-1), created, odd);
+    assert.deepEqual(error.cleanup.removed, [created]);
+    assert.ok(error.cleanup.failures.some((f) => /not a full container ID/.test(f.error)), odd);
+    assert.equal(error.cleanup.complete, false);
+  }
+});
+
 test("a failed start and a failed removal both surface, and only the confirmed ID is ever removed", async () => {
   const before = await listeners(), created = id(1);
   const docker = fakeDocker((args) => {
@@ -192,10 +263,13 @@ function standInDocker(runId, agentOptions) {
   return docker;
 }
 
-test("the whole check passes a pool under the bound and fails one that expires just past it or opens a connection per request", async () => {
-  const run = (name, agent) => checkImage("img", { names: ["catalog"], concurrency: 3, docker: standInDocker(name, agent).run, runId: name, window: 50 });
-  const [safe, late, unpooled] = await Promise.all([
+test("the whole check passes a pool under the bound and fails one still reusing at 4.5 s or opening a connection per request", async () => {
+  const run = (name, agent, extra = {}) => checkImage("img", { names: ["catalog"], concurrency: 3, docker: standInDocker(name, agent).run, runId: name, window: 50, ...extra });
+  const [safe, frozen, late, unpooled] = await Promise.all([
     run("safe", { keepAlive: true, timeout: 2000 }),
+    // Every event stamped 0 ms: readiness and the warm bursts share a timestamp, so only the
+    // event order can tell them apart.
+    run("frozen", { keepAlive: true, timeout: 2000 }, { stamp: () => 0 }),
     // Node's agent keeps a connection until the server's keep-alive hint less this buffer: 4.8 s.
     run("late", { keepAlive: true, agentKeepAliveTimeoutBuffer: 200 }),
     run("unpooled", null),
@@ -204,6 +278,10 @@ test("the whole check passes a pool under the bound and fails one that expires j
   assert.ok(safe.reads.catalog.warm.reused > 0);
   assert.ok(safe.idleMs >= boundMs + marginMs && safe.idleMs < 5000, String(safe.idleMs));
   assert.equal(safe.cleanup.complete, true);
+  // The readiness answer is not counted as a warm answer, whatever the stamps say.
+  assert.equal(frozen.reads.catalog.warm.answers, 6, JSON.stringify(frozen.reads.catalog.warm));
+  assert.ok(frozen.idleMs >= boundMs + marginMs, String(frozen.idleMs));
+  assertPasses(frozen);
   // Expiring at 4.8 s, between the bound and the upstream's close: every read still answers 200 and
   // the upstream closed nothing, but each reused connection had been idle past the bound.
   assert.deepEqual(late.reads.catalog.after.statuses, [200, 200, 200]);

@@ -8,8 +8,10 @@ export function requestOutcome(response, target) {
 }
 
 // The class of a failed request, asked only after requestOutcome returned http_errors or
-// invalid_responses, so a successful request does no more work than before the split and a run
-// without failures emits no class series. HTTP errors split into 429, 502, 503 and other 5xx. An
+// invalid_responses, so a successful request is never classified here and a run without failures
+// emits no class series: its samples and outcome classification are those from before the split.
+// A success still pays one more comparison, and the class Counters are built once at init; their
+// effect on CPU or timing is not measured. HTTP errors split into 429, 502, 503 and other 5xx. An
 // invalid response is `transport` when k6 got no response for a network reason: a TCP, TLS or
 // HTTP/2 error code, or a non-TCP network error (k6 v2.4.0, lib/netext/httpext/error_codes.go:
 // 1010, 1200-1399, 1600-1699). Anything else is `other`: a generic (1000), invalid URL (1020),

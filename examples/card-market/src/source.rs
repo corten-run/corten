@@ -50,8 +50,17 @@ impl Source {
 
     /// Items read from the item API at `base`.
     pub fn api(base: &str) -> Self {
-        let client = reqwest::Client::builder().pool_idle_timeout(UPSTREAM_IDLE).build().expect("HTTP client");
-        Source::Api { client, base: base.into() }
+        Self::api_pooled(base, Some(UPSTREAM_IDLE))
+    }
+
+    /// [`Source::api`] with `idle` as the pool's idle bound. `None` leaves reqwest's default of 90 s,
+    /// the policy before #1569, which a test keeps as the control that fails.
+    pub(crate) fn api_pooled(base: &str, idle: Option<std::time::Duration>) -> Self {
+        let mut client = reqwest::Client::builder();
+        if let Some(idle) = idle {
+            client = client.pool_idle_timeout(idle);
+        }
+        Source::Api { client: client.build().expect("HTTP client"), base: base.into() }
     }
 
     /// The demo catalog built into the app, with the store's own art for each of its cards

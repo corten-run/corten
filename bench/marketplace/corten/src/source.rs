@@ -27,14 +27,17 @@ impl Source {
 
     /// The records of the API at `base`.
     pub fn api(base: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self::Api {
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(10))
-                .redirect(reqwest::redirect::Policy::none())
-                .pool_idle_timeout(UPSTREAM_IDLE)
-                .build()?,
-            base: base.parse()?,
-        })
+        Self::api_pooled(base, Some(UPSTREAM_IDLE))
+    }
+
+    /// [`Source::api`] with `idle` as the pool's idle bound. `None` leaves reqwest's default of 90 s,
+    /// the policy before #1893, which a test keeps as the control that fails.
+    pub(crate) fn api_pooled(base: &str, idle: Option<Duration>) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut client = reqwest::Client::builder().timeout(Duration::from_secs(10)).redirect(reqwest::redirect::Policy::none());
+        if let Some(idle) = idle {
+            client = client.pool_idle_timeout(idle);
+        }
+        Ok(Self::Api { client: client.build()?, base: base.parse()? })
     }
     pub async fn record(&self, id: &str, traceparent: Option<&str>) -> corten::Result<Option<Arc<Record>>> {
         let (client, base) = match self {

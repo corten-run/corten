@@ -12,17 +12,24 @@
 // per request); then nothing for `boundMs + marginMs` (4.5 s) after the last answer, which is
 // 500 ms past the bound and 500 ms before the upstream here closes (1.5 s before Node's own close);
 // then a burst again. It passes when every read after the idle is a 200 from exactly one upstream
-// answer and no request arrived on a connection idle for the bound or longer. So a client whose
-// expiry slipped just past the bound (anything from 4.5 s) fails, as well as one that reuses a
-// connection the upstream closes: here a request on a connection idle the advertised 5 s or more
-// meets a reset and no answer. A library that retries a lost request still shows the reuse.
+// answer and no request arrived on a connection idle for the bound or longer. So a client that
+// still reuses a connection idle 4.5 s fails, as well as one that reuses a connection the upstream
+// closes: here a request on a connection idle the advertised 5 s or more meets a reset and no
+// answer. A library that retries a lost request still shows the reuse. What it verifies is that
+// the pool has dropped its idle connections by 4.5 s, under the upstream's 5 s close: a pool that
+// expires anywhere between 4 s and 4.5 s also passes, so each app's configured 4 s is read from its
+// source, not measured here. Each burst's answers are the upstream events recorded after the burst
+// began (by position in the event list, not by timestamp), so a readiness answer is never counted.
 //
 // Docker is used the way bench/marketplace/alert-probe-run.mjs uses it: every command has a
 // deadline; the container carries this run's owner label and is registered only by the immutable
 // ID its create returned; every inspect, log read and removal goes through that ID after
 // confirming the label, never through its name. A create that returned no ID is looked for at
-// teardown by its own attempt label for a bounded window, and its cleanup is reported unconfirmed
-// if nothing appears. A failed or unconfirmed removal fails the run.
+// teardown by its own attempt label for a bounded window (on the monotonic clock; each lookup gets
+// only the time left in it, and none starts once it is spent), and its cleanup is reported
+// unconfirmed if nothing appears. The owner-label sweep runs after that search whatever it found.
+// Every ID a lookup returns must be a full 64-hex container ID before it is inspected or removed.
+// A failed or unconfirmed removal fails the run.
 // Usage: node bench/fullstack/idle-close.mjs <image> [catalog,marketplace,items] [NAME=value ...] [--json-only] [--no-reuse] [--bound-ms=N] [--label=key=value ...]
 // A functional check, not a measurement.
 import assert from "node:assert/strict";
@@ -82,16 +89,17 @@ export function checkOptions({ names, labels = [], bound = boundMs, concurrency 
 /**
  * An upstream that answers `bodies` (path to JSON) over keep-alive connections and resets a
  * connection whose next request arrives `keepAlive` ms or more after its last answer. `events`
- * lists `{ at, connection, kind, path?, idle?, lastPath? }` with `at` in ms from the start; an `answered` event's
- * `idle` is how long its connection had been idle when the request arrived (null on a connection's
- * first request), and a `closedIdle` event's `lastPath` is the path its connection last answered. The
- * event is recorded before the answer is written. `close()` ends every
- * connection and the listener.
+ * lists `{ at, connection, kind, path?, idle?, lastPath? }` in the order they happened, with `at`
+ * from `stamp` (ms from the start by default; a report only, never used to select events); an
+ * `answered` event's `idle` is how long its connection had been idle when the request arrived (null
+ * on a connection's first request), and a `closedIdle` event's `lastPath` is the path its connection
+ * last answered. The event is recorded before the answer is written. `lastAnswer()` is the
+ * `performance.now()` of the latest answer. `close()` ends every connection and the listener.
  */
-export function closingUpstream(bodies, keepAlive = keepAliveMs) {
+export function closingUpstream(bodies, keepAlive = keepAliveMs, { stamp } = {}) {
   const started = performance.now(), events = [], sockets = new Set();
-  const now = () => Math.round(performance.now() - started);
-  let next = 0;
+  const now = stamp ?? (() => Math.round(performance.now() - started));
+  let next = 0, last = null;
   const server = createServer((socket) => {
     const connection = next++;
     let buffer = Buffer.alloc(0), answered, lastPath;
@@ -116,7 +124,7 @@ export function closingUpstream(bodies, keepAlive = keepAliveMs) {
         socket.write(`HTTP/1.1 ${json ? "200 OK" : "404 Not Found"}\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\n` +
           "connection: keep-alive\r\nkeep-alive: timeout=5\r\n\r\n");
         socket.write(body);
-        answered = performance.now();
+        answered = last = performance.now();
         lastPath = path;
       }
     });
@@ -125,7 +133,7 @@ export function closingUpstream(bodies, keepAlive = keepAliveMs) {
     for (const socket of sockets) socket.destroy();
     if (server.listening) server.close(() => done()); else done();
   });
-  return { server, events, now, close, lastAnswer: () => Math.max(...events.filter((e) => e.kind === "answered").map((e) => e.at)) };
+  return { server, events, now, close, lastAnswer: () => last };
 }
 
 /** One GET on a new connection to the app: its status, or the error that ended it. */
@@ -143,6 +151,7 @@ export function get(url) {
 }
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+const canonical = /^[0-9a-f]{64}$/;
 const brief = (error) => String(error?.message ?? error).slice(0, 2048);
 
 /**
@@ -169,12 +178,19 @@ export function docker(args, { timeout = commandTimeout, combined = false } = {}
  * confirmed ID; reconciles a create that returned no ID by its attempt label within `window` ms;
  * and records every failure. It never throws.
  */
-export function ownedContainer({ docker: run = docker, runId, labels = [], window = reconcileWindow, wait = sleep }) {
+export function ownedContainer({ docker: run = docker, runId, labels = [], window = reconcileWindow, wait = sleep, now = () => performance.now() }) {
   const owner = `${ownerKey}=${runId}`, attempt = `${attemptKey}=${runId}`;
   const record = { runId, ownerLabel: owner, created: null, unacknowledged: null, removed: [], recovered: [], failures: [], complete: false };
   let id = null;
   const fail = (resource, error) => record.failures.push({ resource, error: brief(error) });
-  const list = async (filter) => (await run(["ps", "-a", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"])).split("\n").map((l) => l.trim()).filter(Boolean);
+  // Only full container IDs come back; anything else is a failure and is never inspected or removed.
+  const list = async (filter, timeout) => {
+    const lines = (await run(["ps", "-a", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"], timeout === undefined ? {} : { timeout }))
+      .split("\n").map((l) => l.trim()).filter(Boolean);
+    const odd = lines.filter((l) => !canonical.test(l));
+    if (odd.length) fail(`containers matching ${filter}`, `docker ps returned ${JSON.stringify(odd[0].slice(0, 200))}, not a full container ID; it is not inspected or removed`);
+    return lines.filter((l) => canonical.test(l));
+  };
   const confirm = async (target) => {
     const [info] = JSON.parse(await run(["container", "inspect", target]));
     assert.equal(info?.Id, target, `container ${target}: inspect returned a different object`);
@@ -191,7 +207,7 @@ export function ownedContainer({ docker: run = docker, runId, labels = [], windo
         if (error.sent !== false) record.unacknowledged = { name, label: attempt, error: brief(error) };
         throw error;
       }
-      if (!/^[0-9a-f]{64}$/.test(out)) {
+      if (!canonical.test(out)) {
         record.unacknowledged = { name, label: attempt, error: `returned no ID: ${JSON.stringify(out.slice(0, 200))}` };
         throw new Error(`docker create ${name} returned no ID`);
       }
@@ -204,14 +220,19 @@ export function ownedContainer({ docker: run = docker, runId, labels = [], windo
     async teardown() {
       const targets = new Set(id ? [id] : []);
       if (record.unacknowledged) {
-        // The create may still be under way in the daemon: look for it by its own label.
-        const end = Date.now() + window;
+        // The create may still be under way in the daemon: look for it by its own label until the
+        // window ends. Each lookup is cut to the time left, and none starts once it is spent. A
+        // failed lookup ends the search and is kept; the owner sweep below does not depend on it.
+        const end = now() + window;
         try {
           for (;;) {
-            const found = await list(`label=${attempt}`);
+            const left = Math.floor(end - now());
+            if (left < 1) break;
+            const found = await list(`label=${attempt}`, left);
             if (found.length) { record.unacknowledged.ids = found; found.forEach((f) => targets.add(f)); break; }
-            if (Date.now() >= end) break;
-            await wait(Math.min(250, Math.max(0, end - Date.now())));
+            const pause = Math.min(250, end - now());
+            if (pause <= 0) break;
+            await wait(pause);
           }
         } catch (error) { fail(`containers labelled ${attempt}`, error); }
       }
@@ -241,12 +262,14 @@ export function ownedContainer({ docker: run = docker, runId, labels = [], windo
  * Runs `image` against a closing upstream and returns what each read saw before and after the
  * idle, with the container's cleanup record. Rejects, after closing the upstream and tearing down
  * the container, if a step fails or the teardown is incomplete; the error carries `cleanup`.
+ * `stamp` replaces the clock of the upstream's event timestamps, which are reported but never
+ * used to decide which events belong to a burst (a test holds it still to show that).
  */
 export async function checkImage(image, { names = ["catalog", "marketplace", "items"], env = [], labels = [], pages = true, concurrency = 6, bound = boundMs,
-  docker: run = docker, runId = `idle-close-${randomBytes(5).toString("hex")}`, window = reconcileWindow, readyTimeout = 180_000 } = {}) {
+  docker: run = docker, runId = `idle-close-${randomBytes(5).toString("hex")}`, window = reconcileWindow, readyTimeout = 180_000, stamp } = {}) {
   checkOptions({ names, labels, bound, concurrency });
   const all = reads(pages), chosen = Object.fromEntries(names.map((name) => [name, all[name]]));
-  const upstream = closingUpstream(Object.fromEntries(Object.values(chosen).map((r) => [r.upstream, r.body])));
+  const upstream = closingUpstream(Object.fromEntries(Object.values(chosen).map((r) => [r.upstream, r.body])), keepAliveMs, { stamp });
   const owned = ownedContainer({ docker: run, runId, labels, window });
   let result, failure;
   try {
@@ -271,28 +294,30 @@ export async function checkImage(image, { names = ["catalog", "marketplace", "it
         await sleep(250);
       }
     }
-    const answers = (from, target) => upstream.events.filter((e) => e.kind === "answered" && e.at >= from && e.path === target);
+    // What the upstream did since `mark`, an index into its event list taken before a burst.
+    const since = (mark) => upstream.events.slice(mark);
+    const answers = (mark, target) => since(mark).filter((e) => e.kind === "answered" && e.path === target);
     const burst = async (path) => Promise.all(Array.from({ length: concurrency }, () => get(base + path)));
     // Two bursts per read, to show the pool reuses connections before the idle.
     const warm = {};
     for (const [read, { path, upstream: target }] of Object.entries(chosen)) {
-      const from = upstream.now(), statuses = [...await burst(path)];
+      const mark = upstream.events.length, statuses = [...await burst(path)];
       await sleep(100);
       statuses.push(...await burst(path));
-      const seen = answers(from, target);
+      const seen = answers(mark, target);
       warm[read] = { statuses, answers: seen.length, reused: seen.filter((e) => e.idle !== null).length };
     }
     const idleFrom = upstream.lastAnswer();
-    await sleep(Math.max(0, idleFrom + bound + marginMs - upstream.now()));
-    const after = upstream.now();
+    await sleep(Math.max(0, idleFrom + bound + marginMs - performance.now()));
+    const after = performance.now(), afterMark = upstream.events.length;
     const checked = {};
     for (const [read, { path, upstream: target }] of Object.entries(chosen)) {
-      const from = upstream.now(), statuses = await burst(path), seen = answers(from, target);
+      const mark = upstream.events.length, statuses = await burst(path), seen = answers(mark, target);
       checked[read] = { warm: warm[read], after: { statuses, answers: seen.length, connections: seen.map(({ connection, idle }) => ({ connection, idle })) } };
     }
-    const closedIdle = upstream.events.filter((e) => e.kind === "closedIdle" && e.at >= after);
-    const reusedPastBound = upstream.events.filter((e) => e.kind === "answered" && e.at >= after && e.idle !== null && e.idle >= bound);
-    result = { image, boundMs: bound, marginMs, keepAliveMs, idleMs: after - idleFrom, concurrency, reads: checked, closedIdle, reusedPastBound };
+    const closedIdle = since(afterMark).filter((e) => e.kind === "closedIdle");
+    const reusedPastBound = since(afterMark).filter((e) => e.kind === "answered" && e.idle !== null && e.idle >= bound);
+    result = { image, boundMs: bound, marginMs, keepAliveMs, idleMs: Math.floor(after - idleFrom), concurrency, reads: checked, closedIdle, reusedPastBound };
   } catch (error) {
     failure = error;
   } finally {
