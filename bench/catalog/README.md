@@ -289,9 +289,11 @@ and aggregate. Truncated stats framing fails in the producer as well as replay,
 preserving its raw bytes.
 Exit 0 means native evidence replay passed; exit 2 means required
 observations are missing; exit 1 means malformed or contradictory evidence.
-Retained tool image references are checked against the pins of the checkout that loads
-`verify.mjs`, so a round measured before a pin moved fails from a newer checkout, naming the
-pin it expected and the measured commit.
+For a gated negative attempt, the retained upstream and checker image references are checked
+against the pins of the checkout that loads `verify.mjs`, so such an attempt measured before a
+pin moved fails from a newer checkout, naming the pin it expected and the measured commit.
+Complete and timed evidence does not compare these references with the checkout's pins; replay
+it from a checkout of its measured commit all the same.
 This is not host-isolation or independent source-audit approval. Those remain
 separate campaign gates. Old summaries remain reportable, but cannot acquire the
 new raw proof retroactively; images not built in the native run are not qualified
