@@ -2927,7 +2927,7 @@ async fn deadlines_on_four_threads_fire_and_none_before_its_limit() {
 /// connection. If that runtime shuts down while the inner request waits, the deadline's next poll
 /// panics inside the handler's catch (tokio's check that the timer's runtime is running) and the
 /// inner request is answered 500, where a timer of its own would have answered 503 at the
-/// deadline (`docs/design.md`, Choice 73, cost 6).
+/// deadline (`docs/design.md#choice-deadline-timer`, cost 6).
 #[test]
 fn a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runtime_has_shut_down() {
     use tokio::io::AsyncWriteExt;
