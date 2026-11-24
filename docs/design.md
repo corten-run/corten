@@ -7367,21 +7367,29 @@ rules something out.
     wait is a connection to either loopback address at that one port, and an app's other
     listeners are its command's to wait for. A connection does not say whose socket accepted
     it: a copy that has exited by then is not taken for the listener, and a program that takes
-    the port between the build's last look and the copy's own bind is, a window the build
-    cannot close without knowing the copy's sockets. The copy cannot bind then, and one that
+    the port between the build's last look and the copy's own bind is, a window that two more
+    looks at a named port narrow and that the build cannot close without knowing the copy's
+    sockets. The copy cannot bind the same address then, and one that
     has exited by the time the command ends stops the build. One still running when the
     command ends (still starting, or one that does not exit when it cannot bind) is stopped as
     any copy is, whatever status it then leaves with, since an app
-    may exit non-zero on `SIGTERM` by design; so the build looks at a named port once more
-    after the copy has exited, and stops when something listens there, which is not the copy.
+    may exit non-zero on `SIGTERM` by design. So the build looks at a named port when the
+    command has ended and before it stops the copy, and stops when nothing accepts there: a
+    copy that listens on the port it was named would, so this one does not, and whatever
+    answered the wait has left. It looks once more after the copy has exited, and stops when
+    something listens there, which is not the copy.
     One timing is left: another program takes the named port in that window and answers the
-    wait and the command, the copy is still running when the command ends (it fails to bind
-    only after that, or stays up without the port), and that
-    program has stopped listening by the time the copy has exited. The build then succeeds,
-    and its release is built from a profile of a copy that served nothing. The look after the
-    copy has a cost of its own: a program that begins to listen on the port in the moment
-    after the copy left it (a supervisor starting the app again) stops a build whose profile
-    was good. Starting, waiting and stopping are where a script goes wrong without a
+    wait and the command, the copy is still running when the command ends, and that program
+    stops listening between the look before the copy is stopped and the copy's exit. The build
+    then succeeds, and its release is built from a profile of a copy that served nothing. Each
+    look has a cost of its own, a build stopped whose profile was good: the one before the
+    copy is stopped, when the queue of connections a serving copy has not accepted is full at
+    that instant; the one after it, when a program begins to listen on the port once the copy
+    has left it (a supervisor starting the app again). And a listener on the other loopback
+    address of the named port, which a copy bound to its own address can serve beside for the
+    whole run, stops the build at whichever look finds it, the one after the copy included:
+    the build cannot tell that the command never reached it, and a command that asks
+    `localhost` may have, so it takes the cautious reading. Starting, waiting and stopping are where a script goes wrong without a
     word (a copy killed, not waited for, or left running writes no profile or a stale one), so
     they are in the command once and not in each app's script. The instrumented copy has a
     target directory of its own, so `target/release` never holds a binary that writes a
@@ -7423,12 +7431,17 @@ rules something out.
     port the dev server binds at its next restart; two builds on one machine that share an
     exported `PORT` meet on it; and a copy that a cancelled build left running refuses every
     build after it. A build that works as it did comes before one way to name a port (README
-    Values, the order), and `corten dev` takes `--port` already, read by the same rule (the
-    value after it or after `=`, a number from 1 to 65535). The argument accepts the last of
-    those costs for the app that names a port, and for no other: a copy that a cancelled build
-    left running holds the named port, and each later build that names it is refused until the
-    copy is stopped, by a refusal that names such a copy as what may hold the port. Nor both, the argument and
-    the variable, which keeps each of those costs; a copy's status after `SIGTERM` read as the
+    Values, the order), and `corten dev` takes `--port <port>` already, the value after it.
+    The argument accepts all four of those costs for the app that names a port, and none for
+    any other: the port is refused while `corten dev` or the app holds it, the copy holds the
+    port the dev server binds at its next restart, two builds on one machine that name the
+    port meet on it, and a copy that a cancelled build left running holds the port, so that
+    each later build that names it is refused until the copy is stopped, by a refusal that
+    names such a copy among what may hold the port. Nor both, the argument and
+    the variable, which keeps each of those costs; `corten dev` made to read its `--port` as
+    this one is read, in the same change: the two commands read it differently (`--port=<n>`
+    is build's alone, and `dev` passes its value on to the app unchecked, a `0` included,
+    which the app binds as a free port), and that is left for a change of its own; a copy's status after `SIGTERM` read as the
     build's failure, which would stop the build in the timing left above when the copy that
     could not bind exits with an error's status, and would refuse an app that exits non-zero on
     `SIGTERM` by design with its profile written; an argument that skips the wait and leaves
@@ -7453,14 +7466,18 @@ rules something out.
     port is accepted as soon as a socket listens there, whichever process holds it, while that
     socket's queue of connections not yet accepted has room: a listener that accepts nothing
     answers a look until the queue is full and reads as a free port after, 129 looks answered
-    and the 130th not, in each of two runs, by a standard-library listener on Linux 6.18; Linux
+    and the 130th not, in each of two runs, by a standard-library listener on Linux 6.18; two
+    sockets listen on one port at the two loopback addresses, as a Corten app's own do, so a
+    copy bound to one serves beside another program's listener on the other; Linux
     gives an outgoing connection a port from a range, 32768 to 60999, so that a connection to
     a port in the range that nothing listens on is, once in some tens of thousands, given that
     port as its own and connects to itself); reasoned (a connection cannot tell the copy from
     another listener on the port, so a named port is one nothing listens on before the copy
     starts; a process that has exited holds no socket, so what accepts on the named port after
     the copy has exited is not the copy, unless the copy left its listener to a child that
-    outlives it; a `PORT` in the environment is set for running the app, so a build that read it
+    outlives it; a copy that listens on the named port accepts a connection there while its
+    queue has room, so a port nothing accepts on while the copy runs is one the copy does not
+    listen on, or one whose queue is full; a `PORT` in the environment is set for running the app, so a build that read it
     would be changed, or refused, by a setting made for something else; a
     separate target directory is the only place an instrumented build cannot be mistaken for
     the release; a refusal before the first build costs nothing, where a dropped linker flag
@@ -7477,8 +7494,10 @@ rules something out.
     socket), whose port is bound on no loopback address, or whose command cannot tell when its
     other listeners are ready; a command's requests are found to have gone to a program that
     took the named port as the copy started, and the build to have succeeded (the timing left
-    above), or a build is found stopped by the look after the copy for a listener that came
-    after it; builds are found refused on a named port for a copy that a cancelled build left
+    above), or a build whose copy served is found stopped: by the look before the copy is
+    stopped with the copy's queue full, by the look after the copy for a listener that came
+    after it, or by that look for a listener on the other loopback address that the command
+    never reached; builds are found refused on a named port for a copy that a cancelled build left
     running, which the build could stop itself only by catching the signal that ends it or by
     keeping a record of the copy's process, neither of which the command has; an app's build is found to need the port from
     its environment after all; Cargo can add a flag to the ones its configuration sets, or builds with a
@@ -7522,7 +7541,18 @@ rules something out.
     same build without that look ended with its release built, the tests in five runs and
     the build without the look in one; by a throwaway
     test, a standard-library listener that accepted nothing answered 129 looks and not the
-    130th, which then read the port as free, in each of two runs).
+    130th, which then read the port as free, in each of two runs); 2026-11-24, the look before
+    the copy is stopped, a listener beside the copy and the earlier port tests on this kernel,
+    by the command's tests on rustc and Cargo 1.100.0 on Linux 6.18 (a listener that took the
+    named port once the copy had started, answered the wait and closed while the command ran,
+    the copy still starting when the command ended, stopped the build at the look before the
+    copy was stopped, in three runs, where the same build without that look ended with its
+    release built, in one; a listener bound on `[::1]` at the named port while a copy bound on
+    `127.0.0.1` ran its command stopped the build at the look after the copy, in four runs,
+    where a build whose looks went to `127.0.0.1` alone ended with its release built, in one;
+    and the tests the entry for Linux 6.8 lists passed here in each of three runs, and in one
+    more with their output shown the listener on `[::1]` alone was seen and a connection met
+    itself and was not taken for a listener, neither test returning without testing).
 
 69. <a id="choice-profile-image"></a>**The starter's image is built with a profile when its build is given the
     app's script, by the same command.** `docker build --build-arg PROFILE_FROM=train.sh` has
