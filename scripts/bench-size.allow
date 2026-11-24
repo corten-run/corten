@@ -1,7 +1,8 @@
 # Files under bench/ that are archives or over 256 KiB, each kept at this exact blob: benchmark
 # output whose paths are cited (removing it would shrink no clone, since history keeps every
-# blob). Dependency lock files are source input, and the size limit skips them.
-# scripts/bench-size.mjs reads this list (CONTRIBUTING.md, Benchmark results). One "<blob ID> <path>" per line, sorted by path.
+# blob). A dependency lock file beside its manifest is source input, and the size limit skips it.
+# The list only shrinks: scripts/bench-size.mjs fails on a line not in the base's list at the same
+# path and blob (CONTRIBUTING.md, Benchmark results). One "<blob ID> <path>" per line, sorted by path.
 d62d1fecc5301b79dff3f80d152efcf6fe514049 bench/fullstack/results/ab-jemalloc-br/raw.tar.xz
 88040ad2418345b7620547b22a9b70d0c5d3678d bench/fullstack/results/ab-jemalloc-tuned/raw.tar.xz
 ae3785eab3ce9e4f750697a92f0b5853c6748a5b bench/fullstack/results/ab-jemalloc/raw.tar.xz
