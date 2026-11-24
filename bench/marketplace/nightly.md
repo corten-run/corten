@@ -270,7 +270,9 @@ passed, no failures, a clean tree at the plan's commit) and parts that did not r
 1. Require exit 0, saved archive/checksum, deletion confirmation, a native replay that passes
    (`node bench/marketplace/validate.mjs <folder> <round> <measured-full-commit>` on the verified
    producer folder, or on each extracted `d<k>/` part of a split round; never on the merged
-   summary) and report.mjs validation:
+   summary), run from a checkout of the measured commit (for example
+   `git worktree add --detach <dir> <measured-full-commit>`), since it checks retained image
+   references against the loaded checkout's pins, and report.mjs validation:
    workload/round/commit match, clean before/after, raw qualification for the complete reserved
    candidate set, both browser gates and three full passes for every admitted app/profile
    (fewer only where the app's container stopped, below), no

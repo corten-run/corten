@@ -2,7 +2,7 @@
 # benchmark's axum + Maud app) under callgrind serving the item page and its JSON over one
 # keep-alive connection, uncompressed, as N1 and then N2 requests in two runs, so the difference
 # divided by N2 - N1 is one request's cost with startup and shutdown cancelled out; then split it
-# by crate with cost-by-crate.mjs. Run from the repository root in rust:1-bookworm, as the
+# by crate with cost-by-crate.mjs. Run from the repository root in rust:1.100.0-trixie, as the
 # README's "Instructions per request, by crate" says. Dumps go to /out.
 # TARGETS (page json), SOURCE (fixture, or api with API_BASE for the item API), each passed to
 # docker run with -e. Every request must answer 200 over one connection, or it stops.
