@@ -850,14 +850,15 @@ test("continuation retries past a create that errored after its launch deadline 
   const outer = path.join(p.h.base, continuationLock);
   assert.ok(fs.existsSync(outer)); await assert.rejects(prepare("r20"), /EEXIST/);
   fs.unlinkSync(outer);
-  await assert.rejects(prepare("r20"), /unresolved custody/);
+  // The retained batch lock of an unsettled child is a live peer, never a retry.
+  await assert.rejects(prepare("r20"), /peer supervision not confirmed/);
   // The later recheck's result: the same receipt and record, and the dead launch's locks released.
   const record = JSON.stringify(createErroredRecord(pending, ids, 3, at));
   const resolve = (bytes = record) => {
     fs.writeFileSync(receipt, bytes);
     fs.writeFileSync(statePath, JSON.stringify({ ...pending, createErrored: { ...ids, evidenceSha256: digest(record) } }));
   };
-  resolve(); await assert.rejects(prepare("r20"), /unresolved custody/, "a retained launch lock is still custody");
+  resolve(); await assert.rejects(prepare("r20"), /peer supervision not confirmed/, "a retained launch lock is still custody");
   fs.unlinkSync(launchLock); fs.unlinkSync(operationLock);
   resolve(record.replace('"droplets":3', '"droplets":4'));
   await assert.rejects(prepare("r20"), /unresolved custody/, "a changed receipt is not resolved");
