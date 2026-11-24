@@ -10,7 +10,7 @@ import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
-import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, interruptedFirstUpload, launchHostKey, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
+import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, interruptedFirstUpload, launchHostKey, offlineNeverStarted, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
@@ -111,14 +111,16 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
         archiveSha256: options.exitArchiveSha256, policy: "collect-one-sealed-exit-archive-with-measured-replay" };
     } else if (options.unusedBootstrapKnownHosts !== undefined) {
       const local = join(physicalRequest, `groups-${options.round}`), settled = settledBootstrap(saved, local), interrupted = interruptedFirstUpload(saved, local);
-      assert.ok(settled || interrupted || unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op, a settled upload prefix, or the unacknowledged first job upload");
+      assert.ok(settled || interrupted || unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op, a settled upload prefix, the unacknowledged first job upload,"
+        + " or an offline bound posted create that never started");
       if (settled || interrupted) assert.equal(saved.commit, head, "bootstrap uploads require the measured checkout");
       else if (saved.commit !== head) await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
       const key = regular(options.unusedBootstrapKnownHosts, 1024 * 1024);
       assert.ok(key.length, "verified host key required");
       if (interrupted) assert.ok(launchHostKey(local, saved).equals(key), "verified key differs from launch");
       recovery = { measuredCommit: saved.commit, hostId: saved.id, ip: saved.ip, knownHostsSha256: digest(key),
-        policy: interrupted ? "unacknowledged-first-upload-never-written-only" : settled ? "settled-uploads-unused-only-no-qualification" : "first-ssh-unused-only-no-qualification" };
+        policy: interrupted ? "unacknowledged-first-upload-never-written-only" : settled ? "settled-uploads-unused-only-no-qualification"
+          : offlineNeverStarted(saved) ? "offline-never-started-posted-create-unused-only-no-qualification" : "first-ssh-unused-only-no-qualification" };
     } else if (options.cancelMixedWait) {
       ownedMixedWait(saved); assert.equal(saved.status, "running");
       for (const key of ["mixedCancellation", "archiveSha256", "evidence", "deletionIntentAt", "collectedAt"]) assert.equal(saved[key], undefined);
@@ -252,7 +254,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   if (stagedSibling) assert.ok(remainingAdmission, "only fleet admission may launch a v5 sibling");
   const admission = manifest && !preview ? readAdmission() : undefined;
   const unconfirmed = manifest?.single ? admission?.subject.continuation.unconfirmed ?? [] : [];
-  const historicalIds = new Set(unconfirmed.map(({ accountId, id }) => {
+  // Every posted droplet of an earlier provider-errored attempt is fenced too, by ID
+  // alone: a renamed or untagged droplet with that ID still refuses the create.
+  const createFailures = manifest?.single ? admission?.subject.continuation.createFailures ?? [] : [];
+  const historicalIds = new Set([...unconfirmed, ...createFailures.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
     assert.equal(accountId, manifest.provider.accountId, "historical custody requires the same provider account");
     return full(id, /[1-9]\d*/, "historical custody requires a bound host ID");
   }));

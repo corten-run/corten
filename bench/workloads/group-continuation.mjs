@@ -70,9 +70,10 @@ const manifestOnly = (fleet, entries = readdirSync(fleet.root)) =>
   entries.length === 1 && entries[0] === `fleet-${fleet.manifest.round}.json`;
 const terminal = ({ state }) => state?.id && state.destroyedAt && ["collected", "retired"].includes(state.status);
 // A provider-errored create never had a host. It is settled once its child holds no
-// launch, operation ("available") or recheck lock.
-const createErrored = (saved) => saved.outcome === "available" && !!saved.state?.createErrored && !present(join(saved.stateRoot, ".groups-launch.lock"))
-  && !present(join(saved.local, createRecheckLock));
+// launch, operation ("available") or recheck lock, unless a later read saw its posted
+// droplet again: that recorded contradiction never settles.
+const createErrored = (saved) => saved.outcome === "available" && !!saved.state?.createErrored && !saved.state.createErrored.reappeared
+  && !present(join(saved.stateRoot, ".groups-launch.lock")) && !present(join(saved.local, createRecheckLock));
 const settled = (saved) => terminal(saved) || createErrored(saved);
 function verifyCreateErroredAttempt(saved) {
   assert.ok(createErrored(saved), "unresolved custody for the selected group");
@@ -224,8 +225,10 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
           try { verifyCreateErroredAttempt(saved); }
           catch (cause) { refuseAdmission("custody-replay", new Error("unresolved custody: selected provider-errored create is not verified", { cause })); }
           receipt = createErroredReceipt;
-          // The successor's child rechecks this attempt again immediately before its create.
-          createFailures.push({ root: fleet.root, round, group, manifestSha256, stateSha256, receiptSha256: state.createErrored.evidenceSha256 });
+          // The successor's child rechecks this attempt again immediately before its create,
+          // and its pre-create census refuses any droplet with the posted ID, whatever its name or tags.
+          createFailures.push({ root: fleet.root, round, group, manifestSha256, stateSha256, receiptSha256: state.createErrored.evidenceSha256,
+            accountId: manifest.provider.accountId, dropletId: state.createErrored.dropletId });
         }
         outcome = "create-errored";
       } else if (terminal(saved)) {

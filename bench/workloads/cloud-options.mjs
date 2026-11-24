@@ -241,9 +241,16 @@ export function controllerState(s, round, options) {
     // Terminal provider failure of the one create: never bound, provisioned or deleted.
     const c = s.createErrored;
     assert.ok(c && typeof c === "object" && !Array.isArray(c), "create failure record required");
-    assert.deepEqual(Object.keys(c).sort(), ["actionId", "dropletId", "evidenceSha256"]);
+    assert.deepEqual(Object.keys(c).filter((key) => key !== "reappeared").sort(), ["actionId", "dropletId", "evidenceSha256"]);
     for (const key of ["actionId", "dropletId"]) assert.ok(Number.isSafeInteger(Number(full(c[key], /[1-9]\d{0,15}/, key))), key);
     full(c.evidenceSha256, /[a-f0-9]{64}/, "create failure evidence hash");
+    if (c.reappeared !== undefined) {
+      // A later read saw the posted droplet again: a permanent contradiction of the receipt.
+      const r = c.reappeared;
+      assert.ok(r && typeof r === "object" && !Array.isArray(r) && JSON.stringify(Object.keys(r).sort()) === '["at","dropletId","via"]'
+        && ["exact-get", "inventory"].includes(r.via) && typeof r.at === "string" && new Date(r.at).toISOString() === r.at
+        && typeof r.dropletId === "string" && /^[1-9]\d{0,15}$/.test(r.dropletId), "create failure reappearance record");
+    }
     assert.equal(s.status, "creating", "a provider-errored create is never bound");
     for (const key of ["id", "ip", "archiveSha256", "evidenceSha256", "evidence", "extractionAttempts", "evidenceOutcome", "validation", "collectedAt",
       "exitCode", "deletionIntentAt", "destroyedAt", "retirement", "bootstrapReady", "preBootstrapTerminal", "launchHostKeySha256", "mixedCancellation", "auditIntent", "auditIntents"])

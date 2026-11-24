@@ -546,7 +546,8 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       const stage = controllerFailure(failure);
       // The child saved its terminal provider-errored create; the provider sent no host.
       const createErrored = (failure ? !failure.controlTreeUncertain && !failure.controlUncertain && diagnostic?.code === "create-errored-absent" : !launching && code === 1)
-        && job.outcome === "planned" && saved?.outcome === "available" && saved.state.status === "creating" && !!saved.state.createErrored;
+        && job.outcome === "planned" && saved?.outcome === "available" && saved.state.status === "creating" && !!saved.state.createErrored
+        && !saved.state.createErrored.reappeared;
       const row = { group: job.group, outcome: job.outcome !== "planned" ? job.outcome : createErrored ? "create-errored" : failure ? "error" : code === 0 ? "collected" : code === 1 ? "terminal-incomplete" : code === 3 ? "pending" : "error",
         ...(saved?.state?.id ? { id: saved.state.id } : {}), ...(!createErrored && (failure || job.outcome === "planned" && ![0, 1, 3].includes(code)) ? { error: "group-operation-failed" } : {}),
         ...(failure ? { uncertain: !!(failure.controlTreeUncertain || failure.controlUncertain) } : {}),

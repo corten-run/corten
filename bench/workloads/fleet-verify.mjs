@@ -362,6 +362,7 @@ export function recheckCreateErroredAttempt(root, row) {
   createErroredCustody(saved.local);
   verifyCreateErrored(saved.local, saved.state);
   assert.equal(saved.state.createErrored.evidenceSha256, row.receiptSha256, "prior create failure receipt changed");
+  assert.ok(saved.state.createErrored.dropletId === row.dropletId && saved.state.provider.accountId === row.accountId, "prior create failure changed");
 }
 // Launch custody is ordered by the exact index, separate from replay evidence.
 // In particular the worker must see a newly acquired staged batch lock even

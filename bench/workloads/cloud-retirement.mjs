@@ -30,8 +30,12 @@ export function createErroredRecord(s, { dropletId, actionId }, droplets, observ
     observedAt, dispatched: { create: 1, replacementCreate: 0, delete: 0, guest: false }, measurements: 0 };
 }
 // Rebuild the receipt from the saved state; only the census size and time come from the file.
+// A recorded reappearance of the posted droplet contradicts the receipt for good.
+export const createReappeared = "provider-errored create contradicted: its posted droplet was observed again on the saved account;"
+  + " this attempt never resolves or admits a retry; account for that droplet with the provider and preserve reservation";
 export function verifyCreateErrored(local, s) {
   assert.ok(s.createErrored, "no provider-errored create record");
+  assert.ok(!s.createErrored.reappeared, createReappeared);
   const bytes = regular(join(local, createErroredReceipt), 64 * 1024), record = JSON.parse(bytes);
   assert.equal(digest(bytes), s.createErrored.evidenceSha256, "create failure receipt changed; preserve reservation");
   assert.ok(Number.isSafeInteger(record.absence?.inventory?.droplets) && record.absence.inventory.droplets >= 0
@@ -790,15 +794,27 @@ function replayFailedNativeRetirement(local, state, expectedSha256, readGrouped)
   return record;
 }
 
+// An offline-handoff launch that stopped at its create, whose exact posted droplet a
+// later collect bound: no SSH, upload, seal or monitor ever existed. Its own pinned,
+// separately approved unused-host collection is the only route to retirement.
+export function offlineNeverStarted(state) {
+  const c = state.control;
+  return state.fleet?.single?.offlineHandoff === true && state.quietBootstrap === "prelogin" && c?.monitor === undefined
+    && Array.isArray(c?.ledger) && c.ledger.length === 0 && Array.isArray(c.sealed) && c.sealed.length === 0
+    && state.launchHostKeySha256 === undefined && state.createErrored === undefined
+    && typeof state.id === "string" && state.createPending?.dropletId === state.id;
+}
+
 function unusedBootstrapState(state, interrupted = false) {
   const c = state.control;
   const pending = c?.monitor?.phase === "pending" && !c.monitor.registrationSha256;
   // Offline launch has no monitor by design. Admit only this exact interrupted
-  // first-upload prefix, never an unmonitored no-op or settled prefix.
+  // first-upload prefix or a bound posted create that never started, never an
+  // unmonitored no-op or settled prefix.
   const offline = interrupted && state.fleet?.single?.offlineHandoff === true
     && state.quietBootstrap === "prelogin" && c?.monitor === undefined;
   return !!(state.id && state.ip && state.createIntentAt && c?.helperSha256 === guardianSha256
-    && (pending || offline) && !c.sealed.length
+    && (pending || offline || !interrupted && offlineNeverStarted(state)) && !c.sealed.length
     && (state.status === "preparing" ? !state.deletionIntentAt : state.status === "retired" && state.retirement?.kind === "unused")
     && ["bootstrapReady", "preBootstrapTerminal", "auditIntent", "auditIntents", "archiveSha256", "evidenceSha256", "extractionAttempts",
       "evidence", "evidenceOutcome", "exitCode", "validation", "collectedAt", "mixedCancellation"].every((key) => state[key] === undefined));
