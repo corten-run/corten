@@ -7391,7 +7391,14 @@ rules something out.
     the ordinary build's 143,443, lower in all 10, and 32,516 fewer where it compressed each
     answer, 14% of 230,402, lower in 8 of 10, from a command of 3,000 requests; ten earlier
     rounds of each on a busier machine gave 29% and 18%; one profiled build from an empty
-    target directory took about eleven minutes against about four for one ordinary build);
+    target directory took about eleven minutes against about four for one ordinary build;
+    what a command leaves out can cost more instructions a request than no profile, cycles
+    and time not measured: on card-market, by callgrind, a
+    profile whose command never asked for the item page made that page cost 4.1% more
+    instructions a request than the ordinary build, and 7.2% more in Brotli, and one whose
+    command never had an answer in Brotli made the two pages' Brotli answers cost 17.2% and
+    9.5% more, where what a command did ask for cost 3.9% to 26.7% fewer, each the median of
+    three counts, from each of two builds of each profile);
     platform (rustc's `-Cprofile-generate` and `-Cprofile-use` and the `llvm-tools`
     component's `llvm-profdata`; Cargo reads rustflags from the environment or from its
     configuration and never both, and builds a crate again, one from the registry included,
@@ -7400,7 +7407,10 @@ rules something out.
     separate target directory is the only place an instrumented build cannot be mistaken for
     the release; a refusal before the first build costs nothing, where a dropped linker flag
     or a missing tool found after it costs a build); bet (an app has, or will write, a command
-    that reaches the routes its readers do, which the build cannot check: a command that sent
+    that reaches the routes its readers do, in the codings they are answered in, which the
+    build cannot check (and a release it builds without a word from a command that left some
+    out is bet to be no slower than the ordinary one, where the counts above say it can take
+    more instructions on what was left out): a command that sent
     the copy nothing leaves a profile of the app starting and stopping; and the app listens on
     `PORT` as `corten dev` already asks of it); value (fast and proven fast, with mistakes
     failing early and one way to build a release, and the option kept off every app that does
@@ -7410,12 +7420,16 @@ rules something out.
     profile itself, so the refusal or the steps go; the standard library can ask a child
     process to stop, or an app on Windows needs the option; an app's release needs a Cargo
     argument not on the list (a cross build, a custom profile); or an app measures a profile from its own command
-    gaining nothing over the ordinary build.
+    gaining nothing over the ordinary build, or a release that is slower than the ordinary
+    build, in cycles or time, on what its command left out: the build would then have to say
+    what the copy was sent, or refuse a copy that was sent nothing.
 
     Last checked: 2026-11-19, the rounds above at `b032155e2` (the earlier ones on the sources
     of `70544a54a`) with rustc and Cargo 1.99.1 in `rust:1-bookworm`, the catalog app
     (`bench/catalog/corten`) with its default features on one CPU under `wrk` with 64
-    connections; 2026-11-19, Cargo 1.99.1: a build given `-Cprofile-use` compiled a registry
+    connections; 2026-11-24, what a command leaves out, `examples/card-market` at `be1192a7b`
+    with rustc 1.100.0 in `rust:1-trixie` and callgrind 3.24.0 over one connection (tag
+    `evidence/profile-coverage`); 2026-11-19, Cargo 1.99.1: a build given `-Cprofile-use` compiled a registry
     crate again after the file at the same path was replaced, an ordinary build after a
     profiled one compiled nothing and put the binary without the profile back in
     `target/release`, an empty `RUSTFLAGS` left the configuration's flags out, and a file
