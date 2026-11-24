@@ -548,8 +548,9 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
 }
 
 /// The mark of an answer [`settle`] found to be one visitor's: it sets a cookie, read a caller,
-/// has this request's nonce, or is a [`Cache`] answer to a request with credentials ([`Seen`]); or
-/// the MCP endpoint made it for a caller its check found (`personal`). A submit key it drew is
+/// has this request's nonce, or is a [`Cache`] answer to a request with credentials ([`Seen`]); an
+/// unstaged route's answer that sets a cookie (`unstaged_headers` in `route.rs`); or the MCP
+/// endpoint made it for a caller its check found (`personal`). A submit key it drew is
 /// marked already ([`Unrepeatable`]). Put on as the answer is settled, it stays on the answer as
 /// [`Unshared`] does: another Corten app whose staged middleware relays it inline, as it is or
 /// changed in place (its cookie taken off included), settles it as personal too ([`settle`]),

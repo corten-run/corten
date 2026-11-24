@@ -2104,6 +2104,75 @@ async fn another_app_s_answer_that_sets_a_cookie_stays_personal_without_it() {
     assert!(wrong.is_empty(), "another app's cookie-setting answer relayed inline without its cookie, open to a CDN: {wrong:#?}");
 }
 
+/// The same for another Corten app's unstaged route: its answer that sets a cookie (with nothing said
+/// of caching, with a shared `Cache-Control` and a CDN's lifetime, with a private one) stays that
+/// visitor's when a staged middleware of the app that relays it inline takes the cookie off and
+/// rewrites its caching headers: `private` whatever that middleware made of its `Cache-Control`
+/// (`private, no-store` where it named `no-store`), with none of the caching headers a CDN reads
+/// first, and with the same body. The same body sent in a fresh answer in its place, and the
+/// unstaged answer that set no cookie relayed the same way, keep what the middleware wrote (the
+/// controls).
+#[tokio::test]
+async fn another_app_s_unstaged_answer_that_sets_a_cookie_stays_personal_without_it() {
+    let other = App::new(super::unstaged::unstaged_url::router()).router();
+    let home = || get(|| async { "home" });
+    let routes = || {
+        Table::new()
+            .route("/cookie", home())
+            .route("/shared-cookie", home())
+            .route("/private-cookie", home())
+            .route("/ping", home())
+    };
+    // Without a `Cookie`, so that nothing but the answer's own cookie makes it personal.
+    let asked = |router: &Router, uri: &'static str, fresh: bool| {
+        let mut req = Request::get(uri);
+        if fresh {
+            req = req.header("x-fresh", "1");
+        }
+        let router = router.clone();
+        async move {
+            let (parts, body) = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap().into_parts();
+            (parts.status, parts.headers, String::from_utf8_lossy(&body.collect().await.unwrap().to_bytes()).into_owned())
+        }
+    };
+    let mut wrong = Vec::new();
+    for (cache, sent) in
+        [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
+    {
+        let router = App::new(Routes::from(routes()))
+            .middleware((CdnRecaches(cache), TakesTheCookieOff, RelaysAnotherApp(other.clone())))
+            .router();
+        for (uri, said, fresh, personal) in [
+            ("/cookie", "seen", false, true),
+            ("/shared-cookie", "id", false, true),
+            ("/private-cookie", "id", false, true),
+            ("/cookie", "seen", true, false),
+            ("/shared-cookie", "id", true, false),
+            ("/private-cookie", "id", true, false),
+            ("/ping", "pong", false, false),
+        ] {
+            let (status, headers, body) = asked(&router, uri, fresh).await;
+            if status != StatusCode::OK || body != said || headers.contains_key(header::SET_COOKIE) {
+                wrong.push(format!("{uri} fresh {fresh}, {cache:?}: {status} {body:?} {headers:?}"));
+                continue;
+            }
+            if personal {
+                wrong.extend(kept_from_cdns(&headers, sent).into_iter().map(|what| format!("{uri}, {cache:?}: {what}")));
+            } else {
+                for name in CDN_OVERRIDES {
+                    if headers.get(name).is_none_or(|value| value != "public, max-age=60") {
+                        wrong.push(format!("{uri} fresh {fresh}, {cache:?}: nothing made it personal, and it lost {name}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "another app's unstaged cookie-setting answer relayed inline without its cookie, open to a CDN: {wrong:#?}"
+    );
+}
+
 /// Staged middleware that answers with a typed refusal turned into a `200`, made before the request's
 /// stages ran (when the app was built, held here) or, with `x-spawned`, on another thread.
 struct AnswersAMadeRefusal(std::sync::Mutex<Vec<crate::response::Response>>);

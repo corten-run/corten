@@ -1283,7 +1283,9 @@ that sets a cookie is `private, no-cache` (`private, no-store` when it says `no-
 caching it says, and it and a `NoStore` one (a `NoStore<Relay>`'s upstream headers included) lose
 any `*-cache-control` header and the other caching headers a CDN reads first that
 [Caching](#caching) lists (`Surrogate-Control`, `Edge-Control`, ...), so no shared cache hands one
-visitor's cookie or one-time answer to another.
+visitor's cookie or one-time answer to another. One that sets a cookie carries that with it, as a
+staged answer does: another app of Corten's that relays it inline and takes the cookie off still
+sends it as that visitor's ([Caching](#caching)).
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
@@ -1454,10 +1456,11 @@ before `Cache-Control` that a middleware wrote, whatever its own `Cache-Control`
 plain `private`, or `no-store`), so a CDN that obeys them does not keep one visitor's answer for
 the next: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
 `Vercel-CDN-Cache-Control`, `Surrogate-Control`, Akamai's `Edge-Control` and nginx's
-`X-Accel-Expires`. Such an answer read a caller, sets a cookie, has the request's nonce or draws a
-submit key, or is a `Public` answer to a request with credentials, or is a tool's answer from an
-MCP endpoint whose `Tools::auth` found its caller (with `Tools::authorization` too, any answer
-that check let through, the list of tools included). The answer carries that with it: another app
+`X-Accel-Expires`. Such an answer read a caller, sets a cookie (an unstaged route's too), has the
+request's nonce or draws a submit key, or is a `Public` answer to a request with credentials, or
+is a tool's answer from an MCP endpoint whose `Tools::auth` found its caller (with
+`Tools::authorization` too, any answer that check let through, the list of tools included). The
+answer carries that with it: another app
 of Corten's whose staged middleware asks it for an answer inline and relays it (as it is, or
 changed in place, its cookie taken off included) sends it the same way, though that app's own
 request read no caller, while an answer that middleware makes in its place, or a relayed answer

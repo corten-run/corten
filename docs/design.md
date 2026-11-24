@@ -2997,10 +2997,11 @@ rules something out.
     round's head marks and settles as Corten's, at `2dc94faf2` against `14126d2a8` the same way: a call whose arguments do not fit the
     tool, the `isError` result Corten makes in its place, 766 more (33,976.7 against 33,210.7), and
     a call to a tool the endpoint does not have, Corten's JSON-RPC error, 771 more (31,769.4 against
-    30,998.2). These are instructions in process, not cycles: the quiet-host cycle run declared for this
-    change (the plain and kept pages, the router's and Corten's failures, the catalog's item page and
-    JSON) has no MCP workload and has not been run at this head, so these counts are the MCP
-    endpoint's only evidence and its cycles under load are outstanding; 2026-11-23, the same plain page at
+    30,998.2). These are instructions in process, not cycles: the quiet-host cycle run as round 15
+    declared it (the plain and kept pages, the router's and Corten's failures, the catalog's item
+    page and JSON) had no MCP workload; the current declaration has two (an authenticated tool call
+    and a call to a tool the endpoint does not have) and has not been measured, so these counts are
+    the MCP endpoint's only evidence and its cycles under load are outstanding; 2026-11-23, the same plain page at
     `ee2d8f7f0` (round 14's head) against main `a01dd5109`, which it merged (three rounds
     alternating the two builds, every run within 1.2 of the others): 104 more (16,383.6 against
     16,279.6); 2026-11-23, the same at
