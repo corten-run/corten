@@ -205,7 +205,7 @@ test("a browser check whose image command is unset fails instead of running on t
 }, () => {
   const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
   const oracle = workflow.jobs.harness.steps.find((step) => step.run?.includes("check:marketplace")).run;
-  const run = (env) => spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", oracle.replace("npm run check:marketplace", "true ran")],
+  const run = (env) => spawnSync("bash", ["-e", "-c", oracle.replace("npm run check:marketplace", "true ran")],
     { encoding: "utf8", timeout: 20000, env });
   const { PLAYWRIGHT, ...unset } = process.env;
   const missing = run(unset);
@@ -237,8 +237,8 @@ test("the image step's Node probe reports a failed, empty or stalled docker run 
     "esac",
   ].join("\n") + "\n");
   chmodSync(docker, 0o755);
-  // Run as GitHub runs a step's script, under -e and pipefail.
-  const run = (mode, lines) => spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c",
+  // Run as GitHub runs a step without `shell:`, under `bash -e`.
+  const run = (mode, lines) => spawnSync("bash", ["-e", "-c",
     ['image="the-image"', ...lines].join("\n")], {
     encoding: "utf8", timeout: 20000, env: { ...process.env, PROBE: mode, PATH: `${dir}:${process.env.PATH}` },
   });
@@ -314,12 +314,13 @@ test("each browser check receives exactly its image command from the image step,
     "$(command -v docker)": join(bin, "docker"), "$PWD": realpathSync(repo), "$image": image };
   const concrete = (word) => Object.entries(values).reduce((out, [name, value]) => out.replaceAll(name, value), word);
   const calls = () => existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
-  // GitHub writes a step's script to a file and runs it with bash --noprofile --norc -eo pipefail.
+  // A step without `shell:` runs as GitHub runs it on Linux: its script in a file, under `bash -e`
+  // (`bash -e {0}`), with no pipefail.
   const bash = (script, options) => {
     const file = join(dir, "step.sh");
     writeFileSync(file, script);
     rmSync(log, { force: true });
-    return spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", file], { encoding: "utf8", timeout: 60000, ...options });
+    return spawnSync("bash", ["-e", file], { encoding: "utf8", timeout: 60000, ...options });
   };
   const path = `${bin}:${process.env.PATH}`;
 
@@ -330,7 +331,8 @@ test("each browser check receives exactly its image command from the image step,
     const githubEnv = join(dir, `${job}.env`);
     writeFileSync(githubEnv, "");
     // Run from the checkout with no inherited PWD, so bash's $PWD is the checkout's real path.
-    const setup = bash(steps[at].run, { cwd: repo, env: { PATH: path, GITHUB_ENV: githubEnv, DOCKER_LOG: log } });
+    // The hosted runner's RUNNER_ENVIRONMENT, so a flag added only on a hosted runner shows here too.
+    const setup = bash(steps[at].run, { cwd: repo, env: { PATH: path, GITHUB_ENV: githubEnv, DOCKER_LOG: log, RUNNER_ENVIRONMENT: "github-hosted" } });
     assert.equal(setup.status, 0, `${job} image step: ${setup.stderr}`);
     assert.ok(setup.stdout.includes(`in ${image} v26.13.1\n`), `${job}: ${setup.stdout}`);
     assert.deepEqual(calls(), [["pull", image], ["run", "--rm", image, "node", "--version"]], `${job}: the step's own docker calls`);
@@ -348,7 +350,7 @@ test("each browser check receives exactly its image command from the image step,
       assert.ok(!command.includes("${{"), command);
       // An empty directory leaves the catalog tests' glob as written, so its words compare as is.
       const result = bash(command + "\n", { cwd: elsewhere,
-        env: { PATH: path, DOCKER_LOG: log, ...exported, ...(step.env ?? {}) } });
+        env: { PATH: path, DOCKER_LOG: log, RUNNER_ENVIRONMENT: "github-hosted", ...exported, ...(step.env ?? {}) } });
       assert.equal(result.status, 0, `${job}: ${command}: ${result.stderr}`);
       const tail = guarded[2].replaceAll("${{ matrix.app }}", "gin").split(" ");
       assert.deepEqual(calls().map((args) => ["docker", ...args]),
