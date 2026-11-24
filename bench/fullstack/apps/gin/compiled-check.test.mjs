@@ -292,6 +292,36 @@ test('the helper writes the run argv: labels first, the built options, then -- a
     '--label', `${ownerKey}=run-1`, '--label', `${attemptKey}=run-1-2`, '--', '[::1]:5000/alpine:expected']);
 });
 
+test("the argv is built from copies read once, so a caller array's own methods, iterator or getters cannot add flags or change the image", () => {
+  const substitute = ['--label', `${ownerKey}=other`, '--label', `${attemptKey}=other`, '--', 'alpine:substitute'];
+  // An array whose methods and iterator are replaced, and whose element is a getter that answers
+  // differently after the first read.
+  const hostile = (first, later) => {
+    const array = [];
+    let reads = 0;
+    Object.defineProperty(array, 0, { get: () => (++reads === 1 ? first : later), enumerable: true, configurable: true });
+    for (const method of ['every', 'flatMap', 'map', 'forEach', 'some', 'filter', 'slice', 'concat'])
+      Object.defineProperty(array, method, { value: () => substitute });
+    Object.defineProperty(array, Symbol.iterator, { value: function* () { yield* substitute; } });
+    return array;
+  };
+  const daemon = fakeDaemon();
+  const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1', labels: hostile('agent.owner=codex', `${ownerKey}=other`) });
+  owned.run({ volumes: hostile('/tmp/l:/fixtures:ro', '/:/host'), publish: hostile('127.0.0.1::8080', '0.0.0.0:80:8080') }, 'image', 'n');
+  assert.deepEqual(daemon.calls[0], ['run', '-d', '--name', 'n', '--label', 'agent.owner=codex',
+    '--label', `${ownerKey}=run-1`, '--label', `${attemptKey}=run-1-1`,
+    '--publish', '127.0.0.1::8080', '--volume', '/tmp/l:/fixtures:ro', '--', 'image']);
+  // A getter on the options object is read once too.
+  let reads = 0;
+  owned.run({ get cpus() { return ++reads === 1 ? '1' : '1 --label x'; } }, 'image', 'm');
+  assert.deepEqual(daemon.calls[1].slice(-4), ['--cpus', '1', '--', 'image']);
+  assert.equal(reads, 1);
+  // A label that is not a string is refused before any Docker command.
+  const none = fakeDaemon();
+  assert.throws(() => ownedContainers({ docker: none.docker, runId: 'run-1', labels: [{ toString: () => 'a=b' }] }), /labels are key=value strings/);
+  assert.deepEqual(none.calls, []);
+});
+
 test('an error class is read once, so a getter that changes cannot pass the allowlist and print other text', async t => {
   const id = 'b'.repeat(64);
   const changing = () => {

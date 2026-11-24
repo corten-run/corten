@@ -72,14 +72,25 @@ const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, millise
 // Caller labels go on every container. Docker keeps a key's last value, so a caller label with
 // the owner key or a key in its dot-delimited namespace would take a container out of this
 // run's ownership checks; it is refused before any Docker command.
+// Returns a fresh copy, each element read once, so nothing the caller's array does later (its
+// own methods, getters or later edits) reaches the argv.
 export function checkLabels(labels) {
-  assert.ok(Array.isArray(labels), 'labels are key=value strings');
-  for (const label of labels) {
-    const key = /^([\w.-]+)=[\w.:/-]*$/.exec(label)?.[1];
+  const copy = snapshot(labels, 'labels are key=value strings');
+  for (const label of copy) {
+    const key = typeof label === 'string' ? /^([\w.-]+)=[\w.:/-]*$/.exec(label)?.[1] : undefined;
     assert.ok(key, 'labels are key=value strings');
     assert.ok(key !== ownerKey && !key.startsWith(`${ownerKey}.`), `label ${key} is reserved for the check's ownership labels`);
   }
-  return labels;
+  return copy;
+}
+
+// A new plain array of `value`'s elements, each read once by index; the caller's array methods
+// and iterator are never called.
+function snapshot(value, message) {
+  assert.ok(Array.isArray(value), message);
+  const copy = [];
+  for (let index = 0; index < value.length; index++) copy.push(value[index]);
+  return copy;
 }
 
 // The `docker run` options a check may set, as a structured object; the helper writes the argv
@@ -87,8 +98,9 @@ export function checkLabels(labels) {
 // image Docker runs. Each value is passed as its flag's separate argument.
 const text = value => typeof value === 'string' && value.length > 0 && !/[\0\r\n]/.test(value);
 const strings = (value, flag) => {
-  assert.ok(Array.isArray(value) && value.every(text), `${flag} values are non-empty strings`);
-  return value.flatMap(item => [flag, item]);
+  const copy = snapshot(value, `${flag} values are non-empty strings`);
+  assert.ok(copy.every(text), `${flag} values are non-empty strings`);
+  return copy.flatMap(item => [flag, item]);
 };
 const runOptions = {
   cpus(value) { assert.ok(typeof value === 'string' && /^\d+(\.\d+)?$/.test(value), 'cpus is a decimal string'); return ['--cpus', value]; },
@@ -109,11 +121,16 @@ const runOptions = {
 export function runArguments(options) {
   assert.ok(options && typeof options === 'object' && !Array.isArray(options) && Object.getPrototypeOf(options) === Object.prototype, 'options are a plain object');
   for (const key of Object.keys(options)) assert.ok(Object.hasOwn(runOptions, key), `unknown docker run option ${key}`);
-  return Object.entries(runOptions).flatMap(([key, build]) => options[key] === undefined ? [] : build(options[key]));
+  const args = [];
+  for (const [key, build] of Object.entries(runOptions)) {
+    const value = options[key];
+    if (value !== undefined) args.push(...build(value));
+  }
+  return args;
 }
 
 export function ownedContainers({ docker, runId, labels = [], window = reconcileWindow, wait = sleep, now = () => performance.now() }) {
-  checkLabels(labels);
+  const ownLabels = checkLabels(labels);
   assert.match(runId, /^[\w.-]{1,64}$/, 'runId is a short label value');
   const owner = `${ownerKey}=${runId}`;
   const record = { runId, ownerLabel: owner, created: [], unacknowledged: [], removed: [], recovered: [], failures: [], complete: false };
@@ -161,7 +178,7 @@ export function ownedContainers({ docker, runId, labels = [], window = reconcile
       assert.ok(typeof image === 'string' && image.length > 0 && !image.startsWith('-'), 'the image is a non-empty argument that is not an option');
       const label = `${attemptKey}=${runId}-${++attempts}`;
       let id;
-      try { id = docker(['run', '-d', '--name', name, ...labels.flatMap(value => ['--label', value]), '--label', owner, '--label', label, ...args, '--', image]); } catch (error) {
+      try { id = docker(['run', '-d', '--name', name, ...ownLabels.flatMap(value => ['--label', value]), '--label', owner, '--label', label, ...args, '--', image]); } catch (error) {
         if (error?.sent !== false) record.unacknowledged.push({ name, label });
         throw error;
       }
