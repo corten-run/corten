@@ -300,15 +300,85 @@ not
 ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
 Rerun it as above.
 
-The watchlist's waiting-submit cases press their buttons in the page (`button.click()`), so
-each submit runs before the test changes the form's values or releases its held answer. A
-loaded browser can acknowledge Playwright's click before dispatching that submit: waiting for
-the answer alone does not prove that the first write used the old values or that the second
-press met it still pending. The cases still wait for their output condition, then check the
-busy mark sampled while the answer was held, the exact sends and the renewed submit key.
-The first request is captured before editing its fields; file output is polled on a timer,
-independent of animation frames. Neither the six-second outcome bound nor the window for
-detecting forbidden sends is extended.
+The watchlist's waiting-submit and submit-key cases press their buttons in the page
+(`button.click()`), so each submit runs before the test changes the form's values, presses
+again or releases its held answer. A loaded browser can acknowledge Playwright's click before
+dispatching that submit: waiting for the answer alone does not prove that the first write used
+the old values or that the second press met it still pending. A press that must meet a request
+still on its way holds that request's answer until the case has made it, never for a fixed time,
+and the cases count their submits, so a press meant to send nothing is seen to have been made.
+The other checks that act while a request is out (a busy mark, a navigation before a write's
+page, a script's `replaceState` during a read) hold it the same way. The busy mark's write check
+sees each post where the page calls `fetch`, since a route hears of a request only some time
+after the browser sends it: it requires the waiting button's post sent only once the held answer
+is drawn, the two posts and their answers in the route's log, and the waiting post's own answer
+drawn within five seconds of the release. The `replaceState` check loads the page with the
+document the server draws for the write's receipt, with its status line and its head's read-again
+tag put in place as the server draws them while the write has not landed, so the page comes in
+waiting whether or not the store had the write by the time the test asked for that document; a
+fixture that draws no page for the write fails the check rather than skipping it. The page is
+loaded after a blank one, and the runtime's reads of a page are recorded from the start of that
+document whatever their address. Its first read of the alerts page is held from before the load,
+so the read held is the first however soon it comes, and it must be the document's first read, at
+the receipt's address. The check requires the navigation reading it to be still on its way when
+the script replaces the address, the replaceState to cancel that navigation, and the held read to
+fail after the replaceState while it is still held (not before it, and not once it is let go); then
+every later read made at its address with only `shown` changed, one of them answered with success,
+`Saved.` drawn in the same document, and the page left at that address. A wait for a request that
+a held answer lets out starts when that answer is let go. The check of a navigation started before
+a write's page comes requires the write's request, the navigation's request read whole and the
+Stocks page drawn in the same document (its title and its watch form in `<main>`), five seconds
+each; each press shares its five seconds with the wait for the request it sends, so a press that
+stalls fails the check too. Without one it fails and does no more work on its page, and the next
+check starts from the News page it left, gone back to within ten seconds. The way back starts once
+the page it is on has loaded (the runtime handles navigations only then), may load the News page in
+full, and ends once that page has loaded; a read of the page that fails while it loads means only
+not yet. A check that stops before its first press never left the page and does not go back. Only a
+page that does not get back stops the smoke, after the check's hold, listeners and the News page's
+route are removed.
+The check that navigating away abandons a held write requires that write to
+fail while it is still held, within five seconds of the page's leaving. The check of a navigation
+during a patch's stylesheet load holds the one stylesheet the patch links until the runtime has
+read the navigation's answer, and requires that
+the page did not swap while it was held and that the browser requested it once while it was
+held. It runs twice: once the load succeeds, and the page swaps in with the area's rules applied,
+the stylesheet requested once in all; once it fails, and the page loads in full, as a navigation
+whose own stylesheet fails does, which may request the stylesheet again. Its steps before the
+stylesheet is let go share 15 seconds, and each arm's steps after it 10. A step that fails, runs
+out of that time or settles only after it fails the check, and no page work starts after it; a
+handle a wait returns is read in a step of its own, so no read of it starts once the time is up.
+Its page is closed however the check ends.
+Only the failed load tells a navigation that shares the load from one that took the patch's link
+for a loaded stylesheet whatever the
+page's handler modules do, since those also hold the swap: with a module held past the
+stylesheet, a runtime that skips the shared load still swaps in styled, but on the failed load it
+swaps in unstyled instead of loading in full.
+The watch form's other presses (watching and unwatching a stock, the submit the network fails
+and the formaction button) are made in the page too, as a loaded Firefox's click on them can miss.
+The two Firefox failures in
+[#2014 Firefox smoke fails a different waiting-submit or template-copy case on two commits that touch neither the runtime nor the watchlist](https://github.com/corten-run/corten/issues/2014)
+each logged only that an expected post was never sent. A loaded Firefox reproduction of those
+cases showed one way that happens: Playwright's click reached the page after it had checked what
+was under its point, the page's live updates had moved the button by then, and the click landed
+on `<main>` or a `<div>` beside it. The CI logs do not show whether that is what happened there.
+The cases still wait for their output condition, then check the busy mark sampled while the
+answer was held, the exact sends and the renewed submit key. The first request is captured
+before editing its fields. An error a case waits for is its form's own. The check of a submit the
+network fails presses its button in the page task that starts listening for the error and its
+six-second timer, so its six seconds start at the press, and its handler fails an error heard
+after them even if the timer has not run yet. The other checks that wait for a form's
+error (the submit that waited for a failed write, the submit keys, the template copies and the
+cut connections) listen from before the press but start their six seconds once the press has
+returned, or, for the held failure, once its answer is let go; a case whose error does not come
+in that time fails and stops, without making its retry. Output is polled on a timer, independent
+of animation frames, and output that comes only after its bound fails the check. The 205 check's
+waiting submit counts by when its request was seen, so one seen after its six seconds fails the
+check whichever of it and the timer is handled first. Each of these checks reads its outcome,
+then removes the listeners, routes and holds it installed however it ends, a press that throws or a
+wait that times out included. The cut-connection and template-copy checks set up inside that guard
+too, so a setup step that fails part way is undone, and each of their removals runs even when
+another fails. Neither the six-second outcome bound nor the window for detecting forbidden sends is
+extended.
 
 The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
 same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a
