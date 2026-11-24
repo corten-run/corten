@@ -7526,7 +7526,15 @@ rules something out.
     `crates/corten/src/kept.rs`). The hash of its body and its bytes in each coding are made
     once and stay with it, so the tag and the compression after the handler cost a kept page a
     lookup. It is on unless the app says otherwise, holds at most 32 MiB
-    (`App::kept_answers`), and is off under `corten dev`.
+    (`App::kept_answers`), and is off under `corten dev`. There the store stands but keeps and
+    gives nothing, so the code that decides what a release build keeps still runs, and each
+    `Public` route says in the log whether that build keeps its answer, and if not the first
+    reason that code found, once for each route and verdict
+    ([#1801 Nothing tells an author whether a Public page is kept, or why not](https://github.com/corten-run/corten/issues/1801)):
+    a page that is not kept looks the same from outside save for a missing `Age`, so without it
+    an author first met the difference in production. Each refusal records its reason only under
+    `corten dev`, behind the flag the request's app already carries, and a reason a second list
+    of the rules would give could drift from what the build does.
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
     give to anyone is the rule checked when the app compiles, that a `Public` handler takes only

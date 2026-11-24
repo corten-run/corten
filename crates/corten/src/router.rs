@@ -39,6 +39,7 @@ use http::Uri;
 use serde::de::{self, DeserializeOwned, DeserializeSeed, Deserializer, SeqAccess, Visitor};
 
 use crate::form::FormError;
+use crate::kept::Verdict;
 
 /// A request's answer on its way: what an [`Endpoint`] and the stages give.
 pub(crate) type Answering = Pin<Box<dyn Future<Output = Response> + Send>>;
@@ -157,9 +158,53 @@ impl Endpoint for Keeping {
                 None => res,
             };
             if drew_key {
+                missed.drew_key();
                 return res;
             }
             missed.keep(res).await
+        })
+    }
+
+    fn action_patches(&self) -> bool {
+        self.inner.action_patches()
+    }
+}
+
+/// Under `corten dev`, a `Public` handler with what goes around it ([`Table::telling`]): says in the
+/// log whether a release build keeps its answer to a `GET`, and if not the first reason, as the
+/// code that decides it found it ([`Verdict`]), once for each verdict the route has. Nothing is
+/// kept under `corten dev`, so this is where an author learns it; a release build has none.
+struct Telling {
+    /// Why its answer is never kept, known when the route was made.
+    unkept: Option<Verdict>,
+    /// The verdicts it has said ([`Verdict::tell`]).
+    told: Arc<std::sync::Mutex<Vec<std::mem::Discriminant<Verdict>>>>,
+    inner: Route,
+}
+
+impl Endpoint for Telling {
+    fn call(&self, req: Request) -> Answering {
+        // A `HEAD` or a write is not kept, whatever its route.
+        if *req.method() != Method::GET {
+            return self.inner.call(req);
+        }
+        let path = req.uri().path().to_owned();
+        let signal = req.extensions().get::<crate::Signal>().cloned();
+        let (unkept, told) = (self.unkept, self.told.clone());
+        let answer = self.inner.call(req);
+        Box::pin(async move {
+            let res = answer.await;
+            // An unstaged route's request has no signal, and no answer kept for it
+            // (`crate::kept::Asked::of`).
+            let verdict = match &signal {
+                _ if unkept.is_some() => unkept,
+                None => Some(Verdict::Unstaged),
+                Some(signal) => Verdict::of(signal),
+            };
+            if let Some(verdict) = verdict {
+                verdict.tell(&path, &told);
+            }
+            res
         })
     }
 
@@ -277,18 +322,27 @@ pub(crate) fn named(query: Option<&str>) -> Named<'_> {
     found
 }
 
-/// A handler for some methods, waiting for its state (`S`) or with it.
-enum Slot<S> {
+/// A handler for some methods, waiting for its state (`S`) or with it, and, of a `Public` one,
+/// what `corten dev` says of it ([`Telling`]).
+struct Slot<S> {
+    held: Held<S>,
+    /// Of a `Public` handler: `Some`, with the reason a release build never keeps its answer,
+    /// known when the route is made (`crate::handler::Handler::public`), or none when it may.
+    public: Option<Option<Verdict>>,
+}
+
+enum Held<S> {
     Unbound(Arc<dyn Fn(S) -> Route + Send + Sync>),
     Bound(Route),
 }
 
 impl<S> Clone for Slot<S> {
     fn clone(&self) -> Self {
-        match self {
-            Slot::Unbound(make) => Slot::Unbound(make.clone()),
-            Slot::Bound(route) => Slot::Bound(route.clone()),
-        }
+        let held = match &self.held {
+            Held::Unbound(make) => Held::Unbound(make.clone()),
+            Held::Bound(route) => Held::Bound(route.clone()),
+        };
+        Slot { held, public: self.public }
     }
 }
 
@@ -296,7 +350,8 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
     fn handler<H: Handler<T, S>, T: 'static>(handler: H) -> Self {
         // Known when the route is made, so no other route's requests ask.
         let keeps = handler.keeps();
-        Slot::Unbound(Arc::new(move |state| {
+        let public = handler.public().map(Result::err);
+        let held = Held::Unbound(Arc::new(move |state| {
             let handled: Route = Arc::new(Handled { handler: handler.clone(), state, types: PhantomData });
             match keeps {
                 Some(shape) => {
@@ -305,29 +360,47 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
                 }
                 None => handled,
             }
-        }))
+        }));
+        Slot { held, public }
     }
 
     fn bind<S2>(self, state: &S) -> Slot<S2> {
-        match self {
-            Slot::Unbound(make) => Slot::Bound(make(state.clone())),
-            Slot::Bound(route) => Slot::Bound(route),
-        }
+        let held = match self.held {
+            Held::Unbound(make) => Held::Bound(make(state.clone())),
+            Held::Bound(route) => Held::Bound(route),
+        };
+        Slot { held, public: self.public }
     }
 
     fn gives(self, gives: &'static [fn() -> std::any::TypeId]) -> Self {
-        match self {
-            Slot::Unbound(make) => Slot::Unbound(Arc::new(move |state| Arc::new(Giving { gives, inner: make(state) }))),
-            Slot::Bound(inner) => Slot::Bound(Arc::new(Giving { gives, inner })),
-        }
+        let held = match self.held {
+            Held::Unbound(make) => Held::Unbound(Arc::new(move |state| Arc::new(Giving { gives, inner: make(state) }))),
+            Held::Bound(inner) => Held::Bound(Arc::new(Giving { gives, inner })),
+        };
+        Slot { held, public: self.public }
+    }
+
+    /// Under `corten dev`: a `Public` handler's requests through [`Telling`], outside all else
+    /// that goes around it.
+    fn telling(self) -> Self {
+        let Some(unkept) = self.public else { return self };
+        let told = Arc::<std::sync::Mutex<Vec<_>>>::default();
+        let held = match self.held {
+            Held::Unbound(make) => Held::Unbound(Arc::new(move |state| {
+                Arc::new(Telling { unkept, told: told.clone(), inner: make(state) }) as Route
+            })),
+            Held::Bound(inner) => Held::Bound(Arc::new(Telling { unkept, told, inner })),
+        };
+        // Told once: the slot is not wrapped again.
+        Slot { held, public: None }
     }
 }
 
 impl Slot<()> {
     fn route(self) -> Route {
-        match self {
-            Slot::Unbound(make) => make(()),
-            Slot::Bound(route) => route,
+        match self.held {
+            Held::Unbound(make) => make(()),
+            Held::Bound(route) => route,
         }
     }
 }
@@ -515,6 +588,12 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
         }
     }
 
+    /// Under `corten dev`: each `Public` handler's requests through [`Telling`]. A page's named
+    /// posts are writes, which are never kept.
+    fn telling(self) -> Self {
+        MethodSet { slots: self.slots.map(|slot| slot.map(Slot::telling)), fallback: self.fallback.map(Slot::telling), ..self }
+    }
+
     /// Each handler marking its request with the layout reads it gives itself.
     pub(crate) fn gives(self, gives: &'static [fn() -> std::any::TypeId]) -> Self {
         MethodSet {
@@ -664,6 +743,13 @@ impl<S: Clone + Send + Sync + 'static> Table<S> {
     /// with none has nothing a write could drop, so it counts no writes ([`crate::kept`]).
     pub(crate) fn keeps(&self) -> bool {
         self.routes.iter().any(|placed| placed.methods.keeps)
+    }
+
+    /// Under `corten dev`: each `Public` handler's requests through [`Telling`], which says what a
+    /// release build does with its answer.
+    pub(crate) fn telling(self) -> Self {
+        let routes = self.routes.into_iter().map(|placed| Placed { methods: placed.methods.telling(), ..placed });
+        Table { routes: routes.collect() }
     }
 
     /// The routes with the state their handlers take.

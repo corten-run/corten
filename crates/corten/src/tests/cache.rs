@@ -1620,8 +1620,12 @@ async fn only_an_app_with_a_public_page_counts_its_writes() {
     assert_eq!(write(area).await, "store=true counted=true", "a Public page in an area");
     let off = App::new(Routes::from(edit().merge(kept_routes(&runs)))).kept_answers(0).router();
     assert_eq!(write(off).await, "store=false counted=false", "an app that keeps none");
+    // Under `corten dev` the store stands, keeping nothing, so what decides a release build's
+    // keeping runs as it does there (a page a write is made under says so).
     let dev = App::new(Routes::from(edit().merge(kept_routes(&runs)))).dev(true).router();
-    assert_eq!(write(dev).await, "store=false counted=false", "under corten dev");
+    assert_eq!(write(dev.clone()).await, "store=true counted=true", "under corten dev");
+    fetch(&dev, "GET", "/", &[]).await;
+    assert!(!fetch(&dev, "GET", "/", &[]).await.1.contains_key(header::AGE), "and nothing is kept under corten dev");
 
     // A `Public` whole body is kept from a size, in every build: an app whose only `Public`
     // route answers one has a store, whether or not the body turns out large enough.
@@ -2261,6 +2265,123 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
         assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{asked:?}: {headers:?}");
     }
     assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE), "and neither took the kept page's place");
+}
+
+/// Under `corten dev` nothing is kept, and the log says instead, for a `GET` that shows nothing
+/// about who asks, whether a release build keeps a `Public` route's answer, and if not the first
+/// reason, as the code that decides it found it: once for each route and verdict. Without dev,
+/// nothing of it is logged.
+#[cfg(feature = "log")]
+#[tokio::test]
+async fn corten_dev_says_whether_a_public_answer_is_kept_and_why_not() {
+    use crate::route::get as typed;
+    let minute = Duration::from_secs(60);
+    let home = || html! { <p>"home"</p> };
+    let routes = move || {
+        Table::new()
+            .route("/", typed(move |req: Req| async move { Public::new(minute, req.test_page_for("Home", home())) }).0)
+            .route(
+                "/flip",
+                typed(move |req: Req, uri: http::Uri| async move {
+                    let cookie = uri.query() == Some("cookie");
+                    let page = req.test_page_for("Flip", home()).map(|mut page| {
+                        if cookie {
+                            page.headers_mut().append(header::SET_COOKIE, SetCookie::new("a", "1").header());
+                        }
+                        page
+                    });
+                    Public::new(minute, page)
+                })
+                .0,
+            )
+            .route(
+                "/device",
+                typed(move |device: Device, req: Req| async move {
+                    let kind = if device.0 { "phone" } else { "desk" };
+                    Public::new(minute, req.test_page_for("Device", html! { <p>{kind}</p> }))
+                })
+                .0,
+            )
+            .route(
+                "/keyed",
+                typed(move |req: Req| async move {
+                    let form = html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> };
+                    Public::new(minute, req.test_page_for("Keyed", form))
+                })
+                .0,
+            )
+            .route("/inline", typed(inline_page).0)
+            .route("/now", typed(move |req: Req| async move { Public::new(Duration::ZERO, req.test_page_for("Now", home())) }).0)
+            .route("/text", typed(move || async move { Public::new(minute, "text") }).0)
+            .route("/status", typed(move || async move { Public::new(minute, StatusCode::OK) }).0)
+            .route("/plain", typed(move |req: Req| async move { req.test_page("Plain", home()) }).0)
+    };
+    let lines = Lines(std::sync::Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    // What one request logged.
+    let logged = |router: Router, uri: &'static str, headers: &'static [(&'static str, &'static str)]| {
+        let lines = lines.clone();
+        async move {
+            lines.0.lock().unwrap().clear();
+            let (status, answer, _) = fetch(&router, "GET", uri, headers).await;
+            assert!(!answer.contains_key(header::AGE), "{uri}: nothing is given from the store");
+            let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+            (status, text)
+        }
+    };
+    let dev = App::new(Routes::from(routes())).dev(true).router();
+    let kept = "is Public, and a release build keeps its answer for 60 s";
+    let not = "is Public, but a release build does not keep its answer: ";
+    let (_, text) = logged(dev.clone(), "/", &[]).await;
+    assert!(text.contains("INFO") && text.contains(&format!("corten: / {kept}")), "{text}");
+    // Said once for the route: the same verdict again, or a request a kept page would not answer
+    // (a cookie, a navigation), says nothing.
+    for headers in [&[][..], &[("cookie", "session=1")], &[("corten", "page")]] {
+        let (_, text) = logged(dev.clone(), "/", headers).await;
+        assert!(text.is_empty(), "{headers:?}: {text}");
+    }
+    for (uri, reason) in [
+        ("/device", "its handler takes an input the kept answer's key does not cover"),
+        ("/keyed", "it draws a form's new submit key (SubmitKey::field)"),
+        ("/inline", "its HTML has this request's CSP nonce"),
+        ("/now", "it has no lifetime a shared cache keeps it for"),
+        ("/text", "its body is 4 bytes, and a whole body is kept from 1024"),
+        ("/status", "its answer is neither a page nor a whole body"),
+    ] {
+        let (status, text) = logged(dev.clone(), uri, &[]).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert!(text.contains("WARN") && text.contains(&format!("corten: {uri} {not}{reason}")), "{uri}: {text}");
+        // The first reason alone. A page sent private for one also says so as it leaves (`settle`).
+        assert_eq!(text.matches("is Public").count(), 1, "{uri}: {text}");
+        let (_, text) = logged(dev.clone(), uri, &[]).await;
+        assert!(!text.contains("is Public"), "{uri}: said once: {text}");
+    }
+    // An answer that is not `Public` says nothing.
+    assert!(logged(dev.clone(), "/plain", &[]).await.1.is_empty());
+    // Each verdict once for a route: a route that answers another way says the new one, and
+    // nothing when it answers a way it has said before.
+    let (_, text) = logged(dev.clone(), "/flip", &[]).await;
+    assert!(text.contains(&format!("corten: /flip {kept}")), "{text}");
+    let (_, text) = logged(dev.clone(), "/flip?cookie", &[]).await;
+    assert!(text.contains(&format!("corten: /flip {not}it sets a cookie")), "{text}");
+    for uri in ["/flip", "/flip?cookie"] {
+        let (_, text) = logged(dev.clone(), uri, &[]).await;
+        assert!(!text.contains("is Public"), "{uri}: {text}");
+    }
+    // Another app is another process's worth of routes, and says each again.
+    let again = App::new(Routes::from(routes())).dev(true).router();
+    assert!(logged(again, "/", &[]).await.1.contains(&format!("corten: / {kept}")));
+
+    // Without dev, the same requests log nothing (and the page is kept).
+    let release = App::new(Routes::from(routes())).dev(false).router();
+    for uri in ["/device", "/keyed", "/inline", "/now", "/text", "/status", "/flip?cookie", "/"] {
+        lines.0.lock().unwrap().clear();
+        fetch(&release, "GET", uri, &[]).await;
+        assert!(lines.0.lock().unwrap().is_empty(), "{uri}");
+    }
+    assert!(fetch(&release, "GET", "/", &[]).await.1.contains_key(header::AGE));
 }
 
 /// A kept page is given until its lifetime ends, which `.shared(..)` sets for a shared cache and
