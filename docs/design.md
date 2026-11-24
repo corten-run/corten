@@ -7776,11 +7776,11 @@ rules something out.
     unstaged answer that sets a cookie follows and `Public::header` checks: any `*cache-control`, a
     deployment's own name too, and the others Corten names) and its `Expires`, which a cache that
     does not read `Cache-Control` keeps by, rather than with the handler's `public` and windows.
-    No copy carries a header for its connection (`Connection` and what it names, `Keep-Alive`,
-    `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, a `Proxy-*`, RFC 9110 section 7.6.1), which an
-    answer type of the app's own may set though `Public::header` may not: an answer with one is not
-    kept, since given again outside the middleware its `Connection` could name the `Cache-Control`
-    the app wrote, and the next proxy remove it. The same copy skips the middleware's other
+    It also goes without the headers for its connection (`Connection` and those it names,
+    `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, a `Proxy-*`, RFC 9110 section
+    7.6.1), which an answer type of the app's own may set though `Public::header` may not, and a
+    middleware may have removed: a `Connection` naming `Cache-Control` would have the next proxy
+    remove the `private, no-store`. The same copy skips the middleware's other
     changes after `next` too (a redaction, a header every answer needs), so the guide tells a
     route that needs one to leave `stale-if-error` off, which is off unless its answer sets it.
     Correctness ranks first: an app whose middleware makes its pages private must not
@@ -7829,10 +7829,11 @@ rules something out.
     middleware's response half, which is not there to run (the panic unwound it, the deadline
     dropped it), and running the middleware again around the copy, which would run its request
     half twice; and the handler's own header kept where the app has no middleware, a second rule
-    for a path that is a failure's. For a header for the connection: removing it, and what its
-    `Connection` names, from the copy as it is given for a failure, a second rule where a copy
-    leaves, where refusing to keep it is one comparison of each name in the pass that already
-    counts the head. For bounding refreshes: a cap of their own, a second limit to
+    for a path that is a failure's. For a header for the connection: refusing to keep an answer
+    with one, a check of each name in the pass that counts the head, which cost the miss that keeps
+    a page about 125 to 140 more instructions under callgrind in each of the three forms tried (a
+    match in that pass, a match by the first byte, a function of its own), where removing the
+    headers from the copy given for a panic or a deadline costs only that failure. For bounding refreshes: a cap of their own, a second limit to
     choose where the copies kept already follow the store's bound; letting a refresh's count go as
     its copy goes, before its task has ended, which let copies turned out and kept again start
     more refreshes than copies (the fourth review found it); and a mark for each URL, which holds

@@ -1625,10 +1625,10 @@ sent in place of either cannot carry what the middleware would have said, and it
 answer a middleware does not see. It goes out `private, no-store`, with every header a CDN may
 read first removed (any `*-cache-control`, a name your deployment chose too, `Surrogate-Control`,
 `Edge-Control`, `X-Accel-Expires`) and its `Expires`, so no cache after the app keeps or shares
-it, whatever the handler's answer said. No kept page carries a header for its connection
-(`Connection` and what it names, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, a
-`Proxy-*`): an answer of your own type that sets one is not kept, since a `Connection` naming
-`Cache-Control` would have the next proxy remove what the app wrote. A `500`, `502`, `503` or `504` the handler
+it, whatever the handler's answer said. It also goes without the headers for its connection an
+answer of your own type set (`Connection` and the headers it names, `Keep-Alive`, `TE`, `Trailer`,
+`Transfer-Encoding`, `Upgrade`, a `Proxy-*`), which a middleware may have removed too: a
+`Connection` naming `Cache-Control` would have the next proxy remove the `private, no-store`. A `500`, `502`, `503` or `504` the handler
 returns goes back through the middleware, and the kept page sent in its place leaves with what
 the middleware makes of it. Nor does the page sent for a panic or a deadline get any other
 change your middleware makes after `next` (a redaction, a header every answer must carry), so a
@@ -1662,7 +1662,7 @@ else a page could differ by, and the answer nothing made for one request:
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
 | past its lifetime | within `stale-while-revalidate`, given at once while the handler makes it again; within `stale-if-error`, given in the place of the handler's `500`, `502`, `503` or `504`, panic, passed deadline or a body the app reads to keep that cannot be read | past both windows, after a write to its path, with `.shared(..)`; within `stale-if-error`, any other answer (a failure as a later stage reads a body the app did not read to keep too), and a failure once another request's answer ended or replaced the page |
-| what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, a header for the connection (`Connection`, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, `Proxy-*`), the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
+| what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read

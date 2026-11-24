@@ -1541,24 +1541,39 @@ impl Held {
 /// every header a CDN may read first removed (any `*cache-control`, a deployment's own name too,
 /// [`crate::cache::read_before_cache_control`]) and its `Expires`, which a cache that does not
 /// read `Cache-Control` keeps by, not with the handler's `public` and windows, so no cache after
-/// the app keeps or shares it. No copy has a header for its connection that could name
-/// `Cache-Control` for a proxy to remove ([`for_the_connection`]).
+/// the app keeps or shares it; and without its headers for the connection, which the middleware
+/// may have removed too, so a `Connection` naming `Cache-Control` does not have the next proxy
+/// remove the `private, no-store` ([`drop_connection_headers`]).
 pub(crate) fn held(signal: &crate::Signal) -> Option<Response> {
     let mut res = signal.take::<HeldCopy>()?.given(signal)?;
     let headers = res.headers_mut();
+    drop_connection_headers(headers);
     crate::cache::drop_every_cdn_caching(headers);
     headers.remove(header::EXPIRES);
     headers.insert(header::CACHE_CONTROL, crate::cache::PRIVATE_NO_STORE);
     Some(res)
 }
 
-/// Whether a header is for the connection an answer is sent on, which a proxy removes with the
-/// headers `Connection` names (RFC 9110 section 7.6.1): `Connection`, `Keep-Alive`, `TE`,
-/// `Trailer`, `Transfer-Encoding`, `Upgrade` and a proxy's own (`Proxy-*`). An answer with one is
-/// not kept: given again outside the middleware that would remove it (for a panic, [`held`]), its
-/// `Connection` could name the `Cache-Control` the app wrote, and the next proxy remove that.
-fn for_the_connection(name: &str) -> bool {
-    matches!(name, "connection" | "keep-alive" | "te" | "trailer" | "transfer-encoding" | "upgrade") || name.starts_with("proxy-")
+/// Removes the headers for the connection an answer is sent on, which a proxy removes (RFC 9110
+/// section 7.6.1): those `Connection` names, then `Connection`, `Keep-Alive`, `TE`, `Trailer`,
+/// `Transfer-Encoding`, `Upgrade` and a proxy's own (`Proxy-*`). For the copy given outside the
+/// middleware ([`held`]) alone: a copy given any other way leaves through the middleware, as its
+/// handler's answer would.
+fn drop_connection_headers(headers: &mut HeaderMap) {
+    let named: Vec<header::HeaderName> = headers
+        .get_all(header::CONNECTION)
+        .iter()
+        .flat_map(|line| line.as_bytes().split(|&byte| byte == b','))
+        .filter_map(|name| header::HeaderName::from_bytes(name.trim_ascii()).ok())
+        .collect();
+    let hop = |name: &str| {
+        matches!(name, "connection" | "keep-alive" | "te" | "trailer" | "transfer-encoding" | "upgrade")
+            || name.starts_with("proxy-")
+    };
+    let own: Vec<header::HeaderName> = headers.keys().filter(|name| hop(name.as_str())).cloned().collect();
+    for name in named.into_iter().chain(own) {
+        headers.remove(name);
+    }
 }
 
 /// The answer for a body of a size it gave that could not be read: not a page to send as it is.
@@ -1780,12 +1795,7 @@ impl Missed {
         if self.told.0.is_some() && length < BODY_FROM {
             return Settled::Left(res);
         }
-        // In the pass that counts the head: a header for the connection is not replayed.
-        let head = res.headers().iter().try_fold(0, |head, (name, value)| {
-            let name = name.as_str();
-            (!for_the_connection(name)).then_some(head + name.len() + value.len() + HEADER)
-        });
-        let Some(head) = head else { return Settled::Left(res) };
+        let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
         // The URL is held once, by the entry: the map holds its hash.
         let sent = self.language.as_ref().filter(|_| language);
         let size = Key::length(self.at.as_str(), self.host.as_ref(), sent) + head + OVERHEAD + length as usize;
