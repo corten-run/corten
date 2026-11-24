@@ -5,18 +5,18 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { controllerFailure, controllerState, full, parseDropletArgs, providerFailure, unsentDelete } from "./cloud-options.mjs";
+import { controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
-import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, interruptedFirstUpload, launchHostKey, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
+import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, interruptedFirstUpload, launchHostKey, offlineNeverStarted, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckContinuationPeers, recheckIndexedLaunchCustody, recheckSetupAttempt } from "./fleet-verify.mjs";
+  recheckContinuationPeers, recheckCreateErroredAttempt, recheckIndexedLaunchCustody, recheckPostedCreate, recheckSetupAttempt } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -111,14 +111,17 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
         archiveSha256: options.exitArchiveSha256, policy: "collect-one-sealed-exit-archive-with-measured-replay" };
     } else if (options.unusedBootstrapKnownHosts !== undefined) {
       const local = join(physicalRequest, `groups-${options.round}`), settled = settledBootstrap(saved, local), interrupted = interruptedFirstUpload(saved, local);
-      assert.ok(settled || interrupted || unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op, a settled upload prefix, or the unacknowledged first job upload");
+      assert.ok(settled || interrupted || unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op, a settled upload prefix, the unacknowledged first job upload,"
+        + " or an offline bound posted create that never started");
       if (settled || interrupted) assert.equal(saved.commit, head, "bootstrap uploads require the measured checkout");
       else if (saved.commit !== head) await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
       const key = regular(options.unusedBootstrapKnownHosts, 1024 * 1024);
       assert.ok(key.length, "verified host key required");
       if (interrupted) assert.ok(launchHostKey(local, saved).equals(key), "verified key differs from launch");
       recovery = { measuredCommit: saved.commit, hostId: saved.id, ip: saved.ip, knownHostsSha256: digest(key),
-        policy: interrupted ? "unacknowledged-first-upload-never-written-only" : settled ? "settled-uploads-unused-only-no-qualification" : "first-ssh-unused-only-no-qualification" };
+        policy: interrupted ? "unacknowledged-first-upload-never-written-only" : settled ? "settled-uploads-unused-only-no-qualification"
+          : saved.createContradicted ? "contradicted-create-posted-droplet-unused-only-no-qualification"
+          : offlineNeverStarted(saved) ? "offline-never-started-posted-create-unused-only-no-qualification" : "first-ssh-unused-only-no-qualification" };
     } else if (options.cancelMixedWait) {
       ownedMixedWait(saved); assert.equal(saved.status, "running");
       for (const key of ["mixedCancellation", "archiveSha256", "evidence", "deletionIntentAt", "collectedAt"]) assert.equal(saved[key], undefined);
@@ -252,7 +255,11 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   if (stagedSibling) assert.ok(remainingAdmission, "only fleet admission may launch a v5 sibling");
   const admission = manifest && !preview ? readAdmission() : undefined;
   const unconfirmed = manifest?.single ? admission?.subject.continuation.unconfirmed ?? [] : [];
-  const historicalIds = new Set(unconfirmed.map(({ accountId, id }) => {
+  // Every posted droplet of an earlier provider-errored attempt, in any group, is fenced
+  // too, by ID alone: a renamed or untagged droplet with that ID still refuses the create.
+  const continuation = manifest?.single ? admission?.subject.continuation : undefined;
+  const posted = [...continuation?.createFailures ?? [], ...continuation?.postedCreates ?? []];
+  const historicalIds = new Set([...unconfirmed, ...posted.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
     assert.equal(accountId, manifest.provider.accountId, "historical custody requires the same provider account");
     return full(id, /[1-9]\d*/, "historical custody requires a bound host ID");
   }));
@@ -284,6 +291,14 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
         recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
         const checks = unconfirmed.filter((row) => row.root !== undefined).map((row) => recheckSetupAttempt(root, row, manifest));
         for (const stillIdle of checks) stillIdle(); // Another attempt's archive may have taken time to hash.
+        // Last, immediately before the create is recorded and dispatched under this child's
+        // own locks: an earlier provider-errored attempt of this group must still hold no
+        // custody. After this point that attempt's collect never creates or provisions: it
+        // rechecks read-only, or records a reappearance and binds only the exact owned posted droplet.
+        for (const row of current.subject.continuation.createFailures ?? []) recheckCreateErroredAttempt(root, row);
+        // Then every earlier posted create on this account, in any group (not only this
+        // group's retry): a contradiction or custody change since admission refuses.
+        for (const row of current.subject.continuation.postedCreates ?? []) recheckPostedCreate(row);
       }
       return currentPeers;
     }
@@ -359,7 +374,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   return result;
   } catch (error) {
     const detail = stage === "controller-collect" && controllerFailure(error);
-    throw mark(error, detail && detail.startsWith("setup-") ? detail : stage);
+    throw mark(error, detail && routeStages.includes(detail) ? detail : stage);
   }
   finally {
     try { await providerRun?.close(); }

@@ -10,6 +10,7 @@ fixture and API modes. The four cases have `target: "json"` and `locale: null`.
 node --test bench/json-api/*.test.mjs
 node bench/json-api/run.mjs j1 --group json-api --build --check-only
 node bench/json-api/run.mjs j2 --group json-api --build --receipts /path/to/audited-receipts.json
+# From a checkout of FULL_MEASURED_SHA; tool image references are checked against its pins:
 node bench/json-api/report.mjs bench/json-api/results/j2/summary.json --require-complete --commit FULL_MEASURED_SHA
 ```
 

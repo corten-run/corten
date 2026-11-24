@@ -243,8 +243,8 @@ merge, collect says the round cannot be merged and to follow the exit 1 steps in
 [State And Collection](#state-and-collection); the next round takes the next rN. When a droplet never started, is partial or is
 missing, the round cannot merge, and collect prints an `ssh ... systemctl stop` command for each
 droplet still running, whatever the exit code: run each, then collect again. This overrides "keep
-running" above, so a round that cannot merge stops billing. Import that merged folder, not a
-droplet's `d<k>/` alone, as results/rN. A launch stopped by a signal says what each droplet is
+running" above, so a round that cannot merge stops billing. Publish from that merged folder, not a
+droplet's `d<k>/` alone, as [Finished Results](#finished-results) step 2 says. A launch stopped by a signal says what each droplet is
 left doing, and saves it as `launch-stopped.txt` in the state directory; stop a started round
 with the `ssh` command it prints, then collect. A droplet whose launch stopped before
 `systemctl start` (`creating` or `preparing`) never ran its round: the launch and collect both
@@ -267,7 +267,12 @@ passed, no failures, a clean tree at the plan's commit) and parts that did not r
 
 ## Finished Results
 
-1. Require exit 0, saved archive/checksum, deletion confirmation and report.mjs validation:
+1. Require exit 0, saved archive/checksum, deletion confirmation, a native replay that passes
+   (`node bench/marketplace/validate.mjs <folder> <round> <measured-full-commit>` on the verified
+   producer folder, or on each extracted `d<k>/` part of a split round; never on the merged
+   summary), run from a checkout of the measured commit (for example
+   `git worktree add --detach <dir> <measured-full-commit>`), since it checks retained image
+   references against the loaded checkout's pins, and report.mjs validation:
    workload/round/commit match, clean before/after, raw qualification for the complete reserved
    candidate set, both browser gates and three full passes for every admitted app/profile
    (fewer only where the app's container stopped, below), no
@@ -292,14 +297,31 @@ passed, no failures, a clean tree at the plan's commit) and parts that did not r
    the phase began (after its first 200, before warmup or between phases), an upstream error
    answer, or a phase in which no request succeeded still fails the run.
 2. Hash summary before/after the read-only reporter. Save its generated report as
-   results/rN/report.md and exact SHA as commit.txt. Preserve raw logs/checks/image provenance.
-   Collection keeps the result folder outside Git in the round-control evidence directory.
-   Import that folder into a new bench/marketplace/results/rN only after validation, without
-   overwriting an existing folder. Stage and verify any interrupted import separately before
-   promotion; never change the archived source. Keep the original hash-verified archive outside
-   Git, with a checksum receipt in the committed results folder. Do not publish credentials or
-   local control state. Pre-measurement failures may have only run.log/exit-code in evidence.
-3. Fetch origin, create bench/rN from origin/main carrying only the untracked result folder.
+   results/rN/report.md and exact SHA as commit.txt. Collection keeps the whole validated result
+   folder (raw logs, checks, image provenance and summary.json) outside Git in the round-control
+   evidence directory, as the original hash-verified archive; never change it. After validation,
+   commit only the evidence into a new bench/marketplace/results/rN, without overwriting an
+   existing folder: report.md, commit.txt, and provenance recording the archive's SHA-256 and a
+   locator a maintainer has approved and published it at (a checksum alone checks a copy but does
+   not say where one is). A split round has one original archive per droplet and no archive holding
+   its merged summary.json and split.json, which collect writes afterwards: record each part
+   archive's SHA-256 and locator, and keep the merged summary.json and split.json as their own
+   off-tree artifact with its SHA-256 and locator; replay fetches and verifies every part, and a
+   comparison reads the merged summary only after verifying it. Commit summary.json only when it is
+   within the bench size limit ([Benchmark results](../../CONTRIBUTING.md#benchmark-results),
+   256 KiB) and approved for public disclosure; whenever it is left out, record its SHA-256 in the
+   provenance. Raw receipts stay in the archive. Stage
+   and verify any interrupted import separately before promotion. Before a replay or a comparison
+   that reads a summary or raw receipt not in Git, fetch the archive from its recorded locator and
+   verify its SHA-256 (and the summary's, where recorded) against the committed provenance;
+   refuse on a mismatch or a missing locator. For a split round, fetch and verify each part
+   archive and the merged summary artifact the same way. The locator may be access-controlled: the archive
+   and its native summary can hold control state such as a reservation token, so neither is public
+   because a locator or an evidence tag exists, and a public copy is a separate derivative with its
+   own SHA-256. Do not publish credentials or local control state.
+   Pre-measurement failures may have only run.log/exit-code in evidence.
+3. Fetch origin, create bench/rN from origin/main carrying only the files step 2 allows in
+   results/rN, never `round/rN/` as a whole.
    Commit results first and docs second. Push only bench/rN. Never overwrite another change.
 4. The first round that validates is the first v2 baseline, no r16/c1 delta. r17 ran under
    the earlier gate, which failed the round on any app's failed request, and has none. Later
@@ -332,7 +354,9 @@ passed, no failures, a clean tree at the plan's commit) and parts that did not r
 
 ## Comparisons And Issues
 
-Use only compatible v2 rounds, per source/page-locale/JSON and phase. State both commits/CPUs,
+Use only compatible v2 rounds, per source, timed profile (the rotating page profile and the
+neutral JSON one) and phase; per-locale rows only for compatible historical matrices that timed
+each locale. State both commits/CPUs,
 medians/ranges and unchanged-app median changes. No causal claim from one round. Consider:
 
 1. sat64 throughput or requests/CPU-second trailing unchanged apps' median change by more
@@ -370,7 +394,10 @@ regressions. Every named issue/PR must be a Markdown link with its actual title.
 Poll exact-head GitHub checks at most 60 seconds, up to 40 minutes. Merge with a merge commit
 only with every check SUCCESS, mergeable state, no unresolved independent-review findings,
 passed docs validation, and diff limited to marketplace/results/rN plus root README, CHANGELOG,
-docs/performance and marketplace README. Valid regressions do not block truthful results;
+docs/performance and marketplace README, with results/rN holding only the files
+[Finished Results](#finished-results) step 2 allows in every commit the change brings, not only at
+its tip: a raw receipt added and later removed still ships in history, so the branch is rebuilt
+without that commit rather than fixed by a later removal. Valid regressions do not block truthful results;
 incomplete/invalid data does. A harness, parity, cleanup or load-run failure leaves results
 partial, no success PR; a stage marked as an app outcome or as stopped does not.
 

@@ -37,6 +37,12 @@ export function providerCreateHost(mode) {
   assert.equal(mode, null, "unknown provider create mode");
 }
 export const tags = Object.freeze(["corten-bench", "corten-bench-groups"]);
+// The native upstream image each fresh host pulls. Reservations saved before Debian 13 (no
+// trixieUpstream marker) regenerate the job bytes they uploaded, with the Debian 12 image.
+export const upstreamImages = Object.freeze({
+  bookworm: "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1",
+  trixie: "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067",
+});
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const full = (value, pattern, name) => {
   assert.equal(typeof value, "string", `${name} must be a string`);
@@ -279,6 +285,7 @@ export function validateState(s, round, options) {
   // Hosts launched since the bench package existed install it. Absent means the original job bytes.
   if (s.benchPackage !== undefined) assert.equal(s.benchPackage, true, "bench package marker");
   if (s.gitSource !== undefined) assert.equal(s.gitSource, true, "Git source marker");
+  if (s.trixieUpstream !== undefined) assert.equal(s.trixieUpstream, true, "Debian 13 upstream image marker");
   // Saved reservations without this marker must regenerate the original job.
   if (s.quietBootstrap !== undefined)
     assert.ok([true, "after-start", "prelogin"].includes(s.quietBootstrap) && dedicated
@@ -365,12 +372,15 @@ export function validateState(s, round, options) {
 export function ownedDroplet(droplets, s, options) {
   validateState(s, s.round, options);
   assert.ok(Array.isArray(droplets));
+  // An ownership tag is an exact member of a well-formed tag array (non-empty strings),
+  // never a substring of a string or a member beside malformed entries.
+  const tagged = (d, tag) => Array.isArray(d.tags) && d.tags.every((t) => typeof t === "string" && t.length > 0) && d.tags.includes(tag);
   const matches = droplets.filter((d) => s.id ? String(d.id) === s.id : d.name === s.name && d.tags?.includes(s.tag));
   assert.equal(matches.length, 1, "owned droplet missing or ambiguous; preserve reservation");
   const d = matches[0];
   full(String(d.id), /[1-9]\d*/, "droplet ID");
   assert.equal(d.name, s.name);
-  for (const tag of [...tags, s.tag]) assert.ok(d.tags?.includes(tag), `missing ownership tag ${tag}`);
+  for (const tag of [...tags, s.tag]) assert.ok(tagged(d, tag), `missing ownership tag ${tag}`);
   assert.equal(d.size_slug ?? d.size?.slug, s.host.size);
   assert.equal(d.region?.slug, s.host.region);
   if (s.ip) assert.equal(d.networks?.v4?.filter((n) => n.type === "public").find((n) => n.ip_address === s.ip)?.ip_address, s.ip,
@@ -864,7 +874,7 @@ timeout 900 npm --prefix bench/browser ci --no-audit --no-fund
 bootstrap_stage=browser-install
 timeout 900 npx --no-install playwright install --with-deps chromium
 bootstrap_stage=upstream-image
-timeout 900 docker pull node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
+timeout 900 docker pull ${s.trixieUpstream ? upstreamImages.trixie : upstreamImages.bookworm}
 bootstrap_stage=rust-install
 timeout 900 bash -o pipefail -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'
 export PATH=/root/.cargo/bin:$PATH

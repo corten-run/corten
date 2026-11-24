@@ -7,6 +7,8 @@
 #include <trantor/net/EventLoop.h>
 #include <malloc.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <stdexcept>
@@ -16,7 +18,8 @@ namespace
 {
 bool fromFixture = false;
 std::unordered_map<std::string, catalog::RecordPtr> fixture;
-thread_local std::vector<drogon::HttpClientPtr> idleClients;
+// Each idle client with the time it went idle, oldest first (record_http::upstreamIdle).
+thread_local std::vector<std::pair<drogon::HttpClientPtr, std::chrono::steady_clock::time_point>> idleClients;
 
 std::string env(const char *name, const char *fallback)
 {
@@ -115,17 +118,20 @@ void get(const std::string &id, std::function<void(RecordPtr record, bool failed
         return;
     }
     drogon::HttpClientPtr client;
+    const auto now = std::chrono::steady_clock::now();
+    idleClients.erase(idleClients.begin(), std::find_if(idleClients.begin(), idleClients.end(),
+                                                        [&](const auto &idle) { return now - idle.second < record_http::upstreamIdle; }));
     if (idleClients.empty())
         client = drogon::HttpClient::newHttpClient(env("API_BASE", "http://localhost:8080"), trantor::EventLoop::getEventLoopOfCurrentThread());
     else
     {
-        client = std::move(idleClients.back());
+        client = std::move(idleClients.back().first);
         idleClients.pop_back();
     }
     auto req = drogon::HttpRequest::newHttpRequest();
     req->setPath("/catalog/records/" + drogon::utils::urlEncodeComponent(id));
     client->sendRequest(req, [client, done = std::move(done)](drogon::ReqResult result, const drogon::HttpResponsePtr &res) {
-        idleClients.push_back(client);
+        idleClients.emplace_back(client, std::chrono::steady_clock::now());
         if (result != drogon::ReqResult::Ok) { done(nullptr, true); return; }
         if (res->statusCode() == drogon::k404NotFound) { done(nullptr, false); return; }
         Json::Value a;

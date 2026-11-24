@@ -1,9 +1,11 @@
 import http from "k6/http";
 import { check } from "k6";
 import { Counter } from "k6/metrics";
-import { requestOutcome } from "./load-outcome.js";
+import { failureClass, failureClasses, requestOutcome } from "./load-outcome.js";
 const observed = __ENV.CATALOG_TIMED_EVIDENCE === "1";
 const counters = observed ? Object.fromEntries(["successes", "timeouts", "http_errors", "invalid_responses"].map((name) => [name, new Counter(`catalog_${name}`)])) : null;
+// Only a failure adds to one of these, so a run without failures never emits them.
+const failures = observed ? Object.fromEntries(failureClasses.map((name) => [name, new Counter(`catalog_failed_${name}`)])) : null;
 let countersInitialized = false;
 const target = __ENV.TARGET;
 if (!["page", "json"].includes(target)) throw new Error("TARGET must be page or json");
@@ -31,6 +33,8 @@ export default function () {
       for (const counter of Object.values(counters)) counter.add(0);
       countersInitialized = true;
     }
-    counters[requestOutcome(response, target)].add(1);
+    const outcome = requestOutcome(response, target);
+    counters[outcome].add(1);
+    if (outcome === "http_errors" || outcome === "invalid_responses") failures[failureClass(response)].add(1);
   }
 }

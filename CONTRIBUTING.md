@@ -408,6 +408,69 @@ after reconnecting with a 64-entry subscription queue.
 
 The failover benchmark is `node examples/listings-feed/bench/run.mjs`; see its header.
 
+## Benchmark results
+
+A normal full clone fetches every version of a committed file still reachable in history, even
+after a later commit deletes it, so a benchmark commits its evidence, not its raw data. Committed evidence is the report, the provenance
+and, where it is small and approved for public disclosure, the summary: small enough to diff and
+review. A summary or other file left out is recorded in the provenance by its SHA-256. Raw data (per-request logs, traces, captures, a
+round's archive) stays outside the tree. A maintainer chooses where it is kept and publishes it
+there, and the committed provenance records a locator it can be fetched from and its SHA-256. A
+digest alone is not a locator: it checks a copy but does not say where one is (a group result's
+`provenance.json` records the digest as `archiveSha256`).
+
+A benchmark's `.gitignore` keeps part of its default raw output out of `git add`, not all of it.
+`bench/fullstack` ignores a round's packed `raw.tar.xz`, but not the loose raw files of a round
+not yet packed; `node bench/fullstack/pack.mjs <round>` packs them and prints the archive's
+SHA-256, and does not publish it or write the round's `raw.txt`. `bench/live` and
+`bench/recoverable-live` ignore the gzip files `parity.mjs` writes under their `results/`,
+leaving its `coverage.json`, `plan.json` and other JSON visible. Catalog and Marketplace ignore
+their results directories. An output path given explicitly is used as given.
+
+`npm run check` runs `scripts/bench-size.mjs`, which keeps raw data out of what a pull request
+merges. It does not publish, fetch or verify an archive.
+
+1. A file under `bench/` whose name ends in `.tar`, `.tgz`, `.gz`, `.xz`, `.zst`, `.bz2`,
+   `.zip` or `.7z` (in any case), or that is larger than 256 KiB, fails unless
+   `scripts/bench-size.allow` lists its path with its exact blob ID. The name is matched, not the
+   contents: an archive under another name is not found by the check, and review has to.
+2. The list holds the files that were in the tree when the check came. They stay where they are:
+   removing one at the tip shrinks no full clone, since its blobs stay reachable in history, and
+   their paths are cited. The list only shrinks: each line must be in the base's list at the same
+   path and blob, so a new or changed line fails, even in the pull request that adds the file. The
+   one exception is the list's first appearance: when the base has no list, each line must name a
+   file already in the base's tree at that path and blob. A listed file that changes
+   fails, and a line whose file is gone or no longer needs it fails until the line is removed.
+3. Every commit the pull request brings is checked, not only its last one, since a merge commit
+   keeps them all: a file added in one commit and deleted or shrunk in the next still fails, and
+   the problem names the commit.
+4. A dependency lock file larger than 256 KiB is source input, not output. It passes only at a
+   path listed in `LOCKS` in `scripts/bench-size.mjs` (today the Fullstack Laravel and Nuxt locks
+   and the Live Laravel lock), and only when it and the manifest `LOCKS` names are regular files
+   in the same directory of the same commit (a directory, submodule or symbolic link named like the
+   manifest does not count), in every commit the pull request brings that changes either of them.
+   A listed lock may change blob, as a dependency update does, without an edit to `LOCKS`. Any
+   other lock file over the limit fails until its path is added to `LOCKS` in the script, where
+   review sees it: a file named like a lock beside one named like its manifest proves neither that
+   it is a lock nor that an app builds from it.
+5. A path under `bench/` that is not valid UTF-8, has a control character (a newline or a tab
+   among them) or has a name starting or ending with white space fails as unsupported.
+
+The base is the commit the change merges into: `--base <revision>`, else `CORTEN_BENCH_SIZE_BASE`,
+else the merge base with `origin/main`, also when the checked commit is a merge commit: a topic
+that has merged `main` keeps its own earlier commits behind its first parent, and they are part of
+what it brings. For a topic aimed at another branch, give that branch with `--base`. An all-zero base, which GitHub gives a push that creates a branch or tag (a release
+tag's first push among them), means the merge base with `origin/main` as it is when the check
+runs. That is not a replay of the range the push brought: a rerun after `main` advances can check
+a different range, a tag on a commit already on `main` checks its tree with no history, and a push
+that creates `main` itself has none. A release needs green CI on the exact commit before it is
+tagged ([RELEASING.md](RELEASING.md)), which is its history check; the tag's check is in addition. CI gives the base from its event rather than let the script guess:
+a pull request's merge commit's first parent, and a push's `before` (after a push to `main`,
+`origin/main` is the pushed commit, so its merge base would check nothing). In GitHub Actions the
+check fails without one, and so does the CI step for an event it has no base for. A shallow clone
+fails too, since the commits it lacks would go unread: fetch the whole history
+(`git fetch --unshallow`). When no base resolves, the check fails and says how to give one.
+
 ## Pull requests
 
 For nightly performance evidence, use the [marketplace v2 procedure](bench/marketplace/nightly.md).
@@ -644,7 +707,7 @@ establish a general ranking.
       11th of 30) above it in both readings, and the A/A resolved as above: a run whose A/A is
       not resolved establishes no win either. The reading measures the change across the plan's
       placements, not the release binary, which has a placement of its own: the unpadded build,
-      which no comparison the gate reads includes (the two runs so far read it only in a
+      which no comparison the gate reads includes (the runs so far read it only in a
       diagnostic).
       A run of K = 30 placements of R = 8 pairs, for the
       change and the A/A on `kept` and an A/A on `plain`, takes about 2 hours on a c-8 (the first
@@ -653,10 +716,22 @@ establish a general ranking.
       resolve, its placement medians spreading 1.97% where the other's spread 1.17%, and the
       Choice works out, on a model of its own, that an A/A of 30 placements fails one of its two
       readings more often than not at the first figure and about one time in five at the first
-      run's own. This rule sets no size. More placements narrow the bound wherever the spread
-      comes from, and a plan with an A/A already read on its setup and workload can take K from
-      that calculation at that A/A's spread; a plan with none has no such figure, and its A/A
-      may not resolve.
+      run's own. More placements generally narrow the bound wherever the spread comes from, though not
+      at every step of K (the bound is an order statistic), and the plan
+      sizes each workload's K before the run as the Choice says: from an A/A already read on its
+      setup, workload and R that the Choice's checks find eligible, or, where there is none, from
+      a pilot A/A at a K its own plan declares, read only for the spread of its placement
+      medians, never with a change's comparison, whose turns are no part of the gated run. The
+      kit's sizing gives the chance that an A/A fails at each K under two models, the normal
+      model and a smoothed resample of the eligible A/A's medians: both are used when normality
+      is not rejected, the smoothed resample alone when it is. The K the plan declares must
+      itself meet 5% under each model used, for each workload it covers, and admit the pad lists
+      above; when no K the pads allow does, the plan declares none and does not read that
+      workload across placements, and it never takes a smaller K than the models ask. The size is
+      that setup, workload and R's, not a constant (the Choice's fourth run took 100 placements on
+      `old`, and its medians, at a standard deviation of 2.05%, give an estimated 69 by the
+      smoothed resample, where the normal model, which they reject, gives 91); K = 30 is not to be
+      used by default; and the run's own A/A still decides.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,

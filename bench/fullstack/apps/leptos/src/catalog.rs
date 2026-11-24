@@ -57,9 +57,22 @@ pub mod source {
                 return Source::Fixture(serde_json::from_str(&text).expect("catalog fixture JSON"));
             }
             let base = std::env::var("API_BASE").unwrap_or_else(|_| "http://localhost:8080".into());
-            Source::Api { client: reqwest::Client::new(), base: base.parse().expect("API_BASE is a URL") }
+            let client = reqwest::Client::builder().pool_idle_timeout(UPSTREAM_IDLE).build().expect("HTTP client");
+            Source::Api { client, base: base.parse().expect("API_BASE is a URL") }
         })
     }
+
+    /// How long a connection to an upstream may sit idle in the pool before a request opens a new
+    /// one instead (every client here: catalog, marketplace and items). The catalog and marketplace
+    /// fixtures (`bench/catalog/upstream.mjs`, `bench/marketplace/upstream.mjs`) and the item API
+    /// (`bench/fullstack/item-api/server.mjs`), all Node HTTP servers, answer with
+    /// `Keep-Alive: timeout=5` and close a connection idle for their 5 s keep-alive timeout plus
+    /// Node's 1 s buffer. A request written
+    /// to a pooled connection as the fixture closes it fails in the send (reqwest keeps an idle
+    /// connection for 90 s unless told otherwise), so the pool drops a connection a second before
+    /// the shortest time the fixtures advertise. It is not a retry: each record is still one
+    /// upstream GET.
+    pub const UPSTREAM_IDLE: std::time::Duration = std::time::Duration::from_secs(4);
 
     /// Exactly one fetch and typed parse per call, with no record or response cache.
     pub async fn get(id: &str) -> Result<Option<Arc<Record>>, String> {
