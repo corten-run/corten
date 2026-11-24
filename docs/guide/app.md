@@ -266,27 +266,27 @@ rather than a setting to remember.
 
 The same check answers `400 Bad Request` to a request HTTP does not allow, whatever names the
 app has and with `Policy::any_host()` too, and nothing of the app runs for it either. The
-first two are what HTTP requires, the third what it recommends, and the fourth Corten's reading:
+first two are what HTTP requires, the third what it recommends, and the last two Corten's own:
 
 1. an HTTP/1.1 request with no `Host` line, or a request with more than one, the same value or
    not, which [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112#section-3.2) (3.2) requires;
 2. a `Host` that is not a host and maybe a port, which it requires too: one with a user
    (`user@shop.example`), a path (`shop.example/x`), a list (`shop.example, other.example`) or
    an IPv6 address with a zone (`[fe80::1%25eth0]`, which
-   [RFC 9844](https://www.rfc-editor.org/rfc/rfc9844) took back out of a URI's host). A `Host`
-   with nothing in it is refused too, by Corten's choice: HTTP lets a server read it as its own
-   default name. So is a user in a target that names its host
-   (`GET http://user@shop.example/ HTTP/1.1`), which HTTP says a server should treat as an
-   error;
+   [RFC 9844](https://www.rfc-editor.org/rfc/rfc9844) took back out of a URI's host);
 3. a request-target with a byte outside ASCII, an invalid request-line, which the same section
    says a server should refuse (or redirect). A browser percent-encodes those bytes, as in
    `/caf%C3%A9`, which is answered as before; a client that sends them as they are was routed
    before and is not now;
 4. `*` with a method other than `OPTIONS`, by Corten's reading: HTTP keeps that target for
-   `OPTIONS` and does not say what a server answers to another method.
+   `OPTIONS` and does not say what a server answers to another method;
+5. by Corten's choice, a `Host` with nothing in it, which HTTP lets a server read as its own
+   default name, and a target that names its host with a user in it
+   (`GET http://user@shop.example/ HTTP/1.1`), which HTTP says a server should treat as an
+   error.
 
-These are the only targets Corten looks for: any other the parse lets through (a `|` in a
-path, a host alone with a method other than `CONNECT`) is routed as before.
+Corten looks for nothing else in a target: any other the parse lets through (a `|` in a path,
+a host alone with a method other than `CONNECT`) is routed as before.
 
 The connection stays open after it, as after the `421`: the server knows where the request
 ends, so the next one on the connection is answered (one whose body had not all arrived is
@@ -299,7 +299,8 @@ other case above is a `400` there too). What reaches the server is what counts: 
 speaks HTTP/1.1 to the app and passes on no `Host` for a client that sent none sends a request
 that gets the `400` (nginx's documentation says it leaves out a header it is given an empty
 value for, as `proxy_set_header Host $http_host` then is; this was not run). The first request
-refused for each of these reasons is logged, with its path and the reason, and never its query.
+refused for each reason is logged, with its method, its path and the reason: never its query,
+and of a `Host` that is no host only the name in it, without a user before or a path after.
 
 A deployed app lists the names it is served under, where the deploy sets `HOST` and `PORT`:
 
@@ -1347,7 +1348,8 @@ check's read of `Host` and its match against the app's names. Refusing what HTTP
 where Playwright's WebKit on Linux writes it (its Chromium and Firefox write it first). A
 request with `Host` first is no longer searched for it and costs 15 to 51 fewer than before
 when the app holds its name as written (`localhost`, a name in `HOSTS`), and 4 to 22 fewer for
-a subdomain of one. An app that answers to any host now reads `Host` too, about 230 more
+a subdomain of one. An app that answers to any host now reads `Host` too: about 230 more with
+it first, 360 with it second and 420 to 430 with it last of eight
 (counted over a socket at `c4c19eee5`, with no control beside it, so the smaller of these are
 within what two builds of the same code differ by;
 [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
