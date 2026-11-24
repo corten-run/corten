@@ -55,7 +55,8 @@ export function serveProviderWorker(dependencies = {}) {
   assert.deepEqual(process.execArgv, stdinEntry ? ["--input-type=module"] : []);
   if (stdinEntry) assert.equal(process.argv[2], join(directory, "cloud-provider-worker.mjs"));
   assert.ok(Object.keys(process.env).every((name) => !diagnosticEnv.test(name) || name === "NODE_CHANNEL_FD" || name === "NODE_CHANNEL_SERIALIZATION_MODE"));
-  let nonce, sequence = 0, active = false, closing = false, failed = false, terminal = false, run, host, catalogCommand, providerFailure, pendingCreate, isSettledAccountFailure;
+  let nonce, sequence = 0, active = false, closing = false, failed = false, terminal, run, host, catalogCommand, providerFailure, pendingCreate;
+  let isSettledAccountFailure, isSettledCatalogFailure;
   const stop = () => { closing = true; if (!active) process.exit(terminal ? 2 : 0); };
   process.on("disconnect", stop);
   process.on("SIGTERM", stop);
@@ -66,7 +67,7 @@ export function serveProviderWorker(dependencies = {}) {
     }
     if (active || failed || closing || terminal) { failed = true; process.exit(2); return; }
     active = true;
-    let ok = false, result = null, account = false, create = false, posted, deadline;
+    let ok = false, result = null, account = false, catalog = false, create = false, posted, deadline;
     try {
       if (nonce === undefined) {
         exact(message, ["schema", "nonce", "sources", "createMode"]); assert.equal(message.schema, "cloud-provider-init/v2");
@@ -93,11 +94,12 @@ export function serveProviderWorker(dependencies = {}) {
         const contract = await import(pathToFileURL(join(directory, "cloud-contract.mjs")).href);
         host = contract.providerCreateHost(message.createMode); catalogCommand = contract.fleetCatalogCommand;
         const { createProviderEngine } = engine;
-        isSettledAccountFailure = engine.isSettledAccountFailure;
+        ({ isSettledAccountFailure, isSettledCatalogFailure } = engine);
         run = createProviderEngine({ ...dependencies, repo: process.cwd(), interrupted: () => closing, createMode: message.createMode }); result = "ready";
       } else {
         action(message, host, catalogCommand); assert.equal(message.schema, "cloud-provider-action/v1"); assert.equal(message.sequence, sequence + 1); sequence++;
         account = message.args[0] === "account"; create = message.args[2] === "create" && message.allowFail === true;
+        catalog = message.args[1] === "placement" && message.allowFail === true;
         deadline = Date.now() + message.timeout;
         result = await run(message.args, message.timeout, message.allowFail, message.deleteProofExpiresAtMs);
         // Never serialize exceptions, provider error bodies or native stderr.
@@ -110,12 +112,15 @@ export function serveProviderWorker(dependencies = {}) {
       result = providerFailure?.(error) ?? null;
       // An unsettled create may name only the IDs its accepted POST returned.
       if (create && error?.controlUncertain === true) posted = pendingCreate(Object.getOwnPropertyDescriptor(error, "pendingCreate")?.value);
-      terminal = account && !closing && Date.now() < deadline && isSettledAccountFailure?.(error) === true;
+      if (!closing && Date.now() < deadline) {
+        if (account && isSettledAccountFailure(error)) terminal = "cloud-provider-account-failed/v2";
+        if (catalog && isSettledCatalogFailure(error)) terminal = "cloud-provider-catalog-failed/v1";
+      }
       failed = !terminal;
     }
     finally {
       active = false;
-      const reply = terminal ? { schema: "cloud-provider-account-failed/v2", nonce, sequence, disposition: "resources-closed", diagnostic: result }
+      const reply = terminal ? { schema: terminal, nonce, sequence, disposition: "resources-closed", diagnostic: result }
         : { schema: "cloud-provider-result/v1", nonce: nonce ?? "", sequence, ok, result, ...(posted ? { pendingCreate: posted } : {}) };
       if (process.connected) process.send(reply, (error) => {
         if (error || closing || failed || terminal) process.exit(error || failed || closing && terminal ? 2 : 0);
