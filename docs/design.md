@@ -7765,12 +7765,14 @@ rules something out.
     set on the ones it refuses, each of which left a page stale in a case a review found; off unless asked for, which leaves the cost on every app that already said its
     pages are public; a page for one visitor kept by caller, where a mistake in the key shows
     one user's page to another ([architecture](architecture.md#what-belongs-in-the-framework));
-    honoring a request's `no-cache`; removing a written path's pages by a search of the store or
+    honoring a request's `no-cache`; a way for an extractor of the app's own to say it reads only
+    the URL ([#1799 A page whose handler takes an extractor of the app's own is never kept](https://github.com/corten-run/corten/issues/1799)),
+    a second way to read what a route's query fields (a `FromQuery` type for a rule over the
+    whole query) and `Uri` already read, and the page they give is kept; removing a written path's pages by a search of the store or
     a second index by path, which a write would pay for under the store's lock; a sweep that
     removes pages as their lifetimes end, since a page that no longer stands is replaced when it
     is next asked for and goes when room is made; and, left for changes of their own, a call
-    that drops a page for a change no write to its path made, a way for an extractor of the
-    app's own to say it reads only the URL, every `Public` body kept whatever its size
+    that drops a page for a change no write to its path made, every `Public` body kept whatever its size
     (what this first did, for the 3.9% and at the price of the 13.8% below), a least size other than the one the
     compressor starts at (by instruction counts a body asked for with a coding named gains from about 350 bytes, and at 1,024 it gained nothing shown in cycles; no size under 1,024 was run), a way for a route to say its bodies are
     worth keeping (a second way to say what `Public` says, until an app shows the handler it
