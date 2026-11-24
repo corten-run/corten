@@ -799,6 +799,14 @@ still reports a child holding its operation lock as busy and does not run this
 recheck. No controller writes a `create-recheck.lock`; a stray one is refused as
 custody wherever it appears.
 
+One errored answer is not a failure: if the exact GET still returns the posted
+droplet ID, the errored action left a real allocation. When that one row is
+positively owned (the saved name, run tags, size and region, one public address)
+and no unpublished receipt claims its absence, the collect binds exactly that
+posted droplet, as the in-deadline launch does, and returns 3; the completed-action
+route below then applies. Another ID, missing ownership, a census match after a 404,
+an uncertain read or an existing receipt refuses with nothing bound or deleted.
+
 A stop between writing the receipt and publishing `createErrored` leaves the receipt
 beside a state that still has `createPending`, and from a launch its locks (refused
 as above until the custody step). The next collect repeats the fresh action read and
@@ -817,9 +825,27 @@ provider-errored create. After the custody step above, group `--collect` binds t
 exact allocation, the same identity reconciliation the launch makes for a lost
 acknowledgement, and returns 3. It never provisions. The binding is its own
 checkpoint: that collection's provider worker closes when it returns, and a fresh
-collection with its own provider then takes the existing unused-allocation path. A
-monitored reservation needs the pinned unused-bootstrap preview and approval; an
-unmonitored one needs the fresh unused-host proof. Both keep their deletion fences.
+collection then retires it only through the pinned unused-bootstrap preview and
+approval below, with the fresh unused-host proof and the existing deletion fences.
+A monitored reservation takes the pending-monitor case of that route. An
+`--offline-handoff` reservation has no monitor and its handoff never started, so
+regular `--collect` keeps refusing it at the offline handoff gate, with a message
+naming that route. The pinned route admits it only as an offline never-started
+bound posted create (policy `offline-never-started-posted-create-unused-only-no-qualification`):
+the saved host ID equals the posted droplet ID, prelogin policy, no monitor, an
+empty ledger and seal list, no launch-pinned host key and no failure record, and,
+in a continuation, neither the attempt's `.fleet-operation.lock` nor the outer
+`.continuation-operation.lock` remains. It never manufactures a handoff, starts the
+guest or relaxes a deletion proof.
+
+A recorded failure is contradicted for good if a later collect sees its posted
+droplet again, by the exact GET returning that ID or by a census row with its ID,
+name or tag. That collect saves `createErrored.reappeared` (time, which read and
+the droplet ID) on the state, leaves the receipt bytes alone, refuses, and never
+binds, creates or deletes. Every later collect refuses before any provider read,
+fleet verification stops reporting `create-errored`, and no continuation admits the
+attempt or accepts an approval or child recheck made before the record (its state
+bytes changed). Account for that droplet with the provider; the reservation stays.
 
 Fleet verification reports a group whose saved `createErrored` receipt rebuilds
 from its state, with no launch, operation or recheck lock left, as
@@ -833,7 +859,10 @@ manifest and state bytes, its receipt and no launch, operation or recheck lock. 
 old attempt that has taken custody again by then refuses the create. A collect of
 that attempt that starts after this check can only run the read-only receipt and
 absence recheck, since a recorded `createErrored` never leads to a create, bind or
-DELETE.
+DELETE. The approval subject lists each such attempt's account and posted droplet
+ID, and the successor's fresh pre-create census refuses any droplet with one of
+those IDs on that account, whatever its name or tags, before it records create
+intent.
 
 The group recheck settles only the child. A launch that stopped uncertain at its
 create deadline also keeps its attempt's `.fleet-operation.lock` and, in a
@@ -872,10 +901,11 @@ receipt and intent. It never overwrites unknown evidence, treats an old observat
 as current permission or repeats a saved deletion intent.
 
 Use the child collector's opt-in `--collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE`
-for a bound `preparing` host with no seal and a pending unregistered monitor, or the exact
+for a bound `preparing` host with no seal and a pending unregistered monitor, the exact
 interrupted first upload below in an offline-handoff reservation with prelogin policy and
-no monitor. Preview and approve the exact pinned collection action with the same flag and
-absolute state root.
+no monitor, or an offline-handoff reservation bound to its late posted create that never
+started (above). Preview and approve the exact pinned collection action with the same flag
+and absolute state root.
 
 ```sh
 node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE_ROOT --collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE --print-approval
