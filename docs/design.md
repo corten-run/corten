@@ -9523,14 +9523,17 @@ rules something out.
     rows faster by an amount a person can feel, and the cold start and memory a web view shell
     costs over a native app, estimated at a few hundred milliseconds and 100 to 300 MB against tens
     of each, matter only for screens an app can write natively; no native or web view client has
-    been measured, and no browser number Corten has times input on a loaded screen, which
+    been measured, and nothing compares input to paint across a browser tab, an installed PWA, a
+    web view shell and a native screen, which
     [#1934 No benchmark measures a desktop client: cold start, input to paint and memory for a browser tab, an installed PWA, a web view shell and a native screen are all estimates](https://github.com/corten-run/corten/issues/1934)
-    is to do); measured, of the browser only and not of input (the item page reaching the mark its
-    code sets when ready 59 ms after a cold load on the desktop profile, Chromium 148, median of 10
+    is to do); measured, of the browser only (the item page reaching the mark its code sets when
+    ready 59 ms after a cold navigation starts, on the desktop profile, Chromium 148, median of 10
     cold loads in one round, historical r16; views taking over 1,000 server-rendered rows in
-    10.2 ms, less any frame painted in between, Chromium 156, median of 30 loads in one round,
-    browser-4); platform (Windows 11 includes the Evergreen WebView2 Runtime and Microsoft has
-    installed it on eligible Windows 10 devices, WKWebView is part of macOS's WebKit framework,
+    10.2 ms from the parser finishing to ready, less the rendering of any long frame recorded in
+    between, median of 30 loads, and the first click on a taken-over row updating the DOM in
+    1.4 ms, the median of 15 in the slower of two rounds, both Chromium 156, round browser-4);
+    platform (Windows 11 includes the Evergreen WebView2 Runtime and Microsoft has installed it
+    on eligible Windows 10 devices, WKWebView is part of macOS's WebKit framework,
     and Linux distributions package WebKitGTK, whose current stable release is 2.54.3); platform
     (the runtime and `corten-ui` are tested in Playwright's builds of Chromium, Firefox and WebKit,
     [Limit 10](#limit-tested-browsers), not in the system web views themselves); reasoned (a

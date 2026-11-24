@@ -80,13 +80,15 @@ tested in Playwright's builds of Chromium, Firefox and WebKit
 Fastest at the user's end is four numbers on a desktop, and they do not agree:
 
 1. Time to first use. A URL wins: no installed app beats not installing one.
-2. Latency inside a loaded screen. What Corten has measured in a browser is other numbers: the
-   item page reaches the mark its own code sets when it is ready 59 ms after a cold load on the
-   desktop profile ([In the browser](performance.md#in-the-browser), historical round r16), and
-   views take over 1,000 server-rendered rows in 10.2 ms, less any frame the browser paints in
-   between ([Client-heavy screens](performance.md#client-heavy-screens), round browser-4).
-   Neither times how fast a loaded form, table or live row answers input. The estimate is that a
-   native toolkit would not answer faster by an amount a person can feel; nothing has measured it.
+2. Latency inside a loaded screen. Corten's browser numbers are of one client, the browser. On
+   the desktop profile the item page reaches the mark its own code sets when ready 59 ms after a
+   cold navigation starts ([In the browser](performance.md#in-the-browser), historical round
+   r16). In round browser-4 ([Client-heavy screens](performance.md#client-heavy-screens)) views
+   take over 1,000 server-rendered rows in 10.2 ms, from the parser finishing to ready less the
+   rendering of any long frame (50 ms or more) recorded in between, and the first click on a
+   taken-over row updates the DOM in 1.4 ms. Nothing compares input to paint across the four
+   desktop clients (a browser tab, an installed PWA, a web view shell and a native screen). The
+   estimate is that a native toolkit would not answer faster by an amount a person can feel.
 3. Cold start of an installed app, and memory. A native app wins here. Estimated, not measured: a
    web view shell costs a few hundred milliseconds and 100 to 300 MB, a native app tens of each.
 4. What the browser an app's users run cannot reach: an OS integration (a tray icon, global
@@ -100,7 +102,7 @@ a desktop app on Corten is one of these, the first by default:
 1. The browser and the installed PWA (built). The same pages any browser gets, installable with
    an offline fallback page by `corten::pwa` (What exists now, item 5). Nothing in them is
    specific to a desktop.
-2. A desktop shell (not built): an installed window on the system web view around the
+2. A desktop shell (not built): an installed window around a web view showing the
    server-rendered pages, the desktop twin of the mobile shell (Native apps, item 1). An app wants
    it when the browsers its users run cannot reach a device or an OS integration it needs (item 4
    above). The preferred direction for the prototype is the system web view rather than a bundled
@@ -123,8 +125,9 @@ first. A screen that needs a native toolkit is written in it, from the same scre
 
 Each of these still reaches the server across the network. A desktop app that carries its Corten
 server in its own process would remove that round trip. It would keep working with no connection
-only if the app also had its data and everything else it depends on locally, and data on the
-device is where the README sends an app elsewhere ([When to use it](../README.md#when-to-use-it)).
+only if the app also had its data and everything else it depends on locally, and the README
+sends an offline-first app whose data lives on the device elsewhere
+([When to use it](../README.md#when-to-use-it)).
 It is open decision 6, not a plan. A shell or a native desktop screen, when one is built, ships
 with a test that drives an example through it (surface rule 6, below).
 
