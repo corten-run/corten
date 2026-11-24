@@ -607,13 +607,14 @@ establish a general ranking.
       1. Placements: each side is compiled once, and its K placements are that build's final link
          run again with one more object, a function of a declared size that nothing calls (a pad),
          placed first in `.text` by `-Wl,--symbol-ordering-file`, so every other function moves by
-         the pad and keeps its order and its neighbours. The plan lists every pad size, spread
-         across the phases of a 64-byte line and a 4 KiB page and up to about 40,000 bytes.
+         the pad and keeps its order and its neighbours. The plan lists every such pad's size,
+         spread across the phases of a 64-byte line and a 4 KiB page and up to about 40,000 bytes.
          Placement i of the change is base with pad p_i against head with pad p_i. Before
          anything is measured, the run records that the link run again without a pad is
          byte-identical to the build's own binary; that each placement has exactly that binary's
          functions and the pad, the pad first, every function moved by exactly the pad's size (so
-         the placement has the line and page phase the plan declared) and every pair of neighbours
+         the placement has the line and page phase the plan declared; with code aligned beyond 16
+         bytes on either side, the fifth point's check instead) and every pair of neighbours
          still next to each other in order; that each placement of one build has a SHA-256 no
          other placement of that build has (base and head at one pad may be one binary, when the
          change compiles to the same code); and that each answers the workload's requests as the unpadded binary does: status, headers but
@@ -622,6 +623,8 @@ establish a general ranking.
          `ETag`). A header value the workload's cost depends on, as `kept`'s depends on `Age`, is
          masked for that comparison only if it can differ between starts, and is then checked
          separately against the value or range the plan states, not accepted as any number.
+         The run also records, from the unpadded link's map, what the fifth point asks of every
+         run, with code aligned beyond 16 bytes or without.
       2. Pairs: R recorded pairs per placement after one that is not, every turn on a freshly
          started build, as above, so a placement and a process start are told apart.
       3. The statistic: per placement, the median of its R per-pair changes in user plus kernel
@@ -650,6 +653,55 @@ establish a general ranking.
          change's own bound. Only a complete, resolved A/A records or replaces a spread, through a
          pull request that changes the Choice; a run reads the spread recorded in the Choice on
          `main` when its plan is declared, whatever a later run records.
+      5. Nothing about code aligned beyond 16 bytes, which the run records and checks. C code a
+         dependency compiles can align input sections of `.text` to 32 or 64 bytes, and a pad can
+         then move some functions, and the data after `.text`, by other than its size
+         ([design Choice 72](docs/design.md#choice-placement-runs), which has the condition for a
+         pull request with such code whose placement runs predate this point). In every placement
+         run the unpadded link the first point compares with the build's own binary is made with
+         LLD's map (`-Wl,-Map`). Before anything is measured, the run records from that map, and the
+         pull request reports, each input section of `.text` aligned beyond 16 bytes, in order with
+         its alignment, and every symbol the map lists in `.text` from the first of them on (the
+         side's list of functions: the map gives a symbol no type), by symbol, archive and archive
+         member, or object file where it is in no archive, as the map names them, less directories;
+         each side's map is kept with the run's results. A run whose plan was declared before this
+         point was on `main` is read by the rule as it then stood, and any other without that record
+         has no reading across placements. A plan may not build the C code with flags chosen for
+         the measurement that leave no such section, to be read under the first point alone. Where
+         either side has such a section, the rest of this point holds for both, in the change
+         comparison and the A/A; a pilot, an A/A with a plan of its own, is held to it by what its
+         own sides show.
+
+         Every placement then has a second pad, whose size no plan lists: a function nothing calls,
+         aligned to 16 bytes, that the ordering file does not name and the link line gives last, so
+         it is laid last in `.text`. One rule sizes it: `.data`'s offset in a 64-byte line is the
+         unpadded link's plus the first pad's size, mod 64. The run links each placement with second
+         pads of 16, 32, 48 and 64 bytes, keeps the smallest whose map shows `.data` there, and
+         records a line a placement with that size and `.data`'s address.
+
+         Each placement's measured binary is linked with its map, checked against the unpadded
+         link's in place of "every function moved by exactly the pad's size": `.text` begins where
+         it did and holds the first pad's section, of the plan's size, then the unpadded link's
+         input sections in its order, each with its size and alignment, then the second pad's
+         section, of one of the four sizes; in both links every input section begins at the first
+         multiple of its alignment at or after the end of the one before it; every symbol of `.text`
+         is in the same input section in both links, as far from its start; and `.data` is where the
+         rule says. The first point's other checks stand, with both pads among a placement's
+         functions and the first pad first.
+
+         A side with no reading across placements does not pass and shows no win. A side has none,
+         for any workload, in three cases: an input section of its `.text` is aligned beyond 64
+         bytes; an input section whose name begins `.text.` and matches
+         `\.(_R[A-Za-z0-9_.$]+|_ZN[A-Za-z0-9_.$]*17h[0-9a-f]{16}E(\.llvm\.\d+)?)$`, so ends in a
+         Rust-mangled symbol (`_R...`, or the legacy `_ZN...17h<hash>E`), lies at or after the first
+         section aligned beyond 16 bytes, or in another output section (Rust code under a name that
+         is not mangled is not seen); or none of the four sizes puts a placement's `.data` where the
+         rule says. The pads do not vary where a function on a side's list lies in a 64-byte line
+         as they vary the code before it: from the first section aligned to 64 bytes on, a function
+         is in every placement where the side's unpadded link has it, and one listed
+         before that section, or on a side with none, is there or 32 bytes from there. That is a
+         limit of the reading and refuses none: what one such place costs a request no reading says,
+         and each side's list in the pull request shows which functions the limit covers.
 
       The margin stays +1% with no floor: the workload meets it when the change's bound across
       placements is under +1% and its A/A resolves. A placement that fails a check above, or has
