@@ -2558,6 +2558,21 @@ rules something out.
     7,076 is 94 over 6,982 (jemalloc), so the next change that adds to an unstaged route reopens
     this.
 
+    The next change was to the host check itself, which now also refuses what HTTP does not allow
+    (a `Host` line missing, repeated or not a host, a request-target with a byte outside ASCII,
+    `*` with a method other than `OPTIONS`: the `400` of
+    [the app guide](guide/app.md#host-names)), at an unstaged route as at every other. It adds 57
+    instructions to an unstaged request, counted over a socket (13,023 against 12,966, below),
+    which is past the bound, so this was read again as it was for the host check's 494: answering a
+    malformed request as RFC 9112 requires is correctness, which comes before the count (the
+    README's Values), and a route that skipped it would answer a request with two `Host` lines
+    that every other route refuses. The refusals stay, and the bound moves by what they cost and
+    no further: about 100 over 6,989 and 7,039, the lane's and step 4's 98 and 94 still counted
+    against it, so the next change that adds to an unstaged route reopens this as before. What
+    was tried to lower the 57 is in the count below; reading the request-target for ASCII is most
+    of what is left (40 of the 56 one profile of the same build gave the route, by source line,
+    are the standard library's ASCII test and the slice iteration under it).
+
     The instruction bounds below bound work on the measured routes, not speed. For a change
     to the request path, also measure cycles under load as
     [CONTRIBUTING](../CONTRIBUTING.md#pull-requests) describes.
@@ -2639,7 +2654,20 @@ rules something out.
     7,076 in an API's module against 7,065, a `service_fn` with no framework 3,190 in both, a
     plain axum router 7,059 against 7,092; with glibc 7,834 against 7,823, 7,882 against 7,871,
     3,568 in both, and 8,073 against 8,106; the harness built before the control, two runs each:
-    7,022 against 7,012 and 7,073 against 7,063); measured (callgrind, release, three runs each, the stages written as combinators
+    7,022 against 7,012 and 7,073 against 7,063); measured (callgrind, release, jemalloc, a
+    request counted as the run of 1,240 less the run of 240 over 1,000 on one connection, three
+    runs each, median and range, a bench app the repository does not hold, the host check with
+    HTTP's refusals at `58d81af93` against main `3aee8a5db`: an unstaged route 13,023 (13,012 to
+    13,024) against 12,966 (12,965 to 12,966), a `GET` through the stages under an API 19,215
+    (19,214 to 19,215) against 19,152 (19,136 to 19,153), the same with a browser's headers
+    24,736 (24,736 to 24,755) against 24,692 (24,692 to 24,693), its `POST` 23,877 (23,875 to
+    23,877) against 23,813 (23,807 to 23,815) and a 12 KB page 43,590 (43,590 to 43,591) against
+    43,499 (43,499 to 43,500), every answer the same bytes in both builds; three uncommitted
+    variants of the same change, `GET` and unstaged, three runs each: knowing a request the
+    server read by a thread-local set around the router's call 19,243 and 13,052, the same with
+    the request-target read eight bytes at a time in place of `str::is_ascii` 19,262 and 13,061,
+    and the first with the `Host` lines walked on every request, not only where some name has
+    two, 19,252 and 13,062); measured (callgrind, release, three runs each, the stages written as combinators
     on Corten's router, an uncommitted variant of `8ddeaea2`: 92 to 367 instructions more a
     staged request with jemalloc and 16 to 298 with glibc); measured
     (callgrind, inclusive counts by function, jemalloc, one run each, the bench binary at
@@ -2705,7 +2733,8 @@ rules something out.
     app but listings-feed uses `unstaged` by the next minor release; or an unstaged route costs more
     than about 100 instructions over what it cost with its checks in its handler at `8ddeaea2`
     with jemalloc, 6,932 in the app's routes and 6,982 in an API's module (7,003 and 7,068
-    through its lane, 7,030 and 7,076 since step 4), when a control that shares no code with
+    through its lane, 7,030 and 7,076 since step 4), and over the 57 its host check has cost
+    since it refuses what HTTP does not allow (`58d81af93`, counted over a socket), when a control that shares no code with
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
     builds by more than the route does, which says the harness no longer separates them; or, in
@@ -2740,7 +2769,11 @@ rules something out.
     browser sends), or when requests are found to reach apps with the line rewritten more often
     than not.
 
-    Last checked: 2026-11-23, the stages' reads of a request under an API, read in the code at
+    Last checked: 2026-11-24, the host check with HTTP's refusals at `58d81af93` against main
+    `3aee8a5db`, callgrind over a socket on a bench app the repository does not hold (the next
+    check writes its own: one keep-alive connection, a `GET` with `Host: localhost` and its port
+    to a route that says `unstaged` and to routes through the stages), rustc 1.100.0;
+    2026-11-23, the stages' reads of a request under an API, read in the code at
     `91e193bce` (which stopped looking up the mode's two headers there; the lookup counts above
     were not taken again); 2026-11-23, each engine's `Accept-Encoding` over HTTP and HTTPS, by
     Playwright 1.65.1 on Linux (tag `evidence/stage-header-checks-2002`), and 2026-11-24, the

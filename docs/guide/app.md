@@ -1321,7 +1321,9 @@ more than the same checks written into the handler (86 in an API's module; 67 an
 glibc), and wall times did not tell them apart.
 The host check, with what
 carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
-check's read of `Host` and its match against the app's names. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+check's read of `Host` and its match against the app's names. Refusing what HTTP does not allow
+([Host names](#host-names)) added 57 to it, and 44 to 91 to a request through the stages (counted
+over a socket at `58d81af93`; [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 
