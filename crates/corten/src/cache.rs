@@ -413,8 +413,9 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
             // lookup. A marked one whose header a middleware took out is settled below as one that
             // says `private, no-cache`.
             if typed.is_none() {
-                let personal = seen.nonce || seen.caller || sets_cookie(res.headers());
-                if !drew_key && (personal || marked) {
+                // `caller` first: a marked answer needs no look for its cookie.
+                let personal = caller || seen.nonce || sets_cookie(res.headers());
+                if !drew_key && personal {
                     drop_cdn_caching(res.headers_mut());
                 }
                 if !marked && personal {
