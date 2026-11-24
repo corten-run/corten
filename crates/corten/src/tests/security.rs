@@ -228,7 +228,11 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
         (b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nHost: localhost\r\n\r\n", 200, "lane spec"),
         // And there it is held to the app's names as on the first line.
         (b"GET /spec HTTP/1.1\r\nAccept: */*\r\nHost: other.example\r\n\r\n", 421, "Misdirected request."),
-        (b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nUser-Agent: probe\r\nHost: other.example\r\n\r\n", 421, "Misdirected request."),
+        (
+            b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nUser-Agent: probe\r\nHost: other.example\r\n\r\n",
+            421,
+            "Misdirected request.",
+        ),
         (b"GET /lane/spec HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 200, "lane spec"),
         // The header's name in any case, the host's too; a port, none, or an empty one.
         (b"GET /spec HTTP/1.1\r\nhOsT: LocalHost:8080\r\n\r\n", 200, "word spec"),
