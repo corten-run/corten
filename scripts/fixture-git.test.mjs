@@ -1,7 +1,8 @@
 // A fixture's Git leaves the repository running the checks alone, even when the caller sets
 // GIT_DIR and GIT_WORK_TREE, as a container that mounts a linked worktree does.
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -207,10 +208,34 @@ function onPath(dir, start) {
 /** @param {Promise<unknown>} pending @returns {Promise<any>} */
 const failure = (pending) => pending.then(() => assert.fail("the command must fail"), (error) => error);
 
+/**
+ * Resolves once `path` exists; a stand-in writes it when it is ready for a signal.
+ * @param {string} path @param {string} what
+ */
+async function appears(path, what) {
+  for (const began = performance.now(); !existsSync(path); await delay(20))
+    if (performance.now() - began > 10000) assert.fail(`${what} never became ready`);
+}
+
+/**
+ * A `git` stand-in that holds stdout and stderr and survives TERM, INT and HUP until KILL: it records
+ * each in `received`, keeps running and writes `ready` once its traps are set.
+ * @param {import("node:test").TestContext} t
+ */
+function termResistant(t) {
+  const dir = mkdtempSync(join(tmpdir(), "corten-fixture-git-marks-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const ready = join(dir, "ready"), received = join(dir, "received");
+  const bin = standIn(t, [
+    ...["TERM", "INT", "HUP"].map((signal) => `trap 'echo ${signal} >> "${received}"' ${signal}`),
+    `: > "${ready}"`, "echo held", "echo held >&2", "while :; do sleep 1; done",
+  ].join("\n"));
+  return { bin, ready, received: () => (existsSync(received) ? readFileSync(received, "utf8") : "") };
+}
+
 test("a fixture Git that ignores TERM and holds its pipes still ends on the runner's deadline and on interruption", posixOnly, async (t) => {
-  // TERM goes to the group at the deadline or interruption and KILL 2 s later while the watched child lives;
-  // the stand-in would hold stdout and stderr for 10 s.
-  const bin = standIn(t, "trap '' TERM INT HUP\necho held\necho held >&2\nsleep 10");
+  // TERM goes to the group at the deadline or interruption, and KILL 2 s later while the watched child
+  // lives. The stand-in records the TERM and carries on, so only that KILL ends it.
   const dir = mkdtempSync(join(tmpdir(), "corten-fixture-git-term-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   /** @type {[string, (io: import("./fixture-git.mjs").Commands, options: Record<string, unknown>) => Promise<unknown>][]} */
@@ -219,28 +244,53 @@ test("a fixture Git that ignores TERM and holds its pipes still ends on the runn
     ["the fixture-git.mjs hop", (io, options) => io.command(process.execPath, [cli, "--", "status"], options)],
   ];
   for (const [route, start] of routes) {
-    const io = commands(dir);
+    const io = commands(dir), deadline = termResistant(t);
     try {
       const began = performance.now();
-      const error = await failure(onPath(bin, () => start(io, { timeout: 500 })));
+      const error = await failure(onPath(deadline.bin, () => start(io, { timeout: 1500 })));
       const took = performance.now() - began;
-      assert.equal(error.exit?.expired, true, `${route}: ${error.message}`);
-      assert.ok(took < 4500, `${route}: a 500 ms deadline settled after ${Math.round(took)} ms`);
+      assert.ok(existsSync(deadline.ready), `${route}: the stand-in must have been ready before the deadline`);
+      assert.deepEqual([error.exit?.expired, error.exit?.signal], [true, "SIGKILL"], `${route}: ${error.message}`);
+      assert.match(deadline.received(), /^TERM$/m, `${route}: the stand-in must have received TERM and carried on`);
+      assert.ok(took >= 3400 && took < 6000, `${route}: a 1.5 s deadline with KILL 2 s after TERM settled after ${Math.round(took)} ms`);
     } finally { io.dispose(); }
 
     const listening = new Set(process.listeners("SIGINT"));
     const stoppable = commands(dir), interrupt = process.listeners("SIGINT").find((listener) => !listening.has(listener));
+    const interrupted = termResistant(t);
     try {
       assert.equal(typeof interrupt, "function");
-      const pending = failure(onPath(bin, () => start(stoppable, { timeout: 30000 })));
-      await delay(300);
+      const pending = failure(onPath(interrupted.bin, () => start(stoppable, { timeout: 30000 })));
+      await appears(interrupted.ready, `${route}: the stand-in`);
       const began = performance.now();
       /** @type {Function} */ (interrupt)();
       const error = await pending, took = performance.now() - began;
-      assert.equal(error.exit?.interrupted, true, `${route}: ${error.message}`);
-      assert.ok(took < 4000, `${route}: an interruption settled after ${Math.round(took)} ms`);
+      assert.deepEqual([error.exit?.interrupted, error.exit?.signal], [true, "SIGKILL"], `${route}: ${error.message}`);
+      assert.match(interrupted.received(), /^TERM$/m, `${route}: the stand-in must have received TERM and carried on`);
+      assert.ok(took >= 1900 && took < 4000, `${route}: an interruption with KILL 2 s after TERM settled after ${Math.round(took)} ms`);
     } finally { stoppable.dispose(); }
   }
+});
+
+test("the fixture-git.mjs hop passes a TERM sent to it alone on to Git, then ends by it as Git did", posixOnly, async (t) => {
+  // Git records the TERM, then ends by it. The signal goes to the hop's PID, not its group, so Git
+  // receives it only if the hop passes it on.
+  const dir = mkdtempSync(join(tmpdir(), "corten-fixture-git-forward-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const ready = join(dir, "ready"), received = join(dir, "received");
+  const bin = standIn(t, [
+    `trap 'echo TERM >> "${received}"; kill $sleeper; trap - TERM; kill -TERM $$' TERM`,
+    "sleep 30 & sleeper=$!", `: > "${ready}"`, "wait $sleeper",
+  ].join("\n"));
+  const hop = onPath(bin, () => spawn(process.execPath, [cli, "--", "status"], { cwd: dir, detached: true, stdio: "ignore" }));
+  const exited = once(hop, "exit");
+  // The hop leads its own group; if it failed to pass TERM on, end the stand-in it left behind.
+  t.after(() => { try { process.kill(-(/** @type {number} */ (hop.pid)), "SIGKILL"); } catch { /* the group has ended */ } });
+  await appears(ready, "the stand-in");
+  hop.kill("SIGTERM");
+  const ended = await Promise.race([exited, delay(10000).then(() => null)]);
+  assert.equal(existsSync(received) ? readFileSync(received, "utf8") : "", "TERM\n", "the hop must pass TERM on to Git");
+  assert.deepEqual(ended, [null, "SIGTERM"]);
 });
 
 test("a fixture Git ended by a signal is reported with that signal, not as exit 1", posixOnly, async (t) => {

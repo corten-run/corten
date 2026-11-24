@@ -37,7 +37,12 @@ test("Linux production control-byte boundary accepts only original files", { ski
   console.log(run.stdout.trim());
 });
 
-test("the control boundary makes its repository without touching a caller named by GIT_DIR and GIT_WORK_TREE", (t) => {
+// This setup check needs Python 3, so it runs only under the boundary's opt-in above or
+// CORTEN_REQUIRE_PYTHON=1, which hosted CI sets where Python 3 is guaranteed, and then fails rather than
+// skips without Python (bench/workloads/CLOUD.md).
+const requirePython = process.env.CORTEN_SYNTHETIC_CONTROL_BOUNDARY === "1" || process.env.CORTEN_REQUIRE_PYTHON === "1";
+test("the control boundary makes its repository without touching a caller named by GIT_DIR and GIT_WORK_TREE",
+  { skip: !requirePython && "needs Python 3: set CORTEN_REQUIRE_PYTHON=1" }, (t) => {
   // The setup the opt-in boundary runs before its controls, here under a scratch caller's selectors.
   const dir = mkdtempSync(join(tmpdir(), "mixed-controls-repo-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -53,6 +58,7 @@ test("the control boundary makes its repository without touching a caller named 
     "import os, pathlib, sys; sys.path.insert(0, sys.argv[1]); import mixed_controls_repo as m; print(*m.make_repo(pathlib.Path(sys.argv[2]), m.fixture_env(os.environ)))",
     fileURLToPath(new URL("./test-fixtures/", import.meta.url)), repo],
     { env: { ...clean, GIT_DIR: join(caller, ".git"), GIT_WORK_TREE: elsewhere }, encoding: "utf8", timeout: 30000 });
+  assert.equal(run.error, undefined, `Python 3 is required here (CORTEN_REQUIRE_PYTHON or CORTEN_SYNTHETIC_CONTROL_BOUNDARY is set): ${run.error?.message}`);
   assert.deepEqual(state(), before, "the caller's config, refs and work tree are unchanged");
   assert.equal(run.status, 0, run.stderr);
   const [commit, tree] = run.stdout.trim().split(" ");
