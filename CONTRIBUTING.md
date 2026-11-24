@@ -610,9 +610,8 @@ establish a general ranking.
          `ETag`). A header value the workload's cost depends on, as `kept`'s depends on `Age`, is
          masked for that comparison only if it can differ between starts, and is then checked
          separately against the value or range the plan states, not accepted as any number.
-         Before anything is measured the run also records, from the map of each side's unpadded
-         link, what the fifth point asks of every run, with code aligned beyond 16 bytes or
-         without.
+         The run also records, from the unpadded link's map, what the fifth point asks of every
+         run, with code aligned beyond 16 bytes or without.
       2. Pairs: R recorded pairs per placement after one that is not, every turn on a freshly
          started build, as above, so a placement and a process start are told apart.
       3. The statistic: per placement, the median of its R per-pair changes in user plus kernel
@@ -640,51 +639,51 @@ establish a general ranking.
          change's own bound. Only a complete, resolved A/A records or replaces a spread, through a
          pull request that changes the Choice; a run reads the spread recorded in the Choice on
          `main` when its plan is declared, whatever a later run records.
-      5. Code aligned beyond 16 bytes, of which the plan states nothing. C code a dependency
-         compiles can put input sections aligned to 32 or 64 bytes in `.text`, and LLD moves one
-         only by a multiple of its alignment: a pad can then move some functions, and the data
-         after `.text`, by other than its size
-         ([design Choice 72](docs/design.md#choice-placement-runs), which has the route for a pull
-         request whose placement runs predate this point). Before anything is measured, the run
-         records from LLD's map (`-Wl,-Map`) of each build's unpadded link, and the pull request
-         reports, each input section of `.text` aligned beyond 16 bytes, in order with its
-         alignment, and every function from the first of them on (the side's list), by symbol,
-         archive and archive member, or object file where it is in no archive, the files named
-         without their hashes; both maps are kept with the run's results. That record is
-         asked of every placement run, one with no such section too: a run whose plan was
-         declared before this point was on `main` is read by the rule as it then stood, and any
-         other with no such record has no reading across placements. A plan may not build the C
-         code with other flags to be read under the first point alone. Where either side has
-         such a section, the rest of this point holds for both, in the change comparison and the
-         A/A (a pilot by its own sides).
+      5. Nothing about code aligned beyond 16 bytes, which the run records and checks. C code a
+         dependency compiles can align input sections of `.text` to 32 or 64 bytes, and a pad can
+         then move some functions, and the data after `.text`, by other than its size
+         ([design Choice 72](docs/design.md#choice-placement-runs), which has the condition for a
+         pull request with such code whose placement runs predate this point). In every placement
+         run the unpadded link the first point compares with the build's own binary is made with
+         LLD's map (`-Wl,-Map`). Before anything is measured, the run records from that map, and the
+         pull request reports, each input section of `.text` aligned beyond 16 bytes, in order with
+         its alignment, and every symbol the map lists in `.text` from the first of them on (the
+         side's list of functions: the map gives a symbol no type), by symbol, archive and archive
+         member, or object file where it is in no archive, as the map names them, less directories;
+         each side's map is kept with the run's results. A run whose plan was declared before this
+         point was on `main` is read by the rule as it then stood, and any other without that record
+         has no reading across placements. A plan may not build the C code with flags that leave no
+         such section, to be read under the first point alone. Where either side has such a section,
+         the rest of this point holds for both, in the change comparison and the A/A; a pilot, an
+         A/A with a plan of its own, is held to it by what its own sides show.
 
          Every placement then has a second pad, whose size no plan lists: a function nothing calls,
          aligned to 16 bytes, that the ordering file does not name and the link line gives last, so
          it is laid last in `.text`. One rule sizes it: `.data`'s offset in a 64-byte line is the
          unpadded link's plus the first pad's size, mod 64. The run links each placement with second
-         pads of 16, 32, 48 and 64 bytes and keeps the smallest whose map shows `.data` there.
+         pads of 16, 32, 48 and 64 bytes, keeps the smallest whose map shows `.data` there, and
+         records a line a placement with that size and `.data`'s address.
 
-         Each measured binary is linked with the map, as is the unpadded link the first point
-         compares with the build's own binary, and each placement's map is checked against that
-         link's, in place of "every function moved by exactly the pad's size": `.text` begins where
+         Each placement's measured binary is linked with its map, checked against the unpadded
+         link's in place of "every function moved by exactly the pad's size": `.text` begins where
          it did and holds the first pad's section, then the unpadded link's input sections in its
          order, each with its size and alignment, then the second pad's section, of one of the four
          sizes; in both links every input section begins at the first multiple of its alignment at
-         or after the end of the one before it; every function is in the same input section in both
-         links, as far from its start; and `.data` is where the rule says. The first point's other
-         checks stand, with both pads among a placement's functions and the first pad first.
+         or after the end of the one before it; every symbol of `.text` is in the same input section
+         in both links, as far from its start; and `.data` is where the rule says. The first point's
+         other checks stand, with both pads among a placement's functions and the first pad first.
 
-         No reading across placements does not pass and shows no win. A side has none, for any
-         workload, in three cases: an input section of its `.text` is aligned beyond 64 bytes; a
-         function whose mangled symbol names a crate of this repository's workspace or the
-         measured program's own crate lies at or after the first section aligned beyond 16 bytes,
-         or outside `.text`; or none of the four sizes puts a placement's `.data` where the rule
-         says. The pads do not vary where a function on a side's list lies in a 64-byte line as
-         they vary the code before it: from the first section aligned to 64 bytes on, a function
-         is in every placement where the side's unpadded link has it, and one listed before that
-         section, or on a side with none, is there or 32 bytes from there. That is a limit of the
-         reading and refuses none: what one such place costs a request no reading says, and each
-         side's list in the pull request shows which functions the limit covers.
+         A side with no reading across placements does not pass and shows no win. A side has none,
+         for any workload, in three cases: an input section of its `.text` is aligned beyond 64
+         bytes; a `.text*` input section whose name ends in a Rust-mangled symbol (`_R...`, or
+         `_ZN...17h<hash>E` under the legacy scheme) lies at or after the first section aligned
+         beyond 16 bytes, or in another output section; or none of the four sizes puts a placement's
+         `.data` where the rule says. The pads do not vary where a function on a side's list lies in
+         a 64-byte line as they vary the code before it: from the first section aligned to 64 bytes
+         on, a function is in every placement where the side's unpadded link has it, and one listed
+         before that section, or on a side with none, is there or 32 bytes from there. That is a
+         limit of the reading and refuses none: what one such place costs a request no reading says,
+         and each side's list in the pull request shows which functions the limit covers.
 
       The margin stays +1% with no floor: the workload meets it when the change's bound across
       placements is under +1% and its A/A resolves. A placement that fails a check above, or has
