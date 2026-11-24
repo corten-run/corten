@@ -4569,9 +4569,13 @@ rules something out.
     patch losing its stylesheet link, a case of `crates/corten/src/patch-parsing.json` that
     `scripts/smoke.mjs` loaded on `1f0bc47b7`, in Chromium 156.0.8078.80, Firefox 157.0 and
     WebKit 27.2 (Playwright 1.64.1); 2026-11-24, a navigation drawn only after the patch's held
-    stylesheet loads, and loading the page in full when that load fails, in the Chromium and
-    Firefox of Playwright 1.65.1 by `scripts/smoke.mjs` on `d39d9af6f`, both checks failing with
-    `stylesOf`'s shared-load return removed and the page's handler module held.
+    stylesheet loads, and loading the page in full when that load fails, in Chromium 159.0.8154.6
+    and Firefox 159.0 (Playwright 1.65.1) by the checks of `scripts/smoke/styles.mjs` on
+    `c54b76f16`: with `stylesOf`'s shared-load return removed and the news page's handler module
+    (`news_filter.js`) held 2 s, the held load's check passed (the page swapped in styled) and the
+    failed load's check failed (the page swapped in instead of loading in full), in both, and with
+    that return removed and the module not held, both checks failed in both (the page swapped in
+    unstyled while the stylesheet was held).
 
 48. <a id="choice-matchit"></a>**Every app uses the exact matchit version Corten tests, 0.9.2.**
     `crates/corten/Cargo.toml` requires `=0.9.2`, not a caret or tilde. The exact pin is what
