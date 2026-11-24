@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { command, here } from "./build.mjs";
-import { checkoutIdentity, assertCheckoutUnchanged, verifyFixes } from "./verify-fixes.mjs";
+import { checkoutIdentity as identity, assertCheckoutUnchanged, verifyFixes } from "./verify-fixes.mjs";
 import { upstream, checkHttp, fixtureIndependent, read } from "./checks.mjs";
 import { records as catalogRecords } from "../../catalog/fixtures.mjs";
 import { records as marketplaceRecords } from "../../marketplace/fixtures.mjs";
@@ -72,35 +72,49 @@ test("command stream artifacts retain full stdout and stderr separately", async 
 test("receipt binds clean committed harness/oracle bytes and rejects changes after execution", () => {
   mkdirSync(join(here, "work"), { recursive: true });
   const base = mkdtempSync(join(here, "work/receipt-"));
-  const git = (...args) => execFileSync("git", args, { cwd: base, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() }).trim();
+  // A disposable caller repository whose GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE the checks inherit, with a
+  // tracked file whose times differ from its index entry, so a status run against it would rewrite its index.
+  const caller = join(base, "caller"), callerGit = (...args) => execFileSync("git", args, { cwd: caller, stdio: "ignore", env: fixtureGitEnv() });
+  mkdirSync(caller); callerGit("init", "-q"); writeFileSync(join(caller, "tracked.txt"), "caller\n"); callerGit("add", "tracked.txt");
+  utimesSync(join(caller, "tracked.txt"), new Date(2001, 0, 1), new Date(2001, 0, 1));
+  const callerEnv = fixtureGitEnv({ GIT_DIR: join(caller, ".git"), GIT_WORK_TREE: caller, GIT_INDEX_FILE: join(caller, ".git", "index") });
+  const callerIndex = () => readFileSync(join(caller, ".git", "index")), indexBefore = callerIndex();
+  // Status only reads the fixture: no optional index refresh of its own.
+  const env = fixtureGitEnv({ GIT_OPTIONAL_LOCKS: "0" }, callerEnv), checkoutIdentity = (/** @type {string} */ path) => identity(path, env);
+  const repo = join(base, "repo"); mkdirSync(repo);
+  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env }).trim();
   const verifier = "bench/deployments/express-bun/verify-fixes.mjs", oracle = "bench/workloads/json-check.mjs";
   try {
     git("init", "-q");
     git("config", "user.name", "Local regression fixture"); git("config", "user.email", "fixture@example.invalid");
     for (const path of [verifier, oracle]) {
-      mkdirSync(join(base, path, ".."), { recursive: true }); writeFileSync(join(base, path), "export const fixture = 1;\n");
+      mkdirSync(join(repo, path, ".."), { recursive: true }); writeFileSync(join(repo, path), "export const fixture = 1;\n");
     }
     git("add", "."); git("-c", "commit.gpgsign=false", "commit", "-qm", "Committed receipt fixture");
-    const before = checkoutIdentity(base);
+    const before = checkoutIdentity(repo);
     assert.equal(before.dirty, false); assert.match(before.commit, /^[a-f0-9]{40}$/);
     assert.deepEqual(Object.keys(before.sources), [verifier, oracle]);
-    assertCheckoutUnchanged(before, checkoutIdentity(base));
+    assertCheckoutUnchanged(before, checkoutIdentity(repo));
     for (const path of [verifier, oracle]) {
-      const original = readFileSync(join(base, path));
-      writeFileSync(join(base, path), "export const changed = true;\n");
-      const changed = checkoutIdentity(base); assert.equal(changed.dirty, true);
+      const original = readFileSync(join(repo, path));
+      writeFileSync(join(repo, path), "export const changed = true;\n");
+      const changed = checkoutIdentity(repo); assert.equal(changed.dirty, true);
       assert.throws(() => assertCheckoutUnchanged(before, changed), /became dirty/);
       // Structural hostile receipt check: even a forged clean flag cannot hide changed hashes.
       assert.throws(() => assertCheckoutUnchanged(before, { ...changed, dirty: false }), /bytes changed/);
-      writeFileSync(join(base, path), original);
+      writeFileSync(join(repo, path), original);
     }
-    writeFileSync(join(base, "untracked.txt"), "untracked");
-    assert.equal(checkoutIdentity(base).dirty, true); rmSync(join(base, "untracked.txt"));
+    writeFileSync(join(repo, "untracked.txt"), "untracked");
+    assert.equal(checkoutIdentity(repo).dirty, true); rmSync(join(repo, "untracked.txt"));
     git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Different clean HEAD");
-    const after = checkoutIdentity(base); assert.equal(after.dirty, false);
+    const after = checkoutIdentity(repo); assert.equal(after.dirty, false);
     assert.throws(() => assertCheckoutUnchanged(before, after), /commit changed/);
     git("rm", "--cached", verifier); git("-c", "commit.gpgsign=false", "commit", "-qm", "HEAD without verifier");
-    assert.throws(() => checkoutIdentity(base), /verifier must be tracked/);
+    assert.throws(() => checkoutIdentity(repo), /verifier must be tracked/);
+    assert.deepEqual(callerIndex(), indexBefore, "the fixture's status must not refresh the caller's index");
+    // Control: the same status with the caller's environment does rewrite that index.
+    execFileSync("git", ["status", "--porcelain"], { cwd: repo, stdio: "ignore", env: callerEnv });
+    assert.notDeepEqual(callerIndex(), indexBefore, "the control must show the write the sanitized environment prevents");
   } finally {
     assert.ok(base.startsWith(join(here, "work/receipt-")));
     rmSync(base, { recursive: true, force: true });
