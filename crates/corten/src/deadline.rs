@@ -1,43 +1,30 @@
 //! The timer a request's deadline waits on ([`crate::App::deadline`]). A request whose handler
 //! waits needs one, and on tokio's multi-threaded runtime a timer made and a timer dropped each
 //! take the one lock of the runtime's timer wheel, where the threads serving such requests
-//! queue. So a connection [`crate::serve`] accepted keeps one timer for its requests: each
-//! deadline moves it later (`Sleep::reset`, which takes no lock while the timer is still set and
-//! the new time is not earlier) and gives it back still set.
+//! queue. So a connection [`crate::serve`] accepted keeps one timer for its requests: the first
+//! deadline of its to wait makes it, each deadline moves it later (`Sleep::reset`, which takes no
+//! lock while the timer is still set and the new time is not earlier) and gives it back still set.
 //!
-//! The connection's task owns the timer ([`Keeps`]): it makes it in its own poll, so the timer is
-//! of the runtime that polls the connection, and the timer is dropped with the connection. A
-//! thread has it only while it polls that connection ([`TIMER`]), which is where a request's
-//! deadline finds it. A deadline that finds none (the connection's first to wait, a second one in
-//! the same request, a request polled anywhere else: a router served another way, a call a layer
-//! moved to another task) makes its own timer and drops it, as every deadline did.
+//! The timer is kept in the connection's [`Watch`] ([`Slot`]), so it is dropped with the
+//! connection, and a connection the app does not watch (no header timeout and no send timeout)
+//! keeps none. A request's answer lends the watch to the thread while it is polled ([`Lends`]),
+//! which is where the request's deadline finds it; the deadline then holds the watch itself, so
+//! the timer goes back to the connection it came from, wherever the deadline is dropped. A
+//! deadline that finds no watch, or is not polled by its connection's own task (a router served
+//! another way, a request served on another runtime inside a handler, a call a layer moved to
+//! another task or polls through a waker of its own), makes its own timer and drops it, as every
+//! deadline did: the kept timer is made in a poll the connection's task made itself.
 
+use crate::watch::Watch;
 use std::{
     cell::Cell,
     future::Future,
     pin::Pin,
-    sync::atomic::{AtomicU64, Ordering::Relaxed},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
     task::{Context, Poll},
     time::Duration,
 };
 use tokio::time::{Instant, Sleep};
-
-/// No connection is being polled on the thread.
-const NOWHERE: u64 = 0;
-/// A connection that has made no timer is being polled.
-const UNNAMED: u64 = 1;
-/// The same, and a deadline has waited during this poll: the connection makes its timer.
-const ASKED: u64 = 2;
-/// The number of the next connection to make a timer.
-static NAMES: AtomicU64 = AtomicU64::new(ASKED + 1);
-
-thread_local! {
-    /// The connection being polled on this thread: its number once it has made a timer, or one
-    /// of the values above.
-    static BY: Cell<u64> = const { Cell::new(NOWHERE) };
-    /// That connection's timer, while the connection has a number and no deadline has the timer.
-    static TIMER: Cell<Option<Held>> = const { Cell::new(None) };
-}
 
 /// A connection's timer.
 struct Held(Pin<Box<Sleep>>);
@@ -51,6 +38,17 @@ thread_local! {
     pub(crate) static TAKEN: Cell<usize> = const { Cell::new(0) };
 }
 
+impl Held {
+    /// A timer set to fire `limit` from now. Panics on a runtime with no clock, as
+    /// `tokio::time::sleep` does: a deadline makes it, inside the handler's catch.
+    fn new(limit: Duration) -> Held {
+        let timer = Box::pin(tokio::time::sleep(limit));
+        #[cfg(test)]
+        LIVE.with(|live| live.set(live.get() + 1));
+        Held(timer)
+    }
+}
+
 #[cfg(test)]
 impl Drop for Held {
     fn drop(&mut self) {
@@ -58,158 +56,146 @@ impl Drop for Held {
     }
 }
 
-pin_project_lite::pin_project! {
-    /// A connection's future with the timer its requests' deadlines wait on, lent to the thread
-    /// while the connection is polled.
-    pub(crate) struct Keeps<C> {
-        #[pin]
-        conn: C,
-        mine: Mine,
-    }
-}
+/// Where a connection keeps its timer between its requests: empty until a deadline of its has
+/// waited, and while a deadline has the timer. A lock, since a deadline may be dropped on any
+/// thread; only the connection's own requests take it, one at a time.
+pub(crate) struct Slot(Mutex<Option<Held>>);
 
-/// What a connection has for its requests' deadlines.
-struct Mine {
-    /// [`UNNAMED`] until a deadline of the connection's has waited, then the connection's own
-    /// number, so a timer goes back only to the connection that made it.
-    id: u64,
-    /// The timer, made once: `None` before, while a deadline has it across polls, and for good
-    /// if that deadline was dropped somewhere else. While the connection is polled, what the
-    /// thread had in its own place is here.
-    timer: Option<Held>,
-}
-
-impl<C> Keeps<C> {
-    pub(crate) fn new(conn: C) -> Self {
-        Keeps { conn, mine: Mine { id: UNNAMED, timer: None } }
+impl Slot {
+    pub(crate) const fn new() -> Slot {
+        Slot(Mutex::new(None))
     }
 
-    /// The connection itself, for what is not a poll (its graceful shutdown).
-    pub(crate) fn conn(self: Pin<&mut Self>) -> Pin<&mut C> {
-        self.project().conn
+    /// Nothing panics while the lock is held, and a deadline's drop is no place to find out.
+    fn place(&self) -> MutexGuard<'_, Option<Held>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// When the timer the connection has is set to fire, for a test.
+    fn take(&self) -> Option<Held> {
+        self.place().take()
+    }
+
+    /// Keeps `timer`, or drops it where the connection has one already (a second deadline in one
+    /// request made its own).
+    fn give(&self, timer: Held) {
+        let mut place = self.place();
+        if place.is_none() {
+            *place = Some(timer);
+        }
+    }
+
+    /// Drops the timer: the connection has switched and serves no more requests.
+    pub(crate) fn empty(&self) {
+        drop(self.take());
+    }
+
+    /// When the timer kept here is set to fire, for a test.
     #[cfg(test)]
-    pub(crate) fn kept_until(&self) -> Option<Instant> {
-        self.mine.timer.as_ref().map(|timer| timer.0.deadline())
+    pub(crate) fn until(&self) -> Option<Instant> {
+        self.place().as_ref().map(|timer| timer.0.deadline())
     }
 }
 
-/// Puts back what the thread had when the connection's poll ends, also when it panics: a
-/// connection can be polled inside another's poll (a handler that blocks on another runtime).
-struct Polling<'a> {
-    by: u64,
-    mine: &'a mut Mine,
+thread_local! {
+    /// What the connection whose request is being polled on this thread lends it.
+    static LENT: Cell<Lends> = const { Cell::new(Lends { by: 0, watch: None }) };
 }
 
-impl Drop for Polling<'_> {
-    #[inline(always)]
+/// A connection's watch, for a request's answer to lend to the thread while it polls the
+/// request, and what polled it then: the address its waker wakes, which is the connection's
+/// task's for a deadline that task polls itself.
+#[derive(Default)]
+pub(crate) struct Lends {
+    by: usize,
+    watch: Option<Arc<Watch>>,
+}
+
+impl Lends {
+    pub(crate) fn new(watch: Option<Arc<Watch>>) -> Lends {
+        Lends { by: 0, watch }
+    }
+
+    /// The watch, once the request is answered.
+    pub(crate) fn take(&mut self) -> Option<Arc<Watch>> {
+        self.watch.take()
+    }
+
+    /// Lends the watch to the thread until what this returns is dropped, also by a panic; the
+    /// thread then has what it had (a connection can be polled inside another's poll). Nothing
+    /// where the connection has no watch.
+    #[inline]
+    pub(crate) fn lend(&mut self, cx: &Context<'_>) -> Option<Lent<'_>> {
+        self.watch.as_ref()?;
+        self.by = cx.waker().data().addr();
+        swap(self);
+        Some(Lent(self))
+    }
+}
+
+/// A watch on the thread ([`Lends::lend`]).
+pub(crate) struct Lent<'a>(&'a mut Lends);
+
+impl Drop for Lent<'_> {
+    #[inline]
     fn drop(&mut self) {
-        // The thread still says whose poll this was: a connection that had a number then had lent
-        // its timer.
-        if BY.replace(self.by) > ASKED {
-            swap(&mut self.mine.timer);
-        }
+        swap(self.0);
     }
 }
 
-/// Swaps the thread's timer and the one in `place`. Not where the thread is ending, as
-/// [`Kept`]'s drop: this runs in [`Polling`]'s drop, where a panic during another would abort.
+/// Swaps what the thread is lent and `lends`. Not where the thread is ending.
 #[inline(always)]
-fn swap(place: &mut Option<Held>) {
-    let _ = TIMER.try_with(|thread| thread.swap(Cell::from_mut(place)));
+fn swap(lends: &mut Lends) {
+    let _ = LENT.try_with(|thread| thread.swap(Cell::from_mut(lends)));
 }
 
-impl<C: Future> Future for Keeps<C> {
-    type Output = C::Output;
-
-    // Written for what a poll costs a connection whose handlers never wait: 13 instructions
-    // (callgrind, keep-alive requests over TCP). The connection is polled in one place, so its
-    // poll is still compiled into its caller, and [`Polling`] owns nothing to drop and reads
-    // what it lent from the thread, so putting the thread back is compiled in here too. Polled
-    // in two places by a guard that owned a timer, a poll cost 64.
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<C::Output> {
-        let this = self.project();
-        // A connection no deadline of whose has waited tells the thread only that.
-        let polling = Polling { by: BY.replace(this.mine.id), mine: this.mine };
-        if polling.mine.id != UNNAMED {
-            swap(&mut polling.mine.timer);
-        }
-        let polled = this.conn.poll(cx);
-        if BY.get() == ASKED && polled.is_pending() {
-            *polling.mine = made();
-        }
-        polled
-    }
-}
-
-/// A connection's number and its timer, not yet set: made in the connection's own poll, so the
-/// timer is of the runtime that polls the connection, whatever its handler had entered when its
-/// deadline asked. A deadline asks only once it has made a timer of its own ([`Timer::poll`]), so
-/// where there is no clock to make one on, the handler's catch has the panic, as it always had.
-/// That leaves a handler that made its timer on a runtime it had entered, on a connection whose
-/// own runtime has no clock: the connection then has its number and no timer, and its deadlines
-/// go on making their own.
-#[cold]
-fn made() -> Mine {
-    let timer = std::panic::catch_unwind(|| Box::pin(tokio::time::sleep(Duration::MAX))).ok().map(Held);
-    #[cfg(test)]
-    LIVE.with(|live| live.set(live.get() + isize::from(timer.is_some())));
-    Mine { id: NAMES.fetch_add(1, Relaxed), timer }
-}
-
-/// A connection's timer while a deadline has it. Dropped where its connection is being polled, it
-/// goes back to the connection still set, and the next deadline moves it later; dropped anywhere
-/// else, the timer is dropped. It keeps the waker of whatever polled it last: the connection's
-/// task as a rule, but a handler that polls its request another way (it blocks on a runtime of its
-/// own, or a layer polls through a `FuturesUnordered`) leaves that waker, and what the waker
-/// holds, until the next deadline polls the timer or the timer fires. A timer no deadline takes
-/// before it fires wakes that once, for nothing.
-pub(crate) struct Kept {
-    of: u64,
+/// A connection's timer while a deadline has it, and the connection's watch, where the timer goes
+/// back, still set, when the deadline is dropped: the next deadline moves it later. It keeps the
+/// waker of whatever polled it last: the connection's task where it was taken, and another only
+/// if the deadline was polled somewhere else afterwards. A timer no deadline takes before it
+/// fires wakes that once, for nothing.
+struct Kept {
+    of: Arc<Watch>,
     /// `None` only once it is dropped.
     timer: Option<Held>,
 }
 
 impl Kept {
-    /// The timer of the connection being polled, set to fire `limit` from now. `None` where no
-    /// connection is being polled, or its timer is not there: not made yet, or another deadline
-    /// has it.
-    fn take(limit: Duration) -> Option<Kept> {
-        let of = BY.get();
-        if of <= ASKED {
-            return None;
-        }
-        let mut timer = TIMER.take()?;
-        timer.0.as_mut().reset(after(limit));
-        #[cfg(test)]
-        TAKEN.with(|taken| taken.set(taken.get() + 1));
+    /// The timer of the connection whose task is polling this deadline, set to fire `limit` from
+    /// now: the one the connection has, or a new one for it. `None` where no connection lends
+    /// its watch, or something else polls the deadline inside that connection's poll.
+    fn new(limit: Duration, cx: &Context<'_>) -> Option<Kept> {
+        let of = LENT
+            .try_with(|thread| {
+                let lent = thread.take();
+                let of = if lent.by == cx.waker().data().addr() { lent.watch.clone() } else { None };
+                thread.set(lent);
+                of
+            })
+            .ok()??;
+        let timer = match of.kept.take() {
+            Some(mut timer) => {
+                timer.0.as_mut().reset(after(limit));
+                #[cfg(test)]
+                TAKEN.with(|taken| taken.set(taken.get() + 1));
+                timer
+            }
+            None => Held::new(limit),
+        };
         Some(Kept { of, timer: Some(timer) })
-    }
-}
-
-/// Tells the connection being polled, if it has made no timer, that a deadline of its has waited:
-/// it makes its timer when this poll of it ends, for its next deadline.
-#[inline]
-fn ask() {
-    if BY.get() == UNNAMED {
-        BY.set(ASKED);
     }
 }
 
 impl Drop for Kept {
     fn drop(&mut self) {
-        // Not where the thread is ending, when what it was lent is gone.
-        if BY.try_with(Cell::get) == Ok(self.of) {
-            let _ = TIMER.try_with(|home| home.set(self.timer.take()));
+        if let Some(timer) = self.timer.take() {
+            self.of.kept.give(timer);
         }
     }
 }
 
 pin_project_lite::pin_project! {
     /// What a deadline waits on: nothing until its handler waits, then its connection's timer
-    /// where there is one to take, or a timer of its own.
+    /// where its connection's task polls it, or a timer of its own.
     #[project = Waiting]
     pub(crate) enum Timer {
         Unset,
@@ -219,7 +205,7 @@ pin_project_lite::pin_project! {
 }
 
 impl Timer {
-    /// Whether it has its connection's timer, for a test.
+    /// Whether it has a timer of its connection's, for a test.
     #[cfg(test)]
     pub(crate) fn is_kept(&self) -> bool {
         matches!(self, Timer::Kept { .. })
@@ -228,14 +214,9 @@ impl Timer {
     /// Ready once `limit` has passed since the first call.
     pub(crate) fn poll(mut self: Pin<&mut Self>, limit: Duration, cx: &mut Context<'_>) -> Poll<()> {
         if let Waiting::Unset = self.as_mut().project() {
-            let timer = match Kept::take(limit) {
+            let timer = match Kept::new(limit, cx) {
                 Some(kept) => Timer::Kept { kept },
-                None => {
-                    let timer = tokio::time::sleep(limit);
-                    // After the timer is made, which panics on a runtime with no clock.
-                    ask();
-                    Timer::Own { timer }
-                }
+                None => Timer::Own { timer: tokio::time::sleep(limit) },
             };
             self.set(timer);
         }

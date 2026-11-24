@@ -94,6 +94,7 @@ impl Clock {
             writer: AtomicWaker::new(),
             wakes: AtomicU64::new(0),
             held: AtomicBool::new(false),
+            kept: crate::deadline::Slot::new(),
             clock: self.clone(),
         });
         self.watches.lock().expect("never poisoned").push(Arc::downgrade(&watch));
@@ -152,6 +153,8 @@ pub(crate) struct Watch {
     /// ([`Watched::send`]), so another task's flushes cannot start a waiting write's or close's
     /// wait over. A close that waited and went through leaves it held: the connection is done.
     held: AtomicBool,
+    /// The timer the connection's requests' deadlines wait on, between them ([`crate::deadline`]).
+    pub(crate) kept: crate::deadline::Slot,
     clock: Arc<Clock>,
 }
 
@@ -454,8 +457,11 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
 /// connection (a 101, or a 2xx to `CONNECT`: a tunnel) stays busy: it is the route's from then on.
 pub(crate) struct Answer<F> {
     pub inner: F,
-    /// The connection's watch and the head's number.
-    pub watch: Option<(Arc<Watch>, u64)>,
+    /// The connection's watch, lent to the thread while the request is polled: its deadline
+    /// waits on the timer the connection keeps there ([`crate::deadline`]).
+    pub watch: crate::deadline::Lends,
+    /// The head's number.
+    pub head: u64,
     /// The request is a `CONNECT`, which a 2xx switches (RFC 9110 9.3.6).
     pub connect: bool,
 }
@@ -465,13 +471,24 @@ impl<F: Future<Output = Result<crate::response::Response, std::convert::Infallib
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        let res = match std::task::ready!(Pin::new(&mut this.inner).poll(cx)) {
+        let polled = {
+            let _lent = this.watch.lend(cx);
+            Pin::new(&mut this.inner).poll(cx)
+        };
+        let res = match std::task::ready!(polled) {
             Ok(res) => res,
             Err(never) => match never {},
         };
         let status = res.status();
         let switched = status == http::StatusCode::SWITCHING_PROTOCOLS || (this.connect && status.is_success());
-        let watch = this.watch.take().filter(|_| !switched);
+        let watch = match this.watch.take() {
+            // The connection serves no more requests: it keeps no timer for their deadlines.
+            Some(watch) if switched => {
+                watch.kept.empty();
+                None
+            }
+            watch => watch.map(|watch| (watch, this.head)),
+        };
         Poll::Ready(Ok(res.map(|body| Answered { body, watch })))
     }
 }
