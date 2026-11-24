@@ -163,6 +163,11 @@ test("a tool image that is not this checkout's pin names the pin and a valid mea
   const unnamed = configuration(bad);
   assert.ok(unnamed.some((w) => w.includes(`not this checkout's pin ${k6Image}`) && w.includes("its measured commit")), unnamed.join("\n"));
   assert.ok(unnamed.every((w) => !w.includes("INJECTED") && !w.includes("saved-image")));
+  for (const commit of [["a".repeat(40)], { toString: null }]) {
+    const odd = copy(); odd.tools.node.image = "saved-image"; odd.commit = commit;
+    const warnings = configuration(odd);
+    assert.ok(warnings.some((w) => w.includes(`not this checkout's pin ${nodeImage}`) && w.includes("its measured commit")), warnings.join("\n"));
+  }
 });
 
 test("missing/corrupted/extra fixed and efficiency aggregates or individual runs cannot be trusted", () => {

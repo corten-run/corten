@@ -57,7 +57,7 @@ export function inspectJson(summary, { load, commit } = {}) {
       assert.match(summary.tools?.[tool]?.imageId ?? "", /^sha256:[0-9a-f]{64}$/, `missing ${tool} immutable tool image`);
       // Image pins are this checkout's, so saved evidence replays from a checkout of its measured commit.
       const pin = tool === "node" ? nodeImage : k6Image;
-      const measured = /^[a-f0-9]{40}$/.test(summary.commit ?? "") ? `the measured commit ${summary.commit}` : "its measured commit";
+      const measured = typeof summary.commit === "string" && /^[a-f0-9]{40}$/.test(summary.commit) ? `the measured commit ${summary.commit}` : "its measured commit";
       assert.ok(summary.tools[tool].image === pin, `wrong ${tool} image reference: not this checkout's pin ${pin}; report from a checkout of ${measured}`);
       verifyImageExecution(summary.toolExecutions?.[tool]);
     }
