@@ -9649,7 +9649,10 @@ rules something out.
     sizing, since the fourth run's medians reject it; and a pilot read beside a change's comparison
     or counted in the gated run, which would let a plan choose its K after a look at the change.
 
-    Stands on: measured (the five pad builds of each side of that pull request above and main
+    Stands on: measured ([design Choice 71](#choice-layout-floor)'s two comparisons of 100 pairs
+    of one commit moved by a pad, as that Choice records them, and the default band's two ends,
+    recomputed from the counts under the four runs' tags, tag `evidence/single-build-undecided`;
+    the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
     in [design Choice 70](#choice-kept-pages); the first placement run above, tag
     `evidence/ee7b0b41`, its A/As on main rather than the change's base, its answers compared after
@@ -9658,10 +9661,7 @@ rules something out.
     one of its two A/As resolved; and the third above, tag `evidence/stage-header-checks-2002`,
     its three A/As at 60 placements resolved; and the fourth above, tag
     `evidence/placement-sizing-1999`, an A/A of 100 placements on `old` that resolved, with
-    medians the normal model does not fit, and four unpadded builds read against padded ones;
-    [design Choice 71](#choice-layout-floor)'s two comparisons of 100 pairs of one commit moved
-    by a pad, as that Choice records them; and the default band's two ends, recomputed from the
-    counts under the four runs' tags, tag `evidence/single-build-undecided`);
+    medians the normal model does not fit, and four unpadded builds read against padded ones);
     platform (LLD
     places the sections of the symbols an ordering file names
     first in their output section and the rest in their default order, rustc 1.100.0 puts each
@@ -9730,18 +9730,19 @@ rules something out.
     zero inside from eight pads, settles it neither way);
     rustc stops emitting a section per function or aligning functions to 16 bytes, the gate's
     linker is not LLD, or LLD stops placing an ordering file's sections first; a recorded spread
-    is so narrow that no single-build reading lands inside it (this entry also named one so wide
-    that most do, which the default band makes so for a no-regression workload on a setup with
-    no spread); something in the tree relinks an image's binary with a pad and starts it, so a
-    catalog target need not be left to one build; a pass left standing by the cutoff above is
-    later read over +1% across placements; a single-build bound outside the default band and a
-    placement run on the same sources disagree past their bounds, or a run reads the gate's own
-    statistic, 100 pairs a build, across placements of one commit, which would give the band in
-    that statistic; a placement run with another kernel or toolchain on an
+    is so wide that most single-build readings land inside it, so the protocol is the rule in
+    practice, or so narrow that none do; a placement run with another kernel or toolchain on an
     otherwise matching setup records a spread wider than the one here, so they belong among what a
     spread must match; a run's time across placements falls to a single-build
-    run's, so the protocol could be the rule rather than an option; or the release binary's own
-    placement is asked to be checked.
+    run's, so the protocol could be the rule rather than an option; something in the tree
+    relinks an image's binary with a pad and starts it, so a catalog target need not be left to
+    one build; a pass left standing by the cutoff above is later read over +1% across
+    placements; a single-build bound outside the default band and a placement run on the same
+    sources disagree past their bounds, or a run reads the gate's own statistic, 100 pairs a
+    build, across placements of one commit, which would give the band in that statistic (the
+    entry above on a spread so wide that most single-build readings land inside it is met by
+    the default band for a no-regression workload on a setup with no spread, by this rule and
+    not by a measurement); or the release binary's own placement is asked to be checked.
 
     Last checked: 2026-11-22 for the source pads of each side of
     [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
