@@ -26,6 +26,7 @@ import { continuationAdmission, continuationLock, inspectContinuation } from "./
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
+import { controller } from "./droplet.mjs";
 
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
 const checkout = fs.realpathSync(".");
@@ -821,7 +822,7 @@ test("continuation appends authorized retries after no-create and retirement whi
   assert.equal(fs.readFileSync(index, "utf8"), "[]");
 });
 
-test("continuation retries past a create that errored after its launch deadline once the later recheck resolved it", { timeout: 60000 }, async (t) => {
+test("continuation retries past a create that errored after its launch deadline once the child recheck settled it and the operator released the outer lock", { timeout: 60000 }, async (t) => {
   const p = fixture(t), group = "json-api", slot = path.join(p.h.base, group);
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
   p.deps.inspect = () => { assert.fail("there is no collected evidence to replay"); };
@@ -836,38 +837,64 @@ test("continuation retries past a create that errored after its launch deadline 
   const launchLock = path.join(stateRoot, ".groups-launch.lock"), operationLock = path.join(local, "operation.lock");
   const pending = { ...reservation({ round: "r19", commit, token: fleet.jobs[0].token, group, fleet }), provider: fleet.provider,
     fullGroupQualified: false, status: "creating", createIntentAt: at, createPending: ids };
-  // The launch reached its create deadline with the action still in progress.
+  // The launch reached its create deadline with the action still in progress. Its
+  // process has since exited: the child locks are its exact records naming a dead owner.
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid;
   p.deps.main = async () => {
     fs.mkdirSync(local, { recursive: true }); fs.writeFileSync(statePath, JSON.stringify(pending));
-    fs.writeFileSync(launchLock, "SYNTHETIC"); fs.writeFileSync(operationLock, "SYNTHETIC");
+    fs.writeFileSync(launchLock, `${JSON.stringify({ pid: dead, round: "r19" })}\n`);
+    fs.writeFileSync(operationLock, `${JSON.stringify({ pid: dead, at })}\n`);
     throw Object.assign(new Error("PRIVATE_MESSAGE"), { controlUncertain: true, providerDiagnostic: { code: "create-action-pending" } });
   };
   assert.equal(await fleetMain([...args("r19"), "--detach", "--approve-reviewed-merged-ready", approval], p.deps), 2);
   assert.deepEqual(p.output.at(-1).groups.map(({ outcome, uncertain }) => [outcome, uncertain]), [["error", true]]);
   delete p.deps.main;
   // The launch process has since exited: its retained batch lock names a dead owner.
-  const batch = path.join(slot, ".fleet-operation.lock"), dead = spawnSync(process.execPath, ["-e", ""]).pid;
+  const batch = path.join(slot, ".fleet-operation.lock");
   fs.writeFileSync(batch, `${JSON.stringify({ ...JSON.parse(fs.readFileSync(batch)), pid: dead })}\n`);
-  // The uncertain launch keeps the outer continuation lock. Its release stays the
-  // operator's documented custody step; the group recheck never touches it.
   const outer = path.join(p.h.base, continuationLock);
   assert.ok(fs.existsSync(outer)); await assert.rejects(prepare("r20"), /EEXIST/);
+  // The child's own --collect, read-only on the saved account, with the real controller.
+  let action = "in-progress";
+  const providerReads = [];
+  const child = () => controller({ round: "r19", stateDir: stateRoot, collect: true }, { repo: p.deps.repo, sleep: async () => {}, run(binary, argv) {
+    assert.equal(binary, "doctl"); assert.deepEqual(argv.slice(-2), ["--context", context]);
+    const command = argv.slice(0, -2); providerReads.push(command[0] === "account" ? "account" : command[1] === "action" ? "action" : command[2]);
+    const ok = (value) => ({ status: 0, stdout: JSON.stringify(value), stderr: "" });
+    if (command[0] === "account") return ok({ uuid: userId, droplet_limit: 20 });
+    if (command[1] === "action") return ok([{ id: 456, type: "create", resource_type: "droplet", resource_id: action === "errored" ? 123 : null, status: action }]);
+    if (command[2] === "get") return { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } };
+    assert.deepEqual(command, ["compute", "droplet", "list", "--single-response", "--output", "json"]); return ok([]);
+  } }).collect();
+  assert.equal(await child(), 3, "still running: nothing changes");
+  assert.ok([launchLock, operationLock].every((lock) => fs.existsSync(lock))); assert.equal(JSON.parse(fs.readFileSync(statePath)).createErrored, undefined);
+  action = "errored";
+  assert.equal(await child(), 1);
+  assert.deepEqual(providerReads.slice(-9), ["account", "action", "account", "account", "get", "account", "account", "list", "account"]);
+  const resolved = JSON.parse(fs.readFileSync(statePath)), record = fs.readFileSync(receipt, "utf8");
+  assert.deepEqual(resolved.createErrored, { ...ids, evidenceSha256: digest(record) });
+  assert.ok(![launchLock, operationLock, path.join(local, "create-recheck.lock")].some((lock) => fs.existsSync(lock)), "the child custody is released");
+  // The child recheck settles only the child. The outer continuation lock and the dead
+  // batch lock stay; continuation remains closed until the operator's custody step.
+  assert.ok(fs.existsSync(outer) && fs.existsSync(batch)); await assert.rejects(prepare("r20"), /EEXIST/);
+  // A lock that appears after admission's scan refuses at its final recheck.
+  const admission = await continuationAdmission(p.h.base, group, { repo: p.deps.repo, inspect: p.deps.inspect });
+  admission.recheck();
+  for (const lock of [launchLock, operationLock, path.join(local, "create-recheck.lock")]) {
+    fs.writeFileSync(lock, "SYNTHETIC");
+    assert.throws(() => admission.recheck(), /custody changed/, path.basename(lock));
+    fs.unlinkSync(lock);
+  }
+  admission.recheck();
+  // The operator's documented custody step: the outer lock names this group, its
+  // owner and process tree are accounted for and gone; keep its bytes, then release it.
+  assert.equal(JSON.parse(fs.readFileSync(outer)).group, group);
   fs.unlinkSync(outer);
-  // The retained batch lock of an unsettled child is an unconfirmed peer, never a retry.
-  await assert.rejects(prepare("r20"), /peer supervision not confirmed|ESRCH/);
-  // The later recheck's result: the same receipt and record, and the dead launch's locks released.
-  const record = JSON.stringify(createErroredRecord(pending, ids, 3, at));
-  const resolve = (bytes = record) => {
-    fs.writeFileSync(receipt, bytes);
-    fs.writeFileSync(statePath, JSON.stringify({ ...pending, createErrored: { ...ids, evidenceSha256: digest(record) } }));
-  };
-  resolve(); await assert.rejects(prepare("r20"), /peer supervision not confirmed|ESRCH/, "a retained launch lock is still custody");
-  fs.unlinkSync(launchLock); fs.unlinkSync(operationLock);
-  resolve(record.replace('"droplets":3', '"droplets":4'));
+  fs.writeFileSync(receipt, record.replace('"droplets": 0', '"droplets": 4'));
   const failures = new Map();
   await assert.rejects(prepare("r20", failures), (error) => /unresolved custody: selected provider-errored create/.test(error.message)
     && failures.get(error) === "continuation-admission; custody-replay", "a changed receipt is not resolved");
-  resolve();
+  fs.writeFileSync(receipt, record);
   let { report } = await inspectContinuation(p.h.base, p.deps);
   assert.deepEqual(report.groups.find((r) => r.group === group).attempts.map((r) => [r.round, r.outcome]), [["r19", "create-errored"]]);
   assert.ok(report.eligibleToRun.includes(group));

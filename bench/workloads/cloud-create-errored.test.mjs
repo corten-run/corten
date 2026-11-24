@@ -7,9 +7,9 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { isDeepStrictEqual } from "node:util";
 import { createProviderEngine as providerTransport } from "./cloud-engine-test-fixture.mjs";
-import { context, harness } from "./cloud-fixtures.mjs";
+import { context, harness, syntheticProviderRequest } from "./cloud-fixtures.mjs";
 import { digest } from "./cloud-local.mjs";
-import { createErroredRecord } from "./cloud-retirement.mjs";
+import { createErroredBytes, createErroredRecord } from "./cloud-retirement.mjs";
 import { publicError } from "./droplet.mjs";
 
 const credential = "SYNTHETIC_ONLY_CREDENTIAL_A";
@@ -95,7 +95,7 @@ const providerCalls = (h) => h.calls.filter(([binary]) => binary === "doctl").ma
 
 // Wrap the synthetic controller transport. The fake create still checks that
 // intent is durable before dispatch; the provider then fails it and holds hosts.
-function erroredLaunch(t, { result = errored(), hosts = [], get, account } = {}) {
+function erroredLaunch(t, { result = errored(), hosts = [], get, account, settle } = {}) {
   const h = harness(t); let created = false, accounts = 0;
   const run = (binary, args, ...rest) => {
     if (binary === "doctl" && args[2] === "create") {
@@ -105,7 +105,7 @@ function erroredLaunch(t, { result = errored(), hosts = [], get, account } = {})
     if (binary === "doctl" && args[0] === "account" && created && account) return account(h, ++accounts) ?? h.run(binary, args, ...rest);
     return h.run(binary, args, ...rest);
   };
-  return { h, task: h.launch({ run }) };
+  return { h, run, task: h.launch({ run, ...(settle ? { settle } : {}) }) };
 }
 
 test("provider-errored create with verified account and exact absence is a terminal outcome without DELETE or another create", async (t) => {
@@ -211,8 +211,8 @@ function orphanLocks(h, pid = deadPid()) {
   writeFileSync(launch, `${JSON.stringify({ ...JSON.parse(readFileSync(launch)), pid })}\n`);
 }
 const late = (h, args) => args[0] === "account" ? "account" : args[1] === "action" ? "action" : args[2];
-function lateLaunch(t, { failure = unsettled(), hosts = [] } = {}) {
-  const h = harness(t), o = { action: actionRow(), accounts: 0 };
+function lateLaunch(t, { failure = unsettled(), hosts = [], flags = {} } = {}) {
+  const h = harness(t, flags), o = { action: actionRow(), accounts: 0 };
   o.run = (binary, args, ...rest) => {
     if (binary === "doctl" && args[2] === "create") { h.run(binary, args, ...rest); h.hosts(hosts); throw failure; }
     if (binary === "doctl" && args[1] === "action") {
@@ -224,7 +224,7 @@ function lateLaunch(t, { failure = unsettled(), hosts = [] } = {}) {
     if (binary === "doctl" && args[0] === "account" && o.account) return o.account(++o.accounts) ?? h.run(binary, args, ...rest);
     return h.run(binary, args, ...rest);
   };
-  o.collect = () => h.task({ run: o.run }).collect();
+  o.collect = (deps = {}) => h.task({ run: o.run, ...deps }).collect();
   o.after = (before) => h.calls.slice(before).filter(([binary]) => binary === "doctl").map(([, ...args]) => late(h, args));
   return { h, o, task: h.launch({ run: o.run }) };
 }
@@ -281,7 +281,7 @@ test("a pending create whose locks an operator already released resolves under t
 
 const foreignAccount = () => ({ status: 0, stdout: JSON.stringify({ uuid: "synthetic-foreign-user", droplet_limit: 20 }), stderr: "" });
 const lateNegatives = {
-  "the action completed": (h, o) => { o.action = actionRow({ status: "completed" }); },
+  "the action completed while the original locks remain": (h, o) => { o.action = actionRow({ status: "completed" }); },
   "the action is bound to another droplet": (h, o) => { o.action = actionRow({ resource_id: 124 }); },
   "the errored action is unbound": (h, o) => { o.action = actionRow({ resource_id: null }); },
   "the action is another action": (h, o) => { o.action = actionRow({ id: 457 }); },
@@ -329,4 +329,168 @@ test("a pending create stays preserved with a partial, live or uncertain owner a
   await assert.rejects(anonymous.o.collect());
   preserved(anonymous.h, { identity: false });
   assert.ok(!anonymous.h.calls.some(([, ...args]) => args[1] === "action"));
+});
+
+// Review round 1. Each control below failed against the previous controller.
+const page = (droplets, extra = {}) => ({ status: 200, value: { droplets, meta: { total: droplets.length }, links: {}, ...extra } });
+const otherRow = (id, fields = {}) => ({ id, name: `other-${id}`, tags: ["other"], region: { raw: credential }, ...fields });
+const nextPage = { pages: { next: "https://api.digitalocean.com/v2/droplets?page=2&per_page=200" } };
+
+test("the absence census is one provider response whose every row has an inspectable ID, name and tags", async () => {
+  const args = ["compute", "droplet", "list", "--single-response", "--output", "json", "--context", context];
+  const reader = (...pages) => { const calls = [];
+    return { calls, run: providerTransport({ repo: resolve("."), spawn, request({ method, path }) {
+      calls.push({ method, path }); return pages[Math.min(calls.length - 1, pages.length - 1)]; } }) }; };
+  const ok = reader(page([otherRow(1), otherRow(2)]));
+  assert.deepEqual(JSON.parse((await ok.run(args)).stdout), [{ id: 1, name: "other-1", tags: ["other"] }, { id: 2, name: "other-2", tags: ["other"] }]);
+  assert.deepEqual(ok.calls, [{ method: "GET", path: "/v2/droplets?page=1&per_page=200" }]);
+  for (const [response, code] of [
+    [page([otherRow(999, { name: null, tags: null })]), "list-response-shape"],
+    [page([otherRow(999, { tags: [7] })]), "list-response-shape"],
+    [page([otherRow(999, { name: "" })]), "list-response-shape"],
+    [page([otherRow(999)], { meta: { total: 2 } }), "list-response-count"],
+    [page([otherRow(1)], { meta: { total: 201 } }), "list-response-bounds"],
+    [page([otherRow(1)], { meta: { total: 2 }, links: nextPage }), "list-response-bounds"],
+    [page([otherRow(1), otherRow(1)]), "list-response-duplicate"],
+  ]) {
+    // A second, clean response is available; the census must never take it.
+    const bad = reader(response, page([]));
+    await assert.rejects(bad.run(args), (error) => error.providerDiagnostic?.code === code && !error.controlUncertain, code);
+    assert.equal(bad.calls.length, 1, `${code}: never retaken`);
+  }
+});
+
+test("the late recheck through the provider engine refuses a malformed row or a match it cannot keep, and accepts one clean response", async (t) => {
+  for (const kind of ["malformed", "matched-then-count-changed", "clean"]) {
+    const { h, o, task } = lateLaunch(t);
+    await assert.rejects(task.launch(), { controlUncertain: true });
+    orphanLocks(h);
+    const name = h.saved().name, lists = [], base = syntheticProviderRequest(h);
+    const response = { malformed: page([{ id: 999, name: null, tags: null }]),
+      "matched-then-count-changed": page([otherRow(999, { name })], { meta: { total: 2 }, links: nextPage }), clean: page([otherRow(999)]) }[kind];
+    const engineRun = providerTransport({ repo: resolve("."), spawn, async request(input) {
+      if (input.path === "/v2/actions/456") return { status: 200, value: { action: actionRow() } };
+      if (input.path.startsWith("/v2/droplets?")) { lists.push(input.path); return lists.length === 1 ? response : page([]); }
+      return base(input);
+    } });
+    // As across the worker IPC boundary, a permitted refusal carries no native error object.
+    const run = async (binary, args, timeout, allowFail, ...rest) => {
+      if (binary !== "doctl") return h.run(binary, args, timeout, allowFail, ...rest);
+      const { error, ...result } = await engineRun(args, timeout, allowFail); return result;
+    };
+    if (kind === "clean") {
+      assert.equal(await h.task({ run }).collect(), 1);
+      assert.equal(JSON.parse(readFileSync(join(h.local, "provider-create-errored.json"))).absence.inventory.droplets, 1);
+    } else {
+      await assert.rejects(h.task({ run }).collect(), (error) => !error.controlUncertain && error.providerDiagnostic?.code
+        === (kind === "malformed" ? "list-response-shape" : "list-response-bounds"));
+      preserved(h);
+    }
+    assert.deepEqual(lists, ["/v2/droplets?page=1&per_page=200"], kind);
+  }
+});
+
+test("a recheck keeps the original locks until the provider teardown settles, and a failed teardown blocks every later path", async (t) => {
+  for (const mode of ["rejected", "withheld"]) {
+    const { h, o, task } = lateLaunch(t);
+    await assert.rejects(task.launch(), { controlUncertain: true });
+    orphanLocks(h);
+    const locks = [...lockPaths(h), join(h.local, "create-recheck.lock")];
+    let fail, entered;
+    const reached = new Promise((resolve) => { entered = resolve; });
+    const settle = mode === "rejected" ? async () => { throw new Error("synthetic teardown failure"); }
+      : () => { entered(); return new Promise((_, reject) => { fail = reject; }); };
+    const pending = o.collect({ settle });
+    if (mode === "withheld") {
+      await reached;
+      // The receipt is published, but nothing is released while teardown is unsettled.
+      assert.ok(h.saved().createErrored); assert.ok(locks.every((path) => existsSync(path)), "withheld: every lock stays");
+      fail(new Error("synthetic teardown failure"));
+    }
+    await assert.rejects(pending, (error) => error.controlTreeUncertain === true && /teardown uncertain/.test(error.message));
+    assert.ok(h.saved().createErrored); assert.ok(locks.every((path) => existsSync(path)), `${mode}: every lock stays`);
+    const before = h.calls.length;
+    await assert.rejects(o.collect(), /recheck artifacts/); assert.equal(h.calls.length, before, "no provider read");
+    await assert.rejects(h.launch().launch(), /EEXIST/);
+    const next = harness(t, { stateRoot: h.base, round: "r22" });
+    await assert.rejects(next.launch().launch(), /EEXIST/); assert.equal(next.creates, 0);
+    assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+  }
+});
+
+test("any lock left beside a recorded create failure keeps it unresolved for collect and a later round", async (t) => {
+  for (const name of ["create-recheck.lock", "launch"]) {
+    const { h, o, task } = lateLaunch(t);
+    await assert.rejects(task.launch(), { controlUncertain: true });
+    orphanLocks(h); assert.equal(await o.collect(), 1);
+    const path = name === "launch" ? lockPaths(h)[1] : join(h.local, name);
+    writeFileSync(path, "SYNTHETIC");
+    const before = h.calls.length;
+    await assert.rejects(o.collect(), name === "launch" ? /partial original launch locks/ : /recheck artifacts/);
+    assert.equal(h.calls.length, before);
+    if (name !== "launch") {
+      const next = harness(t, { stateRoot: h.base, round: "r22", active: true });
+      await assert.rejects(next.launch().launch(), /unresolved reservation blocks launch/); assert.equal(next.creates, 0);
+    }
+  }
+});
+
+test("an in-deadline errored create whose teardown failed keeps both locks with the posted IDs, and the later recheck settles it", async (t) => {
+  const { h, run, task } = erroredLaunch(t, { settle: async () => { throw new Error("synthetic teardown failure"); } });
+  await assert.rejects(task.launch(), { controlTreeUncertain: true });
+  const state = h.saved();
+  assert.deepEqual(state.createPending, { dropletId: "123", actionId: "456" }); assert.ok(state.createErrored);
+  assert.ok(lockPaths(h).every((path) => existsSync(path)));
+  orphanLocks(h);
+  const before = h.calls.length;
+  assert.equal(await h.task({ run }).collect(), 1);
+  assert.deepEqual(h.calls.slice(before).map(([, ...args]) => args[0] === "account" ? "account" : args[2]),
+    ["account", "get", "account", "account", "list", "account"]);
+  assert.ok([...lockPaths(h), join(h.local, "create-recheck.lock")].every((path) => !existsSync(path)));
+  assert.deepEqual(h.saved(), state); assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+});
+
+test("a receipt left before its state publication is adopted only after a fresh proof and only with canonical bytes", async (t) => {
+  for (const kind of ["canonical", "changed", "allocation-present"]) {
+    const { h, o, task } = lateLaunch(t);
+    await assert.rejects(task.launch(), { controlUncertain: true });
+    orphanLocks(h);
+    const state = h.saved(), canonical = createErroredBytes(createErroredRecord(state, state.createPending, 2, "2026-11-20T00:00:00.000Z"));
+    const bytes = kind === "changed" ? canonical.replace('"measurements": 0', '"measurements": 1') : canonical;
+    const path = join(h.local, "provider-create-errored.json"); writeFileSync(path, bytes);
+    if (kind === "allocation-present") h.hosts([h.host()]);
+    const before = h.calls.length;
+    if (kind === "canonical") {
+      assert.equal(await o.collect(), 1);
+      assert.deepEqual(o.after(before), ["account", "action", "account", "account", "get", "account", "account", "list", "account"]);
+      assert.equal(h.saved().createErrored.evidenceSha256, digest(canonical));
+      assert.ok(lockPaths(h).every((lock) => !existsSync(lock)));
+    } else {
+      await assert.rejects(o.collect(), kind === "changed" ? /unpublished create failure receipt differs/ : /not verified absent/);
+      assert.equal(h.saved().createErrored, undefined); assert.ok(lockPaths(h).every((lock) => existsSync(lock)));
+    }
+    assert.equal(readFileSync(path, "utf8"), bytes, "the receipt is never rewritten");
+    assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+  }
+});
+
+test("a completed create of its exact allocation is bound for unused-allocation custody once the original custody is released", async (t) => {
+  const { h, o, task } = lateLaunch(t, { flags: { missingUnit: true } });
+  await assert.rejects(task.launch(), { controlUncertain: true });
+  o.action = actionRow({ status: "completed" }); h.hosts([h.host()]);
+  // With the original locks still present, the same completed action is refused (see the negatives above).
+  for (const path of lockPaths(h)) unlinkSync(path); // The operator's custody step.
+  const before = h.calls.length;
+  await assert.rejects(o.collect(), /approved pinned observation/);
+  assert.deepEqual(o.after(before).slice(0, 6), ["account", "action", "account", "account", "list", "account"]);
+  const state = h.saved();
+  assert.equal(state.status, "preparing"); assert.equal(state.id, "123"); assert.equal(state.ip, "192.0.2.10");
+  assert.deepEqual(state.createPending, { dropletId: "123", actionId: "456" }); assert.equal(state.createErrored, undefined);
+  assert.ok(!existsSync(join(h.local, "operation.lock")));
+  // Bound only: no SSH, upload, unit start or DELETE.
+  assert.ok(!h.calls.some(([binary, ...args]) => binary === "ssh" || binary === "scp" || binary === "doctl" && args[2] === "delete"));
+  // The existing pinned unused-bootstrap path retires it with its fresh proof and deletion fences.
+  assert.equal(await h.pinnedUnused({ run: o.run }).collect(), 1);
+  const retired = h.saved();
+  assert.equal(retired.retirement.kind, "unused"); assert.ok(retired.destroyedAt); assert.equal(h.deletes, 1); assert.equal(h.creates, 1);
 });

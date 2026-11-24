@@ -8,8 +8,8 @@ import { pathToFileURL } from "node:url";
 import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
 import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
-import { createErroredReceipt, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement,
-  verifyUnusedEvidence } from "./cloud-retirement.mjs";
+import { createErroredReceipt, createRecheckLock, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
+  verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readFleet, readGroup,
   readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
   verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
@@ -69,11 +69,13 @@ const unresolved = (row) => row.custodyUnresolved || row.outcome !== "known-resu
 const manifestOnly = (fleet, entries = readdirSync(fleet.root)) =>
   entries.length === 1 && entries[0] === `fleet-${fleet.manifest.round}.json`;
 const terminal = ({ state }) => state?.id && state.destroyedAt && ["collected", "retired"].includes(state.status);
-// A provider-errored create never had a host. It is settled once its child holds no lock.
-const createErrored = (saved) => saved.outcome === "available" && !!saved.state?.createErrored && !present(join(saved.stateRoot, ".groups-launch.lock"));
+// A provider-errored create never had a host. It is settled once its child holds no
+// launch, operation ("available") or recheck lock.
+const createErrored = (saved) => saved.outcome === "available" && !!saved.state?.createErrored && !present(join(saved.stateRoot, ".groups-launch.lock"))
+  && !present(join(saved.local, createRecheckLock));
 const settled = (saved) => terminal(saved) || createErrored(saved);
 function verifyCreateErroredAttempt(saved) {
-  assert.ok(createErrored(saved) && !present(join(saved.local, "create-recheck.lock")), "unresolved custody for the selected group");
+  assert.ok(createErrored(saved), "unresolved custody for the selected group");
   verifyCreateErrored(saved.local, saved.state);
 }
 const receiptSha256 = (state, file) => file === createErroredReceipt ? state.createErrored?.evidenceSha256 : state.retirement?.evidenceSha256;
@@ -386,6 +388,8 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       assert.equal(current.outcome, outcome, "continuation custody changed");
       if (noCreate) assert.ok(notCreated(fleet, current, admittedGroup ? lockBytes(fleet.root) : reportBatch(fleet, processStart)),
         "no-create custody changed");
+      // The same custody predicates as the scan: a lock that appeared since refuses.
+      if (retirementFile === createErroredReceipt) assert.ok(createErrored(current), "continuation create failure custody changed");
       if (retirementFile) assert.equal(digest(regular(join(current.local, retirementFile),
         retirementFile === "failed-native-host.json" ? undefined : retirementFile === createErroredReceipt ? 64 * 1024 : 4096)),
         receiptSha256(current.state, retirementFile), "continuation retirement changed");

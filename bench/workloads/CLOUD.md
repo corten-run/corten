@@ -727,12 +727,23 @@ uncertain, retains locks and cannot take this recovery shortcut.
 
 A create the provider accepts and then fails has its own terminal outcome
 ([#1689 Benchmark r21: catalog qualification droplet create errored before guest startup](https://github.com/corten-run/corten/issues/1689)).
-The launch records it only when four proofs hold within the create's original
-deadline: the polled action has the POST's action ID, `create` type, `droplet`
-resource type and the POST's droplet ID (`create-action-errored`); its status is
-`errored`; the saved account is read before and after the create and every later
-provider read; and the exact-ID GET returns 404 while a complete census lists no
-droplet with that ID, name or run tag. The controller then writes
+The launch records it only when four proofs hold. Two stages bound them. Within the
+create command's 10-minute deadline, which covers the POST and its action polling,
+the polled action has the POST's action ID, `create` type, `droplet` resource type
+and the POST's droplet ID (`create-action-errored`), and its status is `errored`.
+After that command returns, the absence proof runs as separate provider commands,
+each with its own deadline (60 seconds per command), so it can finish after the
+create deadline: the exact-ID GET returns 404, and a single-response census lists no
+droplet with that ID, name or run tag. The saved account is read before and after
+each logical provider command (the create, the GET and the census), not around each
+HTTP request inside one; the worker reads within a command on its pinned credential.
+The single-response census is one provider response holding the whole inventory:
+every row must have a positive unique ID, a name and a list of tags, the response
+must report no further page and its count must match its rows. More than one page
+(over 200 droplets), a count mismatch or any row that cannot be checked refuses, and
+the census is never retaken, so a matching row seen once is never discarded. Offset
+pages are not treated as one snapshot of the inventory. The controller first saves
+the POST's IDs as `createPending`, then writes
 `provider-create-errored.json` (action identity, account, absence, one create, no
 replacement create, no DELETE, no guest, zero measurements), saves its hash as
 `createErrored` on the still-unbound `creating` reservation and stops with
@@ -740,7 +751,10 @@ replacement create, no DELETE, no guest, zero measurements), saves its hash as
 receipts report `create-errored`, a later round in the same root is not blocked, and
 `--collect` only rechecks the receipt and absence before returning 1. It never
 retries the create or relaunches the round. A later successful attempt is separate
-evidence and does not qualify this one.
+evidence and does not qualify this one. The locks are released only after the
+provider worker's teardown settles. If that teardown fails, both locks stay with the
+recorded failure, and a later group `--collect` settles them like the late case
+below.
 
 Any missing or contradicting proof leaves the existing path unchanged: an unbound
 or non-`errored` action stays `create-action-response`, a GET that is not 404, an
@@ -759,21 +773,52 @@ owner that is provably gone; the recheck then runs under its own
 `create-recheck.lock`. It reads that exact action with `doctl compute action get`
 on the saved account. An action still `in-progress` returns 3 and changes nothing.
 Only the same action ID, `create` type, `droplet` resource bound to the posted
-droplet ID and status `errored`, followed by the same exact-404 and complete census
+droplet ID and status `errored`, followed by the same exact-404 and single-response census
 absence proof, writes the same `provider-create-errored.json` receipt and
-`createErrored`, releases the dead launch's locks and returns 1. A live or
-uncertain owner, one missing lock, guest or monitor artifacts, a completed,
-unbound or differently bound action, a failed or uncertain read, a GET that is not
-404, an inventory match or an account change keeps the reservation, its IDs and
-its locks and stops; an uncertain read also keeps the recheck lock. The recheck
-never creates, deletes or binds. Fleet `--collect` still reports a child holding its
+`createErrored` and returns 1. It releases the dead launch's locks only after the
+provider worker's teardown has settled and the lock bytes and dead owner are
+rechecked; if teardown fails or is withheld, the original locks and the recheck lock
+all stay, and every later collect, fleet verification, continuation and later round
+refuses until an operator investigates. A live or uncertain owner, one missing lock,
+guest or monitor artifacts, an unbound or differently bound action, a failed or
+uncertain read, a GET that is not 404, a census that is not one clean response, an
+inventory match or an account change keeps the reservation, its IDs and its locks
+and stops; an uncertain read also keeps the recheck lock. This errored path never
+creates, deletes or binds. Fleet `--collect` still reports a child holding its
 operation lock as busy and does not run this recheck.
 
+A stop between writing the receipt and publishing `createErrored` leaves the receipt
+beside a state that still has `createPending` and, from a launch, its locks. The next
+collect repeats the fresh action read and absence proof, then adopts the existing
+receipt only if its bytes are exactly the canonical record for that saved state (its
+own census size and time); any other bytes refuse and are left unchanged.
+
+A `completed` action bound to the posted droplet is a real allocation, not a
+provider-errored create. While the original launch locks remain it is refused, as
+before. After the operator's custody step has released them (the original
+controller, provider worker and their descendants accounted for and gone, as for any
+retained lock below), group `--collect` binds that exact allocation, the same
+identity reconciliation the launch makes for a lost acknowledgement: it never
+provisions, and the bound reservation then takes the existing unused-allocation
+path. A monitored reservation needs the pinned unused-bootstrap preview and approval;
+an unmonitored one needs the fresh unused-host proof. Both keep their deletion fences.
+
 Fleet verification reports a group whose saved `createErrored` receipt rebuilds
-from its state, with no launch lock left, as `create-errored`; it never qualifies
-the fleet. A continuation treats that attempt like a retired one: the group may
-be prepared again in a new slot, and the receipt is rechecked by hash before that
-launch.
+from its state, with no launch, operation or recheck lock left, as
+`create-errored`; it never qualifies the fleet. A continuation treats that attempt
+like a retired one: the group may be prepared again in a new slot. The receipt and
+the same lock-free custody are rechecked again at the final pre-intent recheck, so
+a lock that appears after the scan refuses.
+
+The group recheck settles only the child. A launch that stopped uncertain at its
+create deadline also keeps its attempt's `.fleet-operation.lock` and, in a
+single-group continuation, the outer `.continuation-operation.lock`; no controller
+releases either. The dead batch lock does not block a new slot, but the outer lock
+refuses every later `--prepare` and approval in that continuation root. Continuation
+resumes only through the operator custody step described under retained locks below:
+verify the outer lock's group, owner and process tree against the original launch,
+keep its unchanged bytes and that proof outside the state roots, then release it and
+prepare the group in a new slot. If ownership is uncertain, leave it.
 
 Ordinary `--collect` supports a separate unused-host retirement path only from
 the pre-start `preparing` state. A bounded read-only host probe must confirm exact

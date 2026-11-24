@@ -396,6 +396,30 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
           && word(action.resource_type) && word(action.status) && (action.resource_id === null || Number.isSafeInteger(action.resource_id) && action.resource_id >= 0)))
           throw stopped(false, { code });
         value = [{ id: action.id, type: action.type, resource_type: action.resource_type, resource_id: action.resource_id, status: action.status }];
+      } else if (command[2] === "list" && command[3] === "--single-response") {
+        // Absence proof for a provider-errored create: one response is the whole
+        // inventory. Offset pages are not a snapshot, so more than one page, a count
+        // mismatch or any row without an inspectable name and tags refuses. Nothing
+        // is retaken, so a row seen once can never be discarded.
+        assert.deepEqual(command, ["compute", "droplet", "list", "--single-response", "--output", "json"]);
+        const result = await call("list", "GET", "/v2/droplets?page=1&per_page=200");
+        code = "list-response";
+        if (!Array.isArray(result?.droplets)) throw stopped(false, { code: "list-response-shape" });
+        if (!(Number.isSafeInteger(result.meta?.total) && result.meta.total >= 0)) throw stopped(false, { code: "list-response-total" });
+        if (!(result.droplets.length <= 200 && result.meta.total <= 200)) throw stopped(false, { code: "list-response-bounds" });
+        if (result.links !== undefined && !(result.links && typeof result.links === "object" && !Array.isArray(result.links))) throw stopped(false, { code: "list-response-links" });
+        if (result.links?.pages !== undefined && !(result.links.pages && typeof result.links.pages === "object" && !Array.isArray(result.links.pages))) throw stopped(false, { code: "list-response-pages" });
+        if (result.links?.pages?.next !== undefined) throw stopped(false, { code: "list-response-bounds" });
+        if (result.droplets.length !== result.meta.total) throw stopped(false, { code: "list-response-count", detail: "terminal-count-mismatch" });
+        const seen = new Set(), text = (v) => typeof v === "string" && v.length > 0 && v.length <= 255;
+        value = result.droplets.map((droplet) => {
+          if (!positive(droplet?.id)) throw stopped(false, { code: "list-response-id" });
+          if (seen.has(droplet.id)) throw stopped(false, { code: "list-response-duplicate" });
+          if (!(text(droplet.name) && Array.isArray(droplet.tags) && droplet.tags.length <= 256 && droplet.tags.every(text)))
+            throw stopped(false, { code: "list-response-shape" });
+          seen.add(droplet.id); return { id: droplet.id, name: droplet.name, tags: [...droplet.tags] };
+        });
+        readRemaining();
       } else if (command[2] === "list") {
         assert.deepEqual(command, ["compute", "droplet", "list", "--output", "json"]);
         let requests = 0;

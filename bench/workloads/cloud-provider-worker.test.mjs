@@ -260,6 +260,8 @@ test("provider-errored create crosses real worker IPC with only its exact IDs an
   assert.deepEqual(await h.run(["compute", "droplet", "get", "123", "--output", "json", ...suffix], 1000, true),
     { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } });
   assert.deepEqual(JSON.parse((await h.run(["compute", "droplet", "list", "--output", "json", ...suffix])).stdout), []);
+  // The absence census is its own fixed command across the same worker.
+  assert.deepEqual(JSON.parse((await h.run(["compute", "droplet", "list", "--single-response", "--output", "json", ...suffix])).stdout), []);
   await h.run.close();
   const state = h.state(); assert.equal(state.consumes, 1); assert.equal(h.launches, 1);
   assert.ok(state.calls.every((call) => call.originalCredential));
@@ -281,6 +283,27 @@ test("create-errored IPC output outside an allowed create or with any other shap
   ]) {
     const h = harness(t, "success", undefined, undefined, (message) => message.sequence === 1 && message.ok ? { ...message, result } : message);
     await assert.rejects(h.run(args, 1000, allowFail), (error) => error.controlTreeUncertain === true);
+  }
+});
+
+test("a pending-create envelope crosses IPC only on a rejected, permitted create with two canonical IDs", async (t) => {
+  const suffix = account.slice(-2), ids = { dropletId: "123", actionId: "456" };
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
+    "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...suffix];
+  const rejected = (pendingCreate) => (message) => message.sequence === 1
+    ? { schema: message.schema, nonce: message.nonce, sequence: 1, ok: false, result: null, pendingCreate } : message;
+  const positive = harness(t, "success", undefined, undefined, rejected(ids));
+  await assert.rejects(positive.run(create, 1000, true), (error) => error.controlTreeUncertain === true
+    && JSON.stringify(error.pendingCreate) === JSON.stringify(ids));
+  for (const [name, args, allowFail, receive] of [
+    ["account command", account, true, rejected(ids)], ["create without permission to fail", create, false, rejected(ids)],
+    ["leading zero", create, true, rejected({ ...ids, dropletId: "0123" })], ["numeric ID", create, true, rejected({ ...ids, actionId: 456 })],
+    ["zero ID", create, true, rejected({ ...ids, dropletId: "0" })], ["unsafe ID", create, true, rejected({ ...ids, dropletId: "9007199254740993" })],
+    ["extra key", create, true, rejected({ ...ids, raw: "SYNTHETIC_RAW_BODY" })],
+    ["successful reply", create, true, (message) => message.sequence === 1 ? { ...message, pendingCreate: ids } : message],
+  ]) {
+    const h = harness(t, "success", undefined, undefined, receive);
+    await assert.rejects(h.run(args, 1000, allowFail), (error) => error.controlTreeUncertain === true && error.pendingCreate === undefined, name);
   }
 });
 

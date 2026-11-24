@@ -269,6 +269,11 @@ test("a provider-errored create with its receipt and no launch custody is resolv
   unlinkSync(join(stateRoot, ".groups-launch.lock")); writeFileSync(join(local, "operation.lock"), "SYNTHETIC");
   assert.equal((await p.verify()).groups[0].outcome, "busy");
   unlinkSync(join(local, "operation.lock"));
+  // A recheck that kept its own lock (for example after a failed teardown) is unresolved.
+  writeFileSync(join(local, "create-recheck.lock"), "SYNTHETIC");
+  assert.equal((await p.verify()).groups[0].outcome, "error");
+  unlinkSync(join(local, "create-recheck.lock"));
+  assert.equal((await p.verify()).groups[0].outcome, "create-errored");
   // A receipt that no longer matches its saved hash, or a self-consistent foreign receipt, stays unresolved.
   save(JSON.stringify({ ...record, observedAt: "2026-11-14T00:00:01.000Z" }));
   assert.equal((await p.verify()).groups[0].outcome, "error");

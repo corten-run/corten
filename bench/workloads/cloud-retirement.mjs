@@ -18,6 +18,8 @@ import { cancellationState, mixedDigest, mixedWait, originalMixedControls, owned
 // A provider-errored create: one accepted POST whose exact action ended errored and
 // whose droplet was proved absent on the saved account. Never a host or a deletion.
 export const createErroredReceipt = "provider-create-errored.json";
+export const createRecheckLock = "create-recheck.lock";
+export const createErroredBytes = (record) => `${JSON.stringify(record, null, 2)}\n`;
 export function createErroredRecord(s, { dropletId, actionId }, droplets, observedAt) {
   return { schema: "benchmark-provider-create-errored/v1", round: s.round, commit: s.commit, ...(s.group === undefined ? {} : { group: s.group }),
     name: s.name, tag: s.tag, host: s.host, createIntentAt: s.createIntentAt,
@@ -37,6 +39,23 @@ export function verifyCreateErrored(local, s) {
   assert.deepEqual(record, createErroredRecord(s, s.createErrored, record.absence.inventory.droplets, record.observedAt),
     "create failure receipt changed; preserve reservation");
   return true;
+}
+// A resolved provider-errored create leaves no custody behind: no original launch or
+// operation lock and no recheck lock. Any of them, or a partial release, is unresolved.
+export function createErroredCustody(local) {
+  for (const path of [join(dirname(local), ".groups-launch.lock"), join(local, "operation.lock"), join(local, createRecheckLock)])
+    assert.ok(!lstatSync(path, { throwIfNoEntry: false }), "provider-errored create still holds custody; preserve reservation");
+  return true;
+}
+// A receipt written before its state publication (a crash between the two) is
+// adopted only if its bytes are exactly the canonical record for this saved state.
+export function pendingCreateErroredReceipt(bytes, s, posted) {
+  const record = JSON.parse(bytes);
+  assert.ok(Number.isSafeInteger(record?.absence?.inventory?.droplets) && record.absence.inventory.droplets >= 0
+    && typeof record.observedAt === "string" && new Date(record.observedAt).toISOString() === record.observedAt, "unpublished create failure receipt differs; preserve reservation");
+  assert.ok(Buffer.from(createErroredBytes(createErroredRecord(s, posted, record.absence.inventory.droplets, record.observedAt))).equals(bytes),
+    "unpublished create failure receipt differs; preserve reservation");
+  return bytes;
 }
 
 // This migration is not a general old-source collection or validation override.

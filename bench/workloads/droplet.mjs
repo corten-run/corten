@@ -15,7 +15,8 @@ import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-s
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
   interruptedFirstUpload, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
-  verifyUnusedEvidence, createErroredReceipt, createErroredRecord, readRetainedInvalidLocks, verifyCreateErrored } from "./cloud-retirement.mjs";
+  verifyUnusedEvidence, createErroredBytes, createErroredCustody, createErroredReceipt, createErroredRecord, createRecheckLock, pendingCreateErroredReceipt,
+  readRetainedInvalidLocks, verifyCreateErrored } from "./cloud-retirement.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { controlCheckpoint, pinnedHostOptions } from "./cloud-transport.mjs";
 
@@ -53,7 +54,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   mkdirSync(requested, { recursive: true, mode: 0o700 });
   const base = realpathSync(requested); physical(base);
   const local = join(base, `groups-${options.round}`), statePath = join(local, "state.json"), archive = join(local, "results.tgz");
-  const recoveryLock = "stream-recovery.lock", recheckLock = "create-recheck.lock", groupedPreplan = recoveryApproval?.policy === "grouped-preplan-failure-custody-only";
+  const recoveryLock = "stream-recovery.lock", recheckLock = createRecheckLock, groupedPreplan = recoveryApproval?.policy === "grouped-preplan-failure-custody-only";
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
@@ -166,20 +167,28 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   }
   const list = async () => { const d = JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--output", "json"])).stdout); assert.ok(Array.isArray(d)); return d; };
   // A provider-errored create retires only on positive absence: exact-ID 404, then a
-  // complete census without its ID, name or run tag. execute() brackets each read
-  // with the saved account. Any other answer is not proof; the caller preserves.
+  // single-response census (the whole inventory in one provider response) whose every
+  // row has an inspectable ID, name and tags, none of them this create's. execute()
+  // brackets each command with the saved account. Anything else preserves.
   const providerAbsent = async ({ dropletId }) => {
     const exact = await execute("doctl", ["compute", "droplet", "get", dropletId, "--output", "json"], 60000, true);
     const diagnostic = providerFailure(exact);
     if (!(exact.status === 1 && !exact.error && diagnostic?.code === "get-http" && diagnostic.httpStatus === 404)) return undefined;
-    const rows = await list();
-    if (rows.some((d) => String(d?.id) === dropletId || d?.name === state.name || Array.isArray(d?.tags) && d.tags.includes(state.tag))) return undefined;
+    const rows = JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--single-response", "--output", "json"])).stdout);
+    const text = (value) => typeof value === "string" && value.length > 0;
+    assert.ok(Array.isArray(rows) && rows.every((d) => Number.isSafeInteger(d?.id) && d.id > 0 && text(d.name) && Array.isArray(d.tags) && d.tags.every(text)),
+      "inventory row cannot be checked for this create; preserve reservation");
+    if (rows.some((d) => String(d.id) === dropletId || d.name === state.name || d.tags.includes(state.tag))) return undefined;
     return rows.length;
   };
   // A launch that stopped while its accepted create was unsettled kept the POST's IDs
   // and, normally, its own locks. Read that exact action later. Only a terminal errored
   // action bound to the posted droplet, with the droplet proved absent on the saved
-  // account, records the provider-errored outcome. Any other answer preserves custody.
+  // account, records the provider-errored outcome. A completed create bound to the
+  // posted droplet with no original custody left is bound to its exact allocation,
+  // the same identity reconciliation the launch makes for a lost acknowledgement, and
+  // returns "allocated": ordinary collection then applies its unused-host and deletion
+  // fences. Any other answer preserves custody.
   async function settlePendingCreate(observed) {
     const m = observed.control?.monitor;
     assert.ok(!observed.deletionIntentAt && (!observed.control || !observed.control.ledger.length && !observed.control.sealed.length
@@ -199,6 +208,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       };
       unchanged();
     }
+    let release = false;
     return locked(async () => {
       assert.deepEqual(state, observed, "pending create reservation changed; preserve reservation");
       unchanged();
@@ -212,6 +222,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           "create action identity differs; preserve reservation");
         // Still running: nothing has settled. Report pending without changing custody.
         if (action.status === "in-progress" && [null, 0, Number(posted.dropletId)].includes(action.resource_id)) return 3;
+        if (action.status === "completed" && action.resource_id === Number(posted.dropletId)) {
+          // A real allocation is not this path's to settle. The original launch custody
+          // stays until the operator's custody step. After it, bind only; never provision.
+          assert.ok(!held[0], "completed create retains original launch custody; preserve locks and host");
+          bind(await own());
+          return "allocated";
+        }
         assert.ok(action.status === "errored" && action.resource_id === Number(posted.dropletId),
           "create action is not an errored create of the posted droplet; preserve reservation");
       }
@@ -220,15 +237,26 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       check(); unchanged();
       if (state.createErrored) verifyCreateErrored(local, state);
       else {
-        const bytes = `${JSON.stringify(createErroredRecord(state, posted, droplets, new Date().toISOString()), null, 2)}\n`;
-        durable(join(local, createErroredReceipt), bytes);
+        // A receipt left by a stop between its write and the state publication is
+        // adopted only after this fresh action and absence proof, and only if its bytes
+        // are exactly the canonical record for this state. Otherwise preserve.
+        const path = join(local, createErroredReceipt);
+        let bytes;
+        if (lstatSync(path, { throwIfNoEntry: false })) bytes = pendingCreateErroredReceipt(regular(path, 64 * 1024), state, posted);
+        else { bytes = createErroredBytes(createErroredRecord(state, posted, droplets, new Date().toISOString())); durable(path, bytes); }
         state.createErrored = { ...posted, evidenceSha256: digest(bytes) }; save();
       }
-      // These locks guarded one create that is now provider-terminal and absent, with
-      // no host, SSH or guest work ever recorded; nothing remains for them to guard.
-      if (held[0]) { unchanged(); for (const path of paths) { unlinkSync(path); syncDirectory(dirname(path)); } }
+      release = held[0];
       return 1;
-    }, false, held[0] ? recheckLock : "operation.lock");
+    }, false, held[0] ? recheckLock : "operation.lock", () => {
+      // These locks guarded one create that is now provider-terminal and absent, with
+      // no host, SSH or guest work ever recorded. Release them only after the provider
+      // worker's teardown settled, like the launch path, and with the owner still gone.
+      // A failure here keeps the recheck lock, which every later path refuses.
+      if (!release) return;
+      unchanged();
+      for (const path of paths) { unlinkSync(path); syncDirectory(dirname(path)); }
+    });
   }
   const exactHost = async (remaining) => {
     const result = await execute("doctl", ["compute", "droplet", "get", state.id, "--output", "json"], 60000, true, undefined, remaining);
@@ -498,11 +526,14 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       await sleep(Math.min(30000, remaining()));
     }
   }
-  async function locked(fn, recovery = false, name = recovery ? recoveryLock : "operation.lock") {
+  // afterSettle runs only after fn returned and the provider teardown settled, before
+  // this lock is released; if it fails, this lock is kept.
+  async function locked(fn, recovery = false, name = recovery ? recoveryLock : "operation.lock", afterSettle) {
     boundary(); const lock = join(local, name);
     if (recovery) assert.ok(existsSync(join(local, "operation.lock")), "original uncertain monitor custody required");
     durable(lock, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`);
     preserveOperationLock = false;
+    let returned = false;
     try {
       state = read(); check();
       // A closed reservation can have no retained launch owner. Competing
@@ -510,15 +541,21 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       if (name === "operation.lock" && state.fleet?.single)
         assert.ok(!lstatSync(join(local, recoveryLock), { throwIfNoEntry: false }), "stream recovery already holds custody");
       if (recovery) assert.equal(state.control?.monitor?.phase, "invalid", "only irrevocably failed monitoring can recover");
-      return await fn();
+      const value = await fn(); returned = true; return value;
     }
     finally {
-      try { await settle(); }
-      catch (error) {
-        preserveOperationLock = true;
-        const diagnostic = providerFailure(error);
-        throw Object.assign(new Error("control teardown uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true, controlUncertain: true },
-          diagnostic ? { providerDiagnostic: diagnostic } : {});
+      try {
+        try { await settle(); }
+        catch (error) {
+          preserveOperationLock = true;
+          const diagnostic = providerFailure(error);
+          throw Object.assign(new Error("control teardown uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true, controlUncertain: true },
+            diagnostic ? { providerDiagnostic: diagnostic } : {});
+        }
+        if (returned && afterSettle && !preserveOperationLock) {
+          try { await afterSettle(); }
+          catch (error) { preserveOperationLock = true; throw error; }
+        }
       }
       finally { if (!preserveOperationLock) { unlinkSync(lock); syncDirectory(local); } }
     }
@@ -847,7 +884,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         for (const entry of readdirSync(base)) if (entry.startsWith("groups-")) {
           const match = /^groups-(r[1-9]\d{0,8})$/.exec(entry); assert.ok(match, "unknown reservation");
           const prior = read(join(base, entry), match[1]);
-          assert.ok(prior.destroyedAt || prior.createErrored && verifyCreateErrored(join(base, entry), prior), "unresolved reservation blocks launch");
+          assert.ok(prior.destroyedAt || prior.createErrored && verifyCreateErrored(join(base, entry), prior)
+            && !existsSync(join(base, entry, "operation.lock")) && !existsSync(join(base, entry, recheckLock)), "unresolved reservation blocks launch");
         }
         checkFleetAdmission?.();
         mkdirSync(local, { mode: 0o700 }); syncDirectory(base);
@@ -904,7 +942,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           const droplets = errored === undefined ? undefined : await providerAbsent(errored);
           if (droplets !== undefined) {
             check();
-            const bytes = `${JSON.stringify(createErroredRecord(state, errored, droplets, new Date().toISOString()), null, 2)}\n`;
+            // Save the posted IDs first: a stop before the state publication below then
+            // leaves a reservation the later recheck can settle, not an orphan receipt.
+            state.createPending = errored; save();
+            const bytes = createErroredBytes(createErroredRecord(state, errored, droplets, new Date().toISOString()));
             durable(join(local, createErroredReceipt), bytes);
             state.createErrored = { ...errored, evidenceSha256: digest(bytes) }; save();
             throw createErroredStop();
@@ -986,12 +1027,20 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         verifyRetirement(); await confirmDeleted();
         state.destroyedAt ??= new Date().toISOString(); save(); return 1;
       });
-      const observed = read();
+      let observed = read();
+      // Every leftover lock beside a recorded failure goes back through the guarded
+      // recheck, which refuses a recheck lock or a partial release.
       if (observed.createPending && observed.status === "creating" && !observed.id
-        && (!observed.createErrored || existsSync(join(local, "operation.lock")))) return settlePendingCreate(observed);
-      if (observed.createErrored) return locked(async () => {
+        && (!observed.createErrored || [join(local, "operation.lock"), join(local, recheckLock), join(base, ".groups-launch.lock")].some((path) => existsSync(path)))) {
+        const settled = await settlePendingCreate(observed);
+        if (settled !== "allocated") return settled;
+        // Now a bound, never-provisioned allocation: the ordinary path below keeps its
+        // pinned unused-bootstrap, unused-host and deletion fences.
+        observed = read();
+      } else if (observed.createErrored) return createErroredCustody(local) && locked(async () => {
         // Read-only: recheck the receipt and absence. Never DELETE, create or bind.
         assert.ok(state.createErrored, "create failure record changed; preserve reservation");
+        assert.ok(!existsSync(join(local, recheckLock)) && !existsSync(join(base, ".groups-launch.lock")), "provider-errored create still holds custody; preserve reservation");
         verifyCreateErrored(local, state);
         assert.ok(await providerAbsent(state.createErrored) !== undefined, "provider-errored allocation no longer verified absent; preserve reservation");
         return 1;
