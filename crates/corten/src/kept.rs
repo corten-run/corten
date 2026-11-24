@@ -15,8 +15,10 @@
 //! that its URL was asked for ([`Store::asked`]) or count toward a run of answers not kept
 //! ([`Unkept`]): it was never one that could be. One given a kept answer counts as a `GET` given
 //! one does, the answer read and its route found to have bodies worth asking for, since it was
-//! spared its handler as the `GET` is. A route's handler for `HEAD` alone gives no kept answer:
-//! the one kept was another handler's.
+//! spared its handler as the `GET` is. Only a `HEAD` the router gave the handler of its route's
+//! `GET` is ([`HeadOfGet`]): a route's handler for `HEAD` alone gives no kept answer, the one
+//! kept being another handler's, and nor does another method's handler for a request a
+//! middleware made a `HEAD` after the router chose that handler.
 //!
 //! While the store has room every such answer is kept. Once it is full, keeping an answer may
 //! drop another page, so an answer is kept then only when its URL was asked for before, as far
@@ -1018,7 +1020,8 @@ impl Answers {
 
 /// A request a kept answer can stand for: a `GET` that shows nothing about who is asking, for
 /// the whole document where the route answers a page, read as the handler would see it (after
-/// the app's middleware); or such a `HEAD`, which a kept answer stands for and none is kept for.
+/// the app's middleware); or such a `HEAD` the router gave the route's `GET` handler
+/// ([`HeadOfGet`]), which a kept answer stands for and none is kept for.
 pub(crate) struct Asked<'a> {
     answers: &'a Answers,
     signal: &'a crate::Signal,
@@ -1031,6 +1034,13 @@ pub(crate) struct Asked<'a> {
     /// A `HEAD`: given a kept answer, whose body the router drops, and none of its own kept.
     head: bool,
 }
+
+/// The mark on a `HEAD` the router gave the handler of its route's `GET` (the route's own, or its
+/// `any` handler where it has neither a `HEAD` nor a `GET` one), put on as it chose that handler.
+/// Only such a `HEAD` is given a kept answer: one a middleware made a `HEAD` after the router chose
+/// another method's handler is that handler's, which a kept `GET` answer does not stand for.
+#[derive(Clone, Copy)]
+pub(crate) struct HeadOfGet;
 
 /// What a request's headers say of whether a kept answer can stand for it, and what of them its
 /// key is made of.
@@ -1100,14 +1110,13 @@ impl<'a> Sent<'a> {
 }
 
 impl<'a> Asked<'a> {
-    /// `head`: whether the route's answer to a `HEAD` is its handler's to a `GET`, which is so
-    /// unless the route has a handler for `HEAD` of its own.
-    pub(crate) fn of(req: &'a Request, shape: Shape, head: bool) -> Option<Self> {
+    pub(crate) fn of(req: &'a Request, shape: Shape) -> Option<Self> {
         let head = match *req.method() {
             http::Method::GET => false,
             // A `HEAD` asks for what its `GET` would answer (RFC 9110 section 9.3.2), with the
-            // same headers and no body, which the router drops after every stage.
-            http::Method::HEAD if head => true,
+            // same headers and no body, which the router drops after every stage: one the router
+            // gave the handler that answers the `GET`, as it chose it.
+            http::Method::HEAD if req.extensions().get::<HeadOfGet>().is_some() => true,
             _ => return None,
         };
         let signal = req.extensions().get::<crate::Signal>()?;

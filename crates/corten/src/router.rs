@@ -118,13 +118,11 @@ impl Endpoint for Giving {
 /// answer is given in its place, and the one it makes is kept ([`crate::kept`]). A page is filled
 /// here, as [`crate::middleware`] would after it, so what is kept is the page as it leaves the
 /// route. A `HEAD` the route answers with this handler is given the kept answer too, whose body
-/// the router drops, and what its handler makes for it is not kept.
+/// the router drops, and what its handler makes for it is not kept ([`crate::kept::HeadOfGet`]).
 struct Keeping {
     shape: crate::kept::Shape,
     /// Of a route of whole bodies: whether any of the answers it made last was kept.
     unkept: Option<Arc<crate::kept::Unkept>>,
-    /// Whether the route's `HEAD` is this handler's `GET`: not for a handler of `HEAD` alone.
-    head: bool,
     inner: Route,
 }
 
@@ -137,7 +135,7 @@ impl Endpoint for Keeping {
             return self.inner.call(req);
         }
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
-        let Some(asked) = crate::kept::Asked::of(&req, self.shape, self.head) else { return self.inner.call(req) };
+        let Some(asked) = crate::kept::Asked::of(&req, self.shape) else { return self.inner.call(req) };
         if let Some(kept) = asked.find() {
             if let Some(route) = &self.unkept {
                 route.found();
@@ -300,8 +298,7 @@ impl<S> Clone for Slot<S> {
 }
 
 impl<S: Clone + Send + Sync + 'static> Slot<S> {
-    /// `head`: whether the route's `HEAD` reaches this handler as its `GET` does.
-    fn handler<H: Handler<T, S>, T: 'static>(handler: H, head: bool) -> Self {
+    fn handler<H: Handler<T, S>, T: 'static>(handler: H) -> Self {
         // Known when the route is made, so no other route's requests ask.
         let keeps = handler.keeps();
         Slot::Unbound(Arc::new(move |state| {
@@ -309,7 +306,7 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
             match keeps {
                 Some(shape) => {
                     let unkept = (shape == crate::kept::Shape::Body).then(Default::default);
-                    Arc::new(Keeping { shape, unkept, head, inner: handled })
+                    Arc::new(Keeping { shape, unkept, inner: handled })
                 }
                 None => handled,
             }
@@ -451,8 +448,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
     fn on<H: Handler<T, S>, T: 'static>(mut self, at: usize, handler: H) -> Self {
         assert!(self.slots[at].is_none(), "corten: a route has two handlers for {}", NAMES[at]);
         self.keeps |= handler.keeps().is_some();
-        // A handler for `HEAD` alone is not the one a kept answer was made by.
-        self.slots[at] = Some(Slot::handler(handler, at != HEAD));
+        self.slots[at] = Some(Slot::handler(handler));
         let names: &[&'static str] = if at == GET { &["GET", "HEAD"] } else { &NAMES[at..=at] };
         if let Allow::Methods(allowed) = &mut self.allow {
             for name in names {
@@ -469,8 +465,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
     pub(crate) fn fallback<H: Handler<T, S>, T: 'static>(mut self, handler: H) -> Self {
         assert!(self.fallback.is_none(), "corten: a route has two handlers for any method");
         self.keeps |= handler.keeps().is_some();
-        // It answers a `HEAD` only where it answers the `GET` too.
-        self.fallback = Some(Slot::handler(handler, true));
+        self.fallback = Some(Slot::handler(handler));
         self
     }
 
@@ -751,18 +746,25 @@ struct Entry {
 
 impl Entry {
     /// The handler for `method`, and the `Allow` its answer gets when it is not one of the
-    /// route's own methods.
+    /// route's own methods; and whether it is a `HEAD` given the handler of the route's `GET`,
+    /// its own or `any`'s, which answers a `HEAD` only where it answers the `GET` too.
     #[inline]
-    fn pick<'a>(&'a self, method: &Method, dispatch: &'a Dispatch) -> (&'a Route, Option<&'a HeaderValue>) {
-        let own = match *method {
-            Method::HEAD => self.slots[HEAD].as_ref().or(self.slots[GET].as_ref()),
-            _ => slot_of(method).and_then(|at| self.slots[at].as_ref()),
+    fn pick<'a>(&'a self, method: &Method, dispatch: &'a Dispatch) -> (&'a Route, Option<&'a HeaderValue>, bool) {
+        let (own, of_get) = match *method {
+            Method::HEAD => match &self.slots[HEAD] {
+                Some(route) => (Some(route), false),
+                None => (self.slots[GET].as_ref(), true),
+            },
+            _ => (slot_of(method).and_then(|at| self.slots[at].as_ref()), false),
         };
         match own {
-            Some(route) => (route, None),
+            Some(route) => (route, None, of_get),
             None => match &self.fallback {
-                Some(fallback) => (fallback, self.allow.as_ref()),
-                None => dispatch.refuse(method, self.allow.as_ref()),
+                Some(fallback) => (fallback, self.allow.as_ref(), of_get),
+                None => {
+                    let (route, allow) = dispatch.refuse(method, self.allow.as_ref());
+                    (route, allow, false)
+                }
             },
         }
     }
@@ -879,23 +881,27 @@ impl Dispatch {
     fn answer(&self, mut req: Request, edge: bool) -> RouterFuture {
         let mut fix = Fix::of(req.method(), edge);
         let path = req.uri().path();
-        let (route, allow, stages, matched) = match self.paths.at(path) {
+        let (route, allow, of_get, stages, matched) = match self.paths.at(path) {
             Ok(found) => {
                 let entry = &self.routes[*found.value];
                 let matched = MatchedPath::new(&entry.path, req.uri(), &found.params);
                 // A segment without the text the route writes after its parameter is not the
                 // route's, whatever the method; no other route answers it either.
-                let (route, allow) = match entry.written {
-                    Some(written) if !crate::route::routes_path(written, path) => (&self.not_found, None),
+                let (route, allow, of_get) = match entry.written {
+                    Some(written) if !crate::route::routes_path(written, path) => (&self.not_found, None, false),
                     _ => entry.pick(req.method(), self),
                 };
-                (route, allow, entry.stages.as_ref(), Some(matched))
+                (route, allow, of_get, entry.stages.as_ref(), Some(matched))
             }
-            Err(_) => (&self.not_found, None, self.stages.as_ref(), None),
+            Err(_) => (&self.not_found, None, false, self.stages.as_ref(), None),
         };
         fix.allow = allow.cloned();
         if let Some(matched) = matched {
             req.extensions_mut().insert(matched);
+        }
+        // Marked here, as the handler is chosen: a middleware may change the method after this.
+        if of_get {
+            req.extensions_mut().insert(crate::kept::HeadOfGet);
         }
         let answering = match stages {
             Some(stages) => stages.clone().run(req, route),
@@ -1346,7 +1352,7 @@ mod tests {
         let Inner::Routes(dispatch) = &router.inner else { panic!("expected a router with no outer layer") };
         let matched = dispatch.paths.at("/small/one").unwrap();
         let entry = &dispatch.routes[*matched.value];
-        let (route, _) = entry.pick(&Method::GET, dispatch);
+        let (route, ..) = entry.pick(&Method::GET, dispatch);
         let request = || http::Request::builder().uri("/small/one").body(Body::empty()).unwrap();
         let stage = entry.stages.as_ref().unwrap().clone().run(request(), route);
         let handler = route.call(request());
