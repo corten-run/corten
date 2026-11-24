@@ -128,7 +128,8 @@ the hosted job adds Google's Docker Hub cache to the runner daemon's registry mi
 restarting it. The daemon tries its mirrors before falling back to Docker Hub, so a pull the
 cache serves does not count against Docker Hub's anonymous limit; a miss still goes to Docker
 Hub. The image keeps its Hub reference and digest. If Docker does not list the cache within a
-minute, the step puts back any configuration it changed and fails. The driver
+minute, the step fails the job; the runner is discarded, so nothing is rolled back. The step
+refuses to run outside a GitHub-hosted runner; never run it on your own machine. The driver
 never edits a Docker configuration. A static coverage
 check rejects any other omitted core test file. Browser CI runs every
 portable saved-verifier test, excluding only the optional historical `retained real w28`

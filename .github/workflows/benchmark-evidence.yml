@@ -115,7 +115,9 @@ jobs:
           sudo /bin/bash scripts/benchmark-ssh-ingress-ci.sh "$(command -v node)"
       # Docker Hub has refused this job's image pull with toomanyrequests (#1499).
       # Adds Google's Hub cache to the daemon's registry mirrors, which it tries before falling
-      # back to Hub, and reloads Docker without restarting it; the reference stays Hub's.
+      # back to Hub, and reloads Docker without restarting it; the reference stays Hub's. The
+      # script runs only on this disposable hosted runner and fails the job if Docker does not
+      # list the cache within a minute; it rolls nothing back.
       - name: Add Google's Docker Hub cache to Docker's registry mirrors
         run: sudo /bin/bash scripts/ci-docker-hub-mirror.sh "$(command -v node)"
       - name: Exercise actual delegated process and Docker participant boundaries

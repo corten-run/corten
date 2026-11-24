@@ -1,10 +1,11 @@
-// Hosted CI only: scripts/ci-docker-hub-mirror.sh runs this as root before Docker Hub pulls.
+// scripts/ci-docker-hub-mirror.sh runs this as root on a disposable GitHub-hosted runner before
+// Docker Hub pulls; see that script before running it anywhere else.
 // Adds Google's Docker Hub cache to a Docker daemon config's registry mirrors, after any mirrors
 // already listed and keeping every other key. The daemon tries its mirrors before falling back
 // to Docker Hub; image references stay Docker Hub's, so a digest-pinned pull still checks the
-// same bytes. It saves the original first so the shell step can put it back.
-import { closeSync, fchmodSync, fchownSync, fstatSync, lstatSync, openSync, readFileSync, renameSync, rmSync,
-  writeFileSync } from "node:fs";
+// same bytes.
+import { closeSync, fchmodSync, fchownSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync,
+  rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -79,39 +80,23 @@ export function publish(path, bytes, { mode, uid, gid }) {
 
 /**
  * Adds the mirror to the config at path (creating it if absent) and says whether it changed.
- * Before changing it, records the original bytes and metadata, or its absence, at saved.
- * A config that is refused is left as it is and nothing is saved.
+ * A config that is refused is left as it is.
  * @param {string} path
- * @param {string} saved
  * @returns {boolean}
  */
-export function addMirror(path, saved) {
+export function addMirror(path) {
   const original = readConfig(path);
   const next = withMirror(original === null ? null : original.bytes.toString("utf8"));
   if (next === null) return false;
-  const record = original === null ? { absent: true }
-    : { bytes: original.bytes.toString("base64"), mode: original.mode, uid: original.uid, gid: original.gid };
-  writeFileSync(saved, JSON.stringify(record) + "\n", { flag: "wx", mode: 0o600 });
   // A new file is 0644 and owned by the writer, which in CI is root.
   const metadata = original ?? { mode: 0o644, uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
+  mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
   publish(path, Buffer.from(next, "utf8"), metadata);
   return true;
 }
 
-/**
- * Puts back what addMirror saved: the original bytes, owner and mode, or the original absence.
- * @param {string} path
- * @param {string} saved
- */
-export function restoreConfig(path, saved) {
-  const record = JSON.parse(readFileSync(saved, "utf8"));
-  if (record.absent === true) rmSync(path, { force: true });
-  else publish(path, Buffer.from(record.bytes, "base64"), { mode: record.mode, uid: record.uid, gid: record.gid });
-}
-
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const [command, path, saved] = process.argv.slice(2);
-  if (command === "add" && path && saved) console.log(addMirror(path, saved) ? "changed" : "unchanged");
-  else if (command === "restore" && path && saved) restoreConfig(path, saved);
-  else throw new Error("usage: node scripts/ci-docker-hub-mirror.mjs add|restore <daemon.json> <saved>");
+  const [path, ...rest] = process.argv.slice(2);
+  if (!path || rest.length > 0) throw new Error("usage: node scripts/ci-docker-hub-mirror.mjs <daemon.json>");
+  console.log(addMirror(path) ? "changed" : "unchanged");
 }
