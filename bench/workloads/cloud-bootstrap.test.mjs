@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { remoteFiles, reservation, supervisorBootstrap } from "./cloud-contract.mjs";
+import { remoteFiles, reservation, supervisorBootstrap, upstreamImages } from "./cloud-contract.mjs";
 
 const state = reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" });
 test("bootstrap prepares upstream stable Git and proves required immutable-query flags before clone", () => {
@@ -30,12 +30,26 @@ test("bootstrap prepares the actual client dependency roots and Node 26 before t
   const browser = job.indexOf("npm --prefix bench/browser ci --no-audit --no-fund");
   const entry = job.indexOf("node bench/workloads/isolated/campaign-entry.mjs");
   assert.ok(root >= 0 && bench > root && browser > bench && entry > browser);
-  assert.ok(job.includes("node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"));
+  assert.ok(job.includes("\ntimeout 900 docker pull node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1\n"));
   assert.ok(!job.includes("setup_24.x"));
   assert.ok(job.includes('node -e \'if (process.versions.node.split(".")[0] !== "26") process.exit(1)\''));
+});
+
+test("a new reservation pulls the native Debian 13 upstream image; a saved one keeps its Debian 12 bytes", () => {
+  const legacy = remoteFiles({ ...state, benchPackage: true, gitSource: true });
+  const marked = remoteFiles({ ...state, benchPackage: true, gitSource: true, trixieUpstream: true });
   const native = readFileSync(new URL("../fullstack-browser/run.mjs", import.meta.url), "utf8");
-  const image = native.match(/node:26\.[0-9.]+-bookworm-slim@sha256:[a-f0-9]{64}/)?.[0];
-  assert.ok(image && job.includes(`docker pull ${image}`), "fresh host prepares the current native upstream image");
+  const image = native.match(/node:26\.[0-9.]+-[a-z]+-slim@sha256:[a-f0-9]{64}/)?.[0];
+  assert.equal(image, upstreamImages.trixie, "native browser runner uses the Debian 13 image");
+  const pull = (name) => `\ntimeout 900 docker pull ${name}\n`;
+  assert.ok(marked["job.sh"].includes(pull(image)), "fresh host prepares the current native upstream image");
+  assert.ok(!marked["job.sh"].includes(upstreamImages.bookworm));
+  assert.ok(legacy["job.sh"].includes(pull(upstreamImages.bookworm)) && !legacy["job.sh"].includes(upstreamImages.trixie));
+  // Only that one line differs, and the packer and unit are the same bytes.
+  assert.equal(marked["job.sh"], legacy["job.sh"].replace(pull(upstreamImages.bookworm), pull(upstreamImages.trixie)));
+  for (const file of ["pack.sh", state.unit]) assert.equal(marked[file], legacy[file]);
+  for (const trixieUpstream of [false, null, "true", 1])
+    assert.throws(() => remoteFiles({ ...state, trixieUpstream }), /Debian 13 upstream image marker/);
 });
 
 test("owned service delegates accounting and establishes its supervisor before provisioning", () => {

@@ -6,6 +6,7 @@ import { gzipSync, gunzipSync } from "node:zlib";
 import test from "node:test";
 import { benchPackagePaths, command, controller, publicError } from "./droplet.mjs";
 import { archive, campaign, commit, harness, metadata, subject, syntheticDelivery } from "./cloud-fixtures.mjs";
+import { upstreamImages } from "./cloud-contract.mjs";
 import { archiveMembers, extractArchive } from "./cloud-local.mjs";
 import { parseDropletArgs } from "./cloud-options.mjs";
 import { validationLimit } from "./cloud-validation.mjs";
@@ -29,6 +30,7 @@ test("detach reserves before one completed create, uploads fixed job and starts 
   assert.ok(!job.includes("--apps")); await assert.rejects(h.launch().launch(), /already reserved/); assert.equal(h.creates, 1);
   assert.equal(s.benchPackage, true); assert.ok(job.includes("bootstrap_stage=bench-dependencies\ntimeout 900 npm --prefix bench ci --no-audit --no-fund\n"));
   assert.equal(h.saved().gitSource, true);
+  assert.equal(h.saved().trixieUpstream, true); assert.ok(job.includes(`\ntimeout 900 docker pull ${upstreamImages.trixie}\n`));
   assert.ok(job.includes("<<'CORTEN_GIT_VERIFY'") && !job.includes("ppa.launchpadcontent.net"));
 });
 

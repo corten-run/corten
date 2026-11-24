@@ -2227,8 +2227,10 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     and stylesheets in every app, and r13 the first with all eighteen; in each, and in r15 and r16 (the
     round these tables come from), parity passed on 17 pages and `look.mjs` on 4 pages in 4 views,
     with no failures.
-13. Build times depend on the toolchain images' versions (`rust:1-bookworm`, `node:24-bookworm-slim`
-    and the rest move to their newest release) and, for dependencies, on the network and the
+13. Build times depend on the toolchain images' versions (the rounds above built on `rust:1-bookworm`,
+    `node:24-bookworm-slim` and the rest at their newest release; later rounds record their own,
+    since 2026-11-24 `rust:1.100.0-trixie` and `node:26.13.1-trixie-slim` by digest, which are
+    different inputs, not a measured speedup) and, for dependencies, on the network and the
     package registries at the time. The rebuild keeps each tool's cache, which favors the tools
     that keep one; a Docker build without a cache mount starts each rebuild without it. Each
     rebuild runs in a new container, so a build server (.NET's, Gradle-style daemons) does not
@@ -2311,9 +2313,11 @@ node look.mjs [apps]        # every app's pages in Chromium against Corten's, bo
 node build.mjs legacy1 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
 node docker-rebuild.mjs legacy1 [apps] [runs=3]   # the app's own docker build after the edit, BuildKit's cache warm
 node rust-analyzer.mjs legacy1 [apps] [runs=5]    # rust-analyzer's own latency (the Rust apps)
-# One request's instructions by stage and crate (callgrind), from the repository root, items in memory:
+# One request's instructions by stage and crate (callgrind), from the repository root, items in memory,
+# in the Rust bench apps' builder (the committed tables ran in rust:1-bookworm, Debian 12; a run in
+# this Debian 13 image has a newer compiler, glibc and valgrind, so compare it with its own runs):
 docker run --rm -v "$PWD:/src" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/cg:/out -w /src \
-  -e CARGO_TARGET_DIR=/target rust:1-bookworm bash bench/fullstack/cost-by-crate.sh
+  -e CARGO_TARGET_DIR=/target rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31 bash bench/fullstack/cost-by-crate.sh
 node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.out /tmp/cg/cg-card-market-page-fixture-1300.out
 # The axum + Maud app the same way: add -e APP=axum-maud (dumps cg-axum-maud-*.out). Writing each
 # page with what it calls: INCLUSIVE='render_into|^item_page_axum_maud::pages::item$' before node
@@ -2323,7 +2327,7 @@ node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.o
 # What each production default costs: card-market built as it is and with each ablate/ patch, then
 # measured; builds go to /tmp/defaults/bins and are reused, so a stopped run measures at once:
 docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/defaults:/out \
-  -e CARGO_TARGET_DIR=/target rust:1-bookworm bash /src/bench/fullstack/cost-by-default.sh
+  -e CARGO_TARGET_DIR=/target rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31 bash /src/bench/fullstack/cost-by-default.sh
 node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
 # The same builds' requests per CPU-second under load (a round's image of each, ab.mjs on pinned
 # cores; on a c-8, the app on CPU 1 and k6 on 2-7; without them the app gets --cpus 1 unpinned),

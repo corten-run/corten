@@ -47,6 +47,14 @@ That preserves ordinary collection from the measured checkout. It does not
 make a new controller source-compatible with [grouped pre-plan retirement](#failed-native-custody-and-retirement).
 Keep the marked recipe fixed too; a future Git pin needs a distinct saved recipe.
 
+New reservations also save `trixieUpstream: true`. Their job pulls the Debian 13 native
+upstream image, `node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067`,
+which the native browser runner uses from the commit that moved bench to Debian 13
+([#1704 bench's Node images and the Gin item-page app still run on Debian 12 after the template and examples moved to Debian 13](https://github.com/corten-run/corten/issues/1704)).
+A reservation without the marker regenerates its original job, which pulls
+`node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1`.
+A new reservation's measured commit must therefore include that move; merged main does.
+
 The production adapter in `cloud-remote.mjs` keeps the job at `umask 077` but
 runs only the fixed public Git clone, fetch and exact detached checkout in a
 `umask 022` subshell. Committed nonexecutable scripts are `0644` under `0755`
