@@ -2516,6 +2516,11 @@ pub trait Anonymous {
     /// ```
     #[doc(hidden)]
     const KEYED: sealed::Keyed = sealed::Keyed(false);
+
+    /// Whether it is keyed in a place before the handler's last, where Corten fills only what
+    /// reads the request's head (`FromRequestParts`): a `Form` there is the app's own.
+    #[doc(hidden)]
+    const KEYED_BEFORE_LAST: sealed::Keyed = Self::KEYED;
 }
 
 // Each is keyed only with the bounds Corten's own extractor for it has, so a type that falls
@@ -2529,6 +2534,8 @@ where
 }
 impl<T: serde::de::DeserializeOwned> Anonymous for crate::Form<T> {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
+    // Corten reads a form only as the last argument, from the body.
+    const KEYED_BEFORE_LAST: sealed::Keyed = sealed::Keyed(false);
 }
 impl<T> Anonymous for State<T> {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
@@ -2635,6 +2642,13 @@ macro_rules! holds {
     };
 }
 
+/// Each argument keyed in its place: the last as Corten fills it there, the others as it fills
+/// one before the last.
+macro_rules! keyed {
+    ($last:ident) => { $last::KEYED.0 };
+    ($first:ident, $($rest:ident),+) => { $first::KEYED_BEFORE_LAST.0 && keyed!($($rest),+) };
+}
+
 macro_rules! arities {
     ($($ty:ident),*) => {
         impl<F, Fut, M, $($ty,)*> Signature<(M, $($ty,)*)> for F
@@ -2647,7 +2661,7 @@ macro_rules! arities {
         }
 
         impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {
-            const KEYED: bool = true $(&& $ty::KEYED.0)*;
+            const KEYED: bool = keyed!($($ty),*);
         }
         impl<$($ty: Unstaged,)*> AllUnstaged for ($($ty,)*) {}
 
