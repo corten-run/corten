@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { providerTransport } from "./cloud-provider.mjs";
+import { fleetCreateMode, fleetPlan } from "./cloud-contract.mjs";
 import { productionMain } from "./cloud-production.mjs";
 import { providerFailure, controllerFailure } from "./cloud-options.mjs";
 import { accountId, commit, context, harness, syntheticProviderRequest } from "./cloud-fixtures.mjs";
@@ -15,7 +16,7 @@ import { beforeProvisioning, settlementControl } from "./test-fixtures/provider-
 
 const account = ["account", "get", "--output", "json", "--context", context];
 const raw = "SYNTHETIC_ONLY_CREDENTIAL_A";
-async function api(t, mode, h, accountFailure = () => !h || beforeProvisioning(h.local)) {
+async function api(t, mode, h, failureReady = () => !h || beforeProvisioning(h.local)) {
   const calls = [], responses = [], sockets = new Set(); let firstFailure = -1, armed = true;
   const translate = h && syntheticProviderRequest(h);
   const server = createServer(async (req, res) => {
@@ -24,14 +25,18 @@ async function api(t, mode, h, accountFailure = () => !h || beforeProvisioning(h
     const path = req.url, method = req.method; calls.push({ method, path });
     const writeHead = res.writeHead.bind(res);
     res.writeHead = (status, ...rest) => { responses.push({ method, path, status }); return writeHead(status, ...rest); };
+    if (mode.startsWith("catalog-") && method !== "GET") { res.writeHead(405); res.end(); return; }
     if (mode === "refused-create" && method === "POST") { res.writeHead(503); res.end(raw); return; }
     const mutation = mode === "action" && path === "/v2/actions/456" || mode === "post" && method === "POST" || mode === "delete" && method === "DELETE";
-    const fail = armed && (firstFailure === -1 || mode === "reset-repeat") && (mutation || path === "/v2/account" && accountFailure());
+    const failingRead = mode.startsWith("catalog-") ? path === "/v2/regions?page=1&per_page=200" : path === "/v2/account";
+    const fail = armed && (firstFailure === -1 || mode === "reset-repeat") && (mutation || failingRead && failureReady());
     if (fail && mode !== "success") {
       if (firstFailure === -1) firstFailure = calls.length - 1;
-      if (["action", "post", "delete", "reset", "reset-repeat", "refused-create"].includes(mode)) { req.socket.destroy(); return; }
-      if (["hang", "cancel"].includes(mode)) return;
-      if (mode === "aborted") { res.writeHead(200); res.flushHeaders(); res.write('{"account":'); setImmediate(() => res.destroy()); return; }
+      if (["action", "post", "delete", "reset", "reset-repeat", "refused-create", "catalog-reset"].includes(mode)) { req.socket.destroy(); return; }
+      if (["hang", "cancel", "catalog-hang"].includes(mode)) return;
+      if (["aborted", "catalog-aborted"].includes(mode)) {
+        res.writeHead(200); res.flushHeaders(); res.write('{"partial":'); setImmediate(() => res.destroy()); return;
+      }
       res.writeHead(mode === "invalid-json" ? 200 : 503); res.end(raw); return;
     }
     const result = translate ? await translate({ method, path, body: chunks.length ? JSON.parse(Buffer.concat(chunks)) : undefined,
@@ -54,8 +59,10 @@ function worker(t, api, { mode = "ordinary", receive = (value) => value, interru
     if (onExit) child.once("exit", onExit);
     const emit = child.emit.bind(child);
     child.emit = (name, ...values) => {
-      if (name === "message") messages.push(values[0]);
-      return emit(name, ...(name === "message" ? [receive(values[0]), ...values.slice(1)] : values));
+      if (name !== "message") return emit(name, ...values);
+      messages.push(values[0]);
+      const delivered = receive(values[0]);
+      return delivered === undefined ? true : emit(name, delivered, ...values.slice(1));
     };
     return child;
   } });
@@ -73,6 +80,84 @@ function failed(error, code, detail) {
   assert.deepEqual(providerFailure(error), { code, ...(detail ? { detail } : { httpStatus: 503 }) });
   assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(raw)); return true;
 }
+
+test("locked marketplace catalog request releases custody only after proved native closure and clean exit", { timeout: 25000 }, async (t) => {
+  for (const [mode, failure, detail, uncertain] of [
+    ["reset", "catalog-reset", "request-error", false],
+    ["aborted", "catalog-aborted", "response-aborted", false],
+    ["unobserved-close", "catalog-reset", "request-error", true],
+    ["hang", "catalog-hang", "deadline", true],
+    ["exit2", "catalog-reset", "request-error", true],
+    ["cancel-at-exit", "catalog-reset", "request-error", true],
+    ["missing-proof", "catalog-reset", undefined, true],
+    ["bad-diagnostic", "catalog-reset", undefined, true],
+    ["ordinary-failure-result", "catalog-reset", undefined, true],
+    ["prior-delete-attempt", "catalog-reset", "request-error", true],
+    ["read-only-worker", "catalog-reset", "request-error", true],
+  ]) await t.test(mode, async (t) => {
+    const group = "localized-marketplace", round = "r63", h = harness(t, { round, fleetGroup: group });
+    const locks = [join(h.base, ".groups-launch.lock"), join(h.local, "operation.lock")];
+    const savedFleet = fleetPlan({ round, commit, token: "f".repeat(16), tokens: { [group]: "1".repeat(16) }, provider: { accountId, context }, sshKey: "42" },
+      undefined, "sfo3", { stagedPlacement: true, single: { group, indexSha256: "a".repeat(64), checkout: h.repo } });
+    const fleet = join(h.temp, "fleet.json"); writeFileSync(fleet, JSON.stringify(savedFleet));
+    let locksAtExit, cancelled = false;
+    const a = await api(t, failure, h, () => {
+      assert.deepEqual(locks.map(existsSync), [true, true]);
+      assert.equal(h.saved().status, "reserved"); assert.equal(h.saved().createIntentAt, undefined);
+      return true;
+    });
+    const w = worker(t, a, { createMode: mode === "read-only-worker" ? null : fleetCreateMode(group, savedFleet),
+      mode: mode === "unobserved-close" ? "catalog-unobserved-close" : mode,
+      interrupted: () => cancelled,
+      onExit() { locksAtExit = locks.map(existsSync); cancelled = mode === "cancel-at-exit"; },
+      receive(message) {
+        if (message.schema === "cloud-provider-catalog-failed/v1") {
+          if (mode === "missing-proof") return undefined;
+          if (mode === "bad-diagnostic") return { ...message, diagnostic: { code: "catalog-request", detail: "send" } };
+          if (mode === "ordinary-failure-result") return { schema: "cloud-provider-result/v1", nonce: message.nonce, sequence: message.sequence,
+            ok: true, result: { status: 1, stdout: "", stderr: "", providerDiagnostic: message.diagnostic } };
+        }
+        return message;
+      } });
+    if (mode === "prior-delete-attempt") {
+      const deleted = await w.run(["compute", "droplet", "delete", "123", "--force", "--context", context], 2200, true, Date.now() - 1);
+      assert.equal(deleted.deleteNotDispatched, true);
+      assert.deepEqual(a.calls, []);
+    }
+    const task = h.task({
+      run(binary, args, timeout, allowFail) {
+        if (binary === "doctl") return w.run(args, args[1] === "placement" ? 2200 : timeout, allowFail);
+        assert.equal(binary, "git");
+        return h.run(binary, args, timeout, allowFail);
+      },
+      settle: () => w.run.close(),
+      interrupted: () => cancelled,
+      checkFleetAdmission: () => [],
+    }, { collect: undefined, detach: true, commit, sshKey: "42", accountId, context, group, fleet });
+    let rejected;
+    await assert.rejects(task.launch(), (error) => { rejected = error; return true; });
+    assert.equal(a.injected, true);
+    assert.deepEqual(a.calls.map(({ method, path }) => [method, path]), [
+      "/v2/account", "/v2/droplets?page=1&per_page=200", ...Array(5).fill("/v2/account"),
+      "/v2/sizes?page=1&per_page=200", "/v2/regions?page=1&per_page=200",
+    ].map((path) => ["GET", path]));
+    assert.deepEqual(locksAtExit, [true, true]);
+    assert.equal(h.saved().status, "reserved"); assert.equal(h.saved().createIntentAt, undefined);
+    assert.equal(h.saved().id, undefined);
+    t.diagnostic(`worker exit=${w.child.exitCode}, ${a.calls.length} GET, zero POST/DELETE, reservation still reserved, locks retained=${locks.map(existsSync)}`);
+    assert.deepEqual(locks.map(existsSync), [uncertain, uncertain]);
+    assert.equal(rejected.controlTreeUncertain, uncertain ? true : undefined);
+    assert.deepEqual(providerFailure(rejected), detail ? { code: "catalog-request", detail } : undefined);
+    const proof = w.messages.find((message) => message.schema === "cloud-provider-catalog-failed/v1");
+    if (["unobserved-close", "hang", "prior-delete-attempt", "read-only-worker"].includes(mode)) assert.equal(proof, undefined);
+    else assert.deepEqual(proof?.diagnostic, { code: "catalog-request", detail: detail ?? "request-error" });
+    if (!uncertain) {
+      assert.equal(w.child.exitCode, 0); assert.equal(w.child.signalCode, null);
+      assert.equal(w.state().requestClose, a.calls.length); assert.equal(w.state().socketClose, a.calls.length);
+      assert.equal(w.state().responseClose, a.calls.length - (mode === "reset" ? 1 : 0));
+    }
+  });
+});
 
 test("native account rejection requires request/response/socket close and typed terminal reply plus exit0", { timeout: 20000 }, async (t) => {
   for (const [mode, code, detail] of [["http503", "account-http"], ["invalid-json", "account-request", "invalid-json"],

@@ -6,8 +6,8 @@ import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { controlEnvironment } from "./cloud-transport.mjs";
-import { erroredCreate, pendingCreate, providerDiagnostic, unsentDelete } from "./cloud-options.mjs";
-import { providerCreateHost } from "./cloud-contract.mjs";
+import { catalogClosureDetails, erroredCreate, pendingCreate, providerDiagnostic, unsentDelete } from "./cloud-options.mjs";
+import { fleetCatalogCommand, providerCreateHost } from "./cloud-contract.mjs";
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const worker = join(directory, "cloud-provider-worker.mjs");
@@ -32,10 +32,10 @@ const keys = (value, names) => value && typeof value === "object" && !Array.isAr
 // Entry dependency injection is for local tests, not a CLI/path/URL option.
 export function providerTransport({ repo, interrupted = () => false, launch = spawn, createMode = null } = {}) {
   assert.equal(resolve(repo), repo);
-  providerCreateHost(createMode);
+  const host = providerCreateHost(createMode);
   const env = controlEnvironment("doctl");
   let child, pending, sequence = 0, closed = false, failed = false, exitPromise, closing;
-  let diagnostic, terminal;
+  let diagnostic, terminal, mutationStarted = false;
   const inBudget = (slot) => {
     const current = Date.now(), valid = current >= slot.last && current < slot.deadline;
     slot.last = current; return valid;
@@ -61,15 +61,20 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
         if (!keys(message, ["schema"]) || message.schema !== "cloud-provider-boot/v1") { fail(); return; }
         const slot = pending; pending = undefined; slot.resolve(); return;
       }
-      if (message?.schema === "cloud-provider-account-failed/v2") {
-        if (!pending?.account || pending.sequence <= 0 || failed || terminal || interrupted()
+      const accountFailure = message?.schema === "cloud-provider-account-failed/v2";
+      const catalogFailure = message?.schema === "cloud-provider-catalog-failed/v1";
+      if (accountFailure || catalogFailure) {
+        if (!(accountFailure ? pending?.account : pending?.catalog && pending.allowFail && host && createMode !== "legacy" && !mutationStarted)
+          || pending.sequence <= 0 || failed || terminal || interrupted()
           || !keys(message, ["schema", "nonce", "sequence", "disposition", "diagnostic"])
           || message.nonce !== nonce || message.sequence !== pending.sequence || message.disposition !== "resources-closed"
           || !inBudget(pending)) { fail(); return; }
         const value = providerDiagnostic(message.diagnostic);
-        if (!value || !["account-request", "account-http"].includes(value.code)) { fail(); return; }
+        if (!(accountFailure ? ["account-request", "account-http"].includes(value?.code)
+          : value?.code === "catalog-request" && catalogClosureDetails.includes(value.detail))) { fail(); return; }
         const slot = pending; pending = undefined; diagnostic = value;
-        const error = Object.assign(new Error("provider account observation failed; operation not accepted"), { providerDiagnostic: { ...value } });
+        const error = Object.assign(new Error(accountFailure ? "provider account observation failed; operation not accepted"
+          : "fleet catalog request failed; operation not accepted"), { providerDiagnostic: { ...value } });
         terminal = { error, last: slot.last, deadline: slot.deadline }; closed = true;
         slot.reject(error); return;
       }
@@ -97,7 +102,8 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
       } else if (!(keys(value, ["status", "stdout", "stderr"])
         || permittedDiagnostic && keys(value, ["status", "stdout", "stderr", "providerDiagnostic"])
           && (errored || value.stdout === "" && permittedDiagnostic.code !== "create-action-errored")) || ![0, 1].includes(value.status)
-        || value.status === 1 && (!slot.allowFail || slot.get && !(permittedDiagnostic?.code === "get-http" && permittedDiagnostic.httpStatus === 404))
+        || value.status === 1 && (!slot.allowFail || slot.get && !(permittedDiagnostic?.code === "get-http" && permittedDiagnostic.httpStatus === 404)
+          || slot.catalog && !["catalog-http", "catalog-response"].includes(permittedDiagnostic?.code))
         || typeof value.stdout !== "string" || Buffer.byteLength(value.stdout) > 16 * 1024 ** 2 || value.stderr !== "") {
         fail(); slot.reject(uncertain());
       } else slot.resolve(value);
@@ -154,11 +160,14 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
       if (!child) await start();
       if (failed || closed || interrupted()) throw uncertain();
       const id = ++sequence;
-      const account = JSON.stringify(args.slice(0, -2)) === JSON.stringify(["account", "get", "--output", "json"])
-        && args.at(-2) === "--context" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(args.at(-1));
+      const scoped = args.at(-2) === "--context" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(args.at(-1));
+      const command = JSON.stringify(args.slice(0, -2));
+      const account = scoped && command === JSON.stringify(["account", "get", "--output", "json"]);
+      const catalog = scoped && command === JSON.stringify(fleetCatalogCommand);
       const started = Date.now();
-      const result = new Promise((resolve, reject) => { pending = { sequence: id, resolve, reject, allowFail, get: args[2] === "get", create: args[2] === "create", account,
+      const result = new Promise((resolve, reject) => { pending = { sequence: id, resolve, reject, allowFail, get: args[2] === "get", create: args[2] === "create", account, catalog,
         fencedDelete: args[2] === "delete" && deleteProofExpiresAtMs !== undefined, last: started, deadline: started + timeout }; });
+      if (args[2] === "create" || args[2] === "delete") mutationStarted = true;
       child.send({ schema: "cloud-provider-action/v1", sequence: id, args, timeout, allowFail,
         ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }, (error) => { if (error) fail(); });
       return await bounded(result, timeout + 1000);

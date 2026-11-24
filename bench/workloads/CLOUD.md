@@ -1830,14 +1830,34 @@ duplicate reply, forced close or cancellation stays uncertain.
 If the account command still fails, its terminal protocol does not accept an
 identity even with `allowFail`; this worker cannot service another request.
 An HTTP refusal and a worker lifetime failure are different outcomes, not different
-authorities. Only this proved orderly failed read can release normal lifecycle
+authorities. A proved orderly failed account read can release normal lifecycle
 locks; a later explicitly approved collect must independently re-prove ownership
 and unusedness. No POST/DELETE or failed enclosing operation is retried, and an
 existing deletion intent still permits only fresh absence reconciliation. Other
-commands, including a create's action GET, cannot use this terminal disposition.
+commands, including a create's action GET, cannot use the account terminal reply.
+
+In the grouped launch worker, the fixed placement catalog GETs use the same private closure evidence for
+`request-error`, `response-error` and `response-aborted`. The failure must occur
+inside the original catalog deadline, all native requests, assigned sockets and
+any responses in that worker must have been observed closed, and the worker must
+not have attempted a mutation. This never retries a catalog page or accepts a
+partial listing. The separate exact-key `cloud-provider-catalog-failed/v1` reply
+uses the same nonce, sequence and `resources-closed` disposition. The parent
+requires the exact pending catalog command (with failure allowed), a closed
+`catalog-request` diagnostic and observed exit 0 without a signal, all before
+expiry or cancellation. Read-only fleet previews do not take this terminal path.
+It is still a launch failure, not placement or ownership
+evidence. In a locked child this check is before create intent: the reserved
+state stays unchanged, normal locks release on verified settlement, and the
+existing independent continuation can report `not-created`. A successor still
+needs a new, explicitly approved launch. In-flight or unobserved closure,
+deadline, bad or missing proof, an unproved worker exit or prior mutation
+attempt retain custody; nothing here recovers a reservation with create intent
+or clears a historical lock.
+
 Provider failures may append a bounded phase code to the generic CLI error. The
 closed vocabulary in `cloud-options.mjs` distinguishes credential consumption,
-account/list/create/delete requests, create response/link validation, action
+account/list/catalog/create/delete requests, create response/link validation, action
 request/response validation, pending-action deadline, and output filtering.
 Unexpected HTTP responses use a `-http` code and optionally a numeric status from
 that module's closed status table; unlisted statuses are omitted, not accepted or
@@ -1855,10 +1875,12 @@ does not prove `ECONNRESET`, and `connect` does not prove DNS/TLS failure or tha
 a connection was established. Details survive the
 existing private-worker IPC and cached finalizer diagnostic; the direct CLI renders
 only the closed stage, detail and allowed HTTP status. Unknown, extra or accessor diagnostic fields
-are not forwarded. Other phases and unclassified failures retain their coarse
-codes. No detail changes retry, credential, acceptance, settlement or lock rules,
-and the original r21 account-request cause remains unknown. A final
-`provider-settlement` stage alone does not identify the original failing call.
+are not forwarded. Catalog-request details use the same labels except
+`invalid-json`: complete malformed catalog JSON still goes through catalog
+validation. Other phases and unclassified failures retain their coarse codes.
+A label alone does not prove settlement. The original r21 account-request and
+r63 catalog-request causes remain unknown. A final `provider-settlement` stage
+alone does not identify the original failing call.
 The adapter follows [DigitalOcean's create/action contract](https://github.com/digitalocean/openapi/blob/main/specification/resources/droplets/droplets_create.yml).
 SSH uses [OpenSSH's command/transfer rules](https://man.openbsd.org/ssh.1),
 [SFTP-by-default SCP](https://man.openbsd.org/scp.1).
