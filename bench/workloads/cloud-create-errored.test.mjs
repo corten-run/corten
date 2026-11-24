@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import test from "node:test";
 import { isDeepStrictEqual } from "node:util";
 import { createProviderEngine as providerTransport } from "./cloud-engine-test-fixture.mjs";
@@ -615,7 +615,8 @@ test("a completed create of its exact allocation is bound, and a fresh pinned co
   release(h);
   const before = h.calls.length;
   assert.equal(await o.collect(), 3);
-  assert.deepEqual(o.after(before), ["account", "action", "account", "account", "list", "account"]);
+  // Review round 6, finding 1: the bind's only read is the exact GET of the posted ID, never a census.
+  assert.deepEqual(o.after(before), ["account", "action", "account", "account", "get", "account"]);
   const state = h.saved();
   assert.equal(state.status, "preparing"); assert.equal(state.id, "123"); assert.equal(state.ip, "192.0.2.10");
   assert.deepEqual(state.createPending, { dropletId: "123", actionId: "456" }); assert.equal(state.createErrored, undefined);
@@ -990,4 +991,136 @@ test("the public error names the supported route for an offline never-started or
     assert.match(publicError({ controllerStage: stage }), /--collect --unused-bootstrap-known-hosts/, stage);
   assert.match(publicError({ controllerStage: "create-contradiction-unpublished" }), /provider-create-reappeared/);
   assert.doesNotMatch(publicError(new Error("--collect --unused-bootstrap-known-hosts")), /unused-bootstrap/);
+});
+
+// Review round 6, finding 1. Two posted-create paths bound a droplet from the census: a late
+// completed action with no receipt (no exact GET at all), and an in-deadline errored create
+// after its exact GET was 404 or failed. Only a positive exact GET of the posted ID binds.
+test("a late completed action binds nothing when its exact GET is not a positive owned read, whatever the census lists", async (t) => {
+  for (const kind of ["404", "503", "renamed"]) {
+    const { h, o, task } = lateLaunch(t, { flags: { missingUnit: true } });
+    await assert.rejects(task.launch(), { controlUncertain: true });
+    release(h);
+    o.action = actionRow({ status: "completed" });
+    // The census lists the owned posted droplet in every case.
+    h.hosts([h.host()]);
+    if (kind === "404") o.get = notFound;
+    else if (kind === "503") o.get = () => ({ status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 503 } });
+    else o.get = () => ({ status: 0, stdout: JSON.stringify([{ ...h.host(), name: "renamed-by-someone", tags: [] }]), stderr: "" });
+    const before = h.calls.length;
+    await assert.rejects(o.collect(), /nothing bound/, kind);
+    assert.deepEqual(o.after(before), ["account", "action", "account", "account", "get", "account"], kind);
+    preserved(h);
+  }
+});
+
+test("an in-deadline errored create binds only its posted droplet's positive exact GET, never the census", async (t) => {
+  const failures = {
+    "exact 404 with the owned posted droplet listed": notFound,
+    "exact 503 with the owned posted droplet listed": () => ({ status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 503 } }),
+  };
+  for (const [name, get] of Object.entries(failures)) {
+    const { h, task } = erroredLaunch(t, { hosts: (h) => [h.host()], get });
+    await assert.rejects(task.launch(), (error) => {
+      assert.notEqual(error.providerDiagnostic?.code, "create-errored-absent", name);
+      assert.match(error.message, /without binding/, name); return true;
+    });
+    const state = h.saved();
+    assert.equal(state.id, undefined, name); assert.equal(state.ip, undefined, name); assert.equal(state.status, "creating", name);
+    assert.deepEqual(state.createPending, { dropletId: "123", actionId: "456" }, name); assert.equal(state.createErrored, undefined, name);
+    assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+    assert.ok(!h.calls.some(([binary]) => binary === "ssh" || binary === "scp"), name);
+  }
+  // The positive: the exact GET returns the owned posted droplet, which binds with no census read.
+  const { h, task } = erroredLaunch(t, { hosts: (h) => [h.host()] });
+  await assert.rejects(task.launch(), /create completion was not proved/);
+  const calls = providerCalls(h);
+  assert.deepEqual(calls.slice(calls.indexOf("create") + 1), ["account", "account", "get", "account"]);
+  assert.equal(h.saved().id, "123"); assert.equal(h.deletes, 0);
+  assert.ok(!h.calls.some(([binary]) => binary === "ssh" || binary === "scp"));
+});
+
+// Review round 6, finding 2. A receipt written and a create-errored publication stage left by an
+// interrupted rename: the bind of the reappeared droplet succeeded, then the pinned retirement
+// refused the stage as unexpected custody, stranding the bound host.
+const erroredStage = (h, nonce = "ef".repeat(16)) => join(h.local, `state.json.create-errored-${nonce}.tmp`);
+async function interruptedPublication(t, stageBytes) {
+  const { h, o, task } = lateLaunch(t, { flags: { missingUnit: true } });
+  await assert.rejects(task.launch(), { controlUncertain: true });
+  release(h);
+  const state = h.saved(), receipt = createErroredBytes(createErroredRecord(state, state.createPending, 0, "2026-11-20T00:00:00.000Z"));
+  writeFileSync(join(h.local, "provider-create-errored.json"), receipt);
+  // The bytes publishCreateErrored stages for this state before its rename.
+  const publication = `${JSON.stringify({ ...state, createErrored: { ...state.createPending, evidenceSha256: digest(receipt) } }, null, 2)}\n`;
+  const stage = erroredStage(h);
+  writeFileSync(stage, stageBytes(publication));
+  h.hosts([h.host()]);
+  return { h, o, stage };
+}
+test("an interrupted receipt publication's stage is recorded at the bind and admitted at retirement only with its bytes", async (t) => {
+  for (const kind of ["complete", "partial write"]) {
+    const { h, o, stage } = await interruptedPublication(t, (bytes) => kind === "complete" ? bytes : bytes.slice(0, 40));
+    const bytes = readFileSync(stage);
+    assert.equal(await o.collect(), 3, kind);
+    const bound = h.saved();
+    assert.equal(bound.id, "123"); assert.deepEqual(bound.createContradicted.stages, [{ name: basename(stage), sha256: digest(bytes) }], kind);
+    // Changed bytes or an unrecorded stage are not admitted.
+    writeFileSync(stage, "changed");
+    await assert.rejects(h.pinnedUnused({ run: o.run }).collect(), /stage changed/, kind); assert.equal(h.deletes, 0);
+    writeFileSync(stage, bytes);
+    const stray = erroredStage(h, "cd".repeat(16));
+    writeFileSync(stray, bytes);
+    await assert.rejects(h.pinnedUnused({ run: o.run }).collect(), /unexpected local bootstrap custody/, kind); assert.equal(h.deletes, 0);
+    unlinkSync(stray);
+    assert.equal(await h.pinnedUnused({ run: o.run }).collect(), 1, kind);
+    assert.equal(h.deletes, 1); assert.ok(readFileSync(stage).equals(bytes), "the stage is kept as evidence");
+  }
+});
+test("a create-errored stage that is not this reservation's publication binds nothing", async (t) => {
+  for (const [kind, change] of Object.entries({ "other bytes": () => "{}\n", "another state": (bytes) => bytes.replace('"creating"', '"preparing"') })) {
+    const { h, o, stage } = await interruptedPublication(t, change);
+    const before = h.saved(), bytes = readFileSync(stage);
+    await assert.rejects(o.collect(), /not this reservation's publication/, kind);
+    assert.deepEqual(h.saved(), before, kind); assert.ok(readFileSync(stage).equals(bytes), kind);
+    assert.ok(existsSync(join(h.local, "provider-create-reappeared")), "the contradiction is still recorded");
+    assert.equal(h.deletes, 0);
+    assert.ok(!h.calls.some(([binary]) => binary === "ssh" || binary === "scp"), kind);
+  }
+});
+
+// Review round 6, finding 3, for an earlier round in the same root: a contradiction recorded
+// after the launch's census and before its create still blocks the create intent and POST.
+test("a later launch sends no create when an earlier round's contradiction is recorded after its census", async (t) => {
+  for (const late of [true, false]) {
+    const { h, task } = erroredLaunch(t);
+    await assert.rejects(task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
+    const next = harness(t, { stateRoot: h.base, round: "r22", hostId: "999", createReturnedId: 999, active: true });
+    const run = (binary, args, ...rest) => {
+      const result = next.run(binary, args, ...rest);
+      if (late && binary === "doctl" && args[2] === "list") writeFileSync(join(h.local, "provider-create-reappeared"), "");
+      return result;
+    };
+    if (late) {
+      await assert.rejects(next.launch({ run }).launch(), /changed before this create/);
+      assert.equal(next.creates, 0); assert.ok(!providerCalls(next).includes("create"));
+      assert.equal(next.saved().createIntentAt, undefined);
+    } else { await next.launch({ run }).launch(); assert.equal(next.creates, 1); }
+  }
+});
+
+// Review round 6, finding 4, for the same root: a contradicted attempt retired by the pinned
+// route still fences its posted ID, as the runbook says.
+test("a later launch in the same root still fences a contradicted posted ID after its verified retirement", async (t) => {
+  for (const listed of [true, false]) {
+    const { h, run } = await contradictionRoutes["a published receipt whose droplet reappears"](t);
+    assert.equal(await h.task({ run }).collect(), 3);
+    assert.equal(await h.pinnedUnused({ run }).collect(), 1);
+    assert.ok(h.saved().destroyedAt);
+    const next = harness(t, { stateRoot: h.base, round: "r22", hostId: "999", createReturnedId: 999, active: true });
+    if (listed) {
+      next.hosts([{ ...h.host(), name: "renamed-by-someone", tags: [] }]);
+      await assert.rejects(next.launch().launch(), /posted droplet is listed/);
+      assert.equal(next.creates, 0); assert.equal(next.saved().createIntentAt, undefined);
+    } else { await next.launch().launch(); assert.equal(next.creates, 1); }
+  }
 });
