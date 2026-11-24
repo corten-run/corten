@@ -642,6 +642,19 @@ benchmark host, a lost lease or changed peer refuses dispatch, not cleanup.
 An earlier controller that did not record peer leases cannot be treated as a
 running peer. Never clear a lock or recreate a group to force overlap.
 
+New monitored and offline-handoff timing phases for official groups use the
+same post-terminal host-boundary proof. A first-after census containing only
+new sleeping workers of the same baseline `systemd-udevd` can trigger one
+five-second settle observation. Each worker needs matching cgroup, parent
+identity and executable provenance, and a start strictly after the sealed
+terminal clock of the verified empty command lifetime. Both clocks must
+support the wait, the workers must be gone, and the final boundary must pass
+the ordinary cleanup checks. In-window workers, missing proof, survivors and
+foreign processes still block advancement. The untimed JSON preparation
+keeps its existing pre-phase cutoff. This does not change the measured window
+or qualify older evidence: replay uses the measured checkout, and r68 does
+not contain the terminal and executable proof needed for a settle.
+
 ### Offline handoff
 
 For a **new single-group continuation attempt**, add `--offline-handoff` to
