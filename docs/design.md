@@ -9793,6 +9793,71 @@ rules something out.
     and that its `pads.mjs` builds lists meeting the rule for every K from 5 to 254 and none from
     255 to 400.
 
+73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
+    not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
+    compile time and plain JavaScript functions that read and change the DOM. Drawing that without
+    a browser means CSS layout and the cascade, text shaping, input methods, accessibility and a
+    DOM for the scripts to run against: reproducing what a browser engine does, and keeping it
+    matched to the engines every desktop already offers apps (WebView2 on Windows, WKWebView on
+    macOS, WebKitGTK on Linux) in each behavior a page relies on. A restricted subset of markup,
+    CSS and scripts that a native renderer could draw is a second component model beside the one
+    pages use, with its own rules for what works where, kept in step with the first as either
+    changes. So a page reaches a desktop as it reaches a phone, in a browser engine: the
+    browser, the installed PWA or a desktop shell around a web view. A screen that needs a native
+    toolkit is written in that toolkit, from the same screen JSON, actions and feeds, and Corten
+    owns that contract, its JSON Schema and the design tokens, not a native widget set
+    ([architecture, Desktop apps](architecture.md#desktop-apps)).
+
+    Not chosen: compiling components to each desktop toolkit (WinUI, AppKit, GTK), three renderers
+    each to be kept equal to the browser; one cross-platform renderer of Corten's that draws a
+    subset, the second component model above; and a Chromium bundled with each app (Electron),
+    which is a browser all the same, at a cost in download size and memory, and is a question for
+    a desktop shell (architecture, open decision 5), not a component model.
+
+    Stands on: bet (inside a loaded screen a native toolkit would not answer forms, tables and live
+    rows faster by an amount a person can feel, and the cold start and memory a web view shell
+    costs over a native app, estimated at a few hundred milliseconds and 100 to 300 MB against tens
+    of each, matter only for screens an app can write natively; no native or web view client has
+    been measured, and nothing compares input to paint across a browser tab, an installed PWA, a
+    web view shell and a native screen, which
+    [#1934 No benchmark measures a desktop client: cold start, input to paint and memory for a browser tab, an installed PWA, a web view shell and a native screen are all estimates](https://github.com/corten-run/corten/issues/1934)
+    is to do); measured, of the browser only (the item page reaching the mark its code sets when
+    ready 59 ms after a cold navigation starts, on the desktop profile, Chromium 148, median of 10
+    cold loads in one round, historical r16; views taking over 1,000 server-rendered rows in
+    10.2 ms from the parser finishing to ready, less the rendering of any long frame recorded in
+    between, median of 30 loads, and the first click on a taken-over row updating the DOM in
+    1.4 ms, the median of 30 fresh loads, both Chromium 156, round browser-4);
+    platform (Windows 11 includes the Evergreen WebView2 Runtime and Microsoft has installed it
+    on eligible Windows 10 devices, WKWebView is part of macOS's WebKit framework,
+    and Linux distributions package WebKitGTK, whose current stable release is 2.54.3); platform
+    (the runtime and `corten-ui` are tested in Playwright's builds of Chromium, Firefox and WebKit,
+    [Limit 10](#limit-tested-browsers), not in the system web views themselves); reasoned (a
+    component's markup, scoped CSS and DOM scripts need layout, text, input, accessibility and a
+    DOM to run, so a renderer that draws all of them is a browser engine and one that draws less is
+    a subset); reasoned (a renderer of Corten's own would have to be kept drawing what the browser
+    draws for every `html!` feature, CSS rule and runtime behavior, and tested against it, as
+    each of them changes; a subset would add rules for what works where to every component);
+    value (correctness comes before speed in the values' order, so a renderer would have to draw
+    each page as the browser does before any speed it gave counted; the platform's HTML and DOM
+    are extended rather than replaced, Values 2; one component model, Values 5; a renderer of
+    Corten's own is a concept and a dependency that has to earn its place, Values 6; one contract
+    serves every surface, Values 8).
+
+    Revisit when: the desktop benchmark (architecture, open decision 4) shows a web view losing to
+    a native screen, by the margin that decision sets on cold start, input to paint or memory, for
+    a screen most apps have; a system web view stops shipping with, or being installable on, one
+    of Windows, macOS or Linux; or an engine an app can embed draws Corten's pages faster than the
+    system web view in that benchmark. A native screen winning by that margin for one kind of
+    screen (a camera scanner, a canvas of thousands of items) can justify the app writing a native
+    desktop screen for it from its screen JSON; it does not reopen this Choice.
+
+    Last checked: 2026-11-24, Microsoft's WebView2 distribution guide, Apple's `WKWebView`
+    reference and webkitgtk.org's releases (WebKitGTK 2.54.3, released 2026-11-18), read at
+    `966bf4a65`; 2026-11-24, Playwright 1.65.1's Chromium 159.0.8154.6, Firefox 159.0 and WebKit
+    27.2, as `package.json` and [Limit 10](#limit-tested-browsers) give them at `966bf4a65`;
+    2026-11-07, round r16's Chromium browser pass, on `eea6adb`; 2026-11-11, round browser-4 on a
+    Xeon Platinum 8358, on `3fb4b1ac`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
