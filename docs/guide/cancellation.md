@@ -42,6 +42,26 @@ A client closing an HTTP/1.1 connection mid-request is seen at once (an integrat
 the socket and waits for `Disconnected`). The deadline's timer starts only when a handler waits,
 so a page rendered from memory registers none.
 
+A connection `serve` accepted keeps one timer for its requests' deadlines once a handler of its
+has waited, rather than making one a request: the first request to wait makes its own, and each
+after it sets the connection's again and leaves it set
+([design.md, Choice 73](../design.md#choice-deadline-timer)). A deadline fires when it did. What
+an app can see of the kept timer:
+
+- A connection that sits idle after a request that waited is woken once, for nothing, when the
+  time the last such request's deadline was set for comes, and the timer (112 bytes) stays until
+  the connection closes.
+- A test on tokio's paused clock (`start_paused`) that leaves a served connection open sees the
+  clock move to that time when nothing else is due, where it stood still before. A test that
+  reads the clock closes the connection first or moves the clock itself (`tokio::time::advance`).
+- `app.router()` served another way keeps no timer, and neither does a request a layer moved to
+  another task: each of their deadlines makes its own, as before.
+- A handler that serves a request on a runtime of its own, inside a connection `serve` polls
+  (`block_in_place` and `block_on`), has that request's deadline wait on the timer of the runtime
+  around it from the connection's second such request. The deadline still fires on time while
+  that runtime runs; if it shuts down first, the request is answered 500 where it would have
+  gone on waiting.
+
 Routes that start their answer later than pages should (an upstream that answers in minutes, a
 report, large uploads) get a deadline of their own where they are mounted, so the rest of the
 app keeps its short one:

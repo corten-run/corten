@@ -9303,6 +9303,162 @@ rules something out.
     three c-8s (base `6f1bbf055`, head `66fa66c49`, rustc 1.100.0 with LLD 23.1.5, Linux
     6.12.117, a Xeon Platinum 8280 each, tag `evidence/stage-header-checks-2002`).
 
+73. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
+    A request's deadline needs a timer once its handler waits
+    ([design Choice 30](#choice-deadline-body) says what it then answers). Every deadline made
+    one and dropped it, and in tokio 1.54.1 a timer made and a timer dropped each take the one
+    lock of the runtime's timer wheel, so on the multi-threaded runtime every thread serving such
+    requests queued there twice a request. A connection `corten::serve` accepts now keeps one
+    (`crates/corten/src/deadline.rs`): the connection's first deadline to wait makes its own, as
+    before, and has the connection make one; each deadline after it moves that timer later
+    (`Sleep::reset`, a compare-and-swap with no lock while the timer is still set and the new
+    time is not earlier) and gives it back still set; the timer is dropped with the connection.
+    The connection's task owns the timer and lends it to the thread only while the connection is
+    polled, under a number of the connection's own, so a deadline finds it there and gives it back
+    only to the connection that made it. A deadline that finds none makes its own and drops it:
+    the connection's first to wait, a second deadline in one request, and a request polled
+    anywhere else (`app.router()` served another way, a call a layer moved to another task). A
+    deadline fires when it did: 200 deadlines of 50 ms on one connection were answered 0.87 to
+    0.97 ms late at the least, 2.03 to 2.07 ms at the median and 2.80 to 3.21 ms at the most on the
+    base (three runs), and 0.87 to 0.92, 2.06 and 2.86 to 3.02 ms with the kept timer (two).
+
+    What it gave, with the server on 24 cores of a 48-core machine and the load on the other 24,
+    tokio's multi-threaded runtime, six passes of three to five 10 s runs a build (two with each
+    build's runs together, the second in the reverse order, four alternating the builds run by
+    run): a staged route whose handler sleeps 10 ms on tokio's timer, 32,000 connections, answered
+    371,061 to 381,443 requests a second on the base (pass medians) and 435,601 to 447,668 with
+    the kept timer, 17.0% to 18.7% more pass by pass, with a p99 of 131 to 135 ms against 158 to
+    164. That handler makes and drops a tokio timer of its own, so the deadline's two takings of
+    the lock were two of its four; with the deadline off the route answered 18.8% and 20.5% more,
+    which is all there was to gain. A staged route that waits on a pooled connection to a local
+    service instead (4,096 connections) answered 5.7%, 3.6%, 2.8%, 2.5% and 1.6% more in five
+    passes and 0.1% fewer in one, a gain its runs do not separate from their own spread. Routes
+    that do not wait answered within -0.6% and +1.5% of the base. No run was taken on fewer
+    cores, so nothing here says where the gain begins. The gain is requests a second under
+    contention, not a lower CPU cost of one request: on one single-threaded runtime, where the
+    lock is never waited for, a staged request whose handler sleeps 1 ms costs 107 and 111
+    instructions fewer of 23,810.
+
+    What it costs, in instructions a request by callgrind (medians of three counts, two rounds,
+    the merged base against the change), and otherwise:
+
+    1. Every connection is polled through a wrapper: 13 instructions a poll. A staged request
+       that does not wait costs 6 and 7 more of 19,980 on one single-threaded runtime (4 and 37
+       of 20,590 on the multi-threaded one, whose counts vary more); a route with no deadline
+       (`unstaged`) 15 to 17 more of 11,590 to 12,170 when it does not wait and 26 to 48 of
+       16,980 to 18,200 when it does; a connection for each request that does not wait 33 and 57
+       of 31,150.
+    2. A connection whose only request waits makes a timer no later request uses, the default of
+       a proxy that opens a connection for each request: 453 and 448 instructions more of 35,060,
+       1.3% (on one single-threaded runtime, the client waiting 10 ms after each close, which
+       holds a build's six counts within 16; 401 and 471 without that wait). It is the request
+       the change costs most, and the cycle run reads it as a touched workload held to +1%.
+    3. The kept timer is a boxed `Sleep` of 112 bytes, and the connection's future is 16 bytes
+       larger (measured, tokio 1.54.1, x86-64 Linux), from the connection's first wait until it
+       closes: about 112 MB for a million idle connections that have each waited, beside the 48
+       to 57 KiB a connection already holds.
+    4. A kept timer no deadline takes before its time is up wakes the connection's task once, for
+       nothing. And a timer moved later stays where it was in the wheel until the driver reaches
+       that time and puts it where it now belongs, about once a connection for each deadline's
+       length of time: work moved to the timer driver, under its lock, not removed.
+    5. The timer keeps the waker of whatever polled it last until it fires or is polled again. That
+       is the connection's task, except where a handler polls its request another way (it blocks
+       on a runtime of its own, or a layer polls through a `FuturesUnordered`): then that waker,
+       and what it holds (an inner runtime's handle, after that runtime is dropped), stays for up
+       to the deadline, an hour under an area's long one.
+    6. A handler that serves a request on a runtime of its own inside a connection's poll
+       (`block_in_place` and `block_on`, which a test here treats as supported) has that request's
+       deadline wait on the connection's timer, the outer runtime's, from the connection's second
+       such request. It fires on time while the outer runtime runs. If the outer runtime shuts
+       down first, the deadline's next poll panics inside the handler's catch ("it is being
+       shutdown", tokio's check; run once on a copy of the tree) and the inner request is
+       answered 500, where its own timer would have gone on waiting. Whether the current runtime
+       is the timer's is not checked: the way to a runtime's identity is `Handle::current()`,
+       which clones the runtime's `Arc` (two atomic operations a waiting request on a count every
+       thread shares, the kind of thing this change is there to remove), and `Handle::id` is
+       behind `tokio_unstable` at the crate's minimum tokio, 1.44.
+    7. A test on tokio's paused clock that leaves a served connection open sees the clock move to
+       the kept timer's time when nothing else is due: after three requests of 40 ms under a
+       300 ms deadline the clock stood at 120 ms on the base while the connection sat idle and
+       went to 380 ms with the kept timer (the guide says what a test does about it).
+    8. On a runtime with no clock a handler that waits is answered 500, as before (making its
+       deadline's timer panics inside the handler's catch), and the connection goes on serving:
+       a deadline tells the connection it has waited only after it has made its own timer, and
+       the connection makes its timer inside a catch of its own, for a handler that made its
+       timer on a runtime it had entered.
+
+    Not chosen: leaving each deadline its own timer (the numbers above are against it). A pool
+    of timers a thread keeps, lent to whichever request waits (as fast: 17.4% to 18.5% more
+    requests a second in the same passes, and 20,599 instructions for the staged request that
+    does not wait where the kept timer's first form took 20,655 and the base 20,607; but a timer
+    must go back to a thread of the runtime it was made on, which needs `Handle::id`, unstable
+    before tokio 1.49 with the crate at 1.44, and up to 4,096 timers a thread outlive their
+    connections). A clock the watch thread sweeps instead of tokio's timer (19.6% and 20.7% more,
+    the most of any, since no deadline touches the wheel at all; but a deadline then fires up to
+    two of the clock's ticks late, a second each at the default header timeout, tokio's paused
+    test clock no longer moves it, and a request polled outside a connection still needs tokio's
+    timer, so there would be two mechanisms). Making the connection's timer only once a second
+    request of its has waited (the connection for each request then costs 155 and 156
+    instructions more instead of 453 and 448, and the kept-alive request that waits the same
+    within 26; not chosen by a rule fixed before those counts, which asked that it bring that
+    request under 100 over the base for the third state it adds, and the wrapper alone is 33 to
+    57 of them; it is the remedy if the cycle run finds the connection for each request over its
+    margin). An `Arc` slot a connection, reached through what the connection already lends
+    its requests for the peer's address (no connection numbers, no states and no wrapper, and a
+    deadline could give the timer back from any task; but an allocation for every connection,
+    also one that never waits, about four uncontended atomic operations a waiting request, and a
+    stored runtime handle to make the timer on the right runtime; not built or measured).
+    Turning on tokio's timer for each
+    worker (`enable_alt_timer`): behind `tokio_unstable` in 1.54.1, and the runtime is the app's
+    to build, not `serve`'s.
+
+    Stands on: platform (tokio 1.54.1, the version in `Cargo.lock`: the timer wheel of a runtime
+    has one lock, which `Sleep`'s first registration and its drop take, and `Sleep::reset` to a
+    time not earlier than a timer still set is a compare-and-swap that takes none, the timer
+    driver moving the entry when it reaches the old time; at tokio 1.44.0, the least the crate
+    allows, `reset` is the same but the wheel is in shards, each with its own lock under a shared
+    read lock, so threads queue there less and the gain measured here is 1.54.1's, not measured
+    at 1.44); bet (connections that serve handlers that wait mostly serve more than one request,
+    so the timer a connection makes is used; a proxy that opens a connection for each request
+    pays cost 2 instead, and an app whose requests arrive that way has not been measured in
+    cycles yet; and the one wake of an idle connection and the 112 bytes are cheap beside what a
+    connection already costs); measured (requests a second and p99, the base `be1192a7b` against
+    the change's first form, `69663386e`, in two passes and its form at `4c6cdf4ad` in four, one
+    48-core machine, a Xeon Platinum 8280, Linux 7.0, tokio 1.54.1 and hyper 1.13.0 as each image
+    resolved them, the benchmark app having no lock file of its own; instructions a request,
+    main at `56432f2fc` against the change, callgrind 3.24, tokio 1.54.1 and hyper 1.12.0; the
+    deadline's lateness; the timer's size; the paused clock; the shut-down runtime; every run's
+    result and scripts under the tag `evidence/deadline-timer`); platform (hyper 1.12.0's HTTP/1
+    server polls one request's future at a time, inside the connection's own poll, and reads no
+    later request's head while it answers; the code does not need that to be right, since a
+    deadline that finds the timer taken makes its own, only to be worth having); reasoned (the
+    connection makes its timer in its own poll, so the timer is of the runtime that polls the
+    connection whatever a handler had entered; a timer goes back only under its connection's
+    number and only while that connection is being polled, so no thread holds one between polls
+    and no connection gets another's; what a poll changed on the thread is put back when the
+    poll ends, also by a panic, so a connection polled inside another's poll leaves the outer
+    one's timer in place; a deadline that takes the timer sets and polls it in the same call, so
+    its waker is registered before the timer can fire; and every path that is not the common one
+    is what every deadline did before); value (Fast, and proven fast: handlers that wait no
+    longer queue on one lock; Verified, not assumed: the costs above are counted, and the cycle
+    run reads the requests that gain nothing, README Values).
+
+    Revisit when: tokio's timer for each worker (`enable_alt_timer`) is stable and the default,
+    or tokio's wheel otherwise stops taking one lock for a timer made and dropped, which leaves
+    this module nothing to save and it is deleted; `Sleep::reset` to a later time takes a lock;
+    Corten serves HTTP/2 itself, where a connection answers many requests at once and one timer
+    a connection serves one of them; a cycle run finds a connection for each request whose
+    handler waits over its +1% margin, which asks for the timer made at the second waiting
+    request; an app is found whose handlers serve requests on a runtime of their own under a
+    server it shuts down first, which asks for the check cost 6 leaves out; or a run on fewer
+    cores, or at tokio 1.44, shows no gain where apps run.
+
+    Last checked: 2026-11-24, requests a second, p99 and lateness on `be1192a7b`, `69663386e` and
+    `4c6cdf4ad`, and instructions, the timer's size, the paused clock and the shut-down runtime
+    on `56432f2fc` and `75ded4019`, results under the tag `evidence/deadline-timer`;
+    2026-11-24, tokio 1.54.1 (`Cargo.lock`) and tokio 1.44.0 read for the wheel's locks and
+    `Sleep::reset`, and hyper 1.12.0 (`Cargo.lock`) for one request at a time.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
