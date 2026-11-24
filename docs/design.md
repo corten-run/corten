@@ -9531,7 +9531,7 @@ rules something out.
     cold loads in one round, historical r16; views taking over 1,000 server-rendered rows in
     10.2 ms from the parser finishing to ready, less the rendering of any long frame recorded in
     between, median of 30 loads, and the first click on a taken-over row updating the DOM in
-    1.4 ms, the median of 15 in the slower of two rounds, both Chromium 156, round browser-4);
+    1.4 ms, the median of 30 fresh loads, both Chromium 156, round browser-4);
     platform (Windows 11 includes the Evergreen WebView2 Runtime and Microsoft has installed it
     on eligible Windows 10 devices, WKWebView is part of macOS's WebKit framework,
     and Linux distributions package WebKitGTK, whose current stable release is 2.54.3); platform
