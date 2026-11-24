@@ -325,9 +325,11 @@ stylesheet the patch links until the runtime has read the navigation's answer, a
 the page did not swap while it was held and that the browser requested it once while it was
 held. It runs twice: once the load succeeds, and the page swaps in with the area's rules applied,
 the stylesheet requested once in all; once it fails, and the page loads in full, as a navigation
-whose own stylesheet fails does, which may request the stylesheet again. A step of it that does
-not end in time fails the check and closes its page. Only the failed load tells a navigation
-that shares the load from one that took the patch's link for a loaded stylesheet whatever the
+whose own stylesheet fails does, which may request the stylesheet again. Its steps before the
+stylesheet is let go share 15 seconds, and each arm's steps after it 10; a step that fails or
+runs out of that time fails the check, no page work starts after it, and its page is closed.
+Only the failed load tells a navigation that shares the load from one that took the patch's link
+for a loaded stylesheet whatever the
 page's handler modules do, since those also hold the swap: with a module held past the
 stylesheet, a runtime that skips the shared load still swaps in styled, but on the failed load it
 swaps in unstyled instead of loading in full.
