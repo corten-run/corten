@@ -313,7 +313,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                 ),
               ).catch((/** @type {unknown} */ e) => (e instanceof Error ? e.message.split("\n")[0] : String(e)));
               if (cancelled) stopped = cancelled;
-              else if (!(await pollFor(5000, async () => failedShut))) stopped = "the held read did not fail while held within 5 s";
+              // Its failure's event may come a moment after the navigation ends; "" is no answer yet.
+              else if (!(await pollFor(5000, async () => failedShut || undefined))) stopped = "the held read did not fail while held within 5 s";
               else if (failedShut !== "after") stopped = "the held read failed before the script replaced the address";
             }
           }
