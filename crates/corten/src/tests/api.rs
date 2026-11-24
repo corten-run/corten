@@ -742,7 +742,11 @@ async fn an_api_answers_the_same_whatever_mode_the_request_names() {
         let (status, headers, body) = call_with(router.clone(), "GET", "/items", mode, accept).await;
         assert_eq!((status, &body[..]), (StatusCode::OK, read), "the handler's Req reads the two headers: {mode:?} {accept:?}");
         let (missing, missing_headers, problem) = call_with(router.clone(), "GET", "/nope", mode, accept).await;
-        assert_eq!((missing, &problem[..]), (StatusCode::NOT_FOUND, r#"{"title":"Not Found","status":404}"#), "{mode:?} {accept:?}");
+        assert_eq!(
+            (missing, &problem[..]),
+            (StatusCode::NOT_FOUND, r#"{"title":"Not Found","status":404}"#),
+            "{mode:?} {accept:?}"
+        );
         answers.push((said(&headers), said(&missing_headers)));
     }
     assert_eq!(answers[0].1[0].as_deref(), Some("application/problem+json"));
