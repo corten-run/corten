@@ -1,0 +1,3 @@
+    Finished `release` profile [optimized] target(s) in 0.09s
+
+corten: the release build finished. An app binary it built (in target/release unless Cargo's configuration moves it) is the whole deploy: the static files are compiled into it (see Dockerfile).

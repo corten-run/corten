@@ -1,0 +1,7 @@
+item: 200, coding none, text/html; charset=utf-8, body 9793 to 9793 bytes
+item-zstd: 200, coding zstd, text/html; charset=utf-8, body 2250 to 2250 bytes
+item-br: 200, coding br, text/html; charset=utf-8, body 2476 to 2476 bytes
+home: 200, coding none, text/html; charset=utf-8, body 1203 to 1203 bytes
+home-zstd: 200, coding zstd, text/html; charset=utf-8, body 568 to 568 bytes
+home-br: 200, coding br, text/html; charset=utf-8, body 589 to 589 bytes
+json: 200, coding none, application/json, body 8831 to 8831 bytes
