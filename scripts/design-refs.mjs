@@ -63,12 +63,14 @@ export function cited(text) {
  * The problems with the commits cited at `found` (`at` is `file:line`) in the clone at `root`:
  * one for a shallow clone, which cannot show them, or one for each citation that writes Corten's
  * commit as a repository's, names no commit on HEAD's history or under an evidence tag, or starts
- * more than one's name, and then how to fetch the evidence tags.
- * @param {string} root @param {{ at: string, sha: string, as?: string }[]} found @returns {string[]}
+ * more than one's name, and then how to fetch the evidence tags. Git runs with `env`, by default this
+ * process's environment, which a test passes without the caller's GIT_DIR to read its own repository.
+ * @param {string} root @param {{ at: string, sha: string, as?: string }[]} found
+ * @param {NodeJS.ProcessEnv} [env] @returns {string[]}
  */
-export function unresolved(root, found) {
+export function unresolved(root, found, env = process.env) {
   if (found.length === 0) return [];
-  const git = (/** @type {string[]} */ args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: "pipe", maxBuffer: 1 << 26 });
+  const git = (/** @type {string[]} */ args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: "pipe", maxBuffer: 1 << 26, env });
   /** @type {string[]} */
   const problems = [];
   const own = found.filter((c) => !c.as);

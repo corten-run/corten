@@ -61,29 +61,31 @@ export function selectKernel(paths) {
   return paths === undefined || paths.some(path => matches(path, kernelInputs));
 }
 
-function changedPaths(base, head, cwd) {
+function changedPaths(base, head, cwd, env) {
   // Keep both sides of a move and don't hide gitlinks from source-custody checks.
   return execFileSync("git", ["diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", base, head, "--"], {
-    cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
+    cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env,
   }).split("\0").filter(Boolean);
 }
 
-export function eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA, PUSH_BEFORE }, cwd) {
+// Git runs with `env`, by default this process's environment; a test passes one without the caller's GIT_DIR to
+// read its own repository.
+export function eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA, PUSH_BEFORE }, cwd, env = process.env) {
   const sha = /^[0-9a-f]{40}$/;
   if (GITHUB_EVENT_NAME === "pull_request") {
     assert.match(GITHUB_SHA ?? "", sha);
     // Actions tests the synthetic merge, including any base-side path moves.
-    return changedPaths(`${GITHUB_SHA}^1`, GITHUB_SHA, cwd);
+    return changedPaths(`${GITHUB_SHA}^1`, GITHUB_SHA, cwd, env);
   }
   if (GITHUB_EVENT_NAME === "push") {
     assert.match(GITHUB_SHA ?? "", sha);
     if (sha.test(PUSH_BEFORE ?? "") && PUSH_BEFORE !== "0".repeat(40)) {
-      const base = spawnSync("git", ["cat-file", "-e", `${PUSH_BEFORE}^{commit}`], { cwd, stdio: "ignore" });
+      const base = spawnSync("git", ["cat-file", "-e", `${PUSH_BEFORE}^{commit}`], { cwd, stdio: "ignore", env });
       if (base.error) throw base.error;
       // A force-push's old tip is not an ancestor; its tree diff can hide changes.
-      const ancestor = base.status === 0 && spawnSync("git", ["merge-base", "--is-ancestor", PUSH_BEFORE, GITHUB_SHA], { cwd, stdio: "ignore" });
+      const ancestor = base.status === 0 && spawnSync("git", ["merge-base", "--is-ancestor", PUSH_BEFORE, GITHUB_SHA], { cwd, stdio: "ignore", env });
       if (ancestor?.error) throw ancestor.error;
-      if (ancestor?.status === 0) return changedPaths(PUSH_BEFORE, GITHUB_SHA, cwd);
+      if (ancestor?.status === 0) return changedPaths(PUSH_BEFORE, GITHUB_SHA, cwd, env);
     }
     console.warn("Push base unavailable; selecting every benchmark job.");
   }

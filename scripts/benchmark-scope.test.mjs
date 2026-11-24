@@ -303,10 +303,13 @@ test("every local module used by native kernel controls selects the kernel job",
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), "corten-benchmark-scope-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  // Git's environment for the fixture, in process and for the scope script: the caller's GIT_DIR and the like would
+  // choose another repository.
+  const env = fixtureGitEnv();
   const git = (...args) => execFileSync("git", [
     "-c", "core.autocrlf=false", "-c", "user.name=Catalog Fixture", "-c", "user.email=fixture@example.invalid",
     "-c", "commit.gpgsign=false", ...args,
-  ], { cwd, encoding: "utf8", env: fixtureGitEnv() }).trim();
+  ], { cwd, encoding: "utf8", env }).trim();
   git("init", "-q", "-b", "main");
   const write = (path, text = "fixture\n") => {
     const file = join(cwd, path);
@@ -327,13 +330,13 @@ function fixture(t) {
     git("merge", "--quiet", "--no-ff", "--no-edit", head);
     return git("rev-parse", "HEAD");
   };
-  return { cwd, git, write, commit, rename, merge };
+  return { cwd, env, git, write, commit, rename, merge };
 }
 
 const prEvent = GITHUB_SHA => ({ GITHUB_EVENT_NAME: "pull_request", GITHUB_SHA });
 
 test("PR diff excludes base-only changes and includes both sides of an app rename", t => {
-  const { cwd, git, write, commit, rename, merge } = fixture(t);
+  const { cwd, env: gitEnv, git, write, commit, rename, merge } = fixture(t);
   const before = "bench/fullstack/apps/rails/old file";
   const after = "bench/fullstack/apps/nextjs/new file";
   write(before);
@@ -343,18 +346,18 @@ test("PR diff excludes base-only changes and includes both sides of an app renam
   git("switch", "--quiet", "--detach", fork);
   rename(before, after);
   const event = prEvent(merge(commit()));
-  const paths = eventPaths(event, cwd);
+  const paths = eventPaths(event, cwd, gitEnv);
   assert.deepEqual(paths.sort(), [after, before]);
 
   const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
   const output = join(cwd, "output");
-  const env = { ...process.env, ...event, GITHUB_OUTPUT: output, PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS };
+  const env = fixtureGitEnv({ ...event, GITHUB_OUTPUT: output, PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS });
   for (const job of ["catalog", "evidence"]) execFileSync(process.execPath, [script, job], { cwd, env });
   assert.equal(readFileSync(output, "utf8"), 'apps=["nextjs","rails"]\njson=false\nrun=true\nkernel=true\n');
 });
 
 test("a base-side rename scopes the edited file where parity actually tests it", t => {
-  const { cwd, git, write, commit, rename, merge } = fixture(t);
+  const { cwd, env, git, write, commit, rename, merge } = fixture(t);
   const before = "bench/fullstack/apps/express/driver.mjs";
   const after = "bench/workloads/driver.mjs";
   write(before);
@@ -366,13 +369,13 @@ test("a base-side rename scopes the edited file where parity actually tests it",
   const head = commit();
   const merged = merge(head);
   assert.equal(git("diff", "--name-only", base + "..." + head), before);
-  const paths = eventPaths(prEvent(merged), cwd);
+  const paths = eventPaths(prEvent(merged), cwd, env);
   assert.deepEqual(paths, [after]);
   assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
 });
 
 test("a push to main scopes Catalog by its push diff, and an unknown base selects everything", t => {
-  const { cwd, write, commit } = fixture(t);
+  const { cwd, env: gitEnv, write, commit } = fixture(t);
   write("initial");
   const base = commit();
   write("docs/guide/views.md");
@@ -383,8 +386,8 @@ test("a push to main scopes Catalog by its push diff, and an unknown base select
   const output = join(cwd, "output");
   const scope = (PUSH_BEFORE, GITHUB_SHA) => {
     writeFileSync(output, "");
-    const env = { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_SHA, PUSH_BEFORE, GITHUB_OUTPUT: output,
-      PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS };
+    const env = fixtureGitEnv({ GITHUB_EVENT_NAME: "push", GITHUB_SHA, PUSH_BEFORE, GITHUB_OUTPUT: output,
+      PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS });
     execFileSync(process.execPath, [script, "catalog"], { cwd, env, stdio: ["ignore", "ignore", "ignore"] });
     return readFileSync(output, "utf8");
   };
@@ -396,12 +399,12 @@ test("a push to main scopes Catalog by its push diff, and an unknown base select
   // A rewound or rewritten push compares with a base that is not its ancestor.
   assert.equal(scope(framework, docs), all);
   for (const GITHUB_EVENT_NAME of ["workflow_dispatch", "schedule"]) {
-    assert.deepEqual(selectScope(allApps, eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA: framework }, cwd)), { apps: allApps, json: true });
+    assert.deepEqual(selectScope(allApps, eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA: framework }, cwd, gitEnv)), { apps: allApps, json: true });
   }
 });
 
 test("PR and multi-commit push diffs see inputs beyond the hosted path-filter limit", t => {
-  const { cwd, git, write, commit, merge } = fixture(t);
+  const { cwd, env, git, write, commit, merge } = fixture(t);
   write("initial");
   const base = commit();
   git("switch", "--quiet", "--detach", base);
@@ -413,7 +416,7 @@ test("PR and multi-commit push diffs see inputs beyond the hosted path-filter li
   const head = commit();
   const events = [prEvent(merge(head)), { GITHUB_EVENT_NAME: "push", GITHUB_SHA: head, PUSH_BEFORE: base }];
   for (const event of events) {
-    const paths = eventPaths(event, cwd);
+    const paths = eventPaths(event, cwd, env);
     assert.equal(paths.length, 303);
     assert.equal(paths[301], input);
     assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
@@ -421,7 +424,7 @@ test("PR and multi-commit push diffs see inputs beyond the hosted path-filter li
     assert.equal(selectKernel(paths), true);
   }
   for (const before of ["0".repeat(40), "a".repeat(40)]) {
-    const paths = eventPaths({ ...events[1], PUSH_BEFORE: before }, cwd);
+    const paths = eventPaths({ ...events[1], PUSH_BEFORE: before }, cwd, env);
     assert.equal(selectEvidence(paths), true);
     assert.equal(selectKernel(paths), true);
   }

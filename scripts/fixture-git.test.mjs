@@ -87,21 +87,45 @@ test("a shallow clone ignores an inherited GIT_SHALLOW_FILE and leaves that file
   assert.equal(readFileSync(shallow, "utf8"), "");
 });
 
-test("design-refs' fixture setup, run under a caller's GIT_DIR, leaves the caller's config byte for byte", (t) => {
-  const s = scratch(t), before = s.files(), here = fileURLToPath(new URL(".", import.meta.url)), trace = join(s.dir, "trace2.txt");
-  // Trace2 is not a selector, so the fixture's own Git commands keep it and record that its setup ran.
+/**
+ * Runs `file`'s tests (those matching `patterns`, or all) in a child whose own environment selects a
+ * scratch caller with a commit of its own, so a fixture read that fell back to the inherited selectors
+ * would read that history rather than the fixture's and fail. Asserts every selected test passed, the
+ * fixture's setup ran Git (`commands`, recorded by GIT_TRACE2, which is not a selector) and every
+ * scratch config is byte for byte unchanged.
+ * @param {import("node:test").TestContext} t @param {string} file @param {number} count
+ * @param {string[]} commands @param {string[]} [patterns]
+ */
+function nested(t, file, count, commands, patterns = []) {
+  const s = scratch(t), here = fileURLToPath(new URL(".", import.meta.url)), trace = join(s.dir, "trace2.txt");
+  writeFileSync(join(s.caller, "caller.txt"), "caller\n");
+  const own = runner(s.caller, clean());
+  own("add", "caller.txt");
+  own("-c", "user.name=Caller", "-c", "user.email=caller@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "caller");
+  const before = s.files();
   const env = { ...s.callerEnv, GIT_TRACE2: trace };
   delete env.NODE_TEST_CONTEXT;
-  // Its before hook makes and commits to its repository; the one test it runs needs no Git.
-  const run = spawnSync(process.execPath, ["--test", "--test-reporter=tap", "--test-name-pattern=^a code span", join(here, "design-refs.test.mjs")],
-    { cwd: here, env, encoding: "utf8", windowsHide: true, timeout: 120000 });
+  const run = spawnSync(process.execPath, ["--test", "--test-reporter=tap", ...patterns.map((p) => `--test-name-pattern=${p}`), join(here, file)],
+    { cwd: here, env, encoding: "utf8", windowsHide: true, timeout: 300000 });
   assert.equal(run.error, undefined);
   assert.equal(run.status, 0, run.stdout + run.stderr);
-  for (const line of ["# tests 1", "# pass 1", "# fail 0", "# cancelled 0"]) assert.match(run.stdout, new RegExp(`^${line}$`, "m"));
-  assert.ok(existsSync(trace), "the fixture's before hook must have run Git");
-  const commands = new Set([...readFileSync(trace, "utf8").matchAll(/\bcmd_name (\S+)/g)].map(([, name]) => name));
-  for (const name of ["init", "commit", "tag"]) assert.ok(commands.has(name), `the fixture's before hook must have run git ${name}`);
+  for (const line of [`# tests ${count}`, `# pass ${count}`, "# fail 0", "# cancelled 0"]) assert.match(run.stdout, new RegExp(`^${line}$`, "m"));
+  assert.ok(existsSync(trace), "the fixture's setup must have run Git");
+  const ran = new Set([...readFileSync(trace, "utf8").matchAll(/\bcmd_name (\S+)/g)].map(([, name]) => name));
+  for (const name of commands) assert.ok(ran.has(name), `the fixture's setup must have run git ${name}`);
   assert.deepEqual(s.files(), before);
+}
+
+test("every design-refs test, run under a caller's GIT_DIR, reads its own fixture and leaves the caller alone", (t) => {
+  // Its before hook makes, commits to and tags its repository; four of its six tests read that repository.
+  nested(t, "design-refs.test.mjs", 6, ["init", "commit", "tag", "rev-list"]);
+});
+
+test("benchmark-scope's fixture tests, run under a caller's GIT_DIR, read their own fixtures and leave the caller alone", (t) => {
+  // The four tests that make a repository, diff it in process and run the scope script on it; the
+  // others read the checkout under test, which that GIT_DIR replaces on purpose.
+  nested(t, "benchmark-scope.test.mjs", 4, ["init", "commit", "merge", "diff"],
+    ["^PR diff excludes base-only changes", "^a base-side rename scopes", "^a push to main scopes Catalog", "^PR and multi-commit push diffs"]);
 });
 
 test("every variable that chooses a repository or adds config goes, whatever its case, and overrides win", () => {
