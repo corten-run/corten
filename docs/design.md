@@ -9051,16 +9051,18 @@ rules something out.
     and under a smoothed resample of the A/A's own medians, each reading centred on its median.
     If Shapiro-Wilk or Anderson-Darling rejects normality at 5%, only the smoothed resample is
     kept; otherwise both are. The K the plan declares is then checked at that K itself: under each
-    model kept, for each workload it covers, the chance is at most 5%, read with `size.mjs`'s
-    exported functions at that K from 200,000 draws on seed 1983 as the unrounded count of failing
-    draws against 5% (at most 10,000). The one-decimal rates it prints and its "K for at most 5%"
+    model kept, for each workload it covers, the chance is at most 5%, read in the kit's `kit/`
+    with `sizePilot(readPilot(dir), { K: [K], draws: 200000, seed: 1983 })` from `size.mjs`, as
+    each kept model's count of failing draws in `rows` (`Math.round(rate * draws)`) against 5%,
+    at most 10,000. The one-decimal rates it prints and its "K for at most 5%"
     line illustrate and do not decide, and the rate is a model estimate, not a calibration shown
     on a run. Neither a model's smallest
     such K rounded up nor the largest of several workloads' smallest will do, since the bound is an
     order statistic whose rank moves in steps, so a larger K can fail more often than a smaller
     one: from the fourth run's medians below, as a model calculation with `size.mjs` (200,000
-    seeded draws each, not a run), the normal model fails in 4.5185% at 91 (the 54th of 91) and
-    5.4115% at 92 (the 55th), and the smoothed resample in 4.998% at 69 and 6.067% at 70. A plan may instead
+    seeded draws each, not a run), the normal model fails in 9,037 of 200,000 draws (4.5185%) at 91
+    (the 54th of 91) and 10,823 (5.4115%) at 92 (the 55th), and the smoothed resample in 9,996
+    (4.998%) at 69 and 12,134 (6.067%) at 70. A plan may instead
     declare a separate K for each workload. The K must also admit the two lists of pads the
     protocol asks for, 2K distinct multiples of 16 up to about 40,000 bytes whose q_i - p_i mod
     4096 take K distinct values: no K over 256 does, since 16-byte steps take 256 values mod 4096,
@@ -9311,7 +9313,10 @@ rules something out.
     (p = 0.751) and `705d14045`'s 46,551 with 159 (p = 0.209); head's 46,825 with 172 (p = 0.144)
     mixes its code with its layout, so says nothing of a pad on its own; and no drift of the padded
     costs in run order was detected (Spearman's rho -0.067, p = 0.335), which does not show there
-    was none. So for one exact base build and two near-base builds this run did not reproduce the
+    was none. Those rank and drift p-values are exploratory, not calibrated tests:
+    each rank sets an unpadded build's median of eight turns among single placements' costs, and
+    the drift shuffle takes the 200 costs as independent where each placement's two share one
+    place in the run order. So for one exact base build and two near-base builds this run did not reproduce the
     earlier pattern, padded builds under their unpadded one: none of the three offsets' intervals
     excludes zero, and each unpadded build sits among the 200 padded placements, though two of the
     three offsets (base's and `705d14045`'s) still point the earlier way and one the other. Head against its own pads is the exception: 7 of 8 cheaper
@@ -9464,7 +9469,8 @@ rules something out.
     6.12.117, a Xeon Platinum 8280, tag `evidence/placement-sizing-1999`), with its sizing and
     tests as the kit's `report.mjs` printed them from those results; 2026-11-24, the model
     failure rates at K = 69, 70, 91 and 92 from that tag's `results/aa-old` at `912199b97`, by
-    `node size.mjs ../results/aa-old --K 69,70,91,92` in its `kit/` (200,000 draws, seed 1983),
+    `sizePilot(readPilot("../results/aa-old"), { K: [69, 70, 91, 92], draws: 200000, seed: 1983 })`
+    from `size.mjs` in its `kit/`, each model's `Math.round(rate * draws)` in `rows`,
     and that its `pads.mjs` builds lists meeting the rule for every K from 5 to 254 and none from
     255 to 400.
 
