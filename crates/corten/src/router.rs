@@ -118,7 +118,7 @@ impl Endpoint for Giving {
 /// answer is given in its place, and the one it makes is kept ([`crate::kept`]). A page is filled
 /// here, as [`crate::middleware`] would after it, so what is kept is the page as it leaves the
 /// route. A `HEAD` the route answers with this handler is given the kept answer too, whose body
-/// the router drops, and what its handler makes for it is not kept ([`crate::kept::HeadOfGet`]).
+/// the router drops, and what its handler makes for it is not kept ([`MatchedPath::head_of_get`]).
 struct Keeping {
     shape: crate::kept::Shape,
     /// Of a route of whole bodies: whether any of the answers it made last was kept.
@@ -881,27 +881,25 @@ impl Dispatch {
     fn answer(&self, mut req: Request, edge: bool) -> RouterFuture {
         let mut fix = Fix::of(req.method(), edge);
         let path = req.uri().path();
-        let (route, allow, of_get, stages, matched) = match self.paths.at(path) {
+        let (route, allow, stages, matched) = match self.paths.at(path) {
             Ok(found) => {
                 let entry = &self.routes[*found.value];
-                let matched = MatchedPath::new(&entry.path, req.uri(), &found.params);
+                let mut matched = MatchedPath::new(&entry.path, req.uri(), &found.params);
                 // A segment without the text the route writes after its parameter is not the
                 // route's, whatever the method; no other route answers it either.
                 let (route, allow, of_get) = match entry.written {
                     Some(written) if !crate::route::routes_path(written, path) => (&self.not_found, None, false),
                     _ => entry.pick(req.method(), self),
                 };
-                (route, allow, of_get, entry.stages.as_ref(), Some(matched))
+                // Marked here, as the handler is chosen: a middleware may change the method after.
+                matched.head_of_get = of_get;
+                (route, allow, entry.stages.as_ref(), Some(matched))
             }
-            Err(_) => (&self.not_found, None, false, self.stages.as_ref(), None),
+            Err(_) => (&self.not_found, None, self.stages.as_ref(), None),
         };
         fix.allow = allow.cloned();
         if let Some(matched) = matched {
             req.extensions_mut().insert(matched);
-        }
-        // Marked here, as the handler is chosen: a middleware may change the method after this.
-        if of_get {
-            req.extensions_mut().insert(crate::kept::HeadOfGet);
         }
         let answering = match stages {
             Some(stages) => stages.clone().run(req, route),
@@ -1146,6 +1144,9 @@ pub struct MatchedPath {
     params: Ranges,
     /// The path matched, kept (a count on the request's own bytes, not a copy).
     path: PathAndQuery,
+    /// Whether the request was a `HEAD` the router gave the handler of the route's `GET` (its own,
+    /// or its `any` handler where it has neither a `HEAD` nor a `GET` one).
+    head_of_get: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1163,6 +1164,14 @@ impl MatchedPath {
     /// The request's path and query as they were when the router matched them.
     pub(crate) fn matched(&self) -> &PathAndQuery {
         &self.path
+    }
+
+    /// Whether the request was a `HEAD` when the router chose its handler, and that handler is
+    /// the one that answers the route's `GET`: the only `HEAD` a kept answer stands for
+    /// ([`crate::kept`]). One a middleware made a `HEAD` after the router chose another method's
+    /// handler is that handler's.
+    pub(crate) fn head_of_get(&self) -> bool {
+        self.head_of_get
     }
 
     #[inline]
@@ -1184,7 +1193,7 @@ impl MatchedPath {
         };
         // A URI with no path (`*`, an authority) matches no route, so it never has parameters.
         let path = uri.path_and_query().cloned().unwrap_or_else(|| PathAndQuery::from_static("/"));
-        MatchedPath { route: route.clone(), params, path }
+        MatchedPath { route: route.clone(), params, path, head_of_get: false }
     }
 
     fn ranges(&self) -> &[(u32, u32)] {

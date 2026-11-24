@@ -16,9 +16,9 @@
 //! ([`Unkept`]): it was never one that could be. One given a kept answer counts as a `GET` given
 //! one does, the answer read and its route found to have bodies worth asking for, since it was
 //! spared its handler as the `GET` is. Only a `HEAD` the router gave the handler of its route's
-//! `GET` is ([`HeadOfGet`]): a route's handler for `HEAD` alone gives no kept answer, the one
-//! kept being another handler's, and nor does another method's handler for a request a
-//! middleware made a `HEAD` after the router chose that handler.
+//! `GET` is ([`crate::router::MatchedPath::head_of_get`]): a route's handler for `HEAD` alone
+//! gives no kept answer, the one kept being another handler's, and nor does another method's
+//! handler for a request a middleware made a `HEAD` after the router chose that handler.
 //!
 //! While the store has room every such answer is kept. Once it is full, keeping an answer may
 //! drop another page, so an answer is kept then only when its URL was asked for before, as far
@@ -1021,7 +1021,8 @@ impl Answers {
 /// A request a kept answer can stand for: a `GET` that shows nothing about who is asking, for
 /// the whole document where the route answers a page, read as the handler would see it (after
 /// the app's middleware); or such a `HEAD` the router gave the route's `GET` handler
-/// ([`HeadOfGet`]), which a kept answer stands for and none is kept for.
+/// ([`crate::router::MatchedPath::head_of_get`]), which a kept answer stands for and none is
+/// kept for.
 pub(crate) struct Asked<'a> {
     answers: &'a Answers,
     signal: &'a crate::Signal,
@@ -1034,13 +1035,6 @@ pub(crate) struct Asked<'a> {
     /// A `HEAD`: given a kept answer, whose body the router drops, and none of its own kept.
     head: bool,
 }
-
-/// The mark on a `HEAD` the router gave the handler of its route's `GET` (the route's own, or its
-/// `any` handler where it has neither a `HEAD` nor a `GET` one), put on as it chose that handler.
-/// Only such a `HEAD` is given a kept answer: one a middleware made a `HEAD` after the router chose
-/// another method's handler is that handler's, which a kept `GET` answer does not stand for.
-#[derive(Clone, Copy)]
-pub(crate) struct HeadOfGet;
 
 /// What a request's headers say of whether a kept answer can stand for it, and what of them its
 /// key is made of.
@@ -1114,9 +1108,9 @@ impl<'a> Asked<'a> {
         let head = match *req.method() {
             http::Method::GET => false,
             // A `HEAD` asks for what its `GET` would answer (RFC 9110 section 9.3.2), with the
-            // same headers and no body, which the router drops after every stage: one the router
-            // gave the handler that answers the `GET`, as it chose it.
-            http::Method::HEAD if req.extensions().get::<HeadOfGet>().is_some() => true,
+            // same headers and no body, which the router drops after every stage. Only one the
+            // router gave the handler that answers the `GET` (below).
+            http::Method::HEAD => true,
             _ => return None,
         };
         let signal = req.extensions().get::<crate::Signal>()?;
@@ -1134,8 +1128,14 @@ impl<'a> Asked<'a> {
         let at = req.uri().path_and_query()?;
         // The URL the router matched: a route's parameters are read from the path as it was then
         // ([`crate::router::MatchedPath`]), so after a middleware changed the URI, the one the
-        // handler sees no longer names the page it makes.
-        if req.extensions().get::<crate::router::MatchedPath>().is_none_or(|matched| matched.matched() != at) {
+        // handler sees no longer names the page it makes. And a `HEAD` the router gave this
+        // handler as it chose it, as the handler of the route's `GET`: a middleware that made
+        // another method's request a `HEAD` after that leaves it that method's handler's.
+        if req
+            .extensions()
+            .get::<crate::router::MatchedPath>()
+            .is_none_or(|matched| matched.matched() != at || (head && !matched.head_of_get()))
+        {
             return None;
         }
         let hash = answers.0.keys.hash_one(at.as_str());
