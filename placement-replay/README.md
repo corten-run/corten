@@ -1,16 +1,17 @@
-# What a pad moves in a build that links code aligned beyond 16 bytes, and the band
+# What a pad moves in a build that links code aligned beyond 16 bytes
 
-Scripts and their output behind two rules in design Choice 72 and Pull requests (item 2): how a
-placement run checks a build that links C code, and the band a single build is read against on
-a setup with no recorded spread. Read and run on 2026-11-24. Nothing here counted a cycle: these
-are layouts, read from recorded files and from links run again, and placement medians read from
-earlier runs' reports.
+Scripts and their output behind one rule in design Choice 72 and Pull requests (item 2, the
+placement plan's fifth point): how a placement run checks a build that links code aligned beyond
+16 bytes. Read and run on 2026-11-24. Nothing here counted a cycle: these are layouts, read from
+recorded files and from links run again, and placement medians read from earlier runs' reports.
 
-This commit's parent holds the first version of these files. What changed: `replay.mjs` also
-checks every symbol and the crates named as a side's own, and prints a side's facts;
-`negative.sh` and `results/negative.txt`, which the first version's README named and its commit
-did not hold, are here; `results/maps.sha256` has the SHA-256 of each of the 92 maps;
-`align-flags.sh` tries eleven sets of flags; and `band.mjs` is new.
+This commit's two ancestors hold earlier versions of these files. The second added to the
+first: `replay.mjs` also checks every symbol and the crates named as a side's own, and prints a
+side's facts; `negative.sh` and `results/negative.txt`, which the first version's README named
+and its commit did not hold; `results/maps.sha256`, the SHA-256 of each of the 92 maps;
+`align-flags.sh` with eleven sets of flags; and `band.mjs`. This commit changes this README
+alone: it no longer speaks for a band, which the Choice does not have (Not cited, below), and it
+says what the head's map shows of its input files.
 
 Not here: the 90 placements' maps. They are 319 MB (about 27 MB under xz, by the rate it had
 reached a quarter of the way through), so only the two unpadded links' maps are kept.
@@ -98,10 +99,22 @@ that is in its place, and the head read with a crate named as its own that has f
 the first section aligned beyond 16 bytes. The fifth is one the first version of `replay.mjs`
 passed (`results/negative-v1.txt`).
 
-## The band
+Whose a function is (`results/head.map.gz`): of the 3,483 input sections of the head's `.text`,
+3,440 come from 41 objects named for the program and one code unit each
+(`probe.addr2line-<hash>.addr2line.<hash>-cgu.0.rcgu.o`), 41 from two libraries (libdeflate's
+39 and the compiler built-ins' 2) and 2 from the C start files. A unit holds other crates'
+functions beside its own crate's: the first section from addr2line's unit holds alloc's
+`RawVecInner::reserve::do_reserve_and_handle`. So `replay.mjs` decides whether a function is
+one of a crate named with `--own` by its symbol, the mangled name or the printed one; its third
+test, an input file that is the crate's own library, matches nothing in these links.
 
-`band.mjs` reads the lowest and the highest placement median of each A/A across placements from
-the reports of the three runs design Choice 72 records (`results/placements.json` under the tags
+## Not cited: the band
+
+`band.mjs` and `results/band.txt` were written for a rule that was drafted and set aside: a
+band that a single build would be read against on a setup with no recorded spread. Design
+Choice 72 has no such rule and cites neither file. They are kept as what was read. `band.mjs`
+reads the lowest and the highest placement median of each A/A across placements from the
+reports of the three runs design Choice 72 records (`results/placements.json` under the tags
 `evidence/ee7b0b41` and `evidence/0c0c599c`, and the three `placements-<workload>.json` under
 `evidence/stage-header-checks-2002`). `results/band.txt` is what it printed: seven A/As, the
 lowest of all -5.47% (the third run's on its mounted API, 60 placements) and the highest +4.38%
