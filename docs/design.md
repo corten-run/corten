@@ -7357,31 +7357,55 @@ rules something out.
     port the build picked, so the build is told that port by an argument of the option's own,
     `--port <port>` before `--profile-from`: the copy is looked for there, and it and the
     command are given that port in `PORT`. A `PORT` in the build's own environment is not
-    read, with the argument or without, so a build that names no port is the build it was. A
+    read, with the argument or without, so a build that names no port picks its port as it
+    did. Three things changed with the argument for every profiled build, one that names no
+    port included: an app that did not listen is told where it was looked for and of `--port`;
+    a look whose connection met itself is no longer taken for the copy listening, which a
+    picked port, always in the range the system gives outgoing connections, could be; and the
+    copy's exit is read after each look of the wait, not before it, so a copy that exited
+    during a look is not taken for what accepted. A
     named port that something already listens on is refused, before the first build and again
     before the copy starts, since that listener would answer the wait and the command in the
     copy's place; a port the build picks is one nothing listened on when it was picked. The
     first look comes after the target directory's lock is taken, so a second build there that
     names the port the first one's copy holds is told that a build is running, not to stop
-    what listens. The
+    what listens; a refusal at that look has built nothing and leaves the lock's file, in a
+    target directory it makes when there was none. The
     wait is a connection to either loopback address at that one port, and an app's other
     listeners are its command's to wait for. A connection does not say whose socket accepted
     it: a copy that has exited by then is not taken for the listener, and a program that takes
     the port between the build's last look and the copy's own bind is, a window that two more
     looks at a named port narrow and that the build cannot close without knowing the copy's
-    sockets. The copy cannot bind the same address then, and one that
+    sockets. The copy cannot bind the same address then, unless both sockets set
+    `SO_REUSEPORT`, as two instances of one app may: the system then shares the command's
+    connections between the two, and the look after the copy stops the build only if the
+    other is still listening, which is reasoned from the measured bind and was not run through
+    a build. A copy that
     has exited by the time the command ends stops the build. One still running when the
     command ends (still starting, or one that does not exit when it cannot bind) is stopped as
     any copy is, whatever status it then leaves with, since an app
     may exit non-zero on `SIGTERM` by design. So the build looks at a named port when the
-    command has ended and before it stops the copy, and stops when nothing accepts there: a
-    copy that listens on the port it was named would, so this one does not, and whatever
-    answered the wait has left. It looks once more after the copy has exited, and stops when
-    something listens there, which is not the copy.
-    One timing is left: another program takes the named port in that window and answers the
-    wait and the command, the copy is still running when the command ends, and that program
-    stops listening between the look before the copy is stopped and the copy's exit. The build
-    then succeeds, and its release is built from a profile of a copy that served nothing. Each
+    command has ended and before it stops the copy, and stops when nothing accepts at either
+    loopback address there: a copy that listens on the port it was named would. That look
+    holds no guarantee of its own and is kept: the timing it catches was reproduced (a program
+    that answered the wait and left while the command ran, the copy still starting when the
+    command ended), its wrong stop needs a serving copy's queue to be full after the command
+    has ended, and what it does not see is stated below. The build looks once more after the
+    copy has exited, and stops when something listens there, which is not the copy.
+    What the two looks establish is that something accepted a connection on a loopback address
+    of the port when the command ended, and that nothing listens there once the copy has
+    exited. Neither shows that the copy is what answered the command, and no look can. Three
+    timings end with the build succeeding and its release built from a profile of a copy the
+    command never reached. In the first, another program takes the named port in that window,
+    answers the wait and the command and leaves while the command runs, and the copy, still
+    starting or trying its bind again, binds the port before the command ends. In the second,
+    a program on the other loopback address of the named port, beside a copy bound to its own,
+    answers a command that asks that address (as one that asks `localhost` may) and leaves
+    before the copy has exited, which needs no race with the copy's start. In the third,
+    another program takes the port in that window and answers the wait and the command, the
+    copy is still running when the command ends, and the program leaves between the look at
+    the command's end and the copy's exit. The first two were reproduced, and tests hold them
+    as what the build does, to change when the gap is closed; the third is reasoned. Each
     look has a cost of its own, a build stopped whose profile was good: the one before the
     copy is stopped, when the queue of connections a serving copy has not accepted is full at
     that instant; the one after it, when a program begins to listen on the port once the copy
@@ -7442,7 +7466,7 @@ rules something out.
     this one is read, in the same change: the two commands read it differently (`--port=<n>`
     is build's alone, and `dev` passes its value on to the app unchecked, a `0` included,
     which the app binds as a free port), and that is left for a change of its own; a copy's status after `SIGTERM` read as the
-    build's failure, which would stop the build in the timing left above when the copy that
+    build's failure, which would stop the build in the third timing above when the copy that
     could not bind exits with an error's status, and would refuse an app that exits non-zero on
     `SIGTERM` by design with its profile written; an argument that skips the wait and leaves
     it to the command, which puts a wait in every such app's script and has nothing look for
@@ -7475,7 +7499,10 @@ rules something out.
     answers a look until the queue is full and reads as a free port after, 129 looks answered
     and the 130th not, in each of two runs, by a standard-library listener on Linux 6.18; two
     sockets listen on one port at the two loopback addresses, as a Corten app's own do, so a
-    copy bound to one serves beside another program's listener on the other; Linux
+    copy bound to one serves beside another program's listener on the other; two sockets that
+    both set `SO_REUSEPORT` listen on one address and port and are each given some of its
+    connections, 20 and 20, 21 and 19, and 21 and 19 of 40 in three runs on Linux 6.18, where a
+    socket without the option is refused the address; Linux
     gives an outgoing connection a port from a range, 32768 to 60999, so that a connection to
     a port in the range that nothing listens on is, once in some tens of thousands, given that
     port as its own and connects to itself); reasoned (a connection cannot tell the copy from
@@ -7484,7 +7511,10 @@ rules something out.
     the copy has exited is not the copy, unless the copy left its listener to a child that
     outlives it; a copy that listens on the named port accepts a connection there while its
     queue has room, so a port nothing accepts on while the copy runs is one the copy does not
-    listen on, or one whose queue is full; a `PORT` in the environment is set for running the app, so a build that read it
+    listen on, or one whose queue is full; what accepts on the port when the command has ended
+    need not be what accepted while it ran, and a look is answered at one loopback address where the
+    command may have asked the other, so neither later look shows that the copy answered the
+    command; a `PORT` in the environment is set for running the app, so a build that read it
     would be changed, or refused, by a setting made for something else; a
     separate target directory is the only place an instrumented build cannot be mistaken for
     the release; a refusal before the first build costs nothing, where a dropped linker flag
@@ -7502,9 +7532,12 @@ rules something out.
 
     Revisit when: an app needs the option whose only listener is not a TCP port (a Unix
     socket), whose port is bound on no loopback address, or whose command cannot tell when its
-    other listeners are ready; a command's requests are found to have gone to a program that
-    took the named port as the copy started, and the build to have succeeded (the timing left
-    above), or a build whose copy served is found stopped: by the look before the copy is
+    other listeners are ready; a command's requests are found to have gone to another program
+    on the named port, and the build to have succeeded, by any of the three timings above (a
+    program that took the port as the copy started and left before the copy bound it, one on
+    the other loopback address that the command asked and that left before the copy had
+    exited, or one that left between the two later looks), or to have been shared with a
+    program that set `SO_REUSEPORT` beside the copy, or a build whose copy served is found stopped: by the look before the copy is
     stopped with the copy's queue full, by the look after the copy for a listener that came
     after it, or by that look for a listener on the other loopback address that the command
     never reached; builds are found refused on a named port for a copy that a cancelled build left
@@ -7566,7 +7599,22 @@ rules something out.
     where a build whose looks went to `127.0.0.1` alone ended with its release built, in one;
     and the tests the entry for Linux 6.8 lists passed here in each of three runs, and in one
     more with their output shown the listener on `[::1]` alone was seen and a connection met
-    itself and was not taken for a listener, neither test returning without testing).
+    itself and was not taken for a listener, neither test returning without testing);
+    2026-11-24, what the two later looks do not see, two sockets that share an address, and
+    what a refusal at the first look leaves, on rustc and Cargo 1.100.0 on Linux 6.18 (by the
+    command's tests, in each of nine runs, a program that took the named port once the copy
+    had started, answered the wait and the command's one request and left, the copy binding
+    the port before the command ended, ended with the release built, and so did a program on
+    `[::1]` that answered the one request of a command beside a copy bound on `127.0.0.1` and
+    left before the command ended; in one run each, the first build stopped where the program
+    stayed and where the copy had not bound when the command ended, the second stopped where
+    the program stayed, and a request sent to the copy's own address was answered by the
+    copy; by a script of plain sockets on Python 3.13.5, two listeners that set
+    `SO_REUSEPORT` both bound `127.0.0.1` at one port and were given 20 and 20, 21 and 19, and
+    21 and 19 of 40 connections, a third socket without the option was refused, and so was a
+    second where neither set it, in three runs; and by the command's tests, a build refused
+    for a named port a listener held left `lock` alone under `target/corten-profile`, in a
+    directory that had no `target` before it).
 
 69. <a id="choice-profile-image"></a>**The starter's image is built with a profile when its build is given the
     app's script, by the same command.** `docker build --build-arg PROFILE_FROM=train.sh` has

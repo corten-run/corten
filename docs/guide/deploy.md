@@ -408,14 +408,21 @@ The copy is then looked for on that port, and it and the command are given it in
 (`--port=8443` is the same). `--port` is refused before anything is built when it is not a
 number from 1 to 65535, when it is given twice or without `--profile-from`, and when something
 already listens on the port, at `127.0.0.1` or at `[::1]`, which would answer the wait and the
-command in the copy's place. The build cannot tell whose listener that is, so the refusal says
+command in the copy's place. Nothing is built then, and something is written: the build takes
+its lock on the target directory before it looks at the port, so a refusal for a port something
+listens on leaves `target/corten-profile/lock`, in a target directory it makes when there was
+none. The build cannot tell whose listener that is, so the refusal says
 what to do for each: this app (under `corten dev`, or run another way) or a copy that a
 cancelled build left running is stopped, the copy of a build that is running in another target
-directory is left until that build ends, and anything else means `--port` names a port that is
-not this app's. The build looks again before it starts the copy, minutes later. A look is a
+directory is left until that build ends, and anything else is another program that holds the
+port on this machine, which is stopped, or the build is run where the port is free, with
+`--port` checked against the port the app binds. The build looks again before it starts the
+copy, minutes later. A look is a
 connection, and a listener answers one only while its queue of connections it has not accepted
 has room: one that has stopped accepting, with that queue full, passes both looks as a free
-port, and the build then stops after the instrumented build, when the copy cannot bind. A
+port. Where it holds an address the copy binds, the build then stops after the instrumented
+build, when the copy cannot bind; where it holds the other loopback address alone, the copy
+binds its own and the build goes on. A
 second build in the same target directory is refused for the build that is running, which is
 looked for before the port, so it is not told to stop that build's copy. Without `--port`, an
 app that binds its own port stops the build after a minute, with a line that names the option.
@@ -429,28 +436,48 @@ of them, and its script, which knows the others, waits for each before it sends 
 (`curl --retry 10 --retry-connrefused` on the first request). And the wait cannot tell whose
 socket accepted: a copy that has exited is not taken for it, but a program that takes the port
 in the moment between the build's last look and the copy's own bind is, and the command's
-requests then go to that program. The copy cannot bind the same address then. A copy that has
+requests then go to that program. The copy cannot bind the same address then, unless both
+sockets set `SO_REUSEPORT`, as two instances of one app may: the system then shares the
+command's connections between the two, and the look after the copy (below) stops the build
+only if the other is still listening. That is reasoned from a bind that was measured, and was
+not run through a build. A copy that has
 exited by the time the command ends fails the build, as one that exited while the command ran.
 One that is still running when the command ends (it is still starting, or it does not exit
 when it cannot bind) is stopped like any other, and may exit with a profile of having served
 nothing, so with `--port` the build looks at the port twice more. When the command has ended
-and before the copy is stopped, the build stops if nothing accepts a connection there: a copy
-that listens on the port it was named would, so this one is not listening there, and whatever
-answered the wait has left. After the copy has exited, the build stops if something listens
-there: that is not the copy.
+and before the copy is stopped, the build stops if nothing accepts a connection at either
+loopback address of the port: a copy that listens on the port it was named would. After the
+copy has exited, the build stops if something listens there: that is not the copy.
 
-Those two looks narrow the moment and do not close it, and each can stop a build it should
-not. One timing is left: another program takes the named port in that moment and answers the
-wait and the command, the copy is still running when the command ends, and that program stops
-listening between the look before the copy is stopped and the copy's exit. The build then
-succeeds, and the release is built from a profile of a copy that served nothing. The look
-before the copy is stopped also stops a build whose copy served, when the copy's queue of
-connections it has not accepted is full at that instant. The look after it stops a build whose
-profile was good when a program begins to listen on the port once the copy has left it (a
-supervisor starting the app again). And a listener on the other loopback address of the named
-port stops the build at whichever look finds it, the one after the copy included, though the
-copy bound its own address beside it and served for the whole run: the build cannot tell that
-the command never reached that listener, and a command that asks `localhost` may have.
+Each of those looks establishes one thing and no more: something accepted a connection on a
+loopback address of the port when the command ended, and nothing listens there once the copy
+has exited. Neither shows that the copy is what answered the command, and no look can, since a
+connection does not say whose socket accepted it. Three timings end with the build succeeding
+and the release built from a profile of a copy the command never reached:
+
+1. Another program takes the named port in that moment, answers the wait and the command, and
+   leaves while the command runs, and the copy, still starting or trying its bind again, binds
+   the port before the command ends. The copy answers the look at the command's end, and
+   nothing listens once it has exited.
+2. A program listens on the other loopback address of the named port, beside a copy bound to
+   its own, answers a command that asks that address (as one that asks `localhost` may), and
+   leaves before the copy has exited. This needs no race with the copy's start: the program
+   may come at any time after the look before the copy starts.
+3. Another program takes the named port in that moment and answers the wait and the command,
+   the copy is still running when the command ends, and the program leaves between the look
+   at the command's end and the copy's exit.
+
+The first two were reproduced, and the command's tests hold them as what a build does today,
+to change when it can tell; the third is reasoned.
+
+Each look can also stop a build it should not. The look at the command's end stops a build
+whose copy served, when the copy's queue of connections it has not accepted is full at that
+instant. The look after the copy stops a build whose profile was good when a program begins to
+listen on the port once the copy has left it (a supervisor starting the app again). And a
+listener on the other loopback address of the named port that is there at a look stops the
+build, at the one after the copy as well, though the copy bound its own address beside it and
+served for the whole run: the build cannot tell that the command never reached that listener,
+and a command that asks `localhost` may have.
 
 An app's own listeners bind the addresses the app chooses, with `HOST` or without: one that
 binds every address (`0.0.0.0:8443`) can be reached from the network while the build runs, and
