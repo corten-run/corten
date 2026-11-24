@@ -1721,13 +1721,14 @@ fn host_lines(headers: &HeaderMap) -> (Option<&HeaderValue>, bool) {
 ///
 /// What RFC 9112 3.2 has a server answer `400`: more than one `Host` line, a `Host` that is not
 /// a host and maybe a port, and an HTTP/1.1 message with no `Host` line. What the same section
-/// says a server should answer `400` or a redirect, an invalid request-line, is refused in two
-/// forms only: a request-target with a byte outside ASCII, which RFC 3986 has in no URI and the
-/// parse lets through when it is UTF-8, and `*` with a method other than `OPTIONS`. The second
-/// is Corten's reading: `*` fits the request-line's grammar, and 3.2.4 says only that it is
-/// used for `OPTIONS`. Other bytes no URI holds (a `|`, a `%` before no hex) are answered as
-/// before, and so is a target that is a host alone with a method other than `CONNECT` (3.2.3). The `Host` is read once for these and for the names, so a request the app answers
-/// costs the scan of its target and a look at whether any name has two lines.
+/// says a server should answer `400` or a redirect, an invalid request-line, is refused in one
+/// form only: a request-target with a byte outside ASCII, which RFC 3986 has in no URI and the
+/// parse lets through when it is UTF-8. `*` with a method other than `OPTIONS` is refused too,
+/// by Corten's reading: it fits the request-line's grammar, and 3.2.4 says only that it is used
+/// for `OPTIONS`. Other bytes no URI holds (a `|`, a `%` before no hex) are answered as before,
+/// and so is a target that is a host alone with a method other than `CONNECT` (3.2.3). The
+/// `Host` is read once for these and for the names, so a request the app answers costs the
+/// scan of its target and a look at whether any name has two lines.
 #[inline]
 fn asked<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bool), hosts: Option<&[String]>) -> Asked {
     match read(req, lines, hosts) {
@@ -1756,38 +1757,89 @@ fn read<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, boo
 }
 
 /// Logs the first request of the process refused for each reason HTTP does not allow one
-/// ([`refused_for`]): a health check written by hand, or a proxy that sends a second `Host`, is
-/// as likely to send one as a scanner is, and its `400`s take the app out of service with
-/// nothing else to say why. One line a reason, so a scanner's does not use up the health check's.
+/// ([`Refused`]): a health check written by hand, or a proxy that sends a second `Host`, is as
+/// likely to send one as a scanner is, and its `400`s take the app out of service with nothing
+/// else to say why. One line a reason, so a request refused for one does not use up the line of
+/// a request refused for another; a later one costs the look for its reason and no more.
 #[cold]
 fn malformed(req: &Request) -> Asked {
     use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-    static LOGGED: [AtomicBool; 5] = [const { AtomicBool::new(false) }; 5];
-    let (reason, why) = refused_for(req);
-    if !LOGGED[reason].swap(true, Relaxed) {
-        tracing::warn!("corten: refused {} {:?} (400): {why}", req.method(), req.uri().path());
+    static LOGGED: [AtomicBool; Refused::COUNT] = [const { AtomicBool::new(false) }; Refused::COUNT];
+    let reason = Refused::of(req);
+    if !LOGGED[reason as usize].swap(true, Relaxed) {
+        tracing::warn!("{}", reason.line(req));
     }
     Asked::Malformed
 }
 
-/// Why [`read`] refused `req`: which of its five reasons, and the words the log has for it.
-/// With the request's path they are all the log says of it: a query, or a user in the target,
-/// may hold what no log should.
-fn refused_for(req: &Request) -> (usize, String) {
-    let target = req.uri().path_and_query().map_or("", |target| target.as_str());
-    let hosts: Vec<_> = req.headers().get_all(header::HOST).iter().map(|host| String::from_utf8_lossy(host.as_bytes())).collect();
-    if !target.is_ascii() {
-        (0, "its request-target has a byte outside ASCII, which a client percent-encodes".into())
-    } else if target == "*" && req.method() != Method::OPTIONS {
-        (1, "the request-target * is for OPTIONS alone".into())
-    } else if hosts.len() > 1 {
-        (2, format!("it has {} Host lines, {hosts:?}, and HTTP allows one", hosts.len()))
-    } else if hosts.is_empty() && req.extensions().get::<Unnamed>().is_some() {
-        (3, "it is HTTP/1.1 with no Host line: a client, a health check too, sends one or asks as HTTP/1.0".into())
-    } else if let Some(host) = hosts.first().filter(|host| named(host.as_bytes(), None) == Asked::Malformed) {
-        (4, format!("its Host, {host:?}, is not a host and maybe a port"))
-    } else {
-        (4, "the host in its request-target is not a host and maybe a port".into())
+/// Why [`read`] refused a request, in the order it looks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Refused {
+    /// A byte outside ASCII in the request-target.
+    Target,
+    /// `*` with a method other than `OPTIONS`.
+    Star,
+    /// More than one `Host` line.
+    Lines,
+    /// An HTTP/1.1 message the server read with no `Host` line.
+    Unnamed,
+    /// A `Host` that is not a host and maybe a port.
+    Host,
+    /// A target whose own host is not one: the last, which [`Refused::COUNT`] counts from.
+    TargetHost,
+}
+
+impl Refused {
+    const COUNT: usize = Refused::TargetHost as usize + 1;
+
+    fn of(req: &Request) -> Refused {
+        let target = req.uri().path_and_query().map_or("", |target| target.as_str());
+        let mut hosts = req.headers().get_all(header::HOST).iter();
+        let (host, more) = (hosts.next(), hosts.next().is_some());
+        if !target.is_ascii() {
+            Refused::Target
+        } else if target == "*" && req.method() != Method::OPTIONS {
+            Refused::Star
+        } else if more {
+            Refused::Lines
+        } else {
+            match host {
+                None if req.extensions().get::<Unnamed>().is_some() => Refused::Unnamed,
+                Some(host) if named(host.as_bytes(), None) == Asked::Malformed => Refused::Host,
+                _ => Refused::TargetHost,
+            }
+        }
+    }
+
+    /// The log's line for `req`: its method, its path and the reason. Never its query, a user
+    /// in its target or in a `Host`, or what follows a `/` or a `?` there, any of which may hold
+    /// what no log should; of a host only what names it.
+    fn line(self, req: &Request) -> String {
+        /// What a `Host` or an authority names, without a user before it or a path after it.
+        fn names(host: &[u8]) -> String {
+            let host = String::from_utf8_lossy(host);
+            let host = host.rsplit('@').next().unwrap_or_default();
+            host.split(['/', '?', '#']).next().unwrap_or_default().to_owned()
+        }
+        let why = match self {
+            Refused::Target => "its request-target has a byte outside ASCII, which a client percent-encodes".to_owned(),
+            Refused::Star => "the request-target * is for OPTIONS alone".to_owned(),
+            Refused::Lines => {
+                format!("it has {} Host lines, and HTTP allows one", req.headers().get_all(header::HOST).iter().count())
+            }
+            Refused::Unnamed => {
+                "it is HTTP/1.1 with no Host line: a client, a health check too, sends one or asks as HTTP/1.0".to_owned()
+            }
+            Refused::Host => {
+                let host = req.headers().get(header::HOST).map(|host| names(host.as_bytes())).unwrap_or_default();
+                format!("its Host is not a host and maybe a port alone (it names {host:?})")
+            }
+            Refused::TargetHost => {
+                let host = req.uri().authority().map(|target| names(target.as_str().as_bytes())).unwrap_or_default();
+                format!("its request-target's host is not a host and maybe a port alone (it names {host:?})")
+            }
+        };
+        format!("corten: refused {} {:?} (400): {why}", req.method(), req.uri().path())
     }
 }
 
@@ -2650,23 +2702,39 @@ mod tests {
                 mark_unnamed(&mut req);
             }
             assert_eq!(Policy::new().host_check().asked(&req), Asked::Malformed, "{method} {target} {hosts:?}");
-            let (reason, why) = refused_for(&req);
-            assert!(!why.contains("secret") && !why.contains("word"), "{why}");
-            (reason, why)
+            let reason = Refused::of(&req);
+            let line = reason.line(&req);
+            assert!(!line.contains("secret") && !line.contains("hunter2") && !line.contains("token"), "{line}");
+            (reason, line)
         };
-        let (target, said) = why("GET", "/caf\u{e9}?token=secret", &["localhost"], true);
-        assert!(said.contains("outside ASCII"), "{said}");
-        let (star, said) = why("GET", "*", &["localhost"], true);
-        assert!(said.contains("OPTIONS"), "{said}");
-        let (lines, said) = why("GET", "/items?token=secret", &["localhost", "other.example"], true);
-        assert!(said.contains("2 Host lines") && said.contains("other.example"), "{said}");
-        let (none, said) = why("GET", "/health/live?token=secret", &[], true);
-        assert!(said.contains("no Host line") && said.contains("HTTP/1.0"), "{said}");
-        let (host, said) = why("GET", "/?token=secret", &["shop.example/x"], true);
-        assert!(said.contains("\"shop.example/x\""), "{said}");
-        let (user, said) = why("GET", "http://user:word@localhost:3000/?token=secret", &["localhost"], false);
-        assert!(said.contains("the host in its request-target"), "{said}");
-        assert_eq!([target, star, lines, none, host, user], [0, 1, 2, 3, 4, 4]);
+        assert_eq!(
+            why("GET", "/caf\u{e9}?token=secret", &["localhost"], true),
+            (
+                Refused::Target,
+                "corten: refused GET \"/caf\u{e9}\" (400): its request-target has a byte outside ASCII, which a client percent-encodes"
+                    .to_owned()
+            )
+        );
+        let (reason, line) = why("GET", "/items?q=caf\u{e9}&token=secret", &["localhost"], true);
+        assert!(reason == Refused::Target && line.starts_with("corten: refused GET \"/items\" (400): "), "{line}");
+        let (reason, line) = why("DELETE", "*", &["localhost"], true);
+        assert!(reason == Refused::Star && line.contains("refused DELETE \"*\" (400)") && line.contains("OPTIONS"), "{line}");
+        let (reason, line) = why("GET", "/items?token=secret", &["localhost", "user:hunter2@other.example"], true);
+        assert!(reason == Refused::Lines && line.contains("\"/items\" (400): it has 2 Host lines"), "{line}");
+        let (reason, line) = why("GET", "/health/live?token=secret", &[], true);
+        assert!(reason == Refused::Unnamed && line.contains("\"/health/live\" (400)") && line.contains("no Host line"), "{line}");
+        let (reason, line) = why("GET", "/?token=secret", &["user:hunter2@shop.example/x?token=secret"], true);
+        assert!(reason == Refused::Host && line.ends_with("(it names \"shop.example\")"), "{line}");
+        let (reason, line) = why("GET", "/", &["shop.example, other.example"], true);
+        assert!(reason == Refused::Host && line.ends_with("(it names \"shop.example, other.example\")"), "{line}");
+        let (reason, line) = why("GET", "http://user:hunter2@localhost:3000/items?token=secret", &["localhost"], false);
+        assert!(reason == Refused::TargetHost && line.contains("\"/items\" (400)"), "{line}");
+        assert!(line.ends_with("(it names \"localhost:3000\")"), "{line}");
+        // A target that names a host is still refused for its `Host` line first, as it is read.
+        let (reason, _) = why("GET", "http://localhost/", &["a, b"], false);
+        assert_eq!(reason, Refused::Host);
+        let (reason, _) = why("GET", "http://localhost/?token=secret", &[], true);
+        assert_eq!(reason, Refused::Unnamed);
     }
 
     #[test]
