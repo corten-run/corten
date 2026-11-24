@@ -603,8 +603,7 @@ establish a general ranking.
          functions and the pad, the pad first, every function moved by exactly the pad's size (so
          the placement has the line and page phase the plan declared; a side with code aligned
          beyond 16 bytes is held to the fifth point's check in place of this one) and every pair
-         of neighbours
-         still next to each other in order; that each placement of one build has a SHA-256 no
+         of neighbours still next to each other in order; that each placement of one build has a SHA-256 no
          other placement of that build has (base and head at one pad may be one binary, when the
          change compiles to the same code); and that each answers the workload's requests as the unpadded binary does: status, headers but
          `Date`, and body as received, with nothing in the body masked and only the header values

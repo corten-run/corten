@@ -9586,9 +9586,10 @@ rules something out.
     build's cycles (padded builds read under their unpadded one in 15 of 16, against two
     unpadded builds), it takes from both sides of a comparison alike; an A/A whose placement
     medians spread 1.97%, as `old`'s 30 did, resolves +1% at 100 placements, by a model of
-    normal medians with a common median of zero that no run has tested; a spread measured on one setup holds
-    for another kernel or toolchain with the same CPU model, allocator and preloaded libraries,
-    protocol and code; the data's place in a line, one draw on a side with code aligned beyond
+    normal medians with a common median of zero that no run has tested; a spread measured on
+    one setup holds for another kernel or toolchain with the same CPU model, allocator and
+    preloaded libraries, protocol and code;
+    the data's place in a line, one draw on a side with code aligned beyond
     16 bytes that the pads do not vary and the A/A does not see, moves a request's cycles
     little beside what the pads do vary, which no run has measured; a recorded spread is no
     narrower than such a build's own; two second pads that differ by up to 40 bytes nothing
