@@ -88,8 +88,8 @@
 //! is how stale the app said the page may be. Off in an app with no route that keeps a page,
 //! whose writes are then not counted. Under `corten dev` the store stands and counts writes, so
 //! the code that decides what it keeps runs, but it keeps nothing and gives nothing: each
-//! `Public` route says in the log instead whether a release build keeps its answer, and if not
-//! why ([`Verdict`]). The
+//! `Public` route says in the log instead whether a release build would keep its answer while
+//! the store has room, and if not why ([`Verdict`]). The
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
 //! the compressed forms made for it, with an allowance for what holds them; the body, the key,
 //! the head's lines and each compressed form are held in allocations of their own size
@@ -260,21 +260,26 @@ pub enum Shape {
     Body,
 }
 
-/// What `corten dev` says of a `Public` answer, where nothing is kept: that a release build
-/// keeps it, or the first reason it does not, as the code that decides found it. A reason decided
-/// when the route is made comes from its handler's type (`crate::handler::Handler::public`). One
-/// decided before the handler runs comes from [`Asked::checked`], the code of [`Asked::of`] in a
-/// copy of its own that only `corten dev` runs (`crate::router::Telling`), and a drawn submit key
-/// from the same watch the route keeps by. One decided by the answer comes from [`Missed::keep`],
-/// which records it on its refusal, only under `corten dev`, in the request's signal
-/// ([`Verdict::found`]). What a request alone decides (a cookie, a navigation, a write, a full
-/// store) is not said: the page's verdict is for the request that shows nothing about who asks.
-/// Public in a private module, as [`Shape`] is.
+/// What `corten dev` says of a `Public` answer, where nothing is kept: that a release build would
+/// keep it while its store has room, or the first reason it does not, as the code that decides
+/// found it. A reason decided when the route is made comes from its handler's type
+/// (`crate::handler::Handler::public`). One decided before the handler runs comes from
+/// [`Asked::checked`], the code of [`Asked::of`] in a copy of its own that only `corten dev` runs
+/// (`crate::router::Telling`), and a drawn submit key from the same watch the route keeps by. One
+/// decided by the answer comes from [`Missed::keep`], whose copy for `corten dev` (`TELL`) records
+/// it on its refusal in the request's signal ([`Verdict::found`]), and `Kept` only where a release
+/// build puts the answer in the store, once its body is read. What a request alone decides (a
+/// cookie, a navigation, a write) is not said: the page's verdict is for the request that shows
+/// nothing about who asks. Nor is a full store, which the store under `corten dev`, holding
+/// nothing, never is: `Kept` says the answer may be kept, not that it is. Public in a private
+/// module, as [`Shape`] is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Verdict {
     Kept {
         lifetime: u64,
     },
+    /// The app keeps no answers: its bound is 0 (`crate::App::kept_answers`).
+    Off,
     /// Its handler takes an input the key does not cover (`Anonymous::KEYED`).
     Unkeyed,
     /// Its answer is neither a page nor a whole body (`Answer::WHOLE`).
@@ -313,6 +318,8 @@ pub enum Verdict {
         bound: usize,
     },
     Written,
+    /// Its body, of a known size, could not be read whole: a release build answers `500`.
+    Unread,
 }
 
 impl Verdict {
@@ -328,22 +335,51 @@ impl Verdict {
         signal.found::<Verdict>().get().copied()
     }
 
+    /// Its bit among the verdicts a route has said: one for each kind, whatever its numbers.
+    fn bit(self) -> u32 {
+        let at = match self {
+            Verdict::Kept { .. } => 0,
+            Verdict::Off => 1,
+            Verdict::Unkeyed => 2,
+            Verdict::NotWhole => 3,
+            Verdict::Unstaged => 4,
+            Verdict::Caller => 5,
+            Verdict::Rewritten => 6,
+            Verdict::DrewKey => 7,
+            Verdict::NoLifetime { .. } => 8,
+            Verdict::Varies => 9,
+            Verdict::Status(_) => 10,
+            Verdict::Marked => 11,
+            Verdict::SetsCookie => 12,
+            Verdict::Encoded => 13,
+            Verdict::Range => 14,
+            Verdict::Tagged => 15,
+            Verdict::Names => 16,
+            Verdict::Nonce => 17,
+            Verdict::Slow { .. } => 18,
+            Verdict::Unsized => 19,
+            Verdict::Small(_) => 20,
+            Verdict::Empty => 21,
+            Verdict::Large { .. } => 22,
+            Verdict::Written => 23,
+            Verdict::Unread => 24,
+        };
+        1 << at
+    }
+
     /// Says it in the log for the route whose request for `path` it is, unless the route said it
-    /// before: `told` holds the verdicts the route has said, each once (a reason once, whatever
-    /// its numbers), so a page loaded again says nothing new, and one that changes how it answers
-    /// says so. `corten dev` starts the app again on each change, so a changed route starts over.
-    pub(crate) fn tell(self, path: &str, told: &std::sync::Mutex<Vec<std::mem::Discriminant<Verdict>>>) {
-        let kind = std::mem::discriminant(&self);
-        {
-            let mut told = told.lock().unwrap_or_else(PoisonError::into_inner);
-            if told.contains(&kind) {
-                return;
-            }
-            told.push(kind);
+    /// before: `told` holds a bit for each verdict the route has said ([`Verdict::bit`]: a reason
+    /// once, whatever its numbers), so a page loaded again says nothing new, and one that changes
+    /// how it answers says so. `corten dev` starts the app again on each change, so a changed
+    /// route starts over.
+    pub(crate) fn tell(self, path: &str, told: &AtomicU32) {
+        let bit = self.bit();
+        if told.load(Ordering::Relaxed) & bit != 0 || told.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
+            return;
         }
         match self {
             Verdict::Kept { lifetime } => tracing::info!(
-                "corten: {path} is Public, and a release build keeps its answer for {lifetime} s, given in its handler's place to each GET that shows nothing about who asks (under corten dev its handler makes every answer)"
+                "corten: {path} is Public, and a release build would keep its answer for {lifetime} s while its store has room, given in its handler's place to each GET that shows nothing about who asks (under corten dev its handler makes every answer)"
             ),
             _ => tracing::warn!("corten: {path} is Public, but a release build does not keep its answer: {}", self.why()),
         }
@@ -353,6 +389,7 @@ impl Verdict {
     fn why(self) -> String {
         match self {
             Verdict::Kept { .. } => String::new(),
+            Verdict::Off => "the app keeps no answers, since its bound is 0 (App::kept_answers(0)); give it a bound to have answers kept".into(),
             Verdict::Unkeyed => "its handler takes an input the kept answer's key does not cover (an extractor of the app's own, an Option, Json, an Upload, LiveSince or Since, or a Form before its last argument), so it runs for every request; read what the URL gives with Params or Uri instead".into(),
             Verdict::NotWhole => "its answer is neither a page nor a whole body (a stream, a relay, a feed or a status alone), so its handler runs for every request".into(),
             Verdict::Unstaged => "its route says unstaged, and no stage gives the request what keeping its answer needs; leave unstaged out to have it kept".into(),
@@ -375,7 +412,8 @@ impl Verdict {
             Verdict::Small(length) => format!("its body is {length} bytes, and a whole body is kept from {BODY_FROM} (a smaller one costs less to make again than to look up)"),
             Verdict::Empty => "its body is empty".into(),
             Verdict::Large { size, bound } => format!("it takes {size} bytes, more than an eighth of the {bound} the app keeps (App::kept_answers); raise the bound to have it kept"),
-            Verdict::Written => "a write to its path went through while its handler read, so it may show what was there before; the next answer is kept".into(),
+            Verdict::Written => "a write to its path went through while its handler read, so it may show what was there before; the next answer may be kept".into(),
+            Verdict::Unread => "its body, of a known size, could not be read whole (reading it failed), so a release build answers 500 in its place".into(),
         }
     }
 }
@@ -1217,16 +1255,19 @@ impl<'a> Asked<'a> {
 
     /// [`Asked::of`], with, when `TELL` (`corten dev`, before the handler runs: [`Verdict`]), the
     /// reason a request the store would otherwise be asked for is not: `Err(Some(_))` for one the
-    /// page's author can change, `Err(None)` for what the request alone decides (a cookie, a
-    /// navigation, a proxy's URL), which is not said. A release build reads none of it: with
-    /// `TELL` false every `Err` is `None`, and this is the code `of` always was.
+    /// page's author can change (an app that keeps no answers among them), `Err(None)` for what
+    /// the request alone decides (a cookie, a navigation, a proxy's URL), which is not said. A
+    /// release build reads none of it: with `TELL` false every `Err` is `None`, and this is the
+    /// code `of` always was.
     #[inline(always)]
     pub(crate) fn checked<const TELL: bool>(req: &'a Request, shape: Shape) -> Result<Self, Option<Verdict>> {
         if *req.method() != http::Method::GET {
             return Err(None);
         }
         let signal = req.extensions().get::<crate::Signal>().ok_or(None)?;
-        let answers = signal.shared().and_then(|shared| shared.kept.as_ref()).ok_or(None)?;
+        // An app with a route that keeps an answer has a store unless its bound is 0.
+        let off = || if TELL && signal.shared().is_some() { Some(Verdict::Off) } else { None };
+        let answers = signal.shared().and_then(|shared| shared.kept.as_ref()).ok_or_else(off)?;
         // A caller a middleware read makes the answer that caller's, and the error page's request
         // is not the one the route would answer. Said of a request the store would otherwise ask
         // for, below: one with a session's cookie is left to its handler anyway.
@@ -1301,13 +1342,6 @@ impl<'a> Asked<'a> {
     }
 }
 
-/// Whether the request is served under `corten dev`, where a refusal to keep its answer is said
-/// ([`Verdict`]): read by [`Missed::keep`] on a refusal, and once for an answer that may be kept.
-#[inline]
-fn dev(signal: &crate::Signal) -> bool {
-    signal.shared().is_some_and(|shared| shared.dev)
-}
-
 /// A request no kept answer stood for, whose handler's answer is kept if it may be.
 pub(crate) struct Missed {
     asked: Instant,
@@ -1328,16 +1362,17 @@ pub(crate) struct Missed {
 }
 
 impl Missed {
-    /// `res`, kept when it is the same for everyone and for how long: see the module. Under
-    /// `corten dev` nothing is kept, and the request is given what a release build does with
-    /// it instead ([`Verdict`]).
-    pub(crate) async fn keep(mut self, mut res: Response) -> Response {
+    /// `res`, kept when it is the same for everyone and for how long: see the module. `TELL` is
+    /// `corten dev`'s copy (`crate::router::Telling`): nothing is kept, and the request is given
+    /// what a release build does with its answer instead ([`Verdict`]), with the answer's head
+    /// left as it is. A release build's copy, with `TELL` false, is the code it was.
+    pub(crate) async fn keep<const TELL: bool>(mut self, mut res: Response) -> Response {
         let Some(signal) = &self.signal else { return res };
         let Some(answers) = signal.shared().and_then(|shared| shared.kept.as_ref()) else { return res };
-        // Not kept: under `corten dev` the reason is made for the route to say, and nowhere else.
+        // Not kept: under `corten dev` the reason is made for the route to say.
         macro_rules! unkept {
             ($verdict:expr) => {{
-                if dev(signal) {
+                if TELL {
                     $verdict.found(signal);
                 }
                 return res;
@@ -1350,9 +1385,18 @@ impl Missed {
         // from it), or on something the key does not cover.
         let Some(mut language) = varies(res.headers()) else { unkept!(Verdict::Varies) };
         // A locale negotiated after the page set its headers is named now, so the key below
-        // and the header the app sends agree.
+        // and the header the app sends agree. Under `corten dev` the answer is left as it is (the
+        // app names it as the answer leaves, after its middleware, as it did with no store), and
+        // its head is counted as a release build counts it, from a copy named so.
+        let mut named = None;
         if !language && signal.asked_language() {
-            crate::page::add_language(res.headers_mut());
+            if TELL {
+                let mut headers = res.headers().clone();
+                crate::page::add_language(&mut headers);
+                named = Some((headers.keys_len(), head_bytes(&headers)));
+            } else {
+                crate::page::add_language(res.headers_mut());
+            }
             language = true;
         }
         let style = res.extensions().get::<crate::security::StyleBlock>().cloned();
@@ -1376,7 +1420,7 @@ impl Missed {
         if res.headers().contains_key(header::ETAG) {
             unkept!(Verdict::Tagged);
         }
-        if res.headers().keys_len() > NAMES {
+        if named.map_or_else(|| res.headers().keys_len(), |(names, _)| names) > NAMES {
             unkept!(Verdict::Names);
         }
         if self.nonce.as_ref().is_some_and(|slot| slot.taken().is_some()) {
@@ -1394,7 +1438,7 @@ impl Missed {
         if self.told.0.is_some() && length < BODY_FROM {
             unkept!(Verdict::Small(length));
         }
-        let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
+        let head = named.map_or_else(|| head_bytes(res.headers()), |(_, bytes)| bytes);
         // The URL is held once, by the entry: the map holds its hash.
         let sent = self.language.as_ref().filter(|_| language);
         let size = Key::length(self.at.as_str(), self.host.as_ref(), sent) + head + OVERHEAD + length as usize;
@@ -1411,19 +1455,25 @@ impl Missed {
         if !self.written.stands(&answers.0) {
             unkept!(Verdict::Written);
         }
-        // Under `corten dev` none is kept: the route says a release build keeps it, and, of a route
-        // of whole bodies, is told so, so it goes on asking.
-        if dev(signal) {
-            Verdict::Kept { lifetime }.found(signal);
-            self.told.1 = true;
-            return res;
-        }
         let (mut parts, body) = res.into_parts();
         // Exact size: one held `Bytes`.
-        let Ok(body) = crate::body::to_bytes(body, usize::MAX).await else {
+        let body = match crate::body::to_bytes(body, usize::MAX).await {
+            Ok(body) => body,
+            // Under `corten dev` the answer goes on as it was, its body failing as it did.
+            Err(error) if TELL => {
+                Verdict::Unread.found(signal);
+                return Response::from_parts(parts, Body::new(Unread(Some(error), length)));
+            }
             // A body of an exact size that could not be read: not a page to send as it is.
-            return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR);
+            Err(_) => return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR),
         };
+        // Under `corten dev` none is kept: the route says a release build would keep it here, and,
+        // of a route of whole bodies, is told so, so it goes on asking.
+        if TELL {
+            Verdict::Kept { lifetime }.found(signal);
+            self.told.1 = true;
+            return Response::from_parts(parts, Body::from(body));
+        }
         // A copy of its own length: a page's buffer is sized for the last page rendered and an
         // eighth more, and the bytes made from it would hold all of that for as long as they are
         // kept. Asking the allocator to shrink the buffer instead moves it under jemalloc, the
@@ -1477,6 +1527,33 @@ fn varies(headers: &HeaderMap) -> Option<bool> {
         }
     }
     Some(language)
+}
+
+/// The bytes a kept answer's head is counted as: each line's name and value, and what holds it.
+#[inline]
+fn head_bytes(headers: &HeaderMap) -> usize {
+    headers.iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum()
+}
+
+/// Under `corten dev`, the body of a size known before it is sent that could not be read whole
+/// ([`Verdict::Unread`]): it fails with the same error, so the answer leaves as it would have
+/// with no store to read it.
+struct Unread(Option<crate::body::BoxError>, u64);
+
+impl http_body::Body for Unread {
+    type Data = Bytes;
+    type Error = crate::body::BoxError;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+        std::task::Poll::Ready(self.get_mut().0.take().map(Err))
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.1)
+    }
 }
 
 #[cfg(test)]

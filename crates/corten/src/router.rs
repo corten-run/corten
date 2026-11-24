@@ -51,6 +51,12 @@ pub(crate) trait Endpoint: Send + Sync + 'static {
     fn action_patches(&self) -> bool {
         false
     }
+
+    /// Under `corten dev`, this route with each [`Keeping`] in it the copy that says what a
+    /// release build does with its answer ([`Telling`]); `None` for one with none.
+    fn telling(&self) -> Option<Route> {
+        None
+    }
 }
 
 /// The handler the router chose for a request, which the stages call last.
@@ -113,20 +119,26 @@ impl Endpoint for Giving {
     fn action_patches(&self) -> bool {
         self.inner.action_patches()
     }
+
+    fn telling(&self) -> Option<Route> {
+        let inner = self.inner.telling()?;
+        Some(Arc::new(Giving { gives: self.gives, inner }))
+    }
 }
 
 /// A handler whose answer is the same for everyone (`Public`), a page or a whole body: a kept
 /// answer is given in its place, and the one it makes is kept ([`crate::kept`]). A page is filled
 /// here, as [`crate::middleware`] would after it, so what is kept is the page as it leaves the
-/// route.
-struct Keeping {
+/// route. `TELL` is `corten dev`'s copy ([`Telling`]), which keeps nothing and records what a
+/// release build does with the answer; a release build's, with `TELL` false, is the code it was.
+struct Keeping<const TELL: bool> {
     shape: crate::kept::Shape,
     /// Of a route of whole bodies: whether any of the answers it made last was kept.
     unkept: Option<Arc<crate::kept::Unkept>>,
     inner: Route,
 }
 
-impl Endpoint for Keeping {
+impl<const TELL: bool> Endpoint for Keeping<TELL> {
     #[inline]
     fn call(&self, req: Request) -> Answering {
         // A route none of whose bodies is kept (each too small, most often) is its handler's, as
@@ -160,24 +172,31 @@ impl Endpoint for Keeping {
             if drew_key {
                 return res;
             }
-            missed.keep(res).await
+            missed.keep::<TELL>(res).await
         })
     }
 
     fn action_patches(&self) -> bool {
         self.inner.action_patches()
     }
+
+    fn telling(&self) -> Option<Route> {
+        let (shape, unkept, inner) = (self.shape, self.unkept.clone(), self.inner.clone());
+        Some(Arc::new(Keeping::<true> { shape, unkept, inner }))
+    }
 }
 
 /// Under `corten dev`, a `Public` handler with what goes around it ([`Table::telling`]): says in the
-/// log whether a release build keeps its answer to a `GET`, and if not the first reason, as the
-/// code that decides it found it ([`Verdict`]), once for each verdict the route has. Nothing is
-/// kept under `corten dev`, so this is where an author learns it; a release build has none.
+/// log whether a release build would keep its answer to a `GET` while its store has room, and if
+/// not the first reason, as the code that decides it found it ([`Verdict`]), once for each verdict
+/// the route has. Nothing is kept under `corten dev`, so this is where an author learns it; a
+/// release build has none. The route's [`Keeping`] is its `corten dev` copy, which finds the
+/// verdict of the answer.
 struct Telling {
     /// What the route's answer is kept as, or why it never is, known when the route was made.
     public: Result<crate::kept::Shape, Verdict>,
-    /// The verdicts it has said ([`Verdict::tell`]).
-    told: Arc<std::sync::Mutex<Vec<std::mem::Discriminant<Verdict>>>>,
+    /// The verdicts it has said, a bit each ([`Verdict::tell`]).
+    told: Arc<std::sync::atomic::AtomicU32>,
     inner: Route,
 }
 
@@ -190,7 +209,8 @@ impl Endpoint for Telling {
         let path = req.uri().path().to_owned();
         let signal = req.extensions().get::<crate::Signal>().cloned();
         // What the request decides, read as the route's `Keeping` reads it: a reason the author can
-        // change (a caller read for it, its URL changed), or one for the request alone, not said.
+        // change (an app that keeps none, a caller read for it, its URL changed), or one for the
+        // request alone, not said.
         let asked = match (self.public, &signal) {
             (Ok(shape), Some(_)) => crate::kept::Asked::checked::<true>(&req, shape).map(|_| ()),
             _ => Ok(()),
@@ -364,7 +384,7 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
             match keeps {
                 Some(shape) => {
                     let unkept = (shape == crate::kept::Shape::Body).then(Default::default);
-                    Arc::new(Keeping { shape, unkept, inner: handled })
+                    Arc::new(Keeping::<false> { shape, unkept, inner: handled })
                 }
                 None => handled,
             }
@@ -392,12 +412,14 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
     /// that goes around it.
     fn telling(self) -> Self {
         let Some(public) = self.public else { return self };
-        let told = Arc::<std::sync::Mutex<Vec<_>>>::default();
+        let told = Arc::<std::sync::atomic::AtomicU32>::default();
+        // Its `Keeping`, if any, the copy that finds what a release build does with its answer.
+        let tell = |route: Route| route.telling().unwrap_or(route);
         let held = match self.held {
             Held::Unbound(make) => Held::Unbound(Arc::new(move |state| {
-                Arc::new(Telling { public, told: told.clone(), inner: make(state) }) as Route
+                Arc::new(Telling { public, told: told.clone(), inner: tell(make(state)) }) as Route
             })),
-            Held::Bound(inner) => Held::Bound(Arc::new(Telling { public, told, inner })),
+            Held::Bound(inner) => Held::Bound(Arc::new(Telling { public, told, inner: tell(inner) })),
         };
         // Told once: the slot is not wrapped again.
         Slot { held, public: None }

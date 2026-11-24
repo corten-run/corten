@@ -19,6 +19,9 @@
 //! `ROUTER_TARGET=unkept` with `ROUTER_PUBLIC=page` and `ROUTER_KEPT=2048` counts that page when
 //! the app does not keep it: larger than its share of the bound, the last check before a page is
 //! kept, so its handler runs and every check before is made for each request.
+//! `ROUTER_TARGET=inserted` with `ROUTER_PUBLIC=page` counts that page kept: each request names a
+//! URL of its own (`/home?n=<i>`), so each is a miss whose answer is put in the store, which has
+//! room for them all.
 
 use std::time::Duration;
 
@@ -107,10 +110,10 @@ fn request_cost() {
     let public = std::env::var("ROUTER_PUBLIC").unwrap_or_default();
     let asked = std::env::var("ROUTER_ASKED").is_ok_and(|asked| asked == "1");
     let (missing, write, kept, unstaged) = (target == "missing", target == "write", target == "kept", target == "unstaged");
-    let unkept = target == "unkept";
+    let (unkept, inserted) = (target == "unkept", target == "inserted");
     let path = if missing { "/items/7/unknown" } else { "/items/7/edit" };
     let status = if missing { 404 } else { 200 };
-    let (routes, shared) = match (write || kept || unkept, public.as_str()) {
+    let (routes, shared) = match (write || kept || unkept || inserted, public.as_str()) {
         (false, _) if unstaged => (bare::router(), None),
         (false, _) => (url::router(), None),
         (true, "") => (plain::router(), None),
@@ -126,10 +129,10 @@ fn request_cost() {
     };
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
-        let ask = |path: &'static str| {
+        let ask = |path: &str| {
+            let req = http::Request::get(path).body(corten::http::Body::empty()).unwrap();
             let router = router.clone();
             async move {
-                let req = http::Request::get(path).body(corten::http::Body::empty()).unwrap();
                 let response = router.oneshot(req).await.unwrap();
                 assert_eq!(response.status().as_u16(), 200);
                 let aged = response.headers().contains_key("age");
@@ -147,6 +150,16 @@ fn request_cost() {
             for _ in 0..requests {
                 assert!(!ask(shared).await, "the page the app does not keep");
             }
+            return;
+        }
+        if inserted {
+            let shared = shared.expect("ROUTER_TARGET=inserted needs ROUTER_PUBLIC=page");
+            // Made before the requests, so each request's own work is all that is counted.
+            let paths: Vec<String> = (0..requests).map(|n| format!("{shared}?n={n}")).collect();
+            for path in &paths {
+                assert!(!ask(path).await, "a URL not asked for before");
+            }
+            assert!(ask(&paths[0]).await, "each answer was kept");
             return;
         }
         if kept {

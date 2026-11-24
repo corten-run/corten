@@ -2268,9 +2268,9 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
 }
 
 /// Under `corten dev` nothing is kept, and the log says instead, for a `GET` that shows nothing
-/// about who asks, whether a release build keeps a `Public` route's answer, and if not the first
-/// reason, as the code that decides it found it: once for each route and verdict. Without dev,
-/// nothing of it is logged.
+/// about who asks, whether a release build would keep a `Public` route's answer while its store
+/// has room, and if not the first reason, as the code that decides it found it: once for each
+/// route and verdict. Without dev, nothing of it is logged.
 #[cfg(feature = "log")]
 #[tokio::test]
 async fn corten_dev_says_whether_a_public_answer_is_kept_and_why_not() {
@@ -2288,6 +2288,19 @@ async fn corten_dev_says_whether_a_public_answer_is_kept_and_why_not() {
                         if cookie {
                             page.headers_mut().append(header::SET_COOKIE, SetCookie::new("a", "1").header());
                         }
+                        page
+                    });
+                    Public::new(minute, page)
+                })
+                .0,
+            )
+            // Two reasons: the first a release build's checks come to is the one said.
+            .route(
+                "/both",
+                typed(move |req: Req| async move {
+                    let page = req.test_page_for("Both", home()).map(|mut page| {
+                        page.headers_mut().insert(header::ETAG, HeaderValue::from_static("\"own\""));
+                        page.headers_mut().append(header::SET_COOKIE, SetCookie::new("a", "1").header());
                         page
                     });
                     Public::new(minute, page)
@@ -2332,17 +2345,27 @@ async fn corten_dev_says_whether_a_public_answer_is_kept_and_why_not() {
         }
     };
     let dev = App::new(Routes::from(routes())).dev(true).router();
-    let kept = "is Public, and a release build keeps its answer for 60 s";
+    let kept = "is Public, and a release build would keep its answer for 60 s while its store has room";
     let not = "is Public, but a release build does not keep its answer: ";
     let (_, text) = logged(dev.clone(), "/", &[]).await;
     assert!(text.contains("INFO") && text.contains(&format!("corten: / {kept}")), "{text}");
-    // Said once for the route: the same verdict again, or a request a kept page would not answer
-    // (a cookie, a navigation), says nothing.
-    for headers in [&[][..], &[("cookie", "session=1")], &[("corten", "page")]] {
-        let (_, text) = logged(dev.clone(), "/", headers).await;
+    // Said once for the route: the same verdict again says nothing.
+    assert!(logged(dev.clone(), "/", &[]).await.1.is_empty());
+    // Nor does a request a kept page would not answer (a cookie, a navigation): each asked of an
+    // app of its own, whose route has said nothing yet, and says what it says next.
+    for headers in [&[("cookie", "session=1")][..], &[("corten", "page")]] {
+        let fresh = App::new(Routes::from(routes())).dev(true).router();
+        let (_, text) = logged(fresh.clone(), "/", headers).await;
         assert!(text.is_empty(), "{headers:?}: {text}");
+        let (_, text) = logged(fresh, "/", &[]).await;
+        assert!(text.contains(&format!("corten: / {kept}")), "{headers:?}, then none: {text}");
     }
+    // An app that keeps no answers says so, whatever the route.
+    let off = App::new(Routes::from(routes())).kept_answers(0).dev(true).router();
+    let (_, text) = logged(off, "/", &[]).await;
+    assert!(text.contains(&format!("corten: / {not}the app keeps no answers, since its bound is 0")), "{text}");
     for (uri, reason) in [
+        ("/both", "it sets a cookie"),
         ("/device", "its handler takes an input the kept answer's key does not cover"),
         ("/keyed", "it draws a form's new submit key (SubmitKey::field)"),
         ("/inline", "its HTML has this request's CSP nonce"),
@@ -2401,12 +2424,121 @@ async fn corten_dev_says_whether_a_public_answer_is_kept_and_why_not() {
 
     // Without dev, the same requests log nothing (and the page is kept).
     let release = App::new(Routes::from(routes())).dev(false).router();
-    for uri in ["/device", "/keyed", "/inline", "/now", "/text", "/status", "/flip?cookie", "/"] {
+    for uri in ["/both", "/device", "/keyed", "/inline", "/now", "/text", "/status", "/flip?cookie", "/"] {
         lines.0.lock().unwrap().clear();
         fetch(&release, "GET", uri, &[]).await;
         assert!(lines.0.lock().unwrap().is_empty(), "{uri}");
     }
     assert!(fetch(&release, "GET", "/", &[]).await.1.contains_key(header::AGE));
+}
+
+/// A body of a known size that fails when read.
+struct Failing(u64);
+
+impl http_body::Body for Failing {
+    type Data = bytes::Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<bytes::Bytes>, Self::Error>>> {
+        std::task::Poll::Ready(Some(Err(std::io::Error::other("the body broke"))))
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.0)
+    }
+}
+
+/// A `Public` page whose body, of a known size, fails when read is answered `500` by a release
+/// build, which reads it to keep it, and kept by none. Under `corten dev` the log says so, and not
+/// that it is kept, and the answer leaves as it does with no store (`kept_answers(0)`), its body
+/// failing as it did.
+#[cfg(feature = "log")]
+#[tokio::test]
+async fn corten_dev_says_a_body_that_cannot_be_read_is_not_kept() {
+    use crate::route::get as typed;
+    let routes = || {
+        Table::new().route(
+            "/",
+            typed(|req: Req| async move {
+                let page = req.test_page_for("Broken", html! { <p>"broken"</p> }).map(|mut page| {
+                    *page.0.body_mut() = Body::new(Failing(64));
+                    page
+                });
+                Public::new(Duration::from_secs(60), page)
+            })
+            .0,
+        )
+    };
+    // Its status and headers, and whether its body could be read.
+    let answer = |router: Router| async move {
+        let res = router.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+        let (mut parts, body) = res.into_parts();
+        // Each app's shell has a hash of its own under `corten dev`.
+        parts.headers.remove("corten-shell");
+        (parts.status, parts.headers, body.collect().await.is_ok())
+    };
+    let lines = Lines(std::sync::Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let dev = App::new(Routes::from(routes())).dev(true).router();
+    let (status, headers, read) = answer(dev).await;
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        text.contains("corten: / is Public, but a release build does not keep its answer: its body, of a known size, could not be read whole"),
+        "{text}"
+    );
+    assert!(!text.contains("would keep"), "{text}");
+    let unkept = App::new(Routes::from(routes())).kept_answers(0).dev(true).router();
+    assert_eq!((status, headers, read), answer(unkept).await, "as with no store");
+    let release = App::new(Routes::from(routes())).dev(false).router();
+    for _ in 0..2 {
+        let (status, headers, _) = answer(release.clone()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!headers.contains_key(header::AGE));
+    }
+}
+
+/// Under `corten dev` the answer the app's middleware sees after its handler is the one it saw
+/// with no store: a `Public` page that read its messages after it was built is named as varying
+/// on the language as it leaves the app, not before. A release build names it where it keeps the
+/// page, before the middleware sees it, as before.
+#[tokio::test]
+async fn corten_dev_leaves_the_head_a_middleware_sees_as_it_was() {
+    #[derive(Clone, Default)]
+    struct Seen(std::sync::Arc<std::sync::Mutex<Option<HeaderMap>>>);
+
+    impl crate::Middleware for Seen {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let res = next.run(req).await;
+            *self.0.lock().unwrap() = Some(res.headers().clone());
+            res
+        }
+    }
+    let routes = || {
+        let page = |req: Req| async move { Public::new(Duration::from_secs(60), late_words(&req)) };
+        Table::new().route("/", crate::route::get(page).0)
+    };
+    // The head the middleware saw after the handler, and the one the app sent.
+    let seen = |router: Router, seen: Seen| async move {
+        let (status, sent, body) = fetch(&router, "GET", "/", &[("accept-language", "fr")]).await;
+        assert!(status == StatusCode::OK && String::from_utf8_lossy(&body).contains("Annonces"), "{sent:?}");
+        names_once(&sent, &["accept-language"], "as sent");
+        let mut at = seen.0.lock().unwrap().take().expect("the middleware ran");
+        // Each app's shell has a hash of its own under `corten dev`.
+        at.remove("corten-shell");
+        (vary_names(&at).contains(&"accept-language".to_string()), at)
+    };
+    let app = |seen: &Seen| App::new(Routes::from(routes())).middleware(seen.clone());
+    let (dev, none) = (Seen::default(), Seen::default());
+    let (named, head) = seen(app(&dev).dev(true).router(), dev).await;
+    assert!(!named, "under corten dev the middleware sees no language named yet: {head:?}");
+    assert_eq!((named, head), seen(app(&none).kept_answers(0).dev(true).router(), none).await, "as with no store");
+    let release = Seen::default();
+    assert!(seen(app(&release).dev(false).router(), release).await.0, "a release build names it where it keeps the page");
 }
 
 /// A kept page is given until its lifetime ends, which `.shared(..)` sets for a shared cache and

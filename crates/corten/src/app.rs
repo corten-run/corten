@@ -969,8 +969,9 @@ impl<M: Middleware> App<M> {
     /// kept there, whatever it is answered, and so does one that redirects to it; a
     /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
     /// under `corten dev`, where the log says instead, once for each route and verdict, whether a
-    /// release build keeps a `Public` route's answer to a `GET` that shows nothing about who
-    /// asks, and if not the first reason; an app with no `Public` route of a kind it keeps (a page, or JSON,
+    /// release build would keep a `Public` route's answer to a `GET` that shows nothing about who
+    /// asks while its store has room, and if not the first reason (a bound of 0 among them); an
+    /// app with no `Public` route of a kind it keeps (a page, or JSON,
     /// text or a file) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.
     pub fn kept_answers(mut self, bytes: usize) -> Self {

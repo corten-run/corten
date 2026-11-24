@@ -1596,10 +1596,10 @@ else a page could differ by, and the answer nothing made for one request:
 | what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
 
 Nothing is kept under `corten dev`, so the log says instead what a release build does with a
-`Public` route's answer to a `GET`: that it is kept and for how long (at `INFO`), or the first
-reason it is not and what to change (at `WARN`), such as an extractor of the app's own, a cookie it
-sets, the request's nonce, a form's submit key, a body under 1,024 bytes or a status other than
-`200`:
+`Public` route's answer to a `GET`: that it would keep it, and for how long, while its store has
+room (at `INFO`), or the first reason it does not and what to change (at `WARN`), such as an
+extractor of the app's own, a cookie it sets, the request's nonce, a form's submit key, a body
+under 1,024 bytes, a status other than `200` or a bound of `0` (`kept_answers(0)`):
 
 ```text
 WARN corten: /items is Public, but a release build does not keep its answer: it sets a cookie; set it on an answer that is not Public
@@ -1607,7 +1607,10 @@ WARN corten: /items is Public, but a release build does not keep its answer: it 
 
 The reasons come from the code that decides what a release build keeps, which runs under
 `corten dev` with a store that keeps nothing and gives nothing (writes are counted as a release
-build counts them), so they cannot say other than that build does. A reason the route's type
+build counts them), so they cannot say other than that build does. That an answer would be kept
+says it may be, not that it is: the store under `corten dev` holds nothing, so it is never full,
+and a full one keeps the answer for a URL only when that URL was asked for before (below). A
+reason the route's type
 decides (its handler's inputs, an answer that is neither a page nor a whole body, `unstaged`) is
 said for any `GET`; one a middleware decides before the handler (a caller it read, a URL it
 changed) or the answer decides, only for a request a kept answer could stand for, one that shows
