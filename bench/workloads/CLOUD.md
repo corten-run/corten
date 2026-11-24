@@ -954,10 +954,12 @@ is selected. Each `postedCreates` row also snapshots its attempt (root, round, g
 manifest and state hashes, custody outcome and whether it was contradicted). The
 child's final gate, after the account read that opens its create and after the
 selected group's own recheck, rereads every one of them, separately from that retry's
-eligibility: a changed manifest or state, a lock taken, a witness or reappearance stage
-written since the snapshot, or a contradicted attempt not yet retired refuses the create
-before intent or POST. A contradicted attempt retired by the pinned route does not block;
-its ID stays in the census fence. No local recheck is atomic with the provider: a
+eligibility: a changed manifest or state, a launch, operation or recheck lock beside the
+attempt (the same custody check as the selected group's own attempt), a witness or
+reappearance stage written since the snapshot, or a contradicted attempt not yet retired
+refuses the create before intent or POST (`changed, took custody or was contradicted before
+this create`). A contradicted attempt retired by the pinned route does not block; its ID
+stays in the census fence. No local recheck is atomic with the provider: a
 contradiction recorded after this gate is caught by the next launch, not this one.
 
 The group recheck settles only the child. A launch that stopped uncertain at its
