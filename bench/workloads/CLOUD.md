@@ -737,9 +737,35 @@ evidence and does not qualify this one.
 Any missing or contradicting proof leaves the existing path unchanged: an unbound
 or non-`errored` action stays `create-action-response`, a GET that is not 404, an
 inventory row with the ID, name or tag, an account change or a transport failure
-preserves the `creating` reservation for inspection, and an action still pending at
-the deadline stays uncertain with its locks. Such a reservation still blocks later
-launches in its root.
+preserves the `creating` reservation for inspection. Such a reservation still blocks
+later launches in its root.
+
+The provider can report `errored` long after the create's deadline: in r21 the
+action errored about 22 minutes after the accepted POST. A create action still
+pending at the deadline stays uncertain with its locks, and the launch also saves
+the POST's droplet and action IDs as `createPending` on the unbound `creating`
+reservation (a lost POST response saves none). A later `--collect` of that group,
+from the measured checkout, settles it read-only. With the original launch and
+operation locks still present, both must be the launch's exact records naming one
+owner that is provably gone; the recheck then runs under its own
+`create-recheck.lock`. It reads that exact action with `doctl compute action get`
+on the saved account. An action still `in-progress` returns 3 and changes nothing.
+Only the same action ID, `create` type, `droplet` resource bound to the posted
+droplet ID and status `errored`, followed by the same exact-404 and complete census
+absence proof, writes the same `provider-create-errored.json` receipt and
+`createErrored`, releases the dead launch's locks and returns 1. A live or
+uncertain owner, one missing lock, guest or monitor artifacts, a completed,
+unbound or differently bound action, a failed or uncertain read, a GET that is not
+404, an inventory match or an account change keeps the reservation, its IDs and
+its locks and stops; an uncertain read also keeps the recheck lock. The recheck
+never creates, deletes or binds. Fleet `--collect` still reports a child holding its
+operation lock as busy and does not run this recheck.
+
+Fleet verification reports a group whose saved `createErrored` receipt rebuilds
+from its state, with no launch lock left, as `create-errored`; it never qualifies
+the fleet. A continuation treats that attempt like a retired one: the group may
+be prepared again in a new slot, and the receipt is rechecked by hash before that
+launch.
 
 Ordinary `--collect` supports a separate unused-host retirement path only from
 the pre-start `preparing` state. A bounded read-only host probe must confirm exact

@@ -21,7 +21,7 @@ import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress
 import { readFleet, recheckSetupAttempt, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { unitQuery } from "./cloud-options.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
-import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
+import { createErroredReceipt, createErroredRecord, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 import { continuationAdmission, inspectContinuation } from "./group-continuation.mjs";
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
@@ -821,6 +821,51 @@ test("continuation appends authorized retries after no-create and retirement whi
   assert.equal(fs.readFileSync(index, "utf8"), "[]");
 });
 
+test("continuation retries past a create that errored after its launch deadline once the later recheck resolved it", { timeout: 60000 }, async (t) => {
+  const p = fixture(t), group = "json-api", slot = path.join(p.h.base, group);
+  fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
+  p.deps.inspect = () => { assert.fail("there is no collected evidence to replay"); };
+  const args = (round) => [round, "--continuation-root", p.h.base, "--group", group];
+  const prepare = (round) => fleetMain([...args(round), "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
+  assert.equal(await prepare("r19"), 3);
+  assert.equal(await fleetMain([...args("r19"), "--detach", "--print-approval"], p.deps), 3);
+  const approval = p.output.at(-1).approvalSha256, fleet = readFleet(slot, "r19").manifest;
+  const stateRoot = path.join(slot, group), local = path.join(stateRoot, "groups-r19"), at = new Date().toISOString();
+  const ids = { dropletId: "123", actionId: "456" }, statePath = path.join(local, "state.json"), receipt = path.join(local, createErroredReceipt);
+  const launchLock = path.join(stateRoot, ".groups-launch.lock"), operationLock = path.join(local, "operation.lock");
+  const pending = { ...reservation({ round: "r19", commit, token: fleet.jobs[0].token, group, fleet }), provider: fleet.provider,
+    fullGroupQualified: false, status: "creating", createIntentAt: at, createPending: ids };
+  // The launch reached its create deadline with the action still in progress.
+  p.deps.main = async () => {
+    fs.mkdirSync(local, { recursive: true }); fs.writeFileSync(statePath, JSON.stringify(pending));
+    fs.writeFileSync(launchLock, "SYNTHETIC"); fs.writeFileSync(operationLock, "SYNTHETIC");
+    throw Object.assign(new Error("PRIVATE_MESSAGE"), { controlUncertain: true, providerDiagnostic: { code: "create-action-pending" } });
+  };
+  await fleetMain([...args("r19"), "--detach", "--approve-reviewed-merged-ready", approval], p.deps).catch(() => {});
+  delete p.deps.main;
+  await assert.rejects(prepare("r20"), /unresolved custody/);
+  // The later recheck's result: the same receipt and record, and the dead launch's locks released.
+  const record = JSON.stringify(createErroredRecord(pending, ids, 3, at));
+  const resolve = (bytes = record) => {
+    fs.writeFileSync(receipt, bytes);
+    fs.writeFileSync(statePath, JSON.stringify({ ...pending, createErrored: { ...ids, evidenceSha256: digest(record) } }));
+  };
+  resolve(); await assert.rejects(prepare("r20"), /unresolved custody/, "a retained launch lock is still custody");
+  fs.unlinkSync(launchLock); fs.unlinkSync(operationLock);
+  resolve(record.replace('"droplets":3', '"droplets":4'));
+  await assert.rejects(prepare("r20"), /unresolved custody/, "a changed receipt is not resolved");
+  resolve();
+  let { report } = await inspectContinuation(p.h.base, p.deps);
+  assert.deepEqual(report.groups.find((r) => r.group === group).attempts.map((r) => [r.round, r.outcome]), [["r19", "create-errored"]]);
+  assert.ok(report.eligibleToRun.includes(group));
+  const tree = treeHash(slot);
+  assert.equal(await prepare("r20"), 3);
+  ({ report } = await inspectContinuation(p.h.base, p.deps));
+  assert.deepEqual(report.groups.find((r) => r.group === group).attempts.map((r) => [r.round, r.outcome]), [["r19", "create-errored"], ["r20", "prepared"]]);
+  assert.equal(treeHash(slot), tree, "the resolved attempt is never rewritten");
+  assert.deepEqual(p.events().filter((row) => row.method === "POST"), []);
+});
 test("remaining approval moves from sfo2 to lon1 through captured workers and dispatches once", { timeout: 120000 }, async (t) => {
   const p = fixture(t, "overlap");
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3);

@@ -6,7 +6,7 @@ import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { controlEnvironment } from "./cloud-transport.mjs";
-import { erroredCreate, providerDiagnostic, unsentDelete } from "./cloud-options.mjs";
+import { erroredCreate, pendingCreate, providerDiagnostic, unsentDelete } from "./cloud-options.mjs";
 import { providerCreateHost } from "./cloud-contract.mjs";
 
 const directory = dirname(fileURLToPath(import.meta.url));
@@ -73,13 +73,17 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
         terminal = { error, last: slot.last, deadline: slot.deadline }; closed = true;
         slot.reject(error); return;
       }
-      if (!pending || !keys(message, ["schema", "sequence", "nonce", "ok", "result"]) || message.schema !== "cloud-provider-result/v1"
+      // Only an unsettled, permitted create may name the IDs its accepted POST returned.
+      const posted = Object.hasOwn(message ?? {}, "pendingCreate") ? pendingCreate(message.pendingCreate) : undefined;
+      if (!pending || !(keys(message, ["schema", "sequence", "nonce", "ok", "result"])
+          || posted && message.ok === false && pending.create && pending.allowFail && keys(message, ["schema", "sequence", "nonce", "ok", "result", "pendingCreate"]))
+        || message.schema !== "cloud-provider-result/v1"
         || message.sequence !== pending.sequence || message.nonce !== nonce || typeof message.ok !== "boolean") { fail(); return; }
       const slot = pending; pending = undefined;
       if (!message.ok) {
         const value = providerDiagnostic(message.result);
         if (message.result !== null && !value) { fail(); slot.reject(uncertain()); return; }
-        diagnostic ??= value; failed = true; slot.reject(uncertain()); return;
+        diagnostic ??= value; failed = true; slot.reject(Object.assign(uncertain(), posted ? { pendingCreate: posted } : {})); return;
       }
       const value = message.result;
       const permittedDiagnostic = value?.status === 1 ? providerDiagnostic(value.providerDiagnostic) : undefined;
@@ -159,9 +163,11 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
         ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }, (error) => { if (error) fail(); });
       return await bounded(result, timeout + 1000);
     } catch (error) {
-      await close();
+      // Teardown keeps the posted create's IDs with whichever uncertainty is reported.
+      const posted = pendingCreate(error?.pendingCreate), attach = (value) => posted ? Object.assign(value, { pendingCreate: posted }) : value;
+      try { await close(); } catch (closeError) { throw attach(closeError); }
       if (terminal?.error === error && !failed && !interrupted()) throw error;
-      throw uncertain();
+      throw attach(uncertain());
     }
   };
   run.close = close;

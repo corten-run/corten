@@ -314,7 +314,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     assert.ok(!interrupted(), "controller cancelled");
     const command = args.slice(0, -2);
     const reportUnsent = command[2] === "delete" && allowFail && deleteProofExpiresAtMs !== undefined && !unsafe && !mutationPending;
-    let requestEntered = false;
+    let requestEntered = false, posted;
     let code = "provider-command";
     let listTime = deadline - timeout;
     const readRemaining = () => {
@@ -324,7 +324,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     };
     const call = async (phase, method, path, body, expected = 200) => {
       await controlCheckpoint(interrupted);
-      const read = ["account", "list", "get", "catalog"].includes(phase);
+      const read = ["account", "list", "get", "catalog", "action"].includes(phase);
       const remaining = read ? readRemaining() : Math.ceil(deadline - now());
       if (interrupted() || remaining <= 0) throw stopped(true);
       code = `${phase}-request`;
@@ -384,6 +384,18 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
           readRemaining();
           return refused({ code });
         }
+      } else if (command[1] === "action") {
+        // A later read of one known action. Only its identity and status leave the worker.
+        assert.equal(command.length, 6);
+        assert.deepEqual([...command.slice(0, 3), ...command.slice(4)], ["compute", "action", "get", "--output", "json"]);
+        assert.ok(/^[1-9]\d*$/.test(command[3]) && positive(Number(command[3])), "positive exact action ID required");
+        const action = (await call("action", "GET", `/v2/actions/${command[3]}`))?.action;
+        code = "action-response";
+        const word = (value) => typeof value === "string" && /^[a-z][a-z_-]{0,63}$/.test(value);
+        if (!(action && typeof action === "object" && !Array.isArray(action) && action.id === Number(command[3]) && word(action.type)
+          && word(action.resource_type) && word(action.status) && (action.resource_id === null || Number.isSafeInteger(action.resource_id) && action.resource_id >= 0)))
+          throw stopped(false, { code });
+        value = [{ id: action.id, type: action.type, resource_type: action.resource_type, resource_id: action.resource_id, status: action.status }];
       } else if (command[2] === "list") {
         assert.deepEqual(command, ["compute", "droplet", "list", "--output", "json"]);
         let requests = 0;
@@ -465,6 +477,8 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         // never read, parse, follow or forward it. The canonical GET proves the
         // action's actual type, resource and completion, not a link's spelling.
         const dropletId = result.droplet.id, actionId = actions[0].id;
+        // From here an unsettled outcome still identifies what the one POST created.
+        posted = { dropletId: String(dropletId), actionId: String(actionId) };
         for (;;) {
           const response = await call("create-action", "GET", `/v2/actions/${actionId}`);
           code = "create-action-response";
@@ -513,7 +527,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         unsafe = true; throw stopped(true, diagnostic);
       }
       if (error?.controlUncertain) unsafe = true;
-      if (error?.controlUncertain) throw stopped(true, diagnostic);
+      if (error?.controlUncertain) throw Object.assign(stopped(true, diagnostic), posted ? { pendingCreate: posted } : {});
       if (allowFail && !reportUnsent && (error?.createSemanticFailure === true || error?.httpFailure
         && (command[2] !== "get" || diagnostic.code === "get-http" && diagnostic.httpStatus === 404))) {
         const result = refused(diagnostic);

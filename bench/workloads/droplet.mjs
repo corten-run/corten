@@ -8,14 +8,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerCheckSeconds, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash, withVerifiedArchive } from "./cloud-local.mjs";
-import { campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
+import { campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
   interruptedFirstUpload, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
-  verifyUnusedEvidence } from "./cloud-retirement.mjs";
+  verifyUnusedEvidence, createErroredReceipt, createErroredRecord, readRetainedInvalidLocks, verifyCreateErrored } from "./cloud-retirement.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { controlCheckpoint, pinnedHostOptions } from "./cloud-transport.mjs";
 
@@ -28,26 +28,6 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
   return r;
 }
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
-const createErroredReceipt = "provider-create-errored.json";
-// Rebuild the receipt from the saved state; only the census size and time come from the file.
-function verifyCreateErrored(local, s) {
-  const bytes = regular(join(local, createErroredReceipt), 64 * 1024), record = JSON.parse(bytes);
-  assert.equal(digest(bytes), s.createErrored.evidenceSha256, "create failure receipt changed; preserve reservation");
-  assert.ok(Number.isSafeInteger(record.absence?.inventory?.droplets) && record.absence.inventory.droplets >= 0
-    && typeof record.observedAt === "string" && new Date(record.observedAt).toISOString() === record.observedAt, "create failure receipt changed; preserve reservation");
-  assert.deepEqual(record, createErroredRecord(s, s.createErrored, record.absence.inventory.droplets, record.observedAt),
-    "create failure receipt changed; preserve reservation");
-  return true;
-}
-function createErroredRecord(s, { dropletId, actionId }, droplets, observedAt) {
-  return { schema: "benchmark-provider-create-errored/v1", round: s.round, commit: s.commit, ...(s.group === undefined ? {} : { group: s.group }),
-    name: s.name, tag: s.tag, host: s.host, createIntentAt: s.createIntentAt,
-    action: { id: Number(actionId), type: "create", resourceType: "droplet", resourceId: Number(dropletId), status: "errored" },
-    account: { id: s.provider.accountId, verified: "before-and-after-each-provider-call" },
-    absence: { exactGet: { id: Number(dropletId), httpStatus: 404 },
-      inventory: { complete: true, droplets, matchingId: 0, matchingName: 0, matchingTag: 0 } },
-    observedAt, dispatched: { create: 1, replacementCreate: 0, delete: 0, guest: false }, measurements: 0 };
-}
 const createErroredStop = () => Object.assign(new Error("provider create errored; exact allocation verified absent; no DELETE or replacement create"),
   { providerDiagnostic: { code: "create-errored-absent" } });
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -73,7 +53,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   mkdirSync(requested, { recursive: true, mode: 0o700 });
   const base = realpathSync(requested); physical(base);
   const local = join(base, `groups-${options.round}`), statePath = join(local, "state.json"), archive = join(local, "results.tgz");
-  const recoveryLock = "stream-recovery.lock", groupedPreplan = recoveryApproval?.policy === "grouped-preplan-failure-custody-only";
+  const recoveryLock = "stream-recovery.lock", recheckLock = "create-recheck.lock", groupedPreplan = recoveryApproval?.policy === "grouped-preplan-failure-custody-only";
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
@@ -196,6 +176,60 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     if (rows.some((d) => String(d?.id) === dropletId || d?.name === state.name || Array.isArray(d?.tags) && d.tags.includes(state.tag))) return undefined;
     return rows.length;
   };
+  // A launch that stopped while its accepted create was unsettled kept the POST's IDs
+  // and, normally, its own locks. Read that exact action later. Only a terminal errored
+  // action bound to the posted droplet, with the droplet proved absent on the saved
+  // account, records the provider-errored outcome. Any other answer preserves custody.
+  async function settlePendingCreate(observed) {
+    const m = observed.control?.monitor;
+    assert.ok(!observed.deletionIntentAt && (!observed.control || !observed.control.ledger.length && !observed.control.sealed.length
+      && (!m || m.phase === "pending" && !m.registrationSha256)), "pending create has guest control; preserve reservation");
+    assert.ok(!readdirSync(local).some((name) => name.startsWith("monitor-") || name === "known_hosts" || name === recheckLock),
+      "pending create has guest or recheck artifacts; preserve reservation");
+    const paths = [join(local, "operation.lock"), join(base, ".groups-launch.lock")], held = paths.map((path) => existsSync(path));
+    assert.equal(held[0], held[1], "partial original launch locks; preserve reservation");
+    let unchanged = () => {};
+    if (held[0]) {
+      // The original launch's exact lock records, one owner, and that owner gone.
+      const original = paths.map((path) => regular(path, 1024));
+      readRetainedInvalidLocks(local, observed);
+      unchanged = () => {
+        assert.ok(paths.every((path, i) => regular(path, 1024).equals(original[i])), "original launch locks changed; preserve reservation");
+        assert.ok(!retainedInvalidOwner(local, observed), "original launch owner is still live or uncertain; preserve reservation");
+      };
+      unchanged();
+    }
+    return locked(async () => {
+      assert.deepEqual(state, observed, "pending create reservation changed; preserve reservation");
+      unchanged();
+      const posted = state.createPending;
+      if (!state.createErrored) {
+        // Read-only: never a second create, a DELETE or a bind.
+        const rows = JSON.parse((await execute("doctl", ["compute", "action", "get", posted.actionId, "--output", "json"])).stdout);
+        assert.ok(Array.isArray(rows) && rows.length === 1, "create action observation unavailable; preserve reservation");
+        const [action] = rows;
+        assert.ok(action?.id === Number(posted.actionId) && action.type === "create" && action.resource_type === "droplet",
+          "create action identity differs; preserve reservation");
+        // Still running: nothing has settled. Report pending without changing custody.
+        if (action.status === "in-progress" && [null, 0, Number(posted.dropletId)].includes(action.resource_id)) return 3;
+        assert.ok(action.status === "errored" && action.resource_id === Number(posted.dropletId),
+          "create action is not an errored create of the posted droplet; preserve reservation");
+      }
+      const droplets = await providerAbsent(posted);
+      assert.ok(droplets !== undefined, "provider-errored allocation not verified absent; preserve reservation");
+      check(); unchanged();
+      if (state.createErrored) verifyCreateErrored(local, state);
+      else {
+        const bytes = `${JSON.stringify(createErroredRecord(state, posted, droplets, new Date().toISOString()), null, 2)}\n`;
+        durable(join(local, createErroredReceipt), bytes);
+        state.createErrored = { ...posted, evidenceSha256: digest(bytes) }; save();
+      }
+      // These locks guarded one create that is now provider-terminal and absent, with
+      // no host, SSH or guest work ever recorded; nothing remains for them to guard.
+      if (held[0]) { unchanged(); for (const path of paths) { unlinkSync(path); syncDirectory(dirname(path)); } }
+      return 1;
+    }, false, held[0] ? recheckLock : "operation.lock");
+  }
   const exactHost = async (remaining) => {
     const result = await execute("doctl", ["compute", "droplet", "get", state.id, "--output", "json"], 60000, true, undefined, remaining);
     if (result.status === 1 && providerFailure(result)?.code === "get-http" && providerFailure(result)?.httpStatus === 404) return undefined;
@@ -850,8 +884,19 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             fleetRegion(catalog, remainingPlacement?.region ?? fleet.host.region,
               { remainingOnly: remainingAdmission, staged: stagedFleet(fleet), group: fleet.single?.group });
           }
-          const created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
-            "--ssh-keys", options.sshKey, "--tag-names", [...tags, state.tag].join(","), "--wait", "--output", "json"], 10 * 60000, true);
+          let created;
+          try {
+            created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
+              "--ssh-keys", options.sshKey, "--tag-names", [...tags, state.tag].join(","), "--wait", "--output", "json"], 10 * 60000, true);
+          } catch (error) {
+            // An accepted create still unsettled at its deadline keeps the POST's droplet and
+            // action IDs beside the preserved locks, so a later read can settle that exact action.
+            const posted = pendingCreate(error?.pendingCreate);
+            if (posted && (error.controlUncertain || error.controlTreeUncertain) && state.status === "creating" && !state.id) {
+              try { boundary(); state.createPending = posted; writeState(state); } catch { /* Preserve without the IDs. */ }
+            }
+            throw error;
+          }
           // A provider-terminal create failure retires this attempt only with all four
           // proofs: exact action/droplet identity and errored status (worker), the saved
           // account and exact absence (providerAbsent). Otherwise preserve as before.
@@ -942,6 +987,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         state.destroyedAt ??= new Date().toISOString(); save(); return 1;
       });
       const observed = read();
+      if (observed.createPending && observed.status === "creating" && !observed.id
+        && (!observed.createErrored || existsSync(join(local, "operation.lock")))) return settlePendingCreate(observed);
       if (observed.createErrored) return locked(async () => {
         // Read-only: recheck the receipt and absence. Never DELETE, create or bind.
         assert.ok(state.createErrored, "create failure record changed; preserve reservation");

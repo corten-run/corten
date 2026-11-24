@@ -10,7 +10,7 @@ import { livePeerLease, streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
-import { readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyFailedNativeRetirement,
+import { readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
   verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
@@ -469,6 +469,13 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
       const historicalLocks = historicalChildLocks(job, processStart);
       const retained = retainedCandidate && (s.destroyedAt ? !!historicalLocks : !retainedInvalidOwner(job.local, s));
       if (job.outcome !== "available" && !retained) { add({ group, outcome: job.outcome }); continue; }
+      if (s.createErrored) {
+        // Resolved only with its receipt and with no launch custody left behind.
+        assert.ok(!present(join(job.stateRoot, ".groups-launch.lock")), "provider-errored create still holds launch custody");
+        verifyCreateErrored(job.local, s);
+        assert.equal(digest(regular(join(job.local, "state.json"), 1024 * 1024)), job.stateSha256, "create failure changed during verification");
+        add({ group, outcome: "create-errored" }); continue;
+      }
       if (s.status === "retired") {
         if (s.retirement.kind === "native-failed") {
           if (present(join(job.local, "stream-recovery.lock"))) { add({ group, outcome: "busy" }); continue; }

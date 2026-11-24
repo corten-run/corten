@@ -12,7 +12,8 @@ const providerCodes = ["provider-command", "provider-credential", "provider-outp
   "catalog-request", "catalog-http", "catalog-response",
   "create-request", "create-http", "create-response", "create-link", "create-action-request", "create-action-http",
   "create-link-shape", "create-link-count", "create-link-id", "create-link-rel", "create-link-href",
-  "create-action-response", "create-action-pending", "create-action-errored", "create-errored-absent", "delete-request", "delete-http"];
+  "create-action-response", "create-action-pending", "create-action-errored", "create-errored-absent", "delete-request", "delete-http",
+  "action-request", "action-http", "action-response"];
 const providerStatuses = [200, 201, 202, 204, 301, 302, 303, 304, 307, 308, 400, 401, 403, 404, 405, 408, 409, 410, 413, 415, 422, 429, 500, 501, 502, 503, 504];
 const providerDetails = {
   "account-request": ["internal-refusal", "connect", "send", "request-error", "response-error", "response-aborted",
@@ -51,6 +52,16 @@ export function erroredCreate(result) {
   const [{ id, actionId }] = JSON.parse(stdout);
   if (!Number.isSafeInteger(id) || !Number.isSafeInteger(actionId)) return undefined;
   return { dropletId: String(id), actionId: String(actionId) };
+}
+
+// The droplet and create action IDs of an accepted POST whose outcome is still
+// unknown. Identity only: never completion, failure or absence proof.
+export function pendingCreate(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || JSON.stringify(Object.keys(value).sort()) !== '["actionId","dropletId"]') return undefined;
+  const ids = [value.dropletId, value.actionId];
+  if (!ids.every((id) => typeof id === "string" && /^[1-9]\d{0,15}$/.test(id) && Number.isSafeInteger(Number(id)))) return undefined;
+  return { dropletId: value.dropletId, actionId: value.actionId };
 }
 
 export function fleetCatalogResult(result) {
@@ -156,7 +167,7 @@ export function controllerState(s, round, options) {
   validateState(s, round, options);
   const allowed = ["schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "createdAt", "status", "id", "ip",
     "createIntentAt", "archiveSha256", "evidenceSha256", "extractionAttempts", "evidence", "evidenceOutcome", "collectedAt", "deletionIntentAt", "destroyedAt",
-    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "gitSource", "quietBootstrap", "remainingPlacement", "launchHostKeySha256", "createErrored"];
+    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "gitSource", "quietBootstrap", "remainingPlacement", "launchHostKeySha256", "createErrored", "createPending"];
   assert.ok(Object.keys(s).every((k) => allowed.includes(k)), "unknown controller state field");
   providerIdentity(s.provider);
   if (s.fleet) assert.deepEqual(s.provider, s.fleet.provider, "fleet account/context differs");
@@ -221,6 +232,11 @@ export function controllerState(s, round, options) {
         assert.equal(s[key], undefined, "unused retirement cannot claim campaign evidence");
     } else assert.ok(s.archiveSha256 && s.evidenceSha256 && s.evidence, "failed setup requires preserved archive evidence");
   }
+  if (s.createPending !== undefined) {
+    // An accepted POST whose create action had not settled when the launch stopped.
+    assert.deepEqual(pendingCreate(s.createPending), s.createPending, "pending create identity");
+    assert.ok(!s.id || s.id === s.createPending.dropletId, "bound host differs from the posted create");
+  }
   if (s.createErrored !== undefined) {
     // Terminal provider failure of the one create: never bound, provisioned or deleted.
     const c = s.createErrored;
@@ -235,6 +251,7 @@ export function controllerState(s, round, options) {
     const m = s.control?.monitor;
     assert.ok(!s.control || !s.control.ledger.length && !s.control.sealed.length && (!m || m.phase === "pending" && !m.registrationSha256),
       "a provider-errored create cannot have guest control");
+    if (s.createPending) assert.deepEqual({ dropletId: c.dropletId, actionId: c.actionId }, s.createPending, "create failure differs from the posted create");
   }
   if (s.evidence) assert.ok(s.archiveSha256 && s.evidenceSha256, "unhashed evidence");
   if (s.collectedAt || s.status === "collected") assert.ok(s.evidence && s.validation && ["validated", "failed", "blocked"].includes(s.evidenceOutcome), "incomplete collection state");

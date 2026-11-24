@@ -15,6 +15,30 @@ import { campaignRounds, jsonPreparationRound, nativeArtifactRoot } from "./regi
 import { deploymentSha256 } from "./deployments.mjs";
 import { cancellationState, mixedDigest, mixedWait, originalMixedControls, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 
+// A provider-errored create: one accepted POST whose exact action ended errored and
+// whose droplet was proved absent on the saved account. Never a host or a deletion.
+export const createErroredReceipt = "provider-create-errored.json";
+export function createErroredRecord(s, { dropletId, actionId }, droplets, observedAt) {
+  return { schema: "benchmark-provider-create-errored/v1", round: s.round, commit: s.commit, ...(s.group === undefined ? {} : { group: s.group }),
+    name: s.name, tag: s.tag, host: s.host, createIntentAt: s.createIntentAt,
+    action: { id: Number(actionId), type: "create", resourceType: "droplet", resourceId: Number(dropletId), status: "errored" },
+    account: { id: s.provider.accountId, verified: "before-and-after-each-provider-call" },
+    absence: { exactGet: { id: Number(dropletId), httpStatus: 404 },
+      inventory: { complete: true, droplets, matchingId: 0, matchingName: 0, matchingTag: 0 } },
+    observedAt, dispatched: { create: 1, replacementCreate: 0, delete: 0, guest: false }, measurements: 0 };
+}
+// Rebuild the receipt from the saved state; only the census size and time come from the file.
+export function verifyCreateErrored(local, s) {
+  assert.ok(s.createErrored, "no provider-errored create record");
+  const bytes = regular(join(local, createErroredReceipt), 64 * 1024), record = JSON.parse(bytes);
+  assert.equal(digest(bytes), s.createErrored.evidenceSha256, "create failure receipt changed; preserve reservation");
+  assert.ok(Number.isSafeInteger(record.absence?.inventory?.droplets) && record.absence.inventory.droplets >= 0
+    && typeof record.observedAt === "string" && new Date(record.observedAt).toISOString() === record.observedAt, "create failure receipt changed; preserve reservation");
+  assert.deepEqual(record, createErroredRecord(s, s.createErrored, record.absence.inventory.droplets, record.observedAt),
+    "create failure receipt changed; preserve reservation");
+  return true;
+}
+
 // This migration is not a general old-source collection or validation override.
 export const failedNativeCommit = "9f3d35884c67d90524f978d173fabeb3a17bc970";
 const failedNativeCases = [
