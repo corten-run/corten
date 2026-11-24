@@ -280,15 +280,24 @@ test("the fixture-git.mjs hop passes a TERM sent to it alone on to Git, then end
   const ready = join(dir, "ready"), received = join(dir, "received");
   const bin = standIn(t, [
     `trap 'echo TERM >> "${received}"; kill $sleeper; trap - TERM; kill -TERM $$' TERM`,
-    "sleep 30 & sleeper=$!", `: > "${ready}"`, "wait $sleeper",
+    // Bounded on its own, so a hop that dropped the TERM leaves nothing running for long.
+    "sleep 12 & sleeper=$!", `: > "${ready}"`, "wait $sleeper",
   ].join("\n"));
   const hop = onPath(bin, () => spawn(process.execPath, [cli, "--", "status"], { cwd: dir, detached: true, stdio: "ignore" }));
   const exited = once(hop, "exit");
-  // The hop leads its own group; if it failed to pass TERM on, end the stand-in it left behind.
-  t.after(() => { try { process.kill(-(/** @type {number} */ (hop.pid)), "SIGKILL"); } catch { /* the group has ended */ } });
+  // The hop leads its own group. Only while it is still running does that group number name this
+  // test's processes, so teardown signals the group then and never after the hop has exited; a
+  // stand-in a hop left behind ends by its own bound.
+  t.after(() => {
+    if (hop.exitCode !== null || hop.signalCode !== null) return;
+    try { process.kill(-(/** @type {number} */ (hop.pid)), "SIGKILL"); } catch { /* the group has ended */ }
+  });
+  const timer = new AbortController();
+  t.after(() => timer.abort());
   await appears(ready, "the stand-in");
   hop.kill("SIGTERM");
-  const ended = await Promise.race([exited, delay(10000).then(() => null)]);
+  const ended = await Promise.race([exited, delay(10000, null, { signal: timer.signal }).catch(() => null)]);
+  timer.abort();
   assert.equal(existsSync(received) ? readFileSync(received, "utf8") : "", "TERM\n", "the hop must pass TERM on to Git");
   assert.deepEqual(ended, [null, "SIGTERM"]);
 });
