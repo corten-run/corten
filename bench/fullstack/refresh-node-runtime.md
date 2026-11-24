@@ -59,7 +59,53 @@ fixtures (`bench/workloads/test-fixtures/`), and the lines in `CHANGELOG.0.2.0.m
 `docs/design.md`, `docs/guide/deploy.md` and `bench/http2/README.md` that record where an
 earlier measurement was taken.
 
-VERIFICATION_PLACEHOLDER
+### Debian 13 verification
+
+Run from commit `ecd96fa15` on one Windows workstation with Docker Desktop, linux/amd64
+only; no arm64 image was built. These are build and correctness checks, not timing.
+
+1. All eleven changed Dockerfiles built: the seven fullstack JS apps, SvelteKit's
+   `Dockerfile.marketplace`, Gin, and the live Express and Laravel apps. The Node images
+   and live Express report Debian 13.8 and Node v26.13.1; Gin and the Laravel final
+   stage report Debian 13.7. The Express/Bun image built from `pins.json` reports
+   Debian 13.8, Node v26.13.1 and Bun 1.4.5.
+2. In `node:26.13.1-trixie-slim`, the fast unit files (those that need no running server
+   or browser) passed 93 of 93: Astro 13, Next.js 26, Nuxt 13, React Router 14, SvelteKit
+   13, TanStack Start 14. Express's marketplace, request-lifetime and traceparent files
+   passed 36 of 36 inside its built image; its `htmx.test.mjs` reads the Spring app's
+   Dockerfile, which is outside the image, and was not run there. After a build, the
+   Astro, Nuxt and SvelteKit `marketplace-http.test.mjs` files passed 3 of 3 each, and
+   React Router's `alerts-http.test.mjs` passed 2 of 2 against its built image with the
+   fixture source. The other alert, browser and Next.js production suites were not run.
+3. The unchanged `bench/marketplace/check.mjs` oracle passed against the rebuilt Express
+   image with the fixture source: 500 records, 264 pages, 12 of 12 profiles. No other
+   app/source pair was run.
+4. The Debian 13 Gin container answered the `cold-start.mjs` probe's bash `/dev/tcp`
+   request with 200, and GNU `date +%s%N` ran in the probe image. `go test ./...` in
+   Gin's Alpine build stage, which this refresh does not change, failed
+   `TestNativeProductionBoundsAndFollowup` five times of five with a connection reset by
+   peer. It runs in the unchanged build stage on unchanged sources, so the runtime image
+   is not its cause; it was not diagnosed.
+5. In `node:26.13.1-trixie` (Node v26.13.1) without a Docker CLI or systemd, these passed:
+   `npm run check` (341 and 35), `check:catalog` (348, 1 skipped), `check:json-api` (92),
+   `check:workloads` (1,524, 7 skipped), `check:groups:host` (215, 1 skipped; 8; 18),
+   `check:groups:browser` (641, 12 skipped), `check:groups:evidence:core` (837),
+   `check:groups:evidence:contracts` (418), `check:groups:evidence:browser` (503,
+   1 skipped; 134) and `check:client-heavy` (117). The skips are opt-in Linux or Docker
+   tests. The first `evidence:core` run failed 31 tests because a diagnostic report
+   file had been left in the checkout; with the checkout clean it passed.
+   `check:marketplace` passed 267 and failed 1: its `droplet.test.mjs` systemd unit
+   check, which spawns `systemd-analyze`, absent from the container; neither that test
+   nor its contract changes here.
+6. `native-controls.test.mjs` failed both tests in that container. Its Docker ledger test
+   passed 1 of 1 against host Docker with the Debian 13 image. Its Chromium worker test,
+   which does not use the image, fails with `native-target-discovery-command-missing` in
+   that container and on the workstation, from this commit and from base `799c6e56d`
+   alike, so the image change does not cause it.
+7. The opt-in Docker test of `fixture-publication.test.mjs` passed 1 of 1 with the
+   slim default: Gin's uid 65534 and Rails's uid 1000 read the published fixtures, and
+   private evidence stayed unreadable.
+
 ## Current official metadata
 
 Checked 2026-11-13, after reading GitHub REST issue metadata and every comment using
