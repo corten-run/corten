@@ -9813,8 +9813,9 @@ rules something out.
        parks: a request that does not wait then costs 213 and 212 more of 20,590 (219 and 218 of
        19,980 single-threaded), 1.0% and 1.1%, until the timer fires, a deadline's length after
        the connection's last request that waited (30 s by default; reasoned from the timer
-       firing once and nothing setting it again, not measured). No workload of the cycle run
-       sends that request, so what it costs in cycles is not read.
+       firing once and nothing setting it again, not measured). It is the request the change
+       costs most, and the cycle run reads it as a touched workload held to +1% (`after`:
+       connections that each send requests that wait and then only requests that do not).
     2. A connection whose only request waits, the default of a proxy that opens a connection for
        each request, makes no timer, and pays for the first deadline telling the connection it
        waited: 171 and 199 instructions more of 35,060, 0.5% and 0.6%, on one single-threaded
@@ -9822,7 +9823,7 @@ rules something out.
        76 there and `main`'s within 31), and 81 and 124 of 38,400 on the multi-threaded one; an
        earlier count of the same binaries gave 168 and 169, and 110 and 127. No allocation
        more. Among the requests the rule below reads it is the one the change costs most, and
-       the cycle run reads it as a touched workload held to +1% (`close`).
+       the cycle run reads it too as a touched workload held to +1% (`close`).
     3. The kept timer is a boxed `Sleep` of 112 bytes, and the connection's future is 16 bytes
        larger (measured on the form before this one, whose types these are; tokio 1.54.1, x86-64
        Linux), the timer from the connection's second request that waits until it closes: about
@@ -9865,6 +9866,19 @@ rules something out.
        a deadline tells the connection it has waited only after it has made its own timer, and
        the connection makes its timer inside a catch of its own, for a handler that made its
        timer on a runtime it had entered.
+
+    The branch then merged `main` at `df9242b56`, which had changed `answer.rs` and `route.rs`
+    on every request's path, and the rows the cycle plan's expectations rest on were counted
+    again, that commit against the merge, `2a653b1d0`, in one session with the pair above as a
+    control (round 1 and round 2; under the tag `evidence/deadline-timer-3`). A staged request
+    that does not wait costs 7 and 2 more on the multi-threaded runtime and 5 and 28 on the
+    single-threaded one; the kept-alive request that waits 131 and 139 fewer, and 125 and 128;
+    a connection for each request whose handler waits 152 and 137 more, and 185 and 155 with
+    the wait after each close; a request that does not wait after three that did 215 and 216
+    more, and 220 and 219. The control read 2 and 4, and 48 and 27; 134 and 129 fewer, and 136
+    and 132; 144 and 96, and 181 and 175; 213 and 209, and 220 and 221. `main` itself counts
+    within 22 of what it did at the earlier base on each of these rows, so the costs above
+    stand on this base as counted.
 
     Not chosen: leaving each deadline its own timer (the numbers above are against it). A pool
     of timers a thread keeps, lent to whichever request waits (as fast: 17.4% to 18.5% more
@@ -9941,10 +9955,11 @@ rules something out.
     requests, so the timer a connection makes is used; a connection that serves requests that
     wait and then, within a deadline's length, many that do not is rare enough, or its 1% of
     instructions on those requests small enough in cycles, that cost 1's last part is worth the
-    gain, which no run here reads; a proxy that opens a connection for each request pays cost 2
-    instead, and an app whose requests arrive that way has not been measured in cycles yet; and
-    the one wake of an idle connection and the 112 bytes are cheap beside what a connection
-    already costs); measured (requests a second and p99, the base `be1192a7b` against
+    gain, which the cycle run's `after` is there to read and has not yet; a proxy that opens a
+    connection for each request pays cost 2 instead, and an app whose requests arrive that way
+    has not been measured in cycles yet; and the one wake of an idle connection and the 112
+    bytes are cheap beside what a connection already costs); measured (requests a second and
+    p99, the base `be1192a7b` against
     the change's first form, `69663386e`, in two passes and its form at `4c6cdf4ad` in four, two
     of those on a patch one `mut` from it, one machine of 48 CPUs, a Xeon Platinum 8280 whose
     topology was not recorded, Linux 7.0, tokio 1.54.1 and hyper 1.13.0 as each image
@@ -9954,7 +9969,9 @@ rules something out.
     against `ca259c467`, A at `098f56243` and C at `05c9bf95f`, callgrind 3.24, tokio 1.54.1
     and hyper 1.12.0, A and B in one session and C with its own count of A in another; the
     paused clock and the shut-down runtime on this form; those under the tag
-    `evidence/deadline-timer-2`; every binary measured under either tag was built with
+    `evidence/deadline-timer-2`; four of those rows again on `main` at `df9242b56` against the
+    merge, `2a653b1d0`, with the earlier pair built again as a control, under the tag
+    `evidence/deadline-timer-3`; every binary measured under any of the tags was built with
     `--cfg tokio_unstable`, which compiles tokio's timer with the branches of its second
     flavour, so none is the build an app makes by default); platform (hyper 1.12.0's HTTP/1
     server polls one request's future at a time, inside the connection's own poll, and reads no
@@ -9969,8 +9986,8 @@ rules something out.
     its waker is registered before the timer can fire; and every path that is not the common one
     is what every deadline did before); value (Fast, and proven fast: handlers that wait no
     longer queue on one lock; Verified, not assumed: the costs above are counted but for the
-    idle wake, and the cycle run reads four requests that gain nothing or little, not the one
-    cost 1 ends with, README Values).
+    idle wake, and the cycle run reads five requests that gain nothing or little, the one cost
+    1 ends with among them, README Values).
 
     Revisit when: tokio's timer for each worker (`enable_alt_timer`) is stable and the default,
     or tokio's wheel otherwise stops taking one lock for a timer made and dropped, which leaves
@@ -9978,9 +9995,9 @@ rules something out.
     Corten serves HTTP/2 itself, where a connection answers many requests at once and one timer
     a connection serves one of them; a cycle run finds a connection for each request whose
     handler waits over its +1% margin, which leaves no cheaper form known here and reopens this
-    Choice; an app is found whose connections serve requests that wait and then requests that
-    do not, which asks for a cycle run on that request, or for a kept timer that is taken out
-    of the wheel when its deadline gives it back; an app is found whose handlers serve requests
+    Choice; a cycle run finds a request that does not wait, on a connection whose timer is set,
+    over its +1% margin, which asks for a kept timer that is taken out of the wheel when its
+    deadline gives it back, and reopens this Choice; an app is found whose handlers serve requests
     on a runtime of their own under a server it shuts down first, which asks for the check cost
     6 leaves out; a run of requests a second on this form does not show the earlier forms'
     gain; or a run on fewer cores, at tokio 1.44, or built without `tokio_unstable`, shows no
@@ -9991,6 +10008,9 @@ rules something out.
     `75ded4019`, results under the tag `evidence/deadline-timer`; 2026-11-24, instructions and allocations a request on
     `81e77162a`, `098f56243`, `05c9bf95f` and `ca259c467`, and the paused clock and the tests
     against broken rules on `ca259c467`, results under the tag `evidence/deadline-timer-2`;
+    2026-11-24, instructions and allocations a request on `df9242b56` and `2a653b1d0`, with
+    `81e77162a` and `ca259c467` as the control, and the tests against broken rules on
+    `2a653b1d0`, results under the tag `evidence/deadline-timer-3`;
     2026-11-24, tokio 1.54.1 (`Cargo.lock`) and tokio 1.44.0 read for the wheel's locks and
     `Sleep::reset`, and hyper 1.12.0 (`Cargo.lock`) for one request at a time.
 
