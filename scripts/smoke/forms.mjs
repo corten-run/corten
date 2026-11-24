@@ -108,17 +108,28 @@ export async function generatedFormViews(browser) {
 }
 
 export async function formFailures(page, failWatch, openFeeds) {
-  // A submit the network fails: the form stays, and the page hears about it.
+  // A submit the network fails: the form stays, and the page hears about it. The press runs in
+  // the page and the wait for the error is bounded, so a press that never submits fails the check
+  // in 6 s rather than waiting on the stall watchdog (#2014).
   const failed = page.evaluate(
     () =>
-      new Promise((resolve) =>
-        document.addEventListener("corten:error", (e) => resolve([/** @type {CustomEvent} */ (e).detail.status, e.cancelable]), { once: true }),
-      ),
+      new Promise((resolve) => {
+        const stop = new AbortController();
+        const late = setTimeout(() => (stop.abort(), resolve(null)), 6000);
+        document.addEventListener(
+          "corten:error",
+          (e) => (clearTimeout(late), stop.abort(), resolve([/** @type {CustomEvent} */ (e).detail.status, e.cancelable])),
+          { signal: stop.signal },
+        );
+      }),
   );
   failWatch.value = true;
   const messageBefore = await page.textContent("#watch-message");
-  await page.click("#watch-form button");
-  check("a submit the network fails dispatches corten:error with status 0, cancelable", JSON.stringify(await failed) === "[0,true]");
+  await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#watch-form button")).click());
+  const failedWith = JSON.stringify(await failed);
+  // A press that sent nothing leaves the failure armed for the next post: disarm it.
+  failWatch.value = false;
+  check("a submit the network fails dispatches corten:error with status 0, cancelable", failedWith === "[0,true]", failedWith);
   check(
     "a failed submit leaves the page and the form as they were",
     (await page.textContent("#watch-message")) === messageBefore && (await page.getAttribute("#watch-form", "aria-busy")) === null,
@@ -640,12 +651,13 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
   // The message already says Acme from the keyed form, so the check waits for this post's own
   // answer: otherwise a slow post (Firefox) is still going out during the next check, which
   // counts the posts it sees (#161). It waits 15 s, past the 5 s most of the smoke's waits take,
-  // because a loaded Firefox has taken over 4 s to answer this post (#1149).
+  // because a loaded Firefox has taken over 4 s to answer this post (#1149). The button is pressed
+  // in the page: a loaded Firefox's click can land beside a button the page has moved (#2014).
   const viaButton = page
     .waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/watch", { timeout: 15_000 })
     .then(async (r) => (await r.finished(), r.status()))
     .catch(() => 0);
-  await page.click("#via-button button");
+  await press("#via-button button");
   const viaButtonStatus = await viaButton;
   await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Acme Corp"), null, { timeout: 15_000 }).catch(() => {});
   check(

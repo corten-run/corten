@@ -310,6 +310,8 @@ and the cases count their submits, so a press meant to send nothing is seen to h
 The other checks that act while a request is out (a busy mark, a navigation before a write's
 page, a script's `replaceState` during a read, a navigation during a stylesheet's load) hold it
 the same way.
+The watch form's other presses (watching and unwatching a stock, the submit the network fails
+and the formaction button) are made in the page too, as a loaded Firefox's click on them can miss.
 The two Firefox failures in
 [#2014 Firefox smoke fails a different waiting-submit or template-copy case on two commits that touch neither the runtime nor the watchlist](https://github.com/corten-run/corten/issues/2014)
 each logged only that an expected post was never sent. A loaded Firefox reproduction of those

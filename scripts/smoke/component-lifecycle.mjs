@@ -330,7 +330,8 @@ export async function componentLifecycle(page, live, prices, feedSources, signsI
   await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 1));
   const sourcesBefore = await feedSources();
   await page.selectOption("select[name=id]", "HLTH");
-  await page.click("#watch-form button");
+  // Pressed in the page: the live prices move <main> under a loaded Firefox's click (#2014).
+  await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#watch-form button")).click());
   await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Halcyon Health"));
   check("form patch replaces the message by id", true);
   check("watching a stock adds its row, and the form no longer offers it", (await page.$('[data-ref="price"][data-key="HLTH"]')) !== null && (await page.$('select[name=id] option[value="HLTH"]')) === null);
@@ -348,7 +349,7 @@ export async function componentLifecycle(page, live, prices, feedSources, signsI
   } else skip("the list is the same after a reload", "Playwright's WebKit never sends a Secure cookie back over http");
   check("form patch keeps the page", await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1));
   // A row's Remove button submits the watch form to /unwatch.
-  await page.click('button[formaction="/unwatch"][value="HLTH"]');
+  await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector('button[formaction="/unwatch"][value="HLTH"]')).click());
   await page.waitForFunction(() => document.getElementById("watch-message")?.textContent === "Stopped watching Halcyon Health.", null, { timeout: 4000 }).catch(() => {});
   check(
     "unwatching a stock takes its row away and offers it again",
