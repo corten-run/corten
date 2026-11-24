@@ -158,7 +158,6 @@ impl Endpoint for Keeping {
                 None => res,
             };
             if drew_key {
-                missed.drew_key();
                 return res;
             }
             missed.keep(res).await
@@ -175,8 +174,8 @@ impl Endpoint for Keeping {
 /// code that decides it found it ([`Verdict`]), once for each verdict the route has. Nothing is
 /// kept under `corten dev`, so this is where an author learns it; a release build has none.
 struct Telling {
-    /// Why its answer is never kept, known when the route was made.
-    unkept: Option<Verdict>,
+    /// What the route's answer is kept as, or why it never is, known when the route was made.
+    public: Result<crate::kept::Shape, Verdict>,
     /// The verdicts it has said ([`Verdict::tell`]).
     told: Arc<std::sync::Mutex<Vec<std::mem::Discriminant<Verdict>>>>,
     inner: Route,
@@ -190,16 +189,25 @@ impl Endpoint for Telling {
         }
         let path = req.uri().path().to_owned();
         let signal = req.extensions().get::<crate::Signal>().cloned();
-        let (unkept, told) = (self.unkept, self.told.clone());
+        // What the request decides, read as the route's `Keeping` reads it: a reason the author can
+        // change (a caller read for it, its URL changed), or one for the request alone, not said.
+        let asked = match (self.public, &signal) {
+            (Ok(shape), Some(_)) => crate::kept::Asked::checked::<true>(&req, shape).map(|_| ()),
+            _ => Ok(()),
+        };
+        let (public, told) = (self.public, self.told.clone());
         let answer = self.inner.call(req);
         Box::pin(async move {
-            let res = answer.await;
-            // An unstaged route's request has no signal, and no answer kept for it
-            // (`crate::kept::Asked::of`).
-            let verdict = match &signal {
-                _ if unkept.is_some() => unkept,
-                None => Some(Verdict::Unstaged),
-                Some(signal) => Verdict::of(signal),
+            // A submit key drawn by the handler makes the answer the request's: `Keeping` sees it
+            // the same way, and gives the answer as it is.
+            let (res, drew_key) = crate::form::watched(answer).await;
+            let verdict = match (public, &signal, asked) {
+                (Err(unkept), _, _) => Some(unkept),
+                // An unstaged route's request has no signal, and no answer kept for it.
+                (_, None, _) => Some(Verdict::Unstaged),
+                (_, Some(_), Err(said)) => said,
+                (_, Some(_), Ok(())) if drew_key => Some(Verdict::DrewKey),
+                (_, Some(signal), Ok(())) => Verdict::of(signal),
             };
             if let Some(verdict) = verdict {
                 verdict.tell(&path, &told);
@@ -326,9 +334,9 @@ pub(crate) fn named(query: Option<&str>) -> Named<'_> {
 /// what `corten dev` says of it ([`Telling`]).
 struct Slot<S> {
     held: Held<S>,
-    /// Of a `Public` handler: `Some`, with the reason a release build never keeps its answer,
-    /// known when the route is made (`crate::handler::Handler::public`), or none when it may.
-    public: Option<Option<Verdict>>,
+    /// Of a `Public` handler: what its answer is kept as, or why a release build never keeps it,
+    /// known when the route is made (`crate::handler::Handler::public`).
+    public: Option<Result<crate::kept::Shape, Verdict>>,
 }
 
 enum Held<S> {
@@ -350,7 +358,7 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
     fn handler<H: Handler<T, S>, T: 'static>(handler: H) -> Self {
         // Known when the route is made, so no other route's requests ask.
         let keeps = handler.keeps();
-        let public = handler.public().map(Result::err);
+        let public = handler.public();
         let held = Held::Unbound(Arc::new(move |state| {
             let handled: Route = Arc::new(Handled { handler: handler.clone(), state, types: PhantomData });
             match keeps {
@@ -383,13 +391,13 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
     /// Under `corten dev`: a `Public` handler's requests through [`Telling`], outside all else
     /// that goes around it.
     fn telling(self) -> Self {
-        let Some(unkept) = self.public else { return self };
+        let Some(public) = self.public else { return self };
         let told = Arc::<std::sync::Mutex<Vec<_>>>::default();
         let held = match self.held {
             Held::Unbound(make) => Held::Unbound(Arc::new(move |state| {
-                Arc::new(Telling { unkept, told: told.clone(), inner: make(state) }) as Route
+                Arc::new(Telling { public, told: told.clone(), inner: make(state) }) as Route
             })),
-            Held::Bound(inner) => Held::Bound(Arc::new(Telling { unkept, told, inner })),
+            Held::Bound(inner) => Held::Bound(Arc::new(Telling { public, told, inner })),
         };
         // Told once: the slot is not wrapped again.
         Slot { held, public: None }

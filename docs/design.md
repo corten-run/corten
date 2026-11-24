@@ -7706,9 +7706,12 @@ rules something out.
     reason that code found, once for each route and verdict
     ([#1801 Nothing tells an author whether a Public page is kept, or why not](https://github.com/corten-run/corten/issues/1801)):
     a page that is not kept looks the same from outside save for a missing `Age`, so without it
-    an author first met the difference in production. Each refusal records its reason only under
-    `corten dev`, behind the flag the request's app already carries, and a reason a second list
-    of the rules would give could drift from what the build does.
+    an author first met the difference in production. The reasons come from the code that decides,
+    not from a second list of its rules, which could drift from what the build does: a refusal in
+    the answer's checks records its reason only under `corten dev`, behind the flag the request's
+    app already carries, and the checks made before the handler run for `corten dev` in a copy
+    of their own, so the one a release build runs is the code it was (a kept page given again, and a `Public`
+    page that is not kept, cost what they did, within 4 instructions a request in `router_cost`).
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
     give to anyone is the rule checked when the app compiles, that a `Public` handler takes only

@@ -2360,6 +2360,31 @@ async fn corten_dev_says_whether_a_public_answer_is_kept_and_why_not() {
     }
     // An answer that is not `Public` says nothing.
     assert!(logged(dev.clone(), "/plain", &[]).await.1.is_empty());
+    // What a middleware did before the handler, as the route reads it: a caller it read for the
+    // request, a URL it changed. A request with a session's cookie is left to its handler anyway.
+    struct Reads;
+
+    impl crate::Middleware for Reads {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let (mut parts, body) = req.into_parts();
+            if parts.headers.contains_key("viewer") {
+                let _ = Caller::<Viewer>::find(&parts, &()).await;
+            }
+            if parts.headers.contains_key("x-rewrite") {
+                parts.uri = "/?seen=1".parse().unwrap();
+            }
+            next.run(Request::from_parts(parts, body)).await
+        }
+    }
+    let read = App::new(Routes::from(routes())).middleware(Reads).dev(true).router();
+    let (_, text) = logged(read.clone(), "/", &[("viewer", "ada"), ("cookie", "session=1")]).await;
+    assert!(!text.contains("is Public"), "{text}");
+    let (_, text) = logged(read.clone(), "/", &[("viewer", "ada")]).await;
+    assert!(text.contains(&format!("corten: / {not}something read a Caller for the request")), "{text}");
+    let (_, text) = logged(read.clone(), "/", &[("x-rewrite", "1")]).await;
+    assert!(text.contains(&format!("{not}a middleware changed its URL after the router matched it")), "{text}");
+    let (_, text) = logged(read, "/", &[]).await;
+    assert!(text.contains(&format!("corten: / {kept}")), "{text}");
     // Each verdict once for a route: a route that answers another way says the new one, and
     // nothing when it answers a way it has said before.
     let (_, text) = logged(dev.clone(), "/flip", &[]).await;

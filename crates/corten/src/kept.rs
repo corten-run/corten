@@ -262,12 +262,14 @@ pub enum Shape {
 
 /// What `corten dev` says of a `Public` answer, where nothing is kept: that a release build
 /// keeps it, or the first reason it does not, as the code that decides found it. A reason decided
-/// when the route is made comes from its handler's type (`crate::handler::Handler::public`); one
-/// decided for a request, from [`Asked::of`], the route's watch for a submit key and
-/// [`Missed::keep`], each on its own refusal and only under `corten dev`, which gives the
-/// request's signal the first ([`Verdict::found`]). What a request alone decides (a cookie, a
-/// navigation, a write, a full store) is not said: the page's verdict is for the request that
-/// shows nothing about who asks. Public in a private module, as [`Shape`] is.
+/// when the route is made comes from its handler's type (`crate::handler::Handler::public`). One
+/// decided before the handler runs comes from [`Asked::checked`], the code of [`Asked::of`] in a
+/// copy of its own that only `corten dev` runs (`crate::router::Telling`), and a drawn submit key
+/// from the same watch the route keeps by. One decided by the answer comes from [`Missed::keep`],
+/// which records it on its refusal, only under `corten dev`, in the request's signal
+/// ([`Verdict::found`]). What a request alone decides (a cookie, a navigation, a write, a full
+/// store) is not said: the page's verdict is for the request that shows nothing about who asks.
+/// Public in a private module, as [`Shape`] is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Verdict {
     Kept {
@@ -1156,7 +1158,9 @@ impl<'a> Sent<'a> {
     /// answer at the same URL. A whole body is its route's one answer, so a data client's
     /// request is kept too, apart: a handler that takes `Req` can read which of the two asked
     /// (`req.mode`).
-    fn read(headers: &'a HeaderMap, shape: Shape) -> Option<Self> {
+    // `TELL` is [`Asked::checked`]'s: `corten dev`'s reading is its own copy, closures and all, so
+    // the one a release build runs has `Asked::of` as its only caller, and is made as it was then.
+    fn read<const TELL: bool>(headers: &'a HeaderMap, shape: Shape) -> Option<Self> {
         // By their names and first, since they are what most requests a page is not kept for
         // carry: a session's cookie, and the runtime's header on a navigation inside the app.
         // Each is a lookup of about 100 instructions that the pass below could make in its
@@ -1208,38 +1212,45 @@ impl<'a> Sent<'a> {
 
 impl<'a> Asked<'a> {
     pub(crate) fn of(req: &'a Request, shape: Shape) -> Option<Self> {
+        Self::checked::<false>(req, shape).ok()
+    }
+
+    /// [`Asked::of`], with, when `TELL` (`corten dev`, before the handler runs: [`Verdict`]), the
+    /// reason a request the store would otherwise be asked for is not: `Err(Some(_))` for one the
+    /// page's author can change, `Err(None)` for what the request alone decides (a cookie, a
+    /// navigation, a proxy's URL), which is not said. A release build reads none of it: with
+    /// `TELL` false every `Err` is `None`, and this is the code `of` always was.
+    #[inline(always)]
+    pub(crate) fn checked<const TELL: bool>(req: &'a Request, shape: Shape) -> Result<Self, Option<Verdict>> {
         if *req.method() != http::Method::GET {
-            return None;
+            return Err(None);
         }
-        let signal = req.extensions().get::<crate::Signal>()?;
-        let shared = signal.shared()?;
-        let answers = shared.kept.as_ref()?;
+        let signal = req.extensions().get::<crate::Signal>().ok_or(None)?;
+        let answers = signal.shared().and_then(|shared| shared.kept.as_ref()).ok_or(None)?;
         // A caller a middleware read makes the answer that caller's, and the error page's request
-        // is not the one the route would answer.
-        if signal.is_personal() || signal.is_error_page() {
-            if shared.dev {
-                read_a_caller(req, shape, signal);
-            }
-            return None;
+        // is not the one the route would answer. Said of a request the store would otherwise ask
+        // for, below: one with a session's cookie is left to its handler anyway.
+        if (signal.is_personal() && !TELL) || signal.is_error_page() {
+            return Err(None);
         }
-        let Sent { host, language, data } = Sent::read(req.headers(), shape)?;
+        let Sent { host, language, data } = Sent::read::<TELL>(req.headers(), shape).ok_or(None)?;
         // In origin form: a URL that names its own host is a proxy's.
         if req.uri().authority().is_some() {
-            return None;
+            return Err(None);
         }
-        let at = req.uri().path_and_query()?;
+        if TELL && signal.is_personal() {
+            return Err(Some(Verdict::Caller));
+        }
+        let at = req.uri().path_and_query().ok_or(None)?;
         // The URL the router matched: a route's parameters are read from the path as it was then
         // ([`crate::router::MatchedPath`]), so after a middleware changed the URI, the one the
         // handler sees no longer names the page it makes.
         let matched = req.extensions().get::<crate::router::MatchedPath>();
         if matched.is_none_or(|matched| matched.matched() != at) {
-            if shared.dev && matched.is_some() {
-                Verdict::Rewritten.found(signal);
-            }
-            return None;
+            return Err(if TELL && matched.is_some() { Some(Verdict::Rewritten) } else { None });
         }
         let hash = answers.0.keys.hash_one(at.as_str());
-        Some(Asked { answers, signal, at, hash, host, language, data })
+        Ok(Asked { answers, signal, at, hash, host, language, data })
     }
 
     /// The kept answer for this request, as its handler gave it, with its age.
@@ -1290,15 +1301,11 @@ impl<'a> Asked<'a> {
     }
 }
 
-/// Under `corten dev`: a caller was read for a request before its handler, which makes its answer
-/// that caller's. Said only of a request the store would otherwise ask for: one with a session's
-/// cookie is left to its handler anyway, and a middleware that reads a caller for it says nothing
-/// of the page.
-#[cold]
-fn read_a_caller(req: &Request, shape: Shape, signal: &crate::Signal) {
-    if !signal.is_error_page() && Sent::read(req.headers(), shape).is_some() && req.uri().authority().is_none() {
-        Verdict::Caller.found(signal);
-    }
+/// Whether the request is served under `corten dev`, where a refusal to keep its answer is said
+/// ([`Verdict`]): read by [`Missed::keep`] on a refusal, and once for an answer that may be kept.
+#[inline]
+fn dev(signal: &crate::Signal) -> bool {
+    signal.shared().is_some_and(|shared| shared.dev)
 }
 
 /// A request no kept answer stood for, whose handler's answer is kept if it may be.
@@ -1321,30 +1328,92 @@ pub(crate) struct Missed {
 }
 
 impl Missed {
-    /// Its handler drew a form's new submit key, so its answer is not kept: `corten dev` says so.
-    pub(crate) fn drew_key(&self) {
-        if let Some(signal) = self.signal.as_ref().filter(|signal| signal.shared().is_some_and(|shared| shared.dev)) {
-            Verdict::DrewKey.found(signal);
-        }
-    }
-
     /// `res`, kept when it is the same for everyone and for how long: see the module. Under
     /// `corten dev` nothing is kept, and the request is given what a release build does with
     /// it instead ([`Verdict`]).
     pub(crate) async fn keep(mut self, mut res: Response) -> Response {
         let Some(signal) = &self.signal else { return res };
-        let Some(shared) = signal.shared() else { return res };
-        let Some(answers) = shared.kept.as_ref() else { return res };
-        let Keepable { cache, lifetime, language, style, size } = match self.keepable(&mut res, signal, answers) {
-            Ok(keepable) => keepable,
-            Err(verdict) => {
-                if shared.dev {
-                    verdict.found(signal);
+        let Some(answers) = signal.shared().and_then(|shared| shared.kept.as_ref()) else { return res };
+        // Not kept: under `corten dev` the reason is made for the route to say, and nowhere else.
+        macro_rules! unkept {
+            ($verdict:expr) => {{
+                if dev(signal) {
+                    $verdict.found(signal);
                 }
                 return res;
-            }
+            }};
+        }
+        let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else {
+            unkept!(Verdict::NoLifetime { status: res.status().as_u16() })
         };
-        if shared.dev {
+        // Whether the page varies on `Accept-Language` (`App::messages`, or a locale negotiated
+        // from it), or on something the key does not cover.
+        let Some(mut language) = varies(res.headers()) else { unkept!(Verdict::Varies) };
+        // A locale negotiated after the page set its headers is named now, so the key below
+        // and the header the app sends agree.
+        if !language && signal.asked_language() {
+            crate::page::add_language(res.headers_mut());
+            language = true;
+        }
+        let style = res.extensions().get::<crate::security::StyleBlock>().cloned();
+        // Only what is put back on a kept answer: a mark this does not know is not replayed.
+        let known = 2 + usize::from(style.is_some());
+        if res.status() != StatusCode::OK {
+            unkept!(Verdict::Status(res.status().as_u16()));
+        }
+        if res.extensions().len() != known || res.extensions().get::<crate::layout::SameForAll>().is_none() {
+            unkept!(Verdict::Marked);
+        }
+        if res.headers().contains_key(header::SET_COOKIE) {
+            unkept!(Verdict::SetsCookie);
+        }
+        if res.headers().contains_key(header::CONTENT_ENCODING) {
+            unkept!(Verdict::Encoded);
+        }
+        if res.headers().contains_key(header::CONTENT_RANGE) {
+            unkept!(Verdict::Range);
+        }
+        if res.headers().contains_key(header::ETAG) {
+            unkept!(Verdict::Tagged);
+        }
+        if res.headers().keys_len() > NAMES {
+            unkept!(Verdict::Names);
+        }
+        if self.nonce.as_ref().is_some_and(|slot| slot.taken().is_some()) {
+            unkept!(Verdict::Nonce);
+        }
+        if self.signal.as_ref().is_none_or(crate::Signal::is_personal) {
+            unkept!(Verdict::Caller);
+        }
+        // Made over a time longer than it lasts: it would never be given.
+        if self.asked.elapsed().as_secs() >= lifetime {
+            unkept!(Verdict::Slow { took: self.asked.elapsed().as_secs(), lifetime });
+        }
+        let Some(length) = http_body::Body::size_hint(res.body()).exact() else { unkept!(Verdict::Unsized) };
+        // A whole body is kept from a size, whatever its type.
+        if self.told.0.is_some() && length < BODY_FROM {
+            unkept!(Verdict::Small(length));
+        }
+        let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
+        // The URL is held once, by the entry: the map holds its hash.
+        let sent = self.language.as_ref().filter(|_| language);
+        let size = Key::length(self.at.as_str(), self.host.as_ref(), sent) + head + OVERHEAD + length as usize;
+        if length == 0 {
+            unkept!(Verdict::Empty);
+        }
+        if size > answers.0.bound / SHARE {
+            unkept!(Verdict::Large { size, bound: answers.0.bound });
+        }
+        // An answer that may be kept: writes are counted by path from here on, whether or not
+        // this one is kept, so an app whose writes never pause still comes to keep its pages.
+        answers.counts();
+        // A write while the handler read: the page may show what was there before.
+        if !self.written.stands(&answers.0) {
+            unkept!(Verdict::Written);
+        }
+        // Under `corten dev` none is kept: the route says a release build keeps it, and, of a route
+        // of whole bodies, is told so, so it goes on asking.
+        if dev(signal) {
             Verdict::Kept { lifetime }.found(signal);
             self.told.1 = true;
             return res;
@@ -1361,7 +1430,6 @@ impl Missed {
         // template's allocator, whenever the page is in a smaller size class than its buffer,
         // which is a copy with more work around it (`docs/design.md#choice-kept-pages`).
         let body = Bytes::copy_from_slice(&body);
-        let sent = self.language.as_ref().filter(|_| language);
         let key = Key::new(self.at.as_str(), self.host.as_ref(), sent);
         let Missed { hash, data, asked: made, written, mut told, .. } = self;
         let entry = answers.keep(|place| Entry {
@@ -1374,7 +1442,7 @@ impl Missed {
             made,
             lifetime,
             head: head_of(&parts.headers),
-            // At most `NAMES`, as checked before.
+            // At most `NAMES`, as checked above.
             names: parts.headers.keys_len() as u16,
             cache,
             style,
@@ -1390,95 +1458,6 @@ impl Missed {
         parts.extensions.insert(Kept(entry));
         Response::from_parts(parts, Body::from(body))
     }
-
-    /// What keeping `res` takes, when it may be kept; else the first reason it may not, which
-    /// only `corten dev` reads ([`Verdict`]).
-    #[inline]
-    fn keepable(&self, res: &mut Response, signal: &crate::Signal, answers: &Answers) -> Result<Keepable, Verdict> {
-        let Some((cache, lifetime)) = crate::cache::Typed::shared(res) else {
-            return Err(Verdict::NoLifetime { status: res.status().as_u16() });
-        };
-        // Whether the page varies on `Accept-Language` (`App::messages`, or a locale negotiated
-        // from it), or on something the key does not cover.
-        let Some(mut language) = varies(res.headers()) else { return Err(Verdict::Varies) };
-        // A locale negotiated after the page set its headers is named now, so the key below
-        // and the header the app sends agree.
-        if !language && signal.asked_language() {
-            crate::page::add_language(res.headers_mut());
-            language = true;
-        }
-        let style = res.extensions().get::<crate::security::StyleBlock>().cloned();
-        // Only what is put back on a kept answer: a mark this does not know is not replayed.
-        let known = 2 + usize::from(style.is_some());
-        if res.status() != StatusCode::OK {
-            return Err(Verdict::Status(res.status().as_u16()));
-        }
-        if res.extensions().len() != known || res.extensions().get::<crate::layout::SameForAll>().is_none() {
-            return Err(Verdict::Marked);
-        }
-        let headers = res.headers();
-        if headers.contains_key(header::SET_COOKIE) {
-            return Err(Verdict::SetsCookie);
-        }
-        if headers.contains_key(header::CONTENT_ENCODING) {
-            return Err(Verdict::Encoded);
-        }
-        if headers.contains_key(header::CONTENT_RANGE) {
-            return Err(Verdict::Range);
-        }
-        if headers.contains_key(header::ETAG) {
-            return Err(Verdict::Tagged);
-        }
-        if headers.keys_len() > NAMES {
-            return Err(Verdict::Names);
-        }
-        if self.nonce.as_ref().is_some_and(|slot| slot.taken().is_some()) {
-            return Err(Verdict::Nonce);
-        }
-        if self.signal.as_ref().is_none_or(crate::Signal::is_personal) {
-            return Err(Verdict::Caller);
-        }
-        // Made over a time longer than it lasts: it would never be given.
-        let took = self.asked.elapsed().as_secs();
-        if took >= lifetime {
-            return Err(Verdict::Slow { took, lifetime });
-        }
-        let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return Err(Verdict::Unsized) };
-        // A whole body is kept from a size, whatever its type.
-        if self.told.0.is_some() && length < BODY_FROM {
-            return Err(Verdict::Small(length));
-        }
-        let head: usize = headers.iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
-        // The URL is held once, by the entry: the map holds its hash.
-        let sent = self.language.as_ref().filter(|_| language);
-        let size = Key::length(self.at.as_str(), self.host.as_ref(), sent) + head + OVERHEAD + length as usize;
-        if length == 0 {
-            return Err(Verdict::Empty);
-        }
-        if size > answers.0.bound / SHARE {
-            return Err(Verdict::Large { size, bound: answers.0.bound });
-        }
-        // An answer that may be kept: writes are counted by path from here on, whether or not
-        // this one is kept, so an app whose writes never pause still comes to keep its pages.
-        answers.counts();
-        // A write while the handler read: the page may show what was there before.
-        if !self.written.stands(&answers.0) {
-            return Err(Verdict::Written);
-        }
-        Ok(Keepable { cache, lifetime, language, style, size })
-    }
-}
-
-/// What [`Missed::keepable`] found an answer that may be kept to take.
-struct Keepable {
-    cache: crate::cache::Typed,
-    /// In seconds.
-    lifetime: u64,
-    /// It varies on `Accept-Language`.
-    language: bool,
-    style: Option<crate::security::StyleBlock>,
-    /// What it counts for in the store's bytes.
-    size: usize,
 }
 
 /// Whether an answer with these headers varies on `Accept-Language`; `None` when it varies on
