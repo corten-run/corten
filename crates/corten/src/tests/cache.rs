@@ -1425,7 +1425,8 @@ async fn a_request_a_middleware_makes_a_head_is_answered_by_the_handler_the_rout
         let options = options.clone();
         move |req: Req| {
             options.ran();
-            async move { Public::new(Duration::from_secs(60), req.test_page_for("Other", html! { <p>{"other ".repeat(400)}</p> })) }
+            let text = "other ".repeat(400);
+            async move { Public::new(Duration::from_secs(60), req.test_page_for("Other", html! { <p>{text}</p> })) }
         }
     };
     let routes = Table::new().route("/", crate::route::get(page).options(other).0);
