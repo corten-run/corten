@@ -7350,14 +7350,77 @@ rules something out.
     was. The command is the app's because what it sends decides the gain, and it does nothing
     but send: `corten build` starts the copy on a free port it gives the command in `PORT`,
     waits for it to listen, and stops it with `SIGTERM` when the command ends, so that the copy
-    writes its profile. The copy is started without `HOST`, so it listens on this machine
-    only, where the build and the command look for it. Starting, waiting and stopping are where a script goes wrong without a
+    writes its profile. The copy is started without `HOST`, so one that reads it listens on
+    this machine only, where the build and the command look for it; an app that binds
+    listeners of its own binds the addresses it chooses. An app that binds a port of its own
+    and never reads `PORT`, which `serve_on` and `serve_wrapped` let it be, never listens on a
+    port the build picked, so the build is told that port by an argument of the option's own,
+    `--port <port>` before `--profile-from`: the copy is looked for there, and it and the
+    command are given that port in `PORT`. A `PORT` in the build's own environment is not
+    read, with the argument or without, so a build that names no port picks its port as it
+    did. Three things changed with the argument for every profiled build, one that names no
+    port included: an app that did not listen is told where it was looked for and of `--port`;
+    a look whose connection met itself is no longer taken for the copy listening, which a
+    picked port, always in the range the system gives outgoing connections, could be; and the
+    copy's exit is read after each look of the wait, not before it, so a copy that exited
+    during a look is not taken for what accepted. A
+    named port that something already listens on is refused, before the first build and again
+    before the copy starts, since that listener would answer the wait and the command in the
+    copy's place; a port the build picks is one nothing listened on when it was picked. The
+    first look comes after the target directory's lock is taken, so a second build there that
+    names the port the first one's copy holds is told that a build is running, not to stop
+    what listens; a refusal at that look has built nothing and leaves the lock's file, in a
+    target directory it makes when there was none. The
+    wait is a connection to either loopback address at that one port, and an app's other
+    listeners are its command's to wait for. A connection does not say whose socket accepted
+    it: a copy that has exited by then is not taken for the listener, and a program that takes
+    the port between the build's last look and the copy's own bind is, a window that two more
+    looks at a named port narrow and that the build cannot close without knowing the copy's
+    sockets. The copy cannot bind the same address then, unless both sockets set
+    `SO_REUSEPORT`, as two instances of one app may: the system then shares the command's
+    connections between the two, and the look after the copy stops the build only if the
+    other is still listening, which is reasoned from the measured bind and was not run through
+    a build. A copy that
+    has exited by the time the command ends stops the build. One still running when the
+    command ends (still starting, or one that does not exit when it cannot bind) is stopped as
+    any copy is, whatever status it then leaves with, since an app
+    may exit non-zero on `SIGTERM` by design. So the build looks at a named port when the
+    command has ended and before it stops the copy, and stops when nothing accepts at either
+    loopback address there: a copy that listens on the port it was named would. That look
+    holds no guarantee of its own and is kept: the timing it catches was reproduced (a program
+    that answered the wait and left while the command ran, the copy still starting when the
+    command ended), its wrong stop needs a serving copy's queue to be full after the command
+    has ended, and what it does not see is stated below. The build looks once more after the
+    copy has exited, and stops when something listens there, which is not the copy.
+    What the two looks establish is that something accepted a connection on a loopback address
+    of the port when the command ended, and that nothing listens there once the copy has
+    exited. Neither shows that the copy is what answered the command, and no look can. Three
+    timings end with the build succeeding and its release built from a profile of a copy the
+    command never reached. In the first, another program takes the named port in that window,
+    answers the wait and the command and leaves while the command runs, and the copy, still
+    starting or trying its bind again, binds the port before the command ends. In the second,
+    a program on the other loopback address of the named port, beside a copy bound to its own,
+    answers a command that asks that address (as one that asks `localhost` may) and leaves
+    before the copy has exited, which needs no race with the copy's start. In the third,
+    another program takes the port in that window and answers the wait and the command, the
+    copy is still running when the command ends, and the program leaves between the look at
+    the command's end and the copy's exit. The first two were reproduced, and tests hold them
+    as what the build does, to change when the gap is closed; the third is reasoned. Each
+    look has a cost of its own, a build stopped whose profile was good: the one before the
+    copy is stopped, when the queue of connections a serving copy has not accepted is full at
+    that instant; the one after it, when a program begins to listen on the port once the copy
+    has left it (a supervisor starting the app again). And a listener on the other loopback
+    address of the named port, which a copy bound to its own address can serve beside for the
+    whole run, stops the build at whichever look finds it, the one after the copy included:
+    the build cannot tell that the command never reached it, and a command that asks
+    `localhost` may have, so it takes the cautious reading. Starting, waiting and stopping are where a script goes wrong without a
     word (a copy killed, not waited for, or left running writes no profile or a stale one), so
     they are in the command once and not in each app's script. The instrumented copy has a
     target directory of its own, so `target/release` never holds a binary that writes a
     profile, and a step that fails leaves the last release standing. What can be told is wrong
     without building is refused before the first build: a toolchain without `llvm-profdata`, a
-    system that cannot ask the copy to stop, a command that is not there, another profiled
+    system that cannot ask the copy to stop, a command that is not there, a `--port` that is no
+    port number, is given without the option or names a port something listens on, another profiled
     build in the same target directory, and a Cargo configuration that may set flags the profile's flag, which has to
     go in the environment, would replace. A command that fails,
     a copy that exits early or does not listen, a profile not written, and a package that
@@ -7384,7 +7447,34 @@ rules something out.
     configuration as Cargo does to keep its flags, which takes a TOML parser the command does
     not have; an `llvm-profdata` found on the `PATH`, which may read another LLVM's format;
     and every argument after a `--` passed to Cargo, which lets one that moves the binary or
-    its messages through to steps that read both.
+    its messages through to steps that read both. For an app with a port of its own, not
+    chosen: the port read from the environment's `PORT`, the variable an app and `corten dev`
+    already read one from, which needs no argument and was built first. It changes the build
+    of every app that has `PORT` set and never asked: the app's usual port is refused while
+    `corten dev` or the app holds it, where a free one was picked before; the copy holds the
+    port the dev server binds at its next restart; two builds on one machine that share an
+    exported `PORT` meet on it; and a copy that a cancelled build left running refuses every
+    build after it. A build that works as it did comes before one way to name a port (README
+    Values, the order), and `corten dev` takes `--port <port>` already, the value after it.
+    The argument accepts all four of those costs for the app that names a port, and none for
+    any other: the port is refused while `corten dev` or the app holds it, the copy holds the
+    port the dev server binds at its next restart, two builds on one machine that name the
+    port meet on it, and a copy that a cancelled build left running holds the port, so that
+    each later build that names it is refused until the copy is stopped, by a refusal that
+    names such a copy among what may hold the port. Nor both, the argument and
+    the variable, which keeps each of those costs; `corten dev` made to read its `--port` as
+    this one is read, in the same change: the two commands read it differently (`--port=<n>`
+    is build's alone, and `dev` passes its value on to the app unchecked, a `0` included,
+    which the app binds as a free port), and that is left for a change of its own; a copy's status after `SIGTERM` read as the
+    build's failure, which would stop the build in the third timing above when the copy that
+    could not bind exits with an error's status, and would refuse an app that exits non-zero on
+    `SIGTERM` by design with its profile written; an argument that skips the wait and leaves
+    it to the command, which puts a wait in every such app's script and has nothing look for
+    the copy before the command runs; finding the
+    sockets the copy listens on under `/proc`, which Linux alone has, and which says nothing of
+    which of several the command is for; sockets the build binds and hands the copy
+    (`LISTEN_FDS`), which the app would have to be written to take; and the guide saying an app
+    must listen on `PORT`, which refuses an app the library lets be written.
 
     Stands on: measured (the catalog app built by the option took 30,730 fewer cycles a request
     than its ordinary build on the catalog page at the median of 10 alternated rounds, 21% of
@@ -7403,7 +7493,29 @@ rules something out.
     component's `llvm-profdata`; Cargo reads rustflags from the environment or from its
     configuration and never both, and builds a crate again, one from the registry included,
     when the file `-Cprofile-use` names is replaced; a process that returns from `main` or
-    calls `exit` writes its profile and one that a signal ends does not); reasoned (a
+    calls `exit` writes its profile and one that a signal ends does not; a connection to a
+    port is accepted as soon as a socket listens there, whichever process holds it, while that
+    socket's queue of connections not yet accepted has room: a listener that accepts nothing
+    answers a look until the queue is full and reads as a free port after, 129 looks answered
+    and the 130th not, in each of two runs, by a standard-library listener on Linux 6.18; two
+    sockets listen on one port at the two loopback addresses, as a Corten app's own do, so a
+    copy bound to one serves beside another program's listener on the other; two sockets that
+    both set `SO_REUSEPORT` listen on one address and port and are each given some of its
+    connections, 20 and 20, 21 and 19, and 21 and 19 of 40 in three runs on Linux 6.18, where a
+    socket without the option is refused the address; Linux
+    gives an outgoing connection a port from a range, 32768 to 60999, so that a connection to
+    a port in the range that nothing listens on is, once in some tens of thousands, given that
+    port as its own and connects to itself); reasoned (a connection cannot tell the copy from
+    another listener on the port, so a named port is one nothing listens on before the copy
+    starts; a process that has exited holds no socket, so what accepts on the named port after
+    the copy has exited is not the copy, unless the copy left its listener to a child that
+    outlives it; a copy that listens on the named port accepts a connection there while its
+    queue has room, so a port nothing accepts on while the copy runs is one the copy does not
+    listen on, or one whose queue is full; what accepts on the port when the command has ended
+    need not be what accepted while it ran, and a look is answered at one loopback address where the
+    command may have asked the other, so neither later look shows that the copy answered the
+    command; a `PORT` in the environment is set for running the app, so a build that read it
+    would be changed, or refused, by a setting made for something else; a
     separate target directory is the only place an instrumented build cannot be mistaken for
     the release; a refusal before the first build costs nothing, where a dropped linker flag
     or a missing tool found after it costs a build); bet (an app has, or will write, a command
@@ -7412,11 +7524,26 @@ rules something out.
     out is bet to be no slower than the ordinary one, where the counts above say it can take
     more instructions on what was left out): a command that sent
     the copy nothing leaves a profile of the app starting and stopping; and the app listens on
-    `PORT` as `corten dev` already asks of it); value (fast and proven fast, with mistakes
+    `PORT` as `corten dev` already asks of it, or binds a TCP port its author can name, on a
+    loopback address or on every address, where waiting for that one port is enough); value (fast and proven fast, with mistakes
     failing early and one way to build a release, and the option kept off every app that does
-    not ask for it, README Values).
+    not ask for it, README Values; by their order, a build that a setting made for something
+    else cannot change comes before one way to name a port).
 
-    Revisit when: Cargo can add a flag to the ones its configuration sets, or builds with a
+    Revisit when: an app needs the option whose only listener is not a TCP port (a Unix
+    socket), whose port is bound on no loopback address, or whose command cannot tell when its
+    other listeners are ready; a command's requests are found to have gone to another program
+    on the named port, and the build to have succeeded, by any of the three timings above (a
+    program that took the port as the copy started and left before the copy bound it, one on
+    the other loopback address that the command asked and that left before the copy had
+    exited, or one that left between the two later looks), or to have been shared with a
+    program that set `SO_REUSEPORT` beside the copy, or a build whose copy served is found stopped: by the look before the copy is
+    stopped with the copy's queue full, by the look after the copy for a listener that came
+    after it, or by that look for a listener on the other loopback address that the command
+    never reached; builds are found refused on a named port for a copy that a cancelled build left
+    running, which the build could stop itself only by catching the signal that ends it or by
+    keeping a record of the copy's process, neither of which the command has; an app's build is found to need the port from
+    its environment after all; Cargo can add a flag to the ones its configuration sets, or builds with a
     profile itself, so the refusal or the steps go; the standard library can ask a child
     process to stop, or an app on Windows needs the option; an app's release needs a Cargo
     argument not on the list (a cross build, a custom profile); or an app measures a profile from its own command
@@ -7440,7 +7567,54 @@ rules something out.
     a profiled build of a two-binary package given `--no-default-features --features=given -p
     --locked --bin` and an empty `-F` on Cargo 1.100.0, selecting a workspace member that is not
     the default one: each build was given exactly them, as written and in order (a `cargo` on
-    the `PATH` recorded each argument), and the test fails when the release build is not.
+    the `PATH` recorded each argument), and the test fails when the release build is not;
+    2026-11-24, the port, by the command's tests on rustc and Cargo 1.100.0 on Linux 6.8 (a
+    program that binds a port of its own and never reads `PORT` was profiled with `--port`
+    naming that port, in both spellings; a `PORT` in the environment that a listener held, and
+    one that is no number, changed nothing of a build without `--port`; a `--port` that is no
+    port number, given twice or without `--profile-from`, and one a listener held were refused
+    with nothing built; one a listener took while the copy was being built was refused before
+    the copy or the command ran; a listener on `[::1]` alone was seen; and the look did not
+    take a connection that met itself for a listener); 2026-11-24, that meeting, by a script
+    of plain connects on Linux 6.8.0 with the range at 32768 to 60999: to an even port of the
+    range that nothing listened on, the 14,542nd connection to `127.0.0.1` and the 4,432nd to
+    `[::1]` met themselves, five and four in 200,000, and none in 200,000 to `127.0.0.1` at an
+    odd port of the range or at port 8443; 2026-11-24, the lock's order, the look after the
+    copy and a listener's queue, on rustc and Cargo 1.100.0 on Linux 6.18 (by the command's
+    tests, a build that named a port a listener held, in a target directory whose lock was
+    held, was told of the build that is running, and a listener that took the named port once
+    the copy had started, the copy still starting when its command ended, answered the wait
+    and the command and stopped the build at the look after the copy had exited, where the
+    same build without that look ended with its release built, the tests in five runs and
+    the build without the look in one; by a throwaway
+    test, a standard-library listener that accepted nothing answered 129 looks and not the
+    130th, which then read the port as free, in each of two runs); 2026-11-24, the look before
+    the copy is stopped, a listener beside the copy and the earlier port tests on this kernel,
+    by the command's tests on rustc and Cargo 1.100.0 on Linux 6.18 (a listener that took the
+    named port once the copy had started, answered the wait and closed while the command ran,
+    the copy still starting when the command ended, stopped the build at the look before the
+    copy was stopped, in three runs, where the same build without that look ended with its
+    release built, in one; a listener bound on `[::1]` at the named port while a copy bound on
+    `127.0.0.1` ran its command stopped the build at the look after the copy, in four runs,
+    where a build whose looks went to `127.0.0.1` alone ended with its release built, in one;
+    and the tests the entry for Linux 6.8 lists passed here in each of three runs, and in one
+    more with their output shown the listener on `[::1]` alone was seen and a connection met
+    itself and was not taken for a listener, neither test returning without testing);
+    2026-11-24, what the two later looks do not see, two sockets that share an address, and
+    what a refusal at the first look leaves, on rustc and Cargo 1.100.0 on Linux 6.18 (by the
+    command's tests, in each of nine runs, a program that took the named port once the copy
+    had started, answered the wait and the command's one request and left, the copy binding
+    the port before the command ended, ended with the release built, and so did a program on
+    `[::1]` that answered the one request of a command beside a copy bound on `127.0.0.1` and
+    left before the command ended; in one run each, the first build stopped where the program
+    stayed and where the copy had not bound when the command ended, the second stopped where
+    the program stayed, and a request sent to the copy's own address was answered by the
+    copy; by a script of plain sockets on Python 3.13.5, two listeners that set
+    `SO_REUSEPORT` both bound `127.0.0.1` at one port and were given 20 and 20, 21 and 19, and
+    21 and 19 of 40 connections, a third socket without the option was refused, and so was a
+    second where neither set it, in three runs; and by the command's tests, a build refused
+    for a named port a listener held left `lock` alone under `target/corten-profile`, in a
+    directory that had no `target` before it).
 
 69. <a id="choice-profile-image"></a>**The starter's image is built with a profile when its build is given the
     app's script, by the same command.** `docker build --build-arg PROFILE_FROM=train.sh` has
@@ -9505,6 +9679,71 @@ rules something out.
     from `size.mjs` in its `kit/`, each model's `Math.round(rate * draws)` in `rows`,
     and that its `pads.mjs` builds lists meeting the rule for every K from 5 to 254 and none from
     255 to 400.
+
+73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
+    not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
+    compile time and plain JavaScript functions that read and change the DOM. Drawing that without
+    a browser means CSS layout and the cascade, text shaping, input methods, accessibility and a
+    DOM for the scripts to run against: reproducing what a browser engine does, and keeping it
+    matched to the engines every desktop already offers apps (WebView2 on Windows, WKWebView on
+    macOS, WebKitGTK on Linux) in each behavior a page relies on. A restricted subset of markup,
+    CSS and scripts that a native renderer could draw is a second component model beside the one
+    pages use, with its own rules for what works where, kept in step with the first as either
+    changes. So a page reaches a desktop as it reaches a phone, in a browser engine: the
+    browser, the installed PWA or a desktop shell around a web view. A screen that needs a native
+    toolkit is written in that toolkit, from the same screen JSON, actions and feeds, and Corten
+    owns that contract, its JSON Schema and the design tokens, not a native widget set
+    ([architecture, Desktop apps](architecture.md#desktop-apps)).
+
+    Not chosen: compiling components to each desktop toolkit (WinUI, AppKit, GTK), three renderers
+    each to be kept equal to the browser; one cross-platform renderer of Corten's that draws a
+    subset, the second component model above; and a Chromium bundled with each app (Electron),
+    which is a browser all the same, at a cost in download size and memory, and is a question for
+    a desktop shell (architecture, open decision 5), not a component model.
+
+    Stands on: bet (inside a loaded screen a native toolkit would not answer forms, tables and live
+    rows faster by an amount a person can feel, and the cold start and memory a web view shell
+    costs over a native app, estimated at a few hundred milliseconds and 100 to 300 MB against tens
+    of each, matter only for screens an app can write natively; no native or web view client has
+    been measured, and nothing compares input to paint across a browser tab, an installed PWA, a
+    web view shell and a native screen, which
+    [#1934 No benchmark measures a desktop client: cold start, input to paint and memory for a browser tab, an installed PWA, a web view shell and a native screen are all estimates](https://github.com/corten-run/corten/issues/1934)
+    is to do); measured, of the browser only (the item page reaching the mark its code sets when
+    ready 59 ms after a cold navigation starts, on the desktop profile, Chromium 148, median of 10
+    cold loads in one round, historical r16; views taking over 1,000 server-rendered rows in
+    10.2 ms from the parser finishing to ready, less the rendering of any long frame recorded in
+    between, median of 30 loads, and the first click on a taken-over row updating the DOM in
+    1.4 ms, the median of 30 fresh loads, both Chromium 156, round browser-4);
+    platform (Windows 11 includes the Evergreen WebView2 Runtime and Microsoft has installed it
+    on eligible Windows 10 devices, WKWebView is part of macOS's WebKit framework,
+    and Linux distributions package WebKitGTK, whose current stable release is 2.54.3); platform
+    (the runtime and `corten-ui` are tested in Playwright's builds of Chromium, Firefox and WebKit,
+    [Limit 10](#limit-tested-browsers), not in the system web views themselves); reasoned (a
+    component's markup, scoped CSS and DOM scripts need layout, text, input, accessibility and a
+    DOM to run, so a renderer that draws all of them is a browser engine and one that draws less is
+    a subset); reasoned (a renderer of Corten's own would have to be kept drawing what the browser
+    draws for every `html!` feature, CSS rule and runtime behavior, and tested against it, as
+    each of them changes; a subset would add rules for what works where to every component);
+    value (correctness comes before speed in the values' order, so a renderer would have to draw
+    each page as the browser does before any speed it gave counted; the platform's HTML and DOM
+    are extended rather than replaced, Values 2; one component model, Values 5; a renderer of
+    Corten's own is a concept and a dependency that has to earn its place, Values 6; one contract
+    serves every surface, Values 8).
+
+    Revisit when: the desktop benchmark (architecture, open decision 4) shows a web view losing to
+    a native screen, by the margin that decision sets on cold start, input to paint or memory, for
+    a screen most apps have; a system web view stops shipping with, or being installable on, one
+    of Windows, macOS or Linux; or an engine an app can embed draws Corten's pages faster than the
+    system web view in that benchmark. A native screen winning by that margin for one kind of
+    screen (a camera scanner, a canvas of thousands of items) can justify the app writing a native
+    desktop screen for it from its screen JSON; it does not reopen this Choice.
+
+    Last checked: 2026-11-24, Microsoft's WebView2 distribution guide, Apple's `WKWebView`
+    reference and webkitgtk.org's releases (WebKitGTK 2.54.3, released 2026-11-18), read at
+    `966bf4a65`; 2026-11-24, Playwright 1.65.1's Chromium 159.0.8154.6, Firefox 159.0 and WebKit
+    27.2, as `package.json` and [Limit 10](#limit-tested-browsers) give them at `966bf4a65`;
+    2026-11-07, round r16's Chromium browser pass, on `eea6adb`; 2026-11-11, round browser-4 on a
+    Xeon Platinum 8358, on `3fb4b1ac`.
 
 ## Rules
 

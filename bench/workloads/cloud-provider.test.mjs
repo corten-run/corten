@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import { createProviderEngine as providerTransport, isSettledAccountFailure } from "./cloud-engine-test-fixture.mjs";
+import { createProviderEngine as providerTransport, isSettledAccountFailure, isSettledCatalogFailure } from "./cloud-engine-test-fixture.mjs";
 import { providerTransport as workerTransport } from "./cloud-provider.mjs";
 import { context, harness, syntheticPlacement } from "./cloud-fixtures.mjs";
 import { fleetCatalogCommand, preloginUserData, tags } from "./cloud-contract.mjs";
@@ -800,7 +800,7 @@ test("HTTP failures, redirects and ambiguous requests are never retried or expos
   await assert.rejects(uncertain(create, 1000, true), (error) => error.controlUncertain === true && !error.message.includes(credential)); assert.equal(count, 1);
 });
 
-test("native catalog transport refuses complete invalid JSON but cannot settle truncated or timed-out reads", { timeout: 10000 }, async (t) => {
+test("native catalog distinguishes complete invalid JSON, closed truncation and timeout", { timeout: 10000 }, async (t) => {
   let mode = "malformed";
   const server = createServer((req, res) => {
     assert.equal(req.method, "GET");
@@ -818,11 +818,16 @@ test("native catalog transport refuses complete invalid JSON but cannot settle t
   const refused = await run(command, 1000, true);
   assert.deepEqual({ status: refused.status, stdout: refused.stdout, stderr: refused.stderr, diagnostic: refused.providerDiagnostic },
     { status: 1, stdout: "", stderr: "", diagnostic: { code: "catalog-response" } });
-  for (mode of ["truncated", "slow"]) {
-    await assert.rejects(run(command, mode === "slow" ? 100 : 1000, true), {
-      controlUncertain: true, providerDiagnostic: { code: "catalog-request" },
-    });
-  }
+  mode = "truncated";
+  await assert.rejects(run(command, 1000, true), (error) => {
+    assert.ok(isSettledCatalogFailure(error)); assert.equal(error.controlUncertain, undefined);
+    assert.deepEqual(error.providerDiagnostic, { code: "catalog-request", detail: "response-aborted" }); return true;
+  });
+  mode = "slow";
+  await assert.rejects(run(command, 100, true), (error) => {
+    assert.equal(isSettledCatalogFailure(error), false); assert.equal(error.controlUncertain, true);
+    assert.deepEqual(error.providerDiagnostic, { code: "catalog-request", detail: "deadline" }); return true;
+  });
 });
 
 test("native HTTP boundary pins origin, sends only memory credential and bounds redirects/body/deadline/cancellation", { timeout: 10000 }, async (t) => {
