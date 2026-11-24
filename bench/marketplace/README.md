@@ -313,11 +313,11 @@ The local `wN` commands do not create a droplet, collect c1, update nightly stat
 
 ### Saved raw evidence
 
-Marketplace uses the same bounded command runner as Catalog. If a command
-is stopped and a descendant holds its output pipes open, the runner releases
-the pipes after the stop grace and reports a failed command, not a successful
-or complete sample. Existing command deadlines, load settings and owned
-container cleanup still apply.
+Marketplace uses Catalog's bounded runner for its Git, Docker and check
+commands. If one of those commands is stopped and a descendant holds its output
+pipes open, the runner releases the pipes after the stop grace and reports a
+failed command. Existing command deadlines, load settings and owned-container
+cleanup still apply. The separate Docker stats sampler does not use this runner.
 
 The browser gate observes native enhanced form transports without replacing them.
 Livewire alert updates must identify the same-origin marketplace alert component,
