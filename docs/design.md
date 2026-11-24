@@ -9266,13 +9266,15 @@ rules something out.
     outside stays as one build read it, whatever a placement run then reads, and one inside is
     not decided and is read
     across placements with the dead ends that reading already has: an A/A that does not resolve
-    does not pass, and a workload no K the pads allow can size is not read across placements,
+    does not pass, a side or a pull request the plan's fifth point leaves with no reading across
+    placements does not pass (Code aligned beyond 16 bytes, below), and a workload no K the pads
+    allow can size is not read across placements,
     so its reading inside the band does not pass (How many placements, below). For the margin
     the band holds every bound from -1.98% to +4.33%, so a workload the change leaves about as
     fast as it was is read across placements on any setup, as it already was where a spread
     applies; one build decides it only when it reads clearly faster or slower. That reading
     needs what Pull requests' plan lists: each side's final link captured and run again with
-    pads, each placement checked, K sized from a pilot or an eligible A/A, and the change and
+    pads, the unpadded link's map recorded, each placement checked, K sized from a pilot or an eligible A/A, and the change and
     its A/A under the turn protocol. The rule does not wait on a kit for it: each run below
     adapted the kit before it, under its evidence tag; on 2026-11-24 no script under `bench/`
     did any of it (`df9242b56`); and no run has read the image `count.mjs` starts across
