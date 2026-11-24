@@ -9278,9 +9278,10 @@ rules something out.
     routes and settings (`abfc550a3`, built with `--cfg tokio_unstable` and frame pointers).
 
     The 58% is what tokio's timer costs the multi-threaded runtime, which an event loop per core
-    does not pay, and not a gain of serving a core at a time. It came back on the second host: 546,462 and 544,474 a second on the default runtime against 873,472 and 852,417
-    with `per_core()`, best of three in two passes with the order turned. The default runtime was
-    not short of CPU there. Over 3 s of a 30 s run its process had 17.1 of its 24 cores and left
+    does not pay, and not a gain of serving a core at a time. It came back on the second host:
+    546,462 and 544,474 a second on the default runtime against 873,472 and 852,417 with
+    `per_core()`, best of three in two passes with the order turned. The default runtime was not
+    short of CPU there. Over 3 s of a 30 s run its process had 17.1 of its 24 cores and left
     a CPU 37,000 times a second, where `per_core()` had 24.0 and left one 207 times a second, and
     a request took the same cycles on both, 94,200 and 92,600 (`perf stat`'s count over the
     requests answered at the run's rate). Each of its 24 workers was on a CPU 81% of the time.
