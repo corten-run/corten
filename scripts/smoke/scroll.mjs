@@ -1,4 +1,4 @@
-import { base, swapped, engine, skip, check, pollFor } from "./helpers.mjs";
+import { base, swapped, engine, skip, check, within, steps, pollFor, cleanUp } from "./helpers.mjs";
 
 export async function scroll(swaps, page, errors, browser, noSwaps) {
   // A filter applied on change (data-keep-place): the page changes under the user, who stays
@@ -91,8 +91,10 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
       // writes for a handler module's imports: the runtime fetches it when it swaps the page in.
       /** @type {string[]} */
       const probed = [];
-      page.on("request", (r) => r.url().endsWith("?swap-preload") && probed.push(r.url()));
-      await page.route(news, async (route) => {
+      const onProbe = (/** @type {import("@playwright/test").Request} */ r) => void (r.url().endsWith("?swap-preload") && probed.push(r.url()));
+      page.on("request", onProbe);
+      /** @param {import("@playwright/test").Route} route */
+      const drawNews = async (route) => {
         const nav = swapped(route.request());
         if (route.request().method() !== "GET" || nav) return route.fallback();
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
@@ -121,7 +123,21 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
           if (slow) await slow;
         }
         await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
-      });
+      };
+      await page.route(news, drawNews);
+      /**
+       * Lets go of the page held back and removes the News page's route and listeners, each even
+       * when removing another fails: at the end, and before a case that could not get back to the
+       * News page stops the smoke.
+       */
+      const leaveNews = () => {
+        slow = null;
+        return cleanUp(
+          () => page.off("request", onNews),
+          () => page.off("request", onProbe),
+          () => page.unroute(news, drawNews),
+        );
+      };
       // Something a script put beside <main> is not the layout's, and stays.
       await page.evaluate(() => document.body.append(Object.assign(document.createElement("div"), { id: "extension" })));
       await thank();
@@ -302,55 +318,92 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
       // the write changed in the layout is drawn there too. The write's page is held until that
       // navigation's request is out, so the navigation starts first however slowly it comes (#2014).
       // The case requires the write's request, then the navigation's request, read whole, and the
-      // Stocks page drawn in the same document, each within 5 s (a result after them failing). A
-      // case without one fails and does no more work on its page: the next case starts from the
-      // News page it left, gone back to by its history entry.
+      // Stocks page drawn in the same document (its title, and its watch form in <main>, which the
+      // runtime puts there after the title), each within 5 s (a result after them failing). Each press
+      // and the wait for the request it sends share those 5 s, so a press that stalls fails the case
+      // too. A case without one fails and does no more work on its page: the next case starts from
+      // the News page it left, gone back to by its history entry within 10 s. A page that does not
+      // get back there in that time stops the smoke, once the route and the listeners are removed.
       {
         const name = "a navigation started before a write's page comes reads the whole page";
         /** @type {string[]} */
         const asked = [];
         const stocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/";
         const onStocks = (/** @type {import("@playwright/test").Request} */ r) => stocks(r) && asked.push(swapped(r) ? r.headers()["corten"] : "whole");
+        /**
+         * Presses with `press` and waits for the request it sends, both within 5 s: the request, or
+         * why the case stops.
+         * @param {string} what @param {(r: import("@playwright/test").Request) => boolean} sent @param {() => Promise<unknown>} press
+         */
+        const pressFor = async (what, sent, press) => {
+          /** @type {import("@playwright/test").Request | null} */
+          let got = null;
+          let pressed = false;
+          await within(
+            5000,
+            "",
+            Promise.all([page.waitForRequest(sent, { timeout: 5000 }).then((r) => (got = r)), press().then(() => (pressed = true))]),
+          ).catch(() => {});
+          return got && pressed ? got : got ? `the press that asked for ${what} did not return within 5 s` : `no request for ${what} within 5 s`;
+        };
         let release = () => {};
-        slow = new Promise((resolve) => (release = () => resolve(undefined)));
         /** Where the case stopped, if it did. */
         let stopped = "";
-        /** @type {import("@playwright/test").Request | null} */
-        let navigated = null;
-        /** The News page's history entry, which the next case starts from. */
-        const left = await page.evaluate(() => navigation.currentEntry.key);
+        /** The News page's history entry, which the next case starts from. @type {string | null} */
+        let left = null;
         // The listener and the hold go however the case ends.
         page.on("request", onStocks);
         try {
           try {
-            await page.evaluate(() => scrollTo(0, 0));
-            const [wrote] = await Promise.all([page.waitForRequest((r) => news(new URL(r.url())) && !swapped(r), { timeout: 5000 }).then(() => true, () => false), thank()]);
-            if (!wrote) stopped = "no request for the write's page within 5 s";
+            slow = new Promise((resolve) => (release = () => resolve(undefined)));
+            left = await within(
+              5000,
+              "the News page's history entry not read within 5 s",
+              page.evaluate(() => (scrollTo(0, 0), navigation.currentEntry?.key ?? "")),
+            );
+            const wrote = await pressFor("the write's page", (r) => news(new URL(r.url())) && !swapped(r), thank);
+            if (typeof wrote === "string") stopped = wrote;
             else {
               asked.length = 0;
-              [navigated] = await Promise.all([
-                page.waitForRequest(stocks, { timeout: 5000 }).catch(() => null),
+              const navigated = await pressFor("the Stocks page", stocks, () =>
                 page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/"]')).click()),
-              ]);
-              if (!navigated) stopped = "no request for the Stocks page within 5 s";
+              );
+              if (typeof navigated === "string") stopped = navigated;
               else if (swapped(navigated) || asked[0] !== "whole") stopped = `the Stocks page asked for as ${asked.join() || "nothing"}, not whole`;
             }
+          } catch (error) {
+            stopped ||= error instanceof Error && error.message ? error.message.split("\n")[0] : "the case's setup failed";
           } finally {
             slow = null;
             release();
           }
-          if (!stopped && !(await pollFor(5000, () => page.evaluate(() => document.title === "Stocks | Watchlist" && (/** @type {any} */ (window)).__marker === 1))))
+          if (
+            !stopped &&
+            !(await pollFor(5000, () =>
+              page.evaluate(() => document.title === "Stocks | Watchlist" && !!document.querySelector("main #watch-form") && (/** @type {any} */ (window)).__marker === 1),
+            ))
+          )
             stopped = "the Stocks page not drawn in the same document within 5 s";
         } finally {
           page.off("request", onStocks);
         }
         check(name, !stopped, stopped || `asked ${asked.join()}`);
-        if (stopped) {
-          await page.evaluate((key) => navigation.traverseTo(key).finished.catch(() => {}), left).catch(() => {});
-          await page.waitForFunction(() => document.title === "News | Watchlist" && document.getElementById("briefing"), null, { timeout: 5000 }).catch(() => {});
-        } else {
-          await page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click());
-          await page.waitForFunction(() => document.title === "News | Watchlist" && document.getElementById("briefing"), null, { timeout: 5000 });
+        // Back to the News page, in 10 s: by its entry after a failure, by its link after a pass.
+        const back = steps(10_000, "not back on the News page within 10 s");
+        const atNews = await (async () => {
+          if (stopped) {
+            if (!left) return back.end("the News page's history entry was not read");
+            const entry = left;
+            await back.step(() => page.evaluate((key) => navigation.traverseTo(key).finished.catch(() => {}), entry));
+          } else await back.step(() => page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click()));
+          return back.poll(() => page.evaluate(() => document.title === "News | Watchlist" && !!document.getElementById("briefing")));
+        })().then(
+          () => true,
+          () => false,
+        );
+        if (!atNews) {
+          await leaveNews().catch(() => {});
+          throw new Error(`${name}: ${back.over}, so the cases after it cannot run`);
         }
       }
       // More elements around <main>, or another attribute on an element around it: the page loads in
@@ -372,8 +425,7 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
         const drawnNow = await page.evaluate(() => ({ marker: (/** @type {any} */ (window)).__marker, banner: !!document.getElementById("banner"), theme: document.documentElement.getAttribute("data-theme") }));
         check(name, drawnNow.marker === undefined && drawnNow.banner && (frame === "" || drawnNow.theme === "dark"), JSON.stringify(drawnNow));
       }
-      page.off("request", onNews);
-      await page.unroute(news);
+      await leaveNews();
       // After the loads are counted: the page that drew the notice removed it.
       if (engine !== "webkit") check("the notice is said once", !(await page.evaluate(async () => (await (await fetch("/news")).text()).includes("on the list"))));
       // A browser extension that marks <html> and adds to <head> before the runtime starts (a
