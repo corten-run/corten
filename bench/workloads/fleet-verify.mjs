@@ -350,6 +350,19 @@ export function recheckCollectedGroup(fleet, snapshot) {
   const { group, ...hashes } = snapshot;
   assert.deepEqual(evidenceSnapshot(job), hashes, "group-evidence-changed");
 }
+// A prior provider-errored attempt of the admitted group, rechecked at the successor's
+// final create gate: the same manifest and state bytes, its receipt, and no launch,
+// operation or recheck lock. An old attempt that regained custody refuses the create.
+export function recheckCreateErroredAttempt(root, row) {
+  assert.equal(dirname(row.root), root, "create failure belongs to another continuation");
+  const fleet = readFleet(row.root, row.round, { priorSelection: true });
+  assert.ok(fleet.manifestSha256 === row.manifestSha256 && fleet.manifest.single?.group === row.group, "prior create failure changed");
+  const saved = readGroup(fleet, row.group);
+  assert.ok(saved.outcome === "available" && saved.stateSha256 === row.stateSha256, "prior create failure changed or holds custody");
+  createErroredCustody(saved.local);
+  verifyCreateErrored(saved.local, saved.state);
+  assert.equal(saved.state.createErrored.evidenceSha256, row.receiptSha256, "prior create failure receipt changed");
+}
 // Launch custody is ordered by the exact index, separate from replay evidence.
 // In particular the worker must see a newly acquired staged batch lock even
 // after the independent parent has consumed its own launch intent.

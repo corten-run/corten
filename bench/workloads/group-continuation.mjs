@@ -155,6 +155,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
   const attempts = new Map(names.map((group) => [group, []])), slots = new Map(), unlaunched = new Map(), ids = new Set();
   const indexedCustody = [];
   const proofs = [], retryEvidence = [], manifests = [], states = [], peers = [], unconfirmed = [], needsCensus = new Set(), liveIps = new Set();
+  const createFailures = [];
   const retainedLocks = [];
   const setupCensus = (fleet, saved, lock, launch) => {
     const { group, state, stateSha256 } = saved, { round, provider, single } = fleet.manifest;
@@ -223,6 +224,8 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
           try { verifyCreateErroredAttempt(saved); }
           catch (cause) { refuseAdmission("custody-replay", new Error("unresolved custody: selected provider-errored create is not verified", { cause })); }
           receipt = createErroredReceipt;
+          // The successor's child rechecks this attempt again immediately before its create.
+          createFailures.push({ root: fleet.root, round, group, manifestSha256, stateSha256, receiptSha256: state.createErrored.evidenceSha256 });
         }
         outcome = "create-errored";
       } else if (terminal(saved)) {
@@ -411,6 +414,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       priorAttempts: attempts.get(admittedGroup).filter((row) => retryable(row)).map(({ round, commit, manifestSha256, stateSha256, launch }) =>
         ({ round, commit, manifestSha256, stateSha256, launch })),
       ...(unconfirmed.length ? { unconfirmed } : {}),
+      ...(createFailures.length ? { createFailures } : {}),
       ...(peers.length ? { peers: peers.map(({ proof }) => proof) } : {}) } };
   const subject = { indexSha256, verified: proofs.map(({ fleet, snapshot }) => ({ root: fleet.root, round: fleet.manifest.round,
     manifestSha256: fleet.manifestSha256, ...snapshot })),

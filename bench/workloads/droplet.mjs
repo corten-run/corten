@@ -16,7 +16,7 @@ import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, v
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
   interruptedFirstUpload, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
   verifyUnusedEvidence, createErroredBytes, createErroredCustody, createErroredReceipt, createErroredRecord, createRecheckLock, pendingCreateErroredReceipt,
-  readRetainedInvalidLocks, verifyCreateErrored } from "./cloud-retirement.mjs";
+  verifyCreateErrored } from "./cloud-retirement.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { controlCheckpoint, pinnedHostOptions } from "./cloud-transport.mjs";
 
@@ -69,6 +69,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     replace(staging, statePath); syncDirectory(local);
   };
   const save = () => { check(); writeState(state); };
+  // The provider-errored outcome is published through its own fresh exclusive stage,
+  // like the monitor-ending publications: a fixed-name state.json.tmp left by an
+  // interrupted save is never read, promoted, removed or allowed to block it.
+  const publishCreateErrored = (posted, bytes) => {
+    check(); state.createErrored = { ...posted, evidenceSha256: digest(bytes) }; writeState(state, renameSync, "create-errored");
+  };
   const offlineBootstrapAck = () => state.control.sealed.includes("bootstrap")
     && acknowledgedBootstrapSeal(state.control.ledger.filter(({ request }) => request.epoch === "bootstrap"));
   let launchPeers;
@@ -182,80 +188,61 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     return rows.length;
   };
   // A launch that stopped while its accepted create was unsettled kept the POST's IDs
-  // and, normally, its own locks. Read that exact action later. Only a terminal errored
-  // action bound to the posted droplet, with the droplet proved absent on the saved
-  // account, records the provider-errored outcome. A completed create bound to the
-  // posted droplet with no original custody left is bound to its exact allocation,
-  // the same identity reconciliation the launch makes for a lost acknowledgement, and
-  // returns "allocated": ordinary collection then applies its unused-host and deletion
-  // fences. Any other answer preserves custody.
+  // and, normally, its own locks. Those locks stay until the operator's custody step:
+  // a dead PID in a lock record does not prove that the original controller, provider
+  // worker and their descendants are gone (see CLOUD.md, retained locks), so this
+  // recheck never runs while either remains and never removes one. Afterwards it reads
+  // that exact action under the ordinary operation lock. Only a terminal errored action
+  // bound to the posted droplet, with the droplet proved absent on the saved account,
+  // records the provider-errored outcome. A completed create bound to the posted droplet
+  // is bound to that exact allocation and stops there (3): a fresh collection then
+  // applies the unused-host and deletion fences with its own provider. Any other answer
+  // preserves the reservation.
+  const launchCustody = "original launch custody retained: account for the original controller, provider worker and their descendants,"
+    + " then release its launch and operation locks by the custody step and collect again; preserve reservation";
+  const partialCustody = "partial launch custody (a lock left by an interrupted launch or collect): account for its owner by the custody step"
+    + " before collecting; preserve reservation";
   async function settlePendingCreate(observed) {
     const m = observed.control?.monitor;
     assert.ok(!observed.deletionIntentAt && (!observed.control || !observed.control.ledger.length && !observed.control.sealed.length
       && (!m || m.phase === "pending" && !m.registrationSha256)), "pending create has guest control; preserve reservation");
     assert.ok(!readdirSync(local).some((name) => name.startsWith("monitor-") || name === "known_hosts" || name === recheckLock),
       "pending create has guest or recheck artifacts; preserve reservation");
-    const paths = [join(local, "operation.lock"), join(base, ".groups-launch.lock")], held = paths.map((path) => existsSync(path));
-    assert.equal(held[0], held[1], "partial original launch locks; preserve reservation");
-    let unchanged = () => {};
-    if (held[0]) {
-      // The original launch's exact lock records, one owner, and that owner gone.
-      const original = paths.map((path) => regular(path, 1024));
-      readRetainedInvalidLocks(local, observed);
-      unchanged = () => {
-        assert.ok(paths.every((path, i) => regular(path, 1024).equals(original[i])), "original launch locks changed; preserve reservation");
-        assert.ok(!retainedInvalidOwner(local, observed), "original launch owner is still live or uncertain; preserve reservation");
-      };
-      unchanged();
-    }
-    let release = false;
+    const launchLock = join(base, ".groups-launch.lock"), held = [join(local, "operation.lock"), launchLock].map((path) => existsSync(path));
+    assert.ok(!held[0] && !held[1], held[0] && held[1] ? launchCustody : partialCustody);
     return locked(async () => {
       assert.deepEqual(state, observed, "pending create reservation changed; preserve reservation");
-      unchanged();
+      assert.ok(!existsSync(launchLock), partialCustody);
       const posted = state.createPending;
-      if (!state.createErrored) {
-        // Read-only: never a second create, a DELETE or a bind.
-        const rows = JSON.parse((await execute("doctl", ["compute", "action", "get", posted.actionId, "--output", "json"])).stdout);
-        assert.ok(Array.isArray(rows) && rows.length === 1, "create action observation unavailable; preserve reservation");
-        const [action] = rows;
-        assert.ok(action?.id === Number(posted.actionId) && action.type === "create" && action.resource_type === "droplet",
-          "create action identity differs; preserve reservation");
-        // Still running: nothing has settled. Report pending without changing custody.
-        if (action.status === "in-progress" && [null, 0, Number(posted.dropletId)].includes(action.resource_id)) return 3;
-        if (action.status === "completed" && action.resource_id === Number(posted.dropletId)) {
-          // A real allocation is not this path's to settle. The original launch custody
-          // stays until the operator's custody step. After it, bind only; never provision.
-          assert.ok(!held[0], "completed create retains original launch custody; preserve locks and host");
-          bind(await own());
-          return "allocated";
-        }
-        assert.ok(action.status === "errored" && action.resource_id === Number(posted.dropletId),
-          "create action is not an errored create of the posted droplet; preserve reservation");
+      // Read-only: never a second create, a DELETE or a guest command.
+      const rows = JSON.parse((await execute("doctl", ["compute", "action", "get", posted.actionId, "--output", "json"])).stdout);
+      assert.ok(Array.isArray(rows) && rows.length === 1, "create action observation unavailable; preserve reservation");
+      const [action] = rows;
+      assert.ok(action?.id === Number(posted.actionId) && action.type === "create" && action.resource_type === "droplet",
+        "create action identity differs; preserve reservation");
+      // Still running: nothing has settled. Report pending without changing custody.
+      if (action.status === "in-progress" && [null, 0, Number(posted.dropletId)].includes(action.resource_id)) return 3;
+      if (action.status === "completed" && action.resource_id === Number(posted.dropletId)) {
+        // A real allocation is not this path's to settle. Bind it (bind accepts only the
+        // posted ID) and stop: this operation's provider closes when it returns, so the
+        // unused-allocation path runs in a fresh, separately approved collection.
+        bind(await own());
+        return 3;
       }
+      assert.ok(action.status === "errored" && action.resource_id === Number(posted.dropletId),
+        "create action is not an errored create of the posted droplet; preserve reservation");
       const droplets = await providerAbsent(posted);
       assert.ok(droplets !== undefined, "provider-errored allocation not verified absent; preserve reservation");
-      check(); unchanged();
-      if (state.createErrored) verifyCreateErrored(local, state);
-      else {
-        // A receipt left by a stop between its write and the state publication is
-        // adopted only after this fresh action and absence proof, and only if its bytes
-        // are exactly the canonical record for this state. Otherwise preserve.
-        const path = join(local, createErroredReceipt);
-        let bytes;
-        if (lstatSync(path, { throwIfNoEntry: false })) bytes = pendingCreateErroredReceipt(regular(path, 64 * 1024), state, posted);
-        else { bytes = createErroredBytes(createErroredRecord(state, posted, droplets, new Date().toISOString())); durable(path, bytes); }
-        state.createErrored = { ...posted, evidenceSha256: digest(bytes) }; save();
-      }
-      release = held[0];
+      check();
+      // A receipt left by a stop between its write and the state publication is
+      // adopted only after this fresh action and absence proof, and only if its bytes
+      // are exactly the canonical record for this state. Otherwise preserve.
+      const path = join(local, createErroredReceipt);
+      let bytes;
+      if (lstatSync(path, { throwIfNoEntry: false })) bytes = pendingCreateErroredReceipt(regular(path, 64 * 1024), state, posted);
+      else { bytes = createErroredBytes(createErroredRecord(state, posted, droplets, new Date().toISOString())); durable(path, bytes); }
+      publishCreateErrored(posted, bytes);
       return 1;
-    }, false, held[0] ? recheckLock : "operation.lock", () => {
-      // These locks guarded one create that is now provider-terminal and absent, with
-      // no host, SSH or guest work ever recorded. Release them only after the provider
-      // worker's teardown settled, like the launch path, and with the owner still gone.
-      // A failure here keeps the recheck lock, which every later path refuses.
-      if (!release) return;
-      unchanged();
-      for (const path of paths) { unlinkSync(path); syncDirectory(dirname(path)); }
     });
   }
   const exactHost = async (remaining) => {
@@ -293,6 +280,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   const bind = (d) => {
     assert.ok(!state.id || state.id === String(d.id), "host ID changed");
+    // A create whose accepted POST named its droplet binds only that droplet, never
+    // another allocation that happens to carry the same name or tags.
+    assert.ok(!state.createPending || state.createPending.dropletId === String(d.id),
+      "found allocation differs from the posted create; preserve reservation without binding");
     state.id = String(d.id); state.ip = d.networks.v4.find((n) => n.type === "public").ip_address;
     state.status = state.status === "creating" ? "preparing" : state.status; save();
   };
@@ -526,14 +517,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       await sleep(Math.min(30000, remaining()));
     }
   }
-  // afterSettle runs only after fn returned and the provider teardown settled, before
-  // this lock is released; if it fails, this lock is kept.
-  async function locked(fn, recovery = false, name = recovery ? recoveryLock : "operation.lock", afterSettle) {
+  async function locked(fn, recovery = false, name = recovery ? recoveryLock : "operation.lock") {
     boundary(); const lock = join(local, name);
     if (recovery) assert.ok(existsSync(join(local, "operation.lock")), "original uncertain monitor custody required");
     durable(lock, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`);
     preserveOperationLock = false;
-    let returned = false;
     try {
       state = read(); check();
       // A closed reservation can have no retained launch owner. Competing
@@ -541,21 +529,15 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       if (name === "operation.lock" && state.fleet?.single)
         assert.ok(!lstatSync(join(local, recoveryLock), { throwIfNoEntry: false }), "stream recovery already holds custody");
       if (recovery) assert.equal(state.control?.monitor?.phase, "invalid", "only irrevocably failed monitoring can recover");
-      const value = await fn(); returned = true; return value;
+      return await fn();
     }
     finally {
-      try {
-        try { await settle(); }
-        catch (error) {
-          preserveOperationLock = true;
-          const diagnostic = providerFailure(error);
-          throw Object.assign(new Error("control teardown uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true, controlUncertain: true },
-            diagnostic ? { providerDiagnostic: diagnostic } : {});
-        }
-        if (returned && afterSettle && !preserveOperationLock) {
-          try { await afterSettle(); }
-          catch (error) { preserveOperationLock = true; throw error; }
-        }
+      try { await settle(); }
+      catch (error) {
+        preserveOperationLock = true;
+        const diagnostic = providerFailure(error);
+        throw Object.assign(new Error("control teardown uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true, controlUncertain: true },
+          diagnostic ? { providerDiagnostic: diagnostic } : {});
       }
       finally { if (!preserveOperationLock) { unlinkSync(lock); syncDirectory(local); } }
     }
@@ -939,16 +921,19 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           // proofs: exact action/droplet identity and errored status (worker), the saved
           // account and exact absence (providerAbsent). Otherwise preserve as before.
           const errored = erroredCreate(created);
-          const droplets = errored === undefined ? undefined : await providerAbsent(errored);
-          if (droplets !== undefined) {
-            check();
-            // Save the posted IDs first: a stop before the state publication below then
-            // leaves a reservation the later recheck can settle, not an orphan receipt.
-            state.createPending = errored; save();
-            const bytes = createErroredBytes(createErroredRecord(state, errored, droplets, new Date().toISOString()));
-            durable(join(local, createErroredReceipt), bytes);
-            state.createErrored = { ...errored, evidenceSha256: digest(bytes) }; save();
-            throw createErroredStop();
+          if (errored) {
+            // Save the posted IDs before any absence read: from here only that droplet can
+            // be bound, and a stop at any later point leaves a reservation whose exact
+            // action a later collect can recheck, not an orphan receipt.
+            check(); state.createPending = errored; save();
+            const droplets = await providerAbsent(errored);
+            if (droplets !== undefined) {
+              check();
+              const bytes = createErroredBytes(createErroredRecord(state, errored, droplets, new Date().toISOString()));
+              durable(join(local, createErroredReceipt), bytes);
+              publishCreateErrored(errored, bytes);
+              throw createErroredStop();
+            }
           }
           // Lost acknowledgement permits only identity reconciliation, never another create.
           try { bind(await own()); }
@@ -1027,20 +1012,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         verifyRetirement(); await confirmDeleted();
         state.destroyedAt ??= new Date().toISOString(); save(); return 1;
       });
-      let observed = read();
-      // Every leftover lock beside a recorded failure goes back through the guarded
-      // recheck, which refuses a recheck lock or a partial release.
-      if (observed.createPending && observed.status === "creating" && !observed.id
-        && (!observed.createErrored || [join(local, "operation.lock"), join(local, recheckLock), join(base, ".groups-launch.lock")].some((path) => existsSync(path)))) {
-        const settled = await settlePendingCreate(observed);
-        if (settled !== "allocated") return settled;
-        // Now a bound, never-provisioned allocation: the ordinary path below keeps its
-        // pinned unused-bootstrap, unused-host and deletion fences.
-        observed = read();
-      } else if (observed.createErrored) return createErroredCustody(local) && locked(async () => {
+      const observed = read();
+      if (observed.createPending && observed.status === "creating" && !observed.id && !observed.createErrored) return settlePendingCreate(observed);
+      // Any lock left beside a recorded failure keeps it unresolved (createErroredCustody).
+      if (observed.createErrored) return createErroredCustody(local) && locked(async () => {
         // Read-only: recheck the receipt and absence. Never DELETE, create or bind.
         assert.ok(state.createErrored, "create failure record changed; preserve reservation");
-        assert.ok(!existsSync(join(local, recheckLock)) && !existsSync(join(base, ".groups-launch.lock")), "provider-errored create still holds custody; preserve reservation");
+        assert.ok(!existsSync(join(local, recheckLock)) && !existsSync(join(base, ".groups-launch.lock")), "provider-errored create still holds custody; account for the lock's owner by the custody step; preserve reservation");
         verifyCreateErrored(local, state);
         assert.ok(await providerAbsent(state.createErrored) !== undefined, "provider-errored allocation no longer verified absent; preserve reservation");
         return 1;

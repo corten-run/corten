@@ -16,7 +16,7 @@ import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckContinuationPeers, recheckIndexedLaunchCustody, recheckSetupAttempt } from "./fleet-verify.mjs";
+  recheckContinuationPeers, recheckCreateErroredAttempt, recheckIndexedLaunchCustody, recheckSetupAttempt } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -284,6 +284,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
         recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
         const checks = unconfirmed.filter((row) => row.root !== undefined).map((row) => recheckSetupAttempt(root, row, manifest));
         for (const stillIdle of checks) stillIdle(); // Another attempt's archive may have taken time to hash.
+        // Last, immediately before the create is recorded and dispatched under this child's
+        // own locks: an earlier provider-errored attempt of this group must still hold no
+        // custody. After this point that attempt's collect can only recheck read-only.
+        for (const row of current.subject.continuation.createFailures ?? []) recheckCreateErroredAttempt(root, row);
       }
       return currentPeers;
     }

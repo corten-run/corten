@@ -822,7 +822,7 @@ test("continuation appends authorized retries after no-create and retirement whi
   assert.equal(fs.readFileSync(index, "utf8"), "[]");
 });
 
-test("continuation retries past a create that errored after its launch deadline once the child recheck settled it and the operator released the outer lock", { timeout: 60000 }, async (t) => {
+test("continuation retries past a create that errored after its launch deadline once the operator released its custody and the child recheck settled it", { timeout: 60000 }, async (t) => {
   const p = fixture(t), group = "json-api", slot = path.join(p.h.base, group);
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
   p.deps.inspect = () => { assert.fail("there is no collected evidence to replay"); };
@@ -866,14 +866,21 @@ test("continuation retries past a create that errored after its launch deadline 
     if (command[2] === "get") return { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } };
     assert.deepEqual(command, ["compute", "droplet", "list", "--single-response", "--output", "json"]); return ok([]);
   } }).collect();
+  // A dead PID in the child's lock records is not proof that the launch's process tree
+  // settled: the child refuses before any provider read and leaves its locks.
+  await assert.rejects(child(), /original launch custody retained/);
+  assert.deepEqual(providerReads, []); assert.ok([launchLock, operationLock].every((lock) => fs.existsSync(lock)));
+  // The operator's custody step for the child: its controller, provider worker and their
+  // descendants are accounted for and gone; then its launch and operation locks are released.
+  fs.unlinkSync(launchLock); fs.unlinkSync(operationLock);
   assert.equal(await child(), 3, "still running: nothing changes");
-  assert.ok([launchLock, operationLock].every((lock) => fs.existsSync(lock))); assert.equal(JSON.parse(fs.readFileSync(statePath)).createErrored, undefined);
+  assert.ok(![launchLock, operationLock].some((lock) => fs.existsSync(lock))); assert.equal(JSON.parse(fs.readFileSync(statePath)).createErrored, undefined);
   action = "errored";
   assert.equal(await child(), 1);
   assert.deepEqual(providerReads.slice(-9), ["account", "action", "account", "account", "get", "account", "account", "list", "account"]);
   const resolved = JSON.parse(fs.readFileSync(statePath)), record = fs.readFileSync(receipt, "utf8");
   assert.deepEqual(resolved.createErrored, { ...ids, evidenceSha256: digest(record) });
-  assert.ok(![launchLock, operationLock, path.join(local, "create-recheck.lock")].some((lock) => fs.existsSync(lock)), "the child custody is released");
+  assert.ok(![launchLock, operationLock, path.join(local, "create-recheck.lock")].some((lock) => fs.existsSync(lock)), "no child lock is left");
   // The child recheck settles only the child. The outer continuation lock and the dead
   // batch lock stay; continuation remains closed until the operator's custody step.
   assert.ok(fs.existsSync(outer) && fs.existsSync(batch)); await assert.rejects(prepare("r20"), /EEXIST/);
@@ -904,6 +911,19 @@ test("continuation retries past a create that errored after its launch deadline 
   assert.deepEqual(report.groups.find((r) => r.group === group).attempts.map((r) => [r.round, r.outcome]), [["r19", "create-errored"], ["r20", "prepared"]]);
   assert.equal(treeHash(slot), tree, "the resolved attempt is never rewritten");
   assert.deepEqual(p.events().filter((row) => row.method === "POST"), []);
+  // Review round 2, finding 2. The successor's real child rechecks the old attempt
+  // immediately before its create. Here the old attempt takes its operation lock during
+  // the create's own account check, after the new launch intent: no POST is sent.
+  assert.equal(await fleetMain([...args("r20"), "--detach", "--print-approval"], p.deps), 3);
+  const retryApproval = p.output.at(-1).approvalSha256;
+  fs.writeFileSync(`${p.hosts}.late-lock`, operationLock);
+  assert.equal(await fleetMain([...args("r20"), "--detach", "--approve-reviewed-merged-ready", retryApproval], p.deps), 2);
+  assert.deepEqual(p.output.at(-1).groups.map(({ group: name, outcome }) => [name, outcome]), [[group, "error"]]);
+  assert.ok(fs.existsSync(path.join(p.h.base, `${group}--r20`, "launch-intent.json")), "the refusal came after the new launch intent");
+  assert.ok(fs.existsSync(operationLock), "the old attempt's lock is left alone");
+  assert.deepEqual(p.events().filter((row) => row.method === "POST"), []);
+  const retry = JSON.parse(fs.readFileSync(path.join(p.h.base, `${group}--r20`, group, "groups-r20", "state.json")));
+  assert.equal(retry.createIntentAt, undefined); assert.notEqual(retry.status, "creating");
 });
 test("remaining approval moves from sfo2 to lon1 through captured workers and dispatches once", { timeout: 120000 }, async (t) => {
   const p = fixture(t, "overlap");

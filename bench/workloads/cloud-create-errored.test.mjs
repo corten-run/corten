@@ -102,6 +102,10 @@ function erroredLaunch(t, { result = errored(), hosts = [], get, account, settle
       h.run(binary, args, ...rest); created = true; h.hosts(typeof hosts === "function" ? hosts(h) : hosts); return result;
     }
     if (binary === "doctl" && args[2] === "get" && get) { h.calls.push([binary, ...args]); return get(h, args); }
+    if (binary === "doctl" && args[1] === "action") {
+      h.calls.push([binary, ...args]);
+      return { status: 0, stdout: JSON.stringify([{ id: 456, type: "create", resource_type: "droplet", resource_id: 123, status: "errored" }]), stderr: "" };
+    }
     if (binary === "doctl" && args[0] === "account" && created && account) return account(h, ++accounts) ?? h.run(binary, args, ...rest);
     return h.run(binary, args, ...rest);
   };
@@ -228,28 +232,35 @@ function lateLaunch(t, { failure = unsettled(), hosts = [], flags = {} } = {}) {
   o.after = (before) => h.calls.slice(before).filter(([binary]) => binary === "doctl").map(([, ...args]) => late(h, args));
   return { h, o, task: h.launch({ run: o.run }) };
 }
-function preserved(h, { identity = true, recheckLock = false } = {}) {
+// The operator's custody step: the original controller, provider worker and their
+// descendants are accounted for and gone; only then are the launch's locks released.
+const release = (h) => { for (const path of lockPaths(h)) unlinkSync(path); };
+function preserved(h, { identity = true, locks = false } = {}) {
   const state = h.saved();
   assert.equal(state.status, "creating"); assert.equal(state.id, undefined); assert.equal(state.createErrored, undefined);
   assert.deepEqual(state.createPending, identity ? { dropletId: "123", actionId: "456" } : undefined);
   assert.ok(!existsSync(join(h.local, "provider-create-errored.json")));
-  assert.ok(lockPaths(h).every((path) => existsSync(path)), "the original launch locks stay");
-  assert.equal(existsSync(join(h.local, "create-recheck.lock")), recheckLock);
+  assert.deepEqual(lockPaths(h).map((path) => existsSync(path)), [locks, locks], locks ? "the original launch locks stay" : "no lock is left");
+  assert.ok(!existsSync(join(h.local, "create-recheck.lock")));
   assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
   assert.ok(!h.calls.some(([binary, ...args]) => binary === "ssh" || binary === "scp" || binary === "doctl" && args[2] === "delete"));
 }
 
-test("an action errored after the create deadline is resolved later from the saved IDs, absence and a dead launch owner", async (t) => {
+test("an action errored after the create deadline is resolved later from the saved IDs once the operator released the original custody", async (t) => {
   const { h, o, task } = lateLaunch(t);
   await assert.rejects(task.launch(), (error) => error.controlUncertain === true && error.providerDiagnostic?.code === "create-action-pending"
     && !/verified absent/.test(publicError(error)));
-  preserved(h);
-  // The launch process (this test) still owns its locks: no provider read is made.
-  let before = h.calls.length;
-  await assert.rejects(o.collect(), /still live or uncertain/); assert.deepEqual(o.after(before), []); preserved(h);
-  orphanLocks(h);
-  // Still running at the later read: nothing changes and custody stays as it was.
-  o.action = actionRow({ status: "in-progress", resource_id: null }); before = h.calls.length;
+  preserved(h, { locks: true });
+  // Neither the live launch (this test) nor a dead lock owner proves the original
+  // process tree settled: no provider read is made and no lock is touched.
+  for (const owner of ["live", "dead"]) {
+    if (owner === "dead") orphanLocks(h);
+    const before = h.calls.length;
+    await assert.rejects(o.collect(), /original launch custody retained/, owner); assert.deepEqual(o.after(before), []); preserved(h, { locks: true });
+  }
+  release(h);
+  // Still running at the later read: nothing changes.
+  o.action = actionRow({ status: "in-progress", resource_id: null }); let before = h.calls.length;
   assert.equal(await o.collect(), 3); assert.deepEqual(o.after(before), ["account", "action", "account"]); preserved(h);
   o.action = actionRow(); before = h.calls.length;
   assert.equal(await o.collect(), 1);
@@ -259,7 +270,6 @@ test("an action errored after the create deadline is resolved later from the sav
   assert.deepEqual(state.createPending, { dropletId: "123", actionId: "456" });
   assert.equal(state.status, "creating"); assert.equal(state.id, undefined); assert.equal(state.deletionIntentAt, undefined);
   assert.deepEqual(record, createErroredRecord(state, state.createErrored, 0, record.observedAt), "the same receipt as an in-deadline errored create");
-  // The verified outcome releases the dead launch's locks and its own recheck lock.
   assert.ok([...lockPaths(h), join(h.local, "create-recheck.lock")].every((path) => !existsSync(path)));
   assert.equal(h.creates, 1); assert.equal(h.deletes, 0); assert.ok(!h.calls.some(([binary]) => binary === "ssh" || binary === "scp"));
   // Later collection is the existing read-only recheck; the round is never relaunched.
@@ -270,10 +280,31 @@ test("an action errored after the create deadline is resolved later from the sav
   await next.launch().launch(); assert.equal(next.creates, 1); assert.equal(h.creates, 1);
 });
 
+// Review round 2, finding 1. The previous controller released both locks here.
+test("a dead lock owner whose descendant is still live keeps the original custody, with no provider read and no signal", async (t) => {
+  const { h, o, task } = lateLaunch(t);
+  await assert.rejects(task.launch(), { controlUncertain: true });
+  // The recorded owner exits after starting a descendant that outlives it.
+  const owner = spawnSync(process.execPath, ["-e", "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'],"
+    + " { detached: true, stdio: 'ignore' }); c.unref(); process.stdout.write(String(c.pid));"], { encoding: "utf8" });
+  const descendant = Number(owner.stdout);
+  assert.ok(owner.status === 0 && Number.isSafeInteger(descendant) && descendant > 0);
+  t.after(() => { try { process.kill(descendant); } catch { /* Already gone. */ } });
+  orphanLocks(h, owner.pid);
+  const locks = lockPaths(h).map((path) => readFileSync(path));
+  o.action = actionRow(); // Errored, and the allocation is absent: only custody can stop it.
+  const before = h.calls.length;
+  await assert.rejects(o.collect(), /original launch custody retained/);
+  assert.deepEqual(o.after(before), []);
+  preserved(h, { locks: true });
+  assert.ok(lockPaths(h).every((path, i) => readFileSync(path).equals(locks[i])), "the lock records are unchanged");
+  assert.doesNotThrow(() => process.kill(descendant, 0), "the descendant was not signalled");
+});
+
 test("a pending create whose locks an operator already released resolves under the ordinary operation lock", async (t) => {
   const { h, o, task } = lateLaunch(t);
   await assert.rejects(task.launch(), { controlUncertain: true });
-  for (const path of lockPaths(h)) unlinkSync(path);
+  release(h);
   assert.equal(await o.collect(), 1);
   assert.ok(h.saved().createErrored); assert.ok(!existsSync(join(h.local, "operation.lock")));
   assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
@@ -281,7 +312,6 @@ test("a pending create whose locks an operator already released resolves under t
 
 const foreignAccount = () => ({ status: 0, stdout: JSON.stringify({ uuid: "synthetic-foreign-user", droplet_limit: 20 }), stderr: "" });
 const lateNegatives = {
-  "the action completed while the original locks remain": (h, o) => { o.action = actionRow({ status: "completed" }); },
   "the action is bound to another droplet": (h, o) => { o.action = actionRow({ resource_id: 124 }); },
   "the errored action is unbound": (h, o) => { o.action = actionRow({ resource_id: null }); },
   "the action is another action": (h, o) => { o.action = actionRow({ id: 457 }); },
@@ -292,40 +322,42 @@ const lateNegatives = {
   "the inventory lists the name": (h) => { h.hosts([{ ...h.host(), id: 999, tags: [] }]); },
   "the inventory lists the ownership tag": (h) => { h.hosts([{ ...h.host(), id: 999, name: "corten-bench-groups-r21-ffffffffffffffff" }]); },
   "the account changes during the proof": (h, o) => { o.account = (count) => count >= 3 ? foreignAccount() : undefined; },
-  "the launch lock names another owner": (h) => {
-    const launch = lockPaths(h)[1]; writeFileSync(launch, `${JSON.stringify({ ...JSON.parse(readFileSync(launch)), pid: deadPid() + 1 })}\n`);
-  },
 };
 for (const [name, change] of Object.entries(lateNegatives)) {
   test(`a pending create stays preserved when ${name}`, async (t) => {
     const { h, o, task } = lateLaunch(t);
     await assert.rejects(task.launch(), { controlUncertain: true });
-    orphanLocks(h); change(h, o);
+    release(h); change(h, o);
     await assert.rejects(o.collect(), (error) => !error.controlUncertain && !/verified absent/.test(publicError(error)));
     preserved(h);
-    // The retained launch lock refuses a relaunch before any reservation read.
-    await assert.rejects(h.launch().launch(), /EEXIST/);
+    await assert.rejects(h.launch().launch(), /already reserved/);
     const next = harness(t, { stateRoot: h.base, round: "r22" });
-    await assert.rejects(next.launch().launch(), /EEXIST|unresolved reservation/); assert.equal(next.creates, 0);
+    await assert.rejects(next.launch().launch(), /unresolved reservation/); assert.equal(next.creates, 0);
   });
 }
 
-test("a pending create stays preserved with a partial, live or uncertain owner and without posted IDs", async (t) => {
-  const partial = lateLaunch(t);
-  await assert.rejects(partial.task.launch(), { controlUncertain: true });
-  orphanLocks(partial.h); unlinkSync(lockPaths(partial.h)[1]);
-  await assert.rejects(partial.o.collect(), /partial original launch locks/);
-  assert.ok(!partial.h.calls.some(([, ...args]) => args[1] === "action"));
+test("a pending create stays preserved with partial custody, after an uncertain read, and without posted IDs", async (t) => {
+  for (const kept of [0, 1]) {
+    const partial = lateLaunch(t);
+    await assert.rejects(partial.task.launch(), { controlUncertain: true });
+    unlinkSync(lockPaths(partial.h)[1 - kept]);
+    await assert.rejects(partial.o.collect(), /partial launch custody/);
+    assert.ok(!partial.h.calls.some(([, ...args]) => args[1] === "action"));
+  }
+  // An uncertain read keeps this collect's own operation lock: a stopped collect
+  // leaves the same shape, and the next collect refuses it before any provider read.
   const uncertain = lateLaunch(t);
   await assert.rejects(uncertain.task.launch(), { controlUncertain: true });
-  orphanLocks(uncertain.h); uncertain.o.actionError = unsettled(undefined);
+  release(uncertain.h); uncertain.o.actionError = unsettled(undefined);
   await assert.rejects(uncertain.o.collect(), { controlUncertain: true });
-  preserved(uncertain.h, { recheckLock: true });
+  assert.deepEqual(lockPaths(uncertain.h).map((path) => existsSync(path)), [true, false]);
   uncertain.o.actionError = undefined;
-  await assert.rejects(uncertain.o.collect(), /recheck artifacts/); preserved(uncertain.h, { recheckLock: true });
+  const before = uncertain.h.calls.length;
+  await assert.rejects(uncertain.o.collect(), /partial launch custody/); assert.deepEqual(uncertain.o.after(before), []);
+  unlinkSync(lockPaths(uncertain.h)[0]); preserved(uncertain.h);
   const anonymous = lateLaunch(t, { failure: unsettled(null) });
   await assert.rejects(anonymous.task.launch(), { controlUncertain: true });
-  orphanLocks(anonymous.h);
+  release(anonymous.h);
   await assert.rejects(anonymous.o.collect());
   preserved(anonymous.h, { identity: false });
   assert.ok(!anonymous.h.calls.some(([, ...args]) => args[1] === "action"));
@@ -362,9 +394,9 @@ test("the absence census is one provider response whose every row has an inspect
 
 test("the late recheck through the provider engine refuses a malformed row or a match it cannot keep, and accepts one clean response", async (t) => {
   for (const kind of ["malformed", "matched-then-count-changed", "clean"]) {
-    const { h, o, task } = lateLaunch(t);
+    const { h, task } = lateLaunch(t);
     await assert.rejects(task.launch(), { controlUncertain: true });
-    orphanLocks(h);
+    release(h);
     const name = h.saved().name, lists = [], base = syntheticProviderRequest(h);
     const response = { malformed: page([{ id: 999, name: null, tags: null }]),
       "matched-then-count-changed": page([otherRow(999, { name })], { meta: { total: 2 }, links: nextPage }), clean: page([otherRow(999)]) }[kind];
@@ -390,12 +422,12 @@ test("the late recheck through the provider engine refuses a malformed row or a 
   }
 });
 
-test("a recheck keeps the original locks until the provider teardown settles, and a failed teardown blocks every later path", async (t) => {
+test("a teardown that fails after the create failure is recorded keeps the operation lock, and every later path refuses", async (t) => {
   for (const mode of ["rejected", "withheld"]) {
     const { h, o, task } = lateLaunch(t);
     await assert.rejects(task.launch(), { controlUncertain: true });
-    orphanLocks(h);
-    const locks = [...lockPaths(h), join(h.local, "create-recheck.lock")];
+    release(h);
+    const operation = lockPaths(h)[0];
     let fail, entered;
     const reached = new Promise((resolve) => { entered = resolve; });
     const settle = mode === "rejected" ? async () => { throw new Error("synthetic teardown failure"); }
@@ -403,45 +435,47 @@ test("a recheck keeps the original locks until the provider teardown settles, an
     const pending = o.collect({ settle });
     if (mode === "withheld") {
       await reached;
-      // The receipt is published, but nothing is released while teardown is unsettled.
-      assert.ok(h.saved().createErrored); assert.ok(locks.every((path) => existsSync(path)), "withheld: every lock stays");
+      assert.ok(h.saved().createErrored); assert.ok(existsSync(operation), "withheld: the lock stays");
       fail(new Error("synthetic teardown failure"));
     }
     await assert.rejects(pending, (error) => error.controlTreeUncertain === true && /teardown uncertain/.test(error.message));
-    assert.ok(h.saved().createErrored); assert.ok(locks.every((path) => existsSync(path)), `${mode}: every lock stays`);
+    assert.ok(h.saved().createErrored); assert.ok(existsSync(operation), `${mode}: the lock stays`);
     const before = h.calls.length;
-    await assert.rejects(o.collect(), /recheck artifacts/); assert.equal(h.calls.length, before, "no provider read");
-    await assert.rejects(h.launch().launch(), /EEXIST/);
+    await assert.rejects(o.collect(), /still holds custody/); assert.equal(h.calls.length, before, "no provider read");
+    await assert.rejects(h.launch().launch(), /already reserved/);
     const next = harness(t, { stateRoot: h.base, round: "r22" });
-    await assert.rejects(next.launch().launch(), /EEXIST/); assert.equal(next.creates, 0);
+    await assert.rejects(next.launch().launch(), /unresolved reservation/); assert.equal(next.creates, 0);
     assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
   }
 });
 
 test("any lock left beside a recorded create failure keeps it unresolved for collect and a later round", async (t) => {
-  for (const name of ["create-recheck.lock", "launch"]) {
+  for (const name of ["create-recheck.lock", "operation.lock", "launch"]) {
     const { h, o, task } = lateLaunch(t);
     await assert.rejects(task.launch(), { controlUncertain: true });
-    orphanLocks(h); assert.equal(await o.collect(), 1);
+    release(h); assert.equal(await o.collect(), 1);
     const path = name === "launch" ? lockPaths(h)[1] : join(h.local, name);
     writeFileSync(path, "SYNTHETIC");
     const before = h.calls.length;
-    await assert.rejects(o.collect(), name === "launch" ? /partial original launch locks/ : /recheck artifacts/);
+    await assert.rejects(o.collect(), /still holds custody/);
     assert.equal(h.calls.length, before);
-    if (name !== "launch") {
-      const next = harness(t, { stateRoot: h.base, round: "r22", active: true });
-      await assert.rejects(next.launch().launch(), /unresolved reservation blocks launch/); assert.equal(next.creates, 0);
-    }
+    const next = harness(t, { stateRoot: h.base, round: "r22", active: true });
+    await assert.rejects(next.launch().launch(), name === "launch" ? /EEXIST/ : /unresolved reservation blocks launch/); assert.equal(next.creates, 0);
   }
 });
 
-test("an in-deadline errored create whose teardown failed keeps both locks with the posted IDs, and the later recheck settles it", async (t) => {
+test("an in-deadline errored create whose teardown failed keeps both locks until the custody step, then only rechecks", async (t) => {
   const { h, run, task } = erroredLaunch(t, { settle: async () => { throw new Error("synthetic teardown failure"); } });
   await assert.rejects(task.launch(), { controlTreeUncertain: true });
   const state = h.saved();
   assert.deepEqual(state.createPending, { dropletId: "123", actionId: "456" }); assert.ok(state.createErrored);
   assert.ok(lockPaths(h).every((path) => existsSync(path)));
-  orphanLocks(h);
+  for (const owner of ["live", "dead"]) {
+    if (owner === "dead") orphanLocks(h);
+    const before = h.calls.length;
+    await assert.rejects(h.task({ run }).collect(), /still holds custody/, owner); assert.equal(h.calls.length, before);
+  }
+  release(h);
   const before = h.calls.length;
   assert.equal(await h.task({ run }).collect(), 1);
   assert.deepEqual(h.calls.slice(before).map(([, ...args]) => args[0] === "account" ? "account" : args[2]),
@@ -454,7 +488,7 @@ test("a receipt left before its state publication is adopted only after a fresh 
   for (const kind of ["canonical", "changed", "allocation-present"]) {
     const { h, o, task } = lateLaunch(t);
     await assert.rejects(task.launch(), { controlUncertain: true });
-    orphanLocks(h);
+    release(h);
     const state = h.saved(), canonical = createErroredBytes(createErroredRecord(state, state.createPending, 2, "2026-11-20T00:00:00.000Z"));
     const bytes = kind === "changed" ? canonical.replace('"measurements": 0', '"measurements": 1') : canonical;
     const path = join(h.local, "provider-create-errored.json"); writeFileSync(path, bytes);
@@ -464,33 +498,120 @@ test("a receipt left before its state publication is adopted only after a fresh 
       assert.equal(await o.collect(), 1);
       assert.deepEqual(o.after(before), ["account", "action", "account", "account", "get", "account", "account", "list", "account"]);
       assert.equal(h.saved().createErrored.evidenceSha256, digest(canonical));
-      assert.ok(lockPaths(h).every((lock) => !existsSync(lock)));
     } else {
       await assert.rejects(o.collect(), kind === "changed" ? /unpublished create failure receipt differs/ : /not verified absent/);
-      assert.equal(h.saved().createErrored, undefined); assert.ok(lockPaths(h).every((lock) => existsSync(lock)));
+      assert.equal(h.saved().createErrored, undefined);
     }
+    assert.ok(lockPaths(h).every((lock) => !existsSync(lock)));
     assert.equal(readFileSync(path, "utf8"), bytes, "the receipt is never rewritten");
     assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
   }
 });
 
-test("a completed create of its exact allocation is bound for unused-allocation custody once the original custody is released", async (t) => {
+// Review round 2, finding 5. The previous controller stopped with EEXIST on the staging file.
+test("a stopped state write's staging file does not prevent adopting the receipt, and is never read or removed", async (t) => {
+  const { h, o, task } = lateLaunch(t);
+  await assert.rejects(task.launch(), { controlUncertain: true });
+  release(h);
+  // A process stopped after writing the receipt and its fixed-name staging state, before the rename.
+  const state = h.saved(), canonical = createErroredBytes(createErroredRecord(state, state.createPending, 0, "2026-11-20T00:00:00.000Z"));
+  writeFileSync(join(h.local, "provider-create-errored.json"), canonical);
+  const staging = join(h.local, "state.json.tmp"), staged = `${JSON.stringify({ ...state,
+    createErrored: { ...state.createPending, evidenceSha256: digest(canonical) } }, null, 2)}\n`;
+  writeFileSync(staging, staged);
+  const before = h.calls.length;
+  assert.equal(await o.collect(), 1);
+  assert.deepEqual(o.after(before), ["account", "action", "account", "account", "get", "account", "account", "list", "account"]);
+  assert.deepEqual(h.saved().createErrored, { ...state.createPending, evidenceSha256: digest(canonical) });
+  assert.equal(readFileSync(staging, "utf8"), staged, "the staging file is left exactly as found");
+  assert.ok(lockPaths(h).every((lock) => !existsSync(lock)));
+  assert.equal(await o.collect(), 1); assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+});
+
+test("a collect stopped while holding its operation lock is refused before any provider read until the custody step", async (t) => {
+  const { h, o, task } = lateLaunch(t);
+  await assert.rejects(task.launch(), { controlUncertain: true });
+  release(h);
+  writeFileSync(lockPaths(h)[0], `${JSON.stringify({ pid: deadPid(), at: new Date().toISOString() })}\n`);
+  const before = h.calls.length;
+  await assert.rejects(o.collect(), /partial launch custody/); assert.deepEqual(o.after(before), []);
+  unlinkSync(lockPaths(h)[0]); // The custody step for that collect's lock.
+  assert.equal(await o.collect(), 1); assert.ok(h.saved().createErrored);
+});
+
+// Review round 2, finding 3. The previous controller bound droplet 999 and saved no IDs
+// before the absence proof.
+test("an in-deadline errored create saves its posted IDs before absence and never binds another allocation", async (t) => {
+  // The exact ID is 404, but the census lists another droplet with this create's name and tags.
+  const other = erroredLaunch(t, { hosts: (h) => [{ ...h.host(), id: 999 }] });
+  await assert.rejects(other.task.launch(), /differs from the posted create/);
+  let state = other.h.saved();
+  assert.equal(state.status, "creating"); assert.equal(state.id, undefined); assert.equal(state.createErrored, undefined);
+  assert.deepEqual(state.createPending, { dropletId: "123", actionId: "456" });
+  await assert.rejects(other.h.task({ run: other.run }).collect(), /not verified absent/);
+  assert.deepEqual(other.h.saved(), state, "the contradiction stays unresolved");
+  assert.equal(other.h.creates, 1); assert.equal(other.h.deletes, 0);
+  // The exact allocation is present under another name, so absence fails and nothing is bound.
+  const renamed = erroredLaunch(t, { hosts: (h) => [{ ...h.host(), name: "corten-bench-groups-r21-renamed" }] });
+  await assert.rejects(renamed.task.launch(), /owned droplet missing or ambiguous/);
+  state = renamed.h.saved();
+  assert.equal(state.id, undefined); assert.deepEqual(state.createPending, { dropletId: "123", actionId: "456" });
+  // Once it has gone, a later collect rechecks that exact action and settles it.
+  renamed.h.hosts([]);
+  assert.equal(await renamed.h.task({ run: renamed.run }).collect(), 1);
+  assert.ok(renamed.h.saved().createErrored); assert.equal(renamed.h.creates, 1); assert.equal(renamed.h.deletes, 0);
+});
+
+test("a completed create of its exact allocation is bound, and a fresh pinned collection retires it", async (t) => {
   const { h, o, task } = lateLaunch(t, { flags: { missingUnit: true } });
   await assert.rejects(task.launch(), { controlUncertain: true });
   o.action = actionRow({ status: "completed" }); h.hosts([h.host()]);
-  // With the original locks still present, the same completed action is refused (see the negatives above).
-  for (const path of lockPaths(h)) unlinkSync(path); // The operator's custody step.
+  // With the original locks still present the same completed action is refused before any read.
+  await assert.rejects(o.collect(), /original launch custody retained/);
+  release(h);
   const before = h.calls.length;
-  await assert.rejects(o.collect(), /approved pinned observation/);
-  assert.deepEqual(o.after(before).slice(0, 6), ["account", "action", "account", "account", "list", "account"]);
+  assert.equal(await o.collect(), 3);
+  assert.deepEqual(o.after(before), ["account", "action", "account", "account", "list", "account"]);
   const state = h.saved();
   assert.equal(state.status, "preparing"); assert.equal(state.id, "123"); assert.equal(state.ip, "192.0.2.10");
   assert.deepEqual(state.createPending, { dropletId: "123", actionId: "456" }); assert.equal(state.createErrored, undefined);
   assert.ok(!existsSync(join(h.local, "operation.lock")));
   // Bound only: no SSH, upload, unit start or DELETE.
   assert.ok(!h.calls.some(([binary, ...args]) => binary === "ssh" || binary === "scp" || binary === "doctl" && args[2] === "delete"));
-  // The existing pinned unused-bootstrap path retires it with its fresh proof and deletion fences.
+  // A monitored reservation then needs the pinned unused-bootstrap approval.
+  await assert.rejects(o.collect(), /approved pinned observation/);
   assert.equal(await h.pinnedUnused({ run: o.run }).collect(), 1);
   const retired = h.saved();
   assert.equal(retired.retirement.kind, "unused"); assert.ok(retired.destroyedAt); assert.equal(h.deletes, 1); assert.equal(h.creates, 1);
+});
+
+// Review round 2, finding 4. Each collection owns one provider; after close every call
+// fails as uncertain, as production's close contract does. The previous controller
+// reused the closed provider and kept a new operation lock without a DELETE.
+test("an unmonitored completed allocation is bound by one collection and retired by a fresh one with its own provider", async (t) => {
+  const { h, o, task } = lateLaunch(t, { flags: { missingUnit: true } });
+  await assert.rejects(task.launch(), { controlUncertain: true });
+  release(h);
+  h.change((s) => { delete s.control.monitor; });
+  o.action = actionRow({ status: "completed" }); h.hosts([h.host()]);
+  const providers = [];
+  const collect = () => {
+    const provider = { closed: 0 }; providers.push(provider);
+    const run = (binary, args, ...rest) => {
+      if (binary === "doctl" && provider.closed) throw Object.assign(new Error("synthetic closed provider"), { controlUncertain: true });
+      return o.run(binary, args, ...rest);
+    };
+    return h.task({ run, settle: async () => { provider.closed++; } }).collect();
+  };
+  assert.equal(await collect(), 3);
+  const bound = h.saved();
+  assert.equal(bound.status, "preparing"); assert.equal(bound.id, "123"); assert.equal(bound.control.monitor, undefined);
+  assert.ok(!existsSync(join(h.local, "operation.lock"))); assert.equal(h.deletes, 0);
+  assert.ok(!h.calls.some(([binary]) => binary === "ssh" || binary === "scp"));
+  assert.equal(await collect(), 1);
+  const retired = h.saved();
+  assert.equal(retired.retirement.kind, "unused"); assert.ok(retired.destroyedAt);
+  assert.equal(h.deletes, 1); assert.equal(h.creates, 1);
+  assert.ok(!existsSync(join(h.local, "operation.lock")));
+  assert.deepEqual(providers.map(({ closed }) => closed), [1, 1], "each collection closed its own provider once");
 });

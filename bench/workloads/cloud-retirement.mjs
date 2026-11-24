@@ -40,11 +40,13 @@ export function verifyCreateErrored(local, s) {
     "create failure receipt changed; preserve reservation");
   return true;
 }
-// A resolved provider-errored create leaves no custody behind: no original launch or
-// operation lock and no recheck lock. Any of them, or a partial release, is unresolved.
+// A resolved provider-errored create leaves no custody behind: no launch or operation
+// lock, and no recheck lock (no controller writes one now; a stray one still refuses).
+// Any of them is unresolved until the operator's custody step accounts for its owner.
 export function createErroredCustody(local) {
   for (const path of [join(dirname(local), ".groups-launch.lock"), join(local, "operation.lock"), join(local, createRecheckLock)])
-    assert.ok(!lstatSync(path, { throwIfNoEntry: false }), "provider-errored create still holds custody; preserve reservation");
+    assert.ok(!lstatSync(path, { throwIfNoEntry: false }),
+      "provider-errored create still holds custody; account for the lock's owner by the custody step; preserve reservation");
   return true;
 }
 // A receipt written before its state publication (a crash between the two) is

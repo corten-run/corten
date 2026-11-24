@@ -354,10 +354,11 @@ test("composed unknown/unclosed/cancel/deadline/mutation failures retain exclusi
     const collect = ["r21", "--state-dir", h.base, "--collect"];
     if (["action", "post"].includes(mode)) {
       // The unbound create is refused before collect can try the operation lock. A pending
-      // action keeps the POST's IDs for a later recheck, which refuses a live launch owner.
+      // action keeps the POST's IDs for a later recheck, which refuses while the launch's
+      // locks remain, before any provider read.
       assert.deepEqual(saved.createPending, mode === "action" ? { dropletId: "123", actionId: "456" } : undefined);
       await assert.rejects(approved(collect), { controllerStage: "controller-collect", message: mode === "action"
-        ? /original launch owner is still live or uncertain; preserve reservation/ : /monitor not registered; preserve pending reservation/ });
+        ? /original launch custody retained/ : /monitor not registered; preserve pending reservation/ });
       await assert.rejects(approved(args), { controllerStage: "controller-launch", code: "EEXIST" });
     } else await assert.rejects(approved(collect), { controllerStage: "controller-collect", code: "EEXIST" });
     assert.ok(workers.slice(2).every((w) => w.child === undefined));

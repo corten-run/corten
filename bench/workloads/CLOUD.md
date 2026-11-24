@@ -742,8 +742,10 @@ every row must have a positive unique ID, a name and a list of tags, the respons
 must report no further page and its count must match its rows. More than one page
 (over 200 droplets), a count mismatch or any row that cannot be checked refuses, and
 the census is never retaken, so a matching row seen once is never discarded. Offset
-pages are not treated as one snapshot of the inventory. The controller first saves
-the POST's IDs as `createPending`, then writes
+pages are not treated as one snapshot of the inventory. As soon as the worker
+returns a valid errored identity, before any absence read, the controller saves the
+POST's IDs as `createPending`. From then on only that droplet ID can be bound to
+the reservation. When absence is proved it writes
 `provider-create-errored.json` (action identity, account, absence, one create, no
 replacement create, no DELETE, no guest, zero measurements), saves its hash as
 `createErrored` on the still-unbound `creating` reservation and stops with
@@ -753,62 +755,85 @@ receipts report `create-errored`, a later round in the same root is not blocked,
 retries the create or relaunches the round. A later successful attempt is separate
 evidence and does not qualify this one. The locks are released only after the
 provider worker's teardown settles. If that teardown fails, both locks stay with the
-recorded failure, and a later group `--collect` settles them like the late case
-below.
+recorded failure and every later path refuses it until the operator's custody step
+(below) releases them; `--collect` then only rechecks.
 
 Any missing or contradicting proof leaves the existing path unchanged: an unbound
 or non-`errored` action stays `create-action-response`, a GET that is not 404, an
 inventory row with the ID, name or tag, an account change or a transport failure
 preserves the `creating` reservation for inspection. Such a reservation still blocks
-later launches in its root.
+later launches in its root. With a valid errored identity the saved
+`createPending` stays: if the exact droplet is present under its own name and tags
+the existing lost-acknowledgement reconciliation binds that exact allocation, but an
+allocation with any other ID, even one carrying this create's name and tags, is
+never bound. That contradiction stays unresolved, and a later `--collect` rechecks
+the saved action and absence as below.
 
 The provider can report `errored` long after the create's deadline: in r21 the
 action errored about 22 minutes after the accepted POST. A create action still
 pending at the deadline stays uncertain with its locks, and the launch also saves
 the POST's droplet and action IDs as `createPending` on the unbound `creating`
-reservation (a lost POST response saves none). A later `--collect` of that group,
-from the measured checkout, settles it read-only. With the original launch and
-operation locks still present, both must be the launch's exact records naming one
-owner that is provably gone; the recheck then runs under its own
-`create-recheck.lock`. It reads that exact action with `doctl compute action get`
+reservation (a lost POST response saves none). The launch's own launch and
+operation locks stay too. A lock record whose PID is gone does not prove that the
+original controller, provider worker and their descendants are gone, so no
+controller treats it as settled. While either lock remains, group `--collect`
+refuses before any provider read with `original launch custody retained` (both locks)
+or `partial launch custody` (one), and changes nothing. The route on is the
+operator's custody step for retained locks below: account for that launch's process
+tree, keep the lock bytes and that proof outside the state roots, release the
+group's `.groups-launch.lock` and `operation.lock`, then collect again.
+
+That `--collect`, from the measured checkout, settles the create read-only under
+the ordinary operation lock. It reads that exact action with `doctl compute action get`
 on the saved account. An action still `in-progress` returns 3 and changes nothing.
 Only the same action ID, `create` type, `droplet` resource bound to the posted
 droplet ID and status `errored`, followed by the same exact-404 and single-response census
 absence proof, writes the same `provider-create-errored.json` receipt and
-`createErrored` and returns 1. It releases the dead launch's locks only after the
-provider worker's teardown has settled and the lock bytes and dead owner are
-rechecked; if teardown fails or is withheld, the original locks and the recheck lock
-all stay, and every later collect, fleet verification, continuation and later round
-refuses until an operator investigates. A live or uncertain owner, one missing lock,
-guest or monitor artifacts, an unbound or differently bound action, a failed or
-uncertain read, a GET that is not 404, a census that is not one clean response, an
-inventory match or an account change keeps the reservation, its IDs and its locks
-and stops; an uncertain read also keeps the recheck lock. This errored path never
-creates, deletes or binds. Fleet `--collect` still reports a child holding its
-operation lock as busy and does not run this recheck.
+`createErrored` and returns 1. Guest or monitor artifacts, an unbound or differently
+bound action, a failed or uncertain read, a GET that is not 404, a census that is not
+one clean response, an inventory match or an account change keeps the reservation
+and its IDs and stops. An uncertain read or a failed provider teardown keeps that
+collect's operation lock, which every later path refuses until the same custody
+step. This errored path never creates or deletes. Fleet `--collect`
+still reports a child holding its operation lock as busy and does not run this
+recheck. No controller writes a `create-recheck.lock`; a stray one is refused as
+custody wherever it appears.
 
 A stop between writing the receipt and publishing `createErrored` leaves the receipt
-beside a state that still has `createPending` and, from a launch, its locks. The next
-collect repeats the fresh action read and absence proof, then adopts the existing
-receipt only if its bytes are exactly the canonical record for that saved state (its
-own census size and time); any other bytes refuse and are left unchanged.
+beside a state that still has `createPending`, and from a launch its locks (refused
+as above until the custody step). The next collect repeats the fresh action read and
+absence proof, then adopts the existing receipt only if its bytes are exactly the
+canonical record for that saved state (its own census size and time); any other
+bytes refuse and are left unchanged. `createErrored` is published through its own
+fresh exclusive staging file (`state.json.create-errored-<random>.tmp`), as the
+monitor-ending publications are. A fixed-name `state.json.tmp` left by a stop during
+an ordinary save is not verified, so it is never read, promoted, removed or allowed
+to block this publication. It stays for the operator to archive. A stray random-named
+staging file is likewise left alone. An ordinary save on that reservation, such as
+the bind below, still refuses on the fixed-name file until the operator archives it.
 
 A `completed` action bound to the posted droplet is a real allocation, not a
-provider-errored create. While the original launch locks remain it is refused, as
-before. After the operator's custody step has released them (the original
-controller, provider worker and their descendants accounted for and gone, as for any
-retained lock below), group `--collect` binds that exact allocation, the same
-identity reconciliation the launch makes for a lost acknowledgement: it never
-provisions, and the bound reservation then takes the existing unused-allocation
-path. A monitored reservation needs the pinned unused-bootstrap preview and approval;
-an unmonitored one needs the fresh unused-host proof. Both keep their deletion fences.
+provider-errored create. After the custody step above, group `--collect` binds that
+exact allocation, the same identity reconciliation the launch makes for a lost
+acknowledgement, and returns 3. It never provisions. The binding is its own
+checkpoint: that collection's provider worker closes when it returns, and a fresh
+collection with its own provider then takes the existing unused-allocation path. A
+monitored reservation needs the pinned unused-bootstrap preview and approval; an
+unmonitored one needs the fresh unused-host proof. Both keep their deletion fences.
 
 Fleet verification reports a group whose saved `createErrored` receipt rebuilds
 from its state, with no launch, operation or recheck lock left, as
 `create-errored`; it never qualifies the fleet. A continuation treats that attempt
 like a retired one: the group may be prepared again in a new slot. The receipt and
 the same lock-free custody are rechecked again at the final pre-intent recheck, so
-a lock that appears after the scan refuses.
+a lock that appears after the scan refuses. The successor's child checks it once
+more, after the account read that opens its create and immediately before it records
+create intent and sends the POST, under the child's own locks: the attempt's
+manifest and state bytes, its receipt and no launch, operation or recheck lock. An
+old attempt that has taken custody again by then refuses the create. A collect of
+that attempt that starts after this check can only run the read-only receipt and
+absence recheck, since a recorded `createErrored` never leads to a create, bind or
+DELETE.
 
 The group recheck settles only the child. A launch that stopped uncertain at its
 create deadline also keeps its attempt's `.fleet-operation.lock` and, in a
