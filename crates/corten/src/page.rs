@@ -186,8 +186,9 @@ impl Mode {
     /// text. The rule is written here and nowhere else in the request's path: [`Mode::asked`]
     /// looks the two up and `crate::kept` gives them from its pass over a request's headers, so
     /// a header this function is made to read is an argument each of them has to give. A request
-    /// under an API is the one that does not pass here: the stages ask nothing of its mode
-    /// ([`RequestPage::read`]). Browsers never put JSON first for a navigation.
+    /// under an API is the one the stages do not pass here: they ask nothing of its mode
+    /// ([`RequestPage::read`]), and a handler's [`Req`] there still does. Browsers never put JSON
+    /// first for a navigation.
     pub(crate) fn said<'a>(
         runtime: Option<&HeaderValue>,
         accept: impl FnOnce() -> Option<&'a HeaderValue>,
@@ -4571,7 +4572,7 @@ mod carried_tests {
         };
         // The mode, whether the runtime sent the request, and whether a document was asked for by
         // an `Accept` that names HTML.
-        let cases: [(Lines, Lines, Mode, bool, bool); 21] = [
+        let cases: [(Lines, Lines, Mode, bool, bool); 24] = [
             // No `corten`: the first item of the first `Accept` line, JSON or anything else.
             (&[], &[], Mode::Document, false, false),
             (&[], &[b"text/html,application/xhtml+xml,*/*;q=0.8"], Mode::Document, false, true),
@@ -4583,6 +4584,11 @@ mod carried_tests {
             (&[], &[b"application/problem+json"], Mode::Document, false, false),
             (&[], &[b"text/html", b"application/json"], Mode::Document, false, true),
             (&[], &[b"application/json", b"text/html"], Mode::Data, false, false),
+            // HTML is named or it is not, wherever in the line: another `text/` type at the start
+            // is not HTML, and HTML after it is.
+            (&[], &[b"text/plain"], Mode::Document, false, false),
+            (&[], &[b"text/event-stream"], Mode::Document, false, false),
+            (&[], &[b"text/plain, text/html;q=0.9"], Mode::Document, false, true),
             // One that is not text is read as none.
             (&[], &[b"application/json\xff"], Mode::Document, false, false),
             (&[], &[b"text/html\xff"], Mode::Document, false, false),

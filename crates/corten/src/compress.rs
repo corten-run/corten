@@ -115,11 +115,13 @@ pub(crate) fn accepted(headers: &HeaderMap, offered: &[Coding]) -> Option<Coding
 }
 
 /// The `Accept-Encoding` lines browsers send, each with the codings of Corten's it names, none
-/// with a weight. Playwright 1.65.1's browsers sent these three on 2026-11-23: Chromium 159 and
-/// Firefox 159 the first, WebKit 27.2 the second over HTTPS and the third over plain HTTP. A line
-/// that is one of these byte for byte is not parsed ([`each_accepted`]), and
+/// with a weight. Playwright 1.65.1's browsers on Linux sent these three on 2026-11-23: Chromium
+/// 159 and Firefox 159 the first, WebKit 27.2 the second over HTTPS and the third over plain
+/// HTTP. A line that is one of these byte for byte is not parsed ([`each_accepted`]), and
 /// `a_browsers_line_is_read_as_the_parser_reads_it` holds each to what the parser makes of it; a
-/// browser that sends another line is parsed as any client's is.
+/// browser that sends another line (Playwright's WebKit on Windows: `deflate, gzip, br`), or one
+/// whose line a proxy rewrote, is parsed as any client's is. `docs/design.md#choice-fixed-stages`
+/// holds the list's premises and when to read them again.
 const BROWSER_LINES: [(&[u8], &[Coding]); 3] = [
     (b"gzip, deflate, br, zstd", &[Coding::Gzip, Coding::Brotli, Coding::Zstd]),
     (b"gzip, deflate, br", &[Coding::Gzip, Coding::Brotli]),
