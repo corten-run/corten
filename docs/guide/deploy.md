@@ -396,6 +396,27 @@ in the measurements below a profile did not have to come from the load it was me
 only from requests that reach the same routes, and one that barely reached them gained about
 half as much.
 
+It can decide a loss too. The compiler lays out and inlines the code the copy ran, and treats
+what the copy never ran as code that seldom runs, so what the command leaves out is not left as
+it was. The command covers what the app's readers ask for:
+
+1. Every route whose cost matters: each page readers reach, its JSON, a form's post. On
+   card-market a command that asked for the home page and an item's JSON, and never for the
+   item page, made the item page cost 4.1% more instructions a request than a build with no
+   profile, and 7.2% more where its answer is in Brotli.
+2. Every response coding those routes are answered in. The app picks the coding from the
+   request's `Accept-Encoding`, so the command asks with each line the app's readers send, and
+   without one: `gzip, deflate, br, zstd` is Chromium's and Firefox's and is answered in zstd,
+   and `gzip, deflate, br` is WebKit's over HTTPS and is answered in Brotli. A command that
+   asked without a line and with the first, and never with the second, made Brotli answers cost
+   17.2% and 9.5% more than with no profile, on two pages it had asked for in the other codings.
+
+What a command did ask for cost 3.9% to 26.7% fewer instructions than with no profile, and the
+same within two points whichever of three commands had asked. The table is with the
+measurements below. Not measured: how few requests of each are enough (those profiles took 300
+of each), and a command that leaves out gzip, the coding of a reader that accepts neither zstd
+nor Brotli.
+
 The four steps are the toolchain's own, and Corten adds nothing to the binary:
 
 1. `cargo build --release` with `-Cprofile-generate`, into a target directory of its own under
@@ -509,7 +530,41 @@ kernel's from 59,988 to 49,595, user instructions from 27,905 to 19,929, L1 inst
 misses from 4,232 to 1,966 and branch misses from 275 to 141. What the image's build costs for
 it is in [A profile in the image](#a-profile-in-the-image).
 
-Not measured: another app or page, a profile taken from an earlier version of the app
+What a command leaves out, measured on card-market (`examples/card-market`) at `be1192a7b` with
+rustc 1.100.0 in `rust:1-trixie`, on a Xeon Platinum 8280: the workspace's release profile, zstd
+linked to the image's `libzstd` as the example's Dockerfile sets it, and one item, read from the
+smoke fixture. Four builds at the workspace's root: `corten build --locked -p card-market`, and
+the same with `--profile-from` and three commands. The first asked for the home page and the
+item page, each with no `Accept-Encoding`, with Chromium's and Firefox's (answered in zstd) and
+with WebKit's over HTTPS (answered in Brotli), and for the item's JSON. The second asked for the
+same without the item page, and the third for the same as the first without the two Brotli
+lines. Each line was 300 requests by curl, five on a connection. Instructions a request are
+callgrind's, the server on one CPU with jemalloc preloaded and the image's thread cache: one
+keep-alive connection sending what curl sends, 1,240 requests less 240, over 1,000, the median
+of three counts, which differed by at most 69 instructions. The four builds answered each
+request with the same status, coding, type and length. Each profiled build is given against
+the build with no profile:
+
+| Request | No profile | Every route and coding | Without the item page | Without Brotli |
+|---|---|---|---|---|
+| the item page, no coding | 77,800 | 65,421 (-15.9%) | 80,967 (+4.1%) | 64,477 (-17.1%) |
+| the item page in zstd | 348,251 | 334,610 (-3.9%) | 350,013 (+0.5%) | 333,601 (-4.2%) |
+| the item page in Brotli | 844,544 | 770,959 (-8.7%) | 905,245 (+7.2%) | 989,576 (+17.2%) |
+| the home page, no coding | 32,384 | 24,259 (-25.1%) | 23,737 (-26.7%) | 23,982 (-25.9%) |
+| the home page in zstd | 116,034 | 106,533 (-8.2%) | 105,757 (-8.9%) | 106,151 (-8.5%) |
+| the home page in Brotli | 230,893 | 197,244 (-14.6%) | 194,153 (-15.9%) | 252,889 (+9.5%) |
+| the item's JSON, no coding | 65,729 | 56,860 (-13.5%) | 56,580 (-13.9%) | 56,641 (-13.8%) |
+
+Each profile was then taken again and each profiled release built again from it, three other
+binaries: no count moved by more than 0.2%, and no percentage by more than a tenth of a point.
+So the route a command left out cost more than with no profile at all, and so did the coding
+another left out, on pages that command had asked for in the other codings. zstd moved least
+because it is the system's library in these builds, which a profile of the app does not reach;
+Brotli is compiled with the app. These are instructions, the work a request takes, not cycles
+or time, on one app. The scripts and their output are commit `30206df73`, kept under the tag
+`evidence/profile-coverage`.
+
+Not measured: another app or page in cycles, what a command left out in cycles or time, a profile taken from an earlier version of the app
 or with another rustc, and a profile used on another kind of CPU than it was taken on. Nor the
 time a reader waits: no latency was kept, and the pages a second the same
 rounds counted (64 connections against one CPU) say little, 17,567 at the median without a

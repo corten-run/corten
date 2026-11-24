@@ -7391,7 +7391,13 @@ rules something out.
     the ordinary build's 143,443, lower in all 10, and 32,516 fewer where it compressed each
     answer, 14% of 230,402, lower in 8 of 10, from a command of 3,000 requests; ten earlier
     rounds of each on a busier machine gave 29% and 18%; one profiled build from an empty
-    target directory took about eleven minutes against about four for one ordinary build);
+    target directory took about eleven minutes against about four for one ordinary build;
+    what a command leaves out can cost more than no profile: on card-market, by callgrind, a
+    profile whose command never asked for the item page made that page cost 4.1% more
+    instructions a request than the ordinary build, and 7.2% more in Brotli, and one whose
+    command never had an answer in Brotli made the two pages' Brotli answers cost 17.2% and
+    9.5% more, where what a command did ask for cost 3.9% to 26.7% fewer, each the median of
+    three counts, from each of two builds of each profile);
     platform (rustc's `-Cprofile-generate` and `-Cprofile-use` and the `llvm-tools`
     component's `llvm-profdata`; Cargo reads rustflags from the environment or from its
     configuration and never both, and builds a crate again, one from the registry included,
@@ -7415,7 +7421,9 @@ rules something out.
     Last checked: 2026-11-19, the rounds above at `b032155e2` (the earlier ones on the sources
     of `70544a54a`) with rustc and Cargo 1.99.1 in `rust:1-bookworm`, the catalog app
     (`bench/catalog/corten`) with its default features on one CPU under `wrk` with 64
-    connections; 2026-11-19, Cargo 1.99.1: a build given `-Cprofile-use` compiled a registry
+    connections; 2026-11-24, what a command leaves out, `examples/card-market` at `be1192a7b`
+    with rustc 1.100.0 in `rust:1-trixie` and callgrind 3.24.0 over one connection (tag
+    `evidence/profile-coverage`); 2026-11-19, Cargo 1.99.1: a build given `-Cprofile-use` compiled a registry
     crate again after the file at the same path was replaced, an ordinary build after a
     profiled one compiled nothing and put the binary without the profile back in
     `target/release`, an empty `RUSTFLAGS` left the configuration's flags out, and a file
