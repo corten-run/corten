@@ -16,6 +16,9 @@
 //! `ROUTER_KEPT=0` turns the store off (`App::kept_answers(0)`), for what a write pays the store
 //! in the same app; with it nothing is kept, so `ROUTER_ASKED=1` and `ROUTER_TARGET=kept` with a
 //! page, which assert that one is, do not go with it.
+//! `ROUTER_TARGET=unkept` with `ROUTER_PUBLIC=page` and `ROUTER_KEPT=2048` counts that page when
+//! the app does not keep it: larger than its share of the bound, the last check before a page is
+//! kept, so its handler runs and every check before is made for each request.
 
 use std::time::Duration;
 
@@ -104,9 +107,10 @@ fn request_cost() {
     let public = std::env::var("ROUTER_PUBLIC").unwrap_or_default();
     let asked = std::env::var("ROUTER_ASKED").is_ok_and(|asked| asked == "1");
     let (missing, write, kept, unstaged) = (target == "missing", target == "write", target == "kept", target == "unstaged");
+    let unkept = target == "unkept";
     let path = if missing { "/items/7/unknown" } else { "/items/7/edit" };
     let status = if missing { 404 } else { 200 };
-    let (routes, shared) = match (write || kept, public.as_str()) {
+    let (routes, shared) = match (write || kept || unkept, public.as_str()) {
         (false, _) if unstaged => (bare::router(), None),
         (false, _) => (url::router(), None),
         (true, "") => (plain::router(), None),
@@ -115,8 +119,11 @@ fn request_cost() {
         (true, _) => panic!("unknown ROUTER_PUBLIC: {public}"),
     };
     let app = App::new(routes);
-    let off = std::env::var("ROUTER_KEPT").is_ok_and(|kept| kept == "0");
-    let router = if off { app.kept_answers(0).router() } else { app.router() };
+    let bound: Option<usize> = std::env::var("ROUTER_KEPT").ok().map(|bound| bound.parse().unwrap());
+    let router = match bound {
+        Some(bound) => app.kept_answers(bound).router(),
+        None => app.router(),
+    };
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
         let ask = |path: &'static str| {
@@ -134,6 +141,13 @@ fn request_cost() {
             let aged = [ask(shared).await, ask(shared).await, ask(shared).await];
             // A page is kept from its first answer, and text this small never is.
             assert_eq!(aged, [false, public == "page", public == "page"]);
+        }
+        if unkept {
+            let shared = shared.expect("ROUTER_TARGET=unkept needs ROUTER_PUBLIC=page");
+            for _ in 0..requests {
+                assert!(!ask(shared).await, "the page the app does not keep");
+            }
+            return;
         }
         if kept {
             let shared = shared.expect("ROUTER_TARGET=kept needs ROUTER_PUBLIC=page");
