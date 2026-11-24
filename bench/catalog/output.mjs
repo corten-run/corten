@@ -202,10 +202,10 @@ function stopTree(child, { cwd, helperMs, boundMs, taskkill }) {
 // hashes nothing and adds no listener beyond its output, error and close. That path is still
 // not the one before receipts: each chunk also passes an earlier-write-error check and a receipt
 // flag test, and command setup and settlement changed. Its timing effect was not measured.
-export function commandRunner({ cwd, interrupted = () => false, killOptions = {} } = {}) {
+export function commandRunner({ cwd, interrupted = () => false, interruptMessage = "catalog run interrupted", killOptions = {} } = {}) {
   const running = new Set();
   async function command(binary, args, { timeout = 30000, file, capture = true, cleanup = false, receipt = false } = {}) {
-    if (interrupted() && !cleanup) throw new Error("catalog run interrupted");
+    if (interrupted() && !cleanup) throw new Error(interruptMessage);
     const output = commandOutput({ file, capture, receipt });
     let child;
     // The output's descriptor is closed when the client cannot even be spawned.
