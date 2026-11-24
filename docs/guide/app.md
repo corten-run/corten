@@ -1609,8 +1609,9 @@ The reasons come from the code that decides what a release build keeps, which ru
 `corten dev` with a store that keeps nothing and gives nothing (writes are counted as a release
 build counts them), so they cannot say other than that build does. A reason the route's type
 decides (its handler's inputs, an answer that is neither a page nor a whole body, `unstaged`) is
-said for any `GET`; one the answer decides only for a request a kept answer could stand for, one
-that shows nothing about who asks. So open the page signed out, or in a private window: a request
+said for any `GET`; one a middleware decides before the handler (a caller it read, a URL it
+changed) or the answer decides, only for a request a kept answer could stand for, one that shows
+nothing about who asks. So open the page signed out, or in a private window: a request
 with a session's cookie, a navigation inside the app, a `HEAD` or a write is its handler's whatever
 the page does, and says nothing. Each route says each verdict once while the app runs (kept, or
 each reason, whatever its numbers), so loading a page again adds nothing, and a page that answers
