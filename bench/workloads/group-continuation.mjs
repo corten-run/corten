@@ -8,8 +8,8 @@ import { pathToFileURL } from "node:url";
 import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
 import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
-import { createContradiction, createErroredReceipt, createRecheckLock, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
-  verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+import { createContradiction, createErroredCustody, createErroredReceipt, createRecheckLock, setupEvidence, terminalSetupScript, verifyCreateErrored,
+  verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readFleet, readGroup,
   postedContradiction, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
   verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
@@ -226,8 +226,14 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       // Settled, contradicted or retired after its contradiction: the posted ID stays fenced.
       // The snapshot is what the successor's child rechecks immediately before its create.
       const postedId = (state?.createErrored ?? state?.createContradicted)?.dropletId;
-      if (postedId) postedCreates.push({ root: fleet.root, round, group, manifestSha256, stateSha256, outcome: saved.outcome,
-        contradicted: postedContradiction(saved), accountId: manifest.provider.accountId, dropletId: postedId });
+      if (postedId) {
+        // The final gate's custody check (recheckPostedCreate), applied to every posted attempt,
+        // retired or not, so a lock the gate would refuse refuses here, before approval.
+        try { createErroredCustody(saved.local); }
+        catch (cause) { refuseAdmission("posted-custody", new Error("unresolved custody: an earlier provider-errored create still holds a lock", { cause })); }
+        postedCreates.push({ root: fleet.root, round, group, manifestSha256, stateSha256, outcome: saved.outcome,
+          contradicted: postedContradiction(saved), accountId: manifest.provider.accountId, dropletId: postedId });
+      }
       if (pinned || known(saved)) outcome = "known-result";
       else if (createErrored(saved)) {
         if (selected) {
