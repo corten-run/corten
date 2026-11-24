@@ -270,14 +270,18 @@ app has and with `Policy::any_host()` too, and nothing of the app runs for it ei
 1. an HTTP/1.1 request with no `Host` line, or a request with more than one, the same value or
    not, which [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112#section-3.2) (3.2) requires;
 2. a `Host` that is not a host and maybe a port, which it requires too: one with a user
-   (`user@shop.example`), a path (`shop.example/x`) or a list (`shop.example, other.example`),
-   and, by Corten's choice, one with nothing in it, which HTTP lets a server read as its own
-   default name; the host in a target that names one (`GET http://shop.example/ HTTP/1.1`) is
-   held to the same;
-3. a request-target with a byte outside ASCII (a browser percent-encodes those, as in
-   `/caf%C3%A9`, which is answered as before), or `*` with a method other than `OPTIONS`: two
-   of the request-lines the RFC says a server should refuse (3), and the only two Corten looks
-   for. Any other target the parse lets through is routed as before.
+   (`user@shop.example`), a path (`shop.example/x`), a list (`shop.example, other.example`) or
+   an IPv6 address with a zone (`[fe80::1%25eth0]`, which
+   [RFC 9844](https://www.rfc-editor.org/rfc/rfc9844) took back out of a URI's host). A `Host`
+   with nothing in it is refused too, by Corten's choice: HTTP lets a server read it as its own
+   default name. So is a user in a target that names its host
+   (`GET http://user@shop.example/ HTTP/1.1`), which HTTP says a server should treat as an
+   error;
+3. a request-target with a byte outside ASCII, or `*` with a method other than `OPTIONS`: two
+   of the request-lines the same section says a server should refuse (or redirect), and the
+   only two Corten looks for. A browser percent-encodes those bytes, as in `/caf%C3%A9`, which
+   is answered as before; a client that sends them as they are was routed before and is not
+   now. Any other target the parse lets through is routed as before.
 
 The connection stays open after it, as after the `421`: the server knows where the request
 ends, so the next one on the connection is answered (one whose body had not all arrived is
@@ -286,7 +290,8 @@ all (a target that is not UTF-8) never reaches the check: the server answers its
 and closes. A request with no `Host` is still answered when it is HTTP/1.0, and when Corten's
 server did not read it off a connection: a test's `app().test()`, or a `Router` another
 library's server calls as a tower `Service`, which answers for the requests it reads (every
-other case above is a `400` there too). The first one refused for having no `Host` is logged.
+other case above is a `400` there too). The first request refused this way is logged, with its
+target and its `Host` lines.
 
 A deployed app lists the names it is served under, where the deploy sets `HOST` and `PORT`:
 
@@ -1331,10 +1336,11 @@ carries it to the handler, adds 494 to what the route cost without it, about 400
 check's read of `Host` and its match against the app's names. Refusing what HTTP does not allow
 ([Host names](#host-names)) added about 100 to it, and the same change took about 140 back from
 a request whose first header line is `Host`, which is no longer searched for: such a request
-costs 54 fewer than before at an unstaged route and 24 to 49 fewer through the stages, one with
-`Host` after another line about 90 more, and one to an app that answers to any host, which now
-reads `Host` too, about 225 more (counted over a socket at `f91a41b8c`;
-[design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+costs about 40 fewer than before at an unstaged route and 17 to 46 fewer through the stages,
+one with `Host` after another line about 90 more (134 more with it last of a browser's eight
+lines, about where Playwright's WebKit on Linux writes it; its Chromium and Firefox write it
+first), and one to an app that answers to any host, which now reads `Host` too, about 225 more
+(counted over a socket at `290062890`; [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 
