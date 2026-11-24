@@ -1962,3 +1962,308 @@ async fn a_connect_answered_with_success_has_no_body() {
     assert_eq!(res.headers()[header::CONTENT_LENGTH], "6");
     assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "tunnel");
 }
+
+/// The deadline of the app [`waiting`] makes.
+const LIMIT: Duration = Duration::from_millis(300);
+/// How long after its time a deadline's answer may reach a test's client on a busy machine.
+const SLACK: Duration = Duration::from_millis(900);
+
+/// What [`waiting`]'s handlers tell a test: that one began, and how its request's signal ended.
+#[derive(Debug, PartialEq)]
+enum Told {
+    Began,
+    Ended(crate::Abort),
+}
+
+/// An app whose deadline is [`LIMIT`]: `/quick` answers at once, `/wait` after 40 ms, `/never`
+/// never, `/read` with its body once that has arrived, and `/admin/slow`, in an area whose
+/// deadline is an hour, after twice `LIMIT`. `/wait` and `/never` tell `told` how their request's
+/// signal ended, and `/never` and `/admin/slow` that they began.
+fn waiting(told: tokio::sync::mpsc::UnboundedSender<Told>) -> App {
+    type Tx = tokio::sync::mpsc::UnboundedSender<Told>;
+    fn report(signal: crate::Signal, told: Tx) {
+        tokio::spawn(async move {
+            let _ = told.send(Told::Ended(signal.aborted().await));
+        });
+    }
+    let wait = {
+        let told = told.clone();
+        move |signal: crate::Signal| {
+            report(signal, told.clone());
+            async {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+                "done"
+            }
+        }
+    };
+    let never = {
+        let told = told.clone();
+        move |signal: crate::Signal| {
+            report(signal, told.clone());
+            let _ = told.send(Told::Began);
+            std::future::pending::<&'static str>()
+        }
+    };
+    let slow = move || {
+        let _ = told.send(Told::Began);
+        async {
+            tokio::time::sleep(LIMIT * 2).await;
+            "slow"
+        }
+    };
+    let routes = Table::new()
+        .route("/quick", get(|| async { "quick" }))
+        .route("/wait", get(wait))
+        .route("/never", get(never))
+        .route("/read", crate::router::post(|body: String| async move { body }));
+    App::new(Routes::from(routes))
+        .deadline(LIMIT)
+        .area::<Admin>(|admin| admin.route::<AdminSlow>(crate::Methods::reads(get(slow))).deadline(Duration::from_secs(3600)))
+}
+
+/// A server for `app` on a free port of `127.0.0.1`: its address, what stops it, and its task.
+async fn listening(
+    app: App,
+) -> (std::net::SocketAddr, tokio::sync::oneshot::Sender<()>, tokio::task::JoinHandle<std::io::Result<()>>) {
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    (addr, stop, server)
+}
+
+/// Sends a request with no body on a connection and reads its answer: the status, the body, and
+/// how long the answer took from before the request was written.
+async fn asked(stream: &mut tokio::net::TcpStream, line: &str) -> (u16, String, Duration) {
+    use tokio::io::AsyncWriteExt;
+    let began = std::time::Instant::now();
+    stream.write_all(format!("{line} HTTP/1.1\r\nhost: localhost\r\naccept: text/html\r\n\r\n").as_bytes()).await.unwrap();
+    let (head, body) = read_answer(stream).await;
+    (head[9..12].parse().expect("a status"), body, began.elapsed())
+}
+
+/// [`asked`] for a request [`waiting`]'s deadline answers: the 503 with the error page, no
+/// earlier than [`LIMIT`] after the request was written.
+async fn late(stream: &mut tokio::net::TcpStream, line: &str) {
+    let (status, body, took) = asked(stream, line).await;
+    assert_eq!(status, 503, "{line}: {body}");
+    assert!(body.contains("<!DOCTYPE html>"), "{line}: the error page: {body}");
+    assert!(took >= LIMIT && took < LIMIT + SLACK, "{line}: at its own deadline, {LIMIT:?}: {took:?}");
+}
+
+/// Every request of a kept-alive connection has the whole deadline, counted from when its own
+/// handler first waits, whatever the requests before it on the connection did: a handler that
+/// finishes first answers and its signal ends `Responded`; one that does not is answered 503 with
+/// the error page at the deadline and its signal ends `Deadline`; a deadline that fired, a
+/// connection idle for longer than the deadline, and a request to an area with a longer deadline
+/// leave the next request its own.
+#[tokio::test]
+async fn every_request_of_a_connection_has_its_own_deadline() {
+    let (told, mut heard) = tokio::sync::mpsc::unbounded_channel();
+    let (addr, stop, server) = listening(waiting(told)).await;
+    let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+    async fn done(conn: &mut tokio::net::TcpStream, heard: &mut tokio::sync::mpsc::UnboundedReceiver<Told>) {
+        let (status, body, took) = asked(conn, "GET /wait").await;
+        assert_eq!((status, body.as_str()), (200, "done"));
+        assert!(took < LIMIT, "{took:?}");
+        assert_eq!(heard.recv().await, Some(Told::Ended(crate::Abort::Responded)));
+    }
+    async fn never(conn: &mut tokio::net::TcpStream, heard: &mut tokio::sync::mpsc::UnboundedReceiver<Told>) {
+        late(conn, "GET /never").await;
+        assert_eq!(heard.recv().await, Some(Told::Began));
+        assert_eq!(heard.recv().await, Some(Told::Ended(crate::Abort::Deadline)));
+    }
+    // Handlers that finish first, one after another, and one that does not wait at all.
+    for _ in 0..4 {
+        done(&mut conn, &mut heard).await;
+    }
+    assert_eq!(asked(&mut conn, "GET /quick").await.1, "quick");
+    // The deadline, counted from each request, and a handler that finishes first after it.
+    for _ in 0..3 {
+        never(&mut conn, &mut heard).await;
+        done(&mut conn, &mut heard).await;
+    }
+    // Idle past the deadline an earlier request had: the next handler to wait is not cut short.
+    tokio::time::sleep(LIMIT * 2).await;
+    done(&mut conn, &mut heard).await;
+    never(&mut conn, &mut heard).await;
+    // An area's longer deadline lets its handler wait past the app's, and the app's routes have
+    // the app's again after it.
+    let (status, body, took) = asked(&mut conn, "GET /admin/slow").await;
+    assert_eq!((status, body.as_str()), (200, "slow"));
+    assert!(took >= LIMIT * 2, "{took:?}");
+    assert_eq!(heard.recv().await, Some(Told::Began));
+    never(&mut conn, &mut heard).await;
+    done(&mut conn, &mut heard).await;
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// A body that stops arriving is the client's 408 at the deadline on a connection whose earlier
+/// requests waited too, counted from that request, and the connection is closed after it.
+#[tokio::test]
+async fn a_body_that_stalls_after_requests_that_waited_is_the_clients_408_at_its_own_deadline() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (told, _heard) = tokio::sync::mpsc::unbounded_channel();
+    let (addr, stop, server) = listening(waiting(told)).await;
+    let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+    for _ in 0..3 {
+        assert_eq!(asked(&mut conn, "GET /wait").await.1, "done");
+    }
+    // A body that arrives whole is answered.
+    conn.write_all(b"POST /read HTTP/1.1\r\nhost: localhost\r\ncontent-length: 5\r\n\r\nwhole").await.unwrap();
+    assert_eq!(read_answer(&mut conn).await.1, "whole");
+    let began = std::time::Instant::now();
+    conn.write_all(b"POST /read HTTP/1.1\r\nhost: localhost\r\ncontent-length: 10\r\n\r\npart").await.unwrap();
+    let (head, _) = read_answer(&mut conn).await;
+    let took = began.elapsed();
+    assert!(head.starts_with("http/1.1 408"), "{head}");
+    assert!(took >= LIMIT && took < LIMIT + SLACK, "at its own deadline: {took:?}");
+    let mut rest = Vec::new();
+    let closed = tokio::time::timeout(Duration::from_secs(5), conn.read_to_end(&mut rest)).await;
+    assert!(closed.is_ok(), "the connection is closed after the 408");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// Shutdown treats a connection whose requests have waited as any other: an idle one closes at
+/// once, one whose handler is past the grace has its request's deadline and is then answered
+/// 503, and one whose request is in an area with an hour's deadline is answered in full.
+#[tokio::test]
+async fn shutdown_holds_a_connection_whose_requests_waited_to_its_requests_deadline() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (told, mut heard) = tokio::sync::mpsc::unbounded_channel();
+    let (addr, stop, server) = listening(waiting(told).shutdown_grace(Duration::from_millis(20))).await;
+    let mut conns = Vec::new();
+    for _ in 0..3 {
+        let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+        for _ in 0..3 {
+            assert_eq!(asked(&mut conn, "GET /wait").await.1, "done");
+        }
+        conns.push(conn);
+    }
+    let [mut idle, mut never, mut slow] = <[tokio::net::TcpStream; 3]>::try_from(conns).unwrap();
+    never.write_all(b"GET /never HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    slow.write_all(b"GET /admin/slow HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    // Both handlers have begun.
+    let mut began = 0;
+    while began < 2 {
+        began += usize::from(heard.recv().await == Some(Told::Began));
+    }
+    let stopped = std::time::Instant::now();
+    stop.send(()).unwrap();
+    let mut rest = Vec::new();
+    idle.read_to_end(&mut rest).await.unwrap();
+    assert!(rest.is_empty() && stopped.elapsed() < LIMIT, "the idle connection closes at once: {:?}", stopped.elapsed());
+    let mut answer = String::new();
+    never.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.starts_with("HTTP/1.1 503"), "past the grace, the request has its deadline: {answer}");
+    assert!(stopped.elapsed() < LIMIT + SLACK, "{:?}", stopped.elapsed());
+    let mut answer = String::new();
+    slow.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.ends_with("slow"), "the area's request is answered in full: {answer}");
+    tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
+}
+
+/// A thread that serves one runtime and then another (a test's, or an app that builds its own)
+/// serves each as if it were the first: nothing a connection of the first runtime kept for its
+/// deadlines is used on the second, also when the first ended with its connections open.
+#[test]
+fn a_thread_that_serves_one_runtime_after_another_holds_each_to_the_deadline() {
+    for round in 0..3 {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let open = runtime.block_on(async {
+            let (told, heard) = tokio::sync::mpsc::unbounded_channel();
+            let (addr, stop, server) = listening(waiting(told)).await;
+            let mut conns = Vec::new();
+            for _ in 0..4 {
+                let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+                for _ in 0..3 {
+                    assert_eq!(asked(&mut conn, "GET /wait").await.1, "done", "round {round}");
+                }
+                late(&mut conn, "GET /never").await;
+                assert_eq!(asked(&mut conn, "GET /wait").await.1, "done", "round {round}");
+                conns.push(conn);
+            }
+            // One connection is in a request whose handler waits when the runtime ends.
+            use tokio::io::AsyncWriteExt;
+            conns[0].write_all(b"GET /never HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            (conns, stop, server, heard)
+        });
+        // The runtime ends with the server running and its connections open.
+        drop(runtime);
+        drop(open);
+    }
+}
+
+/// A handler that serves a request on a runtime of its own (it blocks on one, inside
+/// `block_in_place`) and drops that runtime: the inner request has its deadline every time, on a
+/// connection whose earlier requests did the same, so nothing the connection keeps for its
+/// deadlines belongs to a runtime that is gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_served_on_another_runtime_inside_a_handler_has_its_deadline() {
+    let (told, _heard) = tokio::sync::mpsc::unbounded_channel();
+    let inner = waiting(told).router();
+    let relay = |path: &'static str| {
+        let inner = inner.clone();
+        get(move || {
+            let inner = inner.clone();
+            async move {
+                tokio::task::block_in_place(move || {
+                    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                    let res = runtime.block_on(inner.oneshot(Request::get(path).body(Body::empty()).unwrap())).unwrap();
+                    res.status().as_u16().to_string()
+                })
+            }
+        })
+    };
+    let routes = Table::new().route("/inner/wait", relay("/wait")).route("/inner/never", relay("/never"));
+    let (addr, stop, server) = listening(App::new(Routes::from(routes))).await;
+    let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+    for round in 0..3 {
+        for _ in 0..3 {
+            assert_eq!(asked(&mut conn, "GET /inner/wait").await.1, "200", "round {round}");
+        }
+        let (status, body, took) = asked(&mut conn, "GET /inner/never").await;
+        assert_eq!((status, body.as_str()), (200, "503"), "round {round}");
+        assert!(took >= LIMIT && took < LIMIT + SLACK, "round {round}: at the inner deadline: {took:?}");
+    }
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// How late a deadline's answer is, for a comparison of two builds: 200 requests whose handler
+/// never answers, one after another on one kept-alive connection, each answered at the deadline
+/// (50 ms); prints the least, the median and the most its answer took past that. `cargo test
+/// --release -p corten-run --lib -- --ignored --exact --nocapture
+/// tests::server::how_late_a_deadlines_answer_is`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
+async fn how_late_a_deadlines_answer_is() {
+    const EACH: Duration = Duration::from_millis(50);
+    let routes = Table::new()
+        .route(
+            "/wait",
+            get(|| async {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                "done"
+            }),
+        )
+        .route("/never", get(std::future::pending::<&'static str>));
+    let (addr, stop, server) = listening(App::new(Routes::from(routes)).deadline(EACH)).await;
+    let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut past = Vec::new();
+    for _ in 0..200 {
+        asked(&mut conn, "GET /wait").await;
+        let (status, _, took) = asked(&mut conn, "GET /never").await;
+        assert_eq!(status, 503);
+        past.push(took.checked_sub(EACH).expect("not before the deadline"));
+    }
+    past.sort();
+    println!("past the deadline: least {:?}, median {:?}, most {:?}", past[0], past[past.len() / 2], past[past.len() - 1]);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
