@@ -485,35 +485,70 @@ test("the success line ranges over timed probes only and says when nothing neede
 
 // A stand-in for an app image: a server that reads API_BASE through an HTTP agent, so its pool's idle
 // bound is chosen by the test. `agent: false` opens a connection per request. `expireMs` is the
-// pool's idle bound, decided when a request takes a connection from the pool: a free connection whose
-// last request began `expireMs` or longer ago is closed and never handed out, however late any timer
-// runs. Its idle is counted from when that request began, which precedes the upstream's answer, so it
-// is never less than the idle the upstream records, even when the runner stalls between the answer
-// and the stand-in reading it. A timer also closes it when the runner is on time, as a real pool's would.
+// pool's idle bound, on the upstream's own clock: a connection's idle is the time since the upstream
+// wrote its last answer on it (`lastAnswerOf`, read through the check's `onUpstream` seam, which the
+// returned client supplies as `onUpstream`), the record the check judges reuse by. When a request
+// takes a connection from the pool, every free connection idle `expireMs` or longer is closed and
+// never handed out, however late any timer runs; a timer also closes one once it is idle `expireMs`,
+// rechecking that idle when it fires, as a real pool's would. So a pause anywhere (before or after the
+// upstream answers, or before the stand-in reads the answer) cannot make the pool hand out a
+// connection idle `expireMs` or more, nor close one idle less. `pool.reused` lists the idle, at that
+// decision, of each pooled connection handed out, and `pool.expired` that of each one closed.
 // `delayMs(n)` holds the app's `n`th request (from 1) before it goes upstream, and `holdMs` holds
 // every reply after the upstream answered, so the stand-in's own upstream connection closes first.
 // The returned client's `intervene(count)` sends `count` upstream GETs on the pool at once.
 function standInDocker(runId, agentOptions, { delayMs, holdMs = 0 } = {}) {
   const { expireMs, ...options } = agentOptions ?? {};
   const containerId = id(9);
-  let app, upstream, removed = false;
+  const pool = { reused: [], expired: [] }, connectionByPort = new Map();
+  let app, upstream, recorder, removed = false;
+  // The upstream records a connection's `accepted` event in its own listener, which runs before this
+  // one, so the last event is this connection's; its port on this side is the client's local port.
+  const onUpstream = (seen) => {
+    recorder = seen;
+    seen.server.on("connection", (socket) => {
+      const accepted = seen.events.at(-1);
+      assert.equal(accepted.kind, "accepted");
+      connectionByPort.set(socket.remotePort, accepted.connection);
+    });
+  };
+  const idleOf = (socket) => {
+    socket.upstreamConnection ??= connectionByPort.get(socket.localPort);
+    const last = recorder?.lastAnswerOf(socket.upstreamConnection);
+    assert.ok(last != null, `no upstream answer recorded for the pooled connection on port ${socket.localPort}`);
+    return performance.now() - last;
+  };
   const docker = fakeDocker(async (args) => {
     if (args[0] === "create") {
       const base = args[args.findIndex((a) => a.startsWith("API_BASE="))].slice("API_BASE=".length).replace("host.docker.internal", "127.0.0.1");
       const agent = agentOptions && new Agent(options);
+      // The timer: close a free connection once the upstream has seen it idle `expireMs`, and if it
+      // fires before that (it counts from when the stand-in read the answer), wait out the rest.
+      const due = (socket) => {
+        if (socket.destroyed) return;
+        const idle = idleOf(socket);
+        if (idle < expireMs) { socket.expiry = setTimeout(due, expireMs - idle, socket); return; }
+        pool.expired.push(Math.round(idle));
+        socket.destroy();
+      };
       if (expireMs) {
         agent.on("free", (socket) => {
           clearTimeout(socket.expiry);
-          socket.expiry = setTimeout(() => socket.destroy(), expireMs);
+          socket.expiry = setTimeout(due, expireMs, socket);
         });
       }
       // The pool's expiry at checkout: drop every free connection idle `expireMs` or longer before
-      // the agent picks one, so a stale connection is never reused even if its timer has not fired.
+      // the agent picks one, so a stale connection is never reused even if its timer has not fired,
+      // and note the idle of each one left, the idle at which the agent may hand it out.
       const expire = () => {
         for (const [name, free] of Object.entries(agent.freeSockets)) {
           for (const socket of [...free]) {
-            if (performance.now() - socket.usedAt < expireMs) continue;
+            // A connection closed but not yet removed by the agent is removed now and never handed out.
+            const idle = socket.destroyed ? null : idleOf(socket);
+            if (idle !== null && idle < expireMs) { socket.idleAtCheckout = idle; continue; }
             free.splice(free.indexOf(socket), 1);
+            if (idle === null) continue;
+            pool.expired.push(Math.round(idle));
             socket.destroy();
           }
           if (!free.length) delete agent.freeSockets[name];
@@ -527,8 +562,10 @@ function standInDocker(runId, agentOptions, { delayMs, holdMs = 0 } = {}) {
           answer.on("data", (c) => chunks.push(c));
           answer.on("end", () => resolve({ status: answer.statusCode, body: Buffer.concat(chunks) }));
         });
-        // Assigned before the request is written, so before the upstream can read or answer it.
-        up.once("socket", (socket) => { socket.usedAt = performance.now(); clearTimeout(socket.expiry); });
+        up.once("socket", (socket) => {
+          clearTimeout(socket.expiry);
+          if (expireMs && up.reusedSocket) pool.reused.push(Math.round(socket.idleAtCheckout));
+        });
         up.on("error", () => resolve({ status: 502, body: Buffer.alloc(0) }));
         up.end();
       });
@@ -552,13 +589,15 @@ function standInDocker(runId, agentOptions, { delayMs, holdMs = 0 } = {}) {
     assert.fail(args.join(" "));
   });
   docker.intervene = (count) => Array.from({ length: count }, () => upstream("/catalog/records/record_1"));
+  Object.assign(docker, { pool, onUpstream });
   return docker;
 }
 
 test("against stand-in apps on real sockets, a healthy pool never fails and a stale or interrupted one never passes, however the runner is timed", async () => {
   // Real timers on a shared runner can put any probe outside its window; that is inconclusive, so
   // these assertions accept it, and assert only what a slow runner cannot flip.
-  const run = (name, agent, extra = {}, docker = standInDocker(name, agent)) => checkImage("img", { names: ["catalog"], concurrency: 3, docker: docker.run, runId: name, window: 50, ...extra });
+  const run = (name, agent, extra = {}, docker = standInDocker(name, agent)) =>
+    checkImage("img", { names: ["catalog"], concurrency: 3, docker: docker.run, runId: name, window: 50, onUpstream: docker.onUpstream, ...extra });
   const stale = { keepAlive: true, agentKeepAliveTimeoutBuffer: 200, expireMs: 4800 }, sent = [];
   // The review's control on two pooled sockets: two ordinary GETs go upstream 2.5 s into the first
   // idle wait, sent from the wait itself, which returns only once the upstream has recorded both, so
@@ -570,6 +609,7 @@ test("against stand-in apps on real sockets, a healthy pool never fails and a st
     sent.push(...meddler.intervene(2));
     await Promise.all(sent);
   };
+  const lateDocker = standInDocker("late", stale);
   const [healthy, frozen, unpooled, late, interrupted] = await Promise.all([
     // A 2 s pool: no warmed connection idle 2 s is reused, and on time each is closed long before the probe.
     run("healthy", { keepAlive: true, expireMs: 2000 }),
@@ -577,7 +617,7 @@ test("against stand-in apps on real sockets, a healthy pool never fails and a st
     run("frozen", { keepAlive: true, expireMs: 2000 }, { stamp: () => 0 }),
     run("unpooled", null),
     // A pool that drops a connection idle 4.8 s, between the bound and the upstream's close.
-    run("late", stale),
+    run("late", stale, {}, lateDocker),
     run("interrupted", null, { idleWait: meddle }, meddler),
   ]);
   const verdict = (result, options) => { try { assertPasses(result, options); return "pass"; } catch (error) { return error.message; } };
@@ -593,9 +633,16 @@ test("against stand-in apps on real sockets, a healthy pool never fails and a st
   assert.equal(frozen.reads.catalog.warm.answers, 6, JSON.stringify(frozen.reads.catalog.warm));
   assert.equal(unpooled.reads.catalog.warm.reused, 0);
   assert.notEqual(verdict(unpooled), "pass");
-  // Inside the window the stale pool is a failure on the reuse; outside it, inconclusive.
+  // Inside the window the stale pool is a failure on the reuse; outside it, inconclusive. It stays
+  // stale wherever a pause lands: whenever its probe was inside the window, it handed out a warmed
+  // connection the upstream had seen idle the bound or longer, so a fixture that drifted healthy
+  // (closing its connections before the probe) fails here rather than passing for the wrong reason.
+  if (!late.reads.catalog.after.inconclusive) {
+    assert.ok(lateDocker.pool.reused.some((idle) => idle >= boundMs), `the stale pool reused no connection idle ${boundMs} ms or more: ${JSON.stringify(lateDocker.pool)}`);
+    assert.notDeepEqual(late.reusedPastBound, []);
+    assert.match(verdict(late), /idle 4000 ms or more was reused/);
+  }
   assert.notEqual(verdict(late), "pass");
-  if (!late.reads.catalog.after.inconclusive) assert.match(verdict(late), /idle 4000 ms or more was reused/);
   assert.notEqual(verdict(interrupted), "pass");
   assert.equal(sent.length, 2);
   assert.deepEqual((await Promise.all(sent)).map((r) => r.status), [200, 200]);
