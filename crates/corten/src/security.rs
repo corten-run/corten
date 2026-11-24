@@ -1807,7 +1807,8 @@ impl Refused {
     /// The log's line for `req`: its method, its path and the reason. Never its query, a user
     /// in its target or in a `Host`, or what follows a `/` or a `?` there, any of which may hold
     /// what no log should; of a host only what names it. A `Host` that is none for another
-    /// reason (a list, a space) is given as sent: an operator needs it to see what sends it.
+    /// reason (a space in it, a port that is no number) is given as sent: an operator needs it
+    /// to see what sends it.
     /// The path and the host are given by their start ([`start`]), so a long request does not
     /// make a long line.
     fn line(self, req: &Request) -> String {
