@@ -139,11 +139,12 @@ async fn on_the_wire<M: crate::Middleware>(
 
 /// What RFC 9112 3.2 has a server answer `400`, sent over a connection byte for byte: an
 /// HTTP/1.1 request with no `Host` line, any with more than one, or with one that is not a host
-/// and maybe a port; a byte outside ASCII in the request-target, an invalid request-line, which
-/// it says a server should refuse; and `*` with a method that is not `OPTIONS`, which Corten
-/// reads as one. Each is refused before anything of the app runs, at a route through the
+/// and maybe a port. Each is refused before anything of the app runs, at a route through the
 /// stages and at one outside them, and the connection answers the next request: the server
-/// read the whole message, so nothing asks it to close (9.3).
+/// read the whole message, so nothing asks it to close (9.3); where the message's body has not
+/// arrived, the connection ends after the answer. A request-target is let through as it was:
+/// one with a byte outside ASCII, and `*` with a method that is not `OPTIONS`, are answered by
+/// the routes.
 #[tokio::test]
 async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
     use std::sync::atomic::Ordering::Relaxed;
@@ -160,9 +161,6 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
         b"GET /spec HTTP/1.1\r\nHost: 127.0.0.1:8080/path\r\n\r\n",
         b"GET /spec HTTP/1.1\r\nHost: \r\n\r\n",
         b"GET /spec HTTP/1.1\r\nHost: 127.0.0.1:8080, other.example.com\r\n\r\n",
-        // `*` is `OPTIONS`'s alone, and a request-target is ASCII.
-        b"GET * HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n",
-        b"GET /caf\xC3\xA9 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n",
         // The same at a route outside the stages.
         b"GET /lane/spec HTTP/1.1\r\n\r\n",
         b"GET /lane/spec HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nHost: other.example.com\r\n\r\n",
@@ -171,17 +169,16 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
         b"GET /lane/spec HTTP/1.1\r\nHost: 127.0.0.1:8080/path\r\n\r\n",
         b"GET /lane/spec HTTP/1.1\r\nHost: \r\n\r\n",
         b"GET /lane/spec HTTP/1.1\r\nHost: 127.0.0.1:8080, other.example.com\r\n\r\n",
-        b"GET /lane/caf\xC3\xA9 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n",
         // More of each kind: a third line, a port that is no number, a second colon, an address
-        // that is not IPv6 in brackets, a query outside ASCII, `*` with another method, and a
+        // that is not IPv6 in brackets, a second `Host` beside a target of its own kind, and a
         // target that names the host with no `Host` line beside it, or with one that is no host.
         b"GET /spec HTTP/1.1\r\nHost: localhost\r\nAccept: */*\r\nhost: localhost\r\nHOST: localhost\r\n\r\n",
         b"GET /spec HTTP/1.1\r\nHost: localhost:http\r\n\r\n",
         b"GET /spec HTTP/1.1\r\nHost: localhost:80:80\r\n\r\n",
         b"GET /spec HTTP/1.1\r\nHost: [localhost]\r\n\r\n",
         b"GET /spec HTTP/1.1\r\nHost: [::1\r\n\r\n",
-        b"GET /spec?q=caf\xC3\xA9 HTTP/1.1\r\nHost: localhost\r\n\r\n",
-        b"DELETE * HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"GET /caf\xC3\xA9 HTTP/1.1\r\nHost: localhost\r\nHost: localhost\r\n\r\n",
+        b"DELETE * HTTP/1.1\r\n\r\n",
         b"GET http://localhost/spec HTTP/1.1\r\n\r\n",
         b"GET http://localhost/spec HTTP/1.1\r\nHost: localhost/spec\r\n\r\n",
         b"GET http://user@localhost/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
@@ -229,6 +226,9 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
         // `Host` after other lines, as some clients write it.
         (b"GET /spec HTTP/1.1\r\nAccept: */*\r\nUser-Agent: probe\r\nHost: localhost\r\n\r\n", 200, "word spec"),
         (b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nHost: localhost\r\n\r\n", 200, "lane spec"),
+        // And there it is held to the app's names as on the first line.
+        (b"GET /spec HTTP/1.1\r\nAccept: */*\r\nHost: other.example\r\n\r\n", 421, "Misdirected request."),
+        (b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nUser-Agent: probe\r\nHost: other.example\r\n\r\n", 421, "Misdirected request."),
         (b"GET /lane/spec HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 200, "lane spec"),
         // The header's name in any case, the host's too; a port, none, or an empty one.
         (b"GET /spec HTTP/1.1\r\nhOsT: LocalHost:8080\r\n\r\n", 200, "word spec"),
@@ -251,7 +251,14 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
         (b"GET /spec HTTP/1.1\r\nHost: a.example,b.example\r\n\r\n", 421, "Misdirected request."),
         // A path percent-encoded, as a browser sends one.
         (b"GET /caf%C3%A9 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 200, "word caf\u{e9}"),
-        // `OPTIONS *` and `CONNECT` are answered as they were: no route is at either.
+        // And with its bytes as they are, in a path or a query: let through to the routes, as
+        // before, though no URI holds them.
+        (b"GET /caf\xC3\xA9 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 200, "word caf\u{e9}"),
+        (b"GET /lane/caf\xC3\xA9 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 200, "lane caf\u{e9}"),
+        (b"GET /spec?q=caf\xC3\xA9 HTTP/1.1\r\nHost: localhost\r\n\r\n", 200, "word spec"),
+        // `*` with any method, and `CONNECT`, are answered as they were: no route is at either.
+        (b"GET * HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 404, ""),
+        (b"DELETE * HTTP/1.1\r\nHost: localhost\r\n\r\n", 404, ""),
         (b"OPTIONS * HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 404, ""),
         (b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n", 421, "Misdirected request."),
     ];
@@ -272,6 +279,19 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
         let (status, head, text) = Wire::to(addr).await.ask(request).await;
         assert_eq!((status, text.as_str()), (200, body), "{head}");
     }
+    // A refused request whose body has not arrived: the server cannot tell where the next
+    // request starts, so after the `400` the connection ends, at both routes.
+    WIRE_RUNS.store(0, Relaxed);
+    for request in [
+        &b"GET /spec HTTP/1.1\r\nHost: a, b\r\nContent-Length: 5\r\n\r\n"[..],
+        b"POST /lane/spec HTTP/1.1\r\nContent-Length: 5\r\n\r\n",
+    ] {
+        let mut unread = Wire::to(addr).await;
+        let (status, head, body) = unread.ask(request).await;
+        assert_eq!((status, body.as_str()), (400, "Bad request."), "{head}");
+        assert!(!unread.more().await, "open after a refused request whose body did not arrive: {head}");
+    }
+    assert_eq!(WIRE_RUNS.load(Relaxed), 0);
     drop(wire);
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
@@ -286,8 +306,7 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
         b"GET /lane/spec HTTP/1.1\r\n\r\n",
         b"GET /spec HTTP/1.1\r\nHost: shop.example\r\nHost: shop.example\r\n\r\n",
         b"GET /lane/spec HTTP/1.1\r\nHost: user@shop.example\r\n\r\n",
-        b"GET /lane/caf\xC3\xA9 HTTP/1.1\r\nHost: shop.example\r\n\r\n",
-        b"GET * HTTP/1.1\r\nHost: shop.example\r\n\r\n",
+        b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nHost: shop.example/x\r\n\r\n",
     ] {
         let (status, head, body) = wire.ask(request).await;
         assert_eq!((status, body.as_str()), (400, "Bad request."), "{head}");
@@ -296,6 +315,8 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
     for (request, body) in [
         (&b"GET /spec HTTP/1.1\r\nHost: shop.example:8443\r\n\r\n"[..], "word spec"),
         (b"GET /lane/spec HTTP/1.1\r\nHost: rebound.attacker.example\r\n\r\n", "lane spec"),
+        (b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nHost: other.example\r\n\r\n", "lane spec"),
+        (b"GET /lane/caf\xC3\xA9 HTTP/1.1\r\nHost: shop.example\r\n\r\n", "lane caf\u{e9}"),
     ] {
         let (status, head, text) = wire.ask(request).await;
         assert_eq!((status, text.as_str()), (200, body), "{head}");
