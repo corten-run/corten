@@ -5,6 +5,9 @@ ENV ZSTD_SYS_USE_PKG_CONFIG=1
 WORKDIR /src
 COPY . .
 ENV CARGO_HOME=/var/cache/cargo
+# `tokio_unstable` for the runtime settings `main.rs` tries (`disable_lifo_slot`,
+# `enable_alt_timer`); frame pointers so `perf record -g` can walk the stacks.
+ENV RUSTFLAGS="--cfg tokio_unstable -C force-frame-pointers=yes"
 RUN --mount=type=cache,target=/var/cache/cargo \
     --mount=type=cache,id=bench-httparena-corten.target,target=/src/bench/httparena/corten/target,sharing=locked \
     find crates bench/httparena/corten -name target -prune -o -type f -exec touch {} + \
