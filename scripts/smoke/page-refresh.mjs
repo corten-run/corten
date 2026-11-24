@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check, steps, pollFor } from "./helpers.mjs";
+import { base, shadowing, skip, check, within, steps, pollFor } from "./helpers.mjs";
 
 export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
   // A page that waits for a write (ReadAgain) reads itself again until the write is in,
@@ -165,15 +165,18 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // its head's read-again tag as the server draws them while the write has not landed. The
       // store's reads see a write 1.5 s after it, and the round trip between the write and the read
       // of its page can take longer on a loaded machine, so the case does not depend on it. The
-      // page's reads of itself are recorded from the start of that document, which is loaded after
-      // a blank one so no read of an earlier document counts, and its first read is held from
-      // before the load, so the read held is the first however soon it comes; it must be of the
-      // receipt's address. The case requires that read to fail while it is still held (the
-      // replaceState cancelled it, not its release), every later read made at its address with only
-      // `shown` changed, one of them answered with success, `Saved.` drawn in the same document,
-      // and the page left at that address. Each wait has its own bound, and a result after it fails
-      // the case; once a step fails, the case does no more page work. The hold is let go and the
-      // route and listeners removed however the case ends.
+      // runtime's reads of a page (a `corten: nav` or `page` request that is not a prefetch) are
+      // recorded from the start of that document whatever their address, which is loaded after a
+      // blank one so no read of an earlier document counts, and its first read of the alerts page is
+      // held from before the load, so the read held is the first however soon it comes; it must be
+      // the document's first read, of the receipt's address. The case requires that read still on its
+      // way when the script replaces the address (the navigation reading it not yet ended), that
+      // navigation cancelled by the replaceState, and the read failing after it while it is still
+      // held (not once it is let go); then every later read made at its address with only `shown`
+      // changed, one of them answered with success, `Saved.` drawn in the same document, and the
+      // page left at that address. Each wait has its own bound, and a result after it fails the case;
+      // once a step fails, the case does no more page work. The hold is let go and the route and
+      // listeners removed however the case ends.
       const name = "a read a script's replaceState cancels on its way is made again";
       /** A write, and the page the server draws for its receipt's address. */
       const capture = () =>
@@ -208,8 +211,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       };
       /** The alerts page and its reads. @param {URL} url */
       const alerts = (url) => url.pathname === "/alerts";
-      /** Whether `request` is the runtime's read of the page (not a load). @param {import("@playwright/test").Request} request */
-      const isRead = (request) => !request.isNavigationRequest() && request.method() === "GET" && new URL(request.url()).pathname === "/alerts";
+      /**
+       * Whether `request` is the runtime's read of a page (not a load, and not a prefetch), whatever
+       * its address. @param {import("@playwright/test").Request} request
+       */
+      const isRead = (request) =>
+        !request.isNavigationRequest() && request.method() === "GET" && ["nav", "page"].includes(request.headers()["corten"] ?? "") && request.headers()["purpose"] !== "prefetch";
       /** The document the page's load is given. @type {{ status: number, headers: Record<string, string>, body: string } | null} */
       let served = null;
       /** The receipt's address, and the one every read after the held one must be of. */
@@ -221,7 +228,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       /** The read held, once there is one, and whether it failed while the hold was still on. @type {import("@playwright/test").Request | null} */
       let heldRead = null;
       let shut = true;
-      let failedShut = false;
+      /** Set as the script's replaceState is about to run. */
+      let mutating = false;
+      /** When the held read failed while still held: before the replaceState or after it. @type {"" | "before" | "after"} */
+      let failedShut = "";
       let release = () => {};
       const released = new Promise((resolve) => (release = () => resolve(undefined)));
       let holding = () => {};
@@ -242,7 +252,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       /** The status of each finished read of the address the next must read. @type {Promise<number>[]} */
       const answered = [];
       const onRequest = (/** @type {import("@playwright/test").Request} */ r) => void (recording && isRead(r) && polls.push(r));
-      const onFailed = (/** @type {import("@playwright/test").Request} */ r) => void (r === heldRead && shut && (failedShut = true));
+      const onFailed = (/** @type {import("@playwright/test").Request} */ r) => void (r === heldRead && shut && !failedShut && (failedShut = mutating ? "after" : "before"));
       const onFinished = (/** @type {import("@playwright/test").Request} */ r) =>
         void (expected && isRead(r) && bare(r.url()) === expected && answered.push(r.response().then((res) => res?.status() ?? 0, () => 0)));
       /** Where the case stopped, if it did. */
@@ -277,13 +287,34 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             if (!held) stopped = "no read held within 5 s";
             else if (polls[0] !== heldRead || bare(/** @type {import("@playwright/test").Request} */ (heldRead).url()) !== address)
               stopped = `the document's first read was ${polls[0]?.url() ?? "none"}, not ${address}`;
+            else if (failedShut) stopped = "the held read failed before the script replaced the address";
             else {
-              await page.evaluate(() => {
-                const to = new URL(location.href);
-                to.searchParams.set("shown", "2");
-                history.replaceState(history.state, "", to);
-              });
-              if (!(await pollFor(5000, async () => failedShut))) stopped = "the held read did not fail while held within 5 s";
+              // In one task: whether the runtime's navigation reading the page is still on its way (a
+              // navigation that ended is no longer `navigation.transition`), then the replaceState,
+              // and how that navigation ends. Its read is the one held: the document's first read, and
+              // still held.
+              mutating = true;
+              const cancelled = await within(
+                5000,
+                "the navigation reading the page did not end within 5 s of the replaceState",
+                page.evaluate(
+                  () =>
+                    new Promise((resolve) => {
+                      const on = /** @type {any} */ (window).navigation?.transition;
+                      if (!on) return resolve("no navigation reading the page was on its way at the replaceState");
+                      on.finished.then(
+                        () => resolve("the navigation reading the page finished after the replaceState"),
+                        (/** @type {unknown} */ e) => resolve(e instanceof DOMException && e.name === "AbortError" ? "" : `the navigation reading the page failed with ${String(e)}`),
+                      );
+                      const to = new URL(location.href);
+                      to.searchParams.set("shown", "2");
+                      history.replaceState(history.state, "", to);
+                    }),
+                ),
+              ).catch((/** @type {unknown} */ e) => (e instanceof Error ? e.message.split("\n")[0] : String(e)));
+              if (cancelled) stopped = cancelled;
+              else if (!(await pollFor(5000, async () => failedShut))) stopped = "the held read did not fail while held within 5 s";
+              else if (failedShut !== "after") stopped = "the held read failed before the script replaced the address";
             }
           }
         } finally {
