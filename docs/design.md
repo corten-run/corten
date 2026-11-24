@@ -2559,19 +2559,31 @@ rules something out.
     this.
 
     The next change was to the host check itself, which now also refuses what HTTP does not allow
-    (a `Host` line missing, repeated or not a host, a request-target with a byte outside ASCII,
-    `*` with a method other than `OPTIONS`: the `400` of
-    [the app guide](guide/app.md#host-names)), at an unstaged route as at every other. It adds 57
-    instructions to an unstaged request, counted over a socket (13,023 against 12,966, below),
-    which is past the bound, so this was read again as it was for the host check's 494: answering a
-    malformed request as RFC 9112 requires is correctness, which comes before the count (the
-    README's Values), and a route that skipped it would answer a request with two `Host` lines
-    that every other route refuses. The refusals stay, and the bound moves by what they cost and
-    no further: about 100 over 6,989 and 7,039, the lane's and step 4's 98 and 94 still counted
-    against it, so the next change that adds to an unstaged route reopens this as before. What
-    was tried to lower the 57 is in the count below; reading the request-target for ASCII is most
-    of what is left (40 of the 56 one profile of the same build gave the route, by source line,
-    are the standard library's ASCII test and the slice iteration under it).
+    (the `400` of [the app guide](guide/app.md#host-names)), at an unstaged route as at every
+    other: a `Host` line missing, repeated or not a host, which RFC 9112 (3.2) requires a server
+    to refuse, and two of the request-lines it says a server should refuse (3), a request-target
+    with a byte outside ASCII and `*` with a method other than `OPTIONS`. It adds work to an
+    unstaged route, so this was read again as it was for the host check's 494. The work is about
+    100 instructions a request, 41 of them the standard library's ASCII test of the
+    request-target and the slice iteration under it (5,434 against 5,331 in
+    `tests/router_cost.rs`, whose requests have no `Host`). The same change stopped searching
+    the headers for `Host` where it is the first line, where RFC 9110 (7.2) asks a client to
+    write it, which took about 140 away. So an unstaged request with `Host` first costs
+    54 fewer than before (12,913 against 12,967 over a socket, below), one with `Host` after
+    another line 89 more, one with no `Host` 103 more, and one to an app that answers to any
+    host, which did not read `Host` before and now must to refuse a malformed one, 223 more.
+    The refusals stay. The three of `Host` are what HTTP requires, which is correctness and
+    comes before the count (the README's Values), and a route that skipped them would answer a
+    request with two `Host` lines that every other route refuses. The two request-lines are
+    refused for the RFC's own reason, that an invalid request-line may be written to pass a
+    filter on its way, which holds at an unstaged route as at any; they are the 41, and the
+    part of this to drop first if an unstaged route's count is wanted back. The bound stays
+    where it was, the lane's and step 4's 98 and 94 still counted against it: the harness its
+    counts came from is not in the repository and was not run for this change, so a request
+    there costs less than it did if it names its host first and about 100 more if it does not,
+    which this reading accepts for the refusals and for nothing else. The next change that adds
+    to an unstaged route reopens this as before. The designs tried before this one are in the
+    count below.
 
     The instruction bounds below bound work on the measured routes, not speed. For a change
     to the request path, also measure cycles under load as
@@ -2657,17 +2669,32 @@ rules something out.
     7,022 against 7,012 and 7,073 against 7,063); measured (callgrind, release, jemalloc, a
     request counted as the run of 1,240 less the run of 240 over 1,000 on one connection, three
     runs each, median and range, a bench app the repository does not hold, the host check with
-    HTTP's refusals at `58d81af93` against main `3aee8a5db`: an unstaged route 13,023 (13,012 to
-    13,024) against 12,966 (12,965 to 12,966), a `GET` through the stages under an API 19,215
-    (19,214 to 19,215) against 19,152 (19,136 to 19,153), the same with a browser's headers
-    24,736 (24,736 to 24,755) against 24,692 (24,692 to 24,693), its `POST` 23,877 (23,875 to
-    23,877) against 23,813 (23,807 to 23,815) and a 12 KB page 43,590 (43,590 to 43,591) against
-    43,499 (43,499 to 43,500), every answer the same bytes in both builds; three uncommitted
-    variants of the same change, `GET` and unstaged, three runs each: knowing a request the
-    server read by a thread-local set around the router's call 19,243 and 13,052, the same with
-    the request-target read eight bytes at a time in place of `str::is_ascii` 19,262 and 13,061,
-    and the first with the `Host` lines walked on every request, not only where some name has
-    two, 19,252 and 13,062); measured (callgrind, release, three runs each, the stages written as combinators
+    HTTP's refusals at `f91a41b8c` against main `3aee8a5db`, `Host: localhost` and its port the
+    first line: an unstaged route 12,913 (12,900 to 12,913) against 12,967 (each run), a `GET`
+    through the stages under an API 19,104 (19,104 to 19,105) against 19,145 (19,137 to 19,159),
+    the same with a browser's headers 24,643 (24,624 to 24,645) against 24,692 (24,690 to
+    24,698), its `POST` 23,765 (each run) against 23,813 (23,813 to 23,814) and a 12 KB page
+    43,478 (43,474 to 43,481) against 43,502 (43,499 to 43,504), every answer the same bytes in
+    both builds; the unstaged route and the `GET` asked other ways, the same count: `Host` after
+    an `Accept` line 13,642 against 13,553 and 19,857 against 19,762, `Host: app.localhost`, a
+    name held by its end, 12,969 against 12,963 and 19,160 against 19,162, and in an app that
+    answers to any host (`HOSTS=*`) 12,888 against 12,665 and 19,076 against 18,850; in process,
+    `tests/router_cost.rs`, whose requests have no `Host`, three runs each: an unstaged route
+    5,434 against 5,331, a parameter route through the stages 12,303 against 12,203 and an
+    unknown URL's 404 17,139 against 17,075. No control that shares no code with Corten was
+    counted. One profile of each build, by source line, puts the unstaged route's 54 in the
+    functions changed and the header map's search: 38 fewer in the check as it was, 88 fewer in
+    `http`'s header map and names, 41 more in the check as it is and 41 more in the standard
+    library's ASCII test and the slice iteration under it; the page's profile has 22 more in `cache.rs`,
+    which the change does not touch, so two builds differ by that much in code that is the same.
+    One set of three runs of the base build counted the unstaged route at 12,953, and three
+    other sets at 12,966 or 12,967. Designs of the same change tried before this one, the `GET`
+    and the unstaged route: a request the server read known by a thread-local set around the
+    router's call 19,243 and 13,052 (uncommitted); by a mark on the request's body 19,215 and
+    13,023 at `58d81af93`, which a layer of the app's that replaces the body loses; by the mark
+    it has now with the headers searched for `Host` on every request 19,207 and 13,015 at
+    `0b82b0dca`; and the request-target read eight bytes at a time in place of `str::is_ascii`,
+    19 more and 9 more than the first of these (uncommitted)); measured (callgrind, release, three runs each, the stages written as combinators
     on Corten's router, an uncommitted variant of `8ddeaea2`: 92 to 367 instructions more a
     staged request with jemalloc and 16 to 298 with glibc); measured
     (callgrind, inclusive counts by function, jemalloc, one run each, the bench binary at
@@ -2733,8 +2760,9 @@ rules something out.
     app but listings-feed uses `unstaged` by the next minor release; or an unstaged route costs more
     than about 100 instructions over what it cost with its checks in its handler at `8ddeaea2`
     with jemalloc, 6,932 in the app's routes and 6,982 in an API's module (7,003 and 7,068
-    through its lane, 7,030 and 7,076 since step 4), and over the 57 its host check has cost
-    since it refuses what HTTP does not allow (`58d81af93`, counted over a socket), when a control that shares no code with
+    through its lane, 7,030 and 7,076 since step 4), and, for a request whose first header line
+    is not `Host`, over the about 100 its host check has cost since it refuses what HTTP does
+    not allow (`f91a41b8c`), when a control that shares no code with
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
     builds by more than the route does, which says the harness no longer separates them; or, in
@@ -2769,10 +2797,13 @@ rules something out.
     browser sends), or when requests are found to reach apps with the line rewritten more often
     than not.
 
-    Last checked: 2026-11-24, the host check with HTTP's refusals at `58d81af93` against main
+    Last checked: 2026-11-24, the host check with HTTP's refusals at `f91a41b8c` against main
     `3aee8a5db`, callgrind over a socket on a bench app the repository does not hold (the next
-    check writes its own: one keep-alive connection, a `GET` with `Host: localhost` and its port
-    to a route that says `unstaged` and to routes through the stages), rustc 1.100.0;
+    check writes its own: one keep-alive connection, a `GET` to a route that says `unstaged` and
+    to routes through the stages, with `Host: localhost` and its port first, after another
+    line, as a name under `localhost`, and in an app with `HOSTS=*`) and in process with
+    `tests/router_cost.rs`, rustc 1.100.0, valgrind 3.24.0; the harness with the no-framework
+    control, which the bound's counts came from, was not run;
     2026-11-23, the stages' reads of a request under an API, read in the code at
     `91e193bce` (which stopped looking up the mode's two headers there; the lookup counts above
     were not taken again); 2026-11-23, each engine's `Accept-Encoding` over HTTP and HTTPS, by

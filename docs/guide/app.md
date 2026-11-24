@@ -299,9 +299,10 @@ or in code, `App::policy(Policy::new().host("shop.example"))`. Behind a proxy th
 by `localhost`, is answered as before, when it sends a `Host` line or speaks HTTP/1.0: a check
 written by hand as `GET /health/live HTTP/1.1` with no `Host` is the `400` above. The first refused name is logged, so a deploy that forgot
 its name says why it answers 421. An app served under names it cannot list in advance (each
-customer's own domain) says `Policy::any_host()` (`HOSTS=*`) and checks them itself. The check
-reads one header and compares it with a short list; a name it does not find there as written
-is also read byte by byte.
+customer's own domain) says `Policy::any_host()` (`HOSTS=*`) and checks them itself; its `Host`
+is still read, for the `400` above. The check reads one header and compares it with a short
+list; what it does not find there as written (a subdomain's own part, another host's name, any
+name when the app answers to any) is also read byte by byte.
 
 ## The client's address
 
@@ -1328,8 +1329,12 @@ glibc), and wall times did not tell them apart.
 The host check, with what
 carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
 check's read of `Host` and its match against the app's names. Refusing what HTTP does not allow
-([Host names](#host-names)) added 57 to it, and 44 to 91 to a request through the stages (counted
-over a socket at `58d81af93`; [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+([Host names](#host-names)) added about 100 to it, and the same change took about 140 back from
+a request whose first header line is `Host`, which is no longer searched for: such a request
+costs 54 fewer than before at an unstaged route and 24 to 49 fewer through the stages, one with
+`Host` after another line about 90 more, and one to an app that answers to any host, which now
+reads `Host` too, about 225 more (counted over a socket at `f91a41b8c`;
+[design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 
