@@ -1684,9 +1684,11 @@ impl Asked {
     ///
     /// The `400` leaves the connection open, as the `421` does and as RFC 9112 lets it: the
     /// server read the message's head and knows where its body ends, so the next request on the
-    /// connection is read as it would be after any other answer (9.3). The sections that have a
-    /// server close after a `400` are those where the message's length is in doubt (6.1, 6.3),
-    /// and hyper answers those itself.
+    /// connection is read as it would be after any other answer (9.3), and hyper closes one whose
+    /// request body it cannot finish reading, as after any answer that leaves a body unread. The
+    /// sections that have a server close after a `400` are those where the message's length is
+    /// in doubt (6.1, 6.3), and hyper answers those itself, as it does a request-line it cannot
+    /// parse (a target that is not UTF-8): its own `400`, and the connection closed.
     #[inline]
     pub(crate) fn refusal(self) -> Option<Response> {
         match self {
@@ -1712,12 +1714,14 @@ fn host_lines(headers: &HeaderMap) -> (Option<&HeaderValue>, bool) {
 /// What `req` asks for ([`Asked`]): `lines` gives its `Host` line and whether it has another,
 /// and `hosts` is the names the app answers to, or `None` when it answers to any.
 ///
-/// Not one HTTP allows, each a `400` in RFC 9112: a request-target with a byte outside ASCII,
-/// or `*` with a method other than `OPTIONS` (3 and 3.2.4: an invalid request-line; RFC 3986 has
-/// no such byte in a URI); more than one `Host` line, or a `Host` that is not a host and maybe a
-/// port (3.2); and an HTTP/1.1 message with no `Host` line (3.2). The `Host` is read once for
-/// these and for the names, so a request the app answers costs the second look at its lines and
-/// the scan of its target.
+/// What RFC 9112 3.2 has a server answer `400`: more than one `Host` line, a `Host` that is not
+/// a host and maybe a port, and an HTTP/1.1 message with no `Host` line. What section 3 says a
+/// server should answer `400`, an invalid request-line, is refused in two forms only, the two a
+/// request is seen to arrive in: a request-target with a byte outside ASCII, which RFC 3986
+/// has in no URI and the parse lets through when it is UTF-8, and `*` with a method other than
+/// `OPTIONS` (3.2.4). Other bytes no URI holds (a `|`, a `%` before no hex) are answered as
+/// before. The `Host` is read once for these and for the names, so a request the app answers
+/// costs the scan of its target and a look at whether any name has two lines.
 fn asked<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bool), hosts: Option<&[String]>) -> Asked {
     let uri = req.uri();
     if let Some(target) = uri.path_and_query() {
@@ -1730,29 +1734,64 @@ fn asked<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bo
     if more {
         return Asked::Malformed;
     }
-    match (uri.host(), host) {
+    match (uri.authority(), host) {
         (None, Some(host)) => named(host.as_bytes(), hosts),
         (None, None) => unnamed(req),
-        (Some(target), host) => targeted(target, host, req, hosts),
+        (Some(target), host) => targeted(target.as_str(), host, req, hosts),
+    }
+}
+
+/// On a request Corten's server read off a connection as an HTTP/1.1 message with no `Host`
+/// line ([`mark_unnamed`]). A layer of the app's that maps the request's body or moves it to
+/// another task keeps it; a test's request, and one a server of the app's own hands the router,
+/// never has it.
+#[derive(Clone, Copy)]
+pub(crate) struct Unnamed;
+
+/// Marks `req`, which the server has just read off a connection, when it is an HTTP/1.1 message
+/// with no `Host` line: only the server knows that of a request, and the host check answers it
+/// ([`unnamed`]). A client writes `Host` first (RFC 9110 7.2 asks it to), so the first name is
+/// looked at before the map is searched, and only a request without one is given the mark.
+#[inline]
+pub(crate) fn mark_unnamed(req: &mut Request) {
+    if req.headers().keys().next() != Some(&header::HOST) {
+        mark_if_unnamed(req);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn mark_if_unnamed(req: &mut Request) {
+    if req.version() == http::Version::HTTP_11 && !req.headers().contains_key(header::HOST) {
+        req.extensions_mut().insert(Unnamed);
     }
 }
 
 /// A request with no `Host` line: HTTP/1.0's is for the app, and so is one Corten's server did
 /// not read off a connection (a test's, which has no host to name; one from a server of the
 /// app's own, which answers for what it read). An HTTP/1.1 message the server read is not one
-/// HTTP allows, and its body says it is one ([`crate::body::Body::arrived`]).
+/// HTTP allows, and carries its mark ([`Unnamed`]). The first is logged: a health check written
+/// by hand is the client most likely to send one, and its `400`s take the app out of service.
 #[cold]
 fn unnamed(req: &Request) -> Asked {
-    if req.version() == http::Version::HTTP_11 && req.body().arrived() {
-        Asked::Malformed
-    } else {
-        Asked::Here
+    if req.extensions().get::<Unnamed>().is_none() {
+        return Asked::Here;
     }
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!(
+            "corten: refused an HTTP/1.1 request to {} with no Host line (400): a client, or a health check, sends one or asks as HTTP/1.0",
+            req.uri().path()
+        );
+    }
+    Asked::Malformed
 }
 
 /// A request whose target names its host (`GET http://shop.example/ HTTP/1.1`, or `CONNECT`'s
 /// `shop.example:443`): the target's is the host asked for, whatever `Host` says (RFC 9112
-/// 3.2.2), but the message still needs its one `Host` line, with a host in it (3.2).
+/// 3.2.2), but the message still needs its one `Host` line, with a host in it (3.2). `target` is
+/// the whole authority, so one with a user in it, or a port that is no number, is no host
+/// either (RFC 9110 4.2.4).
 #[cold]
 fn targeted(target: &str, host: Option<&HeaderValue>, req: &Request, hosts: Option<&[String]>) -> Asked {
     let line = match host {
@@ -1769,9 +1808,11 @@ fn targeted(target: &str, host: Option<&HeaderValue>, req: &Request, hosts: Opti
 /// port): [`Asked::Here`] for `localhost` or a name under it, an IP address, or one of `names`
 /// (`.name`: it and its subdomains), and for any host when there are no names to hold it to;
 /// [`Asked::Malformed`] when it is not RFC 9110 7.2's `uri-host [ ":" port ]`, with RFC 3986
-/// 3.2.2's host. That grammar allows a name of no bytes, but an `http` URI with an empty host is
-/// one a recipient must reject (RFC 9110 4.2.1), so here it is malformed too. An address in
-/// brackets is IPv6: 3986's `IPvFuture` has no version defined, and its text asks for an error.
+/// 3.2.2's host. That grammar allows a name of no bytes, and RFC 9112 3.3 lets a server put its
+/// own default name in its place; Corten has none to put there, and an `http` URI with an empty
+/// host is one a recipient rejects (RFC 9110 4.2.1), so here a `Host` of no bytes is malformed
+/// too, by choice and not by 3.2. An address in brackets is IPv6, with no zone: 3986's
+/// `IPvFuture` has no version defined, and its text asks for an error.
 ///
 /// A name the app answers to as it is written (`localhost`, an IPv4 address, a name in
 /// `names`) is a `reg-name` since what it matched is one, so only a name that matched by its end
@@ -1827,13 +1868,24 @@ fn ends_with(name: &[u8], suffix: &[u8]) -> bool {
 /// Whether `name` is a `reg-name` (RFC 3986 3.2.2) of at least one byte: unreserved characters,
 /// sub-delimiters and percent-encoded bytes. No colon, so a second one in a `Host` is not a port's.
 fn reg_name(name: &[u8]) -> bool {
+    /// The bytes a `reg-name` holds as they are: unreserved characters and sub-delimiters.
+    const AS_WRITTEN: [bool; 256] = {
+        let mut bytes = [false; 256];
+        let mut byte = 0;
+        while byte < 256 {
+            bytes[byte] = (byte as u8).is_ascii_alphanumeric() || matches!(byte as u8, b'-' | b'.' | b'_' | b'~');
+            bytes[byte] |= matches!(byte as u8, b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'=');
+            byte += 1;
+        }
+        bytes
+    };
     let mut rest = name;
     !name.is_empty()
         && loop {
             rest = match rest {
                 [] => break true,
+                [byte, rest @ ..] if AS_WRITTEN[usize::from(*byte)] => rest,
                 [b'%', high, low, rest @ ..] if high.is_ascii_hexdigit() && low.is_ascii_hexdigit() => rest,
-                [byte, rest @ ..] if byte.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=".contains(byte) => rest,
                 _ => break false,
             };
         }
@@ -2485,6 +2537,10 @@ mod tests {
             assert_eq!(asked(policy, "GET", "http://localhost:3000/", &["other.example"]), Asked::Here);
             assert_eq!(asked(policy, "GET", "http://[::1]:3000/", &["localhost"]), Asked::Here);
             assert_eq!(asked(policy, "GET", "http://localhost/", &["a, b"]), Asked::Malformed);
+            // The target's own is held to being a host and maybe a port too.
+            assert_eq!(asked(policy, "GET", "http://user@localhost/", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "http://user:word@localhost:3000/", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "http://user@[::1]:3000/", &["localhost"]), Asked::Malformed);
             assert_eq!(asked(policy, "GET", "http://localhost/", &["localhost", "localhost"]), Asked::Malformed);
         }
         assert_eq!(asked(&policy, "GET", "/", &["other.example"]), Asked::Elsewhere);
@@ -2494,18 +2550,26 @@ mod tests {
         assert_eq!(asked(&policy, "CONNECT", "other.example:443", &["other.example:443"]), Asked::Elsewhere);
         let old = http::Request::builder().version(http::Version::HTTP_10).uri("/").body(crate::http::Body::empty()).unwrap();
         assert_eq!(policy.host_check().asked(&old), Asked::Here);
-        // With the body the server gives a request it read off a connection, an HTTP/1.1
-        // request needs its `Host`, and HTTP/1.0's still does not.
-        for (version, target, asks) in [
-            (http::Version::HTTP_11, "/", Asked::Malformed),
-            (http::Version::HTTP_11, "http://localhost/", Asked::Malformed),
-            (http::Version::HTTP_10, "/", Asked::Here),
-            (http::Version::HTTP_10, "http://localhost/", Asked::Here),
+        // As the server marks a request it read off a connection, an HTTP/1.1 request needs its
+        // `Host`, wherever its line is among the others, and HTTP/1.0's still does not.
+        for (version, target, lines, asks) in [
+            (http::Version::HTTP_11, "/", &[][..], Asked::Malformed),
+            (http::Version::HTTP_11, "/", &[("accept", "*/*")][..], Asked::Malformed),
+            (http::Version::HTTP_11, "http://localhost/", &[][..], Asked::Malformed),
+            (http::Version::HTTP_11, "/", &[("host", "localhost")][..], Asked::Here),
+            (http::Version::HTTP_11, "/", &[("accept", "*/*"), ("host", "localhost")][..], Asked::Here),
+            (http::Version::HTTP_10, "/", &[][..], Asked::Here),
+            (http::Version::HTTP_10, "/", &[("accept", "*/*")][..], Asked::Here),
+            (http::Version::HTTP_10, "http://localhost/", &[][..], Asked::Here),
         ] {
-            let body = crate::http::Body::arriving(http_body_util::Empty::<bytes::Bytes>::new());
-            let read = http::Request::builder().version(version).uri(target).body(body).unwrap();
-            assert_eq!(policy.host_check().asked(&read), asks, "{version:?} {target}");
-            assert_eq!(any.asked(&read, &mut Origin::new(read.headers())), asks, "{version:?} {target}");
+            let mut read = http::Request::builder().version(version).uri(target);
+            for (name, value) in lines {
+                read = read.header(*name, *value);
+            }
+            let mut read = read.body(crate::http::Body::empty()).unwrap();
+            mark_unnamed(&mut read);
+            assert_eq!(policy.host_check().asked(&read), asks, "{version:?} {target} {lines:?}");
+            assert_eq!(any.asked(&read, &mut Origin::new(read.headers())), asks, "{version:?} {target} {lines:?}");
         }
         // Another name with two lines does not make `Host` one with two, and hides no second.
         let twice = |hosts: &[&str]| {

@@ -264,24 +264,29 @@ included, since the browser treats the rebound page as same-origin. On loopback,
 machine can reach the app, that is the access model it would break, so the check is the default
 rather than a setting to remember.
 
-The same check answers `400 Bad Request` to a request HTTP does not allow
-([RFC 9112](https://www.rfc-editor.org/rfc/rfc9112#section-3.2), 3 and 3.2), whatever names the
+The same check answers `400 Bad Request` to a request HTTP does not allow, whatever names the
 app has and with `Policy::any_host()` too, and nothing of the app runs for it either:
 
 1. an HTTP/1.1 request with no `Host` line, or a request with more than one, the same value or
-   not;
-2. a `Host` that is not a host and maybe a port: one with a user (`user@shop.example`), a path
-   (`shop.example/x`), nothing in it, or a list (`shop.example, other.example`);
+   not, which [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112#section-3.2) (3.2) requires;
+2. a `Host` that is not a host and maybe a port, which it requires too: one with a user
+   (`user@shop.example`), a path (`shop.example/x`) or a list (`shop.example, other.example`),
+   and, by Corten's choice, one with nothing in it, which HTTP lets a server read as its own
+   default name; the host in a target that names one (`GET http://shop.example/ HTTP/1.1`) is
+   held to the same;
 3. a request-target with a byte outside ASCII (a browser percent-encodes those, as in
-   `/caf%C3%A9`, which is answered as before), or `*` with a method other than `OPTIONS`.
+   `/caf%C3%A9`, which is answered as before), or `*` with a method other than `OPTIONS`: two
+   of the request-lines the RFC says a server should refuse (3), and the only two Corten looks
+   for. Any other target the parse lets through is routed as before.
 
-The connection stays open after it, as after the `421`: the server read the whole request, so
-the next one on the connection is answered. A request with no `Host` is still answered when it
-is HTTP/1.0, and when Corten's server did not read it off a connection: a test's `app().test()`,
-or a `Router` another library's server calls as a tower `Service`, which answers for the requests
-it reads (every other case above is a `400` there too). The server knows its own request by the
-body it gave it, so a tower layer around the app that replaces a request's body takes that one
-check away.
+The connection stays open after it, as after the `421`: the server knows where the request
+ends, so the next one on the connection is answered (one whose body had not all arrived is
+closed, as after any answer that leaves a body unread). A request-line that cannot be parsed at
+all (a target that is not UTF-8) never reaches the check: the server answers its own bare `400`
+and closes. A request with no `Host` is still answered when it is HTTP/1.0, and when Corten's
+server did not read it off a connection: a test's `app().test()`, or a `Router` another
+library's server calls as a tower `Service`, which answers for the requests it reads (every
+other case above is a `400` there too). The first one refused for having no `Host` is logged.
 
 A deployed app lists the names it is served under, where the deploy sets `HOST` and `PORT`:
 
@@ -295,7 +300,8 @@ by `localhost`, is answered as before, when it sends a `Host` line or speaks HTT
 written by hand as `GET /health/live HTTP/1.1` with no `Host` is the `400` above. The first refused name is logged, so a deploy that forgot
 its name says why it answers 421. An app served under names it cannot list in advance (each
 customer's own domain) says `Policy::any_host()` (`HOSTS=*`) and checks them itself. The check
-compares one header with a short list.
+reads one header and compares it with a short list; a name it does not find there as written
+is also read byte by byte.
 
 ## The client's address
 

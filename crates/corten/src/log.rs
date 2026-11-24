@@ -422,11 +422,15 @@ mod tests {
             let res = router.clone().oneshot(req).await.unwrap();
             assert_eq!(res.status(), http::StatusCode::MISDIRECTED_REQUEST);
             sizes.push(res.into_body().collect().await.unwrap().to_bytes().len());
-            let res = access_call(router, "POST", "/items/7?token=secret", &[("sec-fetch-site", "cross-site")]).await;
+            let res = access_call(router.clone(), "POST", "/items/7?token=secret", &[("sec-fetch-site", "cross-site")]).await;
             assert_eq!(res.status(), http::StatusCode::FORBIDDEN);
             sizes.push(res.into_body().collect().await.unwrap().to_bytes().len());
+            // A second `Host` line: the host check's other refusal.
+            let res = access_call(router, "GET", "/items/7?token=secret", &[("host", "localhost")]).await;
+            assert_eq!(res.status(), http::StatusCode::BAD_REQUEST);
+            sizes.push(res.into_body().collect().await.unwrap().to_bytes().len());
         });
-        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines.len(), 3, "{lines:?}");
         for (line, size) in lines.iter().zip(sizes) {
             assert!(line.contains("path=\"/items/7\"") && line.contains("route=\"/items/{id}\""), "{line}");
             assert!(line.contains(&format!("bytes={size} ")) && line.contains("duration="), "{line}");
@@ -434,6 +438,7 @@ mod tests {
         }
         assert!(lines[0].contains("method=GET") && lines[0].contains("status=421"), "{}", lines[0]);
         assert!(lines[1].contains("method=POST") && lines[1].contains("status=403"), "{}", lines[1]);
+        assert!(lines[2].contains("method=GET") && lines[2].contains("status=400"), "{}", lines[2]);
     }
 
     #[test]

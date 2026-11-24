@@ -183,6 +183,10 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
         b"DELETE * HTTP/1.1\r\nHost: localhost\r\n\r\n",
         b"GET http://localhost/spec HTTP/1.1\r\n\r\n",
         b"GET http://localhost/spec HTTP/1.1\r\nHost: localhost/spec\r\n\r\n",
+        b"GET http://user@localhost/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        // No `Host` among other lines, where the first line is not the place to look.
+        b"GET /spec HTTP/1.1\r\nAccept: */*\r\nUser-Agent: probe\r\n\r\n",
+        b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\n\r\n",
         // A body the server has read is left behind with its request.
         b"GET /spec HTTP/1.1\r\nHost: a, b\r\nContent-Length: 5\r\n\r\nhello",
     ];
@@ -211,10 +215,19 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
         assert_eq!((status, body.as_str()), (400, "Bad request."), "{head}");
     }
     assert_eq!(WIRE_RUNS.load(Relaxed), 0);
+    // A target that is not UTF-8 does not reach the app: hyper cannot parse the line, answers a
+    // `400` of its own and closes the connection, as before.
+    let mut unparsed = Wire::to(addr).await;
+    let (status, head, body) = unparsed.ask(b"GET /caf\xE9 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n").await;
+    assert_eq!((status, body.as_str()), (400, ""), "{head}");
+    assert!(!unparsed.more().await, "open after a request-line that does not parse");
 
     // What does not change. Each on the one connection, with the answer it had before.
     let answered: &[(&[u8], u16, &str)] = &[
         (GOOD, 200, "word spec"),
+        // `Host` after other lines, as some clients write it.
+        (b"GET /spec HTTP/1.1\r\nAccept: */*\r\nUser-Agent: probe\r\nHost: localhost\r\n\r\n", 200, "word spec"),
+        (b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nHost: localhost\r\n\r\n", 200, "lane spec"),
         (b"GET /lane/spec HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 200, "lane spec"),
         // The header's name in any case, the host's too; a port, none, or an empty one.
         (b"GET /spec HTTP/1.1\r\nhOsT: LocalHost:8080\r\n\r\n", 200, "word spec"),
@@ -286,6 +299,29 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
         let (status, head, text) = wire.ask(request).await;
         assert_eq!((status, text.as_str()), (200, body), "{head}");
     }
+    drop(wire);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+
+    // A layer of the app's that gives each request another body and runs it on a task of its
+    // own takes nothing from this: the server marked the request it read, and the mark goes
+    // where the request goes.
+    WIRE_RUNS.store(0, Relaxed);
+    let layered = App::new(wire_url::router()).layer(OuterFn(|req: crate::http::Request, next: crate::Router| async move {
+        let req = req.map(|body| Body::new(http_body_util::Limited::new(body, 1 << 20)));
+        tokio::spawn(next.oneshot(req)).await.unwrap().unwrap()
+    }));
+    let (addr, stop, server) = on_the_wire(layered).await;
+    let mut wire = Wire::to(addr).await;
+    for request in [&b"GET /spec HTTP/1.1\r\n\r\n"[..], b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\n\r\n"] {
+        let (status, head, body) = wire.ask(request).await;
+        assert_eq!((status, body.as_str()), (400, "Bad request."), "{head}");
+    }
+    assert_eq!(WIRE_RUNS.load(Relaxed), 0);
+    let (status, head, body) = wire.ask(GOOD).await;
+    assert_eq!((status, body.as_str()), (200, "word spec"), "{head}");
+    let (status, head, body) = Wire::to(addr).await.ask(b"GET /lane/spec HTTP/1.0\r\n\r\n").await;
+    assert_eq!((status, body.as_str()), (200, "lane spec"), "{head}");
     drop(wire);
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
