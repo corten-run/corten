@@ -588,7 +588,8 @@ test("a collect stopped while holding its operation lock is refused before any p
 test("an in-deadline errored create saves its posted IDs before absence and never binds another allocation", async (t) => {
   // The exact ID is 404, but the census lists another droplet with this create's name and tags.
   const other = erroredLaunch(t, { hosts: (h) => [{ ...h.host(), id: 999 }] });
-  await assert.rejects(other.task.launch(), /differs from the posted create/);
+  // Review round 6, finding 1: a census row binds nothing, so this refuses before any bind.
+  await assert.rejects(other.task.launch(), /not the exact posted droplet; preserve reservation without binding/);
   let state = other.h.saved();
   assert.equal(state.status, "creating"); assert.equal(state.id, undefined); assert.equal(state.createErrored, undefined);
   assert.deepEqual(state.createPending, { dropletId: "123", actionId: "456" });

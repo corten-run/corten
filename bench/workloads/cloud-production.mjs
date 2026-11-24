@@ -16,7 +16,7 @@ import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckContinuationPeers, recheckCreateErroredAttempt, recheckIndexedLaunchCustody, recheckSetupAttempt } from "./fleet-verify.mjs";
+  recheckContinuationPeers, recheckCreateErroredAttempt, recheckIndexedLaunchCustody, recheckPostedCreate, recheckSetupAttempt } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -296,6 +296,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
         // custody. After this point that attempt's collect never creates or provisions: it
         // rechecks read-only, or records a reappearance and binds only the exact owned posted droplet.
         for (const row of current.subject.continuation.createFailures ?? []) recheckCreateErroredAttempt(root, row);
+        // Then every earlier posted create on this account, in any group (not only this
+        // group's retry): a contradiction or custody change since admission refuses.
+        for (const row of current.subject.continuation.postedCreates ?? []) recheckPostedCreate(row);
       }
       return currentPeers;
     }

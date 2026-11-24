@@ -11,7 +11,7 @@ import { full } from "./cloud-options.mjs";
 import { createContradiction, createErroredReceipt, createRecheckLock, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
   verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readFleet, readGroup,
-  readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
+  postedContradiction, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
   verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
 
 export const continuationLock = ".continuation-operation.lock";
@@ -157,8 +157,9 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
   const indexedCustody = [];
   const proofs = [], retryEvidence = [], manifests = [], states = [], peers = [], unconfirmed = [], needsCensus = new Set(), liveIps = new Set();
   // createFailures binds the selected group's own retry to its exact receipt and state.
-  // postedCreates is only the census fence: every earlier provider-errored attempt's
-  // posted droplet in any group, settled or contradicted, refuses a create on its account.
+  // postedCreates is the census fence and the final-gate snapshot: every earlier
+  // provider-errored attempt's posted droplet in any group, settled or contradicted
+  // (also after its retirement), refuses a create on its account while it is listed.
   const createFailures = [], postedCreates = [];
   const retainedLocks = [];
   const setupCensus = (fleet, saved, lock, launch) => {
@@ -222,8 +223,11 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       const noCreate = notCreated(fleet, saved, lock);
       let outcome = noCreate ? "not-created" : setup ? setupCensusOutcome : saved.outcome === "available" ? "uncollected" : saved.outcome;
       let receipt;
-      if (state?.createErrored && !postedCreates.some((row) => row.accountId === manifest.provider.accountId && row.dropletId === state.createErrored.dropletId))
-        postedCreates.push({ accountId: manifest.provider.accountId, dropletId: state.createErrored.dropletId });
+      // Settled, contradicted or retired after its contradiction: the posted ID stays fenced.
+      // The snapshot is what the successor's child rechecks immediately before its create.
+      const postedId = (state?.createErrored ?? state?.createContradicted)?.dropletId;
+      if (postedId) postedCreates.push({ root: fleet.root, round, group, manifestSha256, stateSha256, outcome: saved.outcome,
+        contradicted: postedContradiction(saved), accountId: manifest.provider.accountId, dropletId: postedId });
       if (pinned || known(saved)) outcome = "known-result";
       else if (createErrored(saved)) {
         if (selected) {

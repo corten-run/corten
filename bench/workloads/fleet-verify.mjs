@@ -10,7 +10,7 @@ import { livePeerLease, streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
-import { createErroredCustody, readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
+import { createContradiction, createErroredCustody, readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
   verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
@@ -363,6 +363,28 @@ export function recheckCreateErroredAttempt(root, row) {
   verifyCreateErrored(saved.local, saved.state);
   assert.equal(saved.state.createErrored.evidenceSha256, row.receiptSha256, "prior create failure receipt changed");
   assert.ok(saved.state.createErrored.dropletId === row.dropletId && saved.state.provider.accountId === row.accountId, "prior create failure changed");
+}
+// A posted create is contradicted by a recorded reappearance, a witness or reappearance stage
+// beside it, or a contradicted bind (retired or not).
+export const postedContradiction = (saved) => !!saved.state?.createErrored?.reappeared || !!saved.state?.createContradicted
+  || createContradiction(saved.local);
+// Every earlier provider-errored attempt on this account, in any group, is rechecked at the
+// successor's final gate against its admission snapshot, separately from the selected group's
+// retry eligibility: the same manifest, state bytes and custody, no contradiction recorded
+// since, and none still unretired. A retired contradicted attempt stays fenced by its ID in the
+// census; it does not block a create. This cannot make the check atomic with the provider.
+export function recheckPostedCreate(row) {
+  const changed = "an earlier provider-errored create on this account changed, took custody or was contradicted before this create;"
+    + " never create beside it; preserve reservation";
+  const fleet = readFleet(row.root, row.round, { priorSelection: true });
+  assert.ok(fleet.manifestSha256 === row.manifestSha256 && fleet.manifest.provider.accountId === row.accountId, changed);
+  const saved = readGroup(fleet, row.group);
+  assert.ok(saved.outcome === row.outcome && saved.stateSha256 === row.stateSha256, changed);
+  assert.equal((saved.state.createErrored ?? saved.state.createContradicted)?.dropletId, row.dropletId, changed);
+  const contradicted = postedContradiction(saved);
+  assert.equal(contradicted, row.contradicted, changed);
+  assert.ok(!contradicted || saved.state.status === "retired" && !!saved.state.destroyedAt,
+    "an earlier provider-errored create on this account is contradicted and not retired; never create beside it; preserve reservation");
 }
 // Launch custody is ordered by the exact index, separate from replay evidence.
 // In particular the worker must see a newly acquired staged batch lock even

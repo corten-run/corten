@@ -42,6 +42,10 @@ export const createReappearedWitness = "provider-create-reappeared";
 const reappearedStage = /^state\.json\.create-reappeared-[a-f0-9]{32}\.tmp$/;
 // The stages a failed contradiction publication left, by name (never read here).
 export const contradictionStages = (local) => readdirSync(local).filter((name) => reappearedStage.test(name)).sort();
+// The stages an interrupted createErrored publication left (written before its rename), by name.
+// They claim absence; beside a contradiction the bind checks their bytes and records them.
+const erroredStage = /^state\.json\.create-errored-[a-f0-9]{32}\.tmp$/;
+export const publicationStages = (local) => readdirSync(local).filter((name) => erroredStage.test(name)).sort();
 export function createContradiction(local) {
   return !!lstatSync(join(local, createReappearedWitness), { throwIfNoEntry: false })
     || readdirSync(local).some((name) => reappearedStage.test(name));

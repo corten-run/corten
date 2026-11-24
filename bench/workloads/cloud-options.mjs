@@ -271,7 +271,8 @@ export function controllerState(s, round, options) {
     // is the bind's own exact read; the first observation stays in the witness file,
     // bound by `witnessSha256`. `receiptVerified` is false when the preserved receipt
     // was not the canonical record for this state. `stages` binds each reappearance
-    // stage a failed publication left, by name and bytes.
+    // stage a failed publication left, by name and bytes, and each createErrored
+    // publication stage an interrupted receipt publication left.
     const c = s.createContradicted;
     assert.ok(c && typeof c === "object" && !Array.isArray(c), "create contradiction record required");
     assert.deepEqual(Object.keys(c).filter((key) => key !== "stages").sort(),
@@ -284,7 +285,7 @@ export function controllerState(s, round, options) {
       assert.ok(Array.isArray(c.stages) && c.stages.length > 0, "create contradiction stages");
       for (const stage of c.stages) {
         assert.ok(stage && typeof stage === "object" && !Array.isArray(stage) && JSON.stringify(Object.keys(stage).sort()) === '["name","sha256"]', "create contradiction stage");
-        full(stage.name, /state\.json\.create-reappeared-[a-f0-9]{32}\.tmp/, "create contradiction stage name");
+        full(stage.name, /state\.json\.create-(?:reappeared|errored)-[a-f0-9]{32}\.tmp/, "create contradiction stage name");
         full(stage.sha256, /[a-f0-9]{64}/, "create contradiction stage hash");
       }
       assert.equal(new Set(c.stages.map(({ name }) => name)).size, c.stages.length, "duplicate create contradiction stage");

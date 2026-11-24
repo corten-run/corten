@@ -16,7 +16,7 @@ import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, v
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
   interruptedFirstUpload, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
   verifyUnusedEvidence, createErroredBytes, createErroredCustody, createErroredReceipt, createErroredRecord, createRecheckLock, pendingCreateErroredReceipt,
-  verifyCreateErrored, offlineNeverStarted, createContradiction, contradictionStages, createReappeared, createReappearedWitness } from "./cloud-retirement.mjs";
+  verifyCreateErrored, offlineNeverStarted, createContradiction, contradictionStages, createReappeared, createReappearedWitness, publicationStages } from "./cloud-retirement.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { controlCheckpoint, pinnedHostOptions } from "./cloud-transport.mjs";
 
@@ -78,7 +78,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   const offlineBootstrapAck = () => state.control.sealed.includes("bootstrap")
     && acknowledgedBootstrapSeal(state.control.ledger.filter(({ request }) => request.epoch === "bootstrap"));
-  let launchPeers;
+  let launchPeers, recheckPriorRounds;
   // Cancellation forbids further work, not recording how the owned monitor ended.
   // Record only the ending and, if cancellation beat the live-state write,
   // the registration already received from this stream. Never adopt a file alone.
@@ -164,6 +164,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     if (args[0] === "compute" && args[1] === "droplet" && args[2] === "create") {
       // Check after the final account read, before recording or dispatching a create.
       launchPeers = checkFleetAdmission?.(true);
+      recheckPriorRounds?.();
       state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
     }
     const expiry = prepareDelete ? await prepareDelete.expiresAt() : deleteProofExpiresAtMs;
@@ -248,6 +249,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   // that is not the published hash or the canonical unpublished record is kept as an
   // unverified artifact, never as verified evidence. A reappearance stage left by a
   // failed publication is bound by name and bytes, so the pinned retirement can admit it.
+  // So is a create-errored stage left by an interrupted receipt publication, but only if
+  // its bytes are this reservation's publication of this receipt (or a prefix of it, a
+  // write cut short): it is never read as state. Other bytes bind nothing.
   const bindContradicted = (d, posted) => {
     const reappeared = { at: new Date().toISOString(), via: "exact-get", dropletId: posted.dropletId };
     writeWitness(reappeared);
@@ -255,19 +259,45 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     let receiptVerified = true;
     if (state.createErrored) assert.equal(digest(receipt), state.createErrored.evidenceSha256, "create failure receipt changed; preserve reservation");
     else try { pendingCreateErroredReceipt(receipt, state, posted); } catch { receiptVerified = false; }
-    const stages = contradictionStages(local).map((name) => ({ name, sha256: digest(regular(join(local, name), 1024 * 1024)) }));
+    const { createErrored: _published, ...unpublished } = state;
+    const publication = Buffer.from(`${JSON.stringify({ ...unpublished,
+      createErrored: { dropletId: posted.dropletId, actionId: posted.actionId, evidenceSha256: digest(receipt) } }, null, 2)}\n`);
+    const published = publicationStages(local).map((name) => {
+      const bytes = regular(join(local, name), 1024 * 1024);
+      assert.ok(bytes.length <= publication.length && publication.subarray(0, bytes.length).equals(bytes),
+        "a create-errored stage beside the contradicted receipt is not this reservation's publication; nothing bound;"
+        + " account for it by the custody step (CLOUD.md); preserve reservation");
+      return { name, sha256: digest(bytes) };
+    });
+    const stages = [...contradictionStages(local).map((name) => ({ name, sha256: digest(regular(join(local, name), 1024 * 1024)) })), ...published]
+      .sort((a, b) => a.name < b.name ? -1 : 1);
     state.createContradicted = { dropletId: posted.dropletId, actionId: posted.actionId, evidenceSha256: digest(receipt), receiptVerified, reappeared,
       witnessSha256: digest(witnessed), ...(stages.length ? { stages } : {}) };
     delete state.createErrored;
     bind(d);
     return 3;
   };
-  const contradictedCreate = async (posted) => {
-    assert.ok(lstatSync(join(local, createErroredReceipt), { throwIfNoEntry: false }), "contradiction without its receipt; preserve reservation");
+  // The one read that can bind a posted create: the account-bracketed exact GET of its
+  // posted droplet ID, positively owned. Undefined for anything else. A census row never
+  // binds; it can only record a contradiction.
+  const exactPosted = async (posted) => {
     const exact = await execute("doctl", ["compute", "droplet", "get", posted.dropletId, "--output", "json"], 60000, true);
     let rows;
     try { rows = exact.status === 0 && !exact.error ? JSON.parse(exact.stdout) : undefined; } catch { rows = undefined; }
-    const d = Array.isArray(rows) && rows.length === 1 ? ownedPosted(rows[0], posted) : undefined;
+    return Array.isArray(rows) && rows.length === 1 ? ownedPosted(rows[0], posted) : undefined;
+  };
+  // The same rule for a providerAbsence result that did not prove absence.
+  const witnessedPosted = (census) => {
+    assert.ok(census?.witnessed?.via === "exact-get", census?.witnessed
+      ? "provider-errored allocation not verified absent and not the exact posted droplet; preserve reservation without binding"
+      : "provider-errored allocation not verified absent; preserve reservation without binding");
+    const d = ownedDroplet([census.witnessed.droplet], state);
+    assert.equal(d.networks?.v4?.filter((n) => n.type === "public").length, 1, "ambiguous public host address");
+    return d;
+  };
+  const contradictedCreate = async (posted) => {
+    assert.ok(lstatSync(join(local, createErroredReceipt), { throwIfNoEntry: false }), "contradiction without its receipt; preserve reservation");
+    const d = await exactPosted(posted);
     if (!d) throw contradicted();
     return bindContradicted(d, posted);
   };
@@ -316,10 +346,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         // A completed create contradicts an unpublished absence receipt: only the
         // exact owned posted droplet is bound, keeping that receipt as evidence.
         if (unpublished || witnessed) return contradictedCreate(posted);
-        // A real allocation is not this path's to settle. Bind it (bind accepts only the
-        // posted ID) and stop: this operation's provider closes when it returns, so the
-        // unused-allocation path runs in a fresh, separately approved collection.
-        bind(await own());
+        // A real allocation is not this path's to settle. Bind it, only by the positive
+        // exact GET of the posted ID (never a census), and stop: this operation's provider
+        // closes when it returns, so the unused-allocation path runs in a fresh, separately
+        // approved collection.
+        const d = await exactPosted(posted);
+        assert.ok(d, "completed create's posted droplet is not a positive owned exact read; nothing bound; preserve reservation");
+        bind(d);
         return 3;
       }
       assert.ok(action.status === "errored" && action.resource_id === Number(posted.dropletId),
@@ -343,11 +376,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       if (census?.witnessed) {
         // Only the exact GET of the posted ID, positively owned, can bind; a census
         // match after a 404 or another ID stays unresolved.
-        assert.ok(census.witnessed.via === "exact-get",
-          "provider-errored allocation not verified absent and not the exact posted droplet; preserve reservation without binding");
-        const d = ownedDroplet([census.witnessed.droplet], state);
-        assert.equal(d.networks?.v4?.filter((n) => n.type === "public").length, 1, "ambiguous public host address");
-        bind(d);
+        bind(witnessedPosted(census));
         return 3;
       }
       assert.ok(census?.droplets !== undefined, "provider-errored allocation not verified absent; preserve reservation");
@@ -994,18 +1023,34 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         assert.ok(!existsSync(local), "round already reserved; never relaunch");
         // Every earlier provider-errored round's posted droplet is fenced by ID alone in
         // this launch's pre-create census, whatever its name or tags now are.
-        const postedIds = new Set();
+        // That includes a contradicted create retired by the pinned route: retirement
+        // removed the droplet it bound, not the record that the ID was posted and seen again.
+        const postedIds = new Set(), priors = [];
+        const admitPrior = (path, round) => {
+          const prior = read(path, round);
+          assert.ok(prior.destroyedAt || prior.createErrored && verifyCreateErrored(path, prior)
+            && !existsSync(join(path, "operation.lock")) && !existsSync(join(path, recheckLock)), "unresolved reservation blocks launch");
+          return prior;
+        };
         for (const entry of readdirSync(base)) if (entry.startsWith("groups-")) {
           const match = /^groups-(r[1-9]\d{0,8})$/.exec(entry); assert.ok(match, "unknown reservation");
-          const prior = read(join(base, entry), match[1]);
-          assert.ok(prior.destroyedAt || prior.createErrored && verifyCreateErrored(join(base, entry), prior)
-            && !existsSync(join(base, entry, "operation.lock")) && !existsSync(join(base, entry, recheckLock)), "unresolved reservation blocks launch");
-          if (prior.createErrored) {
+          const path = join(base, entry), prior = admitPrior(path, match[1]);
+          priors.push({ path, round: match[1], sha256: digest(regular(join(path, "state.json"), 1024 * 1024)) });
+          const posted = prior.createErrored ?? prior.createContradicted;
+          if (posted) {
             assert.equal(prior.provider.accountId, options.accountId,
               "an earlier provider-errored create is on another provider account; this census cannot fence its posted droplet; preserve reservation");
-            postedIds.add(prior.createErrored.dropletId);
+            postedIds.add(posted.dropletId);
           }
         }
+        // Again after the census, immediately before create intent: an earlier round that
+        // has since changed, taken custody or been contradicted refuses the create.
+        recheckPriorRounds = () => {
+          for (const { path, round, sha256 } of priors) {
+            try { admitPrior(path, round); assert.equal(digest(regular(join(path, "state.json"), 1024 * 1024)), sha256); }
+            catch (cause) { throw new Error("an earlier reservation in this root changed before this create; preserve reservation", { cause }); }
+          }
+        };
         checkFleetAdmission?.();
         mkdirSync(local, { mode: 0o700 }); syncDirectory(base);
         state = { ...reservation({ round: options.round, commit: options.commit,
@@ -1060,22 +1105,24 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           // proofs: exact action/droplet identity and errored status (worker), the saved
           // account and exact absence (providerAbsent). Otherwise preserve as before.
           const errored = erroredCreate(created);
+          let census;
           if (errored) {
             // Save the posted IDs before any absence read: from here only that droplet can
             // be bound, and a stop at any later point leaves a reservation whose exact
             // action a later collect can recheck, not an orphan receipt.
             check(); state.createPending = errored; save();
-            const { droplets } = await providerAbsence(errored) ?? {};
-            if (droplets !== undefined) {
+            census = await providerAbsence(errored);
+            if (census?.droplets !== undefined) {
               check();
-              const bytes = createErroredBytes(createErroredRecord(state, errored, droplets, new Date().toISOString()));
+              const bytes = createErroredBytes(createErroredRecord(state, errored, census.droplets, new Date().toISOString()));
               durable(join(local, createErroredReceipt), bytes);
               publishCreateErrored(errored, bytes);
               throw createErroredStop();
             }
           }
           // Lost acknowledgement permits only identity reconciliation, never another create.
-          try { bind(await own()); }
+          // An errored create named its droplet: only that ID's positive exact GET binds it.
+          try { bind(errored ? witnessedPosted(census) : await own()); }
           catch (error) {
             const diagnostic = providerFailure(created);
             if (diagnostic && !providerFailure(error)) error.providerDiagnostic = diagnostic;
