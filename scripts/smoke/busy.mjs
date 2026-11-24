@@ -79,9 +79,12 @@ export async function busyForms(page) {
   // another page keeps its button marked until that page is in, and then clears it, a button in
   // the header (outside what the page swaps) included (#1063).
   // A's answer is held until B is pressed and the marks are read, so B meets it still out however
-  // slowly the presses come, and both presses run in the page (#2014). The route logs each post
-  // as it comes and each answer as it goes, so B is seen to go only after A's answer and to be
-  // drawn: a runtime that dropped B and cleared its mark with A's would leave `wrote a`.
+  // slowly the presses come, and both presses run in the page (#2014). The page's fetch is
+  // wrapped so each post is seen where the browser sends it, with what the page showed then: B
+  // must be sent only once A's answer (`wrote a`) is drawn, which the route's log cannot show (its
+  // handler runs in this process, some time after the browser sent the request). The route logs
+  // each post as it comes and each answer as it goes, so the posts are counted, and B's answer is
+  // seen drawn: a runtime that dropped B and cleared its mark with A's would leave `wrote a`.
   /** @type {() => void} */
   let answerWriteA = () => {};
   /** @type {Promise<unknown>} */
@@ -114,30 +117,58 @@ export async function busyForms(page) {
       /** @type {any} */ (window).__goCleared = { pageIn: !document.getElementById("busy-w") };
       observer.disconnect();
     }).observe(held, { attributes: true, attributeFilter: ["aria-busy"] });
+    // Each post of the form as the runtime calls fetch for it: the button it is for, and what the
+    // page showed of the answers then.
+    const w = /** @type {any} */ (window);
+    const sent = /** @type {string[]} */ ([]);
+    const fetch = window.fetch;
+    w.__writesSent = sent;
+    w.__unwrapFetch = () => (window.fetch = fetch);
+    window.fetch = function (input, init) {
+      const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+      if (url.pathname === "/busy-write") {
+        const body = init?.body;
+        const by = typeof body === "string" ? new URLSearchParams(body).get("by") : body instanceof URLSearchParams || body instanceof FormData ? body.get("by") : null;
+        sent.push(`${by} with "${document.getElementById("busy-w-said")?.textContent ?? "no answer"}" drawn`);
+      }
+      return fetch.call(window, input, init);
+    };
   });
   const writeMarks = () => page.evaluate(() => ["busy-w", "busy-wa", "busy-wb"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join());
   heldWriteA = new Promise((resolve) => (answerWriteA = () => resolve(undefined)));
   let whileWrite = "";
-  /** The route's log when B was pressed, A's answer still held. */
-  let loggedWhileHeld = "";
+  /** The posts the page had sent once B was pressed, in the same task as the press. */
+  let sentAtPress = "";
   try {
-    await page.evaluate(() => document.getElementById("busy-wa")?.click());
-    whileWrite = await clickAndMarks("busy-wb", ["busy-w", "busy-wa", "busy-wb"]);
-    loggedWhileHeld = writeLog.join();
+    try {
+      await page.evaluate(() => document.getElementById("busy-wa")?.click());
+      [whileWrite, sentAtPress] = await page.evaluate(() => {
+        document.getElementById("busy-wb")?.click();
+        return [["busy-w", "busy-wa", "busy-wb"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join(), /** @type {any} */ (window).__writesSent.join("; ")];
+      });
+    } finally {
+      answerWriteA();
+    }
+    // Polled on a timer: a loaded browser may not be delivering animation frames.
+    await page
+      .waitForFunction(() => document.querySelector("#busy-w-said")?.textContent === "wrote b" && !document.querySelector("#busy-w[aria-busy]"), null, { timeout: 5000, polling: 50 })
+      .catch(() => {});
   } finally {
-    answerWriteA();
+    await page.evaluate(() => /** @type {any} */ (window).__unwrapFetch?.());
   }
-  // Polled on a timer: a loaded browser may not be delivering animation frames.
-  await page
-    .waitForFunction(() => document.querySelector("#busy-w-said")?.textContent === "wrote b" && !document.querySelector("#busy-w[aria-busy]"), null, { timeout: 5000, polling: 50 })
-    .catch(() => {});
   const afterWrites = await writeMarks();
   const wrote = await page.evaluate(() => document.querySelector("#busy-w-said")?.textContent ?? null);
+  const sentWrites = await page.evaluate(() => /** @type {any} */ (window).__writesSent.join("; "));
   const logged = writeLog.join();
   check(
     "a button pressed while a write is on its way is marked beside it and sends after its answer",
-    whileWrite === "true,true,true" && !loggedWhileHeld.includes("post b") && logged === "post a,answer a,post b,answer b" && wrote === "wrote b" && afterWrites === "-,-,-",
-    `${whileWrite} | ${afterWrites}; ${wrote}; route: ${logged} (${loggedWhileHeld || "nothing"} when B was pressed)`,
+    whileWrite === "true,true,true" &&
+      sentAtPress === 'a with "" drawn' &&
+      sentWrites === 'a with "" drawn; b with "wrote a" drawn' &&
+      logged === "post a,answer a,post b,answer b" &&
+      wrote === "wrote b" &&
+      afterWrites === "-,-,-",
+    `${whileWrite} | ${afterWrites}; ${wrote}; sent: ${sentWrites} (${sentAtPress || "nothing"} when B was pressed); route: ${logged}`,
   );
   const redirectName = "a write that sends the browser to another page keeps its button busy until that page is in";
   return { redirectName };

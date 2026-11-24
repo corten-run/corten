@@ -155,48 +155,83 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       );
     }
     // A script's replaceState while a read is on its way (a sort clicked as it polls) cancels that
-    // read; the next is still made, so the page does not stop short of the write.
+    // read; the next is still made, at the address the script put, so the page does not stop short
+    // of the write.
     if (swaps) {
-      // The page must come in still saving, or it starts no read to cancel; a write that landed
-      // first is tried again.
-      let waiting = false;
-      for (let tries = 0; tries < 3 && !waiting; tries++) {
-        await page.goto(await pending());
-        waiting = (await saved()) === "Saving...";
-      }
-      // Each read is held until the script has replaced the address, so the replaceState meets
-      // one still on its way however slowly it comes (#2014).
+      // The page's first read of itself is held until the script has replaced the address, so the
+      // replaceState meets it still on its way however slowly it comes (#2014). The hold is in
+      // before the page is loaded, so the read it holds is the first, however soon it is made; the
+      // page's own load goes by, and so does a read of any other address. The case waits for the
+      // hold, then requires that read cancelled and a read of the replaced address answered.
       let replaced = () => {};
-      const held = new Promise((resolve) => (replaced = () => resolve(undefined)));
+      const released = new Promise((resolve) => (replaced = () => resolve(undefined)));
+      /** The page's address as it came. */
+      let address = "";
+      /** The read held, once there is one. @type {import("@playwright/test").Request | null} */
+      let heldRead = null;
+      let holding = () => {};
+      const isHeld = new Promise((resolve) => (holding = () => resolve(undefined)));
+      /** Whether `request` reads the page at its address as it came. @param {import("@playwright/test").Request} request */
+      const readsAsCame = (request) => {
+        if (request.isNavigationRequest() || request.method() !== "GET") return false;
+        const url = new URL(request.url());
+        return !url.searchParams.has("shown") && url.searchParams.get("saved") === new URL(address).searchParams.get("saved");
+      };
       const slow = async (/** @type {import("@playwright/test").Route} */ route) => {
-        await held;
+        if (heldRead || !readsAsCame(route.request())) return route.fallback();
+        heldRead = route.request();
+        holding();
+        await released;
         await route.fallback().catch(() => {});
       };
-      let cancelled = 0;
-      const onFailed = (/** @type {import("@playwright/test").Request} */ r) => void (r.url().includes("/alerts?saved=") && cancelled++);
-      let from = reads.length;
-      // Armed inside the guard: a read the route holds is let go however the steps end.
+      let heldCancelled = false;
+      const onFailed = (/** @type {import("@playwright/test").Request} */ r) => void (r === heldRead && (heldCancelled = true));
+      /** The reads of the replaced address that were answered. @type {string[]} */
+      const replacedReads = [];
+      const onFinished = (/** @type {import("@playwright/test").Request} */ r) =>
+        void (!r.isNavigationRequest() && r.method() === "GET" && r.url().includes("/alerts?") && new URL(r.url()).searchParams.get("shown") === "2" && replacedReads.push(r.url()));
+      page.on("requestfailed", onFailed);
+      page.on("requestfinished", onFinished);
+      const from = reads.length;
+      let waiting = false;
+      let held = false;
+      // Armed inside the guard: the read the route holds is let go however the steps end.
       try {
         await page.route("**/alerts?saved=*", slow);
-        page.on("requestfailed", onFailed);
-        from = reads.length;
-        for (let waited = 0; reads.length === from && waited < 5000; waited += 50) await page.waitForTimeout(50);
-        await page.evaluate(() => {
-          const to = new URL(location.href);
-          to.searchParams.set("shown", "2");
-          history.replaceState(history.state, "", to);
-        });
+        // The page must come in still saving, or it starts no read to cancel; a write that landed
+        // first is tried again.
+        for (let tries = 0; tries < 3 && !waiting; tries++) {
+          address = await pending();
+          await page.goto(address);
+          waiting = (await saved()) === "Saving...";
+        }
+        if (waiting) {
+          held = await new Promise((resolve) => {
+            const timer = setTimeout(() => resolve(false), 5000);
+            isHeld.then(() => (clearTimeout(timer), resolve(true)));
+          });
+          if (held)
+            await page.evaluate(() => {
+              const to = new URL(location.href);
+              to.searchParams.set("shown", "2");
+              history.replaceState(history.state, "", to);
+            });
+        }
       } finally {
         replaced();
         await page.unroute("**/alerts?saved=*", slow);
       }
       await savedSoon();
+      // The answered read's event may come a moment after its page is drawn.
+      for (let waited = 0; waiting && held && !replacedReads.length && waited < 1000; waited += 50) await page.waitForTimeout(50);
       page.off("requestfailed", onFailed);
+      page.off("requestfinished", onFinished);
+      const at = new URL(page.url()).searchParams.get("shown");
       if (waiting)
         check(
           "a read a script's replaceState cancels on its way is made again",
-          (await saved()) === "Saved." && cancelled > 0 && reads.length > from + 1,
-          `${await saved()} after ${reads.length - from} reads, ${cancelled} cancelled`,
+          (await saved()) === "Saved." && held && heldCancelled && replacedReads.length > 0 && at === "2",
+          `${await saved()} at shown=${at} after ${reads.length - from} reads; ${held ? `held read ${heldCancelled ? "cancelled" : "not cancelled"}` : "no read held within 5 s"}; ${replacedReads.length} of the replaced address answered`,
         );
       else skip("a read a script's replaceState cancels on its way is made again", "each write landed before its page came in");
     } else {

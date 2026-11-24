@@ -405,22 +405,31 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
     let answerOther = () => {};
     /** The field once the waiting submit is out and before its answer, or why it was not read. */
     let whileOther = "";
+    // The waiting submit is heard from before the presses, so it is not missed, but its six seconds
+    // start only once the presses are made, as the first answer is let go: the first press's own
+    // wait and the second press do not use them up.
+    /** @type {(sent: boolean) => void} */
+    let heardOther = () => {};
+    const otherHeard = new Promise((resolve) => (heardOther = resolve));
+    const onOther = (/** @type {import("@playwright/test").Request} */ r) => void (queueSends("b", "other")(r) && heardOther(true));
+    page.on("request", onOther);
     try {
       queueSecondHeld = new Promise((resolve) => (answerOther = () => resolve(undefined)));
-      // Armed before the first answer can go, which lets the waiting submit out.
-      const otherSent = page.waitForRequest(queueSends("b", "other"), { timeout: 6000 }).then(
-        () => true,
-        () => false,
-      );
+      /** @type {Promise<boolean>} */
+      let otherSent = Promise.resolve(false);
       try {
         queuePressed = new Promise((resolve) => (pressed = resolve));
         await pressFor("#queue-box button[value=save]", queueSends("b", "save"));
         await press("#queue-box button[value=other]");
+        /** @type {ReturnType<typeof setTimeout> | undefined} */
+        let timer;
+        otherSent = Promise.race([otherHeard, new Promise((resolve) => (timer = setTimeout(() => resolve(false), 6000)))]).finally(() => clearTimeout(timer));
       } finally {
         pressed();
       }
-      whileOther = (await otherSent) ? ((await queueFields()).n ?? "no field") : "the other submit was not sent within 6 s";
+      whileOther = (await otherSent) ? ((await queueFields()).n ?? "no field") : "the other submit was not sent within 6 s of the first answer's release";
     } finally {
+      page.off("request", onOther);
       answerOther();
       queueSecondHeld = Promise.resolve();
     }

@@ -308,13 +308,20 @@ the old values or that the second press met it still pending. A press that must 
 still on its way holds that request's answer until the case has made it, never for a fixed time,
 and the cases count their submits, so a press meant to send nothing is seen to have been made.
 The other checks that act while a request is out (a busy mark, a navigation before a write's
-page, a script's `replaceState` during a read) hold it the same way, and the busy mark's write
-check requires the waiting button's post after the held answer and its own answer drawn. The
-check of a navigation during a patch's stylesheet load holds the one stylesheet the patch links
-until the runtime has read the navigation's answer, and requires that the page did not swap
-while it was held and that the browser requested it once. It runs twice: once the load
-succeeds, and the page swaps in with the area's rules applied; once it fails, and the page loads
-in full, as a navigation whose own stylesheet fails does. Only the failed load tells a navigation
+page, a script's `replaceState` during a read) hold it the same way. The busy mark's write check
+sees each post where the page calls `fetch`, since a route hears of a request only some time
+after the browser sends it: it requires the waiting button's post sent only once the held answer
+is drawn, the two posts and their answers in the route's log, and the waiting post's own answer
+drawn. The `replaceState` check holds the page's first read from before the page loads, so the
+read it holds is the first however soon it comes, and requires that read cancelled and a read of
+the replaced address answered. A wait for a request that a held answer lets out starts when that
+answer is let go. The check of a navigation during a patch's stylesheet load holds the one
+stylesheet the patch links until the runtime has read the navigation's answer, and requires that
+the page did not swap while it was held and that the browser requested it once while it was
+held. It runs twice: once the load succeeds, and the page swaps in with the area's rules applied,
+the stylesheet requested once in all; once it fails, and the page loads in full, as a navigation
+whose own stylesheet fails does, which may request the stylesheet again. A step of it that does
+not end in time fails the check and closes its page. Only the failed load tells a navigation
 that shares the load from one that took the patch's link for a loaded stylesheet whatever the
 page's handler modules do, since those also hold the swap: with a module held past the
 stylesheet, a runtime that skips the shared load still swaps in styled, but on the failed load it
