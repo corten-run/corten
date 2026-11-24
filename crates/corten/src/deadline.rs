@@ -62,18 +62,24 @@ pin_project_lite::pin_project! {
     pub(crate) struct Keeps<C> {
         #[pin]
         conn: C,
-        // [`UNNAMED`] until a deadline of the connection's has waited, then the connection's own
-        // number, so a timer goes back only to the connection that made it.
-        id: u64,
-        // The timer, made once: `None` before, while a deadline has it across polls, and for
-        // good if that deadline was dropped somewhere else.
-        timer: Option<Held>,
+        mine: Mine,
     }
+}
+
+/// What a connection has for its requests' deadlines.
+struct Mine {
+    /// [`UNNAMED`] until a deadline of the connection's has waited, then the connection's own
+    /// number, so a timer goes back only to the connection that made it.
+    id: u64,
+    /// The timer, made once: `None` before, while a deadline has it across polls, and for good
+    /// if that deadline was dropped somewhere else. While the connection is polled, what the
+    /// thread had in its own place is here.
+    timer: Option<Held>,
 }
 
 impl<C> Keeps<C> {
     pub(crate) fn new(conn: C) -> Self {
-        Keeps { conn, id: UNNAMED, timer: None }
+        Keeps { conn, mine: Mine { id: UNNAMED, timer: None } }
     }
 
     /// The connection itself, for what is not a poll (its graceful shutdown).
@@ -84,7 +90,7 @@ impl<C> Keeps<C> {
     /// When the timer the connection has is set to fire, for a test.
     #[cfg(test)]
     pub(crate) fn kept_until(&self) -> Option<Instant> {
-        self.timer.as_ref().map(|timer| timer.0.deadline())
+        self.mine.timer.as_ref().map(|timer| timer.0.deadline())
     }
 }
 
@@ -92,39 +98,46 @@ impl<C> Keeps<C> {
 /// connection can be polled inside another's poll (a handler that blocks on another runtime).
 struct Polling<'a> {
     by: u64,
-    /// Where the connection's timer goes back to, and what the thread had in its place.
-    lent: Option<(&'a mut Option<Held>, Option<Held>)>,
+    mine: &'a mut Mine,
 }
 
 impl Drop for Polling<'_> {
+    #[inline(always)]
     fn drop(&mut self) {
-        BY.set(self.by);
-        if let Some((home, before)) = self.lent.take() {
-            *home = TIMER.replace(before);
+        // The thread still says whose poll this was: a connection that had a number then had lent
+        // its timer.
+        if BY.replace(self.by) > ASKED {
+            swap(&mut self.mine.timer);
         }
     }
+}
+
+/// Swaps the thread's timer and the one in `place`.
+#[inline(always)]
+fn swap(place: &mut Option<Held>) {
+    TIMER.with(|thread| thread.swap(Cell::from_mut(place)));
 }
 
 impl<C: Future> Future for Keeps<C> {
     type Output = C::Output;
 
+    // Written for what a poll costs a connection whose handlers never wait: 13 instructions
+    // (callgrind, keep-alive requests over TCP). The connection is polled in one place, so its
+    // poll is still compiled into its caller, and [`Polling`] owns nothing to drop and reads
+    // what it lent from the thread, so putting the thread back is compiled in here too. Polled
+    // in two places by a guard that owned a timer, a poll cost 64.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<C::Output> {
         let this = self.project();
-        if *this.id == UNNAMED {
-            // No deadline of this connection's has waited: all the thread is told is that, so a
-            // connection whose handlers never wait pays only for this.
-            let polling = Polling { by: BY.replace(UNNAMED), lent: None };
-            let polled = this.conn.poll(cx);
-            if BY.get() == ASKED {
-                (*this.id, *this.timer) = made();
-            }
-            drop(polling);
-            return polled;
+        // A connection no deadline of whose has waited tells the thread only that.
+        let polling = Polling { by: BY.replace(this.mine.id), mine: this.mine };
+        if polling.mine.id != UNNAMED {
+            swap(&mut polling.mine.timer);
         }
-        let by = BY.replace(*this.id);
-        let before = TIMER.replace(this.timer.take());
-        let _polling = Polling { by, lent: Some((this.timer, before)) };
-        this.conn.poll(cx)
+        let polled = this.conn.poll(cx);
+        if BY.get() == ASKED && polled.is_pending() {
+            *polling.mine = made();
+        }
+        polled
     }
 }
 
@@ -132,10 +145,10 @@ impl<C: Future> Future for Keeps<C> {
 /// timer is of the runtime that polls the connection, whatever its handler had entered when its
 /// deadline asked.
 #[cold]
-fn made() -> (u64, Option<Held>) {
+fn made() -> Mine {
     #[cfg(test)]
     LIVE.with(|live| live.set(live.get() + 1));
-    (NAMES.fetch_add(1, Relaxed), Some(Held(Box::pin(tokio::time::sleep(Duration::MAX)))))
+    Mine { id: NAMES.fetch_add(1, Relaxed), timer: Some(Held(Box::pin(tokio::time::sleep(Duration::MAX)))) }
 }
 
 /// A connection's timer while a deadline has it. Dropped where its connection is being polled, it

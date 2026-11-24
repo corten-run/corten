@@ -2371,6 +2371,22 @@ async fn a_deadline_waits_on_its_connections_timer_from_the_second_that_waits() 
     assert_eq!(timers(), 0, "dropped with the connection");
 }
 
+/// A connection that is done in the poll its first deadline waited in makes no timer on its way
+/// out.
+#[tokio::test(start_paused = true)]
+async fn a_connection_done_where_its_first_deadline_waited_makes_no_timer() {
+    use crate::deadline::{Keeps, Timer};
+    use std::{future::Future, pin::pin, task::Poll};
+    let mut conn = pin!(Keeps::new(std::future::poll_fn(|cx| {
+        let mut timer = pin!(Timer::Unset);
+        assert!(timer.as_mut().poll(Duration::from_secs(30), cx).is_pending());
+        Poll::Ready(timer.is_kept())
+    })));
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert_eq!(conn.as_mut().poll(&mut cx), Poll::Ready(false));
+    assert_eq!((timers(), conn.kept_until()), (0, None));
+}
+
 /// A deadline dropped anywhere but in its connection's poll drops the timer it had, and the
 /// connection, which makes its timer once, has none from then on: its deadlines make their own.
 #[tokio::test]
@@ -2415,16 +2431,19 @@ async fn a_connection_polled_inside_anothers_poll_keeps_its_own_timer() {
     use std::{future::Future, pin::pin, task::Poll};
     let (short, long) = (Duration::from_secs(10), Duration::from_secs(20));
     let mut kept = Vec::new();
+    let inners = std::cell::Cell::new(false);
     let mut inner = pin!(Keeps::new(std::future::poll_fn(|cx| {
         let mut timer = pin!(Timer::Unset);
         assert!(timer.as_mut().poll(long, cx).is_pending());
-        Poll::Ready::<bool>(timer.is_kept())
+        inners.set(timer.is_kept());
+        Poll::<()>::Pending
     })));
     {
         let mut outer = pin!(Keeps::new(std::future::poll_fn(|cx| {
             let mut timer = pin!(Timer::Unset);
             assert!(timer.as_mut().poll(short, cx).is_pending());
-            let Poll::Ready(inner) = inner.as_mut().poll(cx) else { unreachable!() };
+            assert!(inner.as_mut().poll(cx).is_pending());
+            let inner = inners.get();
             // A deadline after the inner connection's poll finds the outer's timer taken, not
             // the inner's.
             let mut after = pin!(Timer::Unset);
