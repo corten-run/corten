@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check } from "./helpers.mjs";
+import { base, shadowing, skip, check, pollFor } from "./helpers.mjs";
 
 export async function componentLifecycle(page, live, prices, feedSources, signsIn) {
   // Text a script computes, from the catalog: on:connect={js::watch(.., updates, t.js().prices_updates())},
@@ -350,10 +350,11 @@ export async function componentLifecycle(page, live, prices, feedSources, signsI
   check("form patch keeps the page", await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1));
   // A row's Remove button submits the watch form to /unwatch.
   await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector('button[formaction="/unwatch"][value="HLTH"]')).click());
-  await page.waitForFunction(() => document.getElementById("watch-message")?.textContent === "Stopped watching Halcyon Health.", null, { timeout: 4000 }).catch(() => {});
+  // Answered within 4 s, an answer after them failing the check.
+  const unwatched = !!(await pollFor(4000, () => page.evaluate(() => document.getElementById("watch-message")?.textContent === "Stopped watching Halcyon Health.")));
   check(
     "unwatching a stock takes its row away and offers it again",
-    (await page.$('[data-ref="price"][data-key="HLTH"]')) === null && (await page.$('select[name=id] option[value="HLTH"]')) !== null,
-    String(await page.textContent("#watch-message")),
+    unwatched && (await page.$('[data-ref="price"][data-key="HLTH"]')) === null && (await page.$('select[name=id] option[value="HLTH"]')) !== null,
+    `${unwatched ? "" : "not answered within 4 s; "}${await page.textContent("#watch-message")}`,
   );
 }

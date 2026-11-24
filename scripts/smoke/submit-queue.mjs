@@ -1,4 +1,4 @@
-import { check } from "./helpers.mjs";
+import { check, pollFor } from "./helpers.mjs";
 
 export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
   // The cases below press their buttons in the page (`button.click()`), so each submit has run
@@ -29,6 +29,15 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
       w.__submitCount?.abort();
       return /** @type {number} */ (w.__submits);
     });
+  /** Stops `countSubmits`'s and `queueCase`'s listeners in the page, for a case that ended before it read them. */
+  const stopCounting = () =>
+    page
+      .evaluate(() => {
+        const w = /** @type {any} */ (window);
+        w.__submitCount?.abort();
+        w.__queueCase?.abort();
+      })
+      .catch(() => {});
   /** A request's fields, from its address or its body. @param {import("@playwright/test").Request} request */
   const fieldsOf = (request) => (request.method() === "GET" ? new URL(request.url()).searchParams : new URLSearchParams(request.postData() ?? ""));
   // The latest submit wins, but a pending write is not abandoned (the server may have applied
@@ -41,42 +50,49 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
   const onWrite = (r) => r.method() === "POST" && r.url().endsWith("/watch") && writes.push(`sent ${new URLSearchParams(r.postData() ?? "").get("id")}`);
   /** @param {import("@playwright/test").Response} r */
   const onAnswer = (r) => r.request().method() === "POST" && r.url().endsWith("/watch") && writes.push(`answered ${new URLSearchParams(r.request().postData() ?? "").get("id")}`);
-  page.on("request", onWrite);
-  page.on("response", onAnswer);
-  let releaseWatch = () => {};
-  holdWatch.value = new Promise((resolve) => (releaseWatch = () => resolve(undefined)));
   /** @type {string | null} */
   let busyWhileWriting = null;
   let watchPresses = 0;
+  /** The outcome, read before the listeners go: whether the message came within 6 s, and the log then. */
+  let watched = false;
+  let written = "";
+  // The listeners, the hold and the submit count go however the case ends, a press that throws
+  // included.
+  page.on("request", onWrite);
+  page.on("response", onAnswer);
   try {
-    await page.selectOption("select[name=id]", "PNTR");
-    await countSubmits("#watch-form");
-    // The first is out before the form changes.
-    await pressFor("#watch-form button", (r) => r.method() === "POST" && r.url().endsWith("/watch") && fieldsOf(r).get("id") === "PNTR");
-    // The same press again sends nothing, and two newer ones are one submit of where the form ended.
-    await press("#watch-form button");
-    await page.selectOption("select[name=id]", "NRTH");
-    await press("#watch-form button");
-    await page.selectOption("select[name=id]", "VTGO");
-    await press("#watch-form button");
-    busyWhileWriting = await page.getAttribute("#watch-form", "aria-busy");
-    watchPresses = await submits();
+    let releaseWatch = () => {};
+    holdWatch.value = new Promise((resolve) => (releaseWatch = () => resolve(undefined)));
+    try {
+      await page.selectOption("select[name=id]", "PNTR");
+      await countSubmits("#watch-form");
+      // The first is out before the form changes.
+      await pressFor("#watch-form button", (r) => r.method() === "POST" && r.url().endsWith("/watch") && fieldsOf(r).get("id") === "PNTR");
+      // The same press again sends nothing, and two newer ones are one submit of where the form ended.
+      await press("#watch-form button");
+      await page.selectOption("select[name=id]", "NRTH");
+      await press("#watch-form button");
+      await page.selectOption("select[name=id]", "VTGO");
+      await press("#watch-form button");
+      busyWhileWriting = await page.getAttribute("#watch-form", "aria-busy");
+      watchPresses = await submits();
+    } finally {
+      holdWatch.value = null;
+      releaseWatch();
+    }
+    watched = !!(await pollFor(6000, () => page.evaluate(() => !!document.getElementById("watch-message")?.textContent?.startsWith("Watching Vertigo Robotics"))));
+    // Time in which a send the queue must not make would be seen.
+    await page.waitForTimeout(300);
+    written = writes.join();
   } finally {
-    holdWatch.value = null;
-    releaseWatch();
+    page.off("request", onWrite);
+    page.off("response", onAnswer);
+    await stopCounting();
   }
-  await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Vertigo Robotics"), null, { timeout: 6000 }).catch(() => {});
-  await page.waitForTimeout(300);
-  page.off("request", onWrite);
-  page.off("response", onAnswer);
   check(
     "a newer submit waits for a pending write, which is answered, and then goes out",
-    ((await page.textContent("#watch-message")) ?? "").startsWith("Watching Vertigo Robotics") &&
-      busyWhileWriting === "true" &&
-      watchPresses === 4 &&
-      abandoned.length === 0 &&
-      writes.join() === "sent PNTR,answered PNTR,sent VTGO,answered VTGO",
-    `${await page.textContent("#watch-message")}; busy: ${busyWhileWriting}; presses: ${watchPresses}; ${writes.join()}; abandoned: ${abandoned.join()}`,
+    watched && busyWhileWriting === "true" && watchPresses === 4 && abandoned.length === 0 && written === "sent PNTR,answered PNTR,sent VTGO,answered VTGO",
+    `${watched ? "" : "no Vertigo Robotics message within 6 s; "}${await page.textContent("#watch-message")}; busy: ${busyWhileWriting}; presses: ${watchPresses}; ${written}; abandoned: ${abandoned.join()}`,
   );
   check("the form is not left busy", (await page.getAttribute("#watch-form", "aria-busy")) === null);
 
@@ -98,7 +114,6 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
     const n = fieldsOf(request).get("n") ?? "";
     if (!queueRefused.includes(n)) queueRefused.push(n);
   };
-  page.on("requestfailed", queueGaveUp);
   // No answer goes before the case's second press is made, so that press meets the first submit
   // still out: the check is of the queue and not of two sends, however slow the press.
   /** @type {Promise<void>} */
@@ -106,360 +121,364 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
   // A case that reads the form between its two answers holds the second until it has.
   /** @type {Promise<void>} */
   let queueSecondHeld = Promise.resolve();
-  await page.route("**/queue*", async (route) => {
-    const request = route.request();
-    const fields = fieldsOf(request);
-    const sent = queueSent.push(`${request.method()} ${fields.get("n")}${fields.has("submit") ? ` ${fields.get("submit")}` : ""}${fields.has("b") ? ` ${fields.get("b")}` : ""}`);
-    const answer = queueAnswer;
-    // The first of two reads answers last, so a read that was not aborted would draw over the newer.
-    const late = request.method() === "GET" && fields.get("n") === "1";
-    await queuePressed;
-    if (sent === 2) await queueSecondHeld;
-    await new Promise((resolve) => setTimeout(resolve, late ? 1200 : 400));
-    const body = answer.body.replace("{n}", fields.get("n") ?? "");
-    await route
-      .fulfill({ status: answer.status, headers: { "content-type": "text/html; charset=utf-8", ...answer.headers }, body })
-      .catch(() => {});
-    queueAnswered += 1;
-  });
-  /** Whether a request is the queue form's, with `field` set to `value`. @param {string} field @param {string} value */
-  const queueSends = (field, value) => (/** @type {import("@playwright/test").Request} */ r) => new URL(r.url()).pathname === "/queue" && fieldsOf(r).get(field) === value;
-  /**
-   * Puts the form (in a box a patch can redraw), presses, sets n to 2 and presses again, then
-   * waits until `done` says the case's outcome is on the page (6 s at most, and `ended` is false)
-   * and 700 ms more, in which a send the queue must not make would be seen. `status`: the case's
-   * `corten:error`, or null, heard on the form too, so one sent to a form the answer took off the
-   * page is not missed. `refused`: the n of each request the page gave up on. `presses`: the
-   * submits the two presses made, so a second press that sends nothing is seen to have been made.
-   * @param {string} form @param {() => Promise<boolean>} done
-   */
-  const queueCase = async (form, done) => {
-    queueSent = [];
-    queueAnswered = 0;
-    queueRefused = [];
-    /** @type {() => void} */
-    let pressed = () => {};
-    await page.evaluate((form) => {
-      document.getElementById("queue-box")?.remove();
-      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}<p id="queue-out"></p></div>`));
-      // The case's corten:error, if it gets one; the listener goes with the case.
-      const w = /** @type {any} */ (window);
-      w.__queueCase?.abort();
-      w.__queueCase = new AbortController();
-      w.__queueError = null;
-      const heard = (/** @type {Event} */ e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status);
-      document.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
-      document.querySelector("#queue-box form")?.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
-    }, form);
-    // The first press must run before n changes, the second before pressed(), which the case
-    // calls however it ends, so no answer stays held.
-    /** @type {string | null} */
-    let busy = null;
-    let presses = 0;
-    try {
-      queuePressed = new Promise((resolve) => (pressed = resolve));
-      await countSubmits("#queue-box form");
-      await pressFor("#queue-box button", queueSends("n", "1"));
-      await page.fill("#queue-box [name=n]", "2");
-      busy = await page.getAttribute("#queue-box form", "aria-busy");
-      await press("#queue-box button");
-      presses = await submits();
-    } finally {
-      pressed();
-    }
-    const until = Date.now() + 6000;
-    let ended = await done();
-    while (!ended && Date.now() < until) {
-      await page.waitForTimeout(50);
-      ended = await done();
-    }
-    await page.waitForTimeout(700);
-    const status = await page.evaluate(() => {
-      const w = /** @type {any} */ (window);
-      w.__queueCase.abort();
-      return /** @type {number | null} */ (w.__queueError);
-    });
-    return { sent: queueSent.join(), status, busy, ended, refused: queueRefused.join(), presses };
-  };
-  const queueOut = () => page.evaluate(() => document.getElementById("queue-out")?.textContent ?? null);
+  // The route, the listener and the page's listeners go however the cases end, a press that
+  // throws included.
   const queueLogged = errors.length;
-  const patchHeaders = { "corten-patch": "1" };
-  const queueForm = (/** @type {string} */ method, /** @type {string} */ extra = "") =>
-    `<form id="queue" method="${method}" action="/queue" data-patch><input name="n" value="1">${extra}<button>Go</button></form>`;
-
-  // A newer GET aborts the older one, whose answer is worth nothing now: the first answers last,
-  // and the page keeps the newer's.
-  queueAnswer = { status: 200, headers: patchHeaders, body: '<p id="queue-out">read {n}</p>' };
-  // Ended once the older's late answer was tried too, so it had its chance to draw.
-  const read = await queueCase(queueForm("get"), async () => queueAnswered === 2 && (await queueOut()) === "read 2");
-  check(
-    "a newer GET submit aborts the older one",
-    read.ended && read.presses === 2 && read.status === null && read.sent === "GET 1,GET 2" && read.refused === "1" && (await queueOut()) === "read 2",
-    `${read.sent}; ${await queueOut()}; ended: ${read.ended}; presses: ${read.presses}; error: ${read.status}; refused: ${read.refused}`,
-  );
-
-  // An answer the runtime does not draw (a proxy's 503) drops the submit that waited.
-  queueAnswer = { status: 503, body: "Service Unavailable" };
-  const undrawn = await queueCase(queueForm("post"), async () => (await page.evaluate(() => /** @type {any} */ (window).__queueError)) !== null);
-  check(
-    "a submit that waited for an answer the runtime does not draw is not sent",
-    undrawn.ended && undrawn.presses === 2 && undrawn.sent === "POST 1" && undrawn.status === 503,
-    `${undrawn.sent}; ${undrawn.status}; ended: ${undrawn.ended}; presses: ${undrawn.presses}`,
-  );
-
-  // A 5xx patch is drawn, but the write may or may not have applied: the waiting submit drops.
-  queueAnswer = { status: 500, headers: patchHeaders, body: '<p id="queue-out">failed</p>' };
-  const failedPatch = await queueCase(queueForm("post"), async () => (await queueOut()) === "failed");
-  check(
-    "a submit that waited for a 5xx is not sent, and the 5xx's patch is drawn",
-    failedPatch.ended && failedPatch.presses === 2 && failedPatch.status === null && failedPatch.sent === "POST 1" && (await queueOut()) === "failed",
-    `${failedPatch.sent}; ${await queueOut()}; ended: ${failedPatch.ended}; presses: ${failedPatch.presses}; error: ${failedPatch.status}`,
-  );
-
-  // A refusal of the state the write was made against (Errors::refuse, 409) is drawn and drops
-  // the waiting submit: the user reads it before anything else goes.
-  queueAnswer = { status: 409, headers: patchHeaders, body: '<p id="queue-out">stale</p>' };
-  const stale = await queueCase(queueForm("post"), async () => (await queueOut()) === "stale");
-  check(
-    "a submit that waited is not sent after a 409 refusal, which is drawn",
-    stale.ended && stale.presses === 2 && stale.status === null && stale.sent === "POST 1" && (await queueOut()) === "stale",
-    `${stale.sent}; ${await queueOut()}; ended: ${stale.ended}; presses: ${stale.presses}; error: ${stale.status}`,
-  );
-
-  // An answer that removes the form drops it.
-  queueAnswer = { status: 200, headers: patchHeaders, body: '<template id="queue" data-remove></template>' };
-  const removed = await queueCase(queueForm("post"), async () => (await page.$("#queue")) === null);
-  check(
-    "a submit that waited is not sent when the answer removes its form",
-    removed.ended && removed.presses === 2 && removed.status === null && removed.sent === "POST 1" && (await page.$("#queue")) === null,
-    `${removed.sent}; ended: ${removed.ended}; presses: ${removed.presses}; error: ${removed.status}`,
-  );
-
-  // A form without an id that the answer took off the page is not found again: its values are
-  // the ones from before the answer.
-  queueAnswer = { status: 200, headers: patchHeaders, body: '<div id="queue-box"><form method="post" action="/queue" data-patch><input name="n" value="1"><button>Go</button></form></div>' };
-  // The answer's box has no #queue-out: drawn once it is gone.
-  const noId = await queueCase('<form method="post" action="/queue" data-patch><input name="n" value="1"><button>Go</button></form>', async () => (await queueOut()) === null);
-  check(
-    "a submit that waited is not sent when its form without an id left the page",
-    noId.ended && noId.presses === 2 && noId.status === null && noId.sent === "POST 1",
-    `${noId.sent}; ended: ${noId.ended}; presses: ${noId.presses}; error: ${noId.status}`,
-  );
-
-  // The submit that waited goes under the form's new key: the write's answer renewed it.
-  queueAnswer = { status: 200, headers: patchHeaders, body: '<p id="queue-out">saved {n}</p>' };
-  // Ended once the waiting submit's own answer is drawn.
-  const keyed = await queueCase(queueForm("post", `<input type="hidden" name="submit" data-submit value="${zero}">`), async () => (await queueOut()) === "saved 2");
-  const [firstKey, secondKey] = keyed.sent.split(",").map((s) => s.split(" ")[2]);
-  check(
-    "a submit that waited goes out after the write's answer, under the key the answer renewed",
-    keyed.ended && keyed.presses === 2 && keyed.status === null && keyed.busy === "true" && keyed.sent.split(",").length === 2 && keyed.sent.startsWith("POST 1 ") && keyed.sent.includes(",POST 2 ") && firstKey === zero && /^[0-9a-f-]{36}$/.test(secondKey ?? "") && secondKey !== zero,
-    `${keyed.sent}; ended: ${keyed.ended}; presses: ${keyed.presses}; error: ${keyed.status}`,
-  );
-
-  // A 204 or 205 with none of Corten's headers took the write and has nothing to draw (RFC 9110,
-  // 15.3.5 and 15.3.6; #1258): no corten:error, and the submit that waited goes, under the key the
-  // answer renewed. A 205 resets the form only when nothing waits: the second submit goes with the
-  // values it was pressed with, and its own 205 then resets the form, which has a new key after.
-  // The placeholder key matches the UUID pattern, so each key is also held apart from it.
-  const keyField = `<input type="hidden" name="submit" data-submit value="${zero}">`;
-  const queueFields = () =>
-    page.evaluate(() => ({
-      n: /** @type {HTMLInputElement | null} */ (document.querySelector("#queue-box [name=n]"))?.value,
-      key: /** @type {HTMLInputElement | null} */ (document.querySelector("#queue-box [name=submit]"))?.value,
-    }));
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-  for (const status of [204, 205]) {
-    queueAnswer = { status, body: "" };
-    // Ended once the waiting submit's own answer is in and the form is no longer busy.
-    const quiet = await queueCase(queueForm("post", keyField), async () => queueAnswered === 2 && (await page.getAttribute("#queue-box form", "aria-busy")) === null);
-    const [first, second] = quiet.sent.split(",").map((s) => s.split(" ")[2]);
-    const left = await queueFields();
-    check(
-      `a submit that waited for a bare ${status} goes out after it under a new key, with no corten:error${status === 205 ? ", and the last 205 resets the form" : ""}`,
-      quiet.ended &&
-        quiet.presses === 2 &&
-        quiet.status === null &&
-        quiet.busy === "true" &&
-        quiet.sent.split(",").length === 2 &&
-        quiet.sent.startsWith("POST 1 ") &&
-        quiet.sent.includes(",POST 2 ") &&
-        first === zero &&
-        uuid.test(second ?? "") &&
-        second !== zero &&
-        left.n === (status === 205 ? "1" : "2") &&
-        uuid.test(left.key ?? "") &&
-        left.key !== zero &&
-        left.key !== second,
-      `${quiet.sent}; ended: ${quiet.ended}; presses: ${quiet.presses}; error: ${quiet.status}; left ${JSON.stringify(left)}`,
-    );
-  }
-  // With nothing waiting, a 205 resets the form that sent it to the markup's values, and the form
-  // has a new key after (the reset comes before the key is renewed, so this does not see the reset
-  // leave a key alone: a hidden input's value is its attribute, which a reset keeps). A form the
-  // user changed after it was sent keeps their work, as it does against a patch, and so does one a
-  // control was added to: a hidden input too, which has no state of its own the reset could be
-  // seen to change. So does another file of the same name chosen while the write is out (its size
-  // differs), and text a number input cannot read, whose value is "" as an empty field's is. The
-  // form has a control named reset, so `form.reset` is that control and the form's own method has
-  // to be reached through its prototype.
-  /** Sets the queue form's file to one named card.png, of `text`. @param {string} text */
-  const pickQueueFile = (text) =>
-    page.evaluate((text) => {
-      const files = new DataTransfer();
-      files.items.add(new File([text], "card.png", { type: "image/png", lastModified: 1 }));
-      /** @type {HTMLInputElement} */ (document.querySelector("#queue-box [name=f]")).files = files.files;
-    }, text);
-  for (const change of ["none", "edited", "added", "hidden", "file", "unreadable"]) {
-    queueSent = [];
-    queueAnswered = 0;
-    queueAnswer = { status: 205, body: "" };
-    /** @type {() => void} */
-    let pressed = () => {};
-    await page.evaluate((form) => {
-      document.getElementById("queue-box")?.remove();
-      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}</div>`));
-      const w = /** @type {any} */ (window);
-      w.__queueCase?.abort();
-      w.__queueCase = new AbortController();
-      w.__queueError = null;
-      document.addEventListener("corten:error", (e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status), { signal: w.__queueCase.signal });
-    }, queueForm("post", `${keyField}<input type="hidden" name="reset" value="x">${change === "file" ? '<input type="file" name="f">' : change === "unreadable" ? '<input type="number" name="q">' : ""}`));
-    await page.fill("#queue-box [name=n]", "5");
-    if (change === "file") await pickQueueFile("first");
-    // The answer is held until the case has changed the form, and released however it ends.
-    try {
-      queuePressed = new Promise((resolve) => (pressed = resolve));
-      await pressFor("#queue-box button", queueSends("n", "5"));
-      if (change === "edited") await page.fill("#queue-box [name=n]", "6");
-      if (change === "added") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input name="extra">')));
-      if (change === "hidden") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input type="hidden" name="tag" value="a">')));
-      if (change === "file") await pickQueueFile("another picture");
-      if (change === "unreadable") {
-        await page.focus("#queue-box [name=q]");
-        await page.keyboard.type("1e");
-      }
-    } finally {
-      pressed();
-    }
-    const until = Date.now() + 6000;
-    while (!(queueAnswered === 1 && (await page.getAttribute("#queue-box form", "aria-busy")) === null) && Date.now() < until) await page.waitForTimeout(50);
-    // Time for a corten:error to be heard, or a waiting submit to go.
-    await page.waitForTimeout(300);
-    const reset = await queueFields();
-    // What the case says it changed is still there: the second file, and the number input's text.
-    const other = await page.evaluate(() => ({
-      file: /** @type {HTMLInputElement | null} */ (document.querySelector("#queue-box [name=f]"))?.files?.[0]?.size,
-      bad: /** @type {HTMLInputElement | null} */ (document.querySelector("#queue-box [name=q]"))?.validity.badInput,
-    }));
-    const error = await page.evaluate(() => {
-      const w = /** @type {any} */ (window);
-      w.__queueCase.abort();
-      return /** @type {number | null} */ (w.__queueError);
+  page.on("requestfailed", queueGaveUp);
+  try {
+    await page.route("**/queue*", async (route) => {
+      const request = route.request();
+      const fields = fieldsOf(request);
+      const sent = queueSent.push(`${request.method()} ${fields.get("n")}${fields.has("submit") ? ` ${fields.get("submit")}` : ""}${fields.has("b") ? ` ${fields.get("b")}` : ""}`);
+      const answer = queueAnswer;
+      // The first of two reads answers last, so a read that was not aborted would draw over the newer.
+      const late = request.method() === "GET" && fields.get("n") === "1";
+      await queuePressed;
+      if (sent === 2) await queueSecondHeld;
+      await new Promise((resolve) => setTimeout(resolve, late ? 1200 : 400));
+      const body = answer.body.replace("{n}", fields.get("n") ?? "");
+      await route
+        .fulfill({ status: answer.status, headers: { "content-type": "text/html; charset=utf-8", ...answer.headers }, body })
+        .catch(() => {});
+      queueAnswered += 1;
     });
-    /** @type {Record<string, string>} */
-    const keeps = {
-      edited: "a form the user changed after it was sent",
-      added: "a form a control was added to after it was sent",
-      hidden: "a form a hidden input was added to after it was sent",
-      file: "a form whose file was swapped for another of the same name after it was sent",
-      unreadable: "a form whose number input was given text it cannot read after it was sent",
-    };
-    check(
-      change === "none" ? "a bare 205 with nothing waiting resets the form that sent it, gives it a new key, and dispatches no corten:error" : `a bare 205 keeps ${keeps[change]}, with no corten:error`,
-      queueSent.length === 1 &&
-        queueSent[0].startsWith("POST 5 ") &&
-        error === null &&
-        reset.n === (change === "none" ? "1" : change === "edited" ? "6" : "5") &&
-        uuid.test(reset.key ?? "") &&
-        reset.key !== zero &&
-        (change !== "file" || other.file === "another picture".length) &&
-        (change !== "unreadable" || other.bad === true),
-      `${queueSent.join()}; error: ${error}; left ${JSON.stringify({ ...reset, ...other })}`,
-    );
-  }
-  // A press with other values while a write is out waits, and the write's 205 does not reset the
-  // form under it: the waiting submit goes with what the user typed, and its own 205 then resets
-  // the form. The second press is the form's other button, so the values differ only by the button
-  // and nothing is typed between the presses: only the waiting submit keeps the first 205 from
-  // resetting the form. The second answer is held until the form has been read with the waiting
-  // submit out, so a reset by the first 205 after that submit's values were taken is seen too, and
-  // the reset seen at the end is the second 205's.
-  {
-    queueSent = [];
-    queueAnswered = 0;
-    queueAnswer = { status: 205, body: "" };
-    /** @type {() => void} */
-    let pressed = () => {};
-    await page.evaluate((form) => {
-      document.getElementById("queue-box")?.remove();
-      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}</div>`));
-      const w = /** @type {any} */ (window);
-      w.__queueCase?.abort();
-      w.__queueCase = new AbortController();
-      w.__queueError = null;
-      document.addEventListener("corten:error", (e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status), { signal: w.__queueCase.signal });
-    }, `<form id="queue" method="post" action="/queue" data-patch><input name="n" value="1">${keyField}<button name="b" value="save">Save</button><button name="b" value="other">Other</button></form>`);
-    await page.fill("#queue-box [name=n]", "5");
-    /** @type {() => void} */
-    let answerOther = () => {};
-    /** The field once the waiting submit is out and before its answer, or why it was not read. */
-    let whileOther = "";
-    // The waiting submit is heard from before the presses, so it is not missed, but its six seconds
-    // start only once the presses are made, as the first answer is let go: the first press's own
-    // wait and the second press do not use them up.
-    /** @type {(sent: boolean) => void} */
-    let heardOther = () => {};
-    const otherHeard = new Promise((resolve) => (heardOther = resolve));
-    const onOther = (/** @type {import("@playwright/test").Request} */ r) => void (queueSends("b", "other")(r) && heardOther(true));
-    page.on("request", onOther);
-    try {
-      queueSecondHeld = new Promise((resolve) => (answerOther = () => resolve(undefined)));
-      /** @type {Promise<boolean>} */
-      let otherSent = Promise.resolve(false);
+    /** Whether a request is the queue form's, with `field` set to `value`. @param {string} field @param {string} value */
+    const queueSends = (field, value) => (/** @type {import("@playwright/test").Request} */ r) => new URL(r.url()).pathname === "/queue" && fieldsOf(r).get(field) === value;
+    /**
+     * Puts the form (in a box a patch can redraw), presses, sets n to 2 and presses again, then
+     * waits until `done` says the case's outcome is on the page (6 s at most, and `ended` is false)
+     * and 700 ms more, in which a send the queue must not make would be seen. `status`: the case's
+     * `corten:error`, or null, heard on the form too, so one sent to a form the answer took off the
+     * page is not missed. `refused`: the n of each request the page gave up on. `presses`: the
+     * submits the two presses made, so a second press that sends nothing is seen to have been made.
+     * @param {string} form @param {() => Promise<boolean>} done
+     */
+    const queueCase = async (form, done) => {
+      queueSent = [];
+      queueAnswered = 0;
+      queueRefused = [];
+      /** @type {() => void} */
+      let pressed = () => {};
+      await page.evaluate((form) => {
+        document.getElementById("queue-box")?.remove();
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}<p id="queue-out"></p></div>`));
+        // The case's corten:error, if it gets one; the listener goes with the case.
+        const w = /** @type {any} */ (window);
+        w.__queueCase?.abort();
+        w.__queueCase = new AbortController();
+        w.__queueError = null;
+        const heard = (/** @type {Event} */ e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status);
+        document.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
+        document.querySelector("#queue-box form")?.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
+      }, form);
+      // The first press must run before n changes, the second before pressed(), which the case
+      // calls however it ends, so no answer stays held.
+      /** @type {string | null} */
+      let busy = null;
+      let presses = 0;
       try {
         queuePressed = new Promise((resolve) => (pressed = resolve));
-        await pressFor("#queue-box button[value=save]", queueSends("b", "save"));
-        await press("#queue-box button[value=other]");
-        /** @type {ReturnType<typeof setTimeout> | undefined} */
-        let timer;
-        otherSent = Promise.race([otherHeard, new Promise((resolve) => (timer = setTimeout(() => resolve(false), 6000)))]).finally(() => clearTimeout(timer));
+        await countSubmits("#queue-box form");
+        await pressFor("#queue-box button", queueSends("n", "1"));
+        await page.fill("#queue-box [name=n]", "2");
+        busy = await page.getAttribute("#queue-box form", "aria-busy");
+        await press("#queue-box button");
+        presses = await submits();
       } finally {
         pressed();
       }
-      whileOther = (await otherSent) ? ((await queueFields()).n ?? "no field") : "the other submit was not sent within 6 s of the first answer's release";
-    } finally {
-      page.off("request", onOther);
-      answerOther();
-      queueSecondHeld = Promise.resolve();
-    }
-    const until = Date.now() + 6000;
-    while (!(queueAnswered === 2 && (await page.getAttribute("#queue-box form", "aria-busy")) === null) && Date.now() < until) await page.waitForTimeout(50);
-    await page.waitForTimeout(300);
-    const after = await queueFields();
-    const error = await page.evaluate(() => {
-      const w = /** @type {any} */ (window);
-      w.__queueCase.abort();
-      return /** @type {number | null} */ (w.__queueError);
-    });
-    const [one, two] = queueSent;
+      // A `done` that comes true only after the 6 s is not ended.
+      const ended = !!(await pollFor(6000, done));
+      await page.waitForTimeout(700);
+      const status = await page.evaluate(() => {
+        const w = /** @type {any} */ (window);
+        w.__queueCase.abort();
+        return /** @type {number | null} */ (w.__queueError);
+      });
+      return { sent: queueSent.join(), status, busy, ended, refused: queueRefused.join(), presses };
+    };
+    const queueOut = () => page.evaluate(() => document.getElementById("queue-out")?.textContent ?? null);
+    const patchHeaders = { "corten-patch": "1" };
+    const queueForm = (/** @type {string} */ method, /** @type {string} */ extra = "") =>
+      `<form id="queue" method="${method}" action="/queue" data-patch><input name="n" value="1">${extra}<button>Go</button></form>`;
+
+    // A newer GET aborts the older one, whose answer is worth nothing now: the first answers last,
+    // and the page keeps the newer's.
+    queueAnswer = { status: 200, headers: patchHeaders, body: '<p id="queue-out">read {n}</p>' };
+    // Ended once the older's late answer was tried too, so it had its chance to draw.
+    const read = await queueCase(queueForm("get"), async () => queueAnswered === 2 && (await queueOut()) === "read 2");
     check(
-      "a 205 does not reset a form pressed again with other values while it was out: the waiting submit goes with the typed value, and its own 205 resets the form",
-      queueSent.length === 2 &&
-        (one ?? "").startsWith(`POST 5 ${zero} `) &&
-        (one ?? "").endsWith(" save") &&
-        (two ?? "").startsWith("POST 5 ") &&
-        (two ?? "").endsWith(" other") &&
-        !(two ?? "").includes(zero) &&
-        error === null &&
-        whileOther === "5" &&
-        after.n === "1",
-      `${queueSent.join()}; error: ${error}; n while the other was out: ${whileOther}; left ${JSON.stringify(after)}`,
+      "a newer GET submit aborts the older one",
+      read.ended && read.presses === 2 && read.status === null && read.sent === "GET 1,GET 2" && read.refused === "1" && (await queueOut()) === "read 2",
+      `${read.sent}; ${await queueOut()}; ended: ${read.ended}; presses: ${read.presses}; error: ${read.status}; refused: ${read.refused}`,
     );
+
+    // An answer the runtime does not draw (a proxy's 503) drops the submit that waited.
+    queueAnswer = { status: 503, body: "Service Unavailable" };
+    const undrawn = await queueCase(queueForm("post"), async () => (await page.evaluate(() => /** @type {any} */ (window).__queueError)) !== null);
+    check(
+      "a submit that waited for an answer the runtime does not draw is not sent",
+      undrawn.ended && undrawn.presses === 2 && undrawn.sent === "POST 1" && undrawn.status === 503,
+      `${undrawn.sent}; ${undrawn.status}; ended: ${undrawn.ended}; presses: ${undrawn.presses}`,
+    );
+
+    // A 5xx patch is drawn, but the write may or may not have applied: the waiting submit drops.
+    queueAnswer = { status: 500, headers: patchHeaders, body: '<p id="queue-out">failed</p>' };
+    const failedPatch = await queueCase(queueForm("post"), async () => (await queueOut()) === "failed");
+    check(
+      "a submit that waited for a 5xx is not sent, and the 5xx's patch is drawn",
+      failedPatch.ended && failedPatch.presses === 2 && failedPatch.status === null && failedPatch.sent === "POST 1" && (await queueOut()) === "failed",
+      `${failedPatch.sent}; ${await queueOut()}; ended: ${failedPatch.ended}; presses: ${failedPatch.presses}; error: ${failedPatch.status}`,
+    );
+
+    // A refusal of the state the write was made against (Errors::refuse, 409) is drawn and drops
+    // the waiting submit: the user reads it before anything else goes.
+    queueAnswer = { status: 409, headers: patchHeaders, body: '<p id="queue-out">stale</p>' };
+    const stale = await queueCase(queueForm("post"), async () => (await queueOut()) === "stale");
+    check(
+      "a submit that waited is not sent after a 409 refusal, which is drawn",
+      stale.ended && stale.presses === 2 && stale.status === null && stale.sent === "POST 1" && (await queueOut()) === "stale",
+      `${stale.sent}; ${await queueOut()}; ended: ${stale.ended}; presses: ${stale.presses}; error: ${stale.status}`,
+    );
+
+    // An answer that removes the form drops it.
+    queueAnswer = { status: 200, headers: patchHeaders, body: '<template id="queue" data-remove></template>' };
+    const removed = await queueCase(queueForm("post"), async () => (await page.$("#queue")) === null);
+    check(
+      "a submit that waited is not sent when the answer removes its form",
+      removed.ended && removed.presses === 2 && removed.status === null && removed.sent === "POST 1" && (await page.$("#queue")) === null,
+      `${removed.sent}; ended: ${removed.ended}; presses: ${removed.presses}; error: ${removed.status}`,
+    );
+
+    // A form without an id that the answer took off the page is not found again: its values are
+    // the ones from before the answer.
+    queueAnswer = { status: 200, headers: patchHeaders, body: '<div id="queue-box"><form method="post" action="/queue" data-patch><input name="n" value="1"><button>Go</button></form></div>' };
+    // The answer's box has no #queue-out: drawn once it is gone.
+    const noId = await queueCase('<form method="post" action="/queue" data-patch><input name="n" value="1"><button>Go</button></form>', async () => (await queueOut()) === null);
+    check(
+      "a submit that waited is not sent when its form without an id left the page",
+      noId.ended && noId.presses === 2 && noId.status === null && noId.sent === "POST 1",
+      `${noId.sent}; ended: ${noId.ended}; presses: ${noId.presses}; error: ${noId.status}`,
+    );
+
+    // The submit that waited goes under the form's new key: the write's answer renewed it.
+    queueAnswer = { status: 200, headers: patchHeaders, body: '<p id="queue-out">saved {n}</p>' };
+    // Ended once the waiting submit's own answer is drawn.
+    const keyed = await queueCase(queueForm("post", `<input type="hidden" name="submit" data-submit value="${zero}">`), async () => (await queueOut()) === "saved 2");
+    const [firstKey, secondKey] = keyed.sent.split(",").map((s) => s.split(" ")[2]);
+    check(
+      "a submit that waited goes out after the write's answer, under the key the answer renewed",
+      keyed.ended && keyed.presses === 2 && keyed.status === null && keyed.busy === "true" && keyed.sent.split(",").length === 2 && keyed.sent.startsWith("POST 1 ") && keyed.sent.includes(",POST 2 ") && firstKey === zero && /^[0-9a-f-]{36}$/.test(secondKey ?? "") && secondKey !== zero,
+      `${keyed.sent}; ended: ${keyed.ended}; presses: ${keyed.presses}; error: ${keyed.status}`,
+    );
+
+    // A 204 or 205 with none of Corten's headers took the write and has nothing to draw (RFC 9110,
+    // 15.3.5 and 15.3.6; #1258): no corten:error, and the submit that waited goes, under the key the
+    // answer renewed. A 205 resets the form only when nothing waits: the second submit goes with the
+    // values it was pressed with, and its own 205 then resets the form, which has a new key after.
+    // The placeholder key matches the UUID pattern, so each key is also held apart from it.
+    const keyField = `<input type="hidden" name="submit" data-submit value="${zero}">`;
+    const queueFields = () =>
+      page.evaluate(() => ({
+        n: /** @type {HTMLInputElement | null} */ (document.querySelector("#queue-box [name=n]"))?.value,
+        key: /** @type {HTMLInputElement | null} */ (document.querySelector("#queue-box [name=submit]"))?.value,
+      }));
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    for (const status of [204, 205]) {
+      queueAnswer = { status, body: "" };
+      // Ended once the waiting submit's own answer is in and the form is no longer busy.
+      const quiet = await queueCase(queueForm("post", keyField), async () => queueAnswered === 2 && (await page.getAttribute("#queue-box form", "aria-busy")) === null);
+      const [first, second] = quiet.sent.split(",").map((s) => s.split(" ")[2]);
+      const left = await queueFields();
+      check(
+        `a submit that waited for a bare ${status} goes out after it under a new key, with no corten:error${status === 205 ? ", and the last 205 resets the form" : ""}`,
+        quiet.ended &&
+          quiet.presses === 2 &&
+          quiet.status === null &&
+          quiet.busy === "true" &&
+          quiet.sent.split(",").length === 2 &&
+          quiet.sent.startsWith("POST 1 ") &&
+          quiet.sent.includes(",POST 2 ") &&
+          first === zero &&
+          uuid.test(second ?? "") &&
+          second !== zero &&
+          left.n === (status === 205 ? "1" : "2") &&
+          uuid.test(left.key ?? "") &&
+          left.key !== zero &&
+          left.key !== second,
+        `${quiet.sent}; ended: ${quiet.ended}; presses: ${quiet.presses}; error: ${quiet.status}; left ${JSON.stringify(left)}`,
+      );
+    }
+    // With nothing waiting, a 205 resets the form that sent it to the markup's values, and the form
+    // has a new key after (the reset comes before the key is renewed, so this does not see the reset
+    // leave a key alone: a hidden input's value is its attribute, which a reset keeps). A form the
+    // user changed after it was sent keeps their work, as it does against a patch, and so does one a
+    // control was added to: a hidden input too, which has no state of its own the reset could be
+    // seen to change. So does another file of the same name chosen while the write is out (its size
+    // differs), and text a number input cannot read, whose value is "" as an empty field's is. The
+    // form has a control named reset, so `form.reset` is that control and the form's own method has
+    // to be reached through its prototype.
+    /** Sets the queue form's file to one named card.png, of `text`. @param {string} text */
+    const pickQueueFile = (text) =>
+      page.evaluate((text) => {
+        const files = new DataTransfer();
+        files.items.add(new File([text], "card.png", { type: "image/png", lastModified: 1 }));
+        /** @type {HTMLInputElement} */ (document.querySelector("#queue-box [name=f]")).files = files.files;
+      }, text);
+    for (const change of ["none", "edited", "added", "hidden", "file", "unreadable"]) {
+      queueSent = [];
+      queueAnswered = 0;
+      queueAnswer = { status: 205, body: "" };
+      /** @type {() => void} */
+      let pressed = () => {};
+      await page.evaluate((form) => {
+        document.getElementById("queue-box")?.remove();
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}</div>`));
+        const w = /** @type {any} */ (window);
+        w.__queueCase?.abort();
+        w.__queueCase = new AbortController();
+        w.__queueError = null;
+        document.addEventListener("corten:error", (e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status), { signal: w.__queueCase.signal });
+      }, queueForm("post", `${keyField}<input type="hidden" name="reset" value="x">${change === "file" ? '<input type="file" name="f">' : change === "unreadable" ? '<input type="number" name="q">' : ""}`));
+      await page.fill("#queue-box [name=n]", "5");
+      if (change === "file") await pickQueueFile("first");
+      // The answer is held until the case has changed the form, and released however it ends.
+      try {
+        queuePressed = new Promise((resolve) => (pressed = resolve));
+        await pressFor("#queue-box button", queueSends("n", "5"));
+        if (change === "edited") await page.fill("#queue-box [name=n]", "6");
+        if (change === "added") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input name="extra">')));
+        if (change === "hidden") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input type="hidden" name="tag" value="a">')));
+        if (change === "file") await pickQueueFile("another picture");
+        if (change === "unreadable") {
+          await page.focus("#queue-box [name=q]");
+          await page.keyboard.type("1e");
+        }
+      } finally {
+        pressed();
+      }
+      const ended = !!(await pollFor(6000, async () => queueAnswered === 1 && (await page.getAttribute("#queue-box form", "aria-busy")) === null));
+      // Time for a corten:error to be heard, or a waiting submit to go.
+      await page.waitForTimeout(300);
+      const reset = await queueFields();
+      // What the case says it changed is still there: the second file, and the number input's text.
+      const other = await page.evaluate(() => ({
+        file: /** @type {HTMLInputElement | null} */ (document.querySelector("#queue-box [name=f]"))?.files?.[0]?.size,
+        bad: /** @type {HTMLInputElement | null} */ (document.querySelector("#queue-box [name=q]"))?.validity.badInput,
+      }));
+      const error = await page.evaluate(() => {
+        const w = /** @type {any} */ (window);
+        w.__queueCase.abort();
+        return /** @type {number | null} */ (w.__queueError);
+      });
+      /** @type {Record<string, string>} */
+      const keeps = {
+        edited: "a form the user changed after it was sent",
+        added: "a form a control was added to after it was sent",
+        hidden: "a form a hidden input was added to after it was sent",
+        file: "a form whose file was swapped for another of the same name after it was sent",
+        unreadable: "a form whose number input was given text it cannot read after it was sent",
+      };
+      check(
+        change === "none" ? "a bare 205 with nothing waiting resets the form that sent it, gives it a new key, and dispatches no corten:error" : `a bare 205 keeps ${keeps[change]}, with no corten:error`,
+        ended &&
+          queueSent.length === 1 &&
+          queueSent[0].startsWith("POST 5 ") &&
+          error === null &&
+          reset.n === (change === "none" ? "1" : change === "edited" ? "6" : "5") &&
+          uuid.test(reset.key ?? "") &&
+          reset.key !== zero &&
+          (change !== "file" || other.file === "another picture".length) &&
+          (change !== "unreadable" || other.bad === true),
+        `${ended ? "" : "not answered and settled within 6 s; "}${queueSent.join()}; error: ${error}; left ${JSON.stringify({ ...reset, ...other })}`,
+      );
+    }
+    // A press with other values while a write is out waits, and the write's 205 does not reset the
+    // form under it: the waiting submit goes with what the user typed, and its own 205 then resets
+    // the form. The second press is the form's other button, so the values differ only by the button
+    // and nothing is typed between the presses: only the waiting submit keeps the first 205 from
+    // resetting the form. The second answer is held until the form has been read with the waiting
+    // submit out, so a reset by the first 205 after that submit's values were taken is seen too, and
+    // the reset seen at the end is the second 205's.
+    {
+      queueSent = [];
+      queueAnswered = 0;
+      queueAnswer = { status: 205, body: "" };
+      /** @type {() => void} */
+      let pressed = () => {};
+      await page.evaluate((form) => {
+        document.getElementById("queue-box")?.remove();
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}</div>`));
+        const w = /** @type {any} */ (window);
+        w.__queueCase?.abort();
+        w.__queueCase = new AbortController();
+        w.__queueError = null;
+        document.addEventListener("corten:error", (e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status), { signal: w.__queueCase.signal });
+      }, `<form id="queue" method="post" action="/queue" data-patch><input name="n" value="1">${keyField}<button name="b" value="save">Save</button><button name="b" value="other">Other</button></form>`);
+      await page.fill("#queue-box [name=n]", "5");
+      /** @type {() => void} */
+      let answerOther = () => {};
+      /** The field once the waiting submit is out and before its answer, or why it was not read. */
+      let whileOther = "";
+      // The waiting submit is heard from before the presses, so it is not missed, but its six seconds
+      // start only once the presses are made, as the first answer is let go: the first press's own
+      // wait and the second press do not use them up.
+      /** @type {(sent: boolean) => void} */
+      let heardOther = () => {};
+      const otherHeard = new Promise((resolve) => (heardOther = resolve));
+      const onOther = (/** @type {import("@playwright/test").Request} */ r) => void (queueSends("b", "other")(r) && heardOther(true));
+      page.on("request", onOther);
+      try {
+        queueSecondHeld = new Promise((resolve) => (answerOther = () => resolve(undefined)));
+        /** @type {Promise<boolean>} */
+        let otherSent = Promise.resolve(false);
+        try {
+          queuePressed = new Promise((resolve) => (pressed = resolve));
+          await pressFor("#queue-box button[value=save]", queueSends("b", "save"));
+          await press("#queue-box button[value=other]");
+          /** @type {ReturnType<typeof setTimeout> | undefined} */
+          let timer;
+          otherSent = Promise.race([otherHeard, new Promise((resolve) => (timer = setTimeout(() => resolve(false), 6000)))]).finally(() => clearTimeout(timer));
+        } finally {
+          pressed();
+        }
+        whileOther = (await otherSent) ? ((await queueFields()).n ?? "no field") : "the other submit was not sent within 6 s of the first answer's release";
+      } finally {
+        page.off("request", onOther);
+        answerOther();
+        queueSecondHeld = Promise.resolve();
+      }
+      const ended = !!(await pollFor(6000, async () => queueAnswered === 2 && (await page.getAttribute("#queue-box form", "aria-busy")) === null));
+      await page.waitForTimeout(300);
+      const after = await queueFields();
+      const error = await page.evaluate(() => {
+        const w = /** @type {any} */ (window);
+        w.__queueCase.abort();
+        return /** @type {number | null} */ (w.__queueError);
+      });
+      const [one, two] = queueSent;
+      check(
+        "a 205 does not reset a form pressed again with other values while it was out: the waiting submit goes with the typed value, and its own 205 resets the form",
+        ended &&
+          queueSent.length === 2 &&
+          (one ?? "").startsWith(`POST 5 ${zero} `) &&
+          (one ?? "").endsWith(" save") &&
+          (two ?? "").startsWith("POST 5 ") &&
+          (two ?? "").endsWith(" other") &&
+          !(two ?? "").includes(zero) &&
+          error === null &&
+          whileOther === "5" &&
+          after.n === "1",
+        `${ended ? "" : "not answered and settled within 6 s; "}${queueSent.join()}; error: ${error}; n while the other was out: ${whileOther}; left ${JSON.stringify(after)}`,
+      );
+    }
+  } finally {
+    queuePressed = Promise.resolve();
+    queueSecondHeld = Promise.resolve();
+    page.off("requestfailed", queueGaveUp);
+    await stopCounting();
+    await page.unroute("**/queue*");
   }
-  queuePressed = Promise.resolve();
-  await page.unroute("**/queue*");
-  page.off("requestfailed", queueGaveUp);
   await page.evaluate(() => document.getElementById("queue-box")?.remove());
   // The browser logs the 503, 500 and 409 the smoke answered; nothing else is expected.
   errors.splice(queueLogged, errors.length, ...errors.slice(queueLogged).filter((e) => !/Failed to load resource/.test(e)));
@@ -521,19 +540,25 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
       pressed();
     }
     const want = second ? "saved 2" : "saved 1";
-    // Read the outcome even when a loaded browser is not delivering animation frames.
-    const ended = await page
-      .waitForFunction((want) => document.getElementById("queue-file-out")?.textContent === want, want, { timeout: 6000, polling: 50 })
-      .then(() => true, () => false);
+    // Polled on a timer, as a loaded browser may not be delivering animation frames; a match after
+    // the 6 s is not ended.
+    const ended = !!(await pollFor(6000, () => page.evaluate((want) => document.getElementById("queue-file-out")?.textContent === want, want)));
     // Time in which a send the queue must not make would be seen.
     await page.waitForTimeout(700);
     const out = await page.evaluate(() => document.getElementById("queue-file-out")?.textContent ?? null);
     return { sends: fileSends, busy, ended, out, presses };
   };
-  const sameFile = await fileCase(null);
-  const otherSize = await fileCase(["another picture", 1]);
-  const otherTime = await fileCase(["secnd", 2]);
-  await page.unroute("**/queue-file");
+  /** @type {Awaited<ReturnType<typeof fileCase>>[]} */
+  let fileCases = [];
+  // The route and the page's submit count go however the cases end.
+  try {
+    for (const second of /** @type {([string, number] | null)[]} */ ([null, ["another picture", 1], ["secnd", 2]])) fileCases.push(await fileCase(second));
+  } finally {
+    filePressed = Promise.resolve();
+    await stopCounting();
+    await page.unroute("**/queue-file");
+  }
+  const [sameFile, otherSize, otherTime] = fileCases;
   await page.evaluate(() => document.getElementById("queue-file-box")?.remove());
   check(
     "another file of the same name pressed while a write sending one is out is sent after it, whether its size or its time differs; the same file pressed again is not",

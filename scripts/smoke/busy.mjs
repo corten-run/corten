@@ -1,4 +1,4 @@
-import { skip, check } from "./helpers.mjs";
+import { skip, check, pollFor } from "./helpers.mjs";
 
 export async function busyForms(page) {
   // A data-patch form's submit marks the button that sent it busy with the form, one outside the
@@ -139,6 +139,8 @@ export async function busyForms(page) {
   let whileWrite = "";
   /** The posts the page had sent once B was pressed, in the same task as the press. */
   let sentAtPress = "";
+  /** Whether B's answer was drawn and the form left unmarked within 5 s. */
+  let settled = false;
   try {
     try {
       await page.evaluate(() => document.getElementById("busy-wa")?.click());
@@ -149,10 +151,9 @@ export async function busyForms(page) {
     } finally {
       answerWriteA();
     }
-    // Polled on a timer: a loaded browser may not be delivering animation frames.
-    await page
-      .waitForFunction(() => document.querySelector("#busy-w-said")?.textContent === "wrote b" && !document.querySelector("#busy-w[aria-busy]"), null, { timeout: 5000, polling: 50 })
-      .catch(() => {});
+    // Polled on a timer, as a loaded browser may not be delivering animation frames; settling after
+    // the 5 s fails the check.
+    settled = !!(await pollFor(5000, () => page.evaluate(() => document.querySelector("#busy-w-said")?.textContent === "wrote b" && !document.querySelector("#busy-w[aria-busy]"))));
   } finally {
     await page.evaluate(() => /** @type {any} */ (window).__unwrapFetch?.());
   }
@@ -162,13 +163,14 @@ export async function busyForms(page) {
   const logged = writeLog.join();
   check(
     "a button pressed while a write is on its way is marked beside it and sends after its answer",
-    whileWrite === "true,true,true" &&
+    settled &&
+      whileWrite === "true,true,true" &&
       sentAtPress === 'a with "" drawn' &&
       sentWrites === 'a with "" drawn; b with "wrote a" drawn' &&
       logged === "post a,answer a,post b,answer b" &&
       wrote === "wrote b" &&
       afterWrites === "-,-,-",
-    `${whileWrite} | ${afterWrites}; ${wrote}; sent: ${sentWrites} (${sentAtPress || "nothing"} when B was pressed); route: ${logged}`,
+    `${settled ? "" : "not settled within 5 s; "}${whileWrite} | ${afterWrites}; ${wrote}; sent: ${sentWrites} (${sentAtPress || "nothing"} when B was pressed); route: ${logged}`,
   );
   const redirectName = "a write that sends the browser to another page keeps its button busy until that page is in";
   return { redirectName };
