@@ -46,7 +46,8 @@ fn every_command_prints_its_usage_without_running() {
 
 #[test]
 fn help_is_also_recognized_alongside_command_flags() {
-    for args in [["check", "--no-script-types", "--help"], ["ui", "add", "-h"]] {
+    // `dev --port --help` among them: a port number is never help, so that is not `--port`'s value.
+    for args in [["check", "--no-script-types", "--help"], ["ui", "add", "-h"], ["dev", "--port", "--help"]] {
         let out = Command::new(env!("CARGO_BIN_EXE_corten")).args(args).output().unwrap();
         assert!(out.status.success());
         assert!(String::from_utf8(out.stdout).unwrap().starts_with("Usage:\n"));
@@ -74,6 +75,8 @@ fn help_names_a_command_as_its_own_help_does() {
         // The Dockerfile `corten new` writes refuses a `corten` whose `help build` does not name
         // the option (template/Dockerfile), so this command's must.
         assert!(command != ["build"] || stdout.contains("--profile-from"), "{stdout}");
+        // And it names `--port` as the profiled build's own, which is refused without it.
+        assert!(command != ["build"] || stdout.contains("[[--port <port>] --profile-from <command>"), "{stdout}");
     }
     for flag in ["--help", "-h"] {
         let out = Command::new(env!("CARGO_BIN_EXE_corten")).args(["help", flag]).output().unwrap();
