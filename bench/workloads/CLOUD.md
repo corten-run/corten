@@ -1823,10 +1823,11 @@ Only a privately identified failed account read can produce the exact-key
 `cloud-provider-account-failed/v2` reply: `nonce`, `sequence`,
 `disposition: resources-closed`, and its closed `diagnostic`. Success and other
 failures retain their existing result grammar. The parent requires the pending
-exact account command, its matching nonce/sequence, timely terminal proof and an
-observed exit0 without a signal before cached settlement may resolve. Terminal
-proof precedes expected disconnect/exit; an exit without proof, malformed or
-duplicate reply, forced close or cancellation stays uncertain.
+exact account command, its matching nonce/sequence, timely terminal proof,
+observed exit 0 without a signal and confirmed IPC drain before cached settlement
+may resolve. The owned child's exit and disconnect can arrive in either order
+after proof. An exit or disconnect without proof, any later message before drain,
+forced close or cancellation stays uncertain.
 If the account command still fails, its terminal protocol does not accept an
 identity even with `allowFail`; this worker cannot service another request.
 An HTTP refusal and a worker lifetime failure are different outcomes, not different
@@ -1844,7 +1845,7 @@ not have attempted a mutation. This never retries a catalog page or accepts a
 partial listing. The separate exact-key `cloud-provider-catalog-failed/v1` reply
 uses the same nonce, sequence and `resources-closed` disposition. The parent
 requires the exact pending catalog command (with failure allowed), a closed
-`catalog-request` diagnostic and observed exit 0 without a signal, all before
+`catalog-request` diagnostic, observed exit 0 without a signal and IPC drain, all before
 expiry or cancellation. Read-only fleet previews do not take this terminal path.
 It is still a launch failure, not placement or ownership
 evidence. In a locked child this check is before create intent: the reserved

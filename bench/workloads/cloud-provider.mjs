@@ -34,7 +34,7 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
   assert.equal(resolve(repo), repo);
   const host = providerCreateHost(createMode);
   const env = controlEnvironment("doctl");
-  let child, pending, sequence = 0, closed = false, failed = false, exitPromise, closing;
+  let child, pending, sequence = 0, closed = false, failed = false, exited = false, exitPromise, drainPromise, closing;
   let diagnostic, terminal, mutationStarted = false;
   const inBudget = (slot) => {
     const current = Date.now(), valid = current >= slot.last && current < slot.deadline;
@@ -49,14 +49,21 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
     const nonce = randomBytes(16).toString("hex");
     // Node evaluates the bytes just hashed, never a second read of the mutable
     // entry path. The fixed path argument only anchors the verified import root.
-    child = launch(realpathSync(process.execPath), ["--input-type=module", "-", worker], { cwd: repo, env: { ...env }, execArgv: [],
+    const owned = child = launch(realpathSync(process.execPath), ["--input-type=module", "-", worker], { cwd: repo, env: { ...env }, execArgv: [],
       serialization: "json", windowsHide: true, stdio: ["pipe", "ignore", "ignore", "ipc"] });
-    exitPromise = new Promise((resolve) => child.once("exit", (code, signal) => {
+    exitPromise = new Promise((resolve) => owned.once("exit", (code, signal) => {
+      exited = true;
       if (terminal ? code !== 0 || signal !== null || !inBudget(terminal) || interrupted() : !closing) fail();
       resolve();
     }));
-    child.on("error", fail); child.stdin.on("error", fail); child.on("disconnect", () => { if (!closing && !terminal) fail(); });
-    child.on("message", (message) => {
+    drainPromise = new Promise((resolve) => owned.once("disconnect", () => {
+      if (terminal ? owned.connected !== false || owned.channel !== null || !inBudget(terminal) || interrupted() : !closing) fail();
+      resolve();
+    }));
+    owned.on("error", fail); owned.stdin.on("error", fail);
+    owned.on("internalMessage", () => { if (terminal) fail(); });
+    owned.on("message", (message) => {
+      if (terminal) { fail(); return; } // A terminal proof is the only and last reply.
       if (pending?.sequence === -1) {
         if (!keys(message, ["schema"]) || message.schema !== "cloud-provider-boot/v1") { fail(); return; }
         const slot = pending; pending = undefined; slot.resolve(); return;
@@ -65,7 +72,7 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
       const catalogFailure = message?.schema === "cloud-provider-catalog-failed/v1";
       if (accountFailure || catalogFailure) {
         if (!(accountFailure ? pending?.account : pending?.catalog && pending.allowFail && host && createMode !== "legacy" && !mutationStarted)
-          || pending.sequence <= 0 || failed || terminal || interrupted()
+          || pending.sequence <= 0 || failed || interrupted()
           || !keys(message, ["schema", "nonce", "sequence", "disposition", "diagnostic"])
           || message.nonce !== nonce || message.sequence !== pending.sequence || message.disposition !== "resources-closed"
           || !inBudget(pending)) { fail(); return; }
@@ -137,9 +144,13 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
       if (!child) return;
       if (pending) fail();
       try { if (child.connected && !terminal) child.send({ schema: "cloud-provider-close/v1" }); } catch { failed = true; }
-      const wait = async (ms) => { let timer; try { return await Promise.race([exitPromise.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), ms); })]); } finally { clearTimeout(timer); } };
-      if (!await wait(terminal ? Math.max(0, Math.min(1000, terminal.deadline - Date.now())) : 1000)) {
-        failed = true; child.kill("SIGKILL"); if (!await wait(1000)) throw uncertain();
+      const wait = async (completion, ms) => { let timer; try { return await Promise.race([completion.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), ms); })]); } finally { clearTimeout(timer); } };
+      // Exit can precede the IPC EOF. Keep checking messages until the owned
+      // child's disconnect event confirms they drained, without initiating disconnect.
+      const completion = terminal ? Promise.all([exitPromise, drainPromise]) : exitPromise;
+      if (!await wait(completion, terminal ? Math.max(0, Math.min(1000, terminal.deadline - Date.now())) : 1000)) {
+        failed = true;
+        if (!exited) { child.kill("SIGKILL"); if (!await wait(exitPromise, 1000)) throw uncertain(); }
       }
       if (terminal && (interrupted() || !inBudget(terminal))) failed = true;
       if (failed) throw uncertain();

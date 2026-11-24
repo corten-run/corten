@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { createServer } from "node:http";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { setImmediate as turn } from "node:timers/promises";
 import test from "node:test";
 import { providerTransport } from "./cloud-provider.mjs";
-import { fleetCreateMode, fleetPlan } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, fleetCreateMode, fleetPlan } from "./cloud-contract.mjs";
 import { productionMain } from "./cloud-production.mjs";
 import { providerFailure, controllerFailure } from "./cloud-options.mjs";
 import { accountId, commit, context, harness, syntheticProviderRequest } from "./cloud-fixtures.mjs";
@@ -80,6 +81,65 @@ function failed(error, code, detail) {
   assert.deepEqual(providerFailure(error), { code, ...(detail ? { detail } : { httpStatus: 503 }) });
   assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(raw)); return true;
 }
+
+test("terminal catalog proof waits for the owned worker's IPC drain and clean exit", async (t) => {
+  for (const mode of ["duplicate-after-exit", "malformed-after-exit", "internal-after-exit", "exit-first", "drain-first",
+    "foreign-drain", "no-drain", "no-exit", "no-proof", "signaled", "connected-disconnect"]) await t.test(mode, async () => {
+    const child = new EventEmitter(), action = Promise.withResolvers();
+    child.connected = true; child.channel = {};
+    let kills = 0;
+    child.kill = (signal) => {
+      assert.equal(mode, "no-exit", "must not signal an exited worker");
+      assert.equal(signal, "SIGKILL"); kills++;
+      child.emit("exit", null, signal);
+    };
+    const drain = (target = child) => {
+      target.connected = false; target.channel = null; target.emit("disconnect");
+    };
+    child.stdin = Object.assign(new EventEmitter(), { end() { queueMicrotask(() => child.emit("message", { schema: "cloud-provider-boot/v1" })); } });
+    let nonce;
+    child.send = (message) => {
+      if (message.schema === "cloud-provider-init/v2") {
+        nonce = message.nonce;
+        queueMicrotask(() => child.emit("message", { schema: "cloud-provider-result/v1", nonce, sequence: 0, ok: true, result: "ready" }));
+      }
+      if (message.schema === "cloud-provider-action/v1") action.resolve(message.sequence);
+    };
+    const run = providerTransport({ repo: resolve("."), createMode: "dedicated", launch: () => child });
+    let runFinished = false, closeFinished = false;
+    const outcome = run([...fleetCatalogCommand, "--context", context], 2000, true).catch((error) => error)
+      .then((value) => { runFinished = true; return value; });
+    const sequence = await action.promise;
+    const proof = { schema: "cloud-provider-catalog-failed/v1", nonce, sequence,
+      disposition: "resources-closed", diagnostic: { code: "catalog-request", detail: "request-error" } };
+    if (mode !== "no-proof") child.emit("message", proof);
+    await turn(); // Both callers can now be waiting on the same cached teardown.
+    const closure = run.close().then(() => undefined, (error) => error).then((value) => { closeFinished = true; return value; });
+    if (mode === "drain-first" || mode === "no-exit") drain();
+    else if (mode === "foreign-drain") {
+      drain(new EventEmitter());
+      child.emit("exit", 0, null);
+    } else if (mode === "connected-disconnect") child.emit("disconnect");
+    else if (mode !== "no-proof") child.emit("exit", mode === "signaled" ? null : 0, mode === "signaled" ? "SIGTERM" : null);
+    await turn(); // The deliberately delayed frames below arrive after exit's promise callbacks.
+    const beforeBoth = [runFinished, closeFinished];
+    if (mode === "duplicate-after-exit") child.emit("message", proof);
+    if (mode === "malformed-after-exit") child.emit("message", { schema: "broken" });
+    if (mode === "internal-after-exit") child.emit("internalMessage", { cmd: "NODE_UNEXPECTED" });
+    if (!["drain-first", "no-drain", "no-exit"].includes(mode)) drain();
+    if (["drain-first", "no-proof", "connected-disconnect"].includes(mode)) child.emit("exit", 0, null);
+    const [error, closeError] = await Promise.all([outcome, closure]);
+    assert.equal(kills, mode === "no-exit" ? 1 : 0);
+    if (!["exit-first", "drain-first", "foreign-drain"].includes(mode)) {
+      assert.equal(error?.controlTreeUncertain, true);
+      assert.equal(closeError?.controlTreeUncertain, true);
+    } else {
+      failed(error, "catalog-request", "request-error");
+      assert.equal(closeError, undefined);
+    }
+    assert.deepEqual(beforeBoth, [false, false]);
+  });
+});
 
 test("locked marketplace catalog request releases custody only after proved native closure and clean exit", { timeout: 25000 }, async (t) => {
   for (const [mode, failure, detail, uncertain] of [
@@ -234,14 +294,11 @@ test("native account settlement cannot erase preceding create ambiguity or autho
   });
 });
 
-test("terminal reply ordering before disconnect and cancellation before exit are distinct", { timeout: 10000 }, async (t) => {
+test("native terminal drain and cancellation after proof are distinct", { timeout: 10000 }, async (t) => {
   for (const cancelAfterProof of [false, true]) await t.test(String(cancelAfterProof), async (t) => {
     const a = await api(t, "http503"); let cancelled = false;
     const w = worker(t, a, { interrupted: () => cancelled, receive(message) {
-      if (message.schema === "cloud-provider-account-failed/v2") queueMicrotask(() => {
-        if (cancelAfterProof) cancelled = true;
-        else w.child.emit("disconnect");
-      });
+      if (message.schema === "cloud-provider-account-failed/v2" && cancelAfterProof) queueMicrotask(() => { cancelled = true; });
       return message;
     } });
     if (cancelAfterProof) {
@@ -250,6 +307,7 @@ test("terminal reply ordering before disconnect and cancellation before exit are
     } else {
       await assert.rejects(w.run(account, 2000, true), (error) => failed(error, "account-http"));
       await w.run.close(); assert.equal(w.child.exitCode, 0);
+      assert.equal(w.child.connected, false); assert.equal(w.child.channel, null);
     }
   });
 });
