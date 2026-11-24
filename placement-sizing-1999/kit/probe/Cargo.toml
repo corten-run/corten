@@ -1,0 +1,26 @@
+[package]
+name = "p1983"
+version = "0.0.0"
+edition = "2021"
+
+# #1829's probe program with one more route and config (src/main.rs; otherwise kit 1965's), built
+# once per side from one place: build.sh puts the side's tree at ../work (the change's base or
+# its head) and its Cargo.lock here, so every binary is built from the same paths and differs
+# only in what the tree holds. Placements come from relinking that one build (build.sh,
+# relink.mjs), not from building again.
+[[bin]]
+name = "probe"
+path = "src/main.rs"
+
+# Features: the template's (the defaults, log, and compress) and json, as #1829's probe.
+[dependencies]
+corten = { package = "corten-run", path = "../work/crates/corten", features = ["json", "compress"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+# The repository's release profile.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[workspace]

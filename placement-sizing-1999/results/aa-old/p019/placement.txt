@@ -1,0 +1,9 @@
+comparison aa-old placement 19 workload old
+A base-p16608 ee6362e2d34ae51a0f2a2e712241fb3ca26f0fcd4ed892f597e72abafc58babd
+B base-p6592 30c2232ec79d81c3820f878d76c6ce346dca63ba0d53aa748106a8db7a75f00a
+kit cycles-1996-1999
+run 8068ffb8-4604-431d-af08-717236923d24
+plan c4eccf95500982be218107356b0f1edeb0ecd29d293697b2fb0abf4da88db50d
+seq 129
+started 2026-11-24T15:19:45Z
+ended 2026-11-24T15:21:26Z

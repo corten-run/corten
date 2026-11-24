@@ -1,0 +1,32 @@
+## pair w1 base
+# started on Tue Nov 24 11:43:20 2026
+
+3738109708,,cycles:u,3064715217,100.00,,
+5861115335,,cycles:k,3064715217,100.00,,
+4767677062,,instructions:u,3064715217,100.00,1.28,insn per cycle
+470561639,,L1-icache-load-misses,3064715217,100.00,,
+Running 3s test @ http://127.0.0.1:18081/picture.png
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.99ms    1.22ms  30.98ms   99.37%
+    Req/Sec    34.80k     3.40k   58.27k    96.72%
+  211272 requests in 3.10s, 1.71GB read
+Requests/sec:  68148.52
+Transfer/sec:    566.21MB
+RESULT 211272 0 0 0 0 0
+## pair w1 head
+# started on Tue Nov 24 11:43:26 2026
+
+3615901794,,cycles:u,2995468375,100.00,,
+5714019801,,cycles:k,2995468375,100.00,,
+4630421925,,instructions:u,2995468375,100.00,1.28,insn per cycle
+456656444,,L1-icache-load-misses,2995468375,100.00,,
+Running 3s test @ http://127.0.0.1:18082/picture.png
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.94ms   97.69us   5.47ms   97.69%
+    Req/Sec    34.39k   432.40    35.09k    76.67%
+  205255 requests in 3.03s, 1.67GB read
+Requests/sec:  67831.61
+Transfer/sec:    563.57MB
+RESULT 205255 0 0 0 0 0

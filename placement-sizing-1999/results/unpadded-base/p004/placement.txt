@@ -1,0 +1,9 @@
+comparison unpadded-base placement 4 workload old
+A base ea3626e9ee970777e86fe0abbd46fb7429aef498302c613dfa2298381cec57a0
+B base-p40624 3f497c09a24b333721e0f9a060a2f7cdfbc99bbdb4e4b7e2d7fabfd95d3b321f
+kit cycles-1996-1999
+run 8068ffb8-4604-431d-af08-717236923d24
+plan c4eccf95500982be218107356b0f1edeb0ecd29d293697b2fb0abf4da88db50d
+seq 60
+started 2026-11-24T13:23:29Z
+ended 2026-11-24T13:25:11Z

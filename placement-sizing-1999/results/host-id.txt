@@ -1,0 +1,5 @@
+model Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz
+microcode 0x1
+kernel 6.12.117+deb13-amd64
+randomize_va_space 2
+os Debian GNU/Linux 13 (trixie)

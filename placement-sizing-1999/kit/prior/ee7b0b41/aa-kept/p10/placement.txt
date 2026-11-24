@@ -1,0 +1,3 @@
+comparison aa-kept placement 10 workload kept
+A main-p30992 d1f114e772a57ddadd1566e45109786a63e54402c139923077bebcea39aaf89b
+B main-p33184 7b48eb2c51c497b45304d3158264ef217343dc43675380eecf1aa55cec0f4989

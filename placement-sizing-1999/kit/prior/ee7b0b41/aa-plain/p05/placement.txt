@@ -1,0 +1,3 @@
+comparison aa-plain placement 5 workload plain
+A main-p10304 c7a97afce04593a00fa8e069be56a7993d5d2bcbdb8f0bfe80dff38918b540e6
+B main-p12880 6d3d6ad9cdfafbfd208b69e5c50bc75562faac77cbf4ffcd5b4318feb3994247

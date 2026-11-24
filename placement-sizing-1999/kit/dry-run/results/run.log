@@ -1,0 +1,62 @@
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/aa-old/p004/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/same-old/p001/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+Terminated
+unpadded-base p1: stopped after 1 s (timeout, exit 124)
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/unpadded-head/p001/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/unpadded-x1/p001/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/unpadded-x2/p001/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/aa-old/p005/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/aa-old/p003/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/aa-old/p002/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/same-old/p002/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/unpadded-x2/p002/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/unpadded-x1/p002/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/unpadded-head/p002/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/unpadded-base/p002/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/aa-old/p001/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/unpadded-base/p001/counts-old.csv; 6 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler

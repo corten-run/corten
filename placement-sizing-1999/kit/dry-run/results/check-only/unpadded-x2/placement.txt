@@ -1,0 +1,9 @@
+comparison unpadded-x2 placement 1 workload old
+A x2 4fd3c726f8be3e5b04c741601e1d984d241f7a5650580edcc5f0a375c7979869
+B base-p320 4b5f2979dce7a5e03d7ac3a34bbf7fbde7f3cd2c802b9d2fe6b59b14bd6047f4
+kit cycles-1996-1999
+run 0a42e2c7-f74f-4307-8be4-7745cca72965
+plan c4eccf95500982be218107356b0f1edeb0ecd29d293697b2fb0abf4da88db50d
+seq 0
+started 2026-11-24T10:21:30Z
+ended 2026-11-24T10:21:40Z

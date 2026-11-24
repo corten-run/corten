@@ -1,0 +1,84 @@
+## pair w1 base
+2476777792,,cycles:u,3400000000,100.00,,
+5156777792,,cycles:k,3400000000,100.00,,
+2904777792,,instructions:u,3400000000,100.00,,
+316777792,,L1-icache-load-misses:u,3400000000,100.00,,
+Running 1s test @ http://127.0.0.1:18081/picture.png
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.44ms    1.88ms  28.05ms   95.88%
+    Req/Sec    14.07k     3.01k   25.62k    85.71%
+  29356 requests in 1.10s, 243.90MB read
+Requests/sec:  26712.31
+Transfer/sec:    221.94MB
+RESULT 29356 0 0 0 0 0
+## pair w1 head
+2405306615,,cycles:u,3400000000,100.00,,
+5175306615,,cycles:k,3400000000,100.00,,
+2905306615,,instructions:u,3400000000,100.00,,
+305306615,,L1-icache-load-misses:u,3400000000,100.00,,
+Running 1s test @ http://127.0.0.1:18082/picture.png
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.55ms    1.80ms  25.83ms   93.02%
+    Req/Sec    13.20k     2.35k   21.93k    90.48%
+  27554 requests in 1.10s, 228.93MB read
+Requests/sec:  25103.34
+Transfer/sec:    208.57MB
+RESULT 27554 0 0 0 0 0
+## pair 1 base
+2420490736,,cycles:u,3400000000,100.00,,
+5190490736,,cycles:k,3400000000,100.00,,
+2902490736,,instructions:u,3400000000,100.00,,
+320490736,,L1-icache-load-misses:u,3400000000,100.00,,
+Running 1s test @ http://127.0.0.1:18081/picture.png
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     8.35ms    8.85ms  68.38ms   88.65%
+    Req/Sec     4.72k     1.52k    8.52k    76.19%
+  10072 requests in 1.12s, 83.68MB read
+Requests/sec:   9014.59
+Transfer/sec:     74.90MB
+RESULT 10072 0 0 0 0 0
+## pair 1 head
+2431966889,,cycles:u,3400000000,100.00,,
+5131966889,,cycles:k,3400000000,100.00,,
+2904966889,,instructions:u,3400000000,100.00,,
+301966889,,L1-icache-load-misses:u,3400000000,100.00,,
+Running 1s test @ http://127.0.0.1:18082/picture.png
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.87ms    2.02ms  28.19ms   91.71%
+    Req/Sec    11.68k     2.67k   19.92k    71.43%
+  24398 requests in 1.10s, 202.71MB read
+Requests/sec:  22183.61
+Transfer/sec:    184.31MB
+RESULT 24398 0 0 0 0 0
+## pair 2 head
+2445442441,,cycles:u,3400000000,100.00,,
+5145442441,,cycles:k,3400000000,100.00,,
+2900442441,,instructions:u,3400000000,100.00,,
+315442441,,L1-icache-load-misses:u,3400000000,100.00,,
+Running 1s test @ http://127.0.0.1:18082/picture.png
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     3.74ms    4.19ms  29.84ms   91.41%
+    Req/Sec    10.75k     3.25k   17.61k    66.67%
+  22538 requests in 1.10s, 187.25MB read
+Requests/sec:  20539.51
+Transfer/sec:    170.65MB
+RESULT 22538 0 0 0 0 0
+## pair 2 base
+2484762474,,cycles:u,3400000000,100.00,,
+5264762474,,cycles:k,3400000000,100.00,,
+2903762474,,instructions:u,3400000000,100.00,,
+324762474,,L1-icache-load-misses:u,3400000000,100.00,,
+Running 1s test @ http://127.0.0.1:18081/picture.png
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.97ms    4.97ms  36.39ms   87.81%
+    Req/Sec     7.57k     2.56k   15.76k    80.95%
+  15920 requests in 1.10s, 132.27MB read
+Requests/sec:  14502.99
+Transfer/sec:    120.50MB
+RESULT 15920 0 0 0 0 0

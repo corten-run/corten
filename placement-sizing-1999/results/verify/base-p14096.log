@@ -1,0 +1,4 @@
+checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+body: 8000 bytes, sha256 3f885c541e57b083dba70891ea0fd8d27e6737703b02297035d1582fa97524a8
+old: done, /m/1999/results/verify/base-p14096/counts-old.csv; 0 starts, each with its Age in 10005..10020 before and after its turn and one run of the handler

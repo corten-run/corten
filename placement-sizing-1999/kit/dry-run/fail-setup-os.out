@@ -1,0 +1,4 @@
+setup: this kit runs on Debian 13 (DigitalOcean image debian-13-x64); /etc/os-release says 'ubuntu 24.04 (Ubuntu 24.04.3 LTS)': refused, nothing installed
+RUN-ENDED setup-failed at the OS check (not Debian 13: ubuntu 24.04 (Ubuntu 24.04.3 LTS)): setup.sh exit 1, nothing was measured
+ALL-DONE
+setup exit 1

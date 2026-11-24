@@ -1,0 +1,5 @@
+base 14126d2a8a12bccd173ec29032c1818d42904213 .text 0x15a0c0 2370070
+head 8d02090bfa2bae538394e3a36a6b941de844390c .text 0x15a0c0 2370598
+x1 92bc326785cfb274e91302a18021902316da8cac .text 0x159f50 2369494
+x2 705d140454fa800a867fda071ebc1aaead904092 .text 0x15a040 2368358
+base .text here: 0x15a0c0 2370070; the second placement run's (prior/0c0c599c): 0x15a0a0 2370070 (a diagnostic: the same address and size place base's code as that run's did)

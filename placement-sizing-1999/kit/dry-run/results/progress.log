@@ -1,0 +1,30 @@
+== 1999 run 0a42e2c7-f74f-4307-8be4-7745cca72965 verify start 10:20:24
+verify: 14 binaries answer as their reference
+== 1999 check start 10:20:41
+aa-old: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body; ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+same-old: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body; ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+unpadded-base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body; ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+unpadded-head: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body; ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+unpadded-x1: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body; ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+unpadded-x2: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body; ages: base 0 then 10005 and 10005; head 0 then 10005 and 10005 (range 10005..10020)
+== 1999 checks ok 10:21:40; 15 placements to run
+1 aa-old p004 ok 10:22:06
+2 same-old p001 ok 10:22:32
+3 unpadded-base p001 FAILED 10:22:33
+4 unpadded-head p001 ok 10:22:58
+5 unpadded-x1 p001 ok 10:23:24
+6 unpadded-x2 p001 ok 10:23:50
+7 aa-old p005 ok 10:24:16
+8 aa-old p003 ok 10:24:42
+9 aa-old p002 ok 10:25:07
+10 same-old p002 ok 10:25:32
+11 unpadded-x2 p002 ok 10:25:57
+12 unpadded-x1 p002 ok 10:26:23
+13 unpadded-head p002 ok 10:26:48
+14 unpadded-base p002 ok 10:27:13
+15 aa-old p001 ok 10:27:38
+16 unpadded-base p001 ok (retry of seq 3) 10:28:03
+failed: 3:unpadded-base:1; retried 1; lost (no bound for their comparison): none
+report: /m/1999/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

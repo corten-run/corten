@@ -1,0 +1,9 @@
+comparison unpadded-head placement 4 workload old
+A head c5818efce432b0bd65e80e5f5beb10d149f63669699fed2eba76dbd2c9014eae
+B head-p40624 46c7f60faccbba1b4bf0612442d3199e68ed59589e807ef5095e4469ce0c3c9e
+kit cycles-1996-1999
+run 8068ffb8-4604-431d-af08-717236923d24
+plan c4eccf95500982be218107356b0f1edeb0ecd29d293697b2fb0abf4da88db50d
+seq 59
+started 2026-11-24T13:21:49Z
+ended 2026-11-24T13:23:29Z

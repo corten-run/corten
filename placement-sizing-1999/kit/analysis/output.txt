@@ -1,0 +1,14 @@
+$ node analysis/spread.mjs results aa-old:old aa-young:young change-old:old change-young:young
+aa-old: 30 placements of 8; medians sd 1.97%; pairs sd 3.86%, 1.4826 x MAD 2.94%, largest 15.3%; a median of 8 by the normal formula 1.71%, from pooled residuals 1.23%
+aa-young: 30 placements of 8; medians sd 1.17%; pairs sd 4.03%, 1.4826 x MAD 2.64%, largest 21.0%; a median of 8 by the normal formula 1.78%, from pooled residuals 1.12%
+change-old: 30 placements of 8; medians sd 1.54%; pairs sd 3.96%, 1.4826 x MAD 2.22%, largest 17.8%; a median of 8 by the normal formula 1.76%, from pooled residuals 1.01%
+change-young: 30 placements of 8; medians sd 1.19%; pairs sd 3.76%, 1.4826 x MAD 2.23%, largest 18.2%; a median of 8 by the normal formula 1.66%, from pooled residuals 0.92%
+aa-old:old against aa-young:young: ratio of medians' sd 1.68; of 200000 permutations of the 60 centred medians 0.79% reach it (one-sided), 1.57% either way
+
+$ node analysis/resolve-sim.mjs 30:1.97 30:1.17 30:1.44 30:1.48 60:1.97 100:1.97
+K 30 rank 20 sd 1.97: mean bound 0.75%, not resolved in 55.5% of draws
+K 30 rank 20 sd 1.17: mean bound 0.45%, not resolved in 4.6% of draws
+K 30 rank 20 sd 1.44: mean bound 0.55%, not resolved in 18.1% of draws
+K 30 rank 20 sd 1.48: mean bound 0.57%, not resolved in 20.8% of draws
+K 60 rank 37 sd 1.97: mean bound 0.54%, not resolved in 15.4% of draws
+K 100 rank 59 sd 1.97: mean bound 0.42%, not resolved in 2.0% of draws

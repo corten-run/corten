@@ -1,0 +1,13 @@
+HTTP/1.1 200 OK
+content-type: image/png
+cache-control: public, max-age=14400
+age: 0
+content-security-policy: default-src 'self'; script-src 'self' 'sha256-unwAHX/TzefptTPCSzgHI4NbL0yr+G0YCMsktyelKPU='; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+x-frame-options: DENY
+cross-origin-opener-policy: same-origin
+vary: cookie
+content-length: 8000
+date: Tue, 24 Nov 2026 15:16:23 GMT
+

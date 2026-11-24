@@ -1,0 +1,3 @@
+comparison aa-old placement 7 workload old
+A base-p35808 3b4babaf49f7d2d4e5ef292eb3f575bf2907151f8c26eba0f88f4a5039c12a6f
+B base-p32464 ab3c316f5c063c28330e9ece7a08bfeb8c043cfb3207fd966d60f1e6e336af66

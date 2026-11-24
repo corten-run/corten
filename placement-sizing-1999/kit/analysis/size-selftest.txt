@@ -1,0 +1,7 @@
+From-within figures over the truth (the sd of a median of 8 drawn from the pair distribution itself), 10 made-up pilots of K placements of 8 pairs with no placement part each:
+  normal, K = 30: normal formula 1.086, pooled 0.842, leave-one-out 1.120, rescaled 1.016
+  normal, K = 100: normal formula 1.071, pooled 0.838, leave-one-out 1.109, rescaled 1.006
+  t3, K = 30: normal formula 1.502, pooled 0.846, leave-one-out 1.097, rescaled 1.036
+  t3, K = 100: normal formula 1.530, pooled 0.877, leave-one-out 1.130, rescaled 1.066
+  Laplace, K = 30: normal formula 1.486, pooled 0.908, leave-one-out 1.195, rescaled 1.118
+  Laplace, K = 100: normal formula 1.448, pooled 0.880, leave-one-out 1.139, rescaled 1.068

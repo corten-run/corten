@@ -1,0 +1,133 @@
+Tue Nov 24 10:19:53 UTC 2026
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           39 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  12
+On-line CPU(s) list:                     0-11
+Vendor ID:                               GenuineIntel
+Model name:                              Intel(R) Core(TM) i9-10885H CPU @ 2.40GHz
+CPU family:                              6
+Model:                                   165
+Thread(s) per core:                      2
+Core(s) per socket:                      6
+Socket(s):                               1
+Stepping:                                2
+BogoMIPS:                                4800.01
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm arch_perfmon rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow ept vpid ept_ad fsgsbase bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt xsaveopt xsavec xgetbv1 xsaves vnmi md_clear flush_l1d arch_capabilities
+Virtualization:                          VT-x
+Hypervisor vendor:                       Microsoft
+Virtualization type:                     full
+L1d cache:                               192 KiB (6 instances)
+L1i cache:                               192 KiB (6 instances)
+L2 cache:                                1.5 MiB (6 instances)
+L3 cache:                                16 MiB (1 instance)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-11
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Ghostwrite:                Not affected
+Vulnerability Indirect target selection: Mitigation; Aligned branch/return thunks
+Vulnerability Itlb multihit:             KVM: Mitigation: Split huge pages
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Mitigation; Clear CPU buffers; SMT Host state unknown
+Vulnerability Old microcode:             Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Mitigation; Enhanced IBRS
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI SW loop, KVM SW loop
+Vulnerability Srbds:                     Unknown: Dependent on hypervisor status
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+
+/sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0-1
+/sys/devices/system/cpu/cpu1/topology/thread_siblings_list:0-1
+/sys/devices/system/cpu/cpu10/topology/thread_siblings_list:10-11
+/sys/devices/system/cpu/cpu11/topology/thread_siblings_list:10-11
+/sys/devices/system/cpu/cpu2/topology/thread_siblings_list:2-3
+/sys/devices/system/cpu/cpu3/topology/thread_siblings_list:2-3
+/sys/devices/system/cpu/cpu4/topology/thread_siblings_list:4-5
+/sys/devices/system/cpu/cpu5/topology/thread_siblings_list:4-5
+/sys/devices/system/cpu/cpu6/topology/thread_siblings_list:6-7
+/sys/devices/system/cpu/cpu7/topology/thread_siblings_list:6-7
+/sys/devices/system/cpu/cpu8/topology/thread_siblings_list:8-9
+/sys/devices/system/cpu/cpu9/topology/thread_siblings_list:8-9
+
+perf_event_paranoid -1 nmi_watchdog 0 (runs as root)
+Linux d79788859814 6.18.58.1-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Tue Oct 27 00:24:11 UTC 2026 x86_64 GNU/Linux
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+binary: rustc
+commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a
+commit-date: 2026-11-09
+host: x86_64-unknown-linux-gnu
+release: 1.100.0
+LLVM version: 23.1.5
+wrk debian/4.1.0-4+b1 [epoll] Copyright (C) 2012 Will Glozer
+GNU assembler (GNU Binutils for Debian) 2.44
+cc (Debian 14.2.0-19) 14.2.0
+curl 8.14.1 (x86_64-pc-linux-gnu) libcurl/8.14.1 OpenSSL/3.5.9 zlib/1.3.1 brotli/1.1.0 zstd/1.5.7 libidn2/2.3.8 libpsl/0.21.2 libssh2/1.11.1 nghttp2/1.64.0 nghttp3/1.8.0 librtmp/2.3 OpenLDAP/2.6.10
+v20.19.2
+base .comment: GCC: (Debian 14.2.0-19) 14.2.0;Linker: LLD 23.1.5 (/checkout/src/llvm-project/llvm 0a5579eb649d3634a9c30ac873300cc2944fa070);rustc version 1.100.0 (0ef1bc386 2026-11-09)
+base 14126d2a8a12bccd173ec29032c1818d42904213
+head 8d02090bfa2bae538394e3a36a6b941de844390c
+x1 92bc326785cfb274e91302a18021902316da8cac
+x2 705d140454fa800a867fda071ebc1aaead904092
+Package: libjemalloc2
+Version: 5.3.0-3
+Package: libzstd1
+Version: 1.5.7+dfsg-1
+Package: wrk
+Version: 4.1.0-4+b1
+binaries (sha256, size):
+base ea3626e9ee970777e86fe0abbd46fb7429aef498302c613dfa2298381cec57a0 4606136 bytes
+head c5818efce432b0bd65e80e5f5beb10d149f63669699fed2eba76dbd2c9014eae 4606664 bytes
+x1 d2849355dc13c6c43fe4898398110ad206a8c717dabaa24a73b9f1f637e958b2 4604288 bytes
+x2 4fd3c726f8be3e5b04c741601e1d984d241f7a5650580edcc5f0a375c7979869 4604168 bytes
+base-p320 4b5f2979dce7a5e03d7ac3a34bbf7fbde7f3cd2c802b9d2fe6b59b14bd6047f4 4606496 bytes
+base-p15120 50d004cd7d5eca9a71903c5cf3a0fd2bb41a1c84e6069bda7def51b2bb562bb9 4621296 bytes
+base-p25824 72ffcd0851fc551c3eee0473660302fc67e9c31db432a613619eec32b869c67c 4632000 bytes
+base-p40624 3f497c09a24b333721e0f9a060a2f7cdfbc99bbdb4e4b7e2d7fabfd95d3b321f 4646800 bytes
+base-p10304 e760a9d4cc2713a113c51af9d1fde9ebf8b7bc34d2814abb71dc53bb602600ea 4616480 bytes
+base-p22848 07331484db95ff9714dd39a7e30b1b680162a7304579423572dcc18356e6a65e 4629024 bytes
+base-p12160 a6c1cc5fcd442082f16987951298c354da811cf3b31a0f291a78c3bd7d054ef6 4618336 bytes
+base-p38336 960434adfb8f457123bb6ba64877066ae00632245c742bcbb415cf4ac68e410d 4644512 bytes
+base-p27648 8c8a22a1e5c1b1828d8b82879731230fc6c3c9eca1be0305220c0602acfaf405 4633824 bytes
+base-p12880 d99fbafa919b1abface5032ec5b8e95d6e92593568ef2c8c921b8550e6db582e 4619056 bytes
+head-p320 e1a104233f21fac7c28a2ed287a628b618e46ee9703df1bc22e782dc6f2dc948 4607024 bytes
+head-p15120 715b9b1a23fbe33014917ad73a74a129bf1066b168c000c3ff98e7b9058d5fd6 4621824 bytes
+unpadded .text:
+base 14126d2a8a12bccd173ec29032c1818d42904213 .text 0x15a0c0 2370070
+head 8d02090bfa2bae538394e3a36a6b941de844390c .text 0x15a0c0 2370598
+x1 92bc326785cfb274e91302a18021902316da8cac .text 0x159f50 2369494
+x2 705d140454fa800a867fda071ebc1aaead904092 .text 0x15a040 2368358
+base .text here: 0x15a0c0 2370070; the second placement run's (prior/0c0c599c): 0x15a0a0 2370070 (a diagnostic: the same address and size place base's code as that run's did)
+placements (layout against the side's unpadded binary):
+base-p320 4b5f2979dce7a5e03d7ac3a34bbf7fbde7f3cd2c802b9d2fe6b59b14bd6047f4 4606496 bytes; all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +320 B: 3420; same offset in a 64-byte line: 3420, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+base-p15120 50d004cd7d5eca9a71903c5cf3a0fd2bb41a1c84e6069bda7def51b2bb562bb9 4621296 bytes; all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +15120 B: 3420; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+base-p25824 72ffcd0851fc551c3eee0473660302fc67e9c31db432a613619eec32b869c67c 4632000 bytes; all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +25824 B: 3420; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+base-p40624 3f497c09a24b333721e0f9a060a2f7cdfbc99bbdb4e4b7e2d7fabfd95d3b321f 4646800 bytes; all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +40624 B: 3420; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+base-p10304 e760a9d4cc2713a113c51af9d1fde9ebf8b7bc34d2814abb71dc53bb602600ea 4616480 bytes; all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +10304 B: 3420; same offset in a 64-byte line: 3420, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+base-p22848 07331484db95ff9714dd39a7e30b1b680162a7304579423572dcc18356e6a65e 4629024 bytes; all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +22848 B: 3420; same offset in a 64-byte line: 3420, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+base-p12160 a6c1cc5fcd442082f16987951298c354da811cf3b31a0f291a78c3bd7d054ef6 4618336 bytes; all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +12160 B: 3420; same offset in a 64-byte line: 3420, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+base-p38336 960434adfb8f457123bb6ba64877066ae00632245c742bcbb415cf4ac68e410d 4644512 bytes; all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +38336 B: 3420; same offset in a 64-byte line: 3420, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+base-p27648 8c8a22a1e5c1b1828d8b82879731230fc6c3c9eca1be0305220c0602acfaf405 4633824 bytes; all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +27648 B: 3420; same offset in a 64-byte line: 3420, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+base-p12880 d99fbafa919b1abface5032ec5b8e95d6e92593568ef2c8c921b8550e6db582e 4619056 bytes; all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +12880 B: 3420; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+head-p320 e1a104233f21fac7c28a2ed287a628b618e46ee9703df1bc22e782dc6f2dc948 4607024 bytes; all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +320 B: 3420; same offset in a 64-byte line: 3420, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+head-p15120 715b9b1a23fbe33014917ad73a74a129bf1066b168c000c3ff98e7b9058d5fd6 4621824 bytes; all functions in both: 3420; moved by exactly the pad: 3420; not moved: 0; shifts: +15120 B: 3420; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3351 of 3351
+12 placements: functions moved by exactly their pad 41040 of 41040; neighbours kept 40212 of 40212
+clock shim: ab58393bd9478030afffc5a3dc5003536be1bd3d8cad0680ad999cc2df9f4011, step 10005 s for the workload old
+started as: env LD_PRELOAD=libjemalloc.so.2:/m/1999/shim/clockstep.so CLOCKSTEP_SECONDS=10005 MALLOC_CONF=background_thread:true,tcache_max:65536 PROBE_ALLOCATOR=jemalloc <binary> <port> old
+plan: K_A=5, K_B=2, K_C=2 placements; R=2 (A, B), R_C=2 (C) recorded pairs each after 1 unrecorded; TURN=1 s; cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u
+ages: old 10005..10020
+PADS_P: 320 15120 25824 40624 10304
+PADS_Q: 22848 12160 38336 27648 12880
+every turn on a fresh start; server CPU 2, wrk CPUs 4,5, driver and perf CPU 7
+kit cycles-1996-1999 run 0a42e2c7-f74f-4307-8be4-7745cca72965 plan c4eccf95500982be218107356b0f1edeb0ecd29d293697b2fb0abf4da88db50d
+os: Debian GNU/Linux 13 (trixie)
+kernel.randomize_va_space 2
+schedule seed 1996; placement timeout 300 s; at most 3 retries
+DRY RUN: not a measurement

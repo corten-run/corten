@@ -1,0 +1,77 @@
+Placement medians' sd from the saved counts (prior/<tag>/<comparison>), against the issue's:
+  aa-old (evidence/0c0c599c): 30 placements, sd 1.968% -> 1.97%, issue 1.97%: same
+  aa-young (evidence/0c0c599c): 30 placements, sd 1.174% -> 1.17%, issue 1.17%: same
+  aa-kept (evidence/ee7b0b41): 30 placements, sd 1.438% -> 1.44%, issue 1.44%: same
+  aa-plain (evidence/ee7b0b41): 30 placements, sd 1.481% -> 1.48%, issue 1.48%: same
+
+Normal model, 200000 draws, a different seed (1999) from the issue's (1983), at the sd rounded to two decimals as the issue rounds it. Within simulation error: |size.mjs - issue| <= 3 x sqrt(2 p (1 - p) / 200000) + 0.05 points (the issue's rounding to 0.1%):
+
+| A/A | sd | issue | size.mjs | difference | allowed | within |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `old`, K = 30 | 1.97% | 55.5% | 55.52% | 0.02 points | 0.52 points | yes |
+| `young`, K = 30 | 1.17% | 4.6% | 4.49% | -0.11 points | 0.25 points | yes |
+| `kept` (first run), K = 30 | 1.44% | 18.1% | 18.08% | -0.02 points | 0.42 points | yes |
+| `plain` (first run), K = 30 | 1.48% | 20.8% | 20.72% | -0.08 points | 0.44 points | yes |
+| `old`, K = 60 | 1.97% | 15.4% | 15.47% | 0.07 points | 0.39 points | yes |
+| `old`, K = 100 | 1.97% | 2.0% | 2.03% | 0.03 points | 0.18 points | yes |
+
+With the issue's seed (1983) the normal draws are resolve-sim.mjs's own:
+
+  `old`, K = 30: 55.5% (issue 55.5%)
+  `young`, K = 30: 4.6% (issue 4.6%)
+  `kept` (first run), K = 30: 18.1% (issue 18.1%)
+  `plain` (first run), K = 30: 20.8% (issue 20.8%)
+  `old`, K = 60: 15.4% (issue 15.4%)
+  `old`, K = 100: 2.0% (issue 2.0%)
+
+Each earlier A/A as a pilot (target 5%):
+
+evidence/0c0c599c aa-old: 30 placements of 8 pairs; placement medians (user+kernel cycles a request, B / A - 1): median -0.44%, sd 1.97% (labels swapped 1.95%)
+  failure rate of the two-reading A/A at +1% (200000 seeded draws each):
+  | K | rank | (a) normal model, sd 1.97% | (b) resampling the 30 placements, smoothed | resampling them as they are |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 30 | 20 | 55.4% | 69.3% | 82.5% |
+  | 60 | 37 | 15.3% | 45.2% | 74.2% |
+  | 100 | 59 | 2.0% | 26.4% | 64.4% |
+  K for at most 5%: (a) normal model 82 (4.9%); (b) resampling, smoothed 205 (4.8%); resampling as they are over 400
+  (b) is read: resampling 30 medians as they are reads the gaps between them near the centre, where the bound sits, as the shape of the population, and with lumpy pilots it fails at any K (a gap of over 1% beside the centre is never closed by more draws); the smoothed draws add normal noise of Silverman's bandwidth (0.91%) and keep the pilot's spread.
+  what 8 pairs alone give a placement median ("from within"): 1.46% (leave-one-out residuals rescaled; this kit's figure), between 1.24% (pooled residuals about each placement's median, runs low) and 1.58% (leave-one-out, runs high); the normal formula gives 1.80%
+  so the placements' own part of the medians' sd is about 1.32% (sqrt(sd^2 - from within^2))
+
+evidence/0c0c599c aa-young: 30 placements of 8 pairs; placement medians (user+kernel cycles a request, B / A - 1): median 0.46%, sd 1.17% (labels swapped 1.17%)
+  failure rate of the two-reading A/A at +1% (200000 seeded draws each):
+  | K | rank | (a) normal model, sd 1.17% | (b) resampling the 30 placements, smoothed | resampling them as they are |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 30 | 20 | 4.7% | 5.3% | 1.4% |
+  | 60 | 37 | 0.0% | 0.1% | 0.0% |
+  | 100 | 59 | 0.0% | 0.0% | 0.0% |
+  K for at most 5%: (a) normal model 30 (4.7%); (b) resampling, smoothed 33 (4.5%); resampling as they are 26 (4.0%)
+  (b) is read: resampling 30 medians as they are reads the gaps between them near the centre, where the bound sits, as the shape of the population, and with lumpy pilots it fails at any K (a gap of over 1% beside the centre is never closed by more draws); the smoothed draws add normal noise of Silverman's bandwidth (0.51%) and keep the pilot's spread.
+  what 8 pairs alone give a placement median ("from within"): 1.30% (leave-one-out residuals rescaled; this kit's figure), between 1.12% (pooled residuals about each placement's median, runs low) and 1.38% (leave-one-out, runs high); the normal formula gives 1.86%
+  so the placements' own part of the medians' sd is about 0.00% (sqrt(sd^2 - from within^2))
+
+evidence/ee7b0b41 aa-kept: 30 placements of 8 pairs; placement medians (user+kernel cycles a request, B / A - 1): median -0.49%, sd 1.44% (labels swapped 1.44%)
+  failure rate of the two-reading A/A at +1% (200000 seeded draws each):
+  | K | rank | (a) normal model, sd 1.44% | (b) resampling the 30 placements, smoothed | resampling them as they are |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 30 | 20 | 18.0% | 15.8% | 13.9% |
+  | 60 | 37 | 1.0% | 0.8% | 0.6% |
+  | 100 | 59 | 0.0% | 0.0% | 0.0% |
+  K for at most 5%: (a) normal model 44 (5.0%); (b) resampling, smoothed 44 (4.1%); resampling as they are 42 (4.5%)
+  (b) is read: resampling 30 medians as they are reads the gaps between them near the centre, where the bound sits, as the shape of the population, and with lumpy pilots it fails at any K (a gap of over 1% beside the centre is never closed by more draws); the smoothed draws add normal noise of Silverman's bandwidth (0.60%) and keep the pilot's spread.
+  what 8 pairs alone give a placement median ("from within"): 1.14% (leave-one-out residuals rescaled; this kit's figure), between 1.01% (pooled residuals about each placement's median, runs low) and 1.26% (leave-one-out, runs high); the normal formula gives 1.26%
+  so the placements' own part of the medians' sd is about 0.87% (sqrt(sd^2 - from within^2))
+
+evidence/ee7b0b41 aa-plain: 30 placements of 8 pairs; placement medians (user+kernel cycles a request, B / A - 1): median 0.23%, sd 1.48% (labels swapped 1.48%)
+  failure rate of the two-reading A/A at +1% (200000 seeded draws each):
+  | K | rank | (a) normal model, sd 1.48% | (b) resampling the 30 placements, smoothed | resampling them as they are |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 30 | 20 | 20.9% | 37.9% | 54.4% |
+  | 60 | 37 | 1.5% | 6.5% | 18.7% |
+  | 100 | 59 | 0.0% | 0.5% | 4.4% |
+  K for at most 5%: (a) normal model 49 (4.7%); (b) resampling, smoothed 67 (4.4%); resampling as they are 100 (4.5%)
+  (b) is read: resampling 30 medians as they are reads the gaps between them near the centre, where the bound sits, as the shape of the population, and with lumpy pilots it fails at any K (a gap of over 1% beside the centre is never closed by more draws); the smoothed draws add normal noise of Silverman's bandwidth (0.69%) and keep the pilot's spread.
+  what 8 pairs alone give a placement median ("from within"): 0.99% (leave-one-out residuals rescaled; this kit's figure), between 0.84% (pooled residuals about each placement's median, runs low) and 1.06% (leave-one-out, runs high); the normal formula gives 1.34%
+  so the placements' own part of the medians' sd is about 1.10% (sqrt(sd^2 - from within^2))
+
+analysis/output.txt (evidence/c448780e) for the same `old` and `young` A/As: a median of 8 by the normal formula about the median 1.71% and 1.78%, from pooled residuals 1.23% and 1.12%; placement.mjs's normal formula (pairs about their mean) 1.80% and 1.86%.

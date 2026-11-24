@@ -1,0 +1,3 @@
+comparison unpadded-old placement 8 workload old
+A base 566e7f6d33882360249a062d5a9f97e9a5c116926641f425b4e2094e5f77f0bb
+B base-p5552 882098cf5efaa8d8500eed7549a17da3283848827d2812ffa49a0683e440bb21

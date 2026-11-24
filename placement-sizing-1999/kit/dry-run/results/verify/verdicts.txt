@@ -1,0 +1,14 @@
+base-p320 as base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+base-p15120 as base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+base-p25824 as base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+base-p40624 as base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+base-p10304 as base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+base-p22848 as base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+base-p12160 as base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+base-p38336 as base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+base-p27648 as base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+base-p12880 as base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+head-p320 as head: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+head-p15120 as head: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+x1 as base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body
+x2 as base: checked 4 answers of each build: same status, head lines (but Date, the Age's value checked apart) and body

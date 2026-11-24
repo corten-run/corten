@@ -1,0 +1,3 @@
+RUN-ENDED missing-binaries: no /m/1999/bin/base: run build.sh
+ALL-DONE
+run exit 1

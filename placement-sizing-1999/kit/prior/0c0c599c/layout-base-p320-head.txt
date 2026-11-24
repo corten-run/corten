@@ -1,0 +1,1 @@
+.text: A 2370070 bytes at 0x15a0a0; B 2370390 bytes at 0x15a0a0 (B - A 320 bytes; pad 320)

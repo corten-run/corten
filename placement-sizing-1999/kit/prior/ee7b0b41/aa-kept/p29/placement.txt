@@ -1,0 +1,3 @@
+comparison aa-kept placement 29 workload kept
+A main-p16960 76014003ca53df5d1a6086a5028b364da10c2dfb823dbbcd5fd94a90d6a4d40f
+B main-p6256 b23e1cf95c29c995a12ea354e4b18eeb70ac5edbaa9a9e3a61adbd11f4d3cf42
