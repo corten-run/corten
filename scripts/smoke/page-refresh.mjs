@@ -48,41 +48,70 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           (/** @type {any} */ (window)).__pageTag = document.querySelector("main template[data-corten-read-again][data-from]");
         }),
       );
-      await page.goto(url);
-      page.on("request", onPart);
-      const waiting = await saved();
-      await page.fill("input[name=above]", "123.45");
-      await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 8));
-      const entries = await page.evaluate(() => history.length);
-      await savedSoon();
-      check(
-        "a page's part waiting for a write is read again after a full load, not the page",
-        waiting === "Saving..." && (await saved()) === "Saved." && parts.length > 0 && whole.length === 0 && page.url() === url,
-        `${waiting} -> ${await saved()} after ${parts.length} part and ${whole.length} page reads`,
-      );
-      const kept = await page.evaluate(() => ({
-        marker: (/** @type {any} */ (window)).__marker,
-        entries: history.length,
-        above: /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"))?.value,
-      }));
-      check("reading a page's part keeps the document, its history entry and the form", kept.marker === 8 && kept.entries === entries && kept.above === "123.45", JSON.stringify(kept));
-      // The part's answer that asked again put its tag in the page's tag's place: one tag, the
-      // last read's, and not the page's own (whose address is the same here).
-      const tagged = await page.evaluate(() => {
-        const all = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"));
-        const first = (/** @type {any} */ (window)).__pageTag;
-        return {
-          tags: all.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
-          pageTag: !!first,
-          pageTagGone: !!first && !first.isConnected && !all.includes(first),
-        };
-      });
-      const tags = tagged.tags;
-      check(
-        "a page part's answer that asks again takes the place of the tag that asked",
-        tags.length === 1 && tags[0] === parts.at(-1) && tagged.pageTag && tagged.pageTagGone,
-        `${JSON.stringify(tagged)} after ${parts.at(-1)}`,
-      );
+      // The write lands 1.5 s after it is sent and the part is first read 1 s after the page has
+      // loaded, so a loaded browser's first read can find it landed, and then no answer asks again
+      // (#2035). The first read is then answered as the server answers one while the write lands:
+      // its status line saying so, and the tag asking again from the same address. A later read is
+      // the server's own.
+      const from = new URL(url).pathname + new URL(url).search;
+      /** Each part read's answer, in order: whether it asked again, and whether the stand-in gave it. @type {{ asks: boolean, standIn: boolean }[]} */
+      const answers = [];
+      const partReads = (/** @type {URL} */ u) => u.pathname + u.search === from;
+      const partRead = async (/** @type {import("@playwright/test").Route} */ route) => {
+        const request = route.request();
+        if (request.method() !== "GET" || request.headers()["corten"] !== "action") return route.fallback();
+        // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+        const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        const body = await res.text();
+        const saving = body.replace('<p id="alert-status" role="status">Saved.</p>', '<p id="alert-status" role="status">Saving...</p>');
+        const standIn = answers.length === 0 && res.ok() && saving !== body && !body.includes("data-corten-read-again");
+        const answer = standIn ? `${saving}<template data-corten-read-again="1" data-from="${from}"></template>` : body;
+        answers.push({ asks: answer.includes("data-corten-read-again"), standIn });
+        await route.fulfill({ status: res.status(), headers, body: answer });
+      };
+      await page.route(partReads, partRead);
+      try {
+        await page.goto(url);
+        page.on("request", onPart);
+        const waiting = await saved();
+        await page.fill("input[name=above]", "123.45");
+        await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 8));
+        const entries = await page.evaluate(() => history.length);
+        await savedSoon();
+        check(
+          "a page's part waiting for a write is read again after a full load, not the page",
+          waiting === "Saving..." && (await saved()) === "Saved." && parts.length > 0 && whole.length === 0 && page.url() === url,
+          `${waiting} -> ${await saved()} after ${parts.length} part and ${whole.length} page reads`,
+        );
+        const kept = await page.evaluate(() => ({
+          marker: (/** @type {any} */ (window)).__marker,
+          entries: history.length,
+          above: /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"))?.value,
+        }));
+        check("reading a page's part keeps the document, its history entry and the form", kept.marker === 8 && kept.entries === entries && kept.above === "123.45", JSON.stringify(kept));
+        // The part's answer that asked again put its tag in the page's tag's place: one tag, the
+        // last read's, and not the page's own (whose address is the same here).
+        const tagged = await page.evaluate(() => {
+          const all = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"));
+          const first = (/** @type {any} */ (window)).__pageTag;
+          return {
+            tags: all.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
+            pageTag: !!first,
+            pageTagGone: !!first && !first.isConnected && !all.includes(first),
+          };
+        });
+        const tags = tagged.tags;
+        check(
+          "a page part's answer that asks again takes the place of the tag that asked",
+          answers.some((a) => a.asks) && tags.length === 1 && tags[0] === parts.at(-1) && tagged.pageTag && tagged.pageTagGone,
+          `${JSON.stringify({ ...tagged, answers })} after ${parts.at(-1)}`,
+        );
+      } finally {
+        await page.unroute(partReads, partRead);
+      }
       const settled = parts.length;
       await page.waitForTimeout(2200);
       check("a page's part stops once its patch no longer asks", parts.length === settled, `${parts.length - settled} more reads`);
