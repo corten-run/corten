@@ -480,9 +480,9 @@ establish a general ranking.
       touches is held to +1% with no floor, however flat its instructions, and so is a workload
       not named so before the run; a declaration is never added or changed after a run to clear
       its result, and a plan that made +1% decisive before this exception existed stays bound by
-      it. This single-build reading and the CPU-win rule above do not decide a touched workload
-      whose single-build bound's distance from its threshold is inside its recorded placement
-      spread, or one read across placements; both are decided as described below.
+      it. This single-build reading and the CPU-win rule above decide a touched workload only
+      where a recorded placement spread applies to the run's setup and the bound's distance from
+      its threshold is outside it; any other is read across placements, as described below.
 
       A negative control whose bound is at or above +1% but under the layout floor that applies
       to it may go ahead when its user instructions pass a screen: the median of the paired
@@ -557,8 +557,8 @@ establish a general ranking.
       A layout floor never applies to the benefit side: it cannot establish a CPU-cost win, which
       the rule above decides as before.
 
-      A workload the change touches may instead be read across placements, when the run's plan
-      names it before the run with the numbers below
+      A workload the change touches is read across placements, under a plan that names it before
+      the run with the numbers below, unless one build decides it by the test below
       ([design Choice 72](docs/design.md#choice-placement-runs)). Builds of one commit whose code
       sits at different places have differed by up to about 4% in a touched request's cycles
       either way (one start each, so placement and the process's start were not told apart there),
@@ -577,14 +577,22 @@ establish a general ranking.
       until a placement run on its setup records one. The test is one: a single-build bound's
       distance from its threshold (the bound less +1% for the margin; the bound plus the smallest
       worthwhile reduction for a CPU-cost win) is **inside** a spread that applies when it is at
-      or above the spread's lowest and at or below its highest, and **outside** otherwise. Inside
-      does not decide, a pass as much as a miss, and a win no more than a loss: the pull request
-      reports it as "inside the placement spread: not decided", which does not pass and claims no
-      win, and reads the workload across placements in a run whose plan is written before that
-      run. Outside, or with no spread that applies to the run's setup, the single-build bound is
-      the reading by the rules above, binding by policy, not because placement is shown unable to
-      move it. A workload with no single-build bound (a run that failed, too few pairs)
-      does not pass, as before, and a control the plan declared keeps
+      or above the spread's lowest and at or below its highest, and **outside** otherwise.
+      Outside a spread that applies, the single-build bound is the reading by the rules above,
+      binding by policy, not because placement is shown unable to move it. Inside one, or with no
+      spread that applies to the run's setup, one build does not decide, a pass as much as a miss,
+      and a win no more than a loss: the pull request reports the bound as "inside the placement
+      spread: not decided" or "no placement spread applies: not decided", which does not pass and
+      claims no win, and the workload is read across placements in a run whose plan is written
+      before that run, never by another single build (a win alone left undecided may be dropped
+      instead, and none is then claimed). So where no spread applies, one build of each side is a
+      screen: an author may take it first and reports every workload it read, and it moves no
+      negative control and no smallest worthwhile reduction, both declared before any cycle of
+      the change is counted, a screen's included. `bench/fullstack/count.mjs` compares one build
+      of each side, so this test reads its bound too; no script in the tree yet relinks an
+      image's binary with a pad, and a plan that reads a catalog target across placements says
+      how it does. A single-build run that gave a workload no bound (it failed, or had too few
+      pairs) decides nothing for it either, and a control the plan declared keeps
       [design Choice 71](docs/design.md#choice-layout-floor)'s rule. Item 2's other requirements
       apply to a run read across placements as to any other: every counter at 100%; the user and
       kernel split and, when the change adds or moves code, user L1 instruction-cache misses per
@@ -642,10 +650,14 @@ establish a general ranking.
       fewer than R valid pairs, leaves its comparison with no bound, which does not pass; no
       placement is rerun, replaced or dropped for its result. A layout floor never applies to a
       workload read across placements. A single-build run stays valid, and binding for each
-      workload its plan read that way whose distance from its threshold is outside the spread, by
-      the test above, or that has no spread that applies (a control
+      workload its plan read that way whose distance from its threshold is outside a spread that
+      applies, by the test above (a control
       keeps [design Choice 71](docs/design.md#choice-layout-floor)'s rule): a placement
-      run declared after it does not clear such a miss. The benefit side may use the same protocol
+      run declared after it does not clear such a miss. A single-build run read with no spread
+      that applied, while one build still decided there, stays as it was read, a pass as much as
+      a miss, in an open pull request as in a merged one, and no later run clears its miss; a
+      plan written then and not yet run is read by the rule as it now stands.
+      The benefit side may use the same protocol
       if the plan declares it, with its smallest worthwhile reduction, before the run: a CPU-cost
       win then needs the change's upper bound across placements at or below minus that reduction,
       and its A/A's one-sided 95% lower bound (the (K + 1 - j)-th smallest placement median, the
@@ -654,14 +666,15 @@ establish a general ranking.
       placements, not the release binary, which has a placement of its own: the unpadded build,
       which no comparison the gate reads includes (the runs so far read it only in a
       diagnostic).
-      A run of K = 30 placements of R = 8 pairs, for the
-      change and the A/A on `kept` and an A/A on `plain`, takes about 2 hours on a c-8 (the first
-      run: 99 minutes of turns after 2 minutes of checks, besides setup and builds). That size is
-      the first run's, not one to assume: in the second run one of two A/As of that size did not
-      resolve, its placement medians spreading 1.97% where the other's spread 1.17%, and the
-      Choice works out, on a model of its own, that an A/A of 30 placements fails one of its two
-      readings more often than not at the first figure and about one time in five at the first
-      run's own. More placements generally narrow the bound wherever the spread comes from, though not
+      A placement of R = 8 pairs takes about a minute of turns on a c-8 (62 s in the third run;
+      101 s in the fourth, whose workload waits on a stepped clock), so a workload's change and
+      A/A take 2K to 3.4K minutes and a pilot of 100 placements 1.7 to 2.8 hours, besides setup
+      and builds, where a single-build comparison of 100 pairs takes about 12 minutes. The kit
+      that relinks, checks, runs, sizes and reports is not in the tree: a run copies and adapts
+      an earlier run's from its evidence tag (the latest, `evidence/placement-sizing-1999`). An
+      author without a quiet Linux host with counters posts the plan and reports the workload as
+      not decided, and whoever runs that plan gives its reading.
+      More placements generally narrow the bound wherever the spread comes from, though not
       at every step of K (the bound is an order statistic), and the plan
       sizes each workload's K before the run as the Choice says: from an A/A already read on its
       setup, workload and R that the Choice's checks find eligible, or, where there is none, from
