@@ -4,7 +4,7 @@
 // (LIMIT), fails unless scripts/bench-size.allow lists its path with its exact blob ID. The name
 // is matched, not the contents: a small archive under another name is not found. The list holds
 // the files that were in the tree when this check came, which stay because their paths are cited
-// and removing them shrinks no clone (history keeps every blob).
+// and removing them at the tip shrinks no full clone (their blobs stay reachable in history).
 //
 // The list only shrinks. The check reads three things against a base, the commit a pull request
 // merges into (below):
@@ -30,9 +30,10 @@
 // a tab among them) or has a name starting or ending with a space fails as unsupported, shown as a
 // JSON string. The rule for benchmark authors is in CONTRIBUTING.md (Benchmark results).
 //
-// The base is --base <revision>, else CORTEN_BENCH_SIZE_BASE, else the first parent when the tip is
-// a merge commit, else the merge base of the tip and origin/main. An all-zero base, GitHub's before
-// for a push that creates a branch or tag, means the merge base with origin/main as it is when the
+// The base is --base <revision>, else CORTEN_BENCH_SIZE_BASE, else the merge base of the tip and
+// origin/main, also when the tip is a merge commit: a topic that has merged main has its own
+// earlier commits behind its first parent, and they are part of what it brings. An all-zero base,
+// GitHub's before for a push that creates a branch or tag, means the merge base with origin/main as it is when the
 // check runs: a rerun after main has moved can check a different range, and a commit already on
 // main brings no history (a push that creates main itself brings none). Such a check reads the tip
 // and what is not yet on main, not the range the push brought. CI gives the base
@@ -165,8 +166,8 @@ export function commitOf(root, rev, env = process.env) {
 
 /**
  * The commit the tip is checked against and how it was chosen: `base` (--base), else `env`'s
- * CORTEN_BENCH_SIZE_BASE, else the first parent of a merge commit, else the merge base with
- * origin/main. Throws, saying how to give one, when none resolves.
+ * CORTEN_BENCH_SIZE_BASE, else the merge base with origin/main (also for a merge commit; parent
+ * order says nothing about which side is the target). Throws, saying how to give one, when none resolves.
  * @param {string} root @param {{ head: string, base?: string, env?: NodeJS.ProcessEnv }} options
  * @returns {{ sha: string, how: string }}
  */
@@ -187,13 +188,11 @@ export function resolveBase(root, { head, base, env = process.env }) {
     );
   }
   const tip = commitOf(root, head, env);
-  const parents = git(root, ["rev-list", "--parents", "-n", "1", tip], env).toString().trim().split(" ").slice(1);
-  if (parents.length > 1) return { sha: parents[0], how: "the merge commit's first parent" };
   try {
     return { sha: git(root, ["merge-base", tip, "refs/remotes/origin/main"], env).toString().trim(), how: "the merge base with origin/main" };
   } catch {
     throw new Error(
-      `bench-size: no base to check ${head} against: it is not a merge commit and has no merge base with origin/main (fetch it, with its history). ` +
+      `bench-size: no base to check ${head} against: it has no merge base with origin/main (fetch it, with its history). ` +
         `Give the commit the change merges into with --base <revision> or ${BASE_ENV}.`,
     );
   }
@@ -463,7 +462,7 @@ export function checkHistory({ changes, pairs }, trusted, directory) {
   const problems = [];
   const fail = (/** @type {Entry} */ entry, /** @type {string} */ why, /** @type {string} */ commit) =>
     problems.push(
-      `${entry.path}: ${why}, at blob ${entry.blob} from commit ${commit}, which is not that path and blob in the base's list; a merged commit stays in every clone even when a later one deletes the file`,
+      `${entry.path}: ${why}, at blob ${entry.blob} from commit ${commit}, which is not that path and blob in the base's list; a merged commit stays in a full clone's history even when a later one deletes the file`,
     );
   for (const change of changes) {
     if (change.unsupported) {

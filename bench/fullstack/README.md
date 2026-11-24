@@ -2370,9 +2370,9 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
    packs its raw output into one archive instead of a thousand files.
 4. The rounds packed before raw output left the tree (r15, r16, `cost-under-load` and the
    `ab-jemalloc` rounds) keep their `raw.tar.xz` where it is, listed in `scripts/bench-size.allow`:
-   their paths are cited, and removing them would shrink no clone, since history keeps every blob.
-   A new round's archive is not committed, because every version of a committed file stays in
-   every clone; `npm run check` fails on a file under `bench/` with an archive suffix that the
+   their paths are cited, and removing them at the tip would shrink no full clone, since their
+   blobs stay reachable in history. A new round's archive is not committed, because a normal full
+   clone fetches every version of a committed file still reachable in history; `npm run check` fails on a file under `bench/` with an archive suffix that the
    base's list does not have, in any commit of the pull request, and the list only shrinks
    ([#1719 Benchmark runs commit raw output and archives under bench/, so every clone grows with every run](https://github.com/corten-run/corten/issues/1719)).
    A kept file is held to 256 KiB the same way: r16's log and summary, over it, are listed, and a

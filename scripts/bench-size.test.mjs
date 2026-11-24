@@ -233,7 +233,7 @@ test("a pull request cannot list its own archive: the line is not the base's and
   assert.equal(from.sha, base);
   assert.deepEqual(problems, [
     `${LIST}:3: ${archive} (${line.split(" ")[0]}) is not listed in the base ${base}'s list; the list only shrinks, so a line is never added or changed`,
-    `${archive}: an archive or compressed file (.zip), at blob ${line.split(" ")[0]} from commit ${head}, which is not that path and blob in the base's list; a merged commit stays in every clone even when a later one deletes the file`,
+    `${archive}: an archive or compressed file (.zip), at blob ${line.split(" ")[0]} from commit ${head}, which is not that path and blob in the base's list; a merged commit stays in a full clone's history even when a later one deletes the file`,
   ]);
 });
 
@@ -284,7 +284,7 @@ test("a base with no list accepts a first list only when every line is a file al
   assert.match(problems[1], new RegExp(`^bench/r2/raw\\.zip: an archive or compressed file \\(\\.zip\\), at blob [0-9a-f]+ from commit ${added}, `));
 });
 
-test("the base is --base, then CORTEN_BENCH_SIZE_BASE, then a merge commit's first parent, then the merge base with origin/main, and none fails", () => {
+test("the base is --base, then CORTEN_BENCH_SIZE_BASE, then the merge base with origin/main, for a merge commit too, and none fails", () => {
   const { d, base } = history();
   assert.throws(() => size.resolveBase(d, { head: "HEAD", env }), /no base to check HEAD against.*--base <revision> or CORTEN_BENCH_SIZE_BASE/);
   git(d, ["branch", "-q", "-M", "main"]);
@@ -296,11 +296,11 @@ test("the base is --base, then CORTEN_BENCH_SIZE_BASE, then a merge commit's fir
   assert.deepEqual(size.resolveBase(d, { head: topic, env }), { sha: base, how: "the merge base with origin/main" });
   git(d, ["merge", "-q", "--no-ff", "-m", "merge", "topic"]);
   const merge = id(d, "HEAD");
-  assert.deepEqual(size.resolveBase(d, { head: merge, env }), { sha: main, how: "the merge commit's first parent" });
+  assert.deepEqual(size.resolveBase(d, { head: merge, env }), { sha: main, how: "the merge base with origin/main" });
   assert.deepEqual(size.resolveBase(d, { head: merge, env: { ...env, CORTEN_BENCH_SIZE_BASE: base } }), { sha: base, how: "CORTEN_BENCH_SIZE_BASE" });
   assert.deepEqual(size.resolveBase(d, { head: merge, base: topic, env: { ...env, CORTEN_BENCH_SIZE_BASE: base } }), { sha: topic, how: "--base" });
   assert.throws(() => size.resolveBase(d, { head: merge, base: "--all", env }), /"--all" is not a commit/);
-  // A merge commit's own changes against its first parent are what the pull request brings.
+  // A file a merged topic brings is read in the merge's history.
   git(d, ["checkout", "-q", "topic"]);
   commit(d, { "bench/r1/late.gz": "x" });
   git(d, ["checkout", "-q", "main"]);
@@ -309,6 +309,23 @@ test("the base is --base, then CORTEN_BENCH_SIZE_BASE, then a merge commit's fir
   assert.equal(problems.length, 2, problems.join("\n"));
   assert.match(problems[0], /^bench\/r1\/late\.gz: an archive or compressed file \(\.gz\), not in /);
   assert.match(problems[1], /^bench\/r1\/late\.gz: an archive or compressed file \(\.gz\), at blob /);
+});
+
+test("a topic that has merged main is checked from its merge base with origin/main, so a file it added and deleted before the merge still fails", () => {
+  const { d } = history();
+  git(d, ["branch", "-q", "-M", "main"]);
+  git(d, ["checkout", "-q", "-b", "topic"]);
+  const added = commit(d, { "bench/transient.raw": Buffer.alloc(LIMIT + 1, 97) }, "raw output");
+  commit(d, { "bench/transient.raw": null }, "removed");
+  git(d, ["checkout", "-q", "main"]);
+  const main = commit(d, { "bench/noise.md": "main\n" });
+  git(d, ["update-ref", "refs/remotes/origin/main", main]);
+  git(d, ["checkout", "-q", "topic"]);
+  git(d, ["merge", "-q", "--no-ff", "-m", "merge main", "main"]);
+  assert.deepEqual(size.resolveBase(d, { head: "HEAD", env }), { sha: main, how: "the merge base with origin/main" });
+  const { problems } = size.run(d, { head: "HEAD", env });
+  assert.equal(problems.length, 1, problems.join("\n"));
+  assert.match(problems[0], new RegExp(`^bench/transient\\.raw: .*, at blob [0-9a-f]+ from commit ${added}, `));
 });
 
 test("a lock file over 256 KiB a pull request adds or updates at a path in LOCKS passes beside its manifest; without it, or at another path, it is refused", () => {

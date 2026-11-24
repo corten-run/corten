@@ -187,8 +187,9 @@ limits, measured observations and every changed path.
 
 The gzip captures checked in under `evidence/` here and in `bench/recoverable-live/evidence/` stay
 where they are: their paths are cited and the hostile tests read them, and removing them would
-shrink no clone, since history keeps every blob. `scripts/bench-size.allow` lists each at its blob.
-New captures are not committed. Every version of a committed file stays in every clone, so Git
+shrink no full clone, since their blobs stay reachable in history. `scripts/bench-size.allow`
+lists each at its blob. New captures are not committed. A normal full clone fetches every version
+of a committed file still reachable in history, so Git
 ignores the gzip files `parity.mjs` writes under its default outputs, `results/parity/` here
 and `bench/recoverable-live/results/`; the round's `coverage.json`, `plan.json` and other JSON
 there stay visible. A new round commits its summary and provenance; a maintainer publishes the

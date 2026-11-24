@@ -379,9 +379,11 @@ merges. It does not publish, fetch or verify an archive.
    `scripts/bench-size.allow` lists its path with its exact blob ID. The name is matched, not the
    contents: an archive under another name is not found by the check, and review has to.
 2. The list holds the files that were in the tree when the check came. They stay where they are:
-   removing one shrinks no clone, since history keeps every blob, and their paths are cited. The
-   list only shrinks: each line must be in the base's list at the same path and blob, so a new or
-   changed line fails, even in the pull request that adds the file. A listed file that changes
+   removing one at the tip shrinks no full clone, since its blobs stay reachable in history, and
+   their paths are cited. The list only shrinks: each line must be in the base's list at the same
+   path and blob, so a new or changed line fails, even in the pull request that adds the file. The
+   one exception is the list's first appearance: when the base has no list, each line must name a
+   file already in the base's tree at that path and blob. A listed file that changes
    fails, and a line whose file is gone or no longer needs it fails until the line is removed.
 3. Every commit the pull request brings is checked, not only its last one, since a merge commit
    keeps them all: a file added in one commit and deleted or shrunk in the next still fails, and
@@ -399,8 +401,9 @@ merges. It does not publish, fetch or verify an archive.
    among them) or has a name starting or ending with white space fails as unsupported.
 
 The base is the commit the change merges into: `--base <revision>`, else `CORTEN_BENCH_SIZE_BASE`,
-else the first parent when the checked commit is a merge commit, else the merge base with
-`origin/main`. An all-zero base, which GitHub gives a push that creates a branch or tag (a release
+else the merge base with `origin/main`, also when the checked commit is a merge commit: a topic
+that has merged `main` keeps its own earlier commits behind its first parent, and they are part of
+what it brings. For a topic aimed at another branch, give that branch with `--base`. An all-zero base, which GitHub gives a push that creates a branch or tag (a release
 tag's first push among them), means the merge base with `origin/main` as it is when the check
 runs. That is not a replay of the range the push brought: a rerun after `main` advances can check
 a different range, a tag on a commit already on `main` checks its tree with no history, and a push
