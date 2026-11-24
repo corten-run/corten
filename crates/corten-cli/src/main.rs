@@ -35,7 +35,7 @@ Usage:
   corten dev [--port <port>]
                    Build and run the app in this directory; rebuild and restart on every
                    change, and reload open pages. Default port 3000.
-  corten build [<cargo argument> ..] [--profile-from <command> [<argument> ..]]
+  corten build [<cargo argument> ..] [[--port <port>] --profile-from <command> [<argument> ..]]
                    Run Cargo's release build. Cargo's --features (-F), --all-features,
                    --no-default-features, --locked, --package (-p) and --bin, given before
                    --profile-from, go to each build; any other argument is refused.
@@ -43,9 +43,12 @@ Usage:
                    the app at work: build an instrumented copy under target/corten-profile,
                    start it on a free port, run <command> with that port in PORT to send it
                    requests like the ones the app will serve, stop the copy, and build
-                   target/release with the profile it wrote. Needs the toolchain's
-                   llvm-profdata (rustup component add llvm-tools) and a Unix system. A
-                   failed step leaves target/release as it was.
+                   target/release with the profile it wrote. --port <port>, before
+                   --profile-from, names the port in place of a free one, for an app that
+                   binds a port of its own and does not read PORT (corten build --port 8443
+                   --profile-from ..); a PORT in the environment is not read. Needs
+                   the toolchain's llvm-profdata (rustup component add llvm-tools) and a
+                   Unix system. A failed step leaves target/release as it was.
   corten fmt [--check] [path ..]
                    cargo fmt, then lay out the markup inside html! (rustfmt leaves macro
                    bodies alone), so it fixes what corten check reports. With paths, only
@@ -131,7 +134,7 @@ fn main() -> ExitCode {
         Some("new") => new::run(&args[1..]),
         Some("dev") => dev::run(&args[1..]),
         Some("build") => build_flags(&args[1..]).and_then(|build| match build.profile_from {
-            Some(command) => profile::run(command, &build.cargo),
+            Some(command) => profile::run(command, &build.cargo, build.port),
             None => cargo(&["build", "--release"].into_iter().chain(build.cargo.iter().map(String::as_str)).collect::<Vec<_>>()).map(|()| {
                 println!(
                     "\ncorten: the release build finished. An app binary it built (in target/release unless Cargo's configuration moves it) is the whole deploy: the static files are compiled into it (see Dockerfile)."
@@ -207,27 +210,54 @@ fn asks_help(command: &str, args: &[String]) -> bool {
 
 /// [`asks_help`] for `corten build`, read with [`build_flags`]'s grammar: help stands before
 /// `--profile-from` (everything after it is the command's) in a flag position, or as the
-/// missing value of an option (`--bin --help`). A token `build_flags` would refuse ends the
-/// scan, so `--profile-form sh -h` and `--bin --profile-from sh -h` are refused for what is
-/// wrong with them, not taken for help the command after them was given.
+/// missing value of an option (`--bin --help`, `--port --help`). A token `build_flags` would
+/// refuse ends the scan, so `--profile-form sh -h`, `--bin --profile-from sh -h` and
+/// `--port http -h` are refused for what is wrong with them, not taken for help the command
+/// after them was given.
 fn build_asks_help(args: &[String]) -> bool {
     let mut args = args.iter();
+    let mut port_named = false;
     while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--help" | "-h" => return true,
-            "--profile-from" => return false,
-            _ => match cargo_arg(arg) {
-                Some((_, true, false)) => match args.next().map(String::as_str) {
-                    Some("--help" | "-h") => return true,
-                    Some(value) if !value.starts_with('-') => {}
-                    _ => return false,
-                },
-                Some(_) => {}
-                None => return false,
+        // The value an option of build's was given in the same token, or `None` for the next.
+        let joined = match (arg.as_str(), port_arg(arg), cargo_arg(arg)) {
+            ("--help" | "-h", ..) => return true,
+            ("--profile-from", ..) => return false,
+            (_, Some(joined), _) => joined,
+            (_, None, Some((_, true, false))) => None,
+            (_, None, Some(_)) => continue,
+            (_, None, None) => return false,
+        };
+        let value = match joined {
+            Some(value) => value,
+            None => match args.next().map(String::as_str) {
+                Some("--help" | "-h") => return true,
+                Some(value) if !value.starts_with('-') => value,
+                _ => return false,
             },
+        };
+        if port_arg(arg).is_some() && (std::mem::replace(&mut port_named, true) || port_number(value).is_err()) {
+            return false;
         }
     }
     false
+}
+
+/// `--port`'s value when `arg` is that option: what follows `=` in the same token, or `None`
+/// when the value is the next one.
+fn port_arg(arg: &str) -> Option<Option<&str>> {
+    match arg.strip_prefix("--port")? {
+        "" => Some(None),
+        rest => rest.strip_prefix('=').map(Some),
+    }
+}
+
+/// The port `--port` names: digits that make a number from 1 to 65535. 0 names no port to look
+/// for the app on, and a sign or a space is not how a port is written.
+fn port_number(value: &str) -> Result<u16, String> {
+    match value.parse::<u16>() {
+        Ok(port) if port != 0 && value.bytes().all(|byte| byte.is_ascii_digit()) => Ok(port),
+        _ => Err(format!("--port takes the number of the port the app binds, from 1 to 65535; not {value:?}")),
+    }
 }
 
 /// The [`CARGO_ARGS`] entry `arg` is: its name, whether it takes a value, and whether the value
@@ -263,6 +293,8 @@ const CARGO_ARGS: [(&str, bool); 8] = [
 struct Build<'a> {
     /// The Cargo arguments, each value its own item, given to every build in their order.
     cargo: Vec<String>,
+    /// The port `--port` names, where a profiled build looks for the app in place of a free one.
+    port: Option<u16>,
     /// The command after `--profile-from`, with its arguments, if any.
     profile_from: Option<&'a [String]>,
 }
@@ -273,8 +305,13 @@ struct Build<'a> {
 /// (`--features ""`, which a CI variable may be). Anything else is refused, so a misspelled flag
 /// is not an ordinary build that looks profiled, and a value cannot read as a flag, so
 /// `--bin --profile-from sh` does not take `--profile-from` for a binary's name.
+///
+/// `--port` is the profiled build's own, among them in any place: its value after it or after
+/// `=`, once, a port number ([`port_number`]). It is refused without `--profile-from`, where
+/// nothing is started that a port could be looked for on.
 fn build_flags(args: &[String]) -> Result<Build<'_>, String> {
     let mut cargo = Vec::new();
+    let mut port = None;
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         at += 1;
@@ -283,7 +320,21 @@ fn build_flags(args: &[String]) -> Result<Build<'_>, String> {
             if command.is_empty() {
                 return Err("--profile-from needs a command".into());
             }
-            return Ok(Build { cargo, profile_from: Some(command) });
+            return Ok(Build { cargo, port, profile_from: Some(command) });
+        }
+        if let Some(joined) = port_arg(arg) {
+            let value = match (joined, args.get(at)) {
+                (Some(value), _) => value,
+                (None, Some(value)) if !value.starts_with('-') => {
+                    at += 1;
+                    value.as_str()
+                }
+                (None, _) => return Err("--port needs a value".into()),
+            };
+            if port.replace(port_number(value)?).is_some() {
+                return Err("--port is given more than once".into());
+            }
+            continue;
         }
         match cargo_arg(arg) {
             Some((_, false, _)) | Some((_, true, true)) => cargo.push(arg.clone()),
@@ -297,13 +348,18 @@ fn build_flags(args: &[String]) -> Result<Build<'_>, String> {
             None => {
                 let list: Vec<&str> = CARGO_ARGS.iter().map(|(name, _)| *name).collect();
                 return Err(format!(
-                    "corten build takes {} for Cargo, then --profile-from <command>; not {arg:?}",
+                    "corten build takes {} for Cargo and --port <port> for a profiled build, then --profile-from <command>; not {arg:?}",
                     list.join(", ")
                 ));
             }
         }
     }
-    Ok(Build { cargo, profile_from: None })
+    match port {
+        Some(port) => Err(format!(
+            "--port {port} names the port a profiled build looks for the app on, and there is no --profile-from: corten build without it starts no app"
+        )),
+        None => Ok(Build { cargo, port: None, profile_from: None }),
+    }
 }
 
 /// `corten check`'s flags: whether `--no-script-types` skips the scripts' type check.
@@ -435,14 +491,68 @@ mod tests {
         assert!(!asks_help("build", &args(&["-p", "shop", "--profile-form", "sh", "-h"])));
         assert!(!asks_help("build", &args(&["--bin", "--locked", "-h"])));
         assert!(asks_help("build", &args(&["-Fa", "--locked", "-p", "shop", "-h"])));
+        // `--port` is build's own, read the same way: help after it, in place of its value, and
+        // never after a value or a repeat that build refuses.
+        assert!(asks_help("build", &args(&["--port", "8443", "-h"])));
+        assert!(asks_help("build", &args(&["--port=8443", "--locked", "--help"])));
+        assert!(asks_help("build", &args(&["--port", "--help"])));
+        assert!(!asks_help("build", &args(&["--port", "http", "-h"])));
+        assert!(!asks_help("build", &args(&["--port=0", "-h"])));
+        assert!(!asks_help("build", &args(&["--port", "8443", "--port", "8444", "-h"])));
+        assert!(!asks_help("build", &args(&["--port", "8443", "--profile-from", "sh", "-h"])));
+        assert!(!asks_help("build", &args(&["--ports", "8443", "-h"])));
+    }
+
+    #[test]
+    fn build_takes_the_port_a_profiled_build_looks_for_the_app_on() {
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        // After the flag or after `=`, among the Cargo arguments in any place, and never one of them.
+        for written in [
+            &["--port", "8443", "--locked", "--profile-from", "sh", "--port", "1"][..],
+            &["--port=8443", "--locked", "--profile-from", "sh", "--port", "1"],
+            &["--locked", "--port", "8443", "--profile-from", "sh", "--port", "1"],
+            // Digits are a number however many zeros lead it.
+            &["--locked", "--port=08443", "--profile-from", "sh", "--port", "1"],
+        ] {
+            let written = args(written);
+            let command = &written[written.len() - 3..];
+            assert_eq!(
+                build_flags(&written),
+                Ok(Build { cargo: args(&["--locked"]), port: Some(8443), profile_from: Some(command) }),
+                "{written:?}"
+            );
+        }
+        assert_eq!(build_flags(&args(&["--port", "65535", "--profile-from", "sh"])).map(|build| build.port), Ok(Some(65535)));
+        // What is no port number is refused as it is read, 0 and a sign included.
+        for no_port in ["", "0", "http", "65536", "+8443", "-1", " 8443", "8443 ", "8443.0"] {
+            let says = format!("--port takes the number of the port the app binds, from 1 to 65535; not {no_port:?}");
+            let joined = args(&[format!("--port={no_port}").as_str(), "--profile-from", "sh"]);
+            assert_eq!(build_flags(&joined).unwrap_err(), says);
+            // After the flag, a value that reads as a flag is a missing value, as Cargo's are.
+            let says = if no_port.starts_with('-') { "--port needs a value".to_string() } else { says };
+            assert_eq!(build_flags(&args(&["--port", no_port, "--profile-from", "sh"])).unwrap_err(), says);
+        }
+        for missing in [&["--port"][..], &["--port", "--profile-from", "sh"], &["--locked", "--port", "--locked"]] {
+            assert_eq!(build_flags(&args(missing)), Err("--port needs a value".into()), "{missing:?}");
+        }
+        let twice = args(&["--port", "8443", "--port=8443", "--profile-from", "sh"]);
+        assert_eq!(build_flags(&twice), Err("--port is given more than once".into()));
+        // Without a profile no app is started, so a port means nothing and is not passed over.
+        for alone in [&["--port", "8443"][..], &["--port=8443", "--locked"]] {
+            let refused = build_flags(&args(alone)).unwrap_err();
+            assert!(refused.starts_with("--port 8443 names the port a profiled build looks for the app on"), "{refused}");
+            assert!(refused.contains("there is no --profile-from"), "{refused}");
+        }
+        // Another flag that begins the same way is not this one.
+        assert!(build_flags(&args(&["--ports", "8443"])).is_err_and(|error| error.starts_with("corten build takes")));
     }
 
     #[test]
     fn build_takes_only_the_command_a_profile_comes_from() {
         let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
-        assert_eq!(build_flags(&[]), Ok(Build { cargo: vec![], profile_from: None }));
+        assert_eq!(build_flags(&[]), Ok(Build { cargo: vec![], port: None, profile_from: None }));
         let command = args(&["--profile-from", "sh", "train.sh", "--profile-from"]);
-        assert_eq!(build_flags(&command), Ok(Build { cargo: vec![], profile_from: Some(&command[1..]) }));
+        assert_eq!(build_flags(&command), Ok(Build { cargo: vec![], port: None, profile_from: Some(&command[1..]) }));
         assert_eq!(build_flags(&args(&["--profile-from"])), Err("--profile-from needs a command".into()));
         // A misspelled flag is refused, not built without a profile.
         assert!(build_flags(&args(&["--profile-form", "sh"])).is_err());
@@ -468,8 +578,8 @@ mod tests {
         ]);
         // Passed as written, in order; an argument after the command's name is the command's.
         let cargo = given[..9].to_vec();
-        assert_eq!(build_flags(&given), Ok(Build { cargo: cargo.clone(), profile_from: Some(&given[10..]) }));
-        assert_eq!(build_flags(&given[..9]), Ok(Build { cargo, profile_from: None }));
+        assert_eq!(build_flags(&given), Ok(Build { cargo: cargo.clone(), port: None, profile_from: Some(&given[10..]) }));
+        assert_eq!(build_flags(&given[..9]), Ok(Build { cargo, port: None, profile_from: None }));
         // Cargo's other spellings of a value, an empty one included.
         for written in [
             &["-Fa"][..],
@@ -483,7 +593,7 @@ mod tests {
             &["--bin=web"],
         ] {
             let written = args(written);
-            assert_eq!(build_flags(&written), Ok(Build { cargo: written.clone(), profile_from: None }));
+            assert_eq!(build_flags(&written), Ok(Build { cargo: written.clone(), port: None, profile_from: None }));
         }
         // A value is not a flag, and not missing.
         for refused in [&["--bin", "--profile-from", "sh"][..], &["--features"], &["-p", "-F", "a"]] {
