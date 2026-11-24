@@ -64,7 +64,7 @@ export async function httpChecks(base, check) {
     const [local] = await get(`localhost:${port}`);
     check("localhost is answered", local === 200, String(local));
     // A request HTTP/1.1 does not allow (RFC 9112 3.2) is a 400 the same way: no `Host` line, or
-    // one that is no host. Nothing in a request-target is refused.
+    // one that is no host. Of a request-target only the host it names itself is held to the same.
     const [unnamed, said] = await get(null);
     check("an HTTP/1.1 request with no Host line is a 400", unnamed === 400 && said === "Bad request.", `${unnamed} ${said.slice(0, 40)}`);
     const [pathed, why] = await get(`localhost:${port}/x`);

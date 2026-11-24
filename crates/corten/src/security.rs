@@ -1720,14 +1720,17 @@ fn host_lines(headers: &HeaderMap) -> (Option<&HeaderValue>, bool) {
 /// and `hosts` is the names the app answers to, or `None` when it answers to any.
 ///
 /// What RFC 9112 3.2 has a server answer `400`: more than one `Host` line, a `Host` that is not
-/// a host and maybe a port, and an HTTP/1.1 message with no `Host` line. Nothing of the
-/// request-target is refused here: what the same section says a server should answer `400` or
-/// a redirect, an invalid request-line (a byte no URI holds, as the parse lets through a `|`,
-/// a `%` before no hex and a byte outside ASCII that is UTF-8), is answered as before, and so
-/// are `*` with a method other than `OPTIONS` (3.2.4 names no answer) and a target that is a
-/// host alone with a method other than `CONNECT` (3.2.3). The `Host` is read once for these
-/// and for the names, so a request the app answers costs a look at whether any name has two
-/// lines and the read of its `Host`.
+/// a host and maybe a port, and an HTTP/1.1 message with no `Host` line. Of the request-target
+/// one part is read, and held to the same: the host and port of a target that names its own
+/// ([`targeted`]), which is the host the request asks for, so it is read where `Host` would be
+/// and one that is no host and maybe a port is a `400` too, by Corten's choice. Nothing else of
+/// a target is read or refused here: what the same section says a server should answer `400`
+/// or a redirect, an invalid request-line (a byte no URI holds, as the parse lets through a
+/// `|`, a `%` before no hex and a byte outside ASCII that is UTF-8), is answered as before,
+/// and so are `*` with a method other than `OPTIONS` (3.2.4 names no answer) and a target
+/// that is a host alone with a method other than `CONNECT` (3.2.3). The `Host` is read once
+/// for these and for the names, so a request the app answers costs a look at whether any name
+/// has two lines and the read of its `Host`.
 #[inline]
 fn asked<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bool), hosts: Option<&[String]>) -> Asked {
     match read(req, lines, hosts) {
@@ -1809,8 +1812,8 @@ impl Refused {
     /// what no log should; of a host only what names it. A `Host` that is none for another
     /// reason (a space in it, a port that is no number) is given as sent: an operator needs it
     /// to see what sends it.
-    /// The path and the host are given by their start ([`start`]), so a long request does not
-    /// make a long line.
+    /// The method, the path and the host are given by their start ([`start`]), so a long
+    /// request does not make a long line.
     fn line(self, req: &Request) -> String {
         /// What a `Host` or an authority names, without a user before it or a path after it.
         /// Nothing where an `@` follows a `/`, `?` or `#`: it may end a user whose password
@@ -1839,14 +1842,17 @@ impl Refused {
                 format!("its request-target's host is not a host and maybe a port alone{host}")
             }
         };
-        format!("corten: refused {} {} (400): {why}", req.method(), start(req.uri().path()))
+        // A method is a token, which needs no quotes: only one too long for a line is cut.
+        let method = req.method().as_str();
+        let method = if method.len() > LOGGED_BYTES { start(method) } else { method.to_owned() };
+        format!("corten: refused {method} {} (400): {why}", start(req.uri().path()))
     }
 }
 
 /// `text` as a log line gives it, in quotes and escaped: all of it, or its first
-/// [`LOGGED_BYTES`] bytes (fewer where that would cut a character) and that it goes on. A path
-/// and a `Host` can each be as long as a request's head may be, and a line of the log is read
-/// by a person.
+/// [`LOGGED_BYTES`] bytes (fewer where that would cut a character) and that it goes on. A
+/// method, a path and a `Host` can each be as long as a request's head may be, and a line of
+/// the log is read by a person.
 fn start(text: &str) -> String {
     if text.len() <= LOGGED_BYTES {
         return format!("{text:?}");
@@ -1858,7 +1864,7 @@ fn start(text: &str) -> String {
     format!("{:?}... ({} bytes)", &text[..end], text.len())
 }
 
-/// How much of a path or a host a refused request's log line gives.
+/// How much of a method, a path or a host a refused request's log line gives.
 const LOGGED_BYTES: usize = 200;
 
 /// On a request Corten's server read off a connection as an HTTP/1.1 message with no `Host`
@@ -1904,9 +1910,11 @@ fn unnamed(req: &Request) -> Asked {
 /// A request whose target names its host (`GET http://shop.example/ HTTP/1.1`, or `CONNECT`'s
 /// `shop.example:443`): the target's is the host asked for, whatever `Host` says (RFC 9112
 /// 3.2.2), but the message still needs its one `Host` line, with a host in it (3.2). `target` is
-/// the whole authority, and one with a user in it, or a port that is no number, is refused as
-/// the same bytes in `Host` are: RFC 9110 4.2.4 says a recipient should treat a user there as
-/// an error, which is less than 3.2 says of `Host`.
+/// the whole authority, and one with a user in it, a port that is no number or an address in
+/// brackets that is not IPv6 is refused as the same bytes in `Host` are, by Corten's choice:
+/// RFC 9110 4.2.4 says a recipient should treat a user there as an error, and 9112 3.2 that a
+/// server should answer an invalid request-target with a `400` or a redirect, each less than
+/// 3.2 says of `Host`. It is the one part of a target read here, since it is the name asked for.
 #[cold]
 fn targeted(target: &str, host: Option<&HeaderValue>, req: &Request, hosts: Option<&[String]>) -> Asked {
     let line = match host {
@@ -2030,11 +2038,15 @@ fn ip_literal(host: &[u8]) -> bool {
 fn refused_host(host: &[u8]) {
     static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        let host = start(&String::from_utf8_lossy(host));
-        tracing::warn!(
-            "corten: refused a request for host {host} (421): if the app is served under that name, list it with Policy::host"
-        );
+        tracing::warn!("{}", refused_host_line(host));
     }
+}
+
+/// The log's line for `host`, refused as another's: the name by its start ([`start`]), as a
+/// request HTTP does not allow is logged.
+fn refused_host_line(host: &[u8]) -> String {
+    let host = start(&String::from_utf8_lossy(host));
+    format!("corten: refused a request for host {host} (421): if the app is served under that name, list it with Policy::host")
 }
 
 /// [`Policy::asked`], held apart from the policy: the names the app answers to, or `None` when
@@ -2647,7 +2659,8 @@ mod tests {
             assert_eq!(asked(policy, "GET", "/", &["localhost", "localhost"]), Asked::Malformed);
             assert_eq!(asked(policy, "GET", "/", &["localhost", "other.example"]), Asked::Malformed);
             assert_eq!(asked(policy, "GET", "/", &["localhost/"]), Asked::Malformed);
-            // Nothing of the target is refused: a byte outside ASCII and `*` go on to the routes.
+            // Nothing of a target but its own host is refused: a byte outside ASCII in its path
+            // or query, and `*`, go on to the routes.
             assert_eq!(asked(policy, "GET", "/caf\u{e9}", &["localhost"]), Asked::Here);
             assert_eq!(asked(policy, "GET", "/?q=caf\u{e9}", &["localhost"]), Asked::Here);
             assert_eq!(asked(policy, "GET", "/caf%C3%A9?q=caf%C3%A9", &["localhost"]), Asked::Here);
@@ -2660,10 +2673,15 @@ mod tests {
             assert_eq!(asked(policy, "GET", "http://localhost:3000/", &["other.example"]), Asked::Here);
             assert_eq!(asked(policy, "GET", "http://[::1]:3000/", &["localhost"]), Asked::Here);
             assert_eq!(asked(policy, "GET", "http://localhost/", &["a, b"]), Asked::Malformed);
-            // The target's own is held to being a host and maybe a port too.
+            // The target's own is held to being a host and maybe a port too: no user, no port
+            // that is no number, no address in brackets that is not IPv6, a host alone included.
             assert_eq!(asked(policy, "GET", "http://user@localhost/", &["localhost"]), Asked::Malformed);
             assert_eq!(asked(policy, "GET", "http://user:word@localhost:3000/", &["localhost"]), Asked::Malformed);
             assert_eq!(asked(policy, "GET", "http://user@[::1]:3000/", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "http://localhost:abc/", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "http://[v1.x]/", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "http://[fe80::1%25eth0]/", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "localhost:abc", &["localhost"]), Asked::Malformed);
             assert_eq!(asked(policy, "GET", "http://localhost/", &["localhost", "localhost"]), Asked::Malformed);
         }
         assert_eq!(asked(&policy, "GET", "/", &["other.example"]), Asked::Elsewhere);
@@ -2783,6 +2801,33 @@ mod tests {
         );
         assert_eq!(start("/short"), "\"/short\"");
         assert_eq!(start(&"a".repeat(LOGGED_BYTES)), format!("{:?}", "a".repeat(LOGGED_BYTES)));
+        // A long method too, which a request's head has room for; one that fits is as sent.
+        let (reason, line) = why(&"M".repeat(9000), "/", &["a, b"], true);
+        assert_eq!(reason, Refused::Host);
+        assert_eq!(
+            line,
+            format!(
+                "corten: refused \"{}\"... (9000 bytes) \"/\" (400): its Host is not a host and maybe a port alone \
+                 (it names \"a, b\")",
+                "M".repeat(LOGGED_BYTES)
+            )
+        );
+        let (_, line) = why(&"M".repeat(LOGGED_BYTES), "/", &["a, b"], true);
+        assert!(line.starts_with(&format!("corten: refused {} \"/\" (400): ", "M".repeat(LOGGED_BYTES))), "{line}");
+        // The line for a name that is another host's (the `421`) gives a long one the same way.
+        assert_eq!(
+            refused_host_line(format!("{}.example:8080", "h".repeat(9000)).as_bytes()),
+            format!(
+                "corten: refused a request for host \"{}\"... (9013 bytes) (421): \
+                 if the app is served under that name, list it with Policy::host",
+                "h".repeat(LOGGED_BYTES)
+            )
+        );
+        assert_eq!(
+            refused_host_line(b"shop.example"),
+            "corten: refused a request for host \"shop.example\" (421): \
+             if the app is served under that name, list it with Policy::host"
+        );
 
         // The first request refused for a reason has a line, a later one for it none, and one
         // refused for another reason still has its own.

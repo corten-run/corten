@@ -2562,9 +2562,12 @@ rules something out.
     (the `400` of [the app guide](guide/app.md#host-names)), at an unstaged route as at every other:
     a `Host` line missing, repeated or not a host, which RFC 9112 (3.2) requires a server to refuse.
     With them, by Corten's choice: an empty `Host`, which 3.3 lets a server read as its default
-    name; a user in a target that names its host, which RFC 9110 (4.2.4) says a server should treat
-    as an error; and an address in brackets that is not IPv6, of a later version RFC 3986's grammar
-    has a place for and defines none of. It adds work to an unstaged route, so this was read again
+    name; an address in brackets that is not IPv6, of a later version RFC 3986's grammar
+    has a place for and defines none of; and, in a target that names its own host
+    (`GET http://shop.example/ HTTP/1.1`, or a host alone), a host and port that are not what a
+    `Host` is held to: a user before it, which RFC 9110 (4.2.4) says a server should treat as an
+    error, a port that is no number (`http://shop.example:abc/`), and an address in brackets that
+    is not IPv6 or has a zone. It adds work to an unstaged route, so this was read again
     as it was for the host check's 494. The same change stopped searching the headers for `Host`
     where it is the first line, where RFC 9110 (7.2) asks a client to write it. Counted over a
     socket at the final code (below), each build in turn and main built a second time as the
@@ -2581,8 +2584,9 @@ rules something out.
     before the count (the README's Values), and a route that skipped them would answer a request
     with two `Host` lines that every other route refuses. The three by choice cost nothing beside
     them, being answers of the same read: an empty `Host` names none of the hosts an app answers to
-    and was a `421` before, in an app that names its hosts; the user is found where the target's
-    host is read; and an address in brackets is parsed as IPv6 or is none. The bound stays where it
+    and was a `421` before, in an app that names its hosts; an address in brackets is parsed as
+    IPv6 or is none; and a target's host and port are read where `Host` would be, by the function
+    that reads `Host` (below). The bound stays where it
     was for a request whose first header line is `Host` in an app that names its hosts, the lane's
     and step 4's 98 and 94 still counted against it. For a request with `Host` on a later line or
     none it moves by what the refusals cost, the 46 to 80 counted, and in an app that answers to any
@@ -2597,7 +2601,8 @@ rules something out.
     server, which would refuse every request a test builds without `Host` (an `http::Request` is
     HTTP/1.1 unless it says otherwise), in this repository's tests and in apps'; what the mark gives
     up is that such a request another library's server read and hands to the router is answered. Nor
-    refusing anything in a request-target, which an earlier form of this change did for a target
+    refusing anything else in a request-target (its path, its query, its form), which an earlier
+    form of this change did for a target
     with a byte outside ASCII and for `*` with a method other than `OPTIONS`. Of an invalid
     request-line RFC 9112 (3.2) says a server should answer a `400` or a redirect, which is less
     than it says of `Host`; the check refused one kind of byte no URI holds while a `|`, a `%`
@@ -2608,6 +2613,23 @@ rules something out.
     into a `400`. Of `*`, 3.2.4 says only that the form is for `OPTIONS`, and names no answer to
     another method, which the router answers `404` as it does any path with no route. Both are
     answered as they were before this change, and `tests::security` holds them to that.
+    The host and port of a target that names its own are the one part of a target the check reads
+    and refuses, though an invalid one is the same "should answer a `400` or a redirect" as an
+    invalid path, and less than 3.2 says of `Host`. The reason is what the check is for: such a
+    target's host is the one the request asks for, whatever `Host` says (3.2.2), so the check
+    takes the target's authority where it would take `Host` (`security::read`, which reads
+    nothing else of the target) and gives it to the function that reads `Host`, to decide whose
+    name it is; bytes there that are no host and port get that function's one answer for them,
+    the `400`, as they do in `Host`. In
+    an app that answers to any host no name is decided, and the authority is read for the
+    refusal alone, as `Host` is there. Unlike the dropped scan, the rule is the whole of `Host`'s
+    and not one kind of byte, and a request whose target names no host, which is nearly every
+    one, pays nothing for it: one that does is read by a function held out of line
+    (`security::targeted`). Before this change the check took
+    the host as the URI parse split it, with any user and port left off, and answered any address
+    in brackets, so `http://localhost:abc/`, `http://[v1.x]/` and `http://[fe80::1%25eth0]/` were
+    routed in an app that answers to `localhost` (read in `c46092aeb`'s `security::named`, not
+    run there); each is a `400` now, held by `tests::security` over a connection.
 
     The instruction bounds below bound work on the measured routes, not speed. For a change
     to the request path, also measure cycles under load as

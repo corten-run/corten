@@ -142,9 +142,11 @@ async fn on_the_wire<M: crate::Middleware>(
 /// and maybe a port. Each is refused before anything of the app runs, at a route through the
 /// stages and at one outside them, and the connection answers the next request: the server
 /// read the whole message, so nothing asks it to close (9.3); where the message's body has not
-/// arrived, the connection ends after the answer. A request-target is let through as it was:
-/// one with a byte outside ASCII, and `*` with a method that is not `OPTIONS`, are answered by
-/// the routes.
+/// arrived, the connection ends after the answer. A request-target that names its own host is
+/// held to the same, by Corten's choice: its host and port are read where `Host` would be, and
+/// one with a user, a port that is no number or an address in brackets that is not IPv6 is
+/// refused. The rest of a request-target is let through as it was: one with a byte outside
+/// ASCII, and `*` with a method that is not `OPTIONS`, are answered by the routes.
 #[tokio::test]
 async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
     use std::sync::atomic::Ordering::Relaxed;
@@ -182,6 +184,15 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
         b"GET http://localhost/spec HTTP/1.1\r\n\r\n",
         b"GET http://localhost/spec HTTP/1.1\r\nHost: localhost/spec\r\n\r\n",
         b"GET http://user@localhost/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        // A target's own host and port are held to what a `Host` is, beside a `Host` that is
+        // one: a port that is no number, an address in brackets that is not IPv6, one with a
+        // zone, and a host alone that is none, at a route through the stages and outside them.
+        b"GET http://localhost:abc/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"GET http://[v1.x]/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"GET http://[fe80::1%25eth0]/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"GET http://localhost:abc/lane/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"GET http://[v1.x]/lane/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"GET localhost:abc HTTP/1.1\r\nHost: localhost\r\n\r\n",
         // No `Host` among other lines, where the first line is not the place to look.
         b"GET /spec HTTP/1.1\r\nAccept: */*\r\nUser-Agent: probe\r\n\r\n",
         b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\n\r\n",
@@ -311,6 +322,8 @@ async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
         b"GET /spec HTTP/1.1\r\nHost: shop.example\r\nHost: shop.example\r\n\r\n",
         b"GET /lane/spec HTTP/1.1\r\nHost: user@shop.example\r\n\r\n",
         b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nHost: shop.example/x\r\n\r\n",
+        b"GET http://shop.example:abc/spec HTTP/1.1\r\nHost: shop.example\r\n\r\n",
+        b"GET http://[v1.x]/lane/spec HTTP/1.1\r\nHost: shop.example\r\n\r\n",
     ] {
         let (status, head, body) = wire.ask(request).await;
         assert_eq!((status, body.as_str()), (400, "Bad request."), "{head}");

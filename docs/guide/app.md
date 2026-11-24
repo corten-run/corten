@@ -282,17 +282,21 @@ first two are what HTTP requires, and the third is Corten's choice where HTTP le
 3. by Corten's choice: a `Host` with nothing in it, or a port alone, which HTTP lets a server
    read as its own default name (also beside a target that names its host, as in
    `GET http://shop.example/ HTTP/1.1` with `Host:`, where HTTP has a server ignore what `Host`
-   says); a target that names its host with a user in it
-   (`GET http://user@shop.example/ HTTP/1.1`), which HTTP says a server should treat as an
-   error; and an address in brackets that is not IPv6 (`[v1.fe80]`: the grammar has a place
+   says); an address in brackets that is not IPv6 (`[v1.fe80]`: the grammar has a place
    for an address of a later version, none is defined, and RFC 3986 asks for an error where
-   the version is not known).
+   the version is not known); and a target that names its host
+   (`GET http://shop.example/ HTTP/1.1`, or a host alone) where that host and port are not
+   what item 2 holds a `Host` to: a user in it (`http://user@shop.example/`), which HTTP says
+   a server should treat as an error, a port that is no number (`http://shop.example:abc/`),
+   or an address in brackets that is not IPv6 or has a zone (`http://[v1.fe80]/`,
+   `http://[fe80::1%25eth0]/`). The target's host is the one the request asks for, so the
+   check reads it where it would read `Host`, and by the same rule.
 
-Nothing in a request-target is refused: whatever the parse lets through is routed as before,
-though HTTP says a server should answer an invalid request-line with a `400` or a redirect. That
-is a byte outside ASCII (`/café` from a client that sends it as typed, where a browser sends
-`/caf%C3%A9`), a `|` or a `%` before no hex digits, `*` with any method, and a host alone with a
-method other than `CONNECT`.
+Nothing else in a request-target is refused: the check reads none of its path or query, and
+whatever the parse lets through there is routed as before, though HTTP says a server should
+answer an invalid request-line with a `400` or a redirect. That is a byte outside ASCII (`/café`
+from a client that sends it as typed, where a browser sends `/caf%C3%A9`), a `|` or a `%` before
+no hex digits, `*` with any method, and a host alone with a method other than `CONNECT`.
 
 The connection stays open after it, as after the `421`: the server knows where the request
 ends, so the next one on the connection is answered (one whose body had not all arrived is
@@ -313,8 +317,9 @@ names `shop.example`, over HTTP/1.0 or HTTP/1.1, is answered. The first request
 refused for each reason is logged, with its method, its path and the reason: never its query,
 and of a `Host` or a target's host that is none only the name in it, without a user before or a
 path after (no name at all where an `@` comes after a `/`, a `?` or a `#`, since which part is
-the user cannot then be told; a name with a space in it is logged as sent). A path or a name
-longer than 200 bytes is given by its first 200 and its length.
+the user cannot then be told; a name with a space in it is logged as sent). A method, a path or
+a name longer than 200 bytes is given by its first 200 and its length, in that line and in the
+`421`'s.
 
 A deployed app lists the names it is served under, where the deploy sets `HOST` and `PORT`:
 
@@ -1361,9 +1366,10 @@ check's read of `Host` and its match against the app's names. Refusing what HTTP
 with `Host` second, and 80 to 85 with it last of a browser's eight lines, about where
 Playwright's WebKit on Linux writes it (its Chromium and Firefox write it first, and so does
 nginx as the deploy guide sets it up). A request with `Host` first is no longer searched for it
-and costs 59 to 96 fewer than before in an app that names its hosts. An app that answers to any
-host now reads `Host` too: 177 to 183 more with it first and 377 to 384 with it last of eight
-(counted over a socket at the final code, `31212aa1d`, each build in turn, with main built a
+and costs 60 to 96 fewer than before in an app that names its hosts. An app that answers to any
+host now reads `Host` too: 177 to 184 more with it first and 377 to 384 with it last of eight
+(counted over a socket at the final code, `31212aa1d`, each build in turn, each figure the
+difference of the two builds' medians of three runs, with main built a
 second time counting within 4 of main but for one request, 12 away, so the 46 is not told from
 34; [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
