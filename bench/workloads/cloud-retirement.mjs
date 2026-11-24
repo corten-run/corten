@@ -32,10 +32,21 @@ export function createErroredRecord(s, { dropletId, actionId }, droplets, observ
 // Rebuild the receipt from the saved state; only the census size and time come from the file.
 // A recorded reappearance of the posted droplet contradicts the receipt for good.
 export const createReappeared = "provider-errored create contradicted: its posted droplet was observed again on the saved account;"
-  + " this attempt never resolves or admits a retry; account for that droplet with the provider and preserve reservation";
+  + " this attempt never resolves or admits a retry; collect binds only that exact posted droplet under its saved name, tags, region"
+  + " and one public IPv4, then retire it by --collect --unused-bootstrap-known-hosts; otherwise account for it with the provider and preserve reservation";
+// A contradiction is made durable before its state publication: this witness first,
+// then the state through its own create-reappeared stage. Either one left behind (a
+// failed or interrupted publication) contradicts the receipt exactly as a published
+// reappearance does, so no later collect, launch, fleet check or successor accepts it.
+export const createReappearedWitness = "provider-create-reappeared";
+const reappearedStage = /^state\.json\.create-reappeared-[a-f0-9]{32}\.tmp$/;
+export function createContradiction(local) {
+  return !!lstatSync(join(local, createReappearedWitness), { throwIfNoEntry: false })
+    || readdirSync(local).some((name) => reappearedStage.test(name));
+}
 export function verifyCreateErrored(local, s) {
   assert.ok(s.createErrored, "no provider-errored create record");
-  assert.ok(!s.createErrored.reappeared, createReappeared);
+  assert.ok(!s.createErrored.reappeared && !createContradiction(local), createReappeared);
   const bytes = regular(join(local, createErroredReceipt), 64 * 1024), record = JSON.parse(bytes);
   assert.equal(digest(bytes), s.createErrored.evidenceSha256, "create failure receipt changed; preserve reservation");
   assert.ok(Number.isSafeInteger(record.absence?.inventory?.droplets) && record.absence.inventory.droplets >= 0

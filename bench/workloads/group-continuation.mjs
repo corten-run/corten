@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
 import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
-import { createErroredReceipt, createRecheckLock, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
+import { createContradiction, createErroredReceipt, createRecheckLock, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
   verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readFleet, readGroup,
   readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
@@ -73,7 +73,7 @@ const terminal = ({ state }) => state?.id && state.destroyedAt && ["collected", 
 // launch, operation ("available") or recheck lock, unless a later read saw its posted
 // droplet again: that recorded contradiction never settles.
 const createErrored = (saved) => saved.outcome === "available" && !!saved.state?.createErrored && !saved.state.createErrored.reappeared
-  && !present(join(saved.stateRoot, ".groups-launch.lock")) && !present(join(saved.local, createRecheckLock));
+  && !present(join(saved.stateRoot, ".groups-launch.lock")) && !present(join(saved.local, createRecheckLock)) && !createContradiction(saved.local);
 const settled = (saved) => terminal(saved) || createErrored(saved);
 function verifyCreateErroredAttempt(saved) {
   assert.ok(createErrored(saved), "unresolved custody for the selected group");
@@ -156,7 +156,10 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
   const attempts = new Map(names.map((group) => [group, []])), slots = new Map(), unlaunched = new Map(), ids = new Set();
   const indexedCustody = [];
   const proofs = [], retryEvidence = [], manifests = [], states = [], peers = [], unconfirmed = [], needsCensus = new Set(), liveIps = new Set();
-  const createFailures = [];
+  // createFailures binds the selected group's own retry to its exact receipt and state.
+  // postedCreates is only the census fence: every earlier provider-errored attempt's
+  // posted droplet in any group, settled or contradicted, refuses a create on its account.
+  const createFailures = [], postedCreates = [];
   const retainedLocks = [];
   const setupCensus = (fleet, saved, lock, launch) => {
     const { group, state, stateSha256 } = saved, { round, provider, single } = fleet.manifest;
@@ -219,6 +222,8 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       const noCreate = notCreated(fleet, saved, lock);
       let outcome = noCreate ? "not-created" : setup ? setupCensusOutcome : saved.outcome === "available" ? "uncollected" : saved.outcome;
       let receipt;
+      if (state?.createErrored && !postedCreates.some((row) => row.accountId === manifest.provider.accountId && row.dropletId === state.createErrored.dropletId))
+        postedCreates.push({ accountId: manifest.provider.accountId, dropletId: state.createErrored.dropletId });
       if (pinned || known(saved)) outcome = "known-result";
       else if (createErrored(saved)) {
         if (selected) {
@@ -418,6 +423,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
         ({ round, commit, manifestSha256, stateSha256, launch })),
       ...(unconfirmed.length ? { unconfirmed } : {}),
       ...(createFailures.length ? { createFailures } : {}),
+      ...(postedCreates.length ? { postedCreates } : {}),
       ...(peers.length ? { peers: peers.map(({ proof }) => proof) } : {}) } };
   const subject = { indexSha256, verified: proofs.map(({ fleet, snapshot }) => ({ root: fleet.root, round: fleet.manifest.round,
     manifestSha256: fleet.manifestSha256, ...snapshot })),

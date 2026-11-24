@@ -182,10 +182,13 @@ test("a recorded failure whose posted droplet is seen again is contradicted for 
     assert.equal(after.status, "creating"); assert.equal(after.id, undefined);
     assert.ok(readFileSync(join(h.local, "provider-create-errored.json")).equals(receipt), "the receipt is kept as evidence");
     assert.ok(!existsSync(join(h.local, "operation.lock")), "the refusal is recorded state, not retained custody");
-    // Gone again: the record still refuses before any provider read, and blocks a later round.
+    // Gone again: the record still refuses after only the exact GET of the posted ID (the
+    // contradicted route of review round 4, finding 3; never a census), and blocks a later round.
     h.hosts([]);
     const calls = h.calls.length;
-    await assert.rejects(h.task().collect(), /observed again/); assert.equal(h.calls.length, calls);
+    await assert.rejects(h.task().collect(), /observed again/);
+    assert.deepEqual(h.calls.slice(calls).map(([, ...args]) => args[0] === "account" ? "account" : args[2]), ["account", "get", "account"]);
+    assert.equal(h.saved().id, undefined);
     const next = harness(t, { stateRoot: h.base, round: "r22" });
     await assert.rejects(next.launch().launch(), /observed again/); assert.equal(next.creates, 0);
     assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
@@ -534,9 +537,14 @@ test("a receipt left before its state publication is adopted only after a fresh 
       assert.equal(await o.collect(), 1);
       assert.deepEqual(o.after(before), ["account", "action", "account", "account", "get", "account", "account", "list", "account"]);
       assert.equal(h.saved().createErrored.evidenceSha256, digest(canonical));
-    } else {
-      await assert.rejects(o.collect(), kind === "changed" ? /unpublished create failure receipt differs/ : /not verified absent/);
+    } else if (kind === "changed") {
+      await assert.rejects(o.collect(), /unpublished create failure receipt differs/);
       assert.equal(h.saved().createErrored, undefined);
+    } else {
+      // The exact owned posted droplet contradicts the receipt: bound, never adopted (review round 4, finding 3).
+      assert.equal(await o.collect(), 3);
+      const saved = h.saved();
+      assert.equal(saved.createErrored, undefined); assert.equal(saved.id, "123"); assert.equal(saved.createContradicted.evidenceSha256, digest(bytes));
     }
     assert.ok(lockPaths(h).every((lock) => !existsSync(lock)));
     assert.equal(readFileSync(path, "utf8"), bytes, "the receipt is never rewritten");

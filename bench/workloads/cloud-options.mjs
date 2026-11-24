@@ -74,7 +74,11 @@ export function fleetCatalogResult(result) {
 
 const controllerStages = ["source-plan", "exact-approval", "remote-main-advertisement", "remote-main-fetch", "remote-main-ancestry",
   "source-recheck", "controller-construction", "controller-launch", "controller-collect", "controller-audit", "controller-cancellation", "controller-retirement", "controller-checkpoint", "provider-settlement",
-  "setup-watcher-proof-missing", "setup-host-proof-refused"];
+  "setup-watcher-proof-missing", "setup-host-proof-refused",
+  // Refusals whose supported operator route the CLI names (publicError).
+  "offline-never-started", "create-errored-contradicted", "create-contradiction-unpublished"];
+// Collect-time stages that name a route survive the production wrapper's phase mark.
+export const routeStages = ["setup-watcher-proof-missing", "setup-host-proof-refused", "offline-never-started", "create-errored-contradicted", "create-contradiction-unpublished"];
 export function controllerFailure(error) {
   const stage = error && typeof error === "object" ? Object.getOwnPropertyDescriptor(error, "controllerStage")?.value : undefined;
   return controllerStages.includes(stage) ? stage : undefined;
@@ -163,11 +167,16 @@ export function cancellationState(value) {
     full(value[key], /[a-f0-9]{64}/, "cancellation evidence hash");
 }
 export const unitQuery = (s) => `systemctl show ${s.unit} --property=Id --property=LoadState --property=FragmentPath --property=ActiveState --property=Restart --property=MainPID --property=ExecMainCode --property=ExecMainStartTimestamp`;
+function reappearance(r) {
+  assert.ok(r && typeof r === "object" && !Array.isArray(r) && JSON.stringify(Object.keys(r).sort()) === '["at","dropletId","via"]'
+    && ["exact-get", "inventory"].includes(r.via) && typeof r.at === "string" && new Date(r.at).toISOString() === r.at
+    && typeof r.dropletId === "string" && /^[1-9]\d{0,15}$/.test(r.dropletId), "create failure reappearance record");
+}
 export function controllerState(s, round, options) {
   validateState(s, round, options);
   const allowed = ["schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "createdAt", "status", "id", "ip",
     "createIntentAt", "archiveSha256", "evidenceSha256", "extractionAttempts", "evidence", "evidenceOutcome", "collectedAt", "deletionIntentAt", "destroyedAt",
-    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "gitSource", "quietBootstrap", "remainingPlacement", "launchHostKeySha256", "createErrored", "createPending"];
+    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "gitSource", "quietBootstrap", "remainingPlacement", "launchHostKeySha256", "createErrored", "createPending", "createContradicted"];
   assert.ok(Object.keys(s).every((k) => allowed.includes(k)), "unknown controller state field");
   providerIdentity(s.provider);
   if (s.fleet) assert.deepEqual(s.provider, s.fleet.provider, "fleet account/context differs");
@@ -244,13 +253,8 @@ export function controllerState(s, round, options) {
     assert.deepEqual(Object.keys(c).filter((key) => key !== "reappeared").sort(), ["actionId", "dropletId", "evidenceSha256"]);
     for (const key of ["actionId", "dropletId"]) assert.ok(Number.isSafeInteger(Number(full(c[key], /[1-9]\d{0,15}/, key))), key);
     full(c.evidenceSha256, /[a-f0-9]{64}/, "create failure evidence hash");
-    if (c.reappeared !== undefined) {
-      // A later read saw the posted droplet again: a permanent contradiction of the receipt.
-      const r = c.reappeared;
-      assert.ok(r && typeof r === "object" && !Array.isArray(r) && JSON.stringify(Object.keys(r).sort()) === '["at","dropletId","via"]'
-        && ["exact-get", "inventory"].includes(r.via) && typeof r.at === "string" && new Date(r.at).toISOString() === r.at
-        && typeof r.dropletId === "string" && /^[1-9]\d{0,15}$/.test(r.dropletId), "create failure reappearance record");
-    }
+    // A later read saw the posted droplet again: a permanent contradiction of the receipt.
+    if (c.reappeared !== undefined) reappearance(c.reappeared);
     assert.equal(s.status, "creating", "a provider-errored create is never bound");
     for (const key of ["id", "ip", "archiveSha256", "evidenceSha256", "evidence", "extractionAttempts", "evidenceOutcome", "validation", "collectedAt",
       "exitCode", "deletionIntentAt", "destroyedAt", "retirement", "bootstrapReady", "preBootstrapTerminal", "launchHostKeySha256", "mixedCancellation", "auditIntent", "auditIntents"])
@@ -259,6 +263,21 @@ export function controllerState(s, round, options) {
     assert.ok(!s.control || !s.control.ledger.length && !s.control.sealed.length && (!m || m.phase === "pending" && !m.registrationSha256),
       "a provider-errored create cannot have guest control");
     if (s.createPending) assert.deepEqual({ dropletId: c.dropletId, actionId: c.actionId }, s.createPending, "create failure differs from the posted create");
+  }
+  if (s.createContradicted !== undefined) {
+    // A provider-errored receipt (published or not) contradicted by its exact posted
+    // droplet, which then showed its saved ownership and was bound. Kept as evidence
+    // through the pinned unused retirement; never a create failure again.
+    const c = s.createContradicted;
+    assert.ok(c && typeof c === "object" && !Array.isArray(c), "create contradiction record required");
+    assert.deepEqual(Object.keys(c).sort(), ["actionId", "dropletId", "evidenceSha256", "reappeared"]);
+    for (const key of ["actionId", "dropletId"]) assert.ok(Number.isSafeInteger(Number(full(c[key], /[1-9]\d{0,15}/, key))), key);
+    full(c.evidenceSha256, /[a-f0-9]{64}/, "create contradiction evidence hash");
+    reappearance(c.reappeared);
+    assert.equal(c.reappeared.dropletId, c.dropletId, "create contradiction names another droplet");
+    assert.ok(s.createErrored === undefined && s.id === c.dropletId && (s.status === "preparing" || s.status === "retired" && s.retirement?.kind === "unused"),
+      "a contradicted create is only its bound posted droplet, retired as unused");
+    if (s.createPending) assert.deepEqual({ dropletId: c.dropletId, actionId: c.actionId }, s.createPending, "create contradiction differs from the posted create");
   }
   if (s.evidence) assert.ok(s.archiveSha256 && s.evidenceSha256, "unhashed evidence");
   if (s.collectedAt || s.status === "collected") assert.ok(s.evidence && s.validation && ["validated", "failed", "blocked"].includes(s.evidenceOutcome), "incomplete collection state");

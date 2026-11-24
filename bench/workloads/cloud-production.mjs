@@ -5,7 +5,7 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { controllerFailure, controllerState, full, parseDropletArgs, providerFailure, unsentDelete } from "./cloud-options.mjs";
+import { controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
@@ -120,6 +120,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
       if (interrupted) assert.ok(launchHostKey(local, saved).equals(key), "verified key differs from launch");
       recovery = { measuredCommit: saved.commit, hostId: saved.id, ip: saved.ip, knownHostsSha256: digest(key),
         policy: interrupted ? "unacknowledged-first-upload-never-written-only" : settled ? "settled-uploads-unused-only-no-qualification"
+          : saved.createContradicted ? "contradicted-create-posted-droplet-unused-only-no-qualification"
           : offlineNeverStarted(saved) ? "offline-never-started-posted-create-unused-only-no-qualification" : "first-ssh-unused-only-no-qualification" };
     } else if (options.cancelMixedWait) {
       ownedMixedWait(saved); assert.equal(saved.status, "running");
@@ -254,10 +255,11 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   if (stagedSibling) assert.ok(remainingAdmission, "only fleet admission may launch a v5 sibling");
   const admission = manifest && !preview ? readAdmission() : undefined;
   const unconfirmed = manifest?.single ? admission?.subject.continuation.unconfirmed ?? [] : [];
-  // Every posted droplet of an earlier provider-errored attempt is fenced too, by ID
-  // alone: a renamed or untagged droplet with that ID still refuses the create.
-  const createFailures = manifest?.single ? admission?.subject.continuation.createFailures ?? [] : [];
-  const historicalIds = new Set([...unconfirmed, ...createFailures.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
+  // Every posted droplet of an earlier provider-errored attempt, in any group, is fenced
+  // too, by ID alone: a renamed or untagged droplet with that ID still refuses the create.
+  const continuation = manifest?.single ? admission?.subject.continuation : undefined;
+  const posted = [...continuation?.createFailures ?? [], ...continuation?.postedCreates ?? []];
+  const historicalIds = new Set([...unconfirmed, ...posted.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
     assert.equal(accountId, manifest.provider.accountId, "historical custody requires the same provider account");
     return full(id, /[1-9]\d*/, "historical custody requires a bound host ID");
   }));
@@ -368,7 +370,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   return result;
   } catch (error) {
     const detail = stage === "controller-collect" && controllerFailure(error);
-    throw mark(error, detail && detail.startsWith("setup-") ? detail : stage);
+    throw mark(error, detail && routeStages.includes(detail) ? detail : stage);
   }
   finally {
     try { await providerRun?.close(); }
