@@ -1,0 +1,1 @@
+- Benchmark launch errors now distinguish an unproved local SSH process result from missing remote acknowledgement of the bootstrap marker, without changing retry or custody. [#2040 Live Delivery r64 loses bootstrap-marker acknowledgement before monitor registration](https://github.com/corten-run/corten/issues/2040)
