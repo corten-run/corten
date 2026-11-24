@@ -399,6 +399,22 @@ The direct CLI renders that same closed controller stage and the provider's
 allowlisted code-specific detail or HTTP status. It never prints a native error's
 message, stack, response or accessor. These labels identify the stopped operation,
 not its cause or successful cleanup; the retained state still governs recovery.
+For the common-bootstrap marker read, `controller-launch` can also report
+`Bootstrap marker: LOCAL-LABEL` (the same closed detail in the fleet receipt's
+`providerDiagnostic` field, under code `bootstrap-marker`):
+
+- `local-control-uncertain`: the local SSH invocation did not provide a valid
+  process result. Its process tree is not proved gone.
+- `remote-completion-unconfirmed`: the local process result did not prove the
+  registered remote command's completion. This does not say whether it ran.
+- `acknowledged-exit-refused`: an acknowledged exit other than ready (0) or
+  not yet ready (3).
+- `marker-invalid`: an acknowledged ready read did not pass marker validation.
+
+The first two retain custody and never poll again. Only an acknowledged exit 3
+uses the existing bounded poll. These labels do not attest to monitor
+registration, establish a cause for r64, or grant a recovery action.
+
 For `offline-never-started` and `create-errored-contradicted` it adds fixed text
 naming the pinned route, `--collect --unused-bootstrap-known-hosts`; for
 `create-contradiction-unpublished` it names the custody step and the
@@ -602,7 +618,9 @@ continuation lock exists (not that its owner is live); `lock-check` means some
 other lock operation failed. `batch-owner` means the indexed fleet's batch
 owner could not be shown to have stopped. `custody-replay` means the selected
 group's archived result or retirement proof did not replay; `custody-read`
-is the fallback for other errors reading saved evidence. `custody-unresolved`
+is the fallback for other errors reading saved evidence. `posted-custody` means
+an earlier provider-errored attempt with a posted droplet, in any group and retired
+or not, still has a launch, operation or recheck lock beside it. `custody-unresolved`
 means custody scanning found a blocker. `custody-account` and `custody-recheck`
 name the subsequent custody checks.
 `group-selection` covers reservation or eligibility checks. These labels name
@@ -969,6 +987,16 @@ refuses the create before intent or POST (`changed, took custody or was contradi
 this create`). A contradicted attempt retired by the pinned route does not block; its ID
 stays in the census fence. No local recheck is atomic with the provider: a
 contradiction recorded after this gate is caught by the next launch, not this one.
+
+Admission applies the gate's custody check first. When `--prepare`, `--print-approval`
+or the approval reads the continuation, every earlier posted attempt, retired or not,
+must have no launch, operation or recheck lock beside it; otherwise it refuses before any
+reservation, approval prompt, intent or POST, with `continuation-admission; posted-custody`.
+Nothing clears the lock. Account for its owner by the custody step for that attempt's
+locks (verify the lock against the attempt's original launch or collect and that its
+process tree is gone, keep its unchanged bytes outside the state roots, then release it),
+and run admission again. If ownership is uncertain, leave the lock; the continuation
+stays closed.
 
 The group recheck settles only the child. A launch that stopped uncertain at its
 create deadline also keeps its attempt's `.fleet-operation.lock` and, in a
