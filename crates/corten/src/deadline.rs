@@ -47,6 +47,8 @@ thread_local! {
     /// How many connections' timers this thread has made, less how many it has dropped: how many
     /// there are, where one thread does both (a test on a current-thread runtime).
     pub(crate) static LIVE: Cell<isize> = const { Cell::new(0) };
+    /// How many deadlines have taken a connection's timer on this thread.
+    pub(crate) static TAKEN: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -112,10 +114,11 @@ impl Drop for Polling<'_> {
     }
 }
 
-/// Swaps the thread's timer and the one in `place`.
+/// Swaps the thread's timer and the one in `place`. Not where the thread is ending, as
+/// [`Kept`]'s drop: this runs in [`Polling`]'s drop, where a panic during another would abort.
 #[inline(always)]
 fn swap(place: &mut Option<Held>) {
-    TIMER.with(|thread| thread.swap(Cell::from_mut(place)));
+    let _ = TIMER.try_with(|thread| thread.swap(Cell::from_mut(place)));
 }
 
 impl<C: Future> Future for Keeps<C> {
@@ -143,18 +146,26 @@ impl<C: Future> Future for Keeps<C> {
 
 /// A connection's number and its timer, not yet set: made in the connection's own poll, so the
 /// timer is of the runtime that polls the connection, whatever its handler had entered when its
-/// deadline asked.
+/// deadline asked. A deadline asks only once it has made a timer of its own ([`Timer::poll`]), so
+/// where there is no clock to make one on, the handler's catch has the panic, as it always had.
+/// That leaves a handler that made its timer on a runtime it had entered, on a connection whose
+/// own runtime has no clock: the connection then has its number and no timer, and its deadlines
+/// go on making their own.
 #[cold]
 fn made() -> Mine {
+    let timer = std::panic::catch_unwind(|| Box::pin(tokio::time::sleep(Duration::MAX))).ok().map(Held);
     #[cfg(test)]
-    LIVE.with(|live| live.set(live.get() + 1));
-    Mine { id: NAMES.fetch_add(1, Relaxed), timer: Some(Held(Box::pin(tokio::time::sleep(Duration::MAX)))) }
+    LIVE.with(|live| live.set(live.get() + isize::from(timer.is_some())));
+    Mine { id: NAMES.fetch_add(1, Relaxed), timer }
 }
 
 /// A connection's timer while a deadline has it. Dropped where its connection is being polled, it
 /// goes back to the connection still set, and the next deadline moves it later; dropped anywhere
-/// else, the timer is dropped. Its waker stays the last deadline's, so a timer no deadline takes
-/// before it fires wakes that request's task, the connection's, once for nothing.
+/// else, the timer is dropped. It keeps the waker of whatever polled it last: the connection's
+/// task as a rule, but a handler that polls its request another way (it blocks on a runtime of its
+/// own, or a layer polls through a `FuturesUnordered`) leaves that waker, and what the waker
+/// holds, until the next deadline polls the timer or the timer fires. A timer no deadline takes
+/// before it fires wakes that once, for nothing.
 pub(crate) struct Kept {
     of: u64,
     /// `None` only once it is dropped.
@@ -163,19 +174,27 @@ pub(crate) struct Kept {
 
 impl Kept {
     /// The timer of the connection being polled, set to fire `limit` from now. `None` where no
-    /// connection is being polled, or its timer is not there: not made yet (the connection then
-    /// makes it, for its next deadline), or another deadline has it.
+    /// connection is being polled, or its timer is not there: not made yet, or another deadline
+    /// has it.
     fn take(limit: Duration) -> Option<Kept> {
         let of = BY.get();
         if of <= ASKED {
-            if of == UNNAMED {
-                BY.set(ASKED);
-            }
             return None;
         }
         let mut timer = TIMER.take()?;
         timer.0.as_mut().reset(after(limit));
+        #[cfg(test)]
+        TAKEN.with(|taken| taken.set(taken.get() + 1));
         Some(Kept { of, timer: Some(timer) })
+    }
+}
+
+/// Tells the connection being polled, if it has made no timer, that a deadline of its has waited:
+/// it makes its timer when this poll of it ends, for its next deadline.
+#[inline]
+fn ask() {
+    if BY.get() == UNNAMED {
+        BY.set(ASKED);
     }
 }
 
@@ -211,7 +230,12 @@ impl Timer {
         if let Waiting::Unset = self.as_mut().project() {
             let timer = match Kept::take(limit) {
                 Some(kept) => Timer::Kept { kept },
-                None => Timer::Own { timer: tokio::time::sleep(limit) },
+                None => {
+                    let timer = tokio::time::sleep(limit);
+                    // After the timer is made, which panics on a runtime with no clock.
+                    ask();
+                    Timer::Own { timer }
+                }
             };
             self.set(timer);
         }
@@ -223,8 +247,7 @@ impl Timer {
     }
 }
 
-/// `limit` from now, as `tokio::time::sleep` counts it: a time too far to add is 30 years off.
+/// `limit` from now, and no further off than 30 years, the longest `tokio::time::sleep` waits.
 fn after(limit: Duration) -> Instant {
-    let now = Instant::now();
-    now.checked_add(limit).unwrap_or_else(|| now + Duration::from_secs(86400 * 365 * 30))
+    Instant::now() + limit.min(Duration::from_secs(86400 * 365 * 30))
 }
