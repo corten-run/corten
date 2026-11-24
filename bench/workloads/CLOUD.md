@@ -764,7 +764,12 @@ receipts report `create-errored`, a later round in the same root is not blocked,
 round's pre-create census fences each earlier failure's posted droplet by ID alone: a
 listed droplet with that ID, whatever its name or tags, refuses with `posted droplet
 is listed` before create intent, and an earlier failure recorded on another provider
-account refuses the launch, since this account's census cannot see it. It never
+account refuses the launch, since this account's census cannot see it. The fence
+includes a contradicted create (below) after its pinned retirement: retirement deleted
+the droplet it bound, it did not settle what the provider showed under that ID. After
+the census, immediately before create intent, the launch rereads each earlier round in
+the root: one whose state bytes changed, that took a lock or whose receipt has been
+contradicted since refuses with `changed before this create`, with no intent or POST. It never
 retries the create or relaunches the round. A later successful attempt is separate
 evidence and does not qualify this one. The locks are released only after the
 provider worker's teardown settles. If that teardown fails, both locks stay with the
@@ -776,10 +781,11 @@ or non-`errored` action stays `create-action-response`, a GET that is not 404, a
 inventory row with the ID, name or tag, an account change or a transport failure
 preserves the `creating` reservation for inspection. Such a reservation still blocks
 later launches in its root. With a valid errored identity the saved
-`createPending` stays: if the exact droplet is present under its own name and tags
-the existing lost-acknowledgement reconciliation binds that exact allocation, but an
-allocation with any other ID, even one carrying this create's name and tags, is
-never bound. That contradiction stays unresolved, and a later `--collect` rechecks
+`createPending` stays: if the exact GET of the posted ID returns that droplet under
+its own name, tags and placement with one public IPv4, the launch binds exactly that
+allocation. Nothing else binds: not a census row after a 404 (even with the posted ID),
+not a census after a GET that failed, and not an allocation with any other ID, even one
+carrying this create's name and tags; each refuses `without binding`. That contradiction stays unresolved, and a later `--collect` rechecks
 the saved action and absence as below.
 
 The provider can report `errored` long after the create's deadline: in r21 the
@@ -841,12 +847,26 @@ an ordinary save is not verified, so it is never read, promoted, removed or allo
 to block this publication. It stays for the operator to archive. A stray random-named
 staging file is likewise left alone. An ordinary save on that reservation, such as
 the bind below, still refuses on the fixed-name file until the operator archives it.
+A stop after writing that create-errored stage and before its rename leaves it beside
+the receipt. If the posted droplet then reappears, the contradicted bind below checks
+the stage without reading it as state: its bytes must be exactly this reservation's
+publication of the receipt beside it (the saved state with `createErrored` naming
+the posted IDs and that receipt's hash), or a prefix of those bytes left by a write
+cut short. Such a stage is recorded with its hash, like a reappearance stage, so the
+pinned retirement can admit it. Any other bytes bind nothing: the witness is still
+written, and the collect refuses with `not this reservation's publication`. That
+file was not written by this reservation's publication, so account for its origin by
+the custody step, keep its bytes and that account outside the state roots, remove
+it, and collect again; the bind and the pinned retirement then proceed as below.
 
 A `completed` action bound to the posted droplet is a real allocation, not a
 provider-errored create. (Beside an unpublished receipt it contradicts that receipt,
-and takes the contradiction route below.) After the custody step above, group `--collect` binds that
-exact allocation, the same identity reconciliation the launch makes for a lost
-acknowledgement, and returns 3. It never provisions. The binding is its own
+and takes the contradiction route below.) After the custody step above, group `--collect`
+reads the exact GET of the posted droplet ID, never a census. If that one row is the
+posted ID and positively owned (the saved name, run tags, size and region and one
+public IPv4) it binds that exact allocation and returns 3; a 404, a failed read or a
+row without that ownership refuses with `nothing bound`, whatever the census lists,
+and the next collect reads again. It never provisions. The binding is its own
 checkpoint: that collection's provider worker closes when it returns, and a fresh
 collection then retires it only through the pinned unused-bootstrap preview and
 approval below, with the fresh unused-host proof and the existing deletion fences.
@@ -890,7 +910,8 @@ exactly that droplet and returns 3. It never provisions. `createContradicted` ho
 the posted IDs, the receipt hash, `receiptVerified`, the bind's own exact read
 (`reappeared`, always the posted ID), the witness hash (the witness keeps the first
 observation, which can be a census row with another ID and the saved name or tag)
-and, as `stages`, the name and hash of each reappearance stage left beside it.
+and, as `stages`, the name and hash of each reappearance stage and each checked
+create-errored publication stage (above) left beside it.
 `receiptVerified` is true for a published receipt with its saved hash or an
 unpublished one whose bytes are exactly the canonical record for the saved state;
 other bytes (a partial write, say) are kept as an unverified artifact, not evidence
@@ -926,9 +947,18 @@ subject lists each such attempt's account and posted droplet
 ID (`createFailures`, bound to its manifest, state and receipt for the selected
 group's retry), and separately every earlier provider-errored attempt's account and
 posted droplet ID in any group of the continuation (`postedCreates`, settled or
-contradicted). The successor's fresh pre-create census refuses any droplet with one
-of those IDs on that account, whatever its name or tags, before it records create
-intent, whichever group is selected.
+contradicted, including a contradicted attempt after its pinned retirement). The
+successor's fresh pre-create census refuses any droplet with one of those IDs on that
+account, whatever its name or tags, before it records create intent, whichever group
+is selected. Each `postedCreates` row also snapshots its attempt (root, round, group,
+manifest and state hashes, custody outcome and whether it was contradicted). The
+child's final gate, after the account read that opens its create and after the
+selected group's own recheck, rereads every one of them, separately from that retry's
+eligibility: a changed manifest or state, a lock taken, a witness or reappearance stage
+written since the snapshot, or a contradicted attempt not yet retired refuses the create
+before intent or POST. A contradicted attempt retired by the pinned route does not block;
+its ID stays in the census fence. No local recheck is atomic with the provider: a
+contradiction recorded after this gate is caught by the next launch, not this one.
 
 The group recheck settles only the child. A launch that stopped uncertain at its
 create deadline also keeps its attempt's `.fleet-operation.lock` and, in a
