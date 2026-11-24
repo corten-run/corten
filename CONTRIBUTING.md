@@ -312,10 +312,15 @@ page, a script's `replaceState` during a read) hold it the same way. The busy ma
 sees each post where the page calls `fetch`, since a route hears of a request only some time
 after the browser sends it: it requires the waiting button's post sent only once the held answer
 is drawn, the two posts and their answers in the route's log, and the waiting post's own answer
-drawn. The `replaceState` check holds the page's first read from before the page loads, so the
-read it holds is the first however soon it comes, and requires that read cancelled and a read of
-the replaced address answered. A wait for a request that a held answer lets out starts when that
-answer is let go. The check of a navigation during a patch's stylesheet load holds the one
+drawn. The `replaceState` check loads the page with the document the server drew for the write's
+address before the write landed, asked for as soon as the write is answered, so the page comes in
+waiting however long the test takes to load it; a fixture that cannot draw that document fails
+the check rather than skipping it. The check holds the page's first read from before the page
+loads, so the read it holds is the first however soon it comes, and requires that read cancelled,
+every later read made at the held read's address with only `shown` changed (its receipt kept),
+one of them answered with success, and the page left at that address. A wait for a request that a
+held answer lets out starts when that answer is let go. The check of a navigation during a
+patch's stylesheet load holds the one
 stylesheet the patch links until the runtime has read the navigation's answer, and requires that
 the page did not swap while it was held and that the browser requested it once while it was
 held. It runs twice: once the load succeeds, and the page swaps in with the area's rules applied,
