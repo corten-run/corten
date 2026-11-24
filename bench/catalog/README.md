@@ -41,9 +41,13 @@ a second under what the upstream advertises. Spring is the exception at 1 s, sin
 drops an expired connection late, and Drogon and Django check the idle time when they take a
 connection from the pool, so an expired one is skipped at checkout rather than closed at 4 s. The
 full-stack [Caveats](../fullstack/README.md#caveats), item 5, list each client's setting.
-`bench/fullstack/idle-close.mjs` checks that an image has dropped them when probed 4.5 to 4.75 s
-idle, under the upstream's 5 s close; it does not measure the configured 4 s itself. This is the pool policy
-alone: no retry, no cache, and still one upstream GET per record read.
+`bench/fullstack/idle-close.mjs` checks that an image had dropped them when its probe requests
+reached the upstream with every warmed connection idle 4.5 to 4.75 s (or closed under 4.75 s
+idle before the probe), under the upstream's 5 s close; it does not measure the configured 4 s
+itself. This is the pool policy alone: no retry, no cache, and still one upstream GET per record
+read. It is a correctness-only change to the timed request path: the apps' pool bounds, and the
+class counters below, are timed inputs for groups measured from this point, with no performance
+claim; their cost is not measured, and saved results are unchanged.
 
 The stand-in upstream alone pre-serializes and UTF-8 encodes its records at
 startup. Canonical record GETs reuse those bytes without URL parsing or an
@@ -399,7 +403,9 @@ response-decompression error code, another status or a wrong content type). A su
 never reaches that classification and no class series receives a sample, so a run
 without failures emits exactly the samples it did before the split; k6 reports only
 series that received a sample. The six class Counters are still created at init and a
-success makes one more comparison; that cost is not measured. A replay reads the classes when any is present, requires
+success makes one more comparison; that cost is not measured, and the counters are a timed input
+for groups measured from this point (a correctness-only exception, with no performance claim;
+saved results are unchanged). A replay reads the classes when any is present, requires
 them to account exactly for the HTTP errors and invalid responses, and names a transport
 error when it refuses a phase; without any (no failures, or a producer from before the
 split) the split is unknown, and the phase replays to the same metrics either way. Any

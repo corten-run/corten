@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { createServer, request, Agent } from "node:http";
 import test from "node:test";
-import { assertPasses, attemptKey, boundMs, checkImage, checkOptions, closingUpstream, keepAliveMs, marginMs, ownerKey, parseArgs, probeWindow, slackMs, waitUntil } from "./idle-close.mjs";
+import { assertPasses, attemptKey, boundMs, checkImage, checkOptions, closingUpstream, inconclusive, keepAliveMs, marginMs, ownerKey, parseArgs, probeWindow, slackMs, waitUntil } from "./idle-close.mjs";
 
 // Listening servers once the event loop has had a turn to release closed handles.
 const listeners = async () => {
@@ -254,6 +254,9 @@ test("the upstream records each request's idle, answers before the close and res
   assert.equal(answered.length, 2);
   assert.equal(answered[0].idle, null);
   assert.ok(answered[1].idle >= 90 && answered[1].idle < 300 && answered[1].connection === answered[0].connection, JSON.stringify(answered));
+  // Each request's arrival is on the monotonic clock, unrounded, and the connection keeps its last answer after it closes.
+  assert.ok(answered[1].arrival > answered[0].arrival && upstream.lastAnswerOf(answered[0].connection) >= answered[1].arrival, JSON.stringify(answered));
+  assert.equal(upstream.lastAnswerOf(99), null);
   const closed = upstream.events.filter((e) => e.kind === "closedIdle");
   assert.equal(closed.length, 1);
   assert.ok(closed[0].idle >= 300);
@@ -263,9 +266,11 @@ test("the upstream records each request's idle, answers before the close and res
 
 // A stand-in for an app image: a server that reads API_BASE through an HTTP agent, so its pool's idle
 // bound is chosen by the test. `agent: false` opens a connection per request. `expireMs` closes a
-// pooled connection idle that long, on a timer of the stand-in's own rather than Node's. `delay(path,
-// n)` holds the nth answer to a path (from 1) that many ms after its upstream answer.
-function standInDocker(runId, agentOptions, delay = () => 0) {
+// pooled connection idle that long, on a timer of the stand-in's own rather than Node's. For the nth
+// request to a path (from 1): `hold(path, n)` ms before it is sent upstream, `delay(path, n)` ms
+// after its upstream answer before the reply, and `unpooled(path, n)` sends it on a connection of
+// its own.
+function standInDocker(runId, agentOptions, { delay = () => 0, hold = () => 0, unpooled = () => false } = {}) {
   const { expireMs, ...options } = agentOptions ?? {};
   const containerId = id(9);
   let app, removed = false;
@@ -278,17 +283,19 @@ function standInDocker(runId, agentOptions, delay = () => 0) {
         const path = { "/catalog/record_1": "/catalog/records/record_1", "/api/marketplace/item_1": "/marketplace/records/item_1" }[req.url];
         const n = (served.get(req.url) ?? 0) + 1;
         served.set(req.url, n);
-        const up = request(base + path, { agent: agent ?? false }, (answer) => {
-          clearTimeout(answer.socket.expiry);
-          const chunks = [];
-          answer.on("data", (c) => chunks.push(c));
-          answer.on("end", () => setTimeout(() => {
-            res.writeHead(answer.statusCode === 200 ? 200 : 502, { connection: "close" });
-            res.end(Buffer.concat(chunks));
-          }, delay(req.url, n)));
-        });
-        up.on("error", () => { res.writeHead(502, { connection: "close" }); res.end(); });
-        up.end();
+        setTimeout(() => {
+          const up = request(base + path, { agent: (!unpooled(req.url, n) && agent) || false }, (answer) => {
+            clearTimeout(answer.socket.expiry);
+            const chunks = [];
+            answer.on("data", (c) => chunks.push(c));
+            answer.on("end", () => setTimeout(() => {
+              res.writeHead(answer.statusCode === 200 ? 200 : 502, { connection: "close" });
+              res.end(Buffer.concat(chunks));
+            }, delay(req.url, n)));
+          });
+          up.on("error", () => { res.writeHead(502, { connection: "close" }); res.end(); });
+          up.end();
+        }, hold(req.url, n));
       });
       app.agent = agent;
       await new Promise((done) => app.listen(0, "127.0.0.1", done));
@@ -306,10 +313,17 @@ function standInDocker(runId, agentOptions, delay = () => 0) {
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const inWindow = ({ fromMs, toMs }) => fromMs >= boundMs + marginMs && toMs < keepAliveMs - slackMs;
 
-test("the whole check passes a pool under the bound and fails one still reusing at 4.5 s, one probed late, or one opening a connection per request", async () => {
-  const run = (name, agent, extra = {}, delay) => checkImage("img", { names: ["catalog"], concurrency: 3, docker: standInDocker(name, agent, delay).run, runId: name, window: 50, ...extra });
+test("the whole check passes a pool under the bound and fails one still reusing at 4.5 s, one probed late, held, staggered, or opening a connection per request", async () => {
+  const run = (name, agent, extra = {}, shape) => checkImage("img", { names: ["catalog"], concurrency: 3, docker: standInDocker(name, agent, shape).run, runId: name, window: 50, ...extra });
   const early = [];
-  const [safe, frozen, late, slept, woke, unpooled, slow] = await Promise.all([
+  // A request after readiness (1) and the two warm bursts of three (2 to 7) is a probe request.
+  const probing = (path, n) => path === "/catalog/record_1" && n >= 8;
+  // A pool whose warmed connections stay open past the window (closed at 4.8 s idle, as `late`'s)
+  // while the probe goes out on new connections: the probe neither reuses nor sees them closed, so
+  // it is judged by when its requests reached the upstream.
+  const open = { keepAlive: true, agentKeepAliveTimeoutBuffer: 200, expireMs: 4800 }, fresh = (path, n) => n >= 8;
+  const [safe, frozen, late, slept, woke, unpooled, slow, held, staggered, straggler] = await Promise.all([
+    // A 2 s pool: every warmed connection is closed long before the probe.
     run("safe", { keepAlive: true, timeout: 2000 }),
     // Every event stamped 0 ms: readiness and the warm bursts share a timestamp, so only the
     // event order can tell them apart.
@@ -321,16 +335,31 @@ test("the whole check passes a pool under the bound and fails one still reusing 
     // has expired, so nothing is reused and only the window shows the probe proves nothing.
     run("slept", { keepAlive: true, agentKeepAliveTimeoutBuffer: 200, expireMs: 4800 }, { idleWait: (ms) => sleep(ms + 700) }),
     // A timer that fires after a third of the time asked: the wait still reaches the window.
-    run("woke", { keepAlive: true, timeout: 2000 }, { idleWait: (ms) => { early.push(ms); return sleep(Math.floor(ms / 3)); } }),
+    run("woke", open, { idleWait: (ms) => { early.push(ms); return sleep(Math.floor(ms / 3)); } }, { unpooled: fresh }),
     run("unpooled", null),
-    // Marketplace first, its probe answered 400 ms late (its 8th to 10th requests, after one
-    // readiness read and two warm bursts of three): it is inconclusive, and catalog after it still
-    // idles from its own last answer and probes inside its window.
-    run("slow", { keepAlive: true, timeout: 2000 }, { names: ["marketplace", "catalog"] }, (path, n) => (path === "/api/marketplace/item_1" && n >= 8 ? 400 : 0)),
+    // Marketplace first, its probe replies sent 600 ms after their upstream answers, so the last
+    // ends with the warmed connections idle over 5 s: the requests reached the upstream inside the
+    // window, so it passes, and catalog after it still idles from its own warm answers.
+    run("slow", open, { names: ["marketplace", "catalog"] }, { unpooled: fresh, delay: (path, n) => (path === "/api/marketplace/item_1" && n >= 8 ? 600 : 0) }),
+    // The probe requests held 400 ms in the app before it sends them upstream: they arrive with the
+    // warmed connections (closed at 4.8 s, past the window) idle about 4.9 s, so the probe proves nothing.
+    run("held", open, {}, { unpooled: fresh, hold: (path, n) => (probing(path, n) ? 400 : 0) }),
+    // The 4.8 s pool with its last warm request sent 400 ms late on a pooled connection: no moment
+    // puts every open warmed connection inside the window (a probe timed from the newest answer
+    // would come after the older ones expired), so it is not probed and is inconclusive.
+    run("staggered", { keepAlive: true, agentKeepAliveTimeoutBuffer: 200, expireMs: 4800 }, {}, { hold: (path, n) => (n === 7 ? 400 : 0) }),
+    // The review's case: the same pool with that late warm request on a connection of its own,
+    // which closes at once. It cannot be reused, so the probe is timed from the pooled connections
+    // and finds them reused past the bound rather than passing after they expired. Two pooled
+    // sockets, so both answer in the second burst and their own spread stays small.
+    run("straggler", { keepAlive: true, agentKeepAliveTimeoutBuffer: 200, expireMs: 4800, maxSockets: 2 }, {},
+      { hold: (path, n) => (n === 7 ? 400 : 0), unpooled: (path, n) => n === 7 }),
   ]);
   assertPasses(safe);
   assert.ok(safe.reads.catalog.warm.reused > 0);
-  assert.ok(inWindow(safe.reads.catalog.after.probe), JSON.stringify(safe.reads.catalog.after.probe));
+  // Closed under 4.75 s idle and before the probe: counted as closed in time, not timed.
+  assert.equal(safe.reads.catalog.after.probe.closedInTime, safe.reads.catalog.warm.connections, JSON.stringify(safe.reads.catalog));
+  assert.equal(safe.reads.catalog.after.probe.fromMs, null);
   assert.equal(safe.reads.catalog.after.inconclusive, false);
   assert.deepEqual(safe.window, { fromMs: boundMs + marginMs, belowMs: keepAliveMs - slackMs });
   assert.equal(safe.cleanup.complete, true);
@@ -350,22 +379,41 @@ test("the whole check passes a pool under the bound and fails one still reusing 
   assert.equal(slept.reads.catalog.after.inconclusive, true);
   assert.deepEqual(slept.reusedPastBound, []);
   assert.deepEqual(slept.closedIdle, []);
-  assert.throws(() => assertPasses(slept), /catalog: inconclusive: probed \d+ to \d+ ms/);
+  assert.throws(() => assertPasses(slept), /catalog: inconclusive: probe requests reached the upstream with the warmed connections idle [\d.]+ to [\d.]+ ms/);
   // Only the window catches it: the same result with its probe moved inside passes.
   assertPasses({ ...slept, reads: { catalog: { ...slept.reads.catalog, after: { ...slept.reads.catalog.after, probe: { fromMs: 4500, toMs: 4600 } } } } });
   // Woken early, the wait rechecked the clock and waited again until the window opened.
   assert.ok(early.length > 1, JSON.stringify(early));
   assert.ok(inWindow(woke.reads.catalog.after.probe), JSON.stringify(woke.reads.catalog.after.probe));
+  assert.equal(woke.reads.catalog.after.probe.closedInTime, 0);
   assertPasses(woke);
   assert.equal(unpooled.reads.catalog.warm.reused, 0);
+  // Every connection of a connection-per-request client closed before the probe: counted, not timed.
+  assert.equal(unpooled.reads.catalog.after.probe.closedInTime, unpooled.reads.catalog.warm.connections);
+  assert.equal(unpooled.reads.catalog.after.inconclusive, false);
   assert.throws(() => assertPasses(unpooled), /no upstream connection was reused before the idle/);
   assertPasses(unpooled, { reuse: false });
-  // A slow read is inconclusive itself and does not push the next read's probe out of its window.
-  assert.ok(slow.reads.marketplace.after.probe.toMs >= keepAliveMs - slackMs, JSON.stringify(slow.reads.marketplace.after.probe));
-  assert.equal(slow.reads.marketplace.after.inconclusive, true);
+  // A slow reply after an on-time upstream arrival passes, and the next read still probes inside its window.
+  assert.ok(inWindow(slow.reads.marketplace.after.probe), JSON.stringify(slow.reads.marketplace.after.probe));
+  assert.equal(slow.reads.marketplace.after.probe.closedInTime, 0);
+  assert.deepEqual(slow.reads.marketplace.after.statuses, [200, 200, 200]);
   assert.ok(inWindow(slow.reads.catalog.after.probe), JSON.stringify(slow.reads.catalog.after.probe));
-  assert.equal(slow.reads.catalog.after.inconclusive, false);
-  assert.throws(() => assertPasses(slow), /marketplace: inconclusive/);
+  assertPasses(slow);
+  // A request the app sent upstream late is inconclusive even though every reply was a 200.
+  assert.deepEqual(held.reads.catalog.after.statuses, [200, 200, 200]);
+  assert.ok(held.reads.catalog.after.probe.toMs >= keepAliveMs - slackMs, JSON.stringify(held.reads.catalog.after.probe));
+  assert.equal(held.reads.catalog.after.inconclusive, true);
+  assert.throws(() => assertPasses(held), /catalog: inconclusive: probe requests reached the upstream/);
+  // A warm-up spread wider than the window is not probed: inconclusive, not a pass.
+  assert.ok(staggered.reads.catalog.warm.spreadMs >= keepAliveMs - slackMs - boundMs - marginMs, JSON.stringify(staggered.reads.catalog.warm));
+  assert.equal(staggered.reads.catalog.after.probe.fromMs, null);
+  assert.match(staggered.reads.catalog.after.probe.skipped, /warm answers span/);
+  assert.deepEqual(staggered.reads.catalog.after.statuses, []);
+  assert.throws(() => assertPasses(staggered), /catalog: inconclusive: not probed: the warm answers span/);
+  // The review's case fails: the straggler's own connection is counted as closed, and the pooled ones were reused past the bound.
+  assert.ok(straggler.reads.catalog.after.probe.closedInTime >= 1, JSON.stringify(straggler.reads.catalog.after.probe));
+  assert.ok(straggler.reusedPastBound.length > 0, JSON.stringify(straggler.reads.catalog));
+  assert.throws(() => assertPasses(straggler), /inconclusive|idle 4000 ms or more was reused/);
 });
 
 test("the idle wait rechecks the clock after an early wake and returns at once when the target has passed", async () => {
@@ -393,6 +441,17 @@ test("the check refuses a result probed outside its window or that checked no re
   assert.throws(() => assertPasses({ ...good, reads: { catalog: read({ fromMs: 4499, toMs: 4600 }) } }), /catalog: inconclusive/);
   assert.throws(() => assertPasses({ ...good, reads: { catalog: read({ fromMs: 4500, toMs: 4750 }) } }), /catalog: inconclusive/);
   assert.throws(() => assertPasses({ ...good, reads: { catalog: read({ fromMs: 4500, toMs: 4600 }), items: read({ fromMs: 5158, toMs: 5170 }) } }), /items: inconclusive/);
+  // Compared unrounded: just under the opening, or at the close, is outside.
+  assert.throws(() => assertPasses({ ...good, reads: { catalog: read({ fromMs: 4499.9, toMs: 4600 }) } }), /catalog: inconclusive/);
+  assertPasses({ ...good, reads: { catalog: read({ fromMs: 4500, toMs: 4749.99 }) } });
+  assert.equal(inconclusive({ fromMs: 4500, toMs: 4749.99 }, window), false);
+  assert.equal(inconclusive({ fromMs: 4500, toMs: 4750 }, window), true);
+  assert.equal(inconclusive({ fromMs: null, toMs: null }, window), true);
+  // Nothing timed proves the window only when every warmed connection closed in time and a request arrived.
+  assert.equal(inconclusive({ fromMs: null, toMs: null, arrivals: 3, closedInTime: 6 }, window), false);
+  assert.equal(inconclusive({ fromMs: null, toMs: null, arrivals: 0, closedInTime: 6 }, window), true);
+  assert.equal(inconclusive({ fromMs: 4500, toMs: 4600, arrivals: 0 }, window), true);
+  assert.throws(() => assertPasses({ ...good, reads: { catalog: read({ fromMs: null, toMs: null, skipped: "the warm answers span 300.0 ms" }) } }), /catalog: inconclusive: not probed: the warm answers span/);
   assert.throws(() => assertPasses({ ...good, window: { fromMs: 0, belowMs: Infinity } }), /window is not the bound's/);
   const { after } = good.reads.catalog;
   assert.throws(() => assertPasses({ ...good, reads: { catalog: { ...good.reads.catalog, warm: { ...good.reads.catalog.warm, answers: 1 } } } }), /one upstream answer per read before/);
