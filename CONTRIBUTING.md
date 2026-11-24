@@ -637,16 +637,21 @@ establish a general ranking.
          change's own bound. Only a complete, resolved A/A records or replaces a spread, through a
          pull request that changes the Choice; a run reads the spread recorded in the Choice on
          `main` when its plan is declared, whatever a later run records.
-      5. Code aligned beyond 16 bytes. C code a dependency compiles can put input sections aligned
-         to 32 or 64 bytes in `.text`, and LLD moves one only by a multiple of its alignment: a pad
-         can then move some functions, and the data after `.text`, by other than its size
-         ([design Choice 72](docs/design.md#choice-placement-runs)). Before anything is measured,
-         the run records from LLD's map (`-Wl,-Map`) of each build's unpadded link, and the pull
-         request reports, each input section of `.text` aligned beyond 16 bytes, in order with its
-         alignment, and every function from the first of them on (the side's list), by symbol and by
-         its archive, or its object file where it is in none, less cargo's hashes. Where either side
-         has such a section, the rest of this point holds for both, in the change comparison and the
-         A/A (a pilot by its own sides).
+      5. Code aligned beyond 16 bytes, of which the plan states nothing. C code a dependency
+         compiles can put input sections aligned to 32 or 64 bytes in `.text`, and LLD moves one
+         only by a multiple of its alignment: a pad can then move some functions, and the data
+         after `.text`, by other than its size
+         ([design Choice 72](docs/design.md#choice-placement-runs), which has the route for a pull
+         request whose placement runs predate this point). Before anything is measured, the run
+         records from LLD's map (`-Wl,-Map`) of each build's unpadded link, and the pull request
+         reports, each input section of `.text` aligned beyond 16 bytes, in order with its
+         alignment, and every function from the first of them on (the side's list), by symbol and
+         by its archive, or its object file where it is in none, less cargo's hashes; both maps
+         are kept with the run's results. A placement run whose plan was published before this
+         point was on `main` is read by the rule as it then stood; any other with no such record
+         has no reading across placements. A plan may not build the C code with other flags to be
+         read under the first point alone. Where either side has such a section, the rest of this
+         point holds for both, in the change comparison and the A/A (a pilot by its own sides).
 
          Every placement then has a second pad, whose size no plan lists: a function nothing calls,
          aligned to 16 bytes, that the ordering file does not name and the link line gives last, so
@@ -664,20 +669,26 @@ establish a general ranking.
          links, as far from its start; and `.data` is where the rule says. The first point's other
          checks stand, with both pads among a placement's functions and the first pad first.
 
-         No reading across placements does not pass. A side has none, for any workload, in three
-         cases: an input section of its `.text` is aligned beyond 64 bytes; a function whose mangled
-         symbol names a crate of this repository's workspace or the measured program's own crate
-         lies at or after the first section aligned beyond 16 bytes, or outside `.text`; or none of
-         the four sizes puts a placement's `.data` where the rule says. A workload has none where
-         its request runs a listed function that the pull request changes, or that is not on both
-         sides' lists at one offset in a 64-byte line of their unpadded links, behind the same
-         largest alignment, unless on each side that lists it the function is in a section aligned
-         beyond 16 bytes that no input section of `.text` before it exceeds in alignment, or follows
-         such a section of its own archive with only that archive's code between. The pull request
-         reports, for each workload read across placements, which listed functions its request runs
-         and how that was found (callgrind's output for the request, or a count of calls on the
-         probe under the workload); a workload with no such report has no reading either. A plan may
-         not build the C code with other flags to be read under the first point alone.
+         No reading across placements does not pass and shows no win. A side has none, for any
+         workload, in three cases: an input section of its `.text` is aligned beyond 64 bytes; a
+         function whose mangled symbol names a crate of this repository's workspace or the
+         measured program's own crate lies at or after the first section aligned beyond 16 bytes,
+         or outside `.text`; or none of the four sizes puts a placement's `.data` where the rule
+         says. A workload has none where its request runs, on either side, a listed function of
+         one of three kinds: one whose code differs between the two builds, shown by its section's
+         size or alignment in the two maps or by a diff that changes its source, version, flags or
+         compiler; one not on both sides' lists at one offset in their unpadded links modulo the
+         same largest alignment, the largest among `.text`'s input sections up to the function's
+         own; or one the request runs on one side and not on the other. None takes the reading
+         where, on each side that lists it, the function is in a section aligned beyond 16 bytes
+         that no input section of `.text` before it exceeds in alignment, or follows such a
+         section of its own archive with only that archive's code between. Where a listed function
+         is not so excused, the pull request reports, for each workload read across placements and
+         each side, which listed functions its request runs: those called between the workload's
+         first request and its last answer on the side's own unpadded binary, the measured probe
+         serving the workload's own requests (a count from process start that shows no call shows
+         none there). The command and its raw output are kept with the run's results; where the
+         report is asked, a workload without it has no reading either.
 
       The margin stays +1% with no floor: the workload meets it when the change's bound across
       placements is under +1% and its A/A resolves. A placement that fails a check above, or has

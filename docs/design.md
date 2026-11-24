@@ -9622,21 +9622,24 @@ rules something out.
     of `.text` aligned beyond 16 bytes, in order, and the functions from the first of them on. The
     run records them from the map of each build's unpadded link before anything is measured, as
     the first point's checks are made, and the pull request reports them with the run. No plan
-    states them, and none says in advance that its sides have no such section (Not chosen). A
-    function is listed by its symbol and by the archive the map names for its object file, or by
-    the object file where it is in none, without directories and without the hashes cargo gives
-    them: `replay.mjs --stated` under the tag prints the sections, the first of them and the list
-    so, as one line, each archive with the object file beside it. A later head's build is recorded
-    as any build is, and the second pads' sizes are found again for it (below). This point has no
-    rule of its own that a pull request has one plan. Item 2 says that "no placement is rerun,
-    replaced or dropped for its result", and, where it speaks of a negative control and of the
-    margin declared before a run, that "a declaration is never added or changed after a run to
-    clear its result" ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2); this Choice
-    reads the second of no more than that. What item 2's text leaves open this point does not
-    settle: whether a later head may declare pads, K or workloads again, whether a pull request
-    whose A/A did not resolve may read a later run sized from it (that text says only that the
-    workload does not pass, and that such an A/A, if eligible, sizes a later K), and whether a new
-    pull request for the same change may declare a new plan.
+    states them, and none says in advance that its sides have no such section: the record shows
+    it. A function is listed by its symbol and by the archive the map names for its object file,
+    or by the object file where it is in none, without directories and without the hashes cargo
+    gives them: `replay.mjs --stated` under the tag prints the sections, the first of them and the
+    list so, as one line, each archive with the object file beside it. Both unpadded maps are kept
+    with the run's results (303 and 306 KB for that base and head, compressed), since which listed
+    functions take a reading (below) is read from each one's offset, its section's alignment and
+    the sections before it, which the list does not hold and the map does. A run with no record
+    has no reading across placements, as a comparison with a placement that fails a check has no
+    bound. A placement run whose plan was published before the point was on `main` is read by the
+    rule as it then stood: the first point's check, which a side with no such code can pass and a
+    side with it cannot (above). A later head's build is recorded as any build is, and the second
+    pads' sizes are found again for it (below). This point has no rule of its own that a pull
+    request has one plan. Item 2 says that "no placement is rerun, replaced or dropped for its
+    result", and, where it speaks of a negative control and of the margin declared before a run,
+    that "a declaration is never added or changed after a run to clear its result"
+    ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2); this Choice reads the second of
+    no more than that.
 
     Whose a function is, its mangled symbol decides, and which crates count is a rule and no list
     of a plan's: a crate of this repository's workspace or the measured program's own crate, and
@@ -9652,44 +9655,62 @@ rules something out.
     neither is a dependency's code, though a request may run it. Both are on the side's list of
     functions from the first such section on, and that is what the list is for.
 
-    Which listed functions take a workload's reading. Two kinds can make a comparison read, on
-    one side only, a place the pads do not vary: one the pull request changes, and one that the
-    two sides do not both list at one offset in a 64-byte line of their unpadded links, behind
-    the same largest alignment (the largest of `.text`'s input sections up to the function's
-    own). The second takes in code a change adds or removes; code it moves
+    Which listed functions take a workload's reading. Three kinds can make a comparison read, on
+    one side only, a place the pads do not vary. One whose code differs between the two builds:
+    its section's size or alignment differs between the two maps, or the pull request's diff
+    changes its source, its version, the flags it is built with or its compiler (code can differ
+    under one size, so the maps alone clear no function). One that the two sides do not both list
+    at one offset in their unpadded links modulo the same largest alignment, the largest among
+    `.text`'s input sections up to the function's own. And one that the request runs on one side
+    and not on the other. The second takes in code a change adds or removes; code it moves
     behind aligned code, as `__udivti3` and `round` are the last two sections of that base's
     `.text`, which its pads move, and the last two of that head's, behind libdeflate, which its
     pads do not; and code that a change to the aligned library moves once both sides link it.
     When a later head links one more of libdeflate's functions behind the library's last section
     aligned to 64 bytes, those two are on both lists and can lie elsewhere in a line on the head,
-    at a place no pad gives the base. The test is the unpadded link's offset because behind a
-    section aligned to 64 bytes that offset is the function's in every placement. Behind sections
-    aligned to 32 alone it is one of the two the pads give, so two sides whose offsets differ by
-    32 there lose the reading though their places agree, and two sides with different largest
-    alignments before the function lose it because one side's pads give it places the other's
-    do not. A listed function the change leaves alone, at one offset on both sides behind one
-    largest alignment, is read at the same places on both and takes nothing from their
-    difference. A workload whose request runs a function of either kind has no reading across
-    placements. The refusal is the workload's and not the side's, since a request that never
-    reaches the function reads nothing of its place.
+    at a place no pad gives the base. The offsets are compared modulo the largest alignment
+    because every pad moves a section behind an alignment of A bytes by a multiple of A, and a
+    plan's pads between them by every multiple a 64-byte line holds: its places in a line are
+    its unpadded offset and each multiple of A from it. So two sides give a function the same
+    places exactly where A is the same and the offsets agree modulo A, which is reasoned from
+    LLD's rule and not measured: behind 64 that is one place, behind 32 alone two, and sides
+    with sections aligned to 32 alone whose offsets differ by 32 keep the reading, where sides
+    whose largest alignments are 32 and 64 lose it. The third is the first reached without a
+    change to the function: where both sides list `round` at one offset and the change adds a
+    call to it, the cost the change adds is run at one place in a line in every placement, a
+    place a later change to the library moves and no pad gives. A listed function whose code is
+    the same in both builds, at one offset modulo one largest alignment on both sides, that the
+    request runs on both sides or on neither, is read at the same places on both and takes
+    nothing from their difference. A workload whose request runs a function of any of the kinds
+    has no reading across placements. The refusal is the workload's and not the side's, since a
+    request that never reaches the function reads nothing of its place. `replay.mjs --kinds`
+    under the tag
+    `evidence/placement-aligned-code-5` reads both sides' unpadded maps and prints each listed
+    function's kind and whether the condition below excuses it, with written cases on layouts
+    laid out by LLD's rule that nobody has linked: a head with one more of the library's
+    functions after and before its last section aligned to 64, sides aligned to 32 alone,
+    largest alignments that differ, and a call to `round` on the head alone among them.
 
-    One condition excuses such a function, on each side that lists it: it is in a section aligned
-    beyond 16 bytes that no input section of `.text` before it exceeds in alignment, or it follows
-    such a section of its own archive with only that archive's code between. Its place in a line
-    is then set by an alignment and its own archive's code, in an app's builds as under the pads,
-    so it is no draw of the kind the pads vary, on any head, a later one that links one more
-    function of the library included. A section aligned to 64 bytes begins a line in every build,
-    and what follows keeps its distance from it until the code between changes; one aligned to 32
-    with none aligned to 64 before it begins at one of two places in every build, and the pads,
-    which move it by multiples of 32, give it both (the measured places are below, with the
-    pads). "That no input section before it exceeds" keeps the condition as wide as that and
+    One condition excuses a function of any of the three kinds, on each side that lists it: it is
+    in a section aligned beyond 16 bytes that no input section of `.text` before it exceeds in
+    alignment, or it follows such a section of its own archive with only that archive's code
+    between. Its place in a line is then set by an alignment and its own archive's code, in an
+    app's builds as under the pads (where such sections begin is below, with the pads), so it is
+    no draw of the kind the pads vary, on any head, a later one that links one more function of
+    the library included. That is so of a function the change edits or newly calls as of one it
+    moves: its cost is read at the places it has in every build, which is what a reading across
+    placements is for. So the condition governs the third kind as it does the first two, and a
+    request that compresses on the head alone keeps its reading for the library's own functions.
+    "That no input section before it exceeds" keeps the condition as wide as that and
     no wider: a section aligned to 32 bytes behind another archive's aligned to 64 has one place
     under the pads and could take the other when the code between changes, so it is not excused,
     and none has been linked. The sections counted are `.text`'s input sections: that head's
     `.rodata`, an output section before `.text`, is aligned to 64 bytes and does not count. A
-    function in no archive, as one from the program's own objects, is never excused. Of the 40
-    on that head's list, libdeflate's 38 are excused, 15 in such sections, the first aligned to
-    32 bytes with none before it, and 23 behind one in the one archive. `__udivti3` and `round`
+    function in no archive, as one from the program's own objects, is not excused by the second
+    clause. Of the 40 on that head's list, all of the second kind since that base lists none,
+    `replay.mjs --kinds` prints 38 as excused, 15 by the first clause, the first of them aligned
+    to 32 bytes with none before it, and 23 by the second, all 38 libdeflate's
+    (`results/kinds-recorded.txt` under that tag). `__udivti3` and `round`
     are not: they come from compiler_builtins' archive, which has no such section, and lie behind
     libdeflate's code, where a change to that code can move them by 16 bytes and no pad does. A
     workload whose request runs a function the condition does not excuse has no way back to a
@@ -9698,13 +9719,27 @@ rules something out.
     workspace's and the program's functions must also all be in `.text`: one in another output
     section would pass "same input section, as far from its start" and move with the data.
 
-    Whether a request runs a listed function is reported with its method and not left to be said
-    after a run by whoever is asked: the pull request reports, for each workload read across
-    placements, which listed functions its request runs and how that was found, as from
-    callgrind's output for the request or a count of calls on the probe under the workload, and a
-    workload with no such report has no reading across placements. The report has no deadline,
-    since what a request runs is a fact of the build and not a declaration, the same before a
-    run as after it, and the method beside it lets a review find it again.
+    Whether a request runs a listed function is a report with one meaning, and its output is
+    kept. Left open, the build it is made on, what "runs" means and what a reviewer can see are
+    choices an author would make with the results in hand, and only one direction pays: a
+    function reported as not run. So the report is made on each side's own unpadded binary, the
+    probe the run measures serving the workload's own requests, and not in an in-process test,
+    which is another binary with another `.text`; on both sides, since the third kind is their
+    difference. A function counts as run if it is called between the workload's first request
+    and its last answer. That is the window whose cycles a turn counts. The kits' turns start
+    the build, wait until it answers a request, attach `perf` to the running process and then
+    start the load (`run-pair-fresh.sh` under the tag `evidence/request-gzip-1971-placed`:
+    `perf stat -p` on the server's pid a tenth of a second before the load begins, for the
+    load's seconds and 0.4 more), so what a process runs while it starts is in no turn's count,
+    and what its first request sets up once, or a timer fires under the load, is in every one.
+    A count from process start can only show more calls, so one that shows none is accepted.
+    The command and its raw output are kept with the run's results, where a review reads them
+    and does not have to build the sides to repeat them. The report is asked only where a listed
+    function is not excused: where each is, or neither side lists any, no report changes a
+    reading, and with one that is not, the third kind cannot be told without it. A workload then
+    without it has no reading across placements. The report has no deadline, since what a
+    request runs is a fact of the build, the same before a run as after it, and what was open to
+    choice about it is fixed here.
 
     A pull request whose placement runs predate this point may declare a plan under it, before any
     further turn that counts cycles on a padded placement of its head, or the first pull request
@@ -9967,10 +10002,7 @@ rules something out.
     the description on a later head, with a rule for when two statements are equal and no bound for
     a build measured before its facts were stated, since a fact copied from a map chooses nothing,
     so the statements guarded no choice and the last of them refused a build for a late line of
-    text; the first such section and the count of `.text`'s input sections by alignment among the
-    facts, the one given by the sections in order and the other read by no refusal and no review; a
-    line in the plan saying that its sides have no such section, which the run's record shows before
-    anything is measured; a list of crates in the plan that may gain a crate and never lose one,
+    text; a list of crates in the plan that may gain a crate and never lose one,
     since which crates are the repository's and the program's is no choice and a rule names them; a
     rule in this point that a pull request has one plan and later heads keep it, which is a rule for
     every plan and not one for the point on aligned code to set down; a reason the review accepts,
@@ -9983,14 +10015,13 @@ rules something out.
     aligned library moves, or as one not at the same distance behind the last section aligned beyond
     16 bytes, which passes a function behind a section aligned to 32 that itself lies elsewhere
     behind one aligned to 64; whether a request runs a listed function left for a review to settle
-    after the run, with no method named; the toolchain declared in the plan by version, since each
-    build's facts are read from its own map and the check is of the measured binary, so a build by
-    another compiler is described and checked as it is, and a version does not say whether a
-    distribution's revision of a compiler is part of it; a second pad asked of a pilot by the run it
-    sizes, since a pilot's plan and sides are its own, and an A/A read without second pads would
-    size the run all the same once read; and whose a function is decided by its input file, which
-    under thin LTO names a code unit of the program and not the crate a function is from, or by its
-    printed name, which leaves out the crate a generic function was made for.
+    after the run; the report counted from process start alone, which is simpler and only refuses
+    more, and would take a reading for a call made once while the process starts, in no turn's
+    count; a second pad asked of a pilot by the run it sizes, since a pilot's plan and sides are
+    its own, and an A/A read without second pads would size the run all the same once read; and
+    whose a function is decided by its input file, which under thin LTO names a code unit of the
+    program and not the crate a function is from, or by its printed name, which leaves out the
+    crate a generic function was made for.
 
     Stands on: measured (the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
@@ -10007,7 +10038,9 @@ rules something out.
     kit built again four times with every link read from its map, its head linked 25 times
     with a second pad last, and each of its 90 placements linked with the second pad the
     rule asks, tag `evidence/placement-aligned-code-4`: layouts alone, with no cycle counted
-    under that check or with a second pad);
+    under that check or with a second pad; and each listed function's kind and excuse printed
+    from those two unpadded maps and from written layouts, tag
+    `evidence/placement-aligned-code-5`);
     platform (LLD
     places the sections of the symbols an ordering file names
     first in their output section and the rest in their default order, rustc 1.100.0 puts each
@@ -10045,8 +10078,12 @@ rules something out.
     aligned beyond 16 bytes that no input section of `.text` before it exceeds in alignment,
     or behind such a section of its own archive with only that archive's code between, has
     its places in a line set by an alignment and that archive's code, in an app's builds as
-    under the pads, so it is excused; and a listed function the change leaves alone, at one
-    offset in a line of both unpadded links behind one largest alignment, is read at the same
+    under the pads, so it is excused, whichever kind it is of; every pad moves a section behind
+    a largest alignment of A bytes by a multiple of A, so its places in a line are its unpadded
+    offset and each multiple of A from it, and two sides give a function the same places
+    exactly where A is the same and the offsets agree modulo A; and a listed function whose
+    code is the same in both builds, at one offset modulo one largest alignment in both
+    unpadded links, that the request runs on both sides or on neither, is read at the same
     places on both sides and takes nothing from their difference);
     bet
     (moving the whole of the code by declared offsets varies placement about as much as real
@@ -10075,9 +10112,12 @@ rules something out.
     offsets stand in for real changes, though a real change also resizes the sections
     between the code and the data, which a pad does not; a spread recorded with one pad,
     and a K sized from an A/A read with one, hold for a run with two, and a spread recorded
-    with two for a run with one; a review can tell from a pull request's diff and its two
-    lists which listed functions it changes; and a report of the listed functions a request
-    runs, made by the method it states, is right, which no run records);
+    with two for a run with one; a listed function whose code differs between the two builds
+    shows it in its section's size or alignment or in the pull request's diff; an archive's
+    code between an aligned section and a function behind it changes only with that archive,
+    though which of its sections a link keeps follows what the program references, which no
+    receipt shows; and the command a report keeps counts every call of a listed function in
+    the window, which a review reads and no check repeats);
     value
     (Fast, and proven fast: a touched
     request's cost is read from the change, not from where one build put it; Verified, not
@@ -10115,8 +10155,10 @@ rules something out.
     size and their cost is then one the sides may not share; a request's cycles are found to
     follow where its data lies in a page, since the rule sets the data's place in a line and
     leaves the two sides' data 64 bytes apart in the page in some placements; a report of
-    the listed functions a request runs is found wrong, or a review cannot tell whether a
-    pull request changes a listed function, so the run has to record either; a workload a
+    the listed functions a request runs is found wrong, or a listed function's code is found
+    to differ between two builds with nothing in the maps or the diff to show it, so the run
+    has to record more; a change outside an archive is found to move a function the second
+    clause excuses; a workload a
     pull request needs read across placements has no reading because its request runs a
     listed function the condition does not excuse, which is when a way to argue it back, or
     to vary such a function's place, is worth what it adds; a build where none of the four
@@ -10173,7 +10215,11 @@ rules something out.
     spread, the check refusing a second pad outside the four sizes, what a run records printed
     for both sides, and the sections after `.text` read in the 90 placements, the scripts
     and what they print at `b1bbd52e8` (tag
-    `evidence/placement-aligned-code-4`); 2026-11-24, the third run's time read from its
+    `evidence/placement-aligned-code-4`); 2026-11-24, each listed function's kind and excuse
+    printed from that base's and head's unpadded maps and from fourteen written cases, with
+    node alone, at `3f71e9cc8` (tag `evidence/placement-aligned-code-5`), and how that kit's
+    turns attach `perf`, read from its `run-pair-fresh.sh` at `04d4ec477`; 2026-11-24, the third
+    run's time read from its
     log at `2fb31fbaa` (tag `evidence/stage-header-checks-2002`).
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
