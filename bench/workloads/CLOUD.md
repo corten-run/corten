@@ -578,10 +578,15 @@ The continuation does not grant approval; the existing exact merged-source,
 native readiness, independent review and operator approval requirements apply.
 
 If prepare or detach refuses before writing intent, `fleet-operation-failed`
-can name the failing stage: `continuation-admission` (including custody and
-eligibility), `prepare-reservation`, `initial-plan` or `locked-plan` (including exact approval checks),
-or `final-pre-intent-recheck`. These labels identify the check, not its cause or
-whether locks were released. Placement keeps its separate
+can name the failing stage: `continuation-admission`, `prepare-reservation`,
+`initial-plan` or `locked-plan` (including exact approval checks), or
+`final-pre-intent-recheck`. Admission adds a fixed label: `lock-busy` means the
+continuation lock exists (not that its owner is live); `lock-check` means some
+other lock operation failed. `custody-read` covers reading or replaying saved
+evidence, `custody-unresolved` means that check found a blocker, and
+`custody-account` and `custody-recheck` name the subsequent custody checks.
+`group-selection` covers reservation or eligibility checks. These labels name
+checks, not root causes or whether locks were released. Placement keeps its separate
 `fleet-placement-preflight-failed: STAGE` diagnostic. Inspect saved intent and custody
 before deciding what to do next; an unlabeled failure does not establish that
 intent was never written.

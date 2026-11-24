@@ -330,17 +330,32 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
   const owner = json({ pid: process.pid, group: options.group });
   const locked = options.prepare || !!options.approval;
   let uncertain = false, attemptRoot = options.root, ownsLock = false, attemptLockOwned = false;
-  let preIntentStage = "continuation-admission";
+  let preIntentStage = "continuation-admission; lock-check";
   const release = () => {
     assert.equal(regular(lock, 1024).toString(), owner); unlinkSync(lock); ownsLock = false; syncDirectory(root);
   };
   try {
-    if (locked) { physical(root); durable(lock, owner); ownsLock = true; }
-    else assert.ok(!present(lock), "continuation operation busy");
+    if (locked) {
+      physical(root);
+      try { durable(lock, owner); }
+      catch (error) {
+        if (error?.code === "EEXIST") preIntentStage = "continuation-admission; lock-busy";
+        throw error;
+      }
+      ownsLock = true;
+    } else {
+      const busy = present(lock);
+      if (busy) preIntentStage = "continuation-admission; lock-busy";
+      assert.ok(!busy, "continuation operation busy");
+    }
+    preIntentStage = "continuation-admission; custody-read";
     const continuation = await continuationAdmission(root, options.group, { repo, interrupted: deps.interrupted, inspect: deps.inspect });
     const row = continuation.rows.find(({ group }) => group === options.group);
+    preIntentStage = "continuation-admission; group-selection";
     assert.ok(!row.knownResult, "group already verified or pinned; never allocate again");
+    preIntentStage = "continuation-admission; custody-unresolved";
     assert.ok(!continuation.rows.some((r) => r.unresolved), "continuation has unresolved custody or invalid evidence");
+    preIntentStage = "continuation-admission; group-selection";
     const slot = continuation.slots.get(options.group);
     if (options.prepare) {
       if (options["offline-handoff"]) assert.ok(!continuation.subject.peers?.length, "offline handoff requires no live peer");
@@ -356,7 +371,9 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
       attemptRoot = slot.root;
     }
     const accountId = options.prepare ? options.accountId : slot.manifest.provider.accountId;
+    preIntentStage = "continuation-admission; custody-account";
     assert.ok([...continuation.needsCensus].every((account) => account === accountId), "continuation custody requires the same provider account");
+    preIntentStage = "continuation-admission; custody-recheck";
     continuation.recheck();
     preIntentStage = options.prepare ? "prepare-reservation" : undefined;
     return await runFleet({ ...options, root: attemptRoot }, deps, {

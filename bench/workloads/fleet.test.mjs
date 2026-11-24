@@ -152,8 +152,38 @@ test("independent detach names invalid admission without leaking the exception",
   const f = await independentDetach(t);
   writeFileSync(f.index, "SYNTHETIC_PRIVATE_INDEX");
   assert.equal(await f.cli(), 2);
-  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-admission"]);
+  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-admission; custody-read"]);
   f.notDispatched();
+});
+
+test("independent detach distinguishes busy, unresolved and wrong-round admission without dispatch", async (t) => {
+  const f = await independentDetach(t);
+  const preview = [...f.approved.slice(0, -2), "--print-approval"];
+  const lock = join(f.p.h.base, ".continuation-operation.lock");
+  const owner = "SYNTHETIC_PRIVATE_OWNER";
+  const catalogCalls = f.p.catalogCalls.length, outputs = f.p.output.length;
+  writeFileSync(lock, owner);
+  assert.equal(await f.cli(preview), 2);
+  assert.equal(await f.cli(), 2);
+  assert.equal(readFileSync(lock, "utf8"), owner);
+  unlinkSync(lock);
+  assert.equal(await f.cli(["r22", ...preview.slice(1)]), 2);
+  f.notDispatched();
+  const incomplete = join(f.root, "mixed-production");
+  mkdirSync(incomplete);
+  assert.equal(await f.cli(preview), 2);
+  assert.deepEqual(f.errors, [
+    "fleet-operation-failed: continuation-admission; lock-busy",
+    "fleet-operation-failed: continuation-admission; lock-busy",
+    "fleet-operation-failed: continuation-admission; group-selection",
+    "fleet-operation-failed: continuation-admission; custody-unresolved",
+  ]);
+  assert.deepEqual(readdirSync(incomplete), []);
+  assert.deepEqual(readdirSync(f.root).sort(), ["fleet-r21.json", "mixed-production"]);
+  assert.equal(existsSync(lock), false);
+  assert.deepEqual(f.p.children, []);
+  assert.equal(f.p.catalogCalls.length, catalogCalls);
+  assert.equal(f.p.output.length, outputs);
 });
 
 test("independent prepare names its admission or reservation stage without exposing inputs", async (t) => {
@@ -165,7 +195,7 @@ test("independent prepare names its admission or reservation stage without expos
   assert.equal(await cli(), 2);
   writeFileSync(p.index, "[]"); p.flags.head = "b".repeat(40);
   assert.equal(await cli(), 2);
-  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission", "fleet-operation-failed: prepare-reservation"]);
+  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission; custody-read", "fleet-operation-failed: prepare-reservation"]);
   assert.equal(existsSync(p.old), false);
   assert.deepEqual(p.children, []);
 });
