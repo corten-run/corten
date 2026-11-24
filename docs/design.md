@@ -2951,6 +2951,17 @@ rules something out.
     Playwright 1.65.1 on Linux (tag `evidence/stage-header-checks-2002`), and 2026-11-24, the
     instruction counts with a listed line and with curl's (tags
     `evidence/stage-header-checks-2002` and `evidence/stage-header-checks-2002-review`);
+    2026-11-24, at `0737e881d` (round 17's code merged with main `657c2fae3`) against that main,
+    built with Rust 1.100.0 (three rounds alternating the two builds, every run within 2.1 of the
+    others): the plain page 124 more (15,803.7 against 15,679.7), in the header map's lookups (+70)
+    and `settle` (+41), the `cookie` page 415 more (18,983.5 against 18,568.6), mostly settling it
+    as personal (`drop_cdn_caching` +190, `settle` +118) and the mark in its extensions (+81, +19,
+    +18), less 115 in `mentions_no_store`, and a tool's answer from an endpoint whose `Tools::auth`
+    found its caller 886 more (28,985.6 against 28,099.9), the mark round 16 described below
+    (`settle` +181, `drop_cdn_caching` +137, the extensions map +92, +87, +58 and +29, and +134 in
+    allocation) and +94 in `memcmp` and `StandardHeader::as_str`, not in round 16's breakdown and
+    not attributed further. Main's header comparisons put the head 597 to 656 under round 17's
+    counts below. These are instructions in process, not cycles, as below;
     2026-11-23, at `75a353e3f` (round 17's code) against round 16's head `0f91c708d`,
     built with Rust 1.100.0 (three rounds alternating the two builds and `ea8dd1ea8`, every run within
     1.8 of the others): the plain page 2 fewer (16,400.6 against 16,402.7), the settle probe's
