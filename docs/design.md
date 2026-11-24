@@ -7727,9 +7727,14 @@ rules something out.
     afresh from its start, the window's end, shutdown (which waits for it as for `Signal::finish`
     work), once its copy leaves the store (told by the store as the copy goes, that refresh and no
     other, since what it makes could no longer be kept) or once it has answered; and none is
-    claimed while as many are under way as the store holds copies, each counted until its task has
-    ended though its copy went: so a store holds no more refreshes than copies, however many turns
-    of new pages go through it. A guard aborts it however the task ends, a
+    claimed while as many are under way as the store holds copies as it is claimed, each counted
+    until its task has ended though its copy went. The rule bounds admission, not every instant:
+    the store can come to hold fewer copies while refreshes run (one page kept in the room of
+    two), and then admits none until fewer are under way than it holds, so it never has more
+    refreshes under way than the most copies it held while they were claimed, however many turns
+    of new pages go through it. The claim reads its copy, its path's writes and that count under
+    the store's lock as it counts the refresh, so a copy that went since the lookup takes no
+    place. A guard aborts it however the task ends, a
     panic or the task dropped too. Reading the answer's body is inside those limits, and a panic
     there is caught as the handler's is; none
     starts once shutdown has begun or its time is up. What it makes is kept as a miss's answer is
@@ -7738,7 +7743,9 @@ rules something out.
     the handler read and before shutdown or its end: so it never takes the place of a page
     another request kept after the copy went for room, was replaced or was ended. A `500`, `502`,
     `503` or `504`, a panic, a passed deadline or a page it would keep whose body could not be
-    read leaves the old copy given until its window ends, and any other answer takes it out. Its
+    read leaves the old copy given until its window ends, and any other answer takes it out, under
+    the store's lock and only before shutdown or its end, as a replacement does: a refresh whose
+    last poll ran past either takes nothing out. Its
     handler sees the request as the app's middleware left it, its headers and extensions and a
     locale the middleware chose from the URL (`Req::set_locale`, carried to the refresh's signal);
     not the middleware again, nor what it set around `next` or on the request's signal otherwise,
@@ -7767,8 +7774,16 @@ rules something out.
     would have said of caching after `next` was never said: that copy goes out `private, no-store`,
     with every header a CDN may read first removed (`cache::read_before_cache_control`, the rule an
     unstaged answer that sets a cookie follows and `Public::header` checks: any `*cache-control`, a
-    deployment's own name too, and the others Corten names), rather than with the handler's
-    `public` and windows. Correctness ranks first: an app whose middleware makes its pages private must not
+    deployment's own name too, and the others Corten names) and its `Expires`, which a cache that
+    does not read `Cache-Control` keeps by, rather than with the handler's `public` and windows.
+    No copy carries a header for its connection (`Connection` and what it names, `Keep-Alive`,
+    `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, a `Proxy-*`, RFC 9110 section 7.6.1), which an
+    answer type of the app's own may set though `Public::header` may not: an answer with one is not
+    kept, since given again outside the middleware its `Connection` could name the `Cache-Control`
+    the app wrote, and the next proxy remove it. The same copy skips the middleware's other
+    changes after `next` too (a redaction, a header every answer needs), so the guide tells a
+    route that needs one to leave `stale-if-error` off, which is off unless its answer sets it.
+    Correctness ranks first: an app whose middleware makes its pages private must not
     have a stale page shared because its handler failed. A copy given for a returned failure is
     inside the middleware and leaves with what it says.
 
@@ -7814,11 +7829,17 @@ rules something out.
     middleware's response half, which is not there to run (the panic unwound it, the deadline
     dropped it), and running the middleware again around the copy, which would run its request
     half twice; and the handler's own header kept where the app has no middleware, a second rule
-    for a path that is a failure's. For bounding refreshes: a cap of their own, a second limit to
+    for a path that is a failure's. For a header for the connection: removing it, and what its
+    `Connection` names, from the copy as it is given for a failure, a second rule where a copy
+    leaves, where refusing to keep it is one comparison of each name in the pass that already
+    counts the head. For bounding refreshes: a cap of their own, a second limit to
     choose where the copies kept already follow the store's bound; letting a refresh's count go as
     its copy goes, before its task has ended, which let copies turned out and kept again start
     more refreshes than copies (the fourth review found it); and a mark for each URL, which holds
-    one refresh to a URL but not the store's to its copies. For telling a refresh its copy went:
+    one refresh to a URL but not the store's to its copies; and holding the count to the copies
+    kept at every instant, which would end or uncount running refreshes as the store shrinks,
+    the early release the fourth review's fix took out (the fifth review found the admission rule
+    unstated). For telling a refresh its copy went:
     one notice for the store, which woke every refresh at each copy that went; and a notice in
     each entry, whose 16 bytes take an entry and its `Arc`'s counts past jemalloc's class of 448.
     The refreshes are counted in a map by the copy's address, under a lock taken only to claim or

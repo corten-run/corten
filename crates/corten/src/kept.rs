@@ -283,6 +283,13 @@ thread_local! {
     static DRAWN: Cell<u32> = const { Cell::new(DRAWN_FROM) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// What a test does as a claim is about to take the store's lock ([`Refresh::claim`]): what
+    /// may happen to the copy between the lookup that found it and its count.
+    static AS_CLAIMED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// A route of whole bodies, by what became of the answers it made last. A body is kept from
 /// a size ([`BODY_FROM`]), which no type
 /// of the route's shows, so a route whose bodies are all under that size, or all
@@ -877,8 +884,7 @@ impl Store {
         // A refresh takes its own copy's place, and is not told of it.
         let mut wake = true;
         if let Over::Again { until, stop, .. } = over {
-            let ended = stop.is_aborted() || until.is_some_and(|until| tokio::time::Instant::now() >= until);
-            if copy.is_none() || ended || !written.stands(self) {
+            if copy.is_none() || Over::ended(*until, stop) || !written.stands(self) {
                 return false;
             }
             wake = false;
@@ -903,15 +909,15 @@ impl Store {
                 inner.at.remove(&entry.hash);
             }
         }
-        // In one order with the refresh's claim ([`Refresh::claim`]): either the claim sees the
-        // copy gone, or this sees it claimed and tells the refresh.
+        // Under the lock the claim counts its refresh under ([`Refresh::claim`]): either the claim
+        // sees the copy gone, or this sees it claimed and counted, and tells the refresh.
         let size = entry.size.swap(GONE, Ordering::SeqCst);
         if size == GONE {
             return;
         }
         self.bytes.fetch_sub(size, Ordering::AcqRel);
-        // The one refresh of the copy that went, not every refresh under way. One that claimed the
-        // copy and is not yet counted sees it gone as it starts to wait ([`Refresh::until_gone`]).
+        // The one refresh of the copy that went, not every refresh under way. One not yet waiting
+        // sees the copy gone as it starts to ([`Refresh::until_gone`]).
         if wake && entry.refreshing.load(Ordering::SeqCst) {
             let refreshes = self.refreshes.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some(gone) = refreshes.get(&(Arc::as_ptr(entry) as usize)) {
@@ -1028,6 +1034,19 @@ impl Answers {
         let Some(entry) = entry.upgrade() else { return };
         let mut inner = self.0.inner.write().unwrap_or_else(PoisonError::into_inner);
         self.0.drop_entry(&mut inner, &entry, wake);
+    }
+
+    /// Takes a refresh's own `copy` out, for an answer that is no longer what its handler makes,
+    /// under the lock and only before its time is up (`until`) and shutdown (`stop`), as its
+    /// answer takes the copy's place ([`Store::make_way`]): a refresh that has stopped keeps
+    /// nothing, and takes nothing out. A copy that has gone is left gone, and one a write ended,
+    /// which no longer stands, may go.
+    fn retire(&self, copy: &Weak<Entry>, until: Option<tokio::time::Instant>, stop: &crate::Signal) {
+        let Some(copy) = copy.upgrade() else { return };
+        let mut inner = self.0.inner.write().unwrap_or_else(PoisonError::into_inner);
+        if !Over::ended(until, stop) {
+            self.0.drop_entry(&mut inner, &copy, false);
+        }
     }
 
     /// Keeps `entry`, in the place of the copy it stands for, and makes room for it.
@@ -1229,33 +1248,36 @@ impl Refresh {
     /// Marks `entry`, which a request found past its lifetime, as being made again: unless another
     /// request is making it, since the lookup it is no longer the store's copy (another page took
     /// its place, or it went for room) or a write to its path ended it, or as many refreshes are
-    /// under way as the store holds copies. A refresh whose copy went counts until it ends, so
-    /// turning copies out and keeping them again does not start more: the store never has more
-    /// refreshes under way than it has held copies. The mark and the count are let go when this
-    /// goes.
+    /// under way as the store holds copies. Each is checked under the store's lock, as the refresh
+    /// is counted, so a copy that goes before then is not counted. A refresh whose copy went counts
+    /// until it ends, so turning copies out and keeping them again does not start more. The store
+    /// may keep fewer copies than it did as they were claimed (one page kept in the place of two),
+    /// and then admits none until fewer are under way than it keeps: so it never has more under way
+    /// than the most copies it kept while they were claimed. The mark and the count are let go when
+    /// this goes.
     fn claim(store: &Arc<Store>, entry: &Arc<Entry>) -> Option<Self> {
         // In one order with the copy going ([`Store::drop_entry`]).
         entry.refreshing.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed).ok()?;
-        let window = Duration::from_secs(entry.lifetime.saturating_add(entry.cache.stale()));
-        let mut refresh = Refresh {
-            entry: Arc::downgrade(entry),
-            gone: Arc::default(),
-            store: Weak::new(),
-            ends: entry.made.checked_add(window),
-        };
-        if entry.size.load(Ordering::SeqCst) == GONE || !entry.written.stands(store) {
-            return None;
+        #[cfg(test)]
+        if let Some(then) = AS_CLAIMED.with_borrow_mut(Option::take) {
+            then();
         }
-        // Under the store's lock, so the copies counted are the store's as the refresh is.
+        // Under the store's lock, so the copy and the copies counted are the store's as the
+        // refresh is: one that went since the lookup is seen gone here, not counted.
         let inner = store.inner.read().unwrap_or_else(PoisonError::into_inner);
-        let copies = inner.slots.len() - inner.free.len();
         let mut refreshes = store.refreshes.lock().unwrap_or_else(PoisonError::into_inner);
-        if refreshes.len() >= copies {
+        if entry.size.load(Ordering::SeqCst) == GONE
+            || !entry.written.stands(store)
+            || refreshes.len() >= inner.slots.len() - inner.free.len()
+        {
+            entry.refreshing.store(false, Ordering::Release);
             return None;
         }
-        refreshes.insert(Arc::as_ptr(entry) as usize, refresh.gone.clone());
-        refresh.store = Arc::downgrade(store);
-        Some(refresh)
+        // Made once admitted: a stale page asked for while the store is saturated makes none.
+        let gone = Arc::new(tokio::sync::Notify::new());
+        refreshes.insert(Arc::as_ptr(entry) as usize, gone.clone());
+        let window = Duration::from_secs(entry.lifetime.saturating_add(entry.cache.stale()));
+        Some(Refresh { entry: Arc::downgrade(entry), gone, store: Arc::downgrade(store), ends: entry.made.checked_add(window) })
     }
 
     /// Until its copy has gone from the store, told by the store as it goes ([`Again::run`]).
@@ -1358,7 +1380,8 @@ impl Again {
     /// body of the size it gave that could not be read, a panic in the handler or as the body is
     /// read, a passed deadline, shutdown) leaves the copy as it was, to be given until its window
     /// ends; any other answer not kept (a `404`, a redirect, a page that may not be kept) takes the
-    /// copy out, since it is no longer what the handler makes. Work a write left counts when it
+    /// copy out, since it is no longer what the handler makes, under the store's lock and before
+    /// it stops, as an answer kept would ([`Answers::retire`]). Work a write left counts when it
     /// ends, as for any answer kept.
     pub(crate) fn spawn<F>(self, made: F)
     where
@@ -1428,10 +1451,11 @@ impl Again {
             () = gone => None,
             ends_copy = ends_copy => ends_copy,
         };
-        // Its own copy: nothing to tell.
+        // Its own copy: nothing to tell. The select saw neither shutdown nor the deadline before
+        // the answer's last poll, which may have run past either; the store looks again.
         if ends_copy.is_some() {
             if let Some(kept) = signal.shared().and_then(|shared| shared.kept.as_ref()) {
-                kept.forget(&refresh.entry, false);
+                kept.retire(&refresh.entry, until, &stop);
             }
         }
     }
@@ -1515,14 +1539,26 @@ impl Held {
 /// (the panic unwound it, the deadline dropped it), so what it would have said of caching after
 /// `next` (`private, no-store`, say) was never said: the copy goes out `private, no-store`, with
 /// every header a CDN may read first removed (any `*cache-control`, a deployment's own name too,
-/// [`crate::cache::read_before_cache_control`]), not with the handler's `public` and windows, so
-/// no cache after the app keeps or shares it.
+/// [`crate::cache::read_before_cache_control`]) and its `Expires`, which a cache that does not
+/// read `Cache-Control` keeps by, not with the handler's `public` and windows, so no cache after
+/// the app keeps or shares it. No copy has a header for its connection that could name
+/// `Cache-Control` for a proxy to remove ([`for_the_connection`]).
 pub(crate) fn held(signal: &crate::Signal) -> Option<Response> {
     let mut res = signal.take::<HeldCopy>()?.given(signal)?;
     let headers = res.headers_mut();
     crate::cache::drop_every_cdn_caching(headers);
+    headers.remove(header::EXPIRES);
     headers.insert(header::CACHE_CONTROL, crate::cache::PRIVATE_NO_STORE);
     Some(res)
+}
+
+/// Whether a header is for the connection an answer is sent on, which a proxy removes with the
+/// headers `Connection` names (RFC 9110 section 7.6.1): `Connection`, `Keep-Alive`, `TE`,
+/// `Trailer`, `Transfer-Encoding`, `Upgrade` and a proxy's own (`Proxy-*`). An answer with one is
+/// not kept: given again outside the middleware that would remove it (for a panic, [`held`]), its
+/// `Connection` could name the `Cache-Control` the app wrote, and the next proxy remove that.
+fn for_the_connection(name: &str) -> bool {
+    matches!(name, "connection" | "keep-alive" | "te" | "trailer" | "transfer-encoding" | "upgrade") || name.starts_with("proxy-")
 }
 
 /// The answer for a body of a size it gave that could not be read: not a page to send as it is.
@@ -1744,7 +1780,12 @@ impl Missed {
         if self.told.0.is_some() && length < BODY_FROM {
             return Settled::Left(res);
         }
-        let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
+        // In the pass that counts the head: a header for the connection is not replayed.
+        let head = res.headers().iter().try_fold(0, |head, (name, value)| {
+            let name = name.as_str();
+            (!for_the_connection(name)).then_some(head + name.len() + value.len() + HEADER)
+        });
+        let Some(head) = head else { return Settled::Left(res) };
         // The URL is held once, by the entry: the map holds its hash.
         let sent = self.language.as_ref().filter(|_| language);
         let size = Key::length(self.at.as_str(), self.host.as_ref(), sent) + head + OVERHEAD + length as usize;
@@ -1814,6 +1855,12 @@ impl Over<'_> {
         match self {
             Over::Held(copy) | Over::Again { copy, .. } => copy,
         }
+    }
+
+    /// Whether a refresh's time is up (`until`) or shutdown has begun (`stop`): it changes nothing
+    /// kept then.
+    fn ended(until: Option<tokio::time::Instant>, stop: &crate::Signal) -> bool {
+        stop.is_aborted() || until.is_some_and(|until| tokio::time::Instant::now() >= until)
     }
 }
 
@@ -2364,6 +2411,50 @@ mod tests {
         answers.keep_over(windowed(&answers, "/b", 0, 60, 0), Some((b.written, &over))).expect("in its copy's place");
         assert_eq!(woken(), [1, 0], "not told of its own copy going");
         assert!(!poll(1), "its own answer, not the store, ends it");
+    }
+
+    /// Refreshes are admitted against the copies the store keeps as each is claimed, and each
+    /// counts until it ends. The store can keep fewer copies meanwhile (here one in the place of
+    /// two, turned out for room), and then none is admitted until fewer are under way than it
+    /// keeps: never more under way than the most copies it kept while they were claimed.
+    #[test]
+    fn refreshes_are_admitted_against_the_copies_kept_as_each_is_claimed() {
+        let answers = Answers::new((1000 + OVERHEAD) * 2).expect("a bound");
+        let (a, b) = (answers.keep(windowed(&answers, "/a", 11, 60, 0)), answers.keep(windowed(&answers, "/b", 11, 60, 0)));
+        let first = [Refresh::claim(&answers.0, &a).expect("a"), Refresh::claim(&answers.0, &b).expect("b")];
+        let under_way = || answers.0.refreshes.lock().unwrap().len();
+        assert_eq!((answers.copies(), under_way()), (2, 2));
+        // A larger page takes the room of both.
+        let larger = windowed(&answers, "/c", 11, 60, 0);
+        let c = answers.keep(|place| Entry {
+            body: Bytes::from(vec![b'x'; 2000]),
+            size: AtomicUsize::new(2000 + OVERHEAD),
+            ..larger(place)
+        });
+        assert_eq!((answers.copies(), under_way()), (1, 2), "two under way, one copy kept");
+        assert!(Refresh::claim(&answers.0, &c).is_none(), "none admitted with more under way than copies");
+        let [one, two] = first;
+        drop(one);
+        assert!(Refresh::claim(&answers.0, &c).is_none(), "nor with as many");
+        drop(two);
+        let again = Refresh::claim(&answers.0, &c).expect("admitted once fewer are under way than copies");
+        assert_eq!(under_way(), 1);
+        drop(again);
+        assert_eq!(under_way(), 0);
+    }
+
+    /// A copy that goes after the lookup that found it, before its claim takes the store's lock,
+    /// is not counted: a claim for a copy no longer kept takes no place from one that is.
+    #[test]
+    fn a_copy_that_goes_as_it_is_claimed_is_not_counted() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let (a, b) = (answers.keep(windowed(&answers, "/a", 11, 60, 0)), answers.keep(windowed(&answers, "/b", 11, 60, 0)));
+        let (store, gone) = (answers.0.clone(), Arc::downgrade(&a));
+        AS_CLAIMED.set(Some(Box::new(move || Answers(store).forget(&gone, true))));
+        assert!(Refresh::claim(&answers.0, &a).is_none(), "its copy went before it was counted");
+        assert!(!a.refreshing.load(Ordering::Acquire), "and not left marked");
+        assert_eq!((answers.copies(), answers.0.refreshes.lock().unwrap().len()), (1, 0));
+        assert!(Refresh::claim(&answers.0, &b).is_some(), "the copy kept may be made again");
     }
 
     /// A copy past its lifetime that may still be given goes, when room is needed, as one past

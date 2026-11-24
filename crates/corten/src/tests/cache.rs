@@ -2266,7 +2266,8 @@ async fn a_kept_page_lasts_its_lifetime() {
 
 /// What one run of a kept page's handler does, for the tests of a page past its lifetime: answers,
 /// fails (an `Error`, 500), fails with a status of its own, panics, waits past the app's deadline,
-/// redirects, or draws the request's nonce (a page that may not be kept).
+/// redirects, draws the request's nonce (a page that may not be kept), or answers with a status of
+/// its own after its one poll moved the paused clock a second on or began shutdown.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum Does {
     #[default]
@@ -2277,6 +2278,8 @@ enum Does {
     Waits,
     Redirects,
     DrawsNonce,
+    LateStatus(StatusCode),
+    ShutdownStatus(StatusCode),
 }
 
 /// A gate a run of a handler or the reading of a body waits at until it has a permit.
@@ -2358,6 +2361,14 @@ impl Steps {
                     Does::DrawsNonce => {
                         let nonce = req.nonce().len();
                         req.test_page_for("Stale", html! { <p>{format!("a nonce of {nonce}")}</p> })
+                    }
+                    Does::LateStatus(status) => {
+                        advance_in_place(Duration::from_secs(1));
+                        Err(Error::status(status))
+                    }
+                    Does::ShutdownStatus(status) => {
+                        req.signal().shared().expect("an app's signal").finishing.signal().abort(crate::Abort::Shutdown);
+                        Err(Error::status(status))
                     }
                 };
                 windows(Public::new(Duration::from_secs(1), page))
@@ -2881,9 +2892,34 @@ async fn refreshes_under_way_never_outnumber_the_copies_kept() {
     assert_eq!(settled(&finishing).await, 0);
 }
 
+/// A page made again whose handler answers a `404` in the poll that runs past its deadline, or in
+/// which shutdown begins, does not take the old page out: past its time or once shutdown has begun
+/// a refresh changes nothing kept, as it would keep nothing it made. The old page is still given.
+#[tokio::test(start_paused = true)]
+async fn a_page_made_again_that_ends_past_its_deadline_or_at_shutdown_leaves_the_old_page() {
+    for (at, does) in
+        [("/?deadline", Does::LateStatus(StatusCode::NOT_FOUND)), ("/?shutdown", Does::ShutdownStatus(StatusCode::NOT_FOUND))]
+    {
+        let steps = Steps::new();
+        let routes = steps.routes(|page| page.stale_while_revalidate(Duration::from_secs(60)));
+        let app = App::new(Routes::from(routes)).deadline(Duration::from_millis(500));
+        let finishing = app.finishing();
+        let router = app.router();
+        let (_, _, made) = fetch(&router, "GET", at, &[]).await;
+        tokio::time::advance(Duration::from_secs(1)).await;
+        steps.then(does);
+        assert_eq!(age_of(&fetch(&router, "GET", at, &[]).await.1), Some(1), "{at}: given past its lifetime");
+        assert_eq!((settled(&finishing).await, steps.runs.count()), (0, 2), "{at}: made again, and answered 404");
+        let (status, headers, body) = fetch(&router, "GET", at, &[]).await;
+        assert_eq!((status, &body), (StatusCode::OK, &made), "{at}: the old page stands: {headers:?}");
+        assert!(age_of(&headers).is_some_and(|age| age >= 1), "{at}: given from the store: {headers:?}");
+    }
+}
+
 /// How a page's body is read, for the tests of a page made again: whole at once, once its gate has
 /// a permit (which may never come), not at all, with an error (after its handler waited for the
-/// time given), or with a panic, its handler's signal kept in the slot first.
+/// time given), or with a panic, its handler's signal kept in the slot first; or its handler panics
+/// before it answers.
 #[derive(Clone)]
 enum Read {
     Whole,
@@ -2891,6 +2927,7 @@ enum Read {
     Fails,
     LateFails(Duration),
     Panics(Slot),
+    HandlerPanics,
 }
 
 /// Where a run of [`exact_routes`]' handler whose body panics keeps its signal.
@@ -2899,17 +2936,18 @@ type Slot = std::sync::Arc<std::sync::Mutex<Option<crate::Signal>>>;
 /// A page of an exact size whose body is read as its `Read` says: an answer type of the app's own
 /// that says it is a page, as a `Public` route may answer. It sets a caching header of a
 /// deployment's own that a CDN reads before `Cache-Control` (`Example-CDN-Cache-Control`), which
-/// `Public::header` may not set but an answer type of the app's may.
+/// `Public::header` may not set but an answer type of the app's may, and the raw headers `extra`.
 struct Exact {
     text: bytes::Bytes,
     read: Read,
+    extra: &'static [(&'static str, &'static str)],
 }
 
 impl crate::response::IntoResponse for Exact {
     fn into_response(self) -> crate::response::Response {
         let wait: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> = match self.read.clone() {
             Read::Gated(gate) => Some(Box::pin(async move { gate.acquire().await.unwrap().forget() })),
-            Read::Whole | Read::Fails | Read::LateFails(_) | Read::Panics(_) => None,
+            Read::Whole | Read::Fails | Read::LateFails(_) | Read::Panics(_) | Read::HandlerPanics => None,
         };
         let length = self.text.len() as u64;
         let (fails, panics) = (matches!(self.read, Read::Fails | Read::LateFails(_)), matches!(self.read, Read::Panics(_)));
@@ -2917,6 +2955,9 @@ impl crate::response::IntoResponse for Exact {
         let mut res = crate::response::Response::new(Body::new(body));
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
         res.headers_mut().insert("example-cdn-cache-control", HeaderValue::from_static("public, max-age=60"));
+        for (name, value) in self.extra {
+            res.headers_mut().append(*name, HeaderValue::from_static(value));
+        }
         res
     }
 }
@@ -2984,6 +3025,16 @@ fn exact_routes(
     reads: &std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Read>>>,
     windows: fn(Public<Exact>) -> Public<Exact>,
 ) -> Table {
+    exact_routes_with(runs, reads, windows, &[])
+}
+
+/// [`exact_routes`] whose page also carries the raw headers `extra`.
+fn exact_routes_with(
+    runs: &Runs,
+    reads: &std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Read>>>,
+    windows: fn(Public<Exact>) -> Public<Exact>,
+    extra: &'static [(&'static str, &'static str)],
+) -> Table {
     let (runs, reads) = (runs.clone(), reads.clone());
     let page = move |req: Req| {
         runs.ran();
@@ -2996,8 +3047,11 @@ fn exact_routes(
             if let Read::LateFails(late) = read {
                 tokio::time::sleep(late).await;
             }
+            if let Read::HandlerPanics = read {
+                panic!("the page's handler panicked");
+            }
             let text = format!("<!DOCTYPE html><html><head><title>Exact</title></head><body><main><p>made by run {run} </p></main></body></html>");
-            windows(Public::new(Duration::from_secs(1), Exact { text: text.into(), read }))
+            windows(Public::new(Duration::from_secs(1), Exact { text: text.into(), read, extra }))
         }
     };
     Table::new().route("/", crate::route::get(page).0)
@@ -3112,6 +3166,84 @@ async fn a_kept_page_given_for_a_panic_or_a_passed_deadline_has_no_cdn_caching_h
             assert_eq!(headers[header::CACHE_CONTROL], "private, no-store", "{middleware} {at}");
         }
     }
+}
+
+/// An answer with a header for the connection it is sent on (`Connection` and what it names,
+/// `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade` and a proxy's, RFC 9110 section
+/// 7.6.1) is not kept: given again outside the middleware that would remove it, for a panic, it
+/// could have the next proxy remove the `Cache-Control` the app wrote by its name. The panic is
+/// then the answer's own `500`. And the copy given for a panic has no `Expires`, which a cache
+/// that does not read `Cache-Control` would keep it by.
+#[tokio::test(start_paused = true)]
+async fn an_answer_with_a_header_for_its_connection_is_not_kept() {
+    const HOPS: [&[(&str, &str)]; 8] = [
+        &[("connection", "cache-control"), ("expires", "Wed, 01 Jan 2098 00:00:00 GMT")],
+        &[("keep-alive", "timeout=5")],
+        &[("te", "trailers")],
+        &[("trailer", "expires")],
+        &[("transfer-encoding", "chunked")],
+        &[("upgrade", "websocket")],
+        &[("proxy-connection", "keep-alive")],
+        &[("proxy-authenticate", "Basic")],
+    ];
+    const EXPIRES: &[(&str, &str)] = &[("expires", "Wed, 01 Jan 2098 00:00:00 GMT")];
+    for extra in HOPS.into_iter().chain([EXPIRES]) {
+        let (runs, reads) = (Runs::default(), std::sync::Arc::default());
+        let windows = |page: Public<Exact>| page.stale_if_error(Duration::from_secs(10));
+        let app = App::new(Routes::from(exact_routes_with(&runs, &reads, windows, extra))).deadline(Duration::from_secs(5));
+        let router = app.router();
+        let kept = extra == EXPIRES;
+        fetch(&router, "GET", "/", &[]).await;
+        let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
+        assert_eq!(age_of(&headers).is_some(), kept, "{extra:?}: {headers:?}");
+        tokio::time::advance(Duration::from_secs(1)).await;
+        reads.lock().unwrap().push_back(Read::HandlerPanics);
+        let (status, headers, _) = fetch(&router, "GET", "/", &[]).await;
+        if kept {
+            assert_eq!((status, age_of(&headers)), (StatusCode::OK, Some(1)), "{extra:?}: {headers:?}");
+            assert_eq!(headers[header::CACHE_CONTROL], "private, no-store", "{extra:?}");
+            assert!(!headers.contains_key(header::EXPIRES), "{extra:?}: {headers:?}");
+        } else {
+            assert_eq!((status, age_of(&headers)), (StatusCode::INTERNAL_SERVER_ERROR, None), "{extra:?}: {headers:?}");
+        }
+    }
+}
+
+/// The same over HTTP/1, as a client reads it: a page whose answer names `Cache-Control` as its
+/// connection's own is not kept, so a panic past its lifetime is the answer's `500`, with no
+/// `private, no-store` written that a proxy would remove by that name.
+#[tokio::test]
+async fn over_http1_a_panic_is_not_given_a_copy_that_names_its_policy_for_the_connection() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (runs, reads) = (Runs::default(), std::sync::Arc::default());
+    let windows = |page: Public<Exact>| page.stale_if_error(Duration::from_secs(60));
+    let app = App::new(Routes::from(exact_routes_with(&runs, &reads, windows, &[("connection", "cache-control")])));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let head = || async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+        let mut answer = Vec::new();
+        stream.read_to_end(&mut answer).await.unwrap();
+        let answer = String::from_utf8_lossy(&answer).to_ascii_lowercase();
+        answer.split("\r\n\r\n").next().unwrap().to_owned()
+    };
+    head().await;
+    let second = head().await;
+    // Past its lifetime, on the clock the store counts by.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    reads.lock().unwrap().push_back(Read::HandlerPanics);
+    let panicked = head().await;
+    assert!(panicked.starts_with("http/1.1 500"), "the panic's own: {panicked}");
+    assert!(!panicked.lines().any(|line| line.starts_with("connection:") && line.contains("cache-control")), "{panicked}");
+    assert!(second.starts_with("http/1.1 200") && !second.contains("\r\nage:"), "not kept: {second}");
+    assert_eq!(runs.count(), 3);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
 }
 
 /// The body a failure is stood in for as it is read is one the store reads to keep it. An answer

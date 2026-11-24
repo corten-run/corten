@@ -1578,14 +1578,18 @@ at shutdown, which waits for it; reading its body is part of that time, and none
 shutdown has begun. It also stops as soon as the old page leaves the store (it went for room, or
 another page took its place), since what it made could no longer be kept. A refresh counts
 until it has ended, though its page left, and none starts while as many are under way as the
-store keeps pages (the old page is given meanwhile, and the next request past its lifetime tries
-again): so the store never has more pages being made again than it keeps, however fast pages
-are turned out and kept again. When it stops, however it stops, the signal its
+store keeps pages as it would start (the old page is given meanwhile, and the next request past
+its lifetime tries again). The count is checked as each starts: the store can come to keep fewer
+pages while refreshes run (one large page kept in the room of two), and then none starts until
+fewer are under way than it keeps. So the store never has more pages being made again than the
+most it kept while they started, however fast pages are turned out and kept again. When it
+stops, however it stops, the signal its
 handler was given aborts, and work the handler started on that signal ends. A failure there (a
 `500`, `502`, `503` or `504`, a panic in the handler or as its body is read, a passed deadline,
 a page it would keep whose body could not be read) leaves the old page given until its window
 ends, and the next request has it made again; any other answer (a `404`, a redirect, a page
-that may not be kept) ends the old page.
+that may not be kept) ends the old page, unless the refresh has stopped by then: one whose
+deadline, window or shutdown came as it answered changes nothing kept.
 
 The handler that makes it again is given the request that found the old page as your
 middleware left it: its URL, headers and extensions, and a locale the middleware chose with
@@ -1620,16 +1624,23 @@ A panic or a passed deadline ends your middleware before it sees an answer, so t
 sent in place of either cannot carry what the middleware would have said, and it is the one
 answer a middleware does not see. It goes out `private, no-store`, with every header a CDN may
 read first removed (any `*-cache-control`, a name your deployment chose too, `Surrogate-Control`,
-`Edge-Control`, `X-Accel-Expires`), so no cache after the app keeps or shares it, whatever the
-handler's answer said; a `500`, `502`, `503` or `504` the handler
+`Edge-Control`, `X-Accel-Expires`) and its `Expires`, so no cache after the app keeps or shares
+it, whatever the handler's answer said. No kept page carries a header for its connection
+(`Connection` and what it names, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, a
+`Proxy-*`): an answer of your own type that sets one is not kept, since a `Connection` naming
+`Cache-Control` would have the next proxy remove what the app wrote. A `500`, `502`, `503` or `504` the handler
 returns goes back through the middleware, and the kept page sent in its place leaves with what
-the middleware makes of it.
+the middleware makes of it. Nor does the page sent for a panic or a deadline get any other
+change your middleware makes after `next` (a redaction, a header every answer must carry), so a
+route that needs one leaves `.stale_if_error(..)` off: the window is the handler's answer's own,
+there is none unless it sets one, and no setting of the app's turns it on for a route.
 
 A kept page stands where the handler does, after [your own middleware](#your-own-middleware). Every
 stage runs for every request: a middleware that refuses, counts or stamps a header still does, and
 sees the `200` with the whole body (all but a kept page sent for a panic or a passed deadline,
 above); the security headers and `Cache-Control` are written as for any
-answer; and a request that names the page's tag gets its `304`. What a kept page saves is the
+answer; and a request that names the page's tag gets its `304` (not for that page sent for a
+panic or a deadline, which goes out whole and untagged). What a kept page saves is the
 handler with what it reads, the render, the tag's hash and the compression, since the hash and each
 coding's bytes are made once and stay with the page. On the catalog benchmark's page, marked
 `Public` for a minute, a kept page took 14.5% fewer CPU cycles a request where nothing is compressed
@@ -1650,8 +1661,8 @@ else a page could differ by, and the answer nothing made for one request:
 | the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
-| past its lifetime | within `stale-while-revalidate`, given at once while the handler makes it again; within `stale-if-error`, given in the place of the handler's `500`, `502`, `503` or `504`, panic, passed deadline or body that cannot be read | past both windows, after a write to its path, with `.shared(..)`; within `stale-if-error`, any other answer, and a failure once another request's answer ended or replaced the page |
-| what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
+| past its lifetime | within `stale-while-revalidate`, given at once while the handler makes it again; within `stale-if-error`, given in the place of the handler's `500`, `502`, `503` or `504`, panic, passed deadline or a body the app reads to keep that cannot be read | past both windows, after a write to its path, with `.shared(..)`; within `stale-if-error`, any other answer (a failure as a later stage reads a body the app did not read to keep too), and a failure once another request's answer ended or replaced the page |
+| what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, a header for the connection (`Connection`, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, `Proxy-*`), the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
