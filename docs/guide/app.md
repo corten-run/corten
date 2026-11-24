@@ -881,6 +881,98 @@ An app whose own default port is not 3000 (another service has it on that machin
 port, and `PORT` still overrides it: `corten::serve_on(corten::listeners(8320).await?, app)`,
 rather than setting `PORT` from the program, which is `unsafe` once threads may be running.
 
+## A core at a time
+
+`App::new(routes).per_core()` serves each connection on the core that accepted it. The process
+starts one single-threaded event loop per core, `serve` binds a listener per core on each
+address (`SO_REUSEPORT`), the system gives each new connection to one of them, and the
+connection's requests run on that core until it closes. It is still one app: one router, one
+store of kept pages, one set of tasks, one shutdown, and `App::max_connections` and the two
+timeouts hold across the cores. Nothing changes unless the app asks, and off Linux the setting
+does nothing. It is a proposal with a prototype behind it, not a settled part of the framework:
+[design Choice 73](../design.md#choice-per-core) has what is still open, and every number below
+with the runs behind it.
+
+The numbers are from one 48-core host with the load on the same host over loopback, each
+connection sending its next request when the last is answered, to handlers that do little. No
+database, proxy or network was in any of them.
+
+What it is for:
+
+1. More requests a second while few connections are busy: 8% more at 8 connections, 14% at 16,
+   17% at 24, 55 and 62% at 64 and 13 and 10% at 256 (medians of four or five runs, two passes
+   at 64 and 256).
+2. A shorter tail at thousands of connections: a 99th percentile of 9.2 to 9.5 ms where the
+   default runtime had 12.0 to 12.4 ms at 4,096 connections (six passes), and 81 ms against
+   232 ms at 32,000.
+3. A few percent more requests a second at thousands of connections: 3.1 to 6.9% at 4,096 (the
+   same six passes, best of three), and nothing at 32,000.
+4. Calls to a pooled service, when the app keeps a pool for each core
+   ([below](#where-a-pool-is-opened)).
+
+It is not for a handler that sleeps. Such a handler answered 57 to 60% more requests a second
+with `per_core()`, and that is tokio's timer: on the multi-threaded runtime every
+`tokio::time::sleep` takes one lock when it starts and again when it is dropped, and the
+workers queue for it. tokio's alternative timer (`--cfg tokio_unstable`, the app's own choice in
+its `main` and its build) gave back 63 to 79% of the difference.
+
+What it costs:
+
+1. `tokio::spawn` puts a task on the handler's core and no other core takes it over, so work
+   that computes for long holds up that core's other connections. `tokio::task::spawn_blocking`
+   still leaves the core. `tokio::task::block_in_place` panics, as on any single-threaded
+   runtime.
+2. A connection stays on the core that accepted it, and the system places connections by their
+   addresses and ports, not by load. 24 connections landed on 15 of 24 cores and 64 on 22 or 23,
+   a core holding up to seven; 256 or more reached every core. With handlers that do little it
+   was still the faster at each of those counts. A few connections that each need much of a
+   core's CPU were not measured, and that is where an uneven spread would hold it back.
+3. More CPU a request while the server is far from full and one pool is shared: 79 to 87 µs of
+   the server's CPU a request against 66 µs on the default runtime at 32,000 requests a second,
+   and 51 against 45 to 46 µs at about 310,000 (three runs each, one pass).
+4. A rule about where a pool is opened, next.
+
+### Where a pool is opened
+
+A socket is read by the runtime that opened it. Under `per_core` the runtime `main` runs on
+serves no connection: it waits for the shutdown and runs the app's tasks. So a pool whose
+connections are opened in `main` before `serve`, where an app opens one today, has every reply
+read on a thread that serves nothing and handed across to the handler's core. With 4,032
+connections to a service on the same host that answers after 1 ms, which stood in for a
+database, a pool opened that way had a 99th percentile of 16.6 to 16.9 ms where the default
+runtime had 12.1 ms, and answered no more requests a second than it (+1.4% and -1.3% in two
+passes).
+
+So with `per_core`, one of:
+
+1. One pool, built without opening its connections, which the handlers open as they first need
+   them. Each connection then belongs to a core's event loop. That gave 2.5 and 3.1% more
+   requests a second than the default runtime with a 99th percentile of 9.9 to 10.1 ms (4.7 and
+   4.9% more on a route through the stages, and 2.8 and 0.1% more with the request deadline off,
+   whose timer costs the default runtime more).
+2. A pool for each core, kept in a `thread_local!`, each with its share of the connections: an
+   event loop is one thread for as long as the process runs, so a handler always finds its own
+   core's pool. That gave 10% more than the default runtime (13% through the stages) with a 99th
+   percentile of 8.8 to 9.2 ms, and it divides the pool. A core whose connections are all out
+   waits while another's sit idle: with the pool the limit and 42 connections a core it
+   answered 8% fewer requests than the default runtime's one pool of 1,008, and with three a core
+   its 99th percentile was 145 to 158 ms where every other arrangement had 130 to 134 ms (one
+   pass).
+
+No database's pool was measured: the pool was the benchmark entry's own, of plain connections.
+With sqlx, `connect` opens a connection before it returns, so in `main`, and `connect_lazy` opens
+none until one is asked for; which runtime each connection sqlx then opens belongs to was not
+checked.
+
+### HTTPS and listeners of the app's own
+
+Only `serve` binds a listener per core. With listeners of the app's own (`serve_on`,
+`serve_wrapped`) each listener is accepted on one core, dealt in turn, so the two that
+`corten::listeners(3000)` returns serve on two cores, and a warning in the log says so. An app
+that ends TLS itself and wants `per_core` binds a listener per core on each address itself,
+with `SO_REUSEPORT`: the prototype does not do it for the app
+([design Choice 73](../design.md#choice-per-core)).
+
 ## The request path
 
 `App` is one middleware around the routes: the same-origin check, the request signal, the
