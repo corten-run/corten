@@ -312,22 +312,32 @@ page, a script's `replaceState` during a read) hold it the same way. The busy ma
 sees each post where the page calls `fetch`, since a route hears of a request only some time
 after the browser sends it: it requires the waiting button's post sent only once the held answer
 is drawn, the two posts and their answers in the route's log, and the waiting post's own answer
-drawn. The `replaceState` check loads the page with the document the server drew for the write's
-address before the write landed, asked for as soon as the write is answered, so the page comes in
-waiting however long the test takes to load it; a fixture that cannot draw that document fails
-the check rather than skipping it. The check holds the page's first read from before the page
-loads, so the read it holds is the first however soon it comes, and requires that read cancelled,
-every later read made at the held read's address with only `shown` changed (its receipt kept),
-one of them answered with success, and the page left at that address. A wait for a request that a
-held answer lets out starts when that answer is let go. The check of a navigation during a
-patch's stylesheet load holds the one
-stylesheet the patch links until the runtime has read the navigation's answer, and requires that
+drawn within five seconds of the release. The `replaceState` check loads the page with the
+document the server draws for the write's receipt, with its status line and its head's read-again
+tag put in place as the server draws them while the write has not landed, so the page comes in
+waiting whether or not the store had the write by the time the test asked for that document; a
+fixture that draws no page for the write fails the check rather than skipping it. The page is
+loaded after a blank one and its reads of itself are recorded from the start of that document.
+Its first read is held from before the load, so the read held is the first however soon it comes,
+and it must be at the receipt's address. The check requires that read to fail while it is still
+held (not once it is let go), every later read made at its address with only `shown` changed,
+one of them answered with success, `Saved.` drawn in the same document, and the page left at that
+address. A wait for a request that a held answer lets out starts when that answer is let go. The
+check of a navigation started before a write's page comes requires the write's request, the
+navigation's request read whole and the Stocks page drawn in the same document, five seconds
+each; without one it fails and does no more work on its page, and the next check starts from the
+News page it left. The check that navigating away abandons a held write requires that write to
+fail while it is still held, within five seconds of the page's leaving. The check of a navigation
+during a patch's stylesheet load holds the one stylesheet the patch links until the runtime has
+read the navigation's answer, and requires that
 the page did not swap while it was held and that the browser requested it once while it was
 held. It runs twice: once the load succeeds, and the page swaps in with the area's rules applied,
 the stylesheet requested once in all; once it fails, and the page loads in full, as a navigation
 whose own stylesheet fails does, which may request the stylesheet again. Its steps before the
-stylesheet is let go share 15 seconds, and each arm's steps after it 10; a step that fails or
-runs out of that time fails the check, no page work starts after it, and its page is closed.
+stylesheet is let go share 15 seconds, and each arm's steps after it 10. A step that fails, runs
+out of that time or settles only after it fails the check, and no page work starts after it; a
+handle a wait returns is read in a step of its own, so no read of it starts once the time is up.
+Its page is closed however the check ends.
 Only the failed load tells a navigation that shares the load from one that took the patch's link
 for a loaded stylesheet whatever the
 page's handler modules do, since those also hold the swap: with a module held past the
@@ -343,10 +353,17 @@ was under its point, the page's live updates had moved the button by then, and t
 on `<main>` or a `<div>` beside it. The CI logs do not show whether that is what happened there.
 The cases still wait for their output condition, then check the busy mark sampled while the
 answer was held, the exact sends and the renewed submit key. The first request is captured
-before editing its fields, and an error a case waits for is its form's own, for six seconds at
-most from its press, which is made in the page task that starts the wait; file output is polled
-on a timer, independent of animation frames. Neither the six-second outcome bound nor the window
-for detecting forbidden sends is extended.
+before editing its fields. An error a case waits for is its form's own. The check of a submit the
+network fails presses its button in the page task that starts listening for the error and its
+six-second timer, so its six seconds start at the press. The other checks that wait for a form's
+error (the submit that waited for a failed write, the submit keys, the template copies and the
+cut connections) listen from before the press but start their six seconds once the press has
+returned, or, for the held failure, once its answer is let go; a case whose error does not come
+in that time fails and stops, without making its retry. Output is polled on a timer, independent
+of animation frames, and output that comes only after its bound fails the check. Each of these
+checks reads its outcome, then removes the listeners, routes and holds it installed however it
+ends, a press that throws or a wait that times out included. Neither the six-second outcome bound
+nor the window for detecting forbidden sends is extended.
 
 The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
 same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a
