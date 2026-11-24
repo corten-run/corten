@@ -298,7 +298,7 @@ node bench/catalog/run.mjs c1 --build --check-only
 The hosted Catalog checks' runner steps use the exact Node in `.node-version`. Their browser
 checks run in Playwright's image for the `@playwright/test` version in `package.json`, with the
 Node 26 that image installs by major version, which can differ in patch; the image step prints both
-versions in its log.
+versions in its log, or warns that the image's version is unavailable when its bounded probe fails.
 
 The generator explicitly gives only its public synthetic `fixtures/catalog.json` mode 0644
 and its `fixtures/` directory mode 0755, including when regenerating under umask 0077.

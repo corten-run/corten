@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -61,10 +62,22 @@ test("catalog checks include failure reporting regressions and native umask cove
 // every browser check runs through the image's command, set up before it in the same job, and the
 // image step is what forwards the opt-ins and the Docker boundary those checks need.
 const imageTag = "mcr.microsoft.com/playwright:v$(node -p 'require(\"@playwright/test/package.json\").version')-noble";
-const dockerBoundary = ["--group-add", "$(stat -c %g /var/run/docker.sock)", "-v", "/tmp:/tmp",
-  "-v", "$(command -v docker):/usr/local/bin/docker:ro", "-v", "/var/run/docker.sock:/var/run/docker.sock"];
 const imageBase = ["docker", "run", "--rm", "--network", "host", "--ipc", "host", "--user", "$(id -u):$(id -g)",
   "-e", "HOME=/tmp", "-v", "$PWD:$PWD", "-w", "$PWD"];
+const dockerBoundary = ["--group-add", "$(stat -c %g /var/run/docker.sock)", "-v", "/tmp:/tmp",
+  "-v", "$(command -v docker):/usr/local/bin/docker:ro", "-v", "/var/run/docker.sock:/var/run/docker.sock"];
+const forward = (...names) => names.flatMap((name) => ["-e", name]);
+// The image's Node is a bounded, best-effort diagnostic: a failed, empty or stalled probe says so
+// and leaves the step, and the browser checks after it, to run.
+const nodeProbe = [
+  "status=0",
+  'image_node=$(timeout -k 5 60 docker run --rm "$image" node --version) || status=$?',
+  'if [ "$status" != 0 ] || [ -z "$image_node" ]; then',
+  "echo \"::warning::Could not read the Node version in $image (docker run exit $status, 124 is a timeout); the browser checks' Node is not recorded.\"",
+  "image_node=unavailable",
+  "fi",
+  'echo "Node on the runner $(node --version), in $image $image_node"',
+];
 
 // The commands a "Playwright's image" step exports, with $run expanded, as argument lists.
 function imageCommands(run) {
@@ -82,6 +95,15 @@ function imageCommands(run) {
   return commands;
 }
 
+// The Node version probe: the lines between the pull and the run command.
+function probeLines(run) {
+  const lines = run.split("\n").map((line) => line.trim());
+  const pull = lines.indexOf('docker pull "$image"');
+  const base = lines.findIndex((line) => line.startsWith("run="));
+  assert.ok(pull >= 0 && base > pull, "the image step pulls before defining its command");
+  return lines.slice(pull + 1, base);
+}
+
 // Space-separated words, keeping a $(...) substitution whole.
 function words(command) {
   const out = [""];
@@ -96,32 +118,25 @@ function words(command) {
   return out.filter(Boolean);
 }
 
-function includesRun(args, sequence) {
-  return args.some((_, at) => sequence.every((arg, offset) => args[at + offset] === arg));
-}
-
-function assertImageCommand(args, forwarded, docker) {
-  assert.deepEqual(args.slice(0, imageBase.length), imageBase);
-  assert.equal(args.at(-1), "$image", "the image is the command's last argument");
-  if (docker) assert.ok(includesRun(args, dockerBoundary), "Docker boundary present");
-  else assert.ok(!args.slice(imageBase.length).some((arg) => arg === "--group-add" || arg.includes("docker")), "no Docker boundary");
-  const env = args.flatMap((arg, at) => args[at - 1] === "-e" ? [arg] : []);
-  assert.deepEqual(env, ["HOME=/tmp", ...forwarded]);
-}
-
 test("catalog CI takes Chromium from Playwright's image, not the runner's apt mirror", () => {
   const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
   for (const [name, job] of Object.entries(workflow.jobs)) {
     assert.ok(job.steps.every((step) => !/playwright install/.test(step.run ?? "")), name);
+  }
+  // A failing browser check fails its job: neither job that runs one may continue on error.
+  for (const job of ["harness", "parity"]) {
+    assert.equal(workflow.jobs[job]["continue-on-error"], undefined, `${job} continues on error`);
   }
   const imageStep = (job) => {
     const steps = workflow.jobs[job].steps;
     const at = steps.findIndex((step) => step.name === "Playwright's image");
     assert.ok(at >= 0, job);
     assert.equal(steps.filter((step) => step.name === "Playwright's image").length, 1, job);
-    assert.match(steps[at].run, /^\s*echo "Node on the runner \$\(node --version\), in \$image \$\(docker run --rm "\$image" node --version\)"$/m);
+    assert.deepEqual(probeLines(steps[at].run), nodeProbe, `${job}: bounded best-effort Node probe`);
     return { at, step: steps[at], commands: imageCommands(steps[at].run) };
   };
+  // The one step matching predicate, after the image step. Callers compare the whole step, so an
+  // added if: or continue-on-error: fails.
   const after = (job, image, predicate, label) => {
     const steps = workflow.jobs[job].steps;
     const matches = steps.flatMap((step, at) => predicate(step) ? [at] : []);
@@ -131,22 +146,26 @@ test("catalog CI takes Chromium from Playwright's image, not the runner's apt mi
   };
 
   // Harness: the Marketplace oracle gets no Docker; the catalog tests get Docker and their opt-in.
+  // Both run unconditionally and fail the job when they fail; so does the image step.
   const harness = imageStep("harness");
-  assert.deepEqual(Object.keys(harness.commands).sort(), ["PLAYWRIGHT", "PLAYWRIGHT_WITH_DOCKER"]);
-  assertImageCommand(harness.commands.PLAYWRIGHT, [], false);
-  assertImageCommand(harness.commands.PLAYWRIGHT_WITH_DOCKER, ["CATALOG_DOCKER_TESTS", "RUNNER_ENVIRONMENT"], true);
-  after("harness", harness.at, (step) => step.run === "$PLAYWRIGHT npm run check:marketplace", "Marketplace oracle");
-  const catalogTests = after("harness", harness.at,
-    (step) => step.run === "$PLAYWRIGHT_WITH_DOCKER node --test bench/catalog/*.test.mjs", "catalog tests");
-  assert.deepEqual(catalogTests.env, { CATALOG_DOCKER_TESTS: "1" });
-  assert.equal(catalogTests.if, undefined);
+  assert.deepEqual(Object.keys(harness.step).sort(), ["name", "run"]);
+  assert.deepEqual(harness.commands, {
+    PLAYWRIGHT: [...imageBase, "$image"],
+    PLAYWRIGHT_WITH_DOCKER: [...imageBase, ...dockerBoundary, ...forward("CATALOG_DOCKER_TESTS", "RUNNER_ENVIRONMENT"), "$image"],
+  });
+  assert.deepEqual(after("harness", harness.at, (step) => step.run?.includes("check:marketplace"), "Marketplace oracle"),
+    { run: "$PLAYWRIGHT npm run check:marketplace" });
+  assert.deepEqual(after("harness", harness.at, (step) => step.run?.includes("bench/catalog/*.test.mjs"), "catalog tests"),
+    { run: "$PLAYWRIGHT_WITH_DOCKER node --test bench/catalog/*.test.mjs", env: { CATALOG_DOCKER_TESTS: "1" } });
 
   // Parity: every Chromium-launching check, with the matrix cells it runs for and its exact command.
   const parity = imageStep("parity");
   const compiled = "contains(fromJSON('[\"gin\",\"drogon\",\"topcoat\",\"leptos\"]'), matrix.app)";
+  assert.deepEqual(Object.keys(parity.step).sort(), ["if", "name", "run"]);
   assert.equal(parity.step.if, compiled);
-  assert.deepEqual(Object.keys(parity.commands), ["PLAYWRIGHT_WITH_DOCKER"]);
-  assertImageCommand(parity.commands.PLAYWRIGHT_WITH_DOCKER, ["RUNNER_ENVIRONMENT"], true);
+  assert.deepEqual(parity.commands, {
+    PLAYWRIGHT_WITH_DOCKER: [...imageBase, ...dockerBoundary, ...forward("RUNNER_ENVIRONMENT"), "$image"],
+  });
   const browserChecks = [
     { name: "Test native compiled alert forms and independent readback", if: compiled,
       run: "$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}" },
@@ -159,6 +178,44 @@ test("catalog CI takes Chromium from Playwright's image, not the runner's apt mi
   for (const expected of browserChecks) {
     const step = after("parity", parity.at, (candidate) => candidate.name === expected.name, expected.name);
     assert.deepEqual(step, expected);
+  }
+});
+
+test("the image step's Node probe reports a failed, empty or stalled docker run without failing the step", {
+  skip: process.platform === "win32" && "runs the probe in bash with a stand-in docker",
+}, (t) => {
+  const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
+  const probe = probeLines(workflow.jobs.harness.steps.find((step) => step.name === "Playwright's image").run);
+  assert.deepEqual(probe, nodeProbe);
+  const dir = mkdtempSync(join(tmpdir(), "catalog-node-probe-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const docker = join(dir, "docker");
+  writeFileSync(docker, [
+    "#!/bin/sh",
+    'case "$PROBE" in',
+    "  ok) echo v26.13.1 ;;",
+    "  empty) ;;",
+    "  fail) echo 'docker: Error response from daemon' >&2; exit 125 ;;",
+    "  stall) exec sleep 30 ;;",
+    "esac",
+  ].join("\n") + "\n");
+  chmodSync(docker, 0o755);
+  // Run as GitHub runs a step's script, under -e and pipefail.
+  const run = (mode, lines) => spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c",
+    ['image="the-image"', ...lines].join("\n")], {
+    encoding: "utf8", timeout: 20000, env: { ...process.env, PROBE: mode, PATH: `${dir}:${process.env.PATH}` },
+  });
+  const ok = run("ok", probe);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /^Node on the runner v\S+, in the-image v26\.13\.1$/m);
+  assert.doesNotMatch(ok.stdout, /::warning::/);
+  // The stall case shortens only the bound, so the test does not wait the step's 60 seconds.
+  const shortBound = probe.map((line) => line.replace("timeout -k 5 60 ", "timeout -k 1 1 "));
+  for (const [mode, status, lines] of [["empty", 0, probe], ["fail", 125, probe], ["stall", 124, shortBound]]) {
+    const result = run(mode, lines);
+    assert.equal(result.status, 0, `${mode}: ${result.stderr}`);
+    assert.ok(result.stdout.includes(`::warning::Could not read the Node version in the-image (docker run exit ${status}, `), `${mode}: ${result.stdout}`);
+    assert.match(result.stdout, /^Node on the runner v\S+, in the-image unavailable$/m, mode);
   }
 });
 

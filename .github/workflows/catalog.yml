@@ -61,15 +61,23 @@ jobs:
       # runner's. PLAYWRIGHT_WITH_DOCKER adds the runner's Docker CLI and socket and its /tmp, and the
       # checkout is at its runner path, so a directory a check hands the daemon to mount is the same.
       # That gives the image the runner's Docker daemon. It is the image framework CI already runs
-      # (ci.yml), from the same publisher by the same version tag, so this trusts nothing new; the tag
-      # follows package.json, where a digest pin would have to change in both workflows with every
-      # Playwright bump. Node in the image is the Node 26 Playwright's image installs, not setup-node's
-      # .node-version; the step prints which, for the browser checks' record.
+      # (ci.yml), from the same publisher by the same version tag: the same publisher trust, now in
+      # more jobs. The tag follows package.json, where a digest pin would have to change in both
+      # workflows with every Playwright bump. Node in the image is the Node 26 Playwright's image
+      # installs, not setup-node's .node-version; the step prints which, for the browser checks'
+      # record. That probe is bounded and only a diagnostic: when it fails or prints nothing, the log
+      # says the image's Node is unavailable and the browser checks still run.
       - name: Playwright's image
         run: |
           image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
           docker pull "$image"
-          echo "Node on the runner $(node --version), in $image $(docker run --rm "$image" node --version)"
+          status=0
+          image_node=$(timeout -k 5 60 docker run --rm "$image" node --version) || status=$?
+          if [ "$status" != 0 ] || [ -z "$image_node" ]; then
+            echo "::warning::Could not read the Node version in $image (docker run exit $status, 124 is a timeout); the browser checks' Node is not recorded."
+            image_node=unavailable
+          fi
+          echo "Node on the runner $(node --version), in $image $image_node"
           run="docker run --rm --network host --ipc host --user $(id -u):$(id -g) -e HOME=/tmp -v $PWD:$PWD -w $PWD"
           echo "PLAYWRIGHT=$run $image" >> "$GITHUB_ENV"
           echo "PLAYWRIGHT_WITH_DOCKER=$run --group-add $(stat -c %g /var/run/docker.sock) -v /tmp:/tmp -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock -e CATALOG_DOCKER_TESTS -e RUNNER_ENVIRONMENT $image" >> "$GITHUB_ENV"
@@ -241,7 +249,13 @@ jobs:
         run: |
           image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
           docker pull "$image"
-          echo "Node on the runner $(node --version), in $image $(docker run --rm "$image" node --version)"
+          status=0
+          image_node=$(timeout -k 5 60 docker run --rm "$image" node --version) || status=$?
+          if [ "$status" != 0 ] || [ -z "$image_node" ]; then
+            echo "::warning::Could not read the Node version in $image (docker run exit $status, 124 is a timeout); the browser checks' Node is not recorded."
+            image_node=unavailable
+          fi
+          echo "Node on the runner $(node --version), in $image $image_node"
           run="docker run --rm --network host --ipc host --user $(id -u):$(id -g) -e HOME=/tmp -v $PWD:$PWD -w $PWD"
           echo "PLAYWRIGHT_WITH_DOCKER=$run --group-add $(stat -c %g /var/run/docker.sock) -v /tmp:/tmp -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock -e RUNNER_ENVIRONMENT $image" >> "$GITHUB_ENV"
       - name: Test native compiled alert forms and independent readback
