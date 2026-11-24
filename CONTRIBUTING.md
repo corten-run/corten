@@ -356,8 +356,9 @@ The failover benchmark is `node examples/listings-feed/bench/run.mjs`; see its h
 ## Benchmark results
 
 A normal full clone fetches every version of a committed file still reachable in history, even
-after a later commit deletes it, so a benchmark commits its evidence, not its raw data. Committed evidence is the report, the summary and
-the provenance: small enough to diff and review. Raw data (per-request logs, traces, captures, a
+after a later commit deletes it, so a benchmark commits its evidence, not its raw data. Committed evidence is the report, the provenance
+and, where it is small and approved for public disclosure, the summary: small enough to diff and
+review. A summary or other file left out is recorded in the provenance by its SHA-256. Raw data (per-request logs, traces, captures, a
 round's archive) stays outside the tree. A maintainer chooses where it is kept and publishes it
 there, and the committed provenance records a locator it can be fetched from and its SHA-256. A
 digest alone is not a locator: it checks a copy but does not say where one is (a group result's
