@@ -1,6 +1,11 @@
 import { check } from "./helpers.mjs";
 
 export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
+  // The cases below press their buttons in the page (`button.click()`), so each submit has run
+  // before the case changes the form, presses again or releases a held answer. A loaded Firefox
+  // can acknowledge Playwright's click before the page gets it, and by then the page can have
+  // moved under the point clicked: the press lands on another element and sends nothing (#2014).
+  const press = (/** @type {string} */ selector) => page.evaluate((selector) => /** @type {HTMLButtonElement} */ (document.querySelector(selector)).click(), selector);
   // The latest submit wins, but a pending write is not abandoned (the server may have applied
   // it): the newer submit waits for its answer and goes out after it, from the form as the answer
   // left it.
@@ -14,13 +19,16 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
   page.on("request", onWrite);
   page.on("response", onAnswer);
   await page.selectOption("select[name=id]", "PNTR");
-  await page.click("#watch-form button");
+  // Each press runs in the page, so the first is out before the form changes.
+  const firstWrite = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/watch"), { timeout: 6000 });
+  await press("#watch-form button");
+  await firstWrite;
   // The same press again sends nothing, and two newer ones are one submit of where the form ended.
-  await page.click("#watch-form button");
+  await press("#watch-form button");
   await page.selectOption("select[name=id]", "NRTH");
-  await page.click("#watch-form button");
+  await press("#watch-form button");
   await page.selectOption("select[name=id]", "VTGO");
-  await page.click("#watch-form button");
+  await press("#watch-form button");
   const busyWhileWriting = await page.getAttribute("#watch-form", "aria-busy");
   await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Vertigo Robotics"), null, { timeout: 6000 }).catch(() => {});
   await page.waitForTimeout(300);
@@ -102,14 +110,13 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
       document.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
       document.querySelector("#queue-box form")?.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
     }, form);
-    // Dispatch each press in the page: a loaded browser can acknowledge Playwright's click
-    // before its submit runs. The first must run before n changes, the second before pressed().
+    // The first press must run before n changes, the second before pressed().
     const first = page.waitForRequest((r) => new URL(r.url()).pathname === "/queue", { timeout: 6000 });
-    await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#queue-box button")).click());
+    await press("#queue-box button");
     await first;
     await page.fill("#queue-box [name=n]", "2");
     const busy = await page.getAttribute("#queue-box form", "aria-busy");
-    await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#queue-box button")).click());
+    await press("#queue-box button");
     pressed();
     const until = Date.now() + 6000;
     let ended = await done();
@@ -271,7 +278,9 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
     }, queueForm("post", `${keyField}<input type="hidden" name="reset" value="x">${change === "file" ? '<input type="file" name="f">' : change === "unreadable" ? '<input type="number" name="q">' : ""}`));
     await page.fill("#queue-box [name=n]", "5");
     if (change === "file") await pickQueueFile("first");
-    await page.click("#queue-box button");
+    const sent = page.waitForRequest((r) => new URL(r.url()).pathname === "/queue", { timeout: 6000 });
+    await press("#queue-box button");
+    await sent;
     if (change === "edited") await page.fill("#queue-box [name=n]", "6");
     if (change === "added") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input name="extra">')));
     if (change === "hidden") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input type="hidden" name="tag" value="a">')));
@@ -339,8 +348,10 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
       document.addEventListener("corten:error", (e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status), { signal: w.__queueCase.signal });
     }, `<form id="queue" method="post" action="/queue" data-patch><input name="n" value="1">${keyField}<button name="b" value="save">Save</button><button name="b" value="other">Other</button></form>`);
     await page.fill("#queue-box [name=n]", "5");
-    await page.click("#queue-box button[value=save]");
-    await page.click("#queue-box button[value=other]");
+    const first = page.waitForRequest((r) => new URL(r.url()).pathname === "/queue", { timeout: 6000 });
+    await press("#queue-box button[value=save]");
+    await first;
+    await press("#queue-box button[value=other]");
     pressed();
     const until = Date.now() + 6000;
     while (!(queueAnswered === 2 && (await page.getAttribute("#queue-box form", "aria-busy")) === null) && Date.now() < until) await page.waitForTimeout(50);
@@ -413,11 +424,11 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
     await pickFile(["first", 1]);
     // As in queueCase, the submit must run before changing the file or releasing its answer.
     const first = page.waitForRequest((r) => new URL(r.url()).pathname === "/queue-file", { timeout: 6000 });
-    await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#queue-file button")).click());
+    await press("#queue-file button");
     await first;
     if (second) await pickFile(second);
     const busy = await page.getAttribute("#queue-file", "aria-busy");
-    await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#queue-file button")).click());
+    await press("#queue-file button");
     pressed();
     const want = second ? "saved 2" : "saved 1";
     // Read the outcome even when a loaded browser is not delivering animation frames.

@@ -357,7 +357,10 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
   check("a submit that waited for a write the network failed is not sent", watchWasSent && afterFailure === 1, `posts: ${afterFailure}${watchWasSent ? "" : ", the first not sent in 5 s"}`);
 
   // A submit key (SubmitKey::field) is sent again until the submission has an answer, then renewed
-  // as another UUID v4.
+  // as another UUID v4. Its presses, and the template copies' below, run in the page: a loaded
+  // Firefox can acknowledge Playwright's click before the page gets it, and by then the page can
+  // have moved the button from under the point clicked, so a retry is never sent (#2014).
+  const press = (/** @type {string} */ selector) => page.evaluate((selector) => /** @type {HTMLButtonElement} */ (document.querySelector(selector)).click(), selector);
   const zero = "00000000-0000-4000-8000-000000000000";
   await page.evaluate((zero) =>
     document.querySelector("main")?.insertAdjacentHTML(
@@ -371,10 +374,10 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
   page.on("request", keyOf);
   const keyedFailed = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", resolve, { once: true })));
   failWatch.value = true;
-  await page.click("#keyed button");
+  await press("#keyed button");
   await keyedFailed;
   const kept = await page.inputValue("#keyed [name=submit]");
-  await page.click("#keyed button");
+  await press("#keyed button");
   await page.waitForFunction((zero) => /** @type {HTMLInputElement | null} */ (document.querySelector("#keyed [name=submit]"))?.value !== zero, zero, { timeout: 5000 }).catch(() => {});
   const renewed = await page.inputValue("#keyed [name=submit]");
   page.off("request", keyOf);
@@ -407,10 +410,10 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
     });
   });
   const upstreamLogged = errors.length;
-  await page.click("#keyed button");
+  await press("#keyed button");
   await page.waitForSelector("#upstream-said");
   const afterUpstream = await page.inputValue("#keyed [name=submit]");
-  await page.click("#keyed button");
+  await press("#keyed button");
   await page.waitForFunction(() => document.querySelector("#upstream-said")?.textContent === "Watching.", null, { timeout: 5000 }).catch(() => {});
   const afterAnswer = await page.inputValue("#keyed [name=submit]");
   check(
@@ -456,7 +459,7 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
         [zero, action],
       );
       const cutFailed = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", (e) => resolve(/** @type {CustomEvent} */ (e).detail.status), { once: true })));
-      await page.click("#cut button");
+      await press("#cut button");
       const cutStatus = await cutFailed;
       const cutKey = await page.inputValue("#cut [name=submit]");
       cutSeen.push(`${action}: status ${cutStatus}, key ${cutKey === zero ? "kept" : cutKey}`);
@@ -542,14 +545,15 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
       page
         .waitForFunction((row) => document.getElementById(`count-row-${row}-said`)?.textContent || "", row, { timeout: 5000 })
         .then((said) => said.jsonValue(), () => "(no answer)");
-    const failed = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", resolve, { once: true })));
-    await page.click("#count-row-a button");
+    // The failure waited for is the copy's own.
+    const failed = page.evaluate(() => new Promise((resolve) => document.getElementById("count-row-a")?.addEventListener("corten:error", resolve, { once: true })));
+    await press("#count-row-a button");
     await failed;
     const kept = await keyOf("a");
     const readA = await page.getAttribute("#count-row-a", "data-read");
-    await page.click("#count-row-a button");
+    await press("#count-row-a button");
     const saidA = await saidBy("a");
-    await page.click("#count-row-b button");
+    await press("#count-row-b button");
     const saidB = await saidBy("b");
     await page.unroute("**/count-row");
     await page.unroute("**/scripts/read-key.js");
@@ -571,7 +575,8 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
     });
     await plainPage.goto(base);
     await copies(plainPage, ["plain"]);
-    await plainPage.click("#count-row-plain button");
+    // In the page too: the fresh page's live updates can still be moving the copy when it is pressed.
+    await plainPage.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#count-row-plain button")).click());
     await plainPage.waitForURL("**/count-row", { timeout: 5000 }).catch(() => {});
     const [plainKey = "(none)"] = plainSent;
     const readPlain = await plainPage.evaluate(() => sessionStorage.getItem("read-key")).catch(() => null);
