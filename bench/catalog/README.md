@@ -43,8 +43,9 @@ connection from the pool, so an expired one is skipped at checkout rather than c
 full-stack [Caveats](../fullstack/README.md#caveats), item 5, list each client's setting.
 `bench/fullstack/idle-close.mjs` checks that an image had dropped them when its probe requests
 reached the upstream with every warmed connection idle 4.5 to 4.75 s (or closed under 4.75 s
-idle before the probe), under the upstream's 5 s close; it does not measure the configured 4 s
-itself. This is the pool policy alone: no retry, no cache, and still one upstream GET per record
+idle before the probe) and nothing sent upstream since the warm-up, under the upstream's 5 s
+close; it does not measure the configured 4 s itself. This is the pool policy alone: no retry, no
+cache, and still one upstream GET per record
 read. It is a correctness-only change to the timed request path: the apps' pool bounds, and the
 class counters below, are timed inputs for groups measured from this point, with no performance
 claim; their cost is not measured, and saved results are unchanged.

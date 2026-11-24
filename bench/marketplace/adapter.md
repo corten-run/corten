@@ -27,8 +27,8 @@ remain unchanged. V2 is a separate workload, with a new baseline, not a rewrite 
   take one from the pool, and Spring uses 1 s because the JDK client drops an expired connection
   late (bench/fullstack/README.md lists each). `bench/fullstack/idle-close.mjs` checks that an
   image had dropped them when its probe requests reached the upstream with every warmed connection
-  idle 4.5 to 4.75 s (or closed under 4.75 s idle before it), under the 5 s close; it does not
-  measure the 4 s itself.
+  idle 4.5 to 4.75 s (or closed under 4.75 s idle before it) and nothing sent upstream since the
+  warm-up, under the 5 s close; it does not measure the 4 s itself.
   Do not retry instead.
 
 The complete numeric wire record (all keys required, empty arrays and nulls are meaningful):

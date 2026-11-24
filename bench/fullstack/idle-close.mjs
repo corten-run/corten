@@ -16,7 +16,8 @@
 // slow read never delays another's probe. The wait rechecks the monotonic clock after every wake,
 // so a timer that fires early only means another wait.
 // A probe is judged by the upstream's own evidence, at each probe request's arrival, not by when
-// the app replies: it counts only if, when every one of its requests arrived, every warmed
+// the app replies: a request arrives when the read that completed its head came in, before the
+// upstream prepares its answer. It counts only if, when every one of its requests arrived, every warmed
 // connection had been idle at least 4.5 s and less than `keepAliveMs - slackMs` (4.75 s), 250 ms
 // before the upstream here closes (1.25 s before Node's own close). So the pool chose its
 // connections inside the window whatever the app does after the upstream answers. A probe with any
@@ -30,9 +31,13 @@
 // seen the close of any connection the app ended with its request), then on until the newest one
 // still open is too, which needs the open ones' warm answers to span less than the window's 250 ms;
 // a wider warm-up is inconclusive and not probed, since no single moment would put them all inside it.
+// Nothing may reach the upstream between the end of the warm-up and the probe's dispatch: every
+// request in that interval is recorded, and any one (on a warmed connection or another) makes the
+// read inconclusive, since it refreshes the connection it arrives on and the idle was not one.
 // It passes when every probe is inside its window, every read after the idle is a 200 from exactly
-// one upstream answer and no request arrived on a connection idle for the bound or longer. So a
-// client that still reuses a connection idle 4.5 s fails, as well as one that reuses a connection
+// one upstream answer and no request, during the idle or the probe, arrived on a connection idle for
+// the bound or longer. So a client that still reuses a connection idle 4.5 s fails, as well as one
+// that reuses a connection
 // the upstream closes: here a request on a connection idle the advertised 5 s or more meets a reset
 // and no answer. A library that retries a lost request still shows the reuse. What it verifies is
 // that the pool had dropped its idle connections when probed, 4.5 to 4.75 s after their last
@@ -41,6 +46,8 @@
 // also passes, so each app's configured 4 s is read from its source, not measured here. Each
 // burst's answers are the upstream events recorded after the burst began (by position in the event
 // list, not by timestamp), so a readiness answer is never counted.
+// The judging (`warmedSet`, `planProbe`, `judgeRead`) is pure over the recorded events and the
+// monotonic times in them, so its window, expiry and spread rules are tested on fixed sequences.
 //
 // Docker is used the way bench/marketplace/alert-probe-run.mjs uses it: every command has a
 // deadline; the container carries this run's owner label and is registered only by the immutable
@@ -83,11 +90,80 @@ export const probeWindow = (bound = boundMs) => ({ fromMs: bound + marginMs, bel
  * (`closedInTime`) and some request reached the upstream (`arrivals`). A `skipped` probe was not made.
  */
 export function inconclusive(probe, { fromMs, belowMs }) {
-  if (probe.skipped || probe.arrivals === 0) return true;
+  if (probe.skipped || probe.interrupted || probe.arrivals === 0) return true;
   if (probe.fromMs === null || probe.toMs === null) return !(probe.closedInTime > 0);
   return !(probe.fromMs >= fromMs && probe.toMs < belowMs);
 }
 const ms = (n) => (n === null ? "none" : n.toFixed(1));
+const tenth = (n) => Math.round(n * 10) / 10;
+const span = (set) => ({ oldest: Math.min(...set.map((c) => c.last)), newest: Math.max(...set.map((c) => c.last)) });
+// When each connection closed, as the upstream saw it, from `events`.
+const closes = (events) => new Map(events.filter((e) => e.kind === "closed").map((e) => [e.connection, e.time]));
+// A warmed connection seen closed by `t`, while it was idle under `belowMs`: it cannot be reused and
+// was not held past the window, so it is counted rather than timed.
+const closedInTime = ({ connection, last }, closed, t, { belowMs }) => {
+  const at = closed.get(connection);
+  return at !== undefined && at <= t && at - last < belowMs;
+};
+// Requests the upstream received: answered, or refused on a connection idle past its keep-alive.
+const requests = (events) => events.filter((e) => e.kind === "answered" || e.kind === "closedIdle");
+
+/**
+ * The warmed set: each connection that answered `target` in `warmEvents`, with `last`, the time its
+ * latest answer in the warm-up was written.
+ */
+export function warmedSet(warmEvents, target) {
+  const warmed = new Set(warmEvents.filter((e) => e.kind === "answered" && e.path === target).map((e) => e.connection)), last = new Map();
+  for (const e of warmEvents) if (e.kind === "answered" && warmed.has(e.connection)) last.set(e.connection, Math.max(last.get(e.connection) ?? -Infinity, e.answeredAt));
+  return [...last].map(([connection, at]) => ({ connection, last: at }));
+}
+
+/** When to stop the first wait: the oldest warmed connection idle `fromMs`, or null with no warmed set. */
+export const firstWait = (conns, limits) => (conns.length ? span(conns).oldest + limits.fromMs : null);
+
+/**
+ * Whether and when to probe, at `now`, after the first wait, from the events since the warm-up. The
+ * connections still open must all be inside the window at one moment, so their warm answers must
+ * span less than it; the probe goes once the newest is idle `fromMs`. Returns `{ open, spread, at }`,
+ * or `{ open, spread, skipped }` with the reason no probe is made.
+ */
+export function planProbe(conns, sinceWarm, now, limits) {
+  if (!conns.length) return { open: 0, spread: 0, skipped: "no upstream answer in the warm-up" };
+  const closed = closes(sinceWarm), open = conns.filter((c) => !closedInTime(c, closed, now, limits));
+  const timing = span(open.length ? open : conns), spread = open.length ? timing.newest - timing.oldest : 0;
+  if (spread >= limits.belowMs - limits.fromMs) return { open: open.length, spread, skipped: `the warm answers span ${ms(spread)} ms, not less than the window's ${limits.belowMs - limits.fromMs} ms` };
+  return { open: open.length, spread, at: timing.newest + limits.fromMs };
+}
+
+/**
+ * One read's verdict from its recorded events: `warmEvents` (the warm bursts), `idleEvents` (from
+ * the warm-up's end to the probe's dispatch, or to the skip) and `probeEvents` (from the dispatch).
+ * Each probe request is judged at its arrival against every warmed connection not closed in time
+ * by the first arrival; any request during the idle makes the probe inconclusive (`interrupted`).
+ * Returns `{ warm, after, closedIdle, reusedPastBound }`, the last two from the idle and the probe.
+ */
+export function judgeRead({ target, warmStatuses, warmEvents, plan, idleEvents = [], statuses = [], probeEvents = [], sentMs = null, limits, bound }) {
+  const answers = (events) => events.filter((e) => e.kind === "answered" && e.path === target);
+  const warmed = answers(warmEvents), conns = warmedSet(warmEvents, target), later = [...idleEvents, ...probeEvents];
+  const warm = { statuses: warmStatuses, answers: warmed.length, reused: warmed.filter((e) => e.idle !== null).length,
+    connections: conns.length, open: plan.open, spreadMs: tenth(plan.spread) };
+  const intervening = requests(idleEvents), warmedIds = new Set(conns.map((c) => c.connection));
+  const interrupted = intervening.length ? { requests: intervening.length, onWarmed: intervening.filter((e) => warmedIds.has(e.connection)).length } : undefined;
+  let after;
+  if (plan.skipped) {
+    after = { statuses: [], answers: 0, connections: [], probe: { fromMs: null, toMs: null, arrivals: 0, skipped: plan.skipped, ...(interrupted && { interrupted }) } };
+  } else {
+    const seen = answers(probeEvents), arrivals = seen.map((e) => e.arrival), first = Math.min(...arrivals), closed = closes(later);
+    const timed = arrivals.length ? conns.filter((c) => !closedInTime(c, closed, first, limits)) : conns;
+    const judged = timed.length && arrivals.length ? span(timed) : null;
+    const probe = { fromMs: judged && first - judged.newest, toMs: judged && Math.max(...arrivals) - judged.oldest,
+      arrivals: arrivals.length, closedInTime: conns.length - timed.length, sentMs, ...(interrupted && { interrupted }) };
+    after = { statuses, answers: seen.length, connections: seen.map(({ connection, idle }) => ({ connection, idle })), probe };
+  }
+  after.inconclusive = inconclusive(after.probe, limits);
+  return { warm, after, closedIdle: later.filter((e) => e.kind === "closedIdle"),
+    reusedPastBound: later.filter((e) => e.kind === "answered" && e.idle !== null && e.idle >= bound) };
+}
 export const ownerKey = "run.corten.fullstack.idle-close";
 // The create's own label, so a create whose acknowledgement never came back can be found as itself.
 export const attemptKey = `${ownerKey}.create`;
@@ -128,12 +204,14 @@ export function checkOptions({ names, labels = [], bound = boundMs, concurrency 
 /**
  * An upstream that answers `bodies` (path to JSON) over keep-alive connections and resets a
  * connection whose next request arrives `keepAlive` ms or more after its last answer. `events`
- * lists `{ at, connection, kind, path?, idle?, arrival?, lastPath? }` in the order they happened, with `at`
+ * lists `{ at, connection, kind, time?, path?, idle?, arrival?, answeredAt?, lastPath? }` in the order they happened, with `at`
  * from `stamp` (ms from the start by default; a report only, never used to select events); an
- * `answered` event's `idle` is how long its connection had been idle when the request arrived (null
- * on a connection's first request) and its `arrival` the unrounded `performance.now()` at which the
- * request arrived; a `closedIdle` event's `lastPath` is the path its connection last answered. The
- * event is recorded before the answer is written. `lastAnswerOf(connection)` is the
+ * `accepted` or `closed` event's `time` is the unrounded `performance.now()` at which it happened;
+ * an `answered` event's `arrival` is the `performance.now()` at which the read that completed its
+ * request head came in, taken before the answer is prepared, its `idle` how long its connection had
+ * been idle then (null on a connection's first request) and its `answeredAt` the `performance.now()`
+ * once its answer was written; a `closedIdle` event's `lastPath` is the path its connection last
+ * answered. The event is recorded before the answer is prepared. `lastAnswerOf(connection)` is the
  * `performance.now()` of that connection's latest answer (kept after the connection closes), and
  * `closedAt(connection)` of its close as the upstream saw it, or null while it is open.
  * `close()` ends every connection and the listener.
@@ -147,10 +225,14 @@ export function closingUpstream(bodies, keepAlive = keepAliveMs, { stamp } = {})
     const connection = next++;
     let buffer = Buffer.alloc(0), answered, lastPath;
     sockets.add(socket);
-    events.push({ at: now(), connection, kind: "accepted" });
+    events.push({ at: now(), connection, kind: "accepted", time: performance.now() });
     socket.on("error", () => {});
-    socket.on("close", () => { closedByConnection.set(connection, performance.now()); sockets.delete(socket); events.push({ at: now(), connection, kind: "closed" }); });
+    socket.on("close", () => {
+      const time = performance.now();
+      closedByConnection.set(connection, time); sockets.delete(socket); events.push({ at: now(), connection, kind: "closed", time });
+    });
     socket.on("data", (data) => {
+      // Every request whose head this read completes arrived now, whatever its answer then costs.
       const arrival = performance.now(), idle = answered === undefined ? null : Math.round(arrival - answered);
       if (idle !== null && arrival - answered >= keepAlive) {
         events.push({ at: now(), connection, kind: "closedIdle", idle, arrival, lastPath });
@@ -161,14 +243,15 @@ export function closingUpstream(bodies, keepAlive = keepAliveMs, { stamp } = {})
       for (let end; (end = buffer.indexOf("\r\n\r\n")) !== -1;) {
         const [method, path] = buffer.subarray(0, end).toString("latin1").split("\r\n")[0].split(" ");
         buffer = buffer.subarray(end + 4);
+        // A request pipelined behind an answer written after this read arrived waited no idle.
+        const event = { at: now(), connection, kind: "answered", path, idle: answered === undefined ? null : Math.max(0, Math.round(arrival - answered)), arrival };
+        events.push(event);
         const json = method === "GET" && bodies[path];
         const body = json ? Buffer.from(JSON.stringify(json)) : Buffer.alloc(0);
-        const at = performance.now();
-        events.push({ at: now(), connection, kind: "answered", path, idle: answered === undefined ? null : Math.round(at - answered), arrival: at });
         socket.write(`HTTP/1.1 ${json ? "200 OK" : "404 Not Found"}\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\n` +
           "connection: keep-alive\r\nkeep-alive: timeout=5\r\n\r\n");
         socket.write(body);
-        answered = performance.now();
+        answered = event.answeredAt = performance.now();
         lastByConnection.set(connection, answered);
         lastPath = path;
       }
@@ -332,13 +415,15 @@ export function ownedContainer({ docker: run = docker, runId, labels = [], windo
  * the container, if a step fails or the teardown is incomplete; the error carries `cleanup`.
  * `stamp` replaces the clock of the upstream's event timestamps, which are reported but never
  * used to decide which events belong to a burst (a test holds it still to show that). `idleWait`
- * replaces the timer of the idle wait (a test makes it fire early or late).
+ * replaces the timer of the idle wait (a test makes it fire early or late). `onUpstream` is called
+ * with the upstream once it exists, so a test can follow that one listener rather than the process's.
  */
 export async function checkImage(image, { names = ["catalog", "marketplace", "items"], env = [], labels = [], pages = true, concurrency = 6, bound = boundMs,
-  docker: run = docker, runId = `idle-close-${randomBytes(5).toString("hex")}`, window = reconcileWindow, readyTimeout = 180_000, stamp, idleWait = sleep } = {}) {
+  docker: run = docker, runId = `idle-close-${randomBytes(5).toString("hex")}`, window = reconcileWindow, readyTimeout = 180_000, stamp, idleWait = sleep, onUpstream } = {}) {
   checkOptions({ names, labels, bound, concurrency });
   const all = reads(pages), chosen = Object.fromEntries(names.map((name) => [name, all[name]]));
   const upstream = closingUpstream(Object.fromEntries(Object.values(chosen).map((r) => [r.upstream, r.body])), keepAliveMs, { stamp });
+  onUpstream?.(upstream);
   const owned = ownedContainer({ docker: run, runId, labels, window });
   let result, failure;
   try {
@@ -363,53 +448,37 @@ export async function checkImage(image, { names = ["catalog", "marketplace", "it
         await sleep(250);
       }
     }
-    // What the upstream did since `mark`, an index into its event list taken before a burst.
-    const since = (mark) => upstream.events.slice(mark);
-    const answers = (events, target) => events.filter((e) => e.kind === "answered" && e.path === target);
+    // Marks are indexes into the upstream's event list, taken before a burst or at a boundary.
+    const { events } = upstream;
     const burst = async (path) => Promise.all(Array.from({ length: concurrency }, () => get(base + path)));
     const limits = probeWindow(bound), checked = {}, closedIdle = [], reusedPastBound = [];
     // One read at a time, each with its own idle, so no read's probe waits on another's.
     for (const [read, { path, upstream: target }] of Object.entries(chosen)) {
       // Two bursts, to show the pool reuses connections before the idle.
-      const warmMark = upstream.events.length, warmStatuses = [...await burst(path)];
+      const warmMark = events.length, warmStatuses = [...await burst(path)];
       await sleep(100);
       warmStatuses.push(...await burst(path));
-      const warmed = answers(since(warmMark), target);
-      // The warmed set: every connection that answered this path in the warm-up, by when it last
-      // answered (nothing is sent during the idle). One the upstream saw close before `t`, idle
-      // under `belowMs`, cannot be reused and was not held past the window: it is counted, not timed.
-      const conns = [...new Set(warmed.map((e) => e.connection))].map((connection) => ({ connection, last: upstream.lastAnswerOf(connection) }));
-      const closedInTime = ({ connection, last }, t) => { const closed = upstream.closedAt(connection); return closed !== null && closed <= t && closed - last < limits.belowMs; };
-      const span = (set) => ({ oldest: Math.min(...set.map((c) => c.last)), newest: Math.max(...set.map((c) => c.last)) });
+      // From here every upstream event is recorded against the idle until the probe's dispatch.
+      const warmEnd = events.length, warmEvents = events.slice(warmMark, warmEnd), conns = warmedSet(warmEvents, target);
       // Wait until the oldest warmed connection is idle `fromMs`; by then the upstream has seen the
       // close of any the app ended with its request, so the open ones are known.
-      if (conns.length) await waitUntil(span(conns).oldest + limits.fromMs, { wait: idleWait });
-      const open = conns.filter((c) => !closedInTime(c, performance.now()));
-      const timing = conns.length ? span(open.length ? open : conns) : null, spread = open.length ? timing.newest - timing.oldest : 0;
-      const warm = { statuses: warmStatuses, answers: warmed.length, reused: warmed.filter((e) => e.idle !== null).length,
-        connections: conns.length, open: open.length, spreadMs: Math.round(spread * 10) / 10 };
-      let after;
-      if (!conns.length || spread >= limits.belowMs - limits.fromMs) {
-        // No moment puts every open warmed connection inside the window, so there is no probe to judge.
-        after = { statuses: [], answers: 0, connections: [], probe: { fromMs: null, toMs: null, arrivals: 0,
-          skipped: conns.length ? `the warm answers span ${ms(spread)} ms, not less than the window's ${limits.belowMs - limits.fromMs} ms` : "no upstream answer in the warm-up" } };
-      } else {
+      if (conns.length) await waitUntil(firstWait(conns, limits), { wait: idleWait });
+      const plan = planProbe(conns, events.slice(warmEnd), performance.now(), limits);
+      let dispatch = events.length, statuses = [], sentMs = null;
+      if (!plan.skipped) {
         // On until the newest open warmed connection is idle `fromMs` too, which the spread leaves
         // before the oldest reaches `belowMs`.
-        await waitUntil(timing.newest + limits.fromMs, { wait: idleWait });
-        const mark = upstream.events.length, sentMs = Math.round((performance.now() - timing.newest) * 10) / 10;
-        const statuses = await burst(path), events = since(mark), seen = answers(events, target);
-        // Judged where the pool's choice shows, at the upstream: each probe request's arrival
-        // against every timed warmed connection's last answer. When the app replies does not matter.
-        const arrivals = seen.map((e) => e.arrival), first = Math.min(...arrivals);
-        const timed = arrivals.length ? conns.filter((c) => !closedInTime(c, first)) : conns, judged = timed.length && arrivals.length ? span(timed) : null;
-        const probe = { fromMs: judged && first - judged.newest, toMs: judged && Math.max(...arrivals) - judged.oldest,
-          arrivals: arrivals.length, closedInTime: conns.length - timed.length, sentMs };
-        after = { statuses, answers: seen.length, connections: seen.map(({ connection, idle }) => ({ connection, idle })), probe };
-        closedIdle.push(...events.filter((e) => e.kind === "closedIdle"));
-        reusedPastBound.push(...events.filter((e) => e.kind === "answered" && e.idle !== null && e.idle >= bound));
+        await waitUntil(plan.at, { wait: idleWait });
+        dispatch = events.length;
+        sentMs = tenth(performance.now() - (plan.at - limits.fromMs));
+        statuses = await burst(path);
       }
-      after.inconclusive = inconclusive(after.probe, limits);
+      // Judged where the pool's choice shows, at the upstream: each probe request's arrival against
+      // every timed warmed connection's last answer. When the app replies does not matter.
+      const { warm, after, ...seen } = judgeRead({ target, warmStatuses, warmEvents, plan, idleEvents: events.slice(warmEnd, dispatch),
+        statuses, probeEvents: plan.skipped ? [] : events.slice(dispatch), sentMs, limits, bound });
+      closedIdle.push(...seen.closedIdle);
+      reusedPastBound.push(...seen.reusedPastBound);
       checked[read] = { warm, after };
     }
     result = { image, boundMs: bound, marginMs, keepAliveMs, slackMs, window: limits, concurrency, reads: checked, closedIdle, reusedPastBound };
@@ -425,7 +494,8 @@ export async function checkImage(image, { names = ["catalog", "marketplace", "it
 }
 
 /**
- * The check. Every probe fell inside its window; one outside it, or not made, is inconclusive and
+ * The check. Every probe fell inside its window after an idle nothing interrupted; one outside it,
+ * not made, or after a request during the idle, is inconclusive and
  * fails. Before the idle, every read answers 200 from one upstream answer each and, unless `reuse`
  * is false, some on a connection that had answered already. After it, the same, with none on a
  * connection idle for the bound or longer and none meeting the upstream's close.
@@ -435,7 +505,9 @@ export function assertPasses(result, { reuse = true } = {}) {
   assert.deepEqual(result.window, probeWindow(result.boundMs), "the probe window is not the bound's");
   const { fromMs, belowMs } = result.window;
   for (const [read, { after: { probe } }] of Object.entries(result.reads)) {
-    assert.ok(!inconclusive(probe, result.window), probe.skipped ? `${read}: inconclusive: not probed: ${probe.skipped}` :
+    assert.ok(!inconclusive(probe, result.window), probe.interrupted ? `${read}: inconclusive: ${probe.interrupted.requests} upstream request(s) arrived ` +
+      `between the warm-up and the probe (${probe.interrupted.onWarmed} on warmed connections), so the warmed connections were not idle` :
+      probe.skipped ? `${read}: inconclusive: not probed: ${probe.skipped}` :
       `${read}: inconclusive: probe requests reached the upstream with the warmed connections idle ${ms(probe.fromMs)} to ${ms(probe.toMs)} ms, outside ${fromMs} to below ${belowMs} ms`);
   }
   for (const [read, { warm, after }] of Object.entries(result.reads)) {
@@ -447,6 +519,22 @@ export function assertPasses(result, { reuse = true } = {}) {
   }
   assert.deepEqual(result.reusedPastBound, [], `an upstream connection idle ${result.boundMs} ms or more was reused`);
   assert.deepEqual(result.closedIdle, [], "an upstream connection was reused past its keep-alive");
+}
+
+/**
+ * The command line's line for a passing result: the idle range over the probes that timed a
+ * warmed connection only, and how many warmed connections closed in time instead.
+ */
+export function summary(result, image) {
+  const probes = Object.values(result.reads).map(({ after: { probe } }) => probe);
+  const timed = probes.filter((p) => p.fromMs !== null && p.toMs !== null), closed = probes.reduce((n, p) => n + (p.closedInTime ?? 0), 0);
+  const counted = `${closed} warmed connection${closed === 1 ? "" : "s"} closed in time before the probe`;
+  const seen = timed.length
+    ? `when probed with the timed warmed connections idle ${ms(Math.min(...timed.map((p) => p.fromMs)))} to ${ms(Math.max(...timed.map((p) => p.toMs)))} ms` +
+      (closed ? ` (${counted}, not timed)` : "")
+    : `when probed: ${counted}, so no connection needed timing`;
+  return `${image}: no upstream connection reused ${seen} (window ${result.window.fromMs} to below ${result.window.belowMs} ms, ` +
+    `bound ${result.boundMs} ms, upstream close ${result.keepAliveMs} ms)`;
 }
 
 /** The command line's options, checked before anything runs. */
@@ -477,7 +565,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   console.log(JSON.stringify(result));
   assertPasses(result, { reuse });
-  const probes = Object.values(result.reads).map(({ after: { probe } }) => probe);
-  console.log(`${image}: no upstream connection reused when probed with the warmed connections idle ${ms(Math.min(...probes.map((p) => p.fromMs)))} to ` +
-    `${ms(Math.max(...probes.map((p) => p.toMs)))} ms (window ${result.window.fromMs} to below ${result.window.belowMs} ms, bound ${bound} ms, upstream close ${keepAliveMs} ms)`);
+  console.log(summary(result, image));
 }
