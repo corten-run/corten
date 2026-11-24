@@ -7781,10 +7781,16 @@ rules something out.
     fields RFC 9110 section 7.6.1 has a proxy remove whether named or not (`Proxy-Connection`,
     `Keep-Alive`, `TE`, `Transfer-Encoding`, `Upgrade`), `Trailer` (hop-by-hop in RFC 2616, and a
     body read whole has no trailer section), and the two proxy fields that apply only to the next
-    client (`Proxy-Authenticate` and `Proxy-Authentication-Info`, RFC 9110 section 11.7; not
-    `Proxy-Authorization`, a request's, nor `Proxy-Status`, RFC 9209, which passes every proxy).
-    The copy is given only where every name its `Connection` lists is one of those or the `close`
-    option: a `Connection` that names any other header (its `Cache-Control`, which the next proxy
+    client (`Proxy-Authenticate` and `Proxy-Authentication-Info`, RFC 9110 section 11.7). It also
+    goes without a `Proxy-Authorization` or `Proxy-Status`, named or not, which are not the
+    connection's but are not the origin's to send either: the first is a request's credentials
+    for a proxy (RFC 9110 section 11.7.2), and an origin does not generate the second (RFC 9209
+    section 2), which can say how the deployment is laid out or what went wrong for one request
+    (section 4); a middleware that removes them from every answer did not finish for this one.
+    Those two by name, not every `Proxy-*`.
+    The copy is given only where every name its `Connection` lists is one of the connection's
+    fields above or the `close` option (reserved by RFC 9112 section 9.6, naming no header): a
+    `Connection` that names any other header (its `Cache-Control`, which the next proxy
     would remove from the `private, no-store`, a `Content-Disposition` that makes it a download, a
     `Cross-Origin-Resource-Policy` that keeps another site from embedding it, a name of the app's
     own) has the request take the panic's `500` or the deadline's `503`, since nothing tells the
@@ -7848,8 +7854,12 @@ rules something out.
     `Connection` that names another header: removing what it names, which gave the copy without a
     `Content-Disposition` (the sixth review) or a `Cross-Origin-Resource-Policy` (the seventh); and
     a list of the headers too meaningful to remove (any `Content-*`, `Location`, `Vary`,
-    `X-Content-Type-Options`), which each review found one more for, where the fields a connection
-    may own are a short list the RFCs close; and refusing to keep such an answer at all, the
+    `X-Content-Type-Options`), which each review found one more for, where the list of a
+    connection's fields is short and Corten's to close. That closed list is Corten's policy for a
+    copy given outside the middleware, not HTTP's: RFC 9110 section 7.6.1 lets a connection carry
+    extension options of its own, and its list of fields to remove even when not named is a
+    SHOULD and not exhaustive, so a `Connection` naming any name outside the list (an
+    extension's, `Proxy-Status`) declines the copy rather than guessing; and refusing to keep such an answer at all, the
     refusal above, which costs every miss that keeps a page its 125 to 140 instructions. For bounding refreshes: a cap of their own, a second limit to
     choose where the copies kept already follow the store's bound; letting a refresh's count go as
     its copy goes, before its task has ended, which let copies turned out and kept again start

@@ -3256,6 +3256,49 @@ async fn a_kept_page_whose_connection_names_a_header_not_the_connection_s_is_not
     }
 }
 
+/// The copy given for a panic or a passed deadline has no `Proxy-Authorization` or
+/// `Proxy-Status` though no `Connection` names them: a request's credentials for a proxy and a
+/// proxy's report, neither the origin's to send (RFC 9110 section 11.7.2, RFC 9209 section 2). A
+/// middleware that removes them from every answer did not finish for the copy; without it the page
+/// given fresh carries them, so the copy held them.
+#[tokio::test(start_paused = true)]
+async fn a_kept_page_given_for_a_panic_or_deadline_has_no_proxy_authorization_or_proxy_status() {
+    const PROXY: &[(&str, &str)] =
+        &[("proxy-authorization", "Basic YWxhZGRpbjpvcGVuc2VzYW1l"), ("proxy-status", "edge; error=connection_refused")];
+    struct Scrubbed;
+
+    impl crate::Middleware for Scrubbed {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            res.headers_mut().remove(header::PROXY_AUTHORIZATION);
+            res.headers_mut().remove("proxy-status");
+            res
+        }
+    }
+
+    for middleware in [true, false] {
+        let (runs, reads) = (Runs::default(), std::sync::Arc::default());
+        let windows = |page: Public<Exact>| page.stale_if_error(Duration::from_secs(20));
+        let app = App::new(Routes::from(exact_routes_with(&runs, &reads, windows, PROXY))).deadline(Duration::from_millis(500));
+        let router = if middleware { app.middleware(Scrubbed).router() } else { app.router() };
+        for at in ["/?panic", "/?deadline"] {
+            fetch(&router, "GET", at, &[]).await;
+            let (_, headers, _) = fetch(&router, "GET", at, &[]).await;
+            assert_eq!(age_of(&headers), Some(0), "{middleware} {at}: kept: {headers:?}");
+            assert!(PROXY.iter().all(|(name, _)| headers.contains_key(*name) != middleware), "{middleware} {at}: {headers:?}");
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let never = Gate::new(tokio::sync::Semaphore::new(0));
+        for (at, read) in [("/?panic", Read::HandlerPanics), ("/?deadline", Read::Gated(never.clone()))] {
+            reads.lock().unwrap().push_back(read);
+            let (status, headers, _) = fetch(&router, "GET", at, &[]).await;
+            assert_eq!((status, age_of(&headers)), (StatusCode::OK, Some(1)), "{middleware} {at}: {headers:?}");
+            assert_eq!(headers[header::CACHE_CONTROL], "private, no-store", "{middleware} {at}");
+            assert!(PROXY.iter().all(|(name, _)| !headers.contains_key(*name)), "{middleware} {at}: {headers:?}");
+        }
+    }
+}
+
 /// The same over HTTP/1, as a client reads it: the copy given for a panic past the lifetime of a
 /// page whose answer named `Proxy-Authenticate`, a header of the connection's own, in its
 /// `Connection` goes out `private, no-store` without that header or a `Connection` that names it.

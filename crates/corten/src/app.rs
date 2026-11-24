@@ -956,8 +956,12 @@ impl<M: Middleware> App<M> {
     /// `stale-if-error` (given in the place of a `500`, `502`, `503` or `504`, a panic or a
     /// passed deadline), for as long as those allow, and never with `.shared(..)`, which forbids
     /// a shared cache to give it stale. Every stage still runs for it,
-    /// the app's middleware too; what it saves is the handler, the render or the writing of the
-    /// JSON, the tag's hash and the compression. So a `Public` handler does not run for every
+    /// the app's middleware too, but for the copy given in a panic's or a passed deadline's
+    /// place: the middleware did not finish for that request, so the copy skips what it does
+    /// after `next` and goes out `private, no-store` without the headers for its connection,
+    /// and none is given where its `Connection` names any other header (the request has the
+    /// `500` or `503`). What a kept answer saves is the handler, the render or the writing of
+    /// the JSON, the tag's hash and the compression. So a `Public` handler does not run for every
     /// request, and what it reads may be that old when it is seen, as it already may be behind a
     /// CDN. An answer whose handler takes an extractor of the app's own is not kept: it may read
     /// a header the key does not cover. Neither is a relay, a stream or a feed, a file sent as

@@ -1541,8 +1541,9 @@ impl Held {
 /// every header a CDN may read first removed (any `*cache-control`, a deployment's own name too,
 /// [`crate::cache::read_before_cache_control`]) and its `Expires`, which a cache that does not
 /// read `Cache-Control` keeps by, not with the handler's `public` and windows, so no cache after
-/// the app keeps or shares it; and without its headers for the connection, which the middleware
-/// may have removed too ([`drop_connection_headers`]). Given only where every name its
+/// the app keeps or shares it; and without its headers for the connection, or a
+/// `Proxy-Authorization` or `Proxy-Status`, which the middleware may have removed too
+/// ([`drop_connection_headers`]). Given only where every name its
 /// `Connection` lines list is the connection's own ([`for_the_connection`]): a `Connection` that
 /// names any other header (its `Cache-Control`, which the next proxy would remove from the
 /// `private, no-store`, a `Content-Disposition` that makes it a download, a
@@ -1569,15 +1570,24 @@ pub(crate) fn held(signal: &crate::Signal) -> Option<Response> {
 
 /// Removes the headers for the connection an answer is sent on, which a proxy removes (RFC 9110
 /// section 7.6.1): those `Connection` names (each the connection's own, as [`held`] gives no
-/// copy otherwise), then every field of the connection's own ([`connection_field`]). For the copy
-/// given outside the middleware ([`held`]) alone: a copy given any other way leaves through the
-/// middleware, as its handler's answer would.
+/// copy otherwise), then every field of the connection's own ([`connection_field`]). Then, named
+/// or not, `Proxy-Authorization` and `Proxy-Status`, which are not the connection's (a
+/// `Connection` that names either still has [`held`] give no copy) but which this copy, the
+/// origin's own answer given in place of a failure, must not send: `Proxy-Authorization` is a
+/// request's credentials for a proxy (RFC 9110 section 11.7.2), not a field of an answer, and an
+/// origin does not generate `Proxy-Status` (RFC 9209 section 2), which can say how the
+/// deployment is laid out or what went wrong for one request (section 4). Those two alone, not
+/// every `Proxy-*`: a middleware that would remove them on every other answer did not finish
+/// for this one. For the copy given outside the middleware ([`held`]) alone: a copy given any
+/// other way leaves through the middleware, as its handler's answer would.
 fn drop_connection_headers(headers: &mut HeaderMap) {
     let named: Vec<header::HeaderName> = connection_names(headers.get_all(header::CONNECTION).iter()).collect();
     let own: Vec<header::HeaderName> = headers.keys().filter(|name| connection_field(name.as_str())).cloned().collect();
     for name in named.into_iter().chain(own) {
         headers.remove(name);
     }
+    headers.remove(header::PROXY_AUTHORIZATION);
+    headers.remove("proxy-status");
 }
 
 /// The header names `Connection` lines list, each line a comma-separated list, any case.
@@ -1602,7 +1612,9 @@ fn for_the_connection(name: &str) -> bool {
 /// and which a kept body, read whole, has no trailer section for; and the two proxy fields RFC
 /// 9110 says apply only to the next client (`Proxy-Authenticate`, section 11.7.1, and
 /// `Proxy-Authentication-Info`, 11.7.3). Not every `Proxy-*`: `Proxy-Authorization` is a
-/// request's (11.7.2), and `Proxy-Status` (RFC 9209) is meant to pass every proxy.
+/// request's (11.7.2), and `Proxy-Status` (RFC 9209) is meant to pass every proxy, so a
+/// `Connection` that names either is not the connection's own ([`for_the_connection`]);
+/// [`drop_connection_headers`] removes both from the copy [`held`] gives all the same.
 fn connection_field(name: &str) -> bool {
     matches!(
         name,

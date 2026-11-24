@@ -1627,13 +1627,16 @@ read first removed (any `*-cache-control`, a name your deployment chose too, `Su
 `Edge-Control`, `X-Accel-Expires`) and its `Expires`, so no cache after the app keeps or shares
 it, whatever the handler's answer said. It also goes without the headers for its connection an
 answer of your own type set (`Connection`, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`,
-`Upgrade`, `Proxy-Connection`, `Proxy-Authenticate`, `Proxy-Authentication-Info`), which a
-middleware may have removed too. Where that `Connection` names any other header (`Cache-Control`,
+`Upgrade`, `Proxy-Connection`, `Proxy-Authenticate`, `Proxy-Authentication-Info`), and without a
+`Proxy-Authorization` (a request's credentials) or `Proxy-Status` (a proxy's report, which an origin
+does not send), which a middleware may have removed too. Where that `Connection` names anything
+but one of those connection headers or the `close` option (RFC 9112 section 9.6): `Cache-Control`,
 which the next proxy would then remove from the `private, no-store`, a `Content-Disposition`, a
-`Cross-Origin-Resource-Policy`, a header of your own), the kept page is not sent at all, since a
-proxy would remove that header and nothing tells Corten it is safe to lose (a download shown
-inline, a page another site may embed): the request gets the panic's `500` or the deadline's
-`503`. A `500`, `502`, `503` or `504` the handler
+`Cross-Origin-Resource-Policy`, `Proxy-Status`, a header of your own, the kept page is not sent
+at all, since a proxy would remove that header and nothing tells Corten it is safe to lose (a
+download shown inline, a page another site may embed): the request gets the panic's `500` or the
+deadline's `503`. That short list is Corten's choice for a page sent outside your middleware, not
+all HTTP allows: a connection may carry extension options of its own (RFC 9110 section 7.6.1). A `500`, `502`, `503` or `504` the handler
 returns goes back through the middleware, and the kept page sent in its place leaves with what
 the middleware makes of it. Nor does the page sent for a panic or a deadline get any other
 change your middleware makes after `next` (a redaction, a header every answer must carry), so a

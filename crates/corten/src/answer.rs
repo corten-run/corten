@@ -2163,7 +2163,10 @@ impl<A: Shareable> Public<A> {
     /// shared cache that follows RFC 9111 serves neither stale directive on an answer that also has
     /// `shared`. The app's own store of the answer follows it too (`App::kept_answers`): within
     /// `if_error` a request runs the handler, and the kept answer is sent in the place of its
-    /// `500`, `502`, `503` or `504`, a panic or a passed deadline.
+    /// `500`, `502`, `503` or `504`, a panic or a passed deadline. One sent for a panic or a
+    /// deadline skips what the app's middleware does after `next` (which did not finish) and goes
+    /// out `private, no-store`; where its `Connection` names a header that is not the
+    /// connection's own, the request has the `500` or `503` instead.
     pub fn stale_if_error(mut self, if_error: Duration) -> Self {
         self.cache = self.cache.stale_if_error(if_error);
         self
