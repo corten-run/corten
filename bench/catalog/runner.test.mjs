@@ -58,30 +58,108 @@ test("catalog checks include failure reporting regressions and native umask cove
 });
 
 // Chromium and its libraries come from Playwright's image, not from the runner's apt mirror (#2011):
-// every browser check runs through the image's command, set up before it in the same job.
+// every browser check runs through the image's command, set up before it in the same job, and the
+// image step is what forwards the opt-ins and the Docker boundary those checks need.
+const imageTag = "mcr.microsoft.com/playwright:v$(node -p 'require(\"@playwright/test/package.json\").version')-noble";
+const dockerBoundary = ["--group-add", "$(stat -c %g /var/run/docker.sock)", "-v", "/tmp:/tmp",
+  "-v", "$(command -v docker):/usr/local/bin/docker:ro", "-v", "/var/run/docker.sock:/var/run/docker.sock"];
+const imageBase = ["docker", "run", "--rm", "--network", "host", "--ipc", "host", "--user", "$(id -u):$(id -g)",
+  "-e", "HOME=/tmp", "-v", "$PWD:$PWD", "-w", "$PWD"];
+
+// The commands a "Playwright's image" step exports, with $run expanded, as argument lists.
+function imageCommands(run) {
+  const lines = run.split("\n").map((line) => line.trim());
+  const image = lines.find((line) => line.startsWith("image="));
+  assert.equal(image, `image="${imageTag}"`);
+  const base = lines.find((line) => line.startsWith("run="));
+  assert.ok(base, "the image step defines its docker run command");
+  const prefix = base.slice('run="'.length, -1);
+  const commands = {};
+  for (const line of lines) {
+    const exported = /^echo "([A-Z_]+)=(.*)" >> "\$GITHUB_ENV"$/.exec(line);
+    if (exported) commands[exported[1]] = words(exported[2].replace(/^\$run /, `${prefix} `));
+  }
+  return commands;
+}
+
+// Space-separated words, keeping a $(...) substitution whole.
+function words(command) {
+  const out = [""];
+  let depth = 0;
+  for (let at = 0; at < command.length; at++) {
+    const char = command[at];
+    if (char === "(" && command[at - 1] === "$") depth++;
+    else if (char === ")" && depth > 0) depth--;
+    if (char === " " && depth === 0) out.push("");
+    else out[out.length - 1] += char;
+  }
+  return out.filter(Boolean);
+}
+
+function includesRun(args, sequence) {
+  return args.some((_, at) => sequence.every((arg, offset) => args[at + offset] === arg));
+}
+
+function assertImageCommand(args, forwarded, docker) {
+  assert.deepEqual(args.slice(0, imageBase.length), imageBase);
+  assert.equal(args.at(-1), "$image", "the image is the command's last argument");
+  if (docker) assert.ok(includesRun(args, dockerBoundary), "Docker boundary present");
+  else assert.ok(!args.slice(imageBase.length).some((arg) => arg === "--group-add" || arg.includes("docker")), "no Docker boundary");
+  const env = args.flatMap((arg, at) => args[at - 1] === "-e" ? [arg] : []);
+  assert.deepEqual(env, ["HOME=/tmp", ...forwarded]);
+}
+
 test("catalog CI takes Chromium from Playwright's image, not the runner's apt mirror", () => {
   const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
   for (const [name, job] of Object.entries(workflow.jobs)) {
     assert.ok(job.steps.every((step) => !/playwright install/.test(step.run ?? "")), name);
   }
-  const browserChecks = {
-    harness: ["$PLAYWRIGHT npm run check:marketplace", "$PLAYWRIGHT_WITH_DOCKER node --test bench/catalog/*.test.mjs"],
-    parity: ["$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} ",
-      "$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/drogon/tests/marketplace-matched.mjs ",
-      "$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/gin/check-alerts.mjs gin cb-catalog-gin matched"],
+  const imageStep = (job) => {
+    const steps = workflow.jobs[job].steps;
+    const at = steps.findIndex((step) => step.name === "Playwright's image");
+    assert.ok(at >= 0, job);
+    assert.equal(steps.filter((step) => step.name === "Playwright's image").length, 1, job);
+    assert.match(steps[at].run, /^\s*echo "Node on the runner \$\(node --version\), in \$image \$\(docker run --rm "\$image" node --version\)"$/m);
+    return { at, step: steps[at], commands: imageCommands(steps[at].run) };
   };
-  for (const [name, commands] of Object.entries(browserChecks)) {
-    const steps = workflow.jobs[name].steps;
-    const image = steps.findIndex((step) => step.name === "Playwright's image");
-    assert.ok(image >= 0, name);
-    assert.match(steps[image].run, /mcr\.microsoft\.com\/playwright:v\$\(node -p 'require\("@playwright\/test\/package\.json"\)\.version'\)-noble/);
-    for (const command of commands) {
-      const at = steps.findIndex((step) => (step.run ?? "").split("\n").some((line) => line.startsWith(command)));
-      assert.ok(at > image, `${name}: ${command}`);
-    }
+  const after = (job, image, predicate, label) => {
+    const steps = workflow.jobs[job].steps;
+    const matches = steps.flatMap((step, at) => predicate(step) ? [at] : []);
+    assert.equal(matches.length, 1, `${job}: ${label}`);
+    assert.ok(matches[0] > image, `${job}: ${label} follows the image step`);
+    return steps[matches[0]];
+  };
+
+  // Harness: the Marketplace oracle gets no Docker; the catalog tests get Docker and their opt-in.
+  const harness = imageStep("harness");
+  assert.deepEqual(Object.keys(harness.commands).sort(), ["PLAYWRIGHT", "PLAYWRIGHT_WITH_DOCKER"]);
+  assertImageCommand(harness.commands.PLAYWRIGHT, [], false);
+  assertImageCommand(harness.commands.PLAYWRIGHT_WITH_DOCKER, ["CATALOG_DOCKER_TESTS", "RUNNER_ENVIRONMENT"], true);
+  after("harness", harness.at, (step) => step.run === "$PLAYWRIGHT npm run check:marketplace", "Marketplace oracle");
+  const catalogTests = after("harness", harness.at,
+    (step) => step.run === "$PLAYWRIGHT_WITH_DOCKER node --test bench/catalog/*.test.mjs", "catalog tests");
+  assert.deepEqual(catalogTests.env, { CATALOG_DOCKER_TESTS: "1" });
+  assert.equal(catalogTests.if, undefined);
+
+  // Parity: every Chromium-launching check, with the matrix cells it runs for and its exact command.
+  const parity = imageStep("parity");
+  const compiled = "contains(fromJSON('[\"gin\",\"drogon\",\"topcoat\",\"leptos\"]'), matrix.app)";
+  assert.equal(parity.step.if, compiled);
+  assert.deepEqual(Object.keys(parity.commands), ["PLAYWRIGHT_WITH_DOCKER"]);
+  assertImageCommand(parity.commands.PLAYWRIGHT_WITH_DOCKER, ["RUNNER_ENVIRONMENT"], true);
+  const browserChecks = [
+    { name: "Test native compiled alert forms and independent readback", if: compiled,
+      run: "$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}" },
+    { name: "Qualify the matched Drogon marketplace image with both sources", if: "matrix.app == 'drogon'",
+      run: "$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/drogon/tests/marketplace-matched.mjs cb-marketplace-drogon bench/marketplace/results/w1/drogon-matched" },
+    { name: "Test native Gin production boundaries and matched forms", if: "matrix.app == 'gin'",
+      run: "node bench/fullstack/apps/gin/check-production.mjs cb-catalog-gin bench/fullstack/apps/gin/production-results\n"
+        + "$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/gin/check-alerts.mjs gin cb-catalog-gin matched\n" },
+  ];
+  for (const expected of browserChecks) {
+    const step = after("parity", parity.at, (candidate) => candidate.name === expected.name, expected.name);
+    assert.deepEqual(step, expected);
   }
-  const alerts = workflow.jobs.parity.steps.find((step) => step.name === "Test native compiled alert forms and independent readback");
-  assert.equal(workflow.jobs.parity.steps.find((step) => step.name === "Playwright's image").if, alerts.if);
 });
 
 test("an existing catalog results directory is reserved, including a failed or check-only round", () => {

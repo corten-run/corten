@@ -60,10 +60,16 @@ jobs:
       # cancelled the run (#2011). They run as the checkout's owner, so what they write stays the
       # runner's. PLAYWRIGHT_WITH_DOCKER adds the runner's Docker CLI and socket and its /tmp, and the
       # checkout is at its runner path, so a directory a check hands the daemon to mount is the same.
+      # That gives the image the runner's Docker daemon. It is the image framework CI already runs
+      # (ci.yml), from the same publisher by the same version tag, so this trusts nothing new; the tag
+      # follows package.json, where a digest pin would have to change in both workflows with every
+      # Playwright bump. Node in the image is the Node 26 Playwright's image installs, not setup-node's
+      # .node-version; the step prints which, for the browser checks' record.
       - name: Playwright's image
         run: |
           image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
           docker pull "$image"
+          echo "Node on the runner $(node --version), in $image $(docker run --rm "$image" node --version)"
           run="docker run --rm --network host --ipc host --user $(id -u):$(id -g) -e HOME=/tmp -v $PWD:$PWD -w $PWD"
           echo "PLAYWRIGHT=$run $image" >> "$GITHUB_ENV"
           echo "PLAYWRIGHT_WITH_DOCKER=$run --group-add $(stat -c %g /var/run/docker.sock) -v /tmp:/tmp -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock -e CATALOG_DOCKER_TESTS -e RUNNER_ENVIRONMENT $image" >> "$GITHUB_ENV"
@@ -228,12 +234,14 @@ jobs:
           mcr.microsoft.com/dotnet/sdk:11.0.100
           dotnet test tests/Marketplace.Tests.csproj -c Release
       # Chromium for this and the two browser checks after it comes from Playwright's image, as in the
-      # harness job (#2011); each starts its app containers through the runner's Docker.
+      # harness job (#2011), with the same trust in it; each starts its app containers through the
+      # runner's Docker.
       - name: Playwright's image
         if: contains(fromJSON('["gin","drogon","topcoat","leptos"]'), matrix.app)
         run: |
           image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
           docker pull "$image"
+          echo "Node on the runner $(node --version), in $image $(docker run --rm "$image" node --version)"
           run="docker run --rm --network host --ipc host --user $(id -u):$(id -g) -e HOME=/tmp -v $PWD:$PWD -w $PWD"
           echo "PLAYWRIGHT_WITH_DOCKER=$run --group-add $(stat -c %g /var/run/docker.sock) -v /tmp:/tmp -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock -e RUNNER_ENVIRONMENT $image" >> "$GITHUB_ENV"
       - name: Test native compiled alert forms and independent readback

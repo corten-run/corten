@@ -283,8 +283,8 @@ ready-to-run replacement for catalog or the historical marketplace suite.
 
 ## Running it
 
-From the repository root, with the Node version in [`.node-version`](../../.node-version) (the
-one the hosted Catalog checks use), Docker and Playwright Chromium installed:
+From the repository root, with the Node version in [`.node-version`](../../.node-version), Docker
+and Playwright Chromium installed:
 
 ```sh
 npm ci
@@ -294,6 +294,11 @@ npm run check:catalog
 node --test bench/catalog/check.test.mjs
 node bench/catalog/run.mjs c1 --build --check-only
 ```
+
+The hosted Catalog checks' runner steps use the exact Node in `.node-version`. Their browser
+checks run in Playwright's image for the `@playwright/test` version in `package.json`, with the
+Node 26 that image installs by major version, which can differ in patch; the image step prints both
+versions in its log.
 
 The generator explicitly gives only its public synthetic `fixtures/catalog.json` mode 0644
 and its `fixtures/` directory mode 0755, including when regenerating under umask 0077.
