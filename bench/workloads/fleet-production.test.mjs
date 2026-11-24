@@ -22,7 +22,7 @@ import { readFleet, recheckSetupAttempt, verifyCollectedGroup } from "./fleet-ve
 import { unitQuery } from "./cloud-options.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { createErroredReceipt, createErroredRecord, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
-import { continuationAdmission, inspectContinuation } from "./group-continuation.mjs";
+import { continuationAdmission, continuationLock, inspectContinuation } from "./group-continuation.mjs";
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
@@ -842,8 +842,13 @@ test("continuation retries past a create that errored after its launch deadline 
     fs.writeFileSync(launchLock, "SYNTHETIC"); fs.writeFileSync(operationLock, "SYNTHETIC");
     throw Object.assign(new Error("PRIVATE_MESSAGE"), { controlUncertain: true, providerDiagnostic: { code: "create-action-pending" } });
   };
-  await fleetMain([...args("r19"), "--detach", "--approve-reviewed-merged-ready", approval], p.deps).catch(() => {});
+  await assert.rejects(fleetMain([...args("r19"), "--detach", "--approve-reviewed-merged-ready", approval], p.deps), { controlUncertain: true });
   delete p.deps.main;
+  // The uncertain launch keeps the outer continuation lock. Its release stays the
+  // operator's documented custody step; the group recheck never touches it.
+  const outer = path.join(p.h.base, continuationLock);
+  assert.ok(fs.existsSync(outer)); await assert.rejects(prepare("r20"), /EEXIST/);
+  fs.unlinkSync(outer);
   await assert.rejects(prepare("r20"), /unresolved custody/);
   // The later recheck's result: the same receipt and record, and the dead launch's locks released.
   const record = JSON.stringify(createErroredRecord(pending, ids, 3, at));
