@@ -27,6 +27,10 @@ qualify measured native costs. Fresh v3 recovery measurements are required. They
 remain partial rounds, never full-group readiness.
 `evidence/native-recovery-timing-limit/` preserves the earlier failed Corten
 round without rewriting its identity or relaxing the 10-second gates.
+These saved captures stay where they are, listed in `scripts/bench-size.allow`. A new round's
+captures go to `results/<round>/` here, which Git ignores: commit its summary and provenance,
+naming where the captures are published and their SHA-256
+([Benchmark results](../../CONTRIBUTING.md#benchmark-results)).
 
 Explicit `--measure` revalidates all six successful saved native recovery journeys before
 measuring that app's actual 1/2/4-browser fan-out, visible frame latency and kernel CPU/memory.

@@ -1,0 +1,4 @@
+# bench/live/parity.mjs's raw recoverable-live captures (gzip JSON) by default. Committed evidence
+# is a summary whose provenance names where the raw captures are published and their SHA-256
+# (CONTRIBUTING.md, Benchmark results).
+/results/

@@ -185,6 +185,15 @@ not a manufactured passing whole-group ledger. Earlier build/rate/timing failure
 unchanged in their original captures. [Validation record](VALIDATION.md) lists checks,
 limits, measured observations and every changed path.
 
+The gzip captures checked in under `evidence/` here and in `bench/recoverable-live/evidence/` stay
+where they are: their paths are cited and the hostile tests read them, and removing them would
+shrink no clone, since history keeps every blob. `scripts/bench-size.allow` lists each at its blob.
+New captures are not committed. Every version of a committed file stays in every clone, so the
+default outputs, `results/parity/` here and `bench/recoverable-live/results/`, are ignored by Git,
+and a new round commits its summary and provenance, naming where its captures are published and
+their SHA-256 ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)). `npm run check`
+fails on a `.json.gz` or other archive under `bench/` that the list does not have.
+
 Historical `native-live-plan/v1` evidence retains its original three-port inventory. The
 verifier checks that versioned inventory, not today's available adapters; adding a port never
 upgrades an old missing row to a passing qualification or changes its identity.

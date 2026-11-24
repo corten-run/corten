@@ -1,6 +1,9 @@
 // Packs a round's raw output into results/<round>/raw.tar.xz, beside the summaries the README is
-// written from, so a round adds one archive to Git rather than a file for every run.
-// Usage: node bench/fullstack/pack.mjs <round> (droplet.mjs runs it once a finished round is here)
+// written from. The archive is not committed (bench/fullstack/.gitignore): it is published outside
+// the tree, and the round's raw.txt names where and the SHA-256 this prints for it
+// (CONTRIBUTING.md, Benchmark results). The archives of rounds committed before stay in the tree.
+// Usage: node bench/fullstack/pack.mjs <round> (droplet.mjs packs a finished round once it is
+// here; run this then to print the archive's SHA-256)
 //
 // Kept as files: the summaries and the round's log (KEPT below). Packed: everything else in the
 // round's folder (each app's k6, CPU and startup files, every count). The archive is listed back and
@@ -8,7 +11,8 @@
 // summarize.mjs reads a packed round from its archive; `tar -xJf results/<round>/raw.tar.xz -C
 // results/<round>` brings the files back for a look at one run.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -129,4 +133,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const dir = join(import.meta.dirname, "results", round);
   const n = pack(dir);
   console.log(n === 0 ? `${round}: nothing to pack` : `${round}: ${n} files in ${join(dir, ARCHIVE)}`);
+  const archive = join(dir, ARCHIVE);
+  if (existsSync(archive)) {
+    const sha256 = createHash("sha256").update(readFileSync(archive)).digest("hex");
+    console.log(`${ARCHIVE}: ${statSync(archive).size} bytes, SHA-256 ${sha256}; publish it outside the tree and name both in ${join(dir, "raw.txt")}`);
+  }
 }

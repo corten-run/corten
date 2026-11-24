@@ -353,6 +353,26 @@ after reconnecting with a 64-entry subscription queue.
 
 The failover benchmark is `node examples/listings-feed/bench/run.mjs`; see its header.
 
+## Benchmark results
+
+Every version of a committed file stays in every clone, even after it is deleted, so a benchmark
+commits its evidence, not its raw data. Committed evidence is the report, the summary and the
+provenance: small enough to diff and review. Raw data (per-request logs, traces, captures, a
+round's archive) stays outside the tree, and the committed provenance names where it is published
+and its SHA-256, as a group result's `provenance.json` does with `archiveSha256`. A benchmark's
+raw output goes by default to a path its `.gitignore` names (`bench/fullstack/pack.mjs` packs a
+round's into one ignored archive), and an output path given explicitly is used as given.
+
+`npm run check` runs `scripts/bench-size.mjs`, which reads the tree as committed and fails on a file
+under `bench/` that is an archive or compressed file (`.tar`, `.tgz`, `.gz`, `.xz`, `.zst`,
+`.bz2`, `.zip`, `.7z`) or larger than 256 KiB, unless `scripts/bench-size.allow` lists its
+path with its exact blob ID. The list holds the files that were in the tree when the check came.
+They stay where they are: removing one shrinks no clone, since history keeps every blob, and their
+paths are cited. A listed file that changes fails, and a line whose file is gone or no longer
+needs it fails until the line is removed, so the list only shrinks. A file that is not benchmark
+output, such as a lock file an app builds from, is listed deliberately, with its new blob ID in the
+pull request that changes it, where review sees it.
+
 ## Pull requests
 
 For nightly performance evidence, use the [marketplace v2 procedure](bench/marketplace/nightly.md).

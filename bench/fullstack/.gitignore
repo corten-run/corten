@@ -1,0 +1,4 @@
+# A round's raw output, packed by pack.mjs. It is published outside the tree and the round's
+# raw.txt names where and its SHA-256 (CONTRIBUTING.md, Benchmark results). The archives
+# committed before this stay tracked.
+/results/*/raw.tar.xz
