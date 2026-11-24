@@ -652,10 +652,11 @@ establish a general ranking.
          member, or object file where it is in no archive, as the map names them, less directories;
          each side's map is kept with the run's results. A run whose plan was declared before this
          point was on `main` is read by the rule as it then stood, and any other without that record
-         has no reading across placements. A plan may not build the C code with flags that leave no
-         such section, to be read under the first point alone. Where either side has such a section,
-         the rest of this point holds for both, in the change comparison and the A/A; a pilot, an
-         A/A with a plan of its own, is held to it by what its own sides show.
+         has no reading across placements. A plan may not build the C code with flags chosen for
+         the measurement that leave no such section, to be read under the first point alone. Where
+         either side has such a section, the rest of this point holds for both, in the change
+         comparison and the A/A; a pilot, an A/A with a plan of its own, is held to it by what its
+         own sides show.
 
          Every placement then has a second pad, whose size no plan lists: a function nothing calls,
          aligned to 16 bytes, that the ordering file does not name and the link line gives last, so
@@ -666,21 +667,24 @@ establish a general ranking.
 
          Each placement's measured binary is linked with its map, checked against the unpadded
          link's in place of "every function moved by exactly the pad's size": `.text` begins where
-         it did and holds the first pad's section, then the unpadded link's input sections in its
-         order, each with its size and alignment, then the second pad's section, of one of the four
-         sizes; in both links every input section begins at the first multiple of its alignment at
-         or after the end of the one before it; every symbol of `.text` is in the same input section
-         in both links, as far from its start; and `.data` is where the rule says. The first point's
-         other checks stand, with both pads among a placement's functions and the first pad first.
+         it did and holds the first pad's section, of the plan's size, then the unpadded link's
+         input sections in its order, each with its size and alignment, then the second pad's
+         section, of one of the four sizes; in both links every input section begins at the first
+         multiple of its alignment at or after the end of the one before it; every symbol of `.text`
+         is in the same input section in both links, as far from its start; and `.data` is where the
+         rule says. The first point's other checks stand, with both pads among a placement's
+         functions and the first pad first.
 
          A side with no reading across placements does not pass and shows no win. A side has none,
          for any workload, in three cases: an input section of its `.text` is aligned beyond 64
-         bytes; a `.text*` input section whose name ends in a Rust-mangled symbol (`_R...`, or
-         `_ZN...17h<hash>E` under the legacy scheme) lies at or after the first section aligned
-         beyond 16 bytes, or in another output section; or none of the four sizes puts a placement's
-         `.data` where the rule says. The pads do not vary where a function on a side's list lies in
-         a 64-byte line as they vary the code before it: from the first section aligned to 64 bytes
-         on, a function is in every placement where the side's unpadded link has it, and one listed
+         bytes; an input section whose name begins `.text.` and matches
+         `\.(_R[A-Za-z0-9_.$]+|_ZN[A-Za-z0-9_.$]*17h[0-9a-f]{16}E(\.llvm\.\d+)?)$`, so ends in a
+         Rust-mangled symbol (`_R...`, or the legacy `_ZN...17h<hash>E`), lies at or after the first
+         section aligned beyond 16 bytes, or in another output section (Rust code under a name that
+         is not mangled is not seen); or none of the four sizes puts a placement's `.data` where the
+         rule says. The pads do not vary where a function on a side's list lies in a 64-byte line
+         as they vary the code before it: from the first section aligned to 64 bytes on, a function
+         is in every placement where the side's unpadded link has it, and one listed
          before that section, or on a side with none, is there or 32 bytes from there. That is a
          limit of the reading and refuses none: what one such place costs a request no reading says,
          and each side's list in the pull request shows which functions the limit covers.

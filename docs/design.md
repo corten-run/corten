@@ -9584,9 +9584,10 @@ rules something out.
     section or in `.init`, among them) are under the tag
     `evidence/placement-aligned-code-4`. `synthetic.sh` there runs the checks with
     node alone, on placements written by LLD's rule from the two unpadded maps, which are
-    line for line the maps LLD made for the twelve placements compared. That run's own
-    readings stay as they were, with no bound under this point: its plan predates the point
-    and it recorded no map or fact from the builds it measured. The layouts above are a
+    line for line the maps LLD made for the twelve placements compared. That run has no
+    bound, under the rule as it then stood or under this point: a side with such code cannot
+    pass the check it was held to (below), its plan predates the point, and it recorded no
+    map or fact from the builds it measured. The layouts above are a
     historical reading, of builds made again, and not a pass.
 
     So a run with such a section on either side is checked against LLD's rule and not against
@@ -9638,7 +9639,10 @@ rules something out.
 
     Which code may not lie behind an aligned section is one test on the map, with no list of
     crates to judge: a `.text*` input section whose name ends in a Rust-mangled symbol, `_R...`,
-    or `_ZN...17h<hash>E` under the legacy scheme. rustc names each function's section so
+    or `_ZN...17h<hash>E` under the legacy scheme. Exactly, as the point words it and
+    `rust-names.mjs` (below) applies it: the name begins `.text.` and matches
+    `\.(_R[A-Za-z0-9_.$]+|_ZN[A-Za-z0-9_.$]*17h[0-9a-f]{16}E(\.llvm\.\d+)?)$`, so a legacy name
+    is taken with `.llvm.<digits>` after it or without. rustc names each function's section so
     (3,438 of that head's 3,483 input sections of `.text`, 3,188 as `.text._R...` and 250 as
     `.text.unlikely._R...`), where the map prints the symbols themselves demangled, and it
     names sections of data for their symbols too, which the test leaves out. Rust code is what
@@ -9663,19 +9667,32 @@ rules something out.
     bound from them: the check they were held to cannot hold for a build with such code. Its
     first placement plan after the point is on `main` is read only if it changes, from the plan
     before it, only what this point or a rule merged since asks, and is declared before any
-    further turn that counts cycles on a padded placement of the pull request, on whichever
-    head: a new head commit starts nothing again. So nothing in that plan is chosen by the
+    further turn that counts cycles on a padded placement of the pull request, a pilot's turns
+    included, on whichever head: a new head commit starts nothing again. So nothing in that
+    plan is chosen by the
     results of the turns already counted, which give no bound under it either. The condition
     is met or missed once a pull request, by that plan: missed, the pull request has no
     reading across placements; met, the plan's run is read as any run is, and so is what
-    follows it. Where the sizing rule merged
-    since asks a new K, the pilot is read at that rule's 100, each workload's K is the smallest
-    at which that rule's check passes for it, and the pad lists are those `pads.mjs` under the
-    tag `evidence/placement-sizing-1999` gives for that K. Its first 30 pairs are the lists of
-    the first runs' generator (`pads.mjs` under `evidence/ee7b0b41`, the same file under
+    follows it, but for a workload its pilot did not size (below). Where the sizing rule merged
+    since asks a new K, that plan is one plan in two parts, declared whole before the pilot's
+    first turn. Its first part is the pilot, read at that rule's 100, and is the plan of its
+    own that rule asks of a pilot. Its second is the gated run, with each workload's K given
+    by rule and not by number, the smallest at which that rule's check passes for it from
+    that pilot, and its pad lists those `pads.mjs` under the tag
+    `evidence/placement-sizing-1999` gives for that K. That script's first 30 pairs are the
+    lists of the first runs' generator (`pads.mjs` under `evidence/ee7b0b41`, the same file under
     `evidence/request-gzip-1971-placed`), and it meets the fourth point's rule at every K
     from 31 to 254, where that generator, run on past 30, meets it at 31 and 32 alone. The
-    condition is no leave to choose pads, K or workloads otherwise, and none against the rule
+    K's and their pad lists are published before any turn of the gated run. So the pilot is
+    part of that plan and not a plan before it, its turns are not turns counted before the
+    plan, and nothing is chosen after a result. Where the pilot is not eligible, or no K the
+    pads allow passes the check for a workload, the sizing rule's own words hold: "Until a
+    pilot sizes K, the workload is not read across placements on that setup at that R" (How
+    many placements, above). That rule lets a plan "read another under a new plan, at a larger
+    K or with what made it ineligible changed"; the condition does not, since such a plan
+    would be chosen with the first pilot's results in hand, so that workload has no reading
+    across placements for the pull request. The condition is no leave to choose pads, K or
+    workloads otherwise, and none against the rule
     that a single build's miss stays binding and that a placement run declared after it does
     not clear it ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2). A plan declared
     before the point with no such turn counted yet is not under it: the point asks nothing of a
