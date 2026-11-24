@@ -3950,14 +3950,73 @@ async fn within<F: Future>(limit: std::time::Duration, fut: F) -> Result<F::Outp
     use std::{pin::pin, task::Poll};
     let mut fut = pin!(fut);
     let mut timer = pin!(None::<tokio::time::Sleep>);
+    let mut kept = KeptTimer(None);
     std::future::poll_fn(|cx| {
         crate::extract::forget_wait();
         if let Poll::Ready(out) = fut.as_mut().poll(cx) {
             return Poll::Ready(Ok(out));
         }
+        if *KEEP_TIMERS {
+            return kept.poll(limit, cx).map(|()| Err(Late(crate::extract::waited())));
+        }
         waited_until(timer.as_mut(), limit, cx)
     })
     .await
+}
+
+/// A measurement's switch, not an API (`CORTEN_PROTO_KEEP_TIMERS=1`): [`within`] takes its
+/// timer from the thread's kept ones and gives it back still set, in place of making one for
+/// each request that waits and dropping it.
+static KEEP_TIMERS: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("CORTEN_PROTO_KEEP_TIMERS").is_some());
+
+thread_local! {
+    /// Timers earlier requests on this thread were done with, each still in the runtime's timer
+    /// wheel with its old deadline.
+    static KEPT_TIMERS: std::cell::RefCell<Vec<std::pin::Pin<Box<tokio::time::Sleep>>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A deadline's timer taken from [`KEPT_TIMERS`]. Why: on tokio's multi-threaded runtime every
+/// timer made and every timer dropped takes the one lock of the runtime's timer wheel
+/// (`runtime/time/mod.rs`, `reregister` and `clear_entry`), and with many threads serving
+/// requests that wait, that lock is where they queue. `Sleep::reset` to a later deadline takes
+/// no lock (`TimerShared::extend_expiration`), and a deadline is always later than the last
+/// one, so a timer that is kept and reset, never dropped, costs the lock only the first time
+/// and after it has fired unused.
+///
+/// A prototype, with these left open: a kept timer belongs to the runtime that made it, so a
+/// thread that serves for one runtime and then another (tests) would reset a timer of a runtime
+/// that is gone; and the kept timers of a thread are never dropped.
+struct KeptTimer(Option<std::pin::Pin<Box<tokio::time::Sleep>>>);
+
+impl KeptTimer {
+    fn poll(&mut self, limit: std::time::Duration, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        let timer = self.0.get_or_insert_with(|| {
+            let until = tokio::time::Instant::now() + limit;
+            match KEPT_TIMERS.with_borrow_mut(Vec::pop) {
+                Some(mut timer) => {
+                    timer.as_mut().reset(until);
+                    timer
+                }
+                None => Box::pin(tokio::time::sleep_until(until)),
+            }
+        });
+        timer.as_mut().poll(cx)
+    }
+}
+
+impl Drop for KeptTimer {
+    fn drop(&mut self) {
+        let Some(mut timer) = self.0.take() else { return };
+        // The timer lets go of the request's waker, so firing unused wakes nothing.
+        let _ = timer.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop()));
+        let _ = KEPT_TIMERS.try_with(|kept| {
+            let mut kept = kept.borrow_mut();
+            if kept.len() < 4096 {
+                kept.push(timer);
+            }
+        });
+    }
 }
 
 /// Like `within`, with one more possible stage: filling a page that no typed route has filled.
