@@ -1,0 +1,19 @@
+== stage browser verify start 23:05:25
+verify: 15 placements answer as their unpadded binary
+== stage browser check start 23:05:28
+aa-browser: checked 1 requests: same
+change-browser: checked 1 requests: same
+== stage browser checks ok 23:05:43
+aa-browser p01 ok 23:06:03
+change-browser p01 ok 23:06:24
+aa-browser p02 ok 23:06:45
+change-browser p02 ok 23:07:06
+aa-browser p03 ok 23:07:27
+change-browser p03 ok 23:07:48
+aa-browser p04 ok 23:08:09
+change-browser p04 ok 23:08:30
+aa-browser p05 ok 23:08:51
+change-browser p05 ok 23:09:11
+report: /m/stage/results/placements-browser.md
+failed: none
+ALL-DONE

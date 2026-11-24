@@ -1,0 +1,15 @@
+base-p320: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p15120: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p25824: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p40624: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p10304: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p22848: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p12160: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p38336: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p27648: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p12880: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+head-p320: checked 3 requests: same as head; bodies of 6124, 1816 and 1 bytes as received
+head-p15120: checked 3 requests: same as head; bodies of 6124, 1816 and 1 bytes as received
+head-p25824: checked 3 requests: same as head; bodies of 6124, 1816 and 1 bytes as received
+head-p40624: checked 3 requests: same as head; bodies of 6124, 1816 and 1 bytes as received
+head-p10304: checked 3 requests: same as head; bodies of 6124, 1816 and 1 bytes as received

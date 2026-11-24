@@ -1,0 +1,25 @@
+# 2daf312aa Add the changelog note for the header comparisons node v24.22.3
+PASS 1 fmt, corten fmt, clippy, tests, release tests (1278 s)
+PASS 2 no-default-features, corten new and check, publish dry run (297 s)
+PASS 3 MSRV 1.89 check (81 s)
+FAIL 4 npm run check (5 s) log /root/fc/4.log
+PASS 5 watchlist image (101 s)
+PASS 6 watchlist smoke (659 s)
+PASS 7 watchlist dev smoke (11 s)
+PASS 8 card-market image (82 s)
+PASS 9 card-market smoke (30 s)
+PASS 10 ui-gallery image (44 s)
+PASS 11 ui-gallery smoke (277 s)
+PASS 12 corten-site image (61 s)
+PASS 13 corten-site smoke (28 s)
+PASS 14 corten-site held smoke (9 s)
+PASS 15 seller-desk image (51 s)
+PASS 16 seller-desk smoke (13 s)
+PASS 17 deck-builder image (54 s)
+FAIL 18 deck-builder smoke (33 s) log /root/fc/18.log
+PASS 19 deck-builder preview smoke (11 s)
+PASS 20 auction-room image (97 s)
+PASS 21 auction-room smoke (3 s)
+PASS 22 listings-feed image (93 s)
+PASS 23 listings-feed smoke (2 s)
+# full checks done

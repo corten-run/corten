@@ -1,0 +1,36 @@
+ok   the page shows the collection and the saved deck ({"gravel-sprite":3,"moth-court-herald":2,"cinder-cartographer":2,"lantern-warden":2,"ashen-drake":1})
+ok   the filter shows the matching cards and how many (1)
+ok   a column header sorts in the page, cheapest first (0,0,0,0,0,0)
+ok   a second click sorts the other way (7,7,7,7)
+ok   Add shows the card in the deck at once, before the server answers
+ok   the count, the curve and the collection row follow (11,5,1)
+ok   a change marks the collection row and deck line for motion
+ok   the motion markers select the component animations (deck-builder-card-pulse, deck-builder-line-in)
+ok   motion markers clear after the animation
+ok   the save is answered and the page takes the next version (0 then 1)
+ok   Undo takes the last change back
+ok   Redo does it again
+ok   Ctrl+Z undoes
+ok   Ctrl+Shift+Z redoes
+ok   checking rows counts them
+ok   Add selected adds one of each and clears the selection ({"gravel-sprite":3,"moth-court-herald":3,"cinder-cartographer":2,"lantern-warden":3,"ashen-drake":1,"pearl-diver":1,"undertow-serpent":1})
+ok   a third Ashen Drake shows at once ({"gravel-sprite":3,"moth-court-herald":3,"cinder-cartographer":2,"lantern-warden":3,"ashen-drake":3,"pearl-diver":1,"undertow-serpent":1})
+ok   the server refuses it and the page rolls it back with the reason (Not saved: You own 2 copies of Ashen Drake.)
+ok   the history is as it was at the last save
+ok   a typed count changes the deck
+ok   a count of 0 takes the card out
+FAIL dragging a card onto the deck adds it
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+locator.dragTo: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator('li[data-key="salt-oracle"] button')
+
+    at /root/corten-pr/examples/deck-builder/smoke.mjs:204:59 {
+  log: [ `  - waiting for locator('li[data-key="salt-oracle"] button')` ],
+  name: 'TimeoutError'
+}
+
+Node.js v24.22.3

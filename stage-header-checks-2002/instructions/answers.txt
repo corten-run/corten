@@ -1,0 +1,1 @@
+answers: the 9 cases' answers are the same bytes in both builds (Date and ETag masked)

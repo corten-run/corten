@@ -1,0 +1,3 @@
+comparison aa-plain placement 21 workload plain
+A base-p1088 0c106363db68de3e869d0dcbc25571f17a9a7c984c5ef53c98a8a4d664e22c85
+B base-p22096 c12775658aac9240cfe6b598f14a64ade93fe2482119f7d4c0f058d0a73ef625

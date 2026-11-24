@@ -1,0 +1,9 @@
+plain start 1 of base: none
+browser start 1 of base: etag: W/"eb3203ebb3c2e6e6"
+api start 1 of base: none
+plain start 2 of base: none
+browser start 2 of base: etag: W/"229ddf22f5774f31"
+api start 2 of base: none
+plain: no ETag, nothing masked
+browser: a weak ETag keyed per start, its value masked
+api: no ETag, nothing masked

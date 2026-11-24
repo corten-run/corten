@@ -1,0 +1,3 @@
+comparison change-api placement 47 workload api
+A base-p33248 dcc2b1989ec8136b53558eb4685844e16264e668f9e0a59db99556d1182aa4b9
+B head-p33248 a5e0a6c155ee798a08dcfcd15b66aa51aa6f02642966e2411ca2dcefec8baa6b

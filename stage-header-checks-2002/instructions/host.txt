@@ -1,0 +1,5 @@
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+valgrind-3.24.0
+Version: 5.3.0-3
+6.8.0-149-generic
+model name	: Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz

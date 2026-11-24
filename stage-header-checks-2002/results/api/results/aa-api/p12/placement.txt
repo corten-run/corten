@@ -1,0 +1,3 @@
+comparison aa-api placement 12 workload api
+A base-p15536 a06cc03b9fcd701b0f07faea4c7fb175b6e36bc260e22f2d1872f93316d95685
+B base-p11808 51dd7c3bc6809a00f586a114b0aba8f13192ffd93febaefa93098d1e18867d9e

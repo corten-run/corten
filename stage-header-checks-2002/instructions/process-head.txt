@@ -1,0 +1,4 @@
+glibc route: per 1,000 requests 12203027 12202979 12203065
+glibc missing: per 1,000 requests 17075019 17075064 17075102
+jemalloc route: per 1,000 requests 10666888 10666857 10666895
+jemalloc missing: per 1,000 requests 15293033 15293077 15292992

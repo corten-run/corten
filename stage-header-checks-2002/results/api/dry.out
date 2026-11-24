@@ -1,0 +1,19 @@
+== stage api verify start 23:05:26
+verify: 15 placements answer as their unpadded binary
+== stage api check start 23:05:29
+aa-api: checked 1 requests: same
+change-api: checked 1 requests: same
+== stage api checks ok 23:05:43
+aa-api p01 ok 23:06:04
+change-api p01 ok 23:06:25
+aa-api p02 ok 23:06:46
+change-api p02 ok 23:07:07
+aa-api p03 ok 23:07:28
+change-api p03 ok 23:07:49
+aa-api p04 ok 23:08:10
+change-api p04 ok 23:08:31
+aa-api p05 ok 23:08:52
+change-api p05 ok 23:09:13
+report: /m/stage/results/placements-api.md
+failed: none
+ALL-DONE

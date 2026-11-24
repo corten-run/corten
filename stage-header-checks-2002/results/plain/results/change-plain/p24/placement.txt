@@ -1,0 +1,3 @@
+comparison change-plain placement 24 workload plain
+A base-p37296 ce9e089c31d1ad1bdfd8482a43c99232126e1314d902f9c01bf44d5a31809a20
+B head-p37296 b484ca4c422d708acf596ce79075b8579e95fe8677d757dbf330e1261d49253e

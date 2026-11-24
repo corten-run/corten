@@ -1,0 +1,25 @@
+plain start 1 of base: none
+browser start 1 of base: etag: W/"e1259523a66f37a6"
+api start 1 of base: none
+plain start 2 of base: none
+browser start 2 of base: etag: W/"82e2a69a00039b22"
+api start 2 of base: none
+plain: no ETag, nothing masked
+browser: a weak ETag keyed per start, its value masked
+api: no ETag, nothing masked
+base-p320: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p15120: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p25824: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p40624: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p10304: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p22848: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p12160: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p38336: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p27648: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+base-p12880: checked 3 requests: same as base; bodies of 6124, 1816 and 1 bytes as received
+head-p320: checked 3 requests: same as head; bodies of 6124, 1816 and 1 bytes as received
+head-p15120: checked 3 requests: same as head; bodies of 6124, 1816 and 1 bytes as received
+head-p25824: checked 3 requests: same as head; bodies of 6124, 1816 and 1 bytes as received
+head-p40624: checked 3 requests: same as head; bodies of 6124, 1816 and 1 bytes as received
+head-p10304: checked 3 requests: same as head; bodies of 6124, 1816 and 1 bytes as received
+verify: 15 placements answer as their unpadded binary

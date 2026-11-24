@@ -1,0 +1,19 @@
+== stage plain verify start 23:05:24
+verify: 15 placements answer as their unpadded binary
+== stage plain check start 23:05:27
+aa-plain: checked 1 requests: same
+change-plain: checked 1 requests: same
+== stage plain checks ok 23:05:41
+aa-plain p01 ok 23:06:02
+change-plain p01 ok 23:06:23
+aa-plain p02 ok 23:06:44
+change-plain p02 ok 23:07:05
+aa-plain p03 ok 23:07:26
+change-plain p03 ok 23:07:47
+aa-plain p04 ok 23:08:08
+change-plain p04 ok 23:08:29
+aa-plain p05 ok 23:08:50
+change-plain p05 ok 23:09:10
+report: /m/stage/results/placements-plain.md
+failed: none
+ALL-DONE
