@@ -8,6 +8,7 @@ import { join, relative, isAbsolute } from "node:path";
 import { bindExecutionParticipant, createAttachedParticipant, createExecutionEvidence, participantSetupCause, replayExecution } from "./execution-evidence.mjs";
 import { immutableGit } from "./immutable-git.mjs";
 import { mountSourceHash } from "./execution-inputs.mjs";
+import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const image = `sha256:${"a".repeat(64)}`, id = "b".repeat(64), netId = "c".repeat(64);
@@ -468,7 +469,7 @@ test("execution unknown failed variants, duplicate references and mutated files 
 
 test("producer immutable Git ignores blob replacements in a local isolated repository", () => temporary(async (folder) => {
   const git = (args, input) => {
-    const answer = spawnSync("git", args, { cwd: folder, input, windowsHide: true, encoding: "utf8" }); assert.equal(answer.status, 0, answer.stderr); return answer.stdout.trim();
+    const answer = spawnSync("git", args, { cwd: folder, input, windowsHide: true, encoding: "utf8", env: fixtureGitEnv() }); assert.equal(answer.status, 0, answer.stderr); return answer.stdout.trim();
   };
   git(["init", "--quiet"]); const original = git(["hash-object", "-w", "--stdin"], "original-source\n"), replacement = git(["hash-object", "-w", "--stdin"], "hostile-source\n");
   git(["replace", original, replacement]); assert.equal(git(["cat-file", "blob", original]), "hostile-source");

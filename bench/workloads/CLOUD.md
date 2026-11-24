@@ -1070,6 +1070,15 @@ against the sealed checkout first. This is metadata for real Git, not a Git stub
 commit override in controller state, or permission to substitute a different
 source tree. No native qualification or production action is run by the harness.
 
+`cloud-cancellation-controls.test.mjs` checks the original control bytes on every run; its two
+Python 3 cases run only when asked. `CORTEN_SYNTHETIC_CONTROL_BOUNDARY=1` runs the exact emitted
+cancellation and custody programs through `test-fixtures/mixed-controls-boundary.py` on Linux, which
+needs fresh private `/bench`, `/etc/systemd/system` and `/var/lib/cloud` directories, such as a
+disposable container's tmpfs mounts. That setting, or `CORTEN_REQUIRE_PYTHON=1` where Python 3 is
+guaranteed (CI sets it for `npm run check:workloads`), also checks that the boundary makes its Git
+repository without touching a caller named by `GIT_DIR` and `GIT_WORK_TREE`. With either set, a
+missing Python fails that check rather than skipping it.
+
 ### Terminal Custody Fences
 
 The action retains the original `results.tgz` and `evidence-*` tree unchanged,

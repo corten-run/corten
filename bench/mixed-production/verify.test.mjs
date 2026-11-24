@@ -20,6 +20,7 @@ import { resourceCoveragePolicy, mergeResourceSamples } from "./resources.mjs";
 import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-ledger.mjs";
 import { parseArgs } from "./run.mjs";
 import { mixedQualificationProfile, validateSaved } from "./verify.mjs";
+import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 import { createServer } from "node:http";
 import { chromium } from "@playwright/test";
 import { nativeTransport } from "./native.mjs";
@@ -573,7 +574,7 @@ test("review invalid API and CLI identities never echo canaries", async () => {
 });
 
 function localGit(cwd, args, input) {
-  const result = spawnSync("git", args, { cwd, input, encoding: "utf8", windowsHide: true, timeout: 30000 });
+  const result = spawnSync("git", args, { cwd, input, encoding: "utf8", windowsHide: true, timeout: 30000, env: fixtureGitEnv() });
   assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
 }
 function smallRound(dir, identity) {

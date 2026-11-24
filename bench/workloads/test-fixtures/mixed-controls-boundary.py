@@ -7,21 +7,15 @@ A trace stops immediately AFTER all control checks, before signal or capture.
 Requires fresh, private /bench, /etc/systemd/system and /var/lib/cloud scratch.
 """
 import hashlib, json, os, pathlib, subprocess, sys, tempfile
+sys.dont_write_bytecode = True  # leave no __pycache__ beside the fixture
+from mixed_controls_repo import fixture_env, make_repo
 
 os.umask(0o077)
 value = json.load(sys.stdin)
 bench = pathlib.Path('/bench')
 assert bench.is_dir() and not any(bench.iterdir())
-repo = bench / 'repo'
-repo.mkdir()
-(repo / 'sentinel').write_text('synthetic tracked source\n')
-env = dict(os.environ, HOME='/nonexistent', GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null')
-def git(args):
-    return subprocess.run(['git', '-C', str(repo)] + args, env=env, check=True, capture_output=True, text=True).stdout.strip()
-git(['init', '--quiet'])
-git(['add', 'sentinel'])
-git(['-c', 'user.name=synthetic', '-c', 'user.email=synthetic@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'synthetic'])
-commit, tree = git(['rev-parse', 'HEAD']), git(['rev-parse', 'HEAD^{tree}'])
+env = fixture_env(os.environ)
+commit, tree = make_repo(bench / 'repo', env)
 historical, current = value['original']['files'], value['current']
 unit = next(name for name in historical if name.endswith('.service'))
 assert historical['job.sh'] != current['job.sh']

@@ -4,14 +4,19 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { measuredCheckout } from "./group-continuation.mjs";
+import { measuredCheckout as measured } from "./group-continuation.mjs";
+import { fixtureGitEnv, withFixtureGitEnv } from "../../scripts/fixture-git.mjs";
+
+// measuredCheckout runs Git on the process's environment, so it reads the fixture only without the caller's selectors.
+const measuredCheckout = (/** @type {string} */ root, /** @type {string} */ saved, /** @type {string} */ commit) =>
+  withFixtureGitEnv(() => measured(root, saved, commit));
 
 test("a retained group at X finds its original checkout after the operator checkout advances to Y", (t) => {
   const temp = realpathSync(mkdtempSync(join(tmpdir(), "group-checkouts-"))), repo = join(temp, "repo"), root = join(temp, "results");
   t.after(() => { assert.equal(dirname(temp), realpathSync(tmpdir())); rmSync(temp, { recursive: true }); });
   mkdirSync(repo); mkdirSync(root); mkdirSync(`${root}-checkouts`);
   const git = (...args) => execFileSync("git", ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", ...args],
-    { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] }).trim();
+    { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() }).trim();
   const commit = (source) => {
     writeFileSync(join(repo, "input.txt"), source); git("add", "input.txt"); git("commit", "-m", source); return git("rev-parse", "HEAD");
   };
