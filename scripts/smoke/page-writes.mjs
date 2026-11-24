@@ -1,4 +1,4 @@
-import { base, skip, check } from "./helpers.mjs";
+import { base, skip, check, pollFor } from "./helpers.mjs";
 
 export async function pageWrites(page, browser) {
   // After a write, the page it sends the browser to is fetched whole; when that page's handler
@@ -123,6 +123,41 @@ export async function pageWrites(page, browser) {
         () => true,
         () => false,
       );
+  /**
+   * Finds the button at `selector` and presses it in one page task, and whether the write it sends
+   * reaches the stand-in within 5 s of the press. A page that reads itself again swaps <main> a
+   * second after it loads, and again whenever its answer changes: a Playwright click can find the
+   * button, then land once it is gone, and a press that reaches no button sends nothing (#2035).
+   * @param {import("@playwright/test").Page} own @param {{ writes: number }} seen @param {string} selector
+   */
+  const pressWrite = async (own, seen, selector) => {
+    const writes = seen.writes;
+    const pressed = await own.evaluate((selector) => {
+      const button = /** @type {HTMLButtonElement | null} */ (document.querySelector(selector));
+      button?.click();
+      return !!button;
+    }, selector);
+    return pressed && (await pollFor(5000, async () => seen.writes > writes)) === true;
+  };
+  /**
+   * Notes, from now on, whether the write's own <main> is drawn, the moment it is: a page that reads
+   * itself again draws the form's <main> over it a second later, which a sampled wait in a loaded
+   * browser can miss (#2035). `writtenSeen` reads it, for 5 s.
+   * @param {import("@playwright/test").Page} own
+   */
+  const watchWritten = (own) =>
+    own.evaluate(() => {
+      const main = /** @type {HTMLElement} */ (document.querySelector("main"));
+      const w = /** @type {any} */ (window);
+      w.__writtenSeen = false;
+      new MutationObserver((_, observer) => {
+        if (!main.textContent?.includes("Written by the form's own page.")) return;
+        w.__writtenSeen = true;
+        observer.disconnect();
+      }).observe(main, { childList: true, subtree: true, characterData: true });
+    });
+  /** Whether `watchWritten` saw the write's own <main> drawn, within 5 s. @param {import("@playwright/test").Page} own */
+  const writtenSeen = async (own) => (await pollFor(5000, () => own.evaluate(() => /** @type {boolean} */ ((/** @type {any} */ (window)).__writtenSeen)))) === true;
   {
     const { own, seen } = await writtenPage(brand);
     const first = await shownOf(own);
@@ -346,19 +381,24 @@ export async function pageWrites(page, browser) {
     seen.fail = true;
     // The page says the write failed in its header, as a toaster in the layout shows it.
     await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
-    await own.click("main form button");
-    const failed = await own
-      .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
-      .then(
-        () => true,
-        () => false,
-      );
+    const sent = await pressWrite(own, seen, "main form button");
+    const failed =
+      sent &&
+      (await own
+        .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
+        .then(
+          () => true,
+          () => false,
+        ));
+    let legacySent = true;
     let legacyDrew = true;
     if (legacy) {
       seen.fail = false;
       seen.draws = false;
-      await own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
-      legacyDrew = (await writtenIn(own)) && "corten-page" in seen.answered;
+      // Sent within 5 s of the press, then its <main> drawn within 5 s.
+      await watchWritten(own);
+      legacySent = await pressWrite(own, seen, "main form button");
+      legacyDrew = legacySent && (await writtenSeen(own)) && "corten-page" in seen.answered;
     }
     const after = seen.asked.length;
     // The page's next read of itself, and a moment for it to be drawn.
@@ -380,7 +420,7 @@ export async function pageWrites(page, browser) {
     check(
       failedName,
       failed && legacyDrew && again === "GET /smoke/written/again nav" && kept && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ failed, legacyDrew, again, kept, arrived, asked: seen.asked, shown }),
+      JSON.stringify({ sent, failed, legacySent, legacyDrew, again, kept, arrived, asked: seen.asked, shown }),
     );
     await own.context().close();
   }
@@ -533,13 +573,13 @@ export async function pageWrites(page, browser) {
         return res;
       };
     }, { overlap, status, complete });
-    await own.click(overlap ? "#held-write button" : "main form button");
+    let sent = await pressWrite(own, seen, overlap ? "#held-write button" : "main form button");
     let drewOver = true;
-    if (overlap) {
+    if (overlap && sent) {
       await own.waitForFunction(() => typeof (/** @type {any} */ (window)).__releaseBody === "function");
       seen.status = 0;
-      await own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
-      drewOver = await brandBecomes(own, "Watchlist, written");
+      sent = await pressWrite(own, seen, "main form button");
+      drewOver = sent && (await brandBecomes(own, "Watchlist, written"));
       await own.evaluate(() => (/** @type {any} */ (window)).__releaseBody());
     }
     const failed = await own
@@ -558,9 +598,9 @@ export async function pageWrites(page, browser) {
     const shown = await shownOf(own);
     check(
       cutBodyName,
-      drewOver && failed && seen.answers === (overlap ? 2 : 1) && again === "GET /smoke/written/again nav" && kept && arrived &&
+      sent && drewOver && failed && seen.answers === (overlap ? 2 : 1) && again === "GET /smoke/written/again nav" && kept && arrived &&
         shown.brand === (overlap ? "Poll brand" : "Watchlist, written") && seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ drewOver, failed, answers: seen.answers, again, kept, arrived, asked: seen.asked, shown }),
+      JSON.stringify({ sent, drewOver, failed, answers: seen.answers, again, kept, arrived, asked: seen.asked, shown }),
     );
     await own.context().close();
   }
@@ -574,21 +614,24 @@ export async function pageWrites(page, browser) {
     const counted = (/** @type {string} */ body, /** @type {number} */ writes) => body.replace(">Watchlist</span>", `>Count ${writes}</span>`);
     const { own, seen } = await writtenPage(counted, undefined, "/smoke/written/again");
     await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
-    await own.click("main form button");
-    const drew = (await brandBecomes(own, "Count 1")) && (await writtenIn(own));
+    await watchWritten(own);
+    const sentFirst = await pressWrite(own, seen, "main form button");
+    const drew = sentFirst && (await brandBecomes(own, "Count 1")) && (await writtenSeen(own));
     // Read whole while it reads itself again.
     const start = seen.asked.length;
     const until = Date.now() + 5000;
     while (Date.now() < until && !seen.asked.slice(start).some((a) => a.startsWith("GET /smoke/written/again"))) await own.waitForTimeout(50);
     const wholeBefore = seen.asked.slice(start).find((a) => a.startsWith("GET /smoke/written/again")) ?? null;
     seen.fail = true;
-    await own.click("main form button");
-    const failed = await own
-      .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
-      .then(
-        () => true,
-        () => false,
-      );
+    const sentSecond = await pressWrite(own, seen, "main form button");
+    const failed =
+      sentSecond &&
+      (await own
+        .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
+        .then(
+          () => true,
+          () => false,
+        ));
     const after = seen.asked.length;
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline && !seen.asked.slice(after).some((a) => a.startsWith("GET /smoke/written/again"))) await own.waitForTimeout(50);
@@ -607,7 +650,7 @@ export async function pageWrites(page, browser) {
         arrived &&
         shown.brand === "Count 2" &&
         seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ drew, wholeBefore, failed, again, kept, arrived, asked: seen.asked, shown }),
+      JSON.stringify({ sentFirst, drew, wholeBefore, sentSecond, failed, again, kept, arrived, asked: seen.asked, shown }),
     );
     await own.context().close();
   }
@@ -623,31 +666,47 @@ export async function pageWrites(page, browser) {
     /** @type {() => void} */
     let release = () => {};
     const held = new Promise((resolve) => (release = () => resolve(undefined)));
-    await own.route("**/assets/smoke-held-poll.css", async (route) => {
-      await held;
-      await route.fulfill({ contentType: "text/css", body: "" }).catch(() => {});
-    });
-    await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
-    const asset = own.waitForRequest("**/assets/smoke-held-poll.css", { timeout: 5000 }).then(() => true, () => false);
-    await own.click("main form button");
-    const drew = (await brandBecomes(own, "Watchlist, written")) && (await writtenIn(own));
-    const waiting = await asset;
-    seen.fail = true;
-    await own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
-    const failed = await own
-      .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
-      .then(() => true, () => false);
-    // Once the held poll is out of the way, the next one asks for a partial response. A whole
-    // draw of the held answer would have replaced the header and lost its failure mark.
-    const next = own.waitForResponse((res) => new URL(res.url()).pathname === "/smoke/written/again" && res.request().method() === "GET", { timeout: 5000 }).catch(() => null);
-    release();
-    const response = await next;
-    await response?.finished();
-    const retry = response?.request().headers().corten;
-    const kept = await own.evaluate(() => !!document.querySelector("header[data-failed]") && document.querySelector("header span")?.textContent === "Watchlist, written");
-    check(waitingPollName, drew && waiting && failed && retry === "nav" && kept, JSON.stringify({ drew, waiting, failed, retry, kept, asked: seen.asked }));
-    await own.unrouteAll({ behavior: "ignoreErrors" });
-    await own.context().close();
+    // The check's evidence, each part bounded from its own start; a part not seen in time leaves the
+    // ones after it unmade, and the hold, routes and page go however it ends.
+    const got = { sent: false, drew: false, waiting: false, sentFailing: false, failed: false, retry: /** @type {string | undefined} */ (undefined), kept: false };
+    try {
+      await own.route("**/assets/smoke-held-poll.css", async (route) => {
+        await held;
+        await route.fulfill({ contentType: "text/css", body: "" }).catch(() => {});
+      });
+      await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
+      await watchWritten(own);
+      // The whole poll that reads the page a second after the write's page is drawn asks for the
+      // stylesheet, within 5 s of the press.
+      const asset = own.waitForRequest("**/assets/smoke-held-poll.css", { timeout: 5000 }).then(() => true, () => false);
+      got.sent = await pressWrite(own, seen, "main form button");
+      got.drew = got.sent && (await brandBecomes(own, "Watchlist, written")) && (await writtenSeen(own));
+      got.waiting = await asset;
+      if (got.drew && got.waiting) {
+        seen.fail = true;
+        got.sentFailing = await pressWrite(own, seen, "main form button");
+        got.failed =
+          got.sentFailing &&
+          (await own
+            .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
+            .then(() => true, () => false));
+      }
+      if (got.failed) {
+        // Once the held poll is out of the way, the next one asks for a partial response. A whole
+        // draw of the held answer would have replaced the header and lost its failure mark.
+        const next = own.waitForResponse((res) => new URL(res.url()).pathname === "/smoke/written/again" && res.request().method() === "GET", { timeout: 5000 }).catch(() => null);
+        release();
+        const response = await next;
+        await response?.finished();
+        got.retry = response?.request().headers().corten;
+        got.kept = await own.evaluate(() => !!document.querySelector("header[data-failed]") && document.querySelector("header span")?.textContent === "Watchlist, written");
+      }
+    } finally {
+      release();
+      await own.unrouteAll({ behavior: "ignoreErrors" });
+      await own.context().close();
+    }
+    check(waitingPollName, got.sent && got.drew && got.waiting && got.sentFailing && got.failed && got.retry === "nav" && got.kept, JSON.stringify({ ...got, asked: seen.asked }));
   }
   // A write's own page that refuses it (422), with a field marked invalid below the fold: drawn in
   // the same document at the same address, with no history entry added, focus on that field (in
@@ -825,7 +884,10 @@ export async function pageWrites(page, browser) {
       JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked, shown }),
     );
     // The patch was answered before that page was asked for, so the page's layout drew it: the
-    // navigation after reads <main> alone, not the whole page again.
+    // navigation after reads <main> alone, not the whole page again. Only its reads of
+    // /smoke/written count: the pointer left on the link clicked above can make the page that comes
+    // prefetch /smoke/quoted, after the navigation's read (#2035).
+    const sinceReturn = seen.asked.length;
     await own.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/written"));
     const returned = await own
       .waitForFunction(() => location.pathname === "/smoke/written" && !!document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
@@ -835,10 +897,11 @@ export async function pageWrites(page, browser) {
         () => true,
         () => false,
       );
+    const reads = seen.asked.slice(sinceReturn).filter((a) => a.startsWith("GET /smoke/written "));
     check(
       "a write's patch answered before a navigation left it is drawn by that page, and the next navigation reads <main> alone",
-      returned && seen.asked.at(-1) === "GET /smoke/written nav",
-      JSON.stringify({ returned, asked: seen.asked }),
+      returned && reads.join() === "GET /smoke/written nav",
+      JSON.stringify({ returned, reads, asked: seen.asked }),
     );
     await own.context().close();
   }
