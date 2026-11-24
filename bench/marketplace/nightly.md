@@ -267,7 +267,10 @@ passed, no failures, a clean tree at the plan's commit) and parts that did not r
 
 ## Finished Results
 
-1. Require exit 0, saved archive/checksum, deletion confirmation and report.mjs validation:
+1. Require exit 0, saved archive/checksum, deletion confirmation, a native replay that passes
+   (`node bench/marketplace/validate.mjs <folder> <round> <measured-full-commit>` on the verified
+   producer folder, or on each extracted `d<k>/` part of a split round; never on the merged
+   summary) and report.mjs validation:
    workload/round/commit match, clean before/after, raw qualification for the complete reserved
    candidate set, both browser gates and three full passes for every admitted app/profile
    (fewer only where the app's container stopped, below), no
@@ -349,7 +352,9 @@ passed, no failures, a clean tree at the plan's commit) and parts that did not r
 
 ## Comparisons And Issues
 
-Use only compatible v2 rounds, per source/page-locale/JSON and phase. State both commits/CPUs,
+Use only compatible v2 rounds, per source, timed profile (the rotating page profile and the
+neutral JSON one) and phase; per-locale rows only for compatible historical matrices that timed
+each locale. State both commits/CPUs,
 medians/ranges and unchanged-app median changes. No causal claim from one round. Consider:
 
 1. sat64 throughput or requests/CPU-second trailing unchanged apps' median change by more
@@ -388,7 +393,9 @@ Poll exact-head GitHub checks at most 60 seconds, up to 40 minutes. Merge with a
 only with every check SUCCESS, mergeable state, no unresolved independent-review findings,
 passed docs validation, and diff limited to marketplace/results/rN plus root README, CHANGELOG,
 docs/performance and marketplace README, with results/rN holding only the files
-[Finished Results](#finished-results) step 2 allows. Valid regressions do not block truthful results;
+[Finished Results](#finished-results) step 2 allows in every commit the change brings, not only at
+its tip: a raw receipt added and later removed still ships in history, so the branch is rebuilt
+without that commit rather than fixed by a later removal. Valid regressions do not block truthful results;
 incomplete/invalid data does. A harness, parity, cleanup or load-run failure leaves results
 partial, no success PR; a stage marked as an app outcome or as stopped does not.
 
