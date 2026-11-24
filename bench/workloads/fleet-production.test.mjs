@@ -826,8 +826,8 @@ test("continuation retries past a create that errored after its launch deadline 
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
   p.deps.inspect = () => { assert.fail("there is no collected evidence to replay"); };
   const args = (round) => [round, "--continuation-root", p.h.base, "--group", group];
-  const prepare = (round) => fleetMain([...args(round), "--prepare", "--commit", commit,
-    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
+  const prepare = (round, failures) => fleetMain([...args(round), "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps, failures);
   assert.equal(await prepare("r19"), 3);
   assert.equal(await fleetMain([...args("r19"), "--detach", "--print-approval"], p.deps), 3);
   const approval = p.output.at(-1).approvalSha256, fleet = readFleet(slot, "r19").manifest;
@@ -864,7 +864,9 @@ test("continuation retries past a create that errored after its launch deadline 
   resolve(); await assert.rejects(prepare("r20"), /peer supervision not confirmed|ESRCH/, "a retained launch lock is still custody");
   fs.unlinkSync(launchLock); fs.unlinkSync(operationLock);
   resolve(record.replace('"droplets":3', '"droplets":4'));
-  await assert.rejects(prepare("r20"), /unresolved custody/, "a changed receipt is not resolved");
+  const failures = new Map();
+  await assert.rejects(prepare("r20", failures), (error) => /unresolved custody: selected provider-errored create/.test(error.message)
+    && failures.get(error) === "continuation-admission; custody-replay", "a changed receipt is not resolved");
   resolve();
   let { report } = await inspectContinuation(p.h.base, p.deps);
   assert.deepEqual(report.groups.find((r) => r.group === group).attempts.map((r) => [r.round, r.outcome]), [["r19", "create-errored"]]);

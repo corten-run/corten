@@ -152,8 +152,38 @@ test("independent detach names invalid admission without leaking the exception",
   const f = await independentDetach(t);
   writeFileSync(f.index, "SYNTHETIC_PRIVATE_INDEX");
   assert.equal(await f.cli(), 2);
-  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-admission"]);
+  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-admission; custody-read"]);
   f.notDispatched();
+});
+
+test("independent detach distinguishes busy, unresolved and wrong-round admission without dispatch", async (t) => {
+  const f = await independentDetach(t);
+  const preview = [...f.approved.slice(0, -2), "--print-approval"];
+  const lock = join(f.p.h.base, ".continuation-operation.lock");
+  const owner = "SYNTHETIC_PRIVATE_OWNER";
+  const catalogCalls = f.p.catalogCalls.length, outputs = f.p.output.length;
+  writeFileSync(lock, owner);
+  assert.equal(await f.cli(preview), 2);
+  assert.equal(await f.cli(), 2);
+  assert.equal(readFileSync(lock, "utf8"), owner);
+  unlinkSync(lock);
+  assert.equal(await f.cli(["r22", ...preview.slice(1)]), 2);
+  f.notDispatched();
+  const incomplete = join(f.root, "mixed-production");
+  mkdirSync(incomplete);
+  assert.equal(await f.cli(preview), 2);
+  assert.deepEqual(f.errors, [
+    "fleet-operation-failed: continuation-admission; lock-busy",
+    "fleet-operation-failed: continuation-admission; lock-busy",
+    "fleet-operation-failed: continuation-admission; group-selection",
+    "fleet-operation-failed: continuation-admission; custody-unresolved",
+  ]);
+  assert.deepEqual(readdirSync(incomplete), []);
+  assert.deepEqual(readdirSync(f.root).sort(), ["fleet-r21.json", "mixed-production"]);
+  assert.equal(existsSync(lock), false);
+  assert.deepEqual(f.p.children, []);
+  assert.equal(f.p.catalogCalls.length, catalogCalls);
+  assert.equal(f.p.output.length, outputs);
 });
 
 test("independent prepare names its admission or reservation stage without exposing inputs", async (t) => {
@@ -165,7 +195,7 @@ test("independent prepare names its admission or reservation stage without expos
   assert.equal(await cli(), 2);
   writeFileSync(p.index, "[]"); p.flags.head = "b".repeat(40);
   assert.equal(await cli(), 2);
-  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission", "fleet-operation-failed: prepare-reservation"]);
+  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission; custody-read", "fleet-operation-failed: prepare-reservation"]);
   assert.equal(existsSync(p.old), false);
   assert.deepEqual(p.children, []);
 });
@@ -384,6 +414,11 @@ test("continuation refuses a live staged remaining owner before it writes its in
   writeFileSync(lock, JSON.stringify({ pid: process.pid, approvalSha256: remaining.at(-1) }));
   assert.ok(!existsSync(join(staged.h.base, "remaining-intent.json")));
   await assert.rejects(p.detach("r21", approval), /active batch/);
+  const errors = [], owner = readFileSync(lock, "utf8");
+  assert.equal(await fleetCli(["r21", "--continuation-root", p.h.base, "--group", p.group, "--detach", "--print-approval"],
+    { ...p.deps, writeError: (line) => errors.push(line) }), 2);
+  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission; batch-owner"]);
+  assert.equal(readFileSync(lock, "utf8"), owner);
   assert.ok(!existsSync(join(p.old, "launch-intent.json")));
   assert.deepEqual(p.children, []);
 
@@ -409,6 +444,32 @@ test("continuation refuses a live staged remaining owner before it writes its in
   p.flags.placement = () => { ownerGone = false; return syntheticPlacement(); };
   await assert.rejects(p.detach("r21", updated), /source lock changed/);
   assert.ok(!existsSync(join(p.old, "launch-intent.json")));
+  assert.deepEqual(p.children, []);
+});
+
+test("continuation distinguishes a failed selected-group replay without exposing its error", async (t) => {
+  const p = continuationFixture(t), retained = fixture(t), errors = [];
+  retained.seedLegacy();
+  const result = retained.finishGroup(p.group), archivePath = join(result.local, "results.tgz");
+  Object.assign(result.state, { evidenceOutcome: "failed", exitCode: 1 });
+  result.state.validation.status = "failed";
+  writeFileSync(join(result.evidence, "exit-code"), "1\n");
+  writeFileSync(join(result.evidence, "run.log"), "synthetic failed run\n");
+  const files = ["run.log", "exit-code", "host.txt", "campaign/.host-attempt.json", `campaign/${result.report.campaign}/plan.json`];
+  writeFileSync(archivePath, archive(files.map((name) => ({ name, body: readFileSync(join(result.evidence, name)) }))));
+  result.state.archiveSha256 = fileHash(archivePath); result.rehash();
+  writeFileSync(p.index, JSON.stringify([{ root: retained.h.base, checkout: retained.h.repo, round: "r21", commit, archives: {} }]));
+  const saved = treeHash(retained.h.base);
+  let inspected = 0;
+  p.deps.inspect = async () => { inspected++; throw new Error("SYNTHETIC_PRIVATE_REPLAY_FAILURE"); };
+  const prepare = ["r22", "--continuation-root", p.h.base, "--group", p.group, "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context];
+  assert.equal(await fleetCli(prepare, { ...p.deps, writeError: (line) => errors.push(line) }), 2);
+  assert.equal(inspected, 1);
+  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission; custody-replay"]);
+  assert.deepEqual(readdirSync(p.h.base), ["index.json"]);
+  assert.equal(treeHash(retained.h.base), saved);
+  assert.deepEqual(p.catalogCalls, []);
   assert.deepEqual(p.children, []);
 });
 
