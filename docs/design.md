@@ -2291,7 +2291,11 @@ rules something out.
     16,279.6); 2026-11-23, the same two at `2dc94faf2` (round 15's head) against main `14126d2a8`,
     which it merged (three rounds alternating the two builds, every run within 0.3 of the others):
     the `404` 1,180 more (19,155.6 against 17,975.6), the plain page 104 more (16,396.6 against
-    16,292.6).
+    16,292.6); 2026-11-23, the same two at `b5f02010b` (round 16's code) against main `6f1bbf055`,
+    which it merged, and round 15's head `d2f6c8731` (three rounds alternating the three builds,
+    every run within 0.1 of the others): the `404` 1,177 more (19,155.6 against 17,978.5; round
+    15's head 19,155.5), the plain page 126 more (16,421.6 against 16,295.6), 25 more than round
+    15's head (16,396.6), all of it `cache::settle` looking for round 16's `Personal` mark.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2917,6 +2921,20 @@ rules something out.
     measurement.
 
     Last checked: 2026-11-23, the plain page in `tests::cache::what_settling_a_page_costs` at
+    `b5f02010b` (round 16's code) against main `6f1bbf055`, which it merged, and round 15's head
+    `d2f6c8731` (three rounds alternating the three builds, every run within 3.6 of the others):
+    126 more (16,421.6 against 16,295.6), 25 more than round 15's head (16,396.6), all of it in
+    `cache::settle`, which looks for the `Personal` mark on every staged answer; 2026-11-23, the
+    MCP endpoint at `b5f02010b` against `6f1bbf055` the same way: a call the tool answers 167
+    more (27,735.0 against 27,568.0; round 15's head 165 more), the two failures round 15 marked
+    779 and 787 more (34,057.5 against 33,278.7; 31,831.4 against 31,044.2), and a tool's answer
+    from an endpoint whose `Tools::auth` found its caller, which round 16 marks `Personal`, 829
+    more (29,629.9 against 28,800.8; round 15's head 159 more), of which, by function against round
+    15's head, 670 is that mark: settling the answer as personal (`settle` +157,
+    `drop_cdn_caching` +137) and the answer's extensions map made, grown and dropped to hold it
+    (+92, +87, +58, and +134 in allocation), paid only by an endpoint that checks its caller.
+    These are instructions in process, not cycles, as below; 2026-11-23, the plain page in
+    `tests::cache::what_settling_a_page_costs` at
     `2dc94faf2` (round 15's head) against main `14126d2a8`, which it merged (three rounds
     alternating the two builds, every run within 0.1 of the others): 104 more (16,396.6 against
     16,292.6); 2026-11-23, an MCP tool call in `tests::cache::what_an_mcp_call_costs` (an app's MCP
