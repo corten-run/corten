@@ -652,7 +652,7 @@ establish a general ranking.
       11th of 30) above it in both readings, and the A/A resolved as above: a run whose A/A is
       not resolved establishes no win either. The reading measures the change across the plan's
       placements, not the release binary, which has a placement of its own: the unpadded build,
-      which no comparison the gate reads includes (the two runs so far read it only in a
+      which no comparison the gate reads includes (the runs so far read it only in a
       diagnostic).
       A run of K = 30 placements of R = 8 pairs, for the
       change and the A/A on `kept` and an A/A on `plain`, takes about 2 hours on a c-8 (the first
@@ -661,10 +661,15 @@ establish a general ranking.
       resolve, its placement medians spreading 1.97% where the other's spread 1.17%, and the
       Choice works out, on a model of its own, that an A/A of 30 placements fails one of its two
       readings more often than not at the first figure and about one time in five at the first
-      run's own. This rule sets no size. More placements narrow the bound wherever the spread
-      comes from, and a plan with an A/A already read on its setup and workload can take K from
-      that calculation at that A/A's spread; a plan with none has no such figure, and its A/A
-      may not resolve.
+      run's own. More placements narrow the bound wherever the spread comes from, and the plan
+      sizes K before the run as the Choice says: from an A/A already read on its setup and
+      workload, by the kit's sizing (the normal model, or a smoothed resample of that A/A's
+      medians when normality is rejected, whichever needs more placements), or, where none has
+      been read, from a pilot A/A read only for the spread of its placement medians, never with a
+      change's comparison, whose turns are no part of the gated run. The size is that setup and
+      workload's (the Choice's fourth run needed 69 placements on `old` at a standard deviation
+      of 2.05%, where the normal model said 91), not a constant, and the run's own A/A still
+      decides.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
