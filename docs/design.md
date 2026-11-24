@@ -9260,53 +9260,192 @@ rules something out.
     connection to one of them, and the connection's requests run on that core until it closes.
     It is still one app: one router, one store of kept answers, one set of tasks, one shutdown,
     and `App::max_connections` and the two timeouts hold for the whole server.
-    What it bought, on HttpArena's harness (a DigitalOcean c-48, the scratch entry
-    `bench/httparena/corten` with `ARENA_MODE`, best of three, requests a second; the default
-    runtime, then `per_core()`, then the same event loops written by hand in the app's `main`):
-    baseline 795,611, 830,353 and 859,000; limited-conn 669,386, 706,597 and 693,523; async, a
-    handler that sleeps, 551,657, 872,316 and 877,078, with its 99th percentile at 96.7 ms on the
-    default runtime and 59.7 ms with `per_core()`; json-comp 188,982, 196,908 and 191,671;
-    json-tls 518,189, 536,289 and 537,957; pipelined 1,812,081, 1,887,539 and 1,927,247. That is
-    one run of the matrix, and two runs of one image there differed by 1 to 2%, so the 4 to 6% on
-    the short answers is a small gain and the 58% where every request waits on a timer is the
-    large one; why the timer profile gains that much was not looked into.
-    Why not the default: it changes what a handler may do, and what it costs was measured on
-    one kind of load. `tokio::spawn` puts a task on the handler's core and no other core takes it
-    over, so work that computes for long holds up that core's other connections;
-    `tokio::task::block_in_place` panics, as on any single-threaded runtime; and a connection is
-    never moved once accepted, so a proxy's few busy keep-alive connections can land on one core
-    while others idle. HttpArena opens hundreds of connections from one client; an app behind a
-    proxy, or one whose handlers wait on a pooled database, was not measured either way. A
-    default has to be right for those ([Values](../README.md#values), good defaults), and this
-    one is right for a shape of load that is not shown to be the common one.
+
+    How it was measured. Twice, both times as requests a second from HttpArena's load generator
+    over loopback on a DigitalOcean c-48, against the scratch entry `bench/httparena/corten`,
+    which `ARENA_MODE` runs on the default runtime or with `per_core()`. The first run was
+    HttpArena's own profiles by its scripts at `17b7b4c4b`, one run of the matrix, best of three,
+    the third number the same event loops written by hand in the app's `main`: baseline 795,611,
+    830,353 and 859,000; limited-conn 669,386, 706,597 and 693,523; async, a handler that sleeps,
+    551,657, 872,316 and 877,078, with its 99th percentile at 96.7 ms on the default runtime and
+    59.7 ms with `per_core()`; json-comp 188,982, 196,908 and 191,671; json-tls 518,189, 536,289
+    and 537,957; pipelined 1,812,081, 1,887,539 and 1,927,247. Two runs of one image there
+    differed by 1 to 2%, so that is 4 to 6% on the short answers and 58% where every request
+    waits on a timer. The second run, on another c-48 (a Xeon Platinum 8280, the server held to 24
+    of its cores and the load to the other 24), looked for where the 58% comes from and measured
+    loads the first left out. Every number below is from it: the two profiles again on the
+    proposal's code as it is (`1649b2a80`), and the rest on that code under an entry with more
+    routes and settings (`abfc550a3`, built with `--cfg tokio_unstable` and frame pointers).
+
+    The 58% is what tokio's timer costs the multi-threaded runtime, which an event loop per core
+    does not pay, and not a gain of serving a core at a time. It came back on the second host: 546,462 and 544,474 a second on the default runtime against 873,472 and 852,417
+    with `per_core()`, best of three in two passes with the order turned. The default runtime was
+    not short of CPU there. Over 3 s of a 30 s run its process had 17.1 of its 24 cores and left
+    a CPU 37,000 times a second, where `per_core()` had 24.0 and left one 207 times a second, and
+    a request took the same cycles on both, 94,200 and 92,600 (`perf stat`'s count over the
+    requests answered at the run's rate). Each of its 24 workers was on a CPU 81% of the time.
+    Of 50,235 departures from a CPU sampled in one second, 69.7% waited for the mutex around the
+    runtime's one timer wheel, which a `tokio::time::sleep` takes when it is first polled and
+    again when it is dropped (33.6% and 36.0%), and 28.3% for the mutex around the queue the
+    workers share. No setting a stable tokio has gave it back: with the LIFO slot off,
+    `global_queue_interval` or `event_interval` at 7, 31 or 255, or 4,096 I/O events a tick, the
+    profile ran from 4.1% under the default to 2.5% over it, and with 8, 12, 16, 20 or 48 workers
+    6 to 41% under (best of three, one pass). tokio's alternative timer, a wheel for each worker
+    that needs `--cfg tokio_unstable`, gave back most of it: 749,920 to 759,294 a second in four
+    passes (two of three 10 s runs, one of 30 s runs, one of two runs at `019d15fa1`) where the
+    default gave 542,907 to 545,942 and `per_core()` 813,218 to 876,160, which is 63 to 79% of the
+    gap pass by pass, with a longer tail than either (a 99th percentile of 122 to 125 ms, against
+    97 to 99 ms and 39 to 52 ms). The framework's own share is one timer. The profile's route
+    runs outside the stages, where Corten makes no tokio timer; on a staged route the request
+    deadline makes one the first time the handler waits and drops it when the request ends. On a
+    staged route that sleeps (32,000 connections, best of three, one pass) that timer cost the
+    default runtime 17% (375,623 a second with the deadline and 452,471 without), the alternative
+    timer 3% (578,296 and 595,688) and `per_core()` under 1% (578,487 and 582,374). That cost is
+    the default path's to remove whichever way this proposal goes. So a handler that sleeps is
+    not counted as a reason for the setting: on a stable tokio `per_core()` is the one thing
+    measured here that gives such a handler the higher number, but the cause is a lock in
+    tokio's timer, tokio has an answer to it that an app can choose in its own `main` and build,
+    and the framework's part of it is the deadline's.
+
+    What stands as reasons, all from the second host on the entry with more routes: more
+    requests a second while few connections are busy, a shorter tail, a few percent at thousands
+    of connections, and pooled I/O when the app keeps a pool for each core.
+    Few busy connections (the baseline profile's three requests; the median of four runs at 8,
+    16 and 24 connections and of five runs in each of two passes at 64 and 256; the default
+    runtime, then `per_core()`): 223,609 and 242,564 at 8 (+8%); 388,218 and 441,183 at 16
+    (+14%); 363,819 and 424,681 at 24 (+17%); 474,822 and 734,658, then 454,735 and 738,434, at 64
+    (+55% and +62%); 801,154 and 908,415, then 814,189 and 898,935, at 256 (+13% and +10%); and
+    the JSON answer at 64, 402,438 and 517,391 (+29%, four runs). At 64 the default runtime's 24
+    workers were each on a CPU 63 to 65% of the time and left one 86,000 times a second between
+    them: 88% of the sampled departures had no task on the stack (a worker with nothing to run,
+    going to sleep) and 11% waited for the timer's mutex, which the request deadline takes while
+    a POST's body arrives. The alternative timer did not help there (466,495 at 64 and 807,877
+    at 256).
+    The tail (the 99th percentile of each pass's best run, the default runtime first): 12.0 to
+    12.4 ms against 9.2 to 9.5 ms on baseline at 4,096 connections (six passes), 231.6 against
+    81.2 ms on it at 32,000, 16.1 against 9.0 ms on the JSON answer at 4,096, and the 97 to 99
+    against 39 to 52 ms above; with few connections 62 against 53 µs at 8, 75 against 63 at 16
+    and 256 to 294 against 193 to 238 at 64, about the same at 256 (690 and 692 against 677 and
+    637) and the other way at 24 (116 against 123).
+    Thousands of connections that do not wait (best of three): baseline at 4,096 gained 3.1 to
+    6.9% in those six passes, the JSON answer at 4,096 gained 3.7%, and the sleeping route asked
+    to sleep for no time at 32,000 gained 6.3% (929,614 and 988,367); baseline at 32,000 gained
+    nothing (703,502 and 699,340).
+    Pooled I/O: a handler that waits on one of 4,032 keep-alive connections to a service on the
+    same host that waits 1 ms and answers eight bytes, which stood in for a database (4,096
+    client connections, the service on 12 of the other cores and the load on 12, the server's
+    CPU the limit at 22 to 23 of its 24 cores, best of three in each of two passes with the
+    order turned). On a route outside the stages the default runtime
+    gave 523,210 and 522,397 a second with a 99th percentile of 12.1 ms. `per_core()` with one
+    pool whose connections the handlers open as they need them gave 536,496 and 538,830 (+2.5%
+    and +3.1%; 9.9 and 10.1 ms), and with a pool for each core, 168 connections each, 577,549
+    and 575,652 (+10%; 8.8 and 9.2 ms). On a staged route the three gave 428,746 and 427,441,
+    then 448,758 and 448,464 (+4.7% and +4.9%), then 485,993 and 482,743 (+13%). With the request
+    deadline off, the default runtime gave 444,402 and 454,819 and the shared pool under
+    `per_core()` 456,751 and 455,155 (+2.8% and +0.1%), so with a shared pool some of the staged
+    route's gain, in the second pass nearly all of it, is the deadline's timer again.
+
+    What it costs, measured on the same host. Cores are uneven while connections are few: the
+    system gave 24 connections to 15 of the 24 event loops (nine had none and one had four), 64
+    to 22 or 23 of them (none to seven each), and 256, 4,096 and 32,000 to all, at 4 to 16, 153
+    to 201 and 1,255 to 1,408 each (counted once each, twice at 64). In the ten runs at 64, up to
+    two cores did nothing and one to seven were 55 to 71% busy while the rest were at 96%, where
+    the default runtime had every core at 56 to 66%. It was still the faster in those runs, with
+    a handler that does little; a few connections that each need much of a core, where the
+    spread would hold it back, were not measured.
+    It takes more CPU a request while the server is far from full and the pool is shared. With
+    a pool of 72 connections the limit (32,000 requests a second in every mode, the server on 2
+    to 3 of its 24 cores; three runs, one pass) the server's CPU a request was 66 µs on the
+    default runtime and 79 to 87 µs with `per_core()` (+19 to +33%), and 75 to 76 against 91 to
+    97 µs on the staged route; with a pool of 1,008 the limit (about 310,000 to 316,000 a
+    second) it was 45 to 46 against 51 µs outside the stages (+13%).
+    A pool opened in `main` before `serve`, where an app opens one today, has its sockets on the
+    runtime `main` runs on, which serves no connection under `per_core()`. With the 4,032
+    opened that way the 99th percentile was 16.9 and 16.6 ms, where the handlers opening them
+    gave 9.9 and 10.1 ms and the default runtime 12.1 ms, at 530,701 and 515,857 a second (+1.4%
+    and -1.3% on the default); on the staged route 18.9 and 19.0 ms against 12.1 and 11.8 ms and
+    the default's 14.7 and 15.0 ms. The entry's `main` runs on a single-threaded runtime under
+    `per_core()`; a `main` on the multi-threaded one was not measured.
+    And the pooled gain worth having needs a pool for each core, which divides the pool. With
+    the pool the limit (one pass, three runs), 42 connections a core gave 287,395 to 290,858 a
+    second where the default runtime's 1,008 gave 312,630 to 316,301 (-8%), and three a core gave
+    the same 32,000 as every mode with a 99th percentile of 145 to 158 ms where the others had
+    130 to 134 ms. In that pass, with the pool of 1,008, `per_core()` with the shared pool gave
+    375,994 to 381,263 on the staged route where it gave 309,843 to 311,372 outside the stages
+    and the default runtime 313,856 to 315,135; that was not explained or run again, and nothing
+    here rests on it.
+
+    Why not the default: it changes what a handler may do, it has the costs above, and it was
+    measured on one kind of load. `tokio::spawn` puts a task on the handler's core and no other
+    core takes it over, so work that computes for long holds up that core's other connections;
+    `tokio::task::block_in_place` panics, as on any single-threaded runtime; a connection is
+    never moved once accepted; and a pool opened in `main` lengthens the tail. Every run was a
+    closed loop, each connection sending its next request when the last is answered, from a
+    client on the server's own host over loopback, to a handler that does little. Not measured
+    either way: a few connections whose handlers each use much of a core; a database (the
+    service was eight bytes echoed after a sleep); a proxy or a database across a network; a
+    load that arrives at its own rate; HTTPS and HttpArena's other profiles on the second host,
+    and the event loops written by hand there; anything off Linux. A default has to be right for
+    those ([Values](../README.md#values), good defaults), and this one is shown faster on the
+    loads above, with a handler change and a pool rule an app has to know about.
     Why a setting and not the app's own `main`: written by hand, a listener per core on each
     address, the connection limit across cores and one shutdown are each the app's to get
     right, and the setting keeps one way to serve.
     Left open for the maintainer, with what the prototype found: whether it should be the
     default after all; and whether the system should spread connections (as built: Linux only,
-    by address and port, not by load) or one acceptor should deal them to the cores in turn
-    (every system, even counts, a hand-off per connection; not built or measured). Not done in
-    the prototype: listeners the app brings for HTTPS are dealt one to a core, so the documented
-    two-listener setup serves on two cores; each core keeps a blocking pool of its own; under
-    `max_connections` each core's listener may hold one accepted connection that waits for a
-    place; nothing changes off Linux; and no guide says any of it yet.
+    by address and port, not by load, with the uneven cores above) or one acceptor should deal
+    them to the cores in turn (every system, even counts, a hand-off per connection; not built
+    or measured). Not done in the prototype: listeners the app brings for HTTPS are still dealt
+    one to a core, since only `serve` binds one per core and `corten::listeners` returns one for
+    each address as before, so the documented `serve_wrapped(corten::listeners(3000).await?, ..)`
+    serves on two cores and logs a warning that says so (read at `1649b2a80`); each core keeps
+    a blocking pool of its own; under `max_connections` each core's listener may hold one
+    accepted connection that waits for a place; nothing changes off Linux; the scratch entry is
+    not laid out as the repository's benches are; and there is no changelog note. The guide
+    says what the setting does, what it costs and where a pool is opened
+    ([A core at a time](guide/app.md#a-core-at-a-time)).
 
-    Stands on: measured (the matrix above, one run, best of three a profile; the prototype's
-    tests on Linux: a connection served on the core that accepted it, `max_connections` held
-    for the whole server, an unfinished head closed on any core, one shutdown across the cores); reasoned
-    (a single-threaded loop takes no task from another, so the handler changes above follow from
-    tokio's documented behavior and were not each run); bet (an app with many connections and
-    handlers that wait gains what the async profile shows, and an app behind a proxy with few
-    connections loses evenness; neither app was measured); value (good defaults with an override,
-    and one way to serve, ahead of the last 4 to 6% on short answers for an app that did not ask).
+    Stands on: measured (HttpArena's profiles at `17b7b4c4b`, one run of the matrix, best of
+    three a profile; on the second host at `1649b2a80` and `abfc550a3`: the sleeping profile in
+    two more passes with the order turned, its `perf stat`, per-thread times and sampled
+    departures once in one 30 s run a mode, the runtime's settings in one pass and the
+    alternative timer in four, the deadline's timer in one pass, few connections in one or two
+    passes of four or five runs, the pooled service in two passes with the CPU the limit and one
+    with the pool the limit, the connections on each event loop counted once; the prototype's
+    tests on Linux: a connection served on the core that accepted it, `max_connections` held for
+    the whole server, an unfinished head closed on any core, one shutdown across the cores);
+    platform (tokio 1.54.1: the multi-threaded runtime keeps one timer wheel behind one mutex,
+    which a sleep takes to register and to cancel, and the alternative timer needs
+    `tokio_unstable`; a single-threaded runtime takes no task from another, and a socket is read
+    by the runtime that opened it); reasoned (the handler changes follow from that and were not
+    each run; the workers' shared queue is contended because the worker that fires the timers
+    wakes more tasks than its own queue of 256 holds, read in tokio's source and seen again with
+    the wake coming from a thread of the app's own, not shown for the timer alone; the HTTPS
+    listeners, read in `serve` and `listeners`); bet (a database's pool behaves as the pool of
+    plain connections to a service that sleeps did; an app behind a proxy on another host, whose
+    connections do not each send the moment they are answered, keeps what the closed loop over
+    loopback shows; an app with a few connections that each need much of a core loses to the
+    uneven spread; none of the three was measured); value (good defaults with an override, and
+    one way to serve, ahead of 3 to 7% on short answers at thousands of connections and 8 to 62%
+    at 8 to 256 busy ones for an app that did not ask).
 
-    Revisit when: the maintainer settles the two open questions; or an app behind a proxy, or one
-    with a pooled database, is measured both ways and the default is the slower; or tokio's
-    multi-threaded runtime wakes timers and sockets on the thread that owns them, which removes
-    most of what this buys; or an app needs it off Linux.
+    Revisit when: the maintainer settles the two open questions; or a few busy connections whose
+    handlers each use much of a core, a database's pool, or a proxy or a database on another
+    host is measured both ways (the first may show `per_core()` the slower; the others show
+    whether the stand-in's numbers hold); or the request deadline stops making a tokio timer for
+    each request that waits, whose cost on the default runtime is in the staged and
+    few-connection numbers above, so they are taken again; or tokio's multi-threaded runtime
+    serves 8 to 256 busy connections within a few percent of an event loop per core, which takes
+    away the largest reason left; or an app that ends TLS itself, or one off Linux, needs it.
 
-    Last checked: 2026-11-23, the matrix above at `17b7b4c4b` on a c-48 in sfo3 (Ubuntu 24.04,
-    Linux 7.0), with HttpArena's scripts as they were that day.
+    Last checked: 2026-11-23, HttpArena's profiles at `17b7b4c4b` on a c-48 in sfo3 (Ubuntu
+    24.04, Linux 7.0), with HttpArena's scripts as they were that day; 2026-11-24, everything
+    from the second host, at `1649b2a80`, `abfc550a3` and, for one pass of the alternative
+    timer and the counts of connections, `019d15fa1`, on a c-48 with a Xeon Platinum 8280
+    (Linux 7.0.0-43, rustc 1.100.0, tokio 1.54.1, hyper 1.13.0, mio 1.2.5, the load generator
+    and request files of `MDA2AV/HttpArena@3eb74a7`, gcannon 0.10.0), with tokio 1.54.1's source
+    and the prototype's `serve` read the same day, and the scripts, every result and the
+    reports of where threads waited under the tag `evidence/per-core-cause` (`9bd7d83f5`).
 
 ## Rules
 
