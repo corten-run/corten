@@ -1,7 +1,6 @@
 // Marketplace-v2: official r17 onward; wN permits explicit development subsets/checks.
 // node bench/marketplace/run.mjs r17 --build --passes 3
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { hostname, platform, release } from "node:os";
@@ -11,6 +10,7 @@ import { afterPhase, cpuSettings, imageProvenance, inventory, parseArgs, passPla
 import { locales, workload } from "./contract.mjs";
 import { admitted, boundedFeatureProfile, boundedQualificationSettings, validateActiveQualification } from "./feature-contract.mjs";
 import { validateMarketplace } from "./records.mjs";
+import { commandRunner } from "../catalog/output.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
 import { containerReceipt, evidenceVersion, imageReceipt, nodeImage, sourceTree } from "./raw-contract.mjs";
 import { retainLoadEvidence } from "./load-evidence.mjs";
@@ -43,46 +43,8 @@ const retain = (path, value) => writeFileSync(path, JSON.stringify(value, null, 
 const receipt = async (name) => containerReceipt(await inspect(name));
 let tree;
 let interrupted = false;
-const children = new Set();
-// This stops command clients, not browser descendants. Browsers run ONLY in
-// owned containers, which finally removes even when their docker client exited.
-function killCommand(child) {
-  if (process.platform === "win32" && child.pid) {
-    // Node's Windows kill terminates only the child; the check's browser would survive.
-    const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", cwd: repo });
-    killer.on("error", () => child.kill("SIGKILL"));
-  } else if (child.pid) {
-    try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
-  }
-  const force = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    if (process.platform !== "win32" && child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); } }
-    else child.kill("SIGKILL");
-  }, 2000);
-  force.unref();
-}
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { interrupted = true; for (const child of children) killCommand(child); });
-async function command(binary, args, { timeout = 30000, file, cleanup = false } = {}) {
-  if (interrupted && !cleanup) throw new Error("marketplace run interrupted");
-  const child = spawn(binary, args, { cwd: repo, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-  children.add(child);
-  let output = "";
-  let error = "";
-  let killed = false;
-  const keep = (chunk, stderr) => {
-    const value = chunk.toString();
-    if (file) appendFileSync(file, value);
-    if (stderr) error = (error + value).slice(-65536); else output = (output + value).slice(-8 * 1024 * 1024);
-  };
-  child.stdout.on("data", (c) => keep(c, false));
-  child.stderr.on("data", (c) => keep(c, true));
-  const timer = setTimeout(() => { killed = true; killCommand(child); }, timeout);
-  try {
-    const code = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
-    if (code !== 0 || killed || (interrupted && !cleanup)) throw new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${error || output}`);
-    return output.trim();
-  } finally { clearTimeout(timer); children.delete(child); }
-}
+const { command, interrupt } = commandRunner({ cwd: repo, interrupted: () => interrupted, interruptMessage: "marketplace run interrupted" });
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { interrupted = true; interrupt(); });
 const docker = (args, opts) => command("docker", args, opts);
 const inspect = async (name, cleanup = false) => JSON.parse(await docker(["inspect", name], { cleanup }))[0];
 // The app's container stopped during a load phase: its outcome under the profile, not a failure.

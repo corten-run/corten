@@ -27,7 +27,7 @@ let created, clock = 0;
 const censusModes = ["shape", "total", "id", "duplicate", "links", "pages", "next", "count", "bounds"].map((predicate) => `list-${predicate}`);
 const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create", "withhold-close", "reflect", "post-invalid-action-id",
   "post-link-shape", "post-link-count", "post-link-id", "post-link-rel", "post-link-href-variant", "post-link-href-type", "arbitrary-create-hints",
-  "first-action-http-failure", "zero-resource-create", "first-action-invalid", "pending-create", "create-http-failure", "list-converges", "get-http-failure", ...censusModes].includes(mode) ? async ({ method, path, body, credential }) => {
+  "first-action-http-failure", "zero-resource-create", "first-action-invalid", "first-action-errored", "pending-create", "create-http-failure", "list-converges", "get-http-failure", ...censusModes].includes(mode) ? async ({ method, path, body, credential }) => {
   state.requests++; state.calls.push({ method, path, originalCredential: credential === "SYNTHETIC_ONLY_DIAGNOSTIC_CREDENTIAL" }); save();
   if (mode === "hang" || mode === "hang-create" && method === "POST") return new Promise(() => {});
   if (mode === "reflect") return { status: 200, value: { account: { uuid: credential } } };
@@ -71,6 +71,10 @@ const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create"
     return response;
   }
   if (mode === "first-action-http-failure") return { status: 403, value: { raw: credential } };
+  if (mode === "first-action-errored") {
+    created = undefined; // The provider failed the create and holds no droplet.
+    return { status: 200, value: { action: { id: 456, type: "create", resource_type: "droplet", resource_id: 123, status: "errored" } } };
+  }
   if (mode === "first-action-invalid") return { status: 200, value: { action: { id: 456, type: credential, resource_type: "droplet", resource_id: 123, status: "completed" } } };
   if (mode === "pending-create") return { status: 200, value: { action: { id: 456, type: "create", resource_type: "droplet", resource_id: 0, status: "in-progress" } } };
   if (mode === "zero-resource-create" && state.calls.filter((call) => call.path === "/v2/actions/456").length === 1)

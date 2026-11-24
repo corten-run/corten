@@ -6,7 +6,7 @@ import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { controlEnvironment } from "./cloud-transport.mjs";
-import { providerDiagnostic, unsentDelete } from "./cloud-options.mjs";
+import { erroredCreate, pendingCreate, providerDiagnostic, unsentDelete } from "./cloud-options.mjs";
 import { providerCreateHost } from "./cloud-contract.mjs";
 
 const directory = dirname(fileURLToPath(import.meta.url));
@@ -73,23 +73,30 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
         terminal = { error, last: slot.last, deadline: slot.deadline }; closed = true;
         slot.reject(error); return;
       }
-      if (!pending || !keys(message, ["schema", "sequence", "nonce", "ok", "result"]) || message.schema !== "cloud-provider-result/v1"
+      // Only an unsettled, permitted create may name the IDs its accepted POST returned.
+      const posted = Object.hasOwn(message ?? {}, "pendingCreate") ? pendingCreate(message.pendingCreate) : undefined;
+      if (!pending || !(keys(message, ["schema", "sequence", "nonce", "ok", "result"])
+          || posted && message.ok === false && pending.create && pending.allowFail && keys(message, ["schema", "sequence", "nonce", "ok", "result", "pendingCreate"]))
+        || message.schema !== "cloud-provider-result/v1"
         || message.sequence !== pending.sequence || message.nonce !== nonce || typeof message.ok !== "boolean") { fail(); return; }
       const slot = pending; pending = undefined;
       if (!message.ok) {
         const value = providerDiagnostic(message.result);
         if (message.result !== null && !value) { fail(); slot.reject(uncertain()); return; }
-        diagnostic ??= value; failed = true; slot.reject(uncertain()); return;
+        diagnostic ??= value; failed = true; slot.reject(Object.assign(uncertain(), posted ? { pendingCreate: posted } : {})); return;
       }
       const value = message.result;
       const permittedDiagnostic = value?.status === 1 ? providerDiagnostic(value.providerDiagnostic) : undefined;
+      // Only a permitted create failure may carry output: the exact errored action/droplet IDs.
+      const errored = permittedDiagnostic?.code === "create-action-errored" && slot.create && slot.allowFail ? erroredCreate(value) : undefined;
       if (slot.sequence === 0) {
         if (value !== "ready") { fail(); slot.reject(uncertain()); } else slot.resolve();
       } else if (slot.fencedDelete && slot.allowFail && keys(value, ["status", "stdout", "stderr", "deleteNotDispatched"])
         && value.status === 1 && value.stdout === "" && value.stderr === "" && value.deleteNotDispatched === true) {
         slot.resolve(value);
       } else if (!(keys(value, ["status", "stdout", "stderr"])
-        || permittedDiagnostic && keys(value, ["status", "stdout", "stderr", "providerDiagnostic"]) && value.stdout === "") || ![0, 1].includes(value.status)
+        || permittedDiagnostic && keys(value, ["status", "stdout", "stderr", "providerDiagnostic"])
+          && (errored || value.stdout === "" && permittedDiagnostic.code !== "create-action-errored")) || ![0, 1].includes(value.status)
         || value.status === 1 && (!slot.allowFail || slot.get && !(permittedDiagnostic?.code === "get-http" && permittedDiagnostic.httpStatus === 404))
         || typeof value.stdout !== "string" || Buffer.byteLength(value.stdout) > 16 * 1024 ** 2 || value.stderr !== "") {
         fail(); slot.reject(uncertain());
@@ -150,15 +157,17 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
       const account = JSON.stringify(args.slice(0, -2)) === JSON.stringify(["account", "get", "--output", "json"])
         && args.at(-2) === "--context" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(args.at(-1));
       const started = Date.now();
-      const result = new Promise((resolve, reject) => { pending = { sequence: id, resolve, reject, allowFail, get: args[2] === "get", account,
+      const result = new Promise((resolve, reject) => { pending = { sequence: id, resolve, reject, allowFail, get: args[2] === "get", create: args[2] === "create", account,
         fencedDelete: args[2] === "delete" && deleteProofExpiresAtMs !== undefined, last: started, deadline: started + timeout }; });
       child.send({ schema: "cloud-provider-action/v1", sequence: id, args, timeout, allowFail,
         ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }, (error) => { if (error) fail(); });
       return await bounded(result, timeout + 1000);
     } catch (error) {
-      await close();
+      // Teardown keeps the posted create's IDs with whichever uncertainty is reported.
+      const posted = pendingCreate(error?.pendingCreate), attach = (value) => posted ? Object.assign(value, { pendingCreate: posted }) : value;
+      try { await close(); } catch (closeError) { throw attach(closeError); }
       if (terminal?.error === error && !failed && !interrupted()) throw error;
-      throw uncertain();
+      throw attach(uncertain());
     }
   };
   run.close = close;

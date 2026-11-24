@@ -10,7 +10,7 @@ import { livePeerLease, streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
-import { readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyFailedNativeRetirement,
+import { createContradiction, createErroredCustody, readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
   verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
@@ -350,6 +350,44 @@ export function recheckCollectedGroup(fleet, snapshot) {
   const { group, ...hashes } = snapshot;
   assert.deepEqual(evidenceSnapshot(job), hashes, "group-evidence-changed");
 }
+// A prior provider-errored attempt of the admitted group, rechecked at the successor's
+// final create gate: the same manifest and state bytes, its receipt, and no launch,
+// operation or recheck lock. An old attempt that regained custody refuses the create.
+export function recheckCreateErroredAttempt(root, row) {
+  assert.equal(dirname(row.root), root, "create failure belongs to another continuation");
+  const fleet = readFleet(row.root, row.round, { priorSelection: true });
+  assert.ok(fleet.manifestSha256 === row.manifestSha256 && fleet.manifest.single?.group === row.group, "prior create failure changed");
+  const saved = readGroup(fleet, row.group);
+  assert.ok(saved.outcome === "available" && saved.stateSha256 === row.stateSha256, "prior create failure changed or holds custody");
+  createErroredCustody(saved.local);
+  verifyCreateErrored(saved.local, saved.state);
+  assert.equal(saved.state.createErrored.evidenceSha256, row.receiptSha256, "prior create failure receipt changed");
+  assert.ok(saved.state.createErrored.dropletId === row.dropletId && saved.state.provider.accountId === row.accountId, "prior create failure changed");
+}
+// A posted create is contradicted by a recorded reappearance, a witness or reappearance stage
+// beside it, or a contradicted bind (retired or not).
+export const postedContradiction = (saved) => !!saved.state?.createErrored?.reappeared || !!saved.state?.createContradicted
+  || createContradiction(saved.local);
+// Every earlier provider-errored attempt on this account, in any group, is rechecked at the
+// successor's final gate against its admission snapshot, separately from the selected group's
+// retry eligibility: the same manifest, state bytes and custody, no contradiction recorded
+// since, and none still unretired. A retired contradicted attempt stays fenced by its ID in the
+// census; it does not block a create. This cannot make the check atomic with the provider.
+export function recheckPostedCreate(row) {
+  const changed = "an earlier provider-errored create on this account changed, took custody or was contradicted before this create;"
+    + " never create beside it; preserve reservation";
+  const fleet = readFleet(row.root, row.round, { priorSelection: true });
+  assert.ok(fleet.manifestSha256 === row.manifestSha256 && fleet.manifest.provider.accountId === row.accountId, changed);
+  const saved = readGroup(fleet, row.group);
+  assert.ok(saved.outcome === row.outcome && saved.stateSha256 === row.stateSha256, changed);
+  // A launch, operation or recheck lock beside the attempt is custody, as for the selected group's own attempt.
+  try { createErroredCustody(saved.local); } catch (cause) { throw new Error(changed, { cause }); }
+  assert.equal((saved.state.createErrored ?? saved.state.createContradicted)?.dropletId, row.dropletId, changed);
+  const contradicted = postedContradiction(saved);
+  assert.equal(contradicted, row.contradicted, changed);
+  assert.ok(!contradicted || saved.state.status === "retired" && !!saved.state.destroyedAt,
+    "an earlier provider-errored create on this account is contradicted and not retired; never create beside it; preserve reservation");
+}
 // Launch custody is ordered by the exact index, separate from replay evidence.
 // In particular the worker must see a newly acquired staged batch lock even
 // after the independent parent has consumed its own launch intent.
@@ -469,6 +507,13 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
       const historicalLocks = historicalChildLocks(job, processStart);
       const retained = retainedCandidate && (s.destroyedAt ? !!historicalLocks : !retainedInvalidOwner(job.local, s));
       if (job.outcome !== "available" && !retained) { add({ group, outcome: job.outcome }); continue; }
+      if (s.createErrored) {
+        // Resolved only with its receipt and with no launch, operation or recheck lock left.
+        createErroredCustody(job.local);
+        verifyCreateErrored(job.local, s);
+        assert.equal(digest(regular(join(job.local, "state.json"), 1024 * 1024)), job.stateSha256, "create failure changed during verification");
+        add({ group, outcome: "create-errored" }); continue;
+      }
       if (s.status === "retired") {
         if (s.retirement.kind === "native-failed") {
           if (present(join(job.local, "stream-recovery.lock"))) { add({ group, outcome: "busy" }); continue; }
