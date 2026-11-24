@@ -2061,12 +2061,13 @@ where
             };
             let service = hyper_util::service::TowerToHyperService::new(data.service(connection));
             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
-            let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
+            // With the timer its requests' deadlines wait on, kept from one to the next.
+            let mut conn = std::pin::pin!(crate::deadline::Keeps::new(http.serve_connection(io, service).with_upgrades()));
             let closing = tokio::select! {
                 _ = conn.as_mut() => return,
                 closing = stop.wait_for(Option::is_some) => closing.ok().and_then(|closing| *closing),
             };
-            conn.as_mut().graceful_shutdown();
+            conn.as_mut().conn().graceful_shutdown();
             // The server gone without a shutdown: close now.
             let Some(closing) = closing else {
                 let _ = tokio::time::timeout_at(tokio::time::Instant::now(), conn.as_mut()).await;

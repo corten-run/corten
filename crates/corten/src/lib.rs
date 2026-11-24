@@ -506,6 +506,7 @@ pub mod caller;
 mod client;
 #[cfg(feature = "compress")]
 pub mod compress;
+mod deadline;
 pub mod extract;
 pub mod form;
 mod handler;
