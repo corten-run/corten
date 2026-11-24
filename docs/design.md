@@ -7369,12 +7369,14 @@ rules something out.
     it: a copy that has exited by then is not taken for the listener, and a program that takes
     the port between the build's last look and the copy's own bind is, a window the build
     cannot close without knowing the copy's sockets. The copy cannot bind then, and one that
-    has exited by the time the command ends stops the build. One still starting when the
-    command ends is stopped as any copy is, whatever status it then leaves with, since an app
+    has exited by the time the command ends stops the build. One still running when the
+    command ends (still starting, or one that does not exit when it cannot bind) is stopped as
+    any copy is, whatever status it then leaves with, since an app
     may exit non-zero on `SIGTERM` by design; so the build looks at a named port once more
     after the copy has exited, and stops when something listens there, which is not the copy.
     One timing is left: another program takes the named port in that window and answers the
-    wait and the command, the copy fails to bind only after the command has ended, and that
+    wait and the command, the copy is still running when the command ends (it fails to bind
+    only after that, or stays up without the port), and that
     program has stopped listening by the time the copy has exited. The build then succeeds,
     and its release is built from a profile of a copy that served nothing. The look after the
     copy has a cost of its own: a program that begins to listen on the port in the moment
@@ -7517,7 +7519,8 @@ rules something out.
     held, was told of the build that is running, and a listener that took the named port once
     the copy had started, the copy still starting when its command ended, answered the wait
     and the command and stopped the build at the look after the copy had exited, where the
-    same build without that look ended with its release built, one run of each; by a throwaway
+    same build without that look ended with its release built, the tests in three runs and
+    the build without the look in one; by a throwaway
     test, a standard-library listener that accepted nothing answered 129 looks and not the
     130th, which then read the port as free, in each of two runs).
 

@@ -422,13 +422,14 @@ socket accepted: a copy that has exited is not taken for it, but a program that 
 in the moment between the build's last look and the copy's own bind is, and the command's
 requests then go to that program. The copy cannot bind the port then. A copy that has exited
 by the time the command ends fails the build, as one that exited while the command ran. One
-that is still starting when the command ends is stopped like any other, and may exit with a
-profile of having served nothing, so with `--port` the build looks at the port once more after
-the copy has exited: what listens there then is not the copy, and the build stops, saying so.
-One timing is left. Another program takes the named port in that moment and answers the wait
-and the command, the copy fails to bind only after the command has ended, and that program has
-stopped listening by the time the copy has exited. The build then succeeds, and the release is
-built from a profile of a copy that served nothing. The look after the copy can also stop a
+that is still running when the command ends (it is still starting, or it does not exit when it
+cannot bind) is stopped like any other, and may exit with a profile of having served nothing,
+so with `--port` the build looks at the port once more after the copy has exited: what listens
+there then is not the copy, and the build stops, saying so. One timing is left. Another program
+takes the named port in that moment and answers the wait and the command, the copy is still
+running when the command ends (it fails to bind only after that, or stays up without the
+port), and that program has stopped listening by the time the copy has exited. The build then
+succeeds, and the release is built from a profile of a copy that served nothing. The look after the copy can also stop a
 build it should not: a program that begins to listen on the port in the moment after the copy
 left it (a supervisor starting the app again) is taken for one that was there before.
 
