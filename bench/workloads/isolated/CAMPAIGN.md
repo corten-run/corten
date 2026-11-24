@@ -367,7 +367,7 @@ create and remove their own target.
 `host-participant-linux.test.mjs` is a separate actual-kernel fixture, not a portable test
 or native-browser qualification. Its caller owns a fresh long-lived Node Docker container
 with one CPU and 1 GiB memory, using the native pinned image
-`node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1`.
+`node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067`.
 The test only reads the original full ID; it does not create, stop or remove containers.
 It requires root-readable `/proc` and cgroup v2 in the Docker daemon's actual host PID
 and cgroup namespaces, plus the local Docker CLI/socket and Linux Node. Socket access

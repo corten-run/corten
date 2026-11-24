@@ -16,7 +16,7 @@ import { verifyArtifactIndex, verifyPreflight } from "./preflight.mjs";
 import { receiptPrefix } from "./check.mjs";
 
 export const rawSchema = "catalog-saved-evidence/v2";
-export const upstreamImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
+export const upstreamImage = "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067";
 export const checkerImage = `mcr.microsoft.com/playwright:v${JSON.parse(readFileSync(new URL("../../package.json", import.meta.url))).devDependencies["@playwright/test"]}-noble`;
 export function imageCommandEvidence(image) {
   assert.ok(image?.Config && typeof image.Config === "object" && !Array.isArray(image.Config), "image configuration missing");
@@ -161,7 +161,10 @@ export function replayCatalog(summary, { readJson, readText }, commit, expectedC
     assert.equal(summary.dirty, false); assert.equal(summary.complete, false); assert.equal(summary.checksPassed, false);
     assert.notEqual(summary.options.checkOnly, true); assert.deepEqual(summary.failures, []); assert.deepEqual(summary.cleanupFailures, []);
     assert.equal(summary.measurement.appMemoryBytes, 2 ** 30);
-    assert.equal(summary.tools?.upstream?.image, upstreamImage); assert.equal(summary.tools?.checker?.image, checkerImage);
+    // Image pins are this checkout's, so saved evidence replays from a checkout of its measured commit.
+    const measured = /^[a-f0-9]{40}$/.test(commit ?? "") ? `the measured commit ${commit}` : "its measured commit";
+    for (const [tool, pin] of [["upstream", upstreamImage], ["checker", checkerImage]]) assert.ok(summary.tools?.[tool]?.image === pin,
+      `retained ${tool} image is not this checkout's pin ${pin}; verify from a checkout of ${measured}`);
   }
   assert.equal(summary.commitAfter, commit);
   assert.equal(summary.dirtyAfter, false);

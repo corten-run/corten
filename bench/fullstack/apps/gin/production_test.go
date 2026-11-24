@@ -171,19 +171,30 @@ func TestNativeProductionBoundsAndFollowup(t *testing.T) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DisableKeepAlives = true
 	client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
+	// The oversized bodies go from a client that keeps connections alive, as a browser does. A
+	// request that says Connection: close (DisableKeepAlives) makes net/http close the
+	// connection as soon as it has replied, with the rest of the body unread, so the kernel
+	// resets it and the client can see the reset before the refusal. A keep-alive request
+	// takes the server's linger instead (a FIN, then 500 ms before the close), so the client
+	// reads the refusal while it is still writing.
+	refusing := http.DefaultTransport.(*http.Transport).Clone()
+	defer refusing.CloseIdleConnections()
+	sender := &http.Client{Transport: refusing, Timeout: 2 * time.Second}
 	for _, chunked := range []bool{false, true} {
 		req, _ := http.NewRequest("POST", base+"/body", strings.NewReader(strings.Repeat("x", 3<<20)))
+		want := http.StatusRequestEntityTooLarge
 		if chunked {
 			req.ContentLength = -1
 			req.TransferEncoding = []string{"chunked"}
+			want = http.StatusBadRequest
 		}
-		res, err := client.Do(req)
+		res, err := sender.Do(req)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal("chunked", chunked, err)
 		}
 		res.Body.Close()
-		if res.StatusCode < 400 {
-			t.Fatal("oversized body accepted", res.Status)
+		if res.StatusCode != want {
+			t.Fatal("oversized body, chunked", chunked, res.Status)
 		}
 	}
 	if handled.Load() != 1 {

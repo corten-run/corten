@@ -45,7 +45,7 @@ const htmx = (/** @type {string} */ dest) => `--checksum=sha256:a0abb04f2f45a1f8
 const hostTarget = '--target "$(rustc -vV | sed -n "s/^host: //p")"';
 
 const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */ env) => ({
-  tools: "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1",
+  tools: "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067",
   context: "",
   workdir: "/app",
   env,
@@ -234,7 +234,7 @@ export const recipes = {
     edit: "templates/item.html",
   },
   express: {
-    tools: "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1",
+    tools: "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067",
     context: "",
     workdir: "/app",
     env: { NODE_ENV: "production" },

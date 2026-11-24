@@ -82,7 +82,7 @@ await until("the page's feed", async () => (await shown()).status === "live");
 
 const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
 const client = spawn("docker", ["run", "--rm", ...net, "--ulimit", "nofile=65536:65536", "-v", "/var/run/docker.sock:/var/run/docker.sock",
-  "-v", `${here}:/bench`, ...envArgs, "node:24-bookworm-slim", "node", "/bench/failover.mjs"], { stdio: ["ignore", "pipe", "inherit"] });
+  "-v", `${here}:/bench`, ...envArgs, "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067", "node", "/bench/failover.mjs"], { stdio: ["ignore", "pipe", "inherit"] });
 let stdout = "";
 client.stdout.on("data", (d) => (stdout += d));
 const code = await new Promise((r) => client.on("exit", r));
