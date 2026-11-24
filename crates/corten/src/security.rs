@@ -1723,9 +1723,10 @@ fn host_lines(headers: &HeaderMap) -> (Option<&HeaderValue>, bool) {
 /// a host and maybe a port, and an HTTP/1.1 message with no `Host` line. What the same section
 /// says a server should answer `400` or a redirect, an invalid request-line, is refused in two
 /// forms only: a request-target with a byte outside ASCII, which RFC 3986 has in no URI and the
-/// parse lets through when it is UTF-8, and `*` with a method other than `OPTIONS`, the only
-/// one 3.2.4 gives it to. Other bytes no URI holds (a `|`, a `%` before no hex) are answered as
-/// before. The `Host` is read once for these and for the names, so a request the app answers
+/// parse lets through when it is UTF-8, and `*` with a method other than `OPTIONS`. The second
+/// is Corten's reading: `*` fits the request-line's grammar, and 3.2.4 says only that it is
+/// used for `OPTIONS`. Other bytes no URI holds (a `|`, a `%` before no hex) are answered as
+/// before, and so is a target that is a host alone with a method other than `CONNECT` (3.2.3). The `Host` is read once for these and for the names, so a request the app answers
 /// costs the scan of its target and a look at whether any name has two lines.
 #[inline]
 fn asked<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bool), hosts: Option<&[String]>) -> Asked {
@@ -1754,22 +1755,40 @@ fn read<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, boo
     }
 }
 
-/// Logs the first request of the process refused as one HTTP does not allow: a health check
-/// written by hand, or a proxy that sends a second `Host`, is the client most likely to send
-/// one, and its `400`s take the app out of service with nothing else to say why.
+/// Logs the first request of the process refused for each reason HTTP does not allow one
+/// ([`refused_for`]): a health check written by hand, or a proxy that sends a second `Host`, is
+/// as likely to send one as a scanner is, and its `400`s take the app out of service with
+/// nothing else to say why. One line a reason, so a scanner's does not use up the health check's.
 #[cold]
 fn malformed(req: &Request) -> Asked {
-    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        let hosts: Vec<_> =
-            req.headers().get_all(header::HOST).iter().map(|host| String::from_utf8_lossy(host.as_bytes())).collect();
-        tracing::warn!(
-            "corten: refused {} {:?} with Host {hosts:?} (400): HTTP asks for one Host line that is a host and maybe a port (none in HTTP/1.0) and a request-target in ASCII",
-            req.method(),
-            req.uri().to_string()
-        );
+    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+    static LOGGED: [AtomicBool; 5] = [const { AtomicBool::new(false) }; 5];
+    let (reason, why) = refused_for(req);
+    if !LOGGED[reason].swap(true, Relaxed) {
+        tracing::warn!("corten: refused {} {:?} (400): {why}", req.method(), req.uri().path());
     }
     Asked::Malformed
+}
+
+/// Why [`read`] refused `req`: which of its five reasons, and the words the log has for it.
+/// With the request's path they are all the log says of it: a query, or a user in the target,
+/// may hold what no log should.
+fn refused_for(req: &Request) -> (usize, String) {
+    let target = req.uri().path_and_query().map_or("", |target| target.as_str());
+    let hosts: Vec<_> = req.headers().get_all(header::HOST).iter().map(|host| String::from_utf8_lossy(host.as_bytes())).collect();
+    if !target.is_ascii() {
+        (0, "its request-target has a byte outside ASCII, which a client percent-encodes".into())
+    } else if target == "*" && req.method() != Method::OPTIONS {
+        (1, "the request-target * is for OPTIONS alone".into())
+    } else if hosts.len() > 1 {
+        (2, format!("it has {} Host lines, {hosts:?}, and HTTP allows one", hosts.len()))
+    } else if hosts.is_empty() && req.extensions().get::<Unnamed>().is_some() {
+        (3, "it is HTTP/1.1 with no Host line: a client, a health check too, sends one or asks as HTTP/1.0".into())
+    } else if let Some(host) = hosts.first().filter(|host| named(host.as_bytes(), None) == Asked::Malformed) {
+        (4, format!("its Host, {host:?}, is not a host and maybe a port"))
+    } else {
+        (4, "the host in its request-target is not a host and maybe a port".into())
+    }
 }
 
 /// On a request Corten's server read off a connection as an HTTP/1.1 message with no `Host`
@@ -2615,6 +2634,39 @@ mod tests {
         assert_eq!(twice(&["other.example"]), Asked::Elsewhere);
         assert_eq!(twice(&["localhost", "localhost"]), Asked::Malformed);
         assert_eq!(twice(&[]), Asked::Here);
+    }
+
+    /// What the log says of a refused request: its reason, each with a line of its own, and
+    /// nothing of its query or of a user in its target.
+    #[test]
+    fn a_refused_request_is_logged_by_its_reason_without_its_query() {
+        let why = |method: &str, target: &str, hosts: &[&str], read: bool| {
+            let mut req = http::Request::builder().method(method).uri(target);
+            for host in hosts {
+                req = req.header("host", *host);
+            }
+            let mut req = req.body(crate::http::Body::empty()).unwrap();
+            if read {
+                mark_unnamed(&mut req);
+            }
+            assert_eq!(Policy::new().host_check().asked(&req), Asked::Malformed, "{method} {target} {hosts:?}");
+            let (reason, why) = refused_for(&req);
+            assert!(!why.contains("secret") && !why.contains("word"), "{why}");
+            (reason, why)
+        };
+        let (target, said) = why("GET", "/caf\u{e9}?token=secret", &["localhost"], true);
+        assert!(said.contains("outside ASCII"), "{said}");
+        let (star, said) = why("GET", "*", &["localhost"], true);
+        assert!(said.contains("OPTIONS"), "{said}");
+        let (lines, said) = why("GET", "/items?token=secret", &["localhost", "other.example"], true);
+        assert!(said.contains("2 Host lines") && said.contains("other.example"), "{said}");
+        let (none, said) = why("GET", "/health/live?token=secret", &[], true);
+        assert!(said.contains("no Host line") && said.contains("HTTP/1.0"), "{said}");
+        let (host, said) = why("GET", "/?token=secret", &["shop.example/x"], true);
+        assert!(said.contains("\"shop.example/x\""), "{said}");
+        let (user, said) = why("GET", "http://user:word@localhost:3000/?token=secret", &["localhost"], false);
+        assert!(said.contains("the host in its request-target"), "{said}");
+        assert_eq!([target, star, lines, none, host, user], [0, 1, 2, 3, 4, 4]);
     }
 
     #[test]

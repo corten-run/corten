@@ -139,9 +139,9 @@ async fn on_the_wire<M: crate::Middleware>(
 
 /// What RFC 9112 3.2 has a server answer `400`, sent over a connection byte for byte: an
 /// HTTP/1.1 request with no `Host` line, any with more than one, or with one that is not a host
-/// and maybe a port; and two request-lines it says a server should refuse: `*` with a method
-/// that is not `OPTIONS`, and a byte outside ASCII in the request-target. Each is refused
-/// before anything of the app runs, at a route through the
+/// and maybe a port; a byte outside ASCII in the request-target, an invalid request-line, which
+/// it says a server should refuse; and `*` with a method that is not `OPTIONS`, which Corten
+/// reads as one. Each is refused before anything of the app runs, at a route through the
 /// stages and at one outside them, and the connection answers the next request: the server
 /// read the whole message, so nothing asks it to close (9.3).
 #[tokio::test]
