@@ -454,7 +454,8 @@ test("continuation distinguishes a failed selected-group replay without exposing
   Object.assign(result.state, { evidenceOutcome: "failed", exitCode: 1 });
   result.state.validation.status = "failed";
   writeFileSync(join(result.evidence, "exit-code"), "1\n");
-  const files = ["exit-code", "host.txt", "campaign/.host-attempt.json", `campaign/${result.report.campaign}/plan.json`];
+  writeFileSync(join(result.evidence, "run.log"), "synthetic failed run\n");
+  const files = ["run.log", "exit-code", "host.txt", "campaign/.host-attempt.json", `campaign/${result.report.campaign}/plan.json`];
   writeFileSync(archivePath, archive(files.map((name) => ({ name, body: readFileSync(join(result.evidence, name)) }))));
   result.state.archiveSha256 = fileHash(archivePath); result.rehash();
   writeFileSync(p.index, JSON.stringify([{ root: retained.h.base, checkout: retained.h.repo, round: "r21", commit, archives: {} }]));
