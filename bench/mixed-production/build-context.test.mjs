@@ -11,8 +11,9 @@ import { commands } from "../json-api/process.mjs";
 import { sha256 } from "./capture.mjs";
 import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 
+// The same 30 s deadline io.command gave these fixture Git calls.
 const fixtureGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true,
-  stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() }).trim();
+  stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv(), timeout: 30_000 }).trim();
 
 test("native archive arguments share a fixed tree timestamp without changing Corten commit archives", () => {
   const commit = "a".repeat(40), prefix = ["-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar"];
