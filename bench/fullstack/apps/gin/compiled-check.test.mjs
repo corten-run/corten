@@ -316,6 +316,18 @@ test("the argv is built from copies read once, so a caller array's own methods, 
   owned.run({ get cpus() { return ++reads === 1 ? '1' : '1 --label x'; } }, 'image', 'm');
   assert.deepEqual(daemon.calls[1].slice(-4), ['--cpus', '1', '--', 'image']);
   assert.equal(reads, 1);
+  // A list that shrinks or grows while it is copied is refused, not cut short or extended.
+  const resizing = (items, change) => {
+    const array = [...items];
+    Object.defineProperty(array, 0, { get() { change(array); return items[0]; }, enumerable: true, configurable: true });
+    return array;
+  };
+  for (const publish of [resizing(['127.0.0.1::8080', '127.0.0.1::9090'], array => { array.length = 1; }),
+    resizing(['127.0.0.1::8080'], array => { if (array.length < 3) array.push('0.0.0.0:80:8080'); })]) {
+    const calls = daemon.calls.length;
+    assert.throws(() => owned.run({ publish }, 'image', 'resized'), /--publish values are non-empty strings/);
+    assert.equal(daemon.calls.length, calls, 'no Docker command');
+  }
   // A label that is not a string is refused before any Docker command.
   const none = fakeDaemon();
   assert.throws(() => ownedContainers({ docker: none.docker, runId: 'run-1', labels: [{ toString: () => 'a=b' }] }), /labels are key=value strings/);

@@ -84,12 +84,16 @@ export function checkLabels(labels) {
   return copy;
 }
 
-// A new plain array of `value`'s elements, each read once by index; the caller's array methods
-// and iterator are never called.
+// A new plain array of `value`'s elements, each read once by index up to a length read once; the
+// caller's array methods and iterator are never called.
 function snapshot(value, message) {
   assert.ok(Array.isArray(value), message);
+  const length = value.length;
+  assert.ok(Number.isSafeInteger(length) && length >= 0 && length <= 64, message);
   const copy = [];
-  for (let index = 0; index < value.length; index++) copy.push(value[index]);
+  for (let index = 0; index < length; index++) copy.push(value[index]);
+  // A list that changed size while it was read is refused rather than cut short or extended.
+  assert.equal(value.length, length, message);
   return copy;
 }
 
