@@ -304,15 +304,23 @@ The watchlist's waiting-submit and submit-key cases press their buttons in the p
 (`button.click()`), so each submit runs before the test changes the form's values, presses
 again or releases its held answer. A loaded browser can acknowledge Playwright's click before
 dispatching that submit: waiting for the answer alone does not prove that the first write used
-the old values or that the second press met it still pending. In a loaded Firefox the click can
-also reach the page after Playwright has checked what is under its point, and the page's live
-updates can have moved the button by then: the press lands on another element and sends
-nothing, which reads as a submit the runtime dropped
-([#2014 Firefox smoke fails a different waiting-submit or template-copy case on two commits that touch neither the runtime nor the watchlist](https://github.com/corten-run/corten/issues/2014)).
+the old values or that the second press met it still pending. A press that must meet a request
+still on its way holds that request's answer until the case has made it, never for a fixed time,
+and the cases count their submits, so a press meant to send nothing is seen to have been made.
+The other checks that act while a request is out (a busy mark, a navigation before a write's
+page, a script's `replaceState` during a read, a navigation during a stylesheet's load) hold it
+the same way.
+The two Firefox failures in
+[#2014 Firefox smoke fails a different waiting-submit or template-copy case on two commits that touch neither the runtime nor the watchlist](https://github.com/corten-run/corten/issues/2014)
+each logged only that an expected post was never sent. A loaded Firefox reproduction of those
+cases showed one way that happens: Playwright's click reached the page after it had checked what
+was under its point, the page's live updates had moved the button by then, and the click landed
+on `<main>` or a `<div>` beside it. The CI logs do not show whether that is what happened there.
 The cases still wait for their output condition, then check the busy mark sampled while the
 answer was held, the exact sends and the renewed submit key. The first request is captured
-before editing its fields; file output is polled on a timer, independent of animation frames.
-Neither the six-second outcome bound nor the window for detecting forbidden sends is extended.
+before editing its fields, and an error a case waits for is its form's own, for six seconds at
+most; file output is polled on a timer, independent of animation frames. Neither the six-second
+outcome bound nor the window for detecting forbidden sends is extended.
 
 The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
 same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a

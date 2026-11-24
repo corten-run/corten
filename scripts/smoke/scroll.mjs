@@ -78,8 +78,10 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
       let [banner, frame] = ["", ""];
       // Later checks: the section stylesheet's address made new, so it loads before the page is
       // drawn (`late`); a read-again tag in the page and its navigation answers (`readAgain`); the
-      // whole page held back (`slow`).
-      let [late, readAgain, slow] = [false, false, false];
+      // whole page held back until `slow` settles.
+      let [late, readAgain] = [false, false];
+      /** @type {Promise<unknown> | null} */
+      let slow = null;
       // The page's notice marked as not drawn, so the runtime dispatches it (`undrawn`).
       let undrawn = false;
       // The brand the write's page draws in the header.
@@ -116,7 +118,7 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
             // would leave "corten" unmapped on a full load of this answer (a back navigation).
             .replace("</head>", `<link rel="modulepreload" href="${/<meta name="corten-scripts" content="([^"]+)">/.exec(body)?.[1]}live_prices.js?swap-preload"></head>`);
           if (late) body = body.replace(/<link\b[^>]*\bdata-corten-style\b[^>]*>/, (tag) => tag.replace(/href="([^"]+)"/, 'href="$1?late=1"'));
-          if (slow) await new Promise((resolve) => setTimeout(resolve, 1500));
+          if (slow) await slow;
         }
         await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
       });
@@ -297,21 +299,29 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
         check("reading again stops once the page no longer asks", gone && reads === settled, `tag gone ${gone}, ${reads - settled} more reads`);
       }
       // A navigation the user starts before the write's page comes reads the whole page, so what
-      // the write changed in the layout is drawn there too.
+      // the write changed in the layout is drawn there too. The write's page is held until that
+      // navigation's request is out, so the navigation starts first however slowly it comes (#2014).
       {
         /** @type {string[]} */
         const asked = [];
-        const onStocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/" && asked.push(swapped(r) ? r.headers()["corten"] : "whole");
-        slow = true;
-        await page.evaluate(() => scrollTo(0, 0));
-        const held = page.waitForRequest((r) => news(new URL(r.url())) && !swapped(r), { timeout: 5000 });
-        await thank();
-        await held;
-        page.on("request", onStocks);
-        await page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/"]')).click());
+        const stocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/";
+        const onStocks = (/** @type {import("@playwright/test").Request} */ r) => stocks(r) && asked.push(swapped(r) ? r.headers()["corten"] : "whole");
+        let release = () => {};
+        slow = new Promise((resolve) => (release = () => resolve(undefined)));
+        try {
+          await page.evaluate(() => scrollTo(0, 0));
+          await Promise.all([page.waitForRequest((r) => news(new URL(r.url())) && !swapped(r), { timeout: 5000 }), thank()]);
+          page.on("request", onStocks);
+          await Promise.all([
+            page.waitForRequest(stocks, { timeout: 5000 }).catch(() => {}),
+            page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/"]')).click()),
+          ]);
+        } finally {
+          slow = null;
+          release();
+        }
         await page.waitForFunction(() => document.title === "Stocks | Watchlist", null, { timeout: 5000 }).catch(() => {});
         page.off("request", onStocks);
-        slow = false;
         check("a navigation started before a write's page comes reads the whole page", asked[0] === "whole" && (await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1)), asked.join());
         await page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click());
         await page.waitForFunction(() => document.title === "News | Watchlist" && document.getElementById("briefing"), null, { timeout: 5000 });

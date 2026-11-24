@@ -1,15 +1,40 @@
 import { check } from "./helpers.mjs";
 
-export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
+export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
   // The cases below press their buttons in the page (`button.click()`), so each submit has run
-  // before the case changes the form, presses again or releases a held answer. A loaded Firefox
-  // can acknowledge Playwright's click before the page gets it, and by then the page can have
-  // moved under the point clicked: the press lands on another element and sends nothing (#2014).
+  // before the case changes the form, presses again or releases a held answer, and they count the
+  // submits, so a press meant to send nothing is seen to have been made. A loaded Firefox can
+  // acknowledge Playwright's click before the page gets it; in a reproduction the page had moved
+  // by then and the press landed on another element (#2014).
   const press = (/** @type {string} */ selector) => page.evaluate((selector) => /** @type {HTMLButtonElement} */ (document.querySelector(selector)).click(), selector);
+  /**
+   * Presses `selector` in the page and waits at most 6 s for the request `sent` matches. The wait
+   * is armed before the press and joined with it, so neither can fail unheard.
+   * @param {string} selector @param {(r: import("@playwright/test").Request) => boolean} sent
+   */
+  const pressFor = async (selector, sent) => (await Promise.all([page.waitForRequest(sent, { timeout: 6000 }), press(selector)]))[0];
+  /** Counts the submits of the form at `selector` from now on, read (and stopped) by `submits`. @param {string} selector */
+  const countSubmits = (selector) =>
+    page.evaluate((selector) => {
+      const w = /** @type {any} */ (window);
+      w.__submitCount?.abort();
+      w.__submitCount = new AbortController();
+      w.__submits = 0;
+      // On the window, capturing, so it hears the submit before any listener of the page's.
+      window.addEventListener("submit", (e) => e.target === document.querySelector(selector) && (w.__submits += 1), { capture: true, signal: w.__submitCount.signal });
+    }, selector);
+  const submits = () =>
+    page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__submitCount?.abort();
+      return /** @type {number} */ (w.__submits);
+    });
+  /** A request's fields, from its address or its body. @param {import("@playwright/test").Request} request */
+  const fieldsOf = (request) => (request.method() === "GET" ? new URL(request.url()).searchParams : new URLSearchParams(request.postData() ?? ""));
   // The latest submit wins, but a pending write is not abandoned (the server may have applied
   // it): the newer submit waits for its answer and goes out after it, from the form as the answer
-  // left it.
-  delayWatch.value = 1200;
+  // left it. The first write's answer is held until every press has been made and the busy mark
+  // read, so the newer presses meet it still out however slowly they come (#2014).
   /** @type {string[]} */
   const writes = [];
   /** @param {import("@playwright/test").Request} r */
@@ -18,18 +43,28 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
   const onAnswer = (r) => r.request().method() === "POST" && r.url().endsWith("/watch") && writes.push(`answered ${new URLSearchParams(r.request().postData() ?? "").get("id")}`);
   page.on("request", onWrite);
   page.on("response", onAnswer);
-  await page.selectOption("select[name=id]", "PNTR");
-  // Each press runs in the page, so the first is out before the form changes.
-  const firstWrite = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/watch"), { timeout: 6000 });
-  await press("#watch-form button");
-  await firstWrite;
-  // The same press again sends nothing, and two newer ones are one submit of where the form ended.
-  await press("#watch-form button");
-  await page.selectOption("select[name=id]", "NRTH");
-  await press("#watch-form button");
-  await page.selectOption("select[name=id]", "VTGO");
-  await press("#watch-form button");
-  const busyWhileWriting = await page.getAttribute("#watch-form", "aria-busy");
+  let releaseWatch = () => {};
+  holdWatch.value = new Promise((resolve) => (releaseWatch = () => resolve(undefined)));
+  /** @type {string | null} */
+  let busyWhileWriting = null;
+  let watchPresses = 0;
+  try {
+    await page.selectOption("select[name=id]", "PNTR");
+    await countSubmits("#watch-form");
+    // The first is out before the form changes.
+    await pressFor("#watch-form button", (r) => r.method() === "POST" && r.url().endsWith("/watch") && fieldsOf(r).get("id") === "PNTR");
+    // The same press again sends nothing, and two newer ones are one submit of where the form ended.
+    await press("#watch-form button");
+    await page.selectOption("select[name=id]", "NRTH");
+    await press("#watch-form button");
+    await page.selectOption("select[name=id]", "VTGO");
+    await press("#watch-form button");
+    busyWhileWriting = await page.getAttribute("#watch-form", "aria-busy");
+    watchPresses = await submits();
+  } finally {
+    holdWatch.value = null;
+    releaseWatch();
+  }
   await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Vertigo Robotics"), null, { timeout: 6000 }).catch(() => {});
   await page.waitForTimeout(300);
   page.off("request", onWrite);
@@ -38,9 +73,10 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
     "a newer submit waits for a pending write, which is answered, and then goes out",
     ((await page.textContent("#watch-message")) ?? "").startsWith("Watching Vertigo Robotics") &&
       busyWhileWriting === "true" &&
+      watchPresses === 4 &&
       abandoned.length === 0 &&
       writes.join() === "sent PNTR,answered PNTR,sent VTGO,answered VTGO",
-    `${await page.textContent("#watch-message")}; busy: ${busyWhileWriting}; ${writes.join()}; abandoned: ${abandoned.join()}`,
+    `${await page.textContent("#watch-message")}; busy: ${busyWhileWriting}; presses: ${watchPresses}; ${writes.join()}; abandoned: ${abandoned.join()}`,
   );
   check("the form is not left busy", (await page.getAttribute("#watch-form", "aria-busy")) === null);
 
@@ -59,8 +95,7 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
   let queueRefused = [];
   const queueGaveUp = (/** @type {import("@playwright/test").Request} */ request) => {
     if (new URL(request.url()).pathname !== "/queue") return;
-    const fields = request.method() === "GET" ? new URL(request.url()).searchParams : new URLSearchParams(request.postData() ?? "");
-    const n = fields.get("n") ?? "";
+    const n = fieldsOf(request).get("n") ?? "";
     if (!queueRefused.includes(n)) queueRefused.push(n);
   };
   page.on("requestfailed", queueGaveUp);
@@ -70,7 +105,7 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
   let queuePressed = Promise.resolve();
   await page.route("**/queue*", async (route) => {
     const request = route.request();
-    const fields = request.method() === "GET" ? new URL(request.url()).searchParams : new URLSearchParams(request.postData() ?? "");
+    const fields = fieldsOf(request);
     queueSent.push(`${request.method()} ${fields.get("n")}${fields.has("submit") ? ` ${fields.get("submit")}` : ""}${fields.has("b") ? ` ${fields.get("b")}` : ""}`);
     const answer = queueAnswer;
     // The first of two reads answers last, so a read that was not aborted would draw over the newer.
@@ -83,12 +118,15 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
       .catch(() => {});
     queueAnswered += 1;
   });
+  /** Whether a request is the queue form's, with `field` set to `value`. @param {string} field @param {string} value */
+  const queueSends = (field, value) => (/** @type {import("@playwright/test").Request} */ r) => new URL(r.url()).pathname === "/queue" && fieldsOf(r).get(field) === value;
   /**
    * Puts the form (in a box a patch can redraw), presses, sets n to 2 and presses again, then
    * waits until `done` says the case's outcome is on the page (6 s at most, and `ended` is false)
    * and 700 ms more, in which a send the queue must not make would be seen. `status`: the case's
    * `corten:error`, or null, heard on the form too, so one sent to a form the answer took off the
-   * page is not missed. `refused`: the n of each request the page gave up on.
+   * page is not missed. `refused`: the n of each request the page gave up on. `presses`: the
+   * submits the two presses made, so a second press that sends nothing is seen to have been made.
    * @param {string} form @param {() => Promise<boolean>} done
    */
   const queueCase = async (form, done) => {
@@ -110,14 +148,21 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
       document.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
       document.querySelector("#queue-box form")?.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
     }, form);
-    // The first press must run before n changes, the second before pressed().
-    const first = page.waitForRequest((r) => new URL(r.url()).pathname === "/queue", { timeout: 6000 });
-    await press("#queue-box button");
-    await first;
-    await page.fill("#queue-box [name=n]", "2");
-    const busy = await page.getAttribute("#queue-box form", "aria-busy");
-    await press("#queue-box button");
-    pressed();
+    // The first press must run before n changes, the second before pressed(), which the case
+    // calls however it ends, so no answer stays held.
+    /** @type {string | null} */
+    let busy = null;
+    let presses = 0;
+    try {
+      await countSubmits("#queue-box form");
+      await pressFor("#queue-box button", queueSends("n", "1"));
+      await page.fill("#queue-box [name=n]", "2");
+      busy = await page.getAttribute("#queue-box form", "aria-busy");
+      await press("#queue-box button");
+      presses = await submits();
+    } finally {
+      pressed();
+    }
     const until = Date.now() + 6000;
     let ended = await done();
     while (!ended && Date.now() < until) {
@@ -130,7 +175,7 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
       w.__queueCase.abort();
       return /** @type {number | null} */ (w.__queueError);
     });
-    return { sent: queueSent.join(), status, busy, ended, refused: queueRefused.join() };
+    return { sent: queueSent.join(), status, busy, ended, refused: queueRefused.join(), presses };
   };
   const queueOut = () => page.evaluate(() => document.getElementById("queue-out")?.textContent ?? null);
   const queueLogged = errors.length;
@@ -145,8 +190,8 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
   const read = await queueCase(queueForm("get"), async () => queueAnswered === 2 && (await queueOut()) === "read 2");
   check(
     "a newer GET submit aborts the older one",
-    read.ended && read.status === null && read.sent === "GET 1,GET 2" && read.refused === "1" && (await queueOut()) === "read 2",
-    `${read.sent}; ${await queueOut()}; ended: ${read.ended}; error: ${read.status}; refused: ${read.refused}`,
+    read.ended && read.presses === 2 && read.status === null && read.sent === "GET 1,GET 2" && read.refused === "1" && (await queueOut()) === "read 2",
+    `${read.sent}; ${await queueOut()}; ended: ${read.ended}; presses: ${read.presses}; error: ${read.status}; refused: ${read.refused}`,
   );
 
   // An answer the runtime does not draw (a proxy's 503) drops the submit that waited.
@@ -154,8 +199,8 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
   const undrawn = await queueCase(queueForm("post"), async () => (await page.evaluate(() => /** @type {any} */ (window).__queueError)) !== null);
   check(
     "a submit that waited for an answer the runtime does not draw is not sent",
-    undrawn.ended && undrawn.sent === "POST 1" && undrawn.status === 503,
-    `${undrawn.sent}; ${undrawn.status}; ended: ${undrawn.ended}`,
+    undrawn.ended && undrawn.presses === 2 && undrawn.sent === "POST 1" && undrawn.status === 503,
+    `${undrawn.sent}; ${undrawn.status}; ended: ${undrawn.ended}; presses: ${undrawn.presses}`,
   );
 
   // A 5xx patch is drawn, but the write may or may not have applied: the waiting submit drops.
@@ -163,8 +208,8 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
   const failedPatch = await queueCase(queueForm("post"), async () => (await queueOut()) === "failed");
   check(
     "a submit that waited for a 5xx is not sent, and the 5xx's patch is drawn",
-    failedPatch.ended && failedPatch.status === null && failedPatch.sent === "POST 1" && (await queueOut()) === "failed",
-    `${failedPatch.sent}; ${await queueOut()}; ended: ${failedPatch.ended}; error: ${failedPatch.status}`,
+    failedPatch.ended && failedPatch.presses === 2 && failedPatch.status === null && failedPatch.sent === "POST 1" && (await queueOut()) === "failed",
+    `${failedPatch.sent}; ${await queueOut()}; ended: ${failedPatch.ended}; presses: ${failedPatch.presses}; error: ${failedPatch.status}`,
   );
 
   // A refusal of the state the write was made against (Errors::refuse, 409) is drawn and drops
@@ -173,8 +218,8 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
   const stale = await queueCase(queueForm("post"), async () => (await queueOut()) === "stale");
   check(
     "a submit that waited is not sent after a 409 refusal, which is drawn",
-    stale.ended && stale.status === null && stale.sent === "POST 1" && (await queueOut()) === "stale",
-    `${stale.sent}; ${await queueOut()}; ended: ${stale.ended}; error: ${stale.status}`,
+    stale.ended && stale.presses === 2 && stale.status === null && stale.sent === "POST 1" && (await queueOut()) === "stale",
+    `${stale.sent}; ${await queueOut()}; ended: ${stale.ended}; presses: ${stale.presses}; error: ${stale.status}`,
   );
 
   // An answer that removes the form drops it.
@@ -182,8 +227,8 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
   const removed = await queueCase(queueForm("post"), async () => (await page.$("#queue")) === null);
   check(
     "a submit that waited is not sent when the answer removes its form",
-    removed.ended && removed.status === null && removed.sent === "POST 1" && (await page.$("#queue")) === null,
-    `${removed.sent}; ended: ${removed.ended}; error: ${removed.status}`,
+    removed.ended && removed.presses === 2 && removed.status === null && removed.sent === "POST 1" && (await page.$("#queue")) === null,
+    `${removed.sent}; ended: ${removed.ended}; presses: ${removed.presses}; error: ${removed.status}`,
   );
 
   // A form without an id that the answer took off the page is not found again: its values are
@@ -193,8 +238,8 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
   const noId = await queueCase('<form method="post" action="/queue" data-patch><input name="n" value="1"><button>Go</button></form>', async () => (await queueOut()) === null);
   check(
     "a submit that waited is not sent when its form without an id left the page",
-    noId.ended && noId.status === null && noId.sent === "POST 1",
-    `${noId.sent}; ended: ${noId.ended}; error: ${noId.status}`,
+    noId.ended && noId.presses === 2 && noId.status === null && noId.sent === "POST 1",
+    `${noId.sent}; ended: ${noId.ended}; presses: ${noId.presses}; error: ${noId.status}`,
   );
 
   // The submit that waited goes under the form's new key: the write's answer renewed it.
@@ -204,8 +249,8 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
   const [firstKey, secondKey] = keyed.sent.split(",").map((s) => s.split(" ")[2]);
   check(
     "a submit that waited goes out after the write's answer, under the key the answer renewed",
-    keyed.ended && keyed.status === null && keyed.busy === "true" && keyed.sent.split(",").length === 2 && keyed.sent.startsWith("POST 1 ") && keyed.sent.includes(",POST 2 ") && firstKey === zero && /^[0-9a-f-]{36}$/.test(secondKey ?? "") && secondKey !== zero,
-    `${keyed.sent}; ended: ${keyed.ended}; error: ${keyed.status}`,
+    keyed.ended && keyed.presses === 2 && keyed.status === null && keyed.busy === "true" && keyed.sent.split(",").length === 2 && keyed.sent.startsWith("POST 1 ") && keyed.sent.includes(",POST 2 ") && firstKey === zero && /^[0-9a-f-]{36}$/.test(secondKey ?? "") && secondKey !== zero,
+    `${keyed.sent}; ended: ${keyed.ended}; presses: ${keyed.presses}; error: ${keyed.status}`,
   );
 
   // A 204 or 205 with none of Corten's headers took the write and has nothing to draw (RFC 9110,
@@ -229,6 +274,7 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
     check(
       `a submit that waited for a bare ${status} goes out after it under a new key, with no corten:error${status === 205 ? ", and the last 205 resets the form" : ""}`,
       quiet.ended &&
+        quiet.presses === 2 &&
         quiet.status === null &&
         quiet.busy === "true" &&
         quiet.sent.split(",").length === 2 &&
@@ -241,7 +287,7 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
         uuid.test(left.key ?? "") &&
         left.key !== zero &&
         left.key !== second,
-      `${quiet.sent}; ended: ${quiet.ended}; error: ${quiet.status}; left ${JSON.stringify(left)}`,
+      `${quiet.sent}; ended: ${quiet.ended}; presses: ${quiet.presses}; error: ${quiet.status}; left ${JSON.stringify(left)}`,
     );
   }
   // With nothing waiting, a 205 resets the form that sent it to the markup's values, and the form
@@ -278,18 +324,20 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
     }, queueForm("post", `${keyField}<input type="hidden" name="reset" value="x">${change === "file" ? '<input type="file" name="f">' : change === "unreadable" ? '<input type="number" name="q">' : ""}`));
     await page.fill("#queue-box [name=n]", "5");
     if (change === "file") await pickQueueFile("first");
-    const sent = page.waitForRequest((r) => new URL(r.url()).pathname === "/queue", { timeout: 6000 });
-    await press("#queue-box button");
-    await sent;
-    if (change === "edited") await page.fill("#queue-box [name=n]", "6");
-    if (change === "added") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input name="extra">')));
-    if (change === "hidden") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input type="hidden" name="tag" value="a">')));
-    if (change === "file") await pickQueueFile("another picture");
-    if (change === "unreadable") {
-      await page.focus("#queue-box [name=q]");
-      await page.keyboard.type("1e");
+    // The answer is held until the case has changed the form, and released however it ends.
+    try {
+      await pressFor("#queue-box button", queueSends("n", "5"));
+      if (change === "edited") await page.fill("#queue-box [name=n]", "6");
+      if (change === "added") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input name="extra">')));
+      if (change === "hidden") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input type="hidden" name="tag" value="a">')));
+      if (change === "file") await pickQueueFile("another picture");
+      if (change === "unreadable") {
+        await page.focus("#queue-box [name=q]");
+        await page.keyboard.type("1e");
+      }
+    } finally {
+      pressed();
     }
-    pressed();
     const until = Date.now() + 6000;
     while (!(queueAnswered === 1 && (await page.getAttribute("#queue-box form", "aria-busy")) === null) && Date.now() < until) await page.waitForTimeout(50);
     // Time for a corten:error to be heard, or a waiting submit to go.
@@ -348,11 +396,12 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
       document.addEventListener("corten:error", (e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status), { signal: w.__queueCase.signal });
     }, `<form id="queue" method="post" action="/queue" data-patch><input name="n" value="1">${keyField}<button name="b" value="save">Save</button><button name="b" value="other">Other</button></form>`);
     await page.fill("#queue-box [name=n]", "5");
-    const first = page.waitForRequest((r) => new URL(r.url()).pathname === "/queue", { timeout: 6000 });
-    await press("#queue-box button[value=save]");
-    await first;
-    await press("#queue-box button[value=other]");
-    pressed();
+    try {
+      await pressFor("#queue-box button[value=save]", queueSends("b", "save"));
+      await press("#queue-box button[value=other]");
+    } finally {
+      pressed();
+    }
     const until = Date.now() + 6000;
     while (!(queueAnswered === 2 && (await page.getAttribute("#queue-box form", "aria-busy")) === null) && Date.now() < until) await page.waitForTimeout(50);
     await page.waitForTimeout(300);
@@ -406,7 +455,10 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
       files.items.add(new File([text], "card.png", { type: "image/png", lastModified: time }));
       /** @type {HTMLInputElement} */ (document.querySelector("#queue-file [name=f]")).files = files.files;
     }, file);
-  /** Presses with a file, then again with `second` chosen (or the same file), and counts the sends. @param {[string, number] | null} second */
+  /**
+   * Presses with a file, then again with `second` chosen (or the same file), and counts the sends
+   * and the submits the two presses made. @param {[string, number] | null} second
+   */
   const fileCase = async (second) => {
     fileSends = 0;
     /** @type {() => void} */
@@ -423,13 +475,19 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
     });
     await pickFile(["first", 1]);
     // As in queueCase, the submit must run before changing the file or releasing its answer.
-    const first = page.waitForRequest((r) => new URL(r.url()).pathname === "/queue-file", { timeout: 6000 });
-    await press("#queue-file button");
-    await first;
-    if (second) await pickFile(second);
-    const busy = await page.getAttribute("#queue-file", "aria-busy");
-    await press("#queue-file button");
-    pressed();
+    /** @type {string | null} */
+    let busy = null;
+    let presses = 0;
+    try {
+      await countSubmits("#queue-file");
+      await pressFor("#queue-file button", (r) => new URL(r.url()).pathname === "/queue-file" && r.method() === "POST");
+      if (second) await pickFile(second);
+      busy = await page.getAttribute("#queue-file", "aria-busy");
+      await press("#queue-file button");
+      presses = await submits();
+    } finally {
+      pressed();
+    }
     const want = second ? "saved 2" : "saved 1";
     // Read the outcome even when a loaded browser is not delivering animation frames.
     const ended = await page
@@ -438,7 +496,7 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
     // Time in which a send the queue must not make would be seen.
     await page.waitForTimeout(700);
     const out = await page.evaluate(() => document.getElementById("queue-file-out")?.textContent ?? null);
-    return { sends: fileSends, busy, ended, out };
+    return { sends: fileSends, busy, ended, out, presses };
   };
   const sameFile = await fileCase(null);
   const otherSize = await fileCase(["another picture", 1]);
@@ -447,7 +505,7 @@ export async function submitQueue(delayWatch, page, abandoned, errors, zero) {
   await page.evaluate(() => document.getElementById("queue-file-box")?.remove());
   check(
     "another file of the same name pressed while a write sending one is out is sent after it, whether its size or its time differs; the same file pressed again is not",
-    [sameFile, otherSize, otherTime].every((c) => c.busy === "true" && c.ended) && sameFile.sends === 1 && otherSize.sends === 2 && otherTime.sends === 2,
+    [sameFile, otherSize, otherTime].every((c) => c.busy === "true" && c.ended && c.presses === 2) && sameFile.sends === 1 && otherSize.sends === 2 && otherTime.sends === 2,
     `same file: ${JSON.stringify(sameFile)}; another size: ${JSON.stringify(otherSize)}; another time: ${JSON.stringify(otherTime)}`,
   );
 }

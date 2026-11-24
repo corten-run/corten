@@ -164,8 +164,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         await page.goto(await pending());
         waiting = (await saved()) === "Saving...";
       }
+      // Each read is held until the script has replaced the address, so the replaceState meets
+      // one still on its way however slowly it comes (#2014).
+      let replaced = () => {};
+      const held = new Promise((resolve) => (replaced = () => resolve(undefined)));
       const slow = async (/** @type {import("@playwright/test").Route} */ route) => {
-        await new Promise((resolve) => setTimeout(resolve, 800));
+        await held;
         await route.fallback().catch(() => {});
       };
       await page.route("**/alerts?saved=*", slow);
@@ -173,12 +177,16 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const onFailed = (/** @type {import("@playwright/test").Request} */ r) => void (r.url().includes("/alerts?saved=") && cancelled++);
       page.on("requestfailed", onFailed);
       const from = reads.length;
-      for (let waited = 0; reads.length === from && waited < 5000; waited += 50) await page.waitForTimeout(50);
-      await page.evaluate(() => {
-        const to = new URL(location.href);
-        to.searchParams.set("shown", "2");
-        history.replaceState(history.state, "", to);
-      });
+      try {
+        for (let waited = 0; reads.length === from && waited < 5000; waited += 50) await page.waitForTimeout(50);
+        await page.evaluate(() => {
+          const to = new URL(location.href);
+          to.searchParams.set("shown", "2");
+          history.replaceState(history.state, "", to);
+        });
+      } finally {
+        replaced();
+      }
       await page.unroute("**/alerts?saved=*", slow);
       await savedSoon();
       page.off("requestfailed", onFailed);

@@ -1,14 +1,18 @@
 import { base, swapped, shadowing, engine, skip, check, precommits, entriesWhileRecordingAddresses } from "./helpers.mjs";
 
-export async function sectionNavigation(feedSources, page, redirectName, openFeeds, delayWatch, abandoned, openStreams, swaps) {
+export async function sectionNavigation(feedSources, page, redirectName, openFeeds, holdWatch, abandoned, openStreams, swaps) {
   // The feed sources before the write: a write that swaps the page in brings the component a new one.
   const feedsBeforeGo = (await feedSources()).length;
   let goSwapped = false;
   if (!(await page.evaluate(() => "navigation" in window))) skip(redirectName, "without the Navigation API the browser loads that page in full");
   else {
     goSwapped = true;
-    await page.click("#busy-wgo");
-    const goBusy = await page.evaluate(() => /** @type {any} */ (window).__goHeld.getAttribute("aria-busy"));
+    // Pressed and read in one task in the page, so the mark is read before the write's answer
+    // can come back, however slowly the browser runs.
+    const goBusy = await page.evaluate(() => {
+      /** @type {HTMLButtonElement} */ (document.getElementById("busy-wgo")).click();
+      return /** @type {any} */ (window).__goHeld.getAttribute("aria-busy");
+    });
     await page
       .waitForFunction(() => !document.getElementById("busy-w") && /** @type {any} */ (window).__goHeld.getAttribute("aria-busy") !== "true" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
       .catch(() => {});
@@ -56,20 +60,64 @@ export async function sectionNavigation(feedSources, page, redirectName, openFee
   const styleLinks = () => page.$$eval("link[data-corten-style]", (links) => links.length);
   check("a page outside the section does not link its stylesheet", (await styleLinks()) === 0);
   // A navigation abandons a pending submit, whose reply was for the page being left, and the
-  // newer submit that waited for it.
-  delayWatch.value = 1200;
-  let posted = 0;
+  // newer submit that waited for it. The first write is held until the page has gone and the
+  // page has given it up, so the second press and the link meet it still out however slowly they
+  // come; each press runs in the page and is counted, so a second press that sends nothing is
+  // seen to have been made (#2014).
   /** @param {import("@playwright/test").Request} r */
-  const onPost = (r) => r.method() === "POST" && r.url().endsWith("/watch") && (posted += 1);
+  const isWatchPost = (r) => r.method() === "POST" && r.url().endsWith("/watch");
+  const stockOf = (/** @type {import("@playwright/test").Request} */ r) => new URLSearchParams(r.postData() ?? "").get("id");
+  /** @type {(string | null)[]} */
+  const posted = [];
+  /** @type {(string | null)[]} */
+  const gaveUp = [];
+  /** @param {import("@playwright/test").Request} r */
+  const onPost = (r) => isWatchPost(r) && posted.push(stockOf(r));
+  /** @param {import("@playwright/test").Request} r */
+  const onGaveUp = (r) => isWatchPost(r) && gaveUp.push(stockOf(r));
   page.on("request", onPost);
-  await page.click("#watch-form button");
-  await page.selectOption("select[name=id]", "NRTH");
-  await page.click("#watch-form button");
-  await page.click('header a[href="/news"]');
-  await page.waitForFunction(() => document.title === "News | Watchlist");
+  page.on("requestfailed", onGaveUp);
+  const pressWatch = () => page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#watch-form button")).click());
+  let releaseWatch = () => {};
+  holdWatch.value = new Promise((resolve) => (releaseWatch = () => resolve(undefined)));
+  let presses = 0;
+  /** @type {string | null} */
+  let first = null;
+  try {
+    await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__watchPresses = 0;
+      w.__watchPressCount = new AbortController();
+      // Capturing on the window, so the submit is heard before any listener of the page's.
+      window.addEventListener("submit", (e) => e.target === document.getElementById("watch-form") && (w.__watchPresses += 1), { capture: true, signal: w.__watchPressCount.signal });
+    });
+    // The first, of the stock the form shows, is out before the form changes.
+    first = stockOf((await Promise.all([page.waitForRequest(isWatchPost, { timeout: 6000 }), pressWatch()]))[0]);
+    await page.selectOption("select[name=id]", "NRTH");
+    await pressWatch();
+    presses = await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__watchPressCount.abort();
+      return /** @type {number} */ (w.__watchPresses);
+    });
+    await page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click());
+    await page.waitForFunction(() => document.title === "News | Watchlist");
+    // The page gives the held write up as it leaves (every engine reports it failed while the route
+    // still holds it).
+    for (let waited = 0; !gaveUp.length && waited < 5000; waited += 50) await page.waitForTimeout(50);
+  } finally {
+    holdWatch.value = null;
+    releaseWatch();
+  }
+  // Time in which a send the navigation must not let through would be seen.
   await page.waitForTimeout(1600);
   page.off("request", onPost);
-  check("navigating away abandons a pending submit and the one that waited", abandoned.length === 1 && posted === 1, `${abandoned.join()}; posts: ${posted}`);
+  page.off("requestfailed", onGaveUp);
+  check(
+    "navigating away abandons a pending submit and the one that waited",
+    presses === 2 && first !== null && first !== "NRTH" && abandoned.length === 1 && posted.join() === first && gaveUp.join() === first,
+    `${abandoned.join()}; presses: ${presses}; posts: ${posted.join()}; given up: ${gaveUp.join()}`,
+  );
   check("the feed stream closes when its component leaves the page (its signal aborts)", (await openFeeds()) === 0);
   check("the <corten-live> stream closes when it leaves the page", (await openStreams("/live/trades")) === 0);
   check("client navigation moves aria-current in the shell", (await current()) === "/news");

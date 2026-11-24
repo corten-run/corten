@@ -25,12 +25,12 @@ export async function busyForms(page) {
   const busyMarks = () => page.evaluate(() => ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join());
   // Each click and the read of the marks in one task: the marks are moved by the submit itself,
   // not by A's read settling later (#1108).
-  /** @param {string} id */
-  const clickAndMarks = (id) =>
-    page.evaluate((id) => {
+  /** @param {string} id @param {string[]} marked */
+  const clickAndMarks = (id, marked = ["busy-form", "busy-a", "busy-b"]) =>
+    page.evaluate(([id, marked]) => {
       document.getElementById(id)?.click();
-      return ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join();
-    }, id);
+      return marked.map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join();
+    }, /** @type {[string, string[]]} */ ([id, marked]));
   let whileA = "";
   let whileB = "";
   try {
@@ -78,9 +78,16 @@ export async function busyForms(page) {
   // beside it and sends once its answer is drawn. A write whose answer sends the browser to
   // another page keeps its button marked until that page is in, and then clears it, a button in
   // the header (outside what the page swaps) included (#1063).
+  // A's answer is held until B is pressed and the marks are read, so B meets it still out however
+  // slowly the presses come, and both presses run in the page (#2014).
+  /** @type {() => void} */
+  let answerWriteA = () => {};
+  /** @type {Promise<unknown>} */
+  let heldWriteA = Promise.resolve();
   await page.route("**/busy-write*", async (route) => {
     const by = new URLSearchParams(route.request().postData() ?? "").get("by");
-    await new Promise((resolve) => setTimeout(resolve, by === "b" ? 0 : 600));
+    if (by === "a") await heldWriteA;
+    if (by === "go") await new Promise((resolve) => setTimeout(resolve, 600));
     const headers = by === "go" ? { "corten-location": "/" } : { "content-type": "text/html; charset=utf-8", "corten-patch": "1" };
     await route.fulfill({ headers, body: by === "go" ? "" : `<p id="busy-w-said">wrote ${by}</p>` }).catch(() => {});
   });
@@ -102,9 +109,14 @@ export async function busyForms(page) {
     }).observe(held, { attributes: true, attributeFilter: ["aria-busy"] });
   });
   const writeMarks = () => page.evaluate(() => ["busy-w", "busy-wa", "busy-wb"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join());
-  await page.click("#busy-wa");
-  await page.click("#busy-wb");
-  const whileWrite = await writeMarks();
+  heldWriteA = new Promise((resolve) => (answerWriteA = () => resolve(undefined)));
+  let whileWrite = "";
+  try {
+    await page.evaluate(() => document.getElementById("busy-wa")?.click());
+    whileWrite = await clickAndMarks("busy-wb", ["busy-w", "busy-wa", "busy-wb"]);
+  } finally {
+    answerWriteA();
+  }
   await page.waitForFunction(() => document.querySelector("#busy-w-said")?.textContent === "wrote b" && !document.querySelector("#busy-w[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
   const afterWrites = await writeMarks();
   check(
