@@ -293,7 +293,7 @@ For a gated negative attempt, the retained upstream and checker image references
 against the pins of the checkout that loads `verify.mjs`, so such an attempt measured before a
 pin moved fails from a newer checkout. The replay error names the pin it expected and the
 measured commit, but `verify.mjs` reports it only as invalid or contradictory evidence
-([#2026](https://github.com/corten-run/corten/issues/2026)).
+([#2026 Bench evidence checks still print a saved tool image through assert's diff, and the Catalog verifier drops the pin hint](https://github.com/corten-run/corten/issues/2026)).
 Complete and timed evidence does not compare these references with the checkout's pins; replay
 it from a checkout of its measured commit all the same.
 This is not host-isolation or independent source-audit approval. Those remain
