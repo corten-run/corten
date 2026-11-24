@@ -110,7 +110,7 @@ test("every local module used by the Catalog harness starts the harness", async 
     // Playwright's image takes its tag from package.json, which is shared tooling.
     if (!run || name === "Playwright's image" || run.startsWith("npm ci ") || run.startsWith("npm --prefix bench ci ")) return [];
     // A browser check runs the same command in that image.
-    const local = run.replace(/^\$PLAYWRIGHT(?:_WITH_DOCKER)? /, "");
+    const local = run.replace(/^\$\{PLAYWRIGHT(?:_WITH_DOCKER)?:\?\} /, "");
     const command = local === "npm run check:marketplace" ? packageScripts["check:marketplace"] : local;
     assert.match(command, /^node (?:--test )?bench\//, "trace new harness commands here");
     return command.replace(/^node (?:--test )?/, "").split(" ");
