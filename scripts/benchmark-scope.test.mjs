@@ -40,6 +40,20 @@ for (const [name, paths, apps, json] of [
   test(name, () => assert.deepEqual(selectScope(allApps, paths), { apps, json }));
 }
 
+// Every Catalog and Evidence job sets up Node from this file, so a pin bump alone has to run them
+// all on the new Node, not pass their scope jobs and skip the rest.
+test("a Node pin bump alone runs every Catalog app, both JSON jobs and both Evidence selections", () => {
+  const files = new Set(["catalog.yml", "benchmark-evidence.yml"].flatMap(name =>
+    Object.values(parse(readFileSync(new URL(`.github/workflows/${name}`, root), "utf8")).jobs)
+      .flatMap(job => job.steps ?? []).map(step => step.with?.["node-version-file"]).filter(Boolean)));
+  assert.deepEqual([...files], [".node-version"]);
+  for (const path of files) {
+    assert.deepEqual(selectScope(allApps, [path]), { apps: allApps, json: true }, path);
+    assert.equal(selectEvidence([path]), true, path);
+    assert.equal(selectKernel([path]), true, path);
+  }
+});
+
 test("fleet controller changes keep the harness, Corten build, JSON and evidence checks", () => {
   // First-parent diff of the stopped-sibling census fix at 63e7c3314.
   const controllers = ["CLOUD.md", "cloud-production.mjs", "droplet.mjs", "fleet-production.test.mjs",
@@ -423,5 +437,67 @@ test("PR and multi-commit push diffs see inputs beyond the hosted path-filter li
     const paths = eventPaths({ ...events[1], PUSH_BEFORE: before }, cwd);
     assert.equal(selectEvidence(paths), true);
     assert.equal(selectKernel(paths), true);
+  }
+});
+
+// The benchmark gates run on the framework CI's Node line and the release workflow's artifact
+// pin, so moving either is one edit and a literal Node or tag cannot drift back in. Each job that
+// needs Node or uploads evidence is named, so dropping its step fails instead of falling back to
+// the runner's default Node or losing that job's artifacts.
+const toolchainJobs = {
+  "catalog.yml": { node: ["scope", "harness", "parity", "json-harness", "json-aot"], upload: ["parity", "json-aot"] },
+  "benchmark-evidence.yml": { node: ["scope", "evidence", "kernel"], upload: [] },
+};
+
+function assertToolchain(workflows, pin) {
+  for (const [name, required] of Object.entries(toolchainJobs)) {
+    const jobs = workflows[name].jobs;
+    for (const job of [...required.node, ...required.upload]) assert.ok(jobs[job], `${name} has no job ${job}`);
+    for (const [job, { steps = [] }] of Object.entries(jobs)) {
+      const node = steps.filter((step) => step.uses?.startsWith("actions/setup-node@"));
+      const uploads = steps.filter((step) => step.uses?.startsWith("actions/upload-artifact@"));
+      if (required.node.includes(job)) assert.ok(node.length > 0, `${name} ${job} sets up no Node`);
+      if (required.upload.includes(job)) assert.ok(uploads.length > 0, `${name} ${job} uploads no artifact`);
+      for (const step of node) {
+        assert.equal(step.with?.["node-version-file"], ".node-version", `${name} ${job}`);
+        assert.equal(step.with?.["node-version"], undefined, `${name} ${job}`);
+      }
+      for (const step of uploads) assert.equal(step.uses, pin, `${name} ${job}`);
+    }
+  }
+}
+
+test("Catalog and Benchmark Evidence take Node from .node-version and upload-artifact from release.yml's pin", () => {
+  const read = (name) => parse(readFileSync(new URL(`.github/workflows/${name}`, root), "utf8"));
+  const pins = new Set(Object.values(read("release.yml").jobs).flatMap((job) => job.steps ?? [])
+    .map((step) => step.uses).filter((uses) => uses?.startsWith("actions/upload-artifact@")));
+  assert.equal(pins.size, 1);
+  const [pin] = pins;
+  assert.match(pin, /^actions\/upload-artifact@[0-9a-f]{40}$/);
+  const workflows = Object.fromEntries(Object.keys(toolchainJobs).map((name) => [name, read(name)]));
+  assertToolchain(workflows, pin);
+
+  // Each mutation leaves the rest of the workflow passing, so only the named job's gap fails.
+  const without = (name, job, prefix) => {
+    const copy = structuredClone(workflows);
+    const steps = copy[name].jobs[job].steps;
+    copy[name].jobs[job].steps = steps.filter((step) => !step.uses?.startsWith(prefix));
+    assert.ok(copy[name].jobs[job].steps.length < steps.length);
+    return copy;
+  };
+  const edit = (name, job, prefix, change) => {
+    const copy = structuredClone(workflows);
+    change(copy[name].jobs[job].steps.find((step) => step.uses?.startsWith(prefix)));
+    return copy;
+  };
+  for (const [workflowSet, message] of [
+    [without("catalog.yml", "parity", "actions/setup-node@"), /catalog\.yml parity sets up no Node/],
+    [without("catalog.yml", "json-aot", "actions/upload-artifact@"), /catalog\.yml json-aot uploads no artifact/],
+    [without("benchmark-evidence.yml", "kernel", "actions/setup-node@"), /benchmark-evidence\.yml kernel sets up no Node/],
+    [edit("catalog.yml", "json-harness", "actions/setup-node@", (step) => { step.with = { "node-version": 24 }; }), /catalog\.yml json-harness/],
+    [edit("benchmark-evidence.yml", "evidence", "actions/setup-node@", (step) => { step.with["node-version"] = 26; }), /benchmark-evidence\.yml evidence/],
+    [edit("catalog.yml", "json-aot", "actions/upload-artifact@", (step) => { step.uses = "actions/upload-artifact@v6"; }), /catalog\.yml json-aot/],
+  ]) {
+    assert.throws(() => assertToolchain(workflowSet, pin), message);
   }
 });

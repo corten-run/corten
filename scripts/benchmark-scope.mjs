@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
-const tooling = ["package.json", "package-lock.json", ".dockerignore", ".gitattributes", ".gitignore",
+// Every Catalog and Evidence job sets up Node from .node-version.
+const tooling = [".node-version", "package.json", "package-lock.json", ".dockerignore", ".gitattributes", ".gitignore",
   "scripts/benchmark-scope.mjs", "scripts/benchmark-scope.test.mjs", "scripts/steady.mjs"];
 const rustInputs = ["Cargo.toml", "Cargo.lock", ".cargo", "rust-toolchain", "rust-toolchain.toml", "crates"];
 // Exact paths only. Other workloads files can supply shared parity inputs.
