@@ -355,23 +355,50 @@ The failover benchmark is `node examples/listings-feed/bench/run.mjs`; see its h
 
 ## Benchmark results
 
-Every version of a committed file stays in every clone, even after it is deleted, so a benchmark
-commits its evidence, not its raw data. Committed evidence is the report, the summary and the
-provenance: small enough to diff and review. Raw data (per-request logs, traces, captures, a
-round's archive) stays outside the tree, and the committed provenance names where it is published
-and its SHA-256, as a group result's `provenance.json` does with `archiveSha256`. A benchmark's
-raw output goes by default to a path its `.gitignore` names (`bench/fullstack/pack.mjs` packs a
-round's into one ignored archive), and an output path given explicitly is used as given.
+Every version of a committed file stays in every clone, even after a later commit deletes it, so a
+benchmark commits its evidence, not its raw data. Committed evidence is the report, the summary and
+the provenance: small enough to diff and review. Raw data (per-request logs, traces, captures, a
+round's archive) stays outside the tree. A maintainer chooses where it is kept and publishes it
+there, and the committed provenance records a locator it can be fetched from and its SHA-256. A
+digest alone is not a locator: it checks a copy but does not say where one is (a group result's
+`provenance.json` records the digest as `archiveSha256`).
 
-`npm run check` runs `scripts/bench-size.mjs`, which reads the tree as committed and fails on a file
-under `bench/` that is an archive or compressed file (`.tar`, `.tgz`, `.gz`, `.xz`, `.zst`,
-`.bz2`, `.zip`, `.7z`) or larger than 256 KiB, unless `scripts/bench-size.allow` lists its
-path with its exact blob ID. The list holds the files that were in the tree when the check came.
-They stay where they are: removing one shrinks no clone, since history keeps every blob, and their
-paths are cited. A listed file that changes fails, and a line whose file is gone or no longer
-needs it fails until the line is removed, so the list only shrinks. A dependency lock file an app
-builds from (`Cargo.lock`, `package-lock.json`, `composer.lock` and the like) is source input,
-not output, so the size limit does not apply to it; an archive is refused whatever its name.
+A benchmark's `.gitignore` keeps part of its default raw output out of `git add`, not all of it.
+`bench/fullstack` ignores a round's packed `raw.tar.xz`, but not the loose raw files of a round
+not yet packed; `node bench/fullstack/pack.mjs <round>` packs them and prints the archive's
+SHA-256, and does not publish it or write the round's `raw.txt`. `bench/live` and
+`bench/recoverable-live` ignore the gzip files `parity.mjs` writes under their `results/`,
+leaving its `coverage.json`, `plan.json` and other JSON visible. Catalog and Marketplace ignore
+their results directories. An output path given explicitly is used as given.
+
+`npm run check` runs `scripts/bench-size.mjs`, which keeps raw data out of what a pull request
+merges. It does not publish, fetch or verify an archive.
+
+1. A file under `bench/` whose name ends in `.tar`, `.tgz`, `.gz`, `.xz`, `.zst`, `.bz2`,
+   `.zip` or `.7z` (in any case), or that is larger than 256 KiB, fails unless
+   `scripts/bench-size.allow` lists its path with its exact blob ID. The name is matched, not the
+   contents: an archive under another name is not found by the check, and review has to.
+2. The list holds the files that were in the tree when the check came. They stay where they are:
+   removing one shrinks no clone, since history keeps every blob, and their paths are cited. The
+   list only shrinks: each line must be in the base's list at the same path and blob, so a new or
+   changed line fails, even in the pull request that adds the file. A listed file that changes
+   fails, and a line whose file is gone or no longer needs it fails until the line is removed.
+3. Every commit the pull request brings is checked, not only its last one, since a merge commit
+   keeps them all: a file added in one commit and deleted or shrunk in the next still fails, and
+   the problem names the commit.
+4. A dependency lock file larger than 256 KiB is source input, not output, and passes when the same
+   commit has its manifest in the same directory: `Cargo.lock` with `Cargo.toml`;
+   `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml` or `bun.lock`
+   with `package.json`; `composer.lock` with `composer.json`; and the like for Ruby, Elixir,
+   Python, Go, Gradle and NuGet (`LOCKS` in the script). Without its manifest it is held to the
+   limit, and a lock file's name with an archive suffix (`package-lock.json.gz`) still fails.
+5. A path under `bench/` that is not valid UTF-8, has a control character (a newline or a tab
+   among them) or has a name starting or ending with white space fails as unsupported.
+
+The base is the commit the change merges into: `--base <revision>`, else `CORTEN_BENCH_SIZE_BASE`,
+else the first parent when the checked commit is a merge commit (CI checks the pull request's merge
+with `main`, with the whole history), else the merge base with `origin/main`. When none resolves,
+the check fails and says how to give one.
 
 ## Pull requests
 

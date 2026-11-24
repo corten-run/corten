@@ -1,7 +1,8 @@
 // Packs a round's raw output into results/<round>/raw.tar.xz, beside the summaries the README is
-// written from. The archive is not committed (bench/fullstack/.gitignore): it is published outside
-// the tree, and the round's raw.txt names where and the SHA-256 this prints for it
-// (CONTRIBUTING.md, Benchmark results). The archives of rounds committed before stay in the tree.
+// written from. The archive is not committed (bench/fullstack/.gitignore): a maintainer publishes
+// it outside the tree, and the round's raw.txt records where it can be fetched and its SHA-256
+// (CONTRIBUTING.md, Benchmark results). Run from the command line, this prints that SHA-256; it does
+// not publish the archive or write raw.txt. The archives of rounds committed before stay in the tree.
 // Usage: node bench/fullstack/pack.mjs <round> (droplet.mjs packs a finished round once it is
 // here; run this then to print the archive's SHA-256)
 //
@@ -136,6 +137,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const archive = join(dir, ARCHIVE);
   if (existsSync(archive)) {
     const sha256 = createHash("sha256").update(readFileSync(archive)).digest("hex");
-    console.log(`${ARCHIVE}: ${statSync(archive).size} bytes, SHA-256 ${sha256}; publish it outside the tree and name both in ${join(dir, "raw.txt")}`);
+    console.log(`${ARCHIVE}: ${statSync(archive).size} bytes, SHA-256 ${sha256}; record where it is published and this SHA-256 in ${join(dir, "raw.txt")}`);
   }
 }

@@ -588,8 +588,8 @@ one Node process, not two workers: its two-core quota does not make it use two c
 API CPU can cap HTTP-source throughput independently of the framework.
 
 Results go to `bench/catalog/results/cN/`, which Git ignores: a published round commits its report,
-summary and provenance, naming where its raw output is published and its SHA-256
-([Benchmark results](../../CONTRIBUTING.md#benchmark-results)). An existing round directory is never overwritten,
+summary and provenance, recording where a maintainer published its raw output, so it can be
+fetched, and its SHA-256 ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)). An existing round directory is never overwritten,
 including a failed or check-only round. Failures and cleanup errors make the command fail;
 only containers and the network with this invocation's ownership label are removed. The
 runner does not create cloud machines or operate the fullstack/nightly state. The CI

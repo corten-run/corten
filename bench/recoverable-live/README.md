@@ -28,8 +28,9 @@ remain partial rounds, never full-group readiness.
 `evidence/native-recovery-timing-limit/` preserves the earlier failed Corten
 round without rewriting its identity or relaxing the 10-second gates.
 These saved captures stay where they are, listed in `scripts/bench-size.allow`. A new round's
-captures go to `results/<round>/` here, which Git ignores: commit its summary and provenance,
-naming where the captures are published and their SHA-256
+captures go to `results/<round>/` here, whose gzip files Git ignores (its `coverage.json` and
+`plan.json` stay visible): commit its summary and provenance, recording where a maintainer
+published the captures, so they can be fetched, and their SHA-256
 ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)).
 
 Explicit `--measure` revalidates all six successful saved native recovery journeys before

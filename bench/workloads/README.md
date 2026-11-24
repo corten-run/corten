@@ -257,10 +257,12 @@ Each needs a workload-specific port or an explicit historical/unsupported/not-ru
 grouping never removes it or invents new measurements. No new cadence is defined here.
 
 A group's published result commits its report, summary and provenance, small enough to diff.
-The collected archive and other raw output stay outside the tree, and the provenance names where
-the archive is published and its SHA-256 (`archiveSha256`)
-([Benchmark results](../../CONTRIBUTING.md#benchmark-results)). `npm run check` fails on an
-archive or a file over 256 KiB under `bench/` that `scripts/bench-size.allow` does not list.
+The collected archive and other raw output stay outside the tree. A maintainer chooses where the
+archive is kept and publishes it there, and the provenance records where it can be fetched and its
+SHA-256 (`archiveSha256`); the digest alone is not a locator
+([Benchmark results](../../CONTRIBUTING.md#benchmark-results)). `npm run check` fails on a file
+under `bench/` with an archive suffix or over 256 KiB, in any commit of the pull request, unless
+the base's `scripts/bench-size.allow` lists it at that path and blob.
 
 Corten-only rendering/allocation/default-cost and TCP diagnostics remain separate from
 competitive rankings. The distributed listings-feed run and failover test remain separate,
