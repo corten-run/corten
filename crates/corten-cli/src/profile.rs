@@ -7,10 +7,10 @@
 //! `target/corten-profile`, so `target/release` never holds a binary that writes a profile, and
 //! a step that fails leaves the last release as it was. What can be told is wrong without
 //! building (no `llvm-profdata`, flags the profile's would replace, a system that cannot ask the
-//! app to stop, a command that is not there, a port `--port` names that something already
-//! listens on, another profiled build in the same target directory) is refused before the first
-//! step. What only the build tells (a package with two binaries) is refused after the
-//! instrumented build.
+//! app to stop, a command that is not there, another profiled build in the same target
+//! directory, and then a port `--port` names that something already listens on) is refused
+//! before the first step. What only the build tells (a package with two binaries) is refused
+//! after the instrumented build.
 //!
 //! The copy is looked for on one port, which it and the command are given in `PORT`: a free
 //! one, or the one `--port` names ([`Port`]). An app that binds a port of its own, and never
@@ -53,16 +53,18 @@ pub fn run(command: &[String], cargo: &[String], port: Option<u16>) -> Result<()
         return Err("run corten build in the app's directory (where Cargo.toml is)".into());
     }
     there(&command[0], std::env::var_os("PATH"))?;
-    if let Some(port) = port {
-        nothing_listens_on(port)?;
-    }
     let profdata = profdata(&root)?;
     let flags = base_flags(std::env::var_os("CARGO_ENCODED_RUSTFLAGS"), std::env::var_os("RUSTFLAGS"), || {
         Ok(set_elsewhere(&root, std::env::vars_os().map(|(name, _)| name), cargo_home()?))
     })?;
     let dir = target_directory(&root)?.join("corten-profile");
-    // Held until this returns: one profiled build at a time in a target directory.
+    // Held until this returns: one profiled build at a time in a target directory. Taken before
+    // the named port is looked at: what a second build of this directory finds listening there
+    // is the first one's copy, and it is told of that build, not to stop what listens.
     let _only = only_build_in(&dir)?;
+    if let Some(port) = port {
+        nothing_listens_on(port)?;
+    }
     let (written_by_build, runs, merged) = (dir.join("build"), dir.join("run"), dir.join("app.profdata"));
     // This run's own: a copy that an earlier build left running (a build ended by a signal
     // cannot stop it) writes into that build's directory when it exits, not into this one.
@@ -112,6 +114,9 @@ pub fn run(command: &[String], cargo: &[String], port: Option<u16>) -> Result<()
         return Err(format!("{shown} failed ({status}){copy}, so no profile was taken; target/release is as it was"));
     }
     stopped.map_err(unchanged)?;
+    if let Port::Named(named) = port {
+        nothing_listens_after(named).map_err(unchanged)?;
+    }
     let files = profiles(&taken);
     if files == 0 {
         return Err(
@@ -271,6 +276,21 @@ fn nothing_listens_on(port: u16) -> Result<(), String> {
     if accepts(port) {
         Err(format!(
             "something already listens on port {port}, the one --port named, and would answer the wait and the command in the instrumented app's place: the app itself (under corten dev, or run another way), or a copy that a cancelled corten build left running. Stop it and build again"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Refuses a port `--port` named that something listens on once the copy has exited. The wait
+/// could not tell whose socket accepted, and this one is not the copy's: a program that took
+/// the port between the build's last look and the copy's own bind answered the wait and the
+/// command, while a copy still starting had not yet failed to bind. (Or it began to listen in
+/// the moment since the copy left, which a look cannot tell from that.)
+fn nothing_listens_after(port: u16) -> Result<(), String> {
+    if accepts(port) {
+        Err(format!(
+            "something listens on port {port}, the one --port named, now that the instrumented app has exited: it is not the app, and may have answered the wait and the command in the app's place, which leaves a profile of an app that served nothing. Stop it and build again"
         ))
     } else {
         Ok(())
