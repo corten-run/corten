@@ -2295,7 +2295,11 @@ rules something out.
     which it merged, and round 15's head `d2f6c8731` (three rounds alternating the three builds,
     every run within 0.1 of the others): the `404` 1,177 more (19,155.6 against 17,978.5; round
     15's head 19,155.5), the plain page 126 more (16,421.6 against 16,295.6), 25 more than round
-    15's head (16,396.6), all of it `cache::settle` looking for round 16's `Personal` mark.
+    15's head (16,396.6), all of it `cache::settle` looking for round 16's `Personal` mark;
+    2026-11-23, the plain page at `75a353e3f` (round 17's code) against round 16's head `0f91c708d`,
+    built with Rust 1.100.0 (three rounds alternating the two builds, every run within 1.8 of the
+    others): 2 fewer (16,400.6 against 16,402.7), and the `404` was not counted again, as round 17 does
+    not change its path.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2921,7 +2925,17 @@ rules something out.
     much, which only lowers the measurement. Measure both profiles again before moving a
     measurement.
 
-    Last checked: 2026-11-23, the plain page in `tests::cache::what_settling_a_page_costs` at
+    Last checked: 2026-11-23, at `75a353e3f` (round 17's code) against round 16's head `0f91c708d`,
+    built with Rust 1.100.0 (three rounds alternating the two builds and `ea8dd1ea8`, every run within
+    1.8 of the others): the plain page 2 fewer (16,400.6 against 16,402.7), the settle probe's
+    `cookie` page, a `Cache` answer that sets a cookie, which round 17 marks `Personal` for an app that
+    relays it inline, 137 more (19,580.5 against 19,443.6), all of it the mark: the hash map's insert
+    in the answer's extensions (+81), `Extensions::insert` (+19), the map's drop (+18) and `settle`
+    (+19), and a
+    tool's answer from an endpoint whose `Tools::auth` found its caller 12 more (29,641.8 against
+    29,629.8, and `ea8dd1ea8`, which looked for the cookie of an answer already marked, 114 more, in the
+    header map's lookups). These are instructions in process, not cycles, as below; 2026-11-23, the
+    plain page in `tests::cache::what_settling_a_page_costs` at
     `b5f02010b` (round 16's code) against main `6f1bbf055`, which it merged, and round 15's head
     `d2f6c8731` (three rounds alternating the three builds, every run within 3.6 of the others):
     126 more (16,421.6 against 16,295.6), 25 more than round 15's head (16,396.6), all of it in
