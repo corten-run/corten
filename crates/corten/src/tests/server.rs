@@ -2577,13 +2577,20 @@ fn a_runtime_with_no_clock_answers_500_and_goes_on_serving_the_connection() {
 #[tokio::test(start_paused = true)]
 async fn a_deadline_something_else_polls_inside_a_connections_poll_makes_its_own_timer() {
     use crate::deadline::Timer;
-    use std::{future::Future, pin::pin, task::Poll};
-    struct Other;
+    use std::{
+        future::Future,
+        pin::pin,
+        sync::atomic::{AtomicUsize, Ordering::Relaxed},
+        task::Poll,
+    };
+    struct Other(AtomicUsize);
     impl std::task::Wake for Other {
-        fn wake(self: Arc<Self>) {}
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Relaxed);
+        }
     }
     let (short, long) = (Duration::from_secs(10), Duration::from_secs(20));
-    let other = std::task::Waker::from(Arc::new(Other));
+    let other = std::task::Waker::from(Arc::new(Other(AtomicUsize::new(0))));
     let before = taken();
     let mut seen = Vec::new();
     {
@@ -2804,8 +2811,12 @@ async fn deadlines_under_one_limit_on_eight_threads_fire_and_none_before_its_lim
             let (fired, kept) = request(limit, work).await;
             assert!(kept, "connection {conn}, request {n}: on its connection's timer");
             match work {
-                Some(_) => assert!(fired.is_none_or(|took| took >= limit), "connection {conn}, request {n}: {fired:?}, before {limit:?}"),
-                None => assert!(fired.is_some_and(|took| took >= limit), "connection {conn}, request {n}: {fired:?} of {limit:?}"),
+                Some(_) => {
+                    assert!(fired.is_none_or(|took| took >= limit), "connection {conn}, request {n}: {fired:?}, before {limit:?}")
+                }
+                None => {
+                    assert!(fired.is_some_and(|took| took >= limit), "connection {conn}, request {n}: {fired:?} of {limit:?}")
+                }
             }
         }
     }
