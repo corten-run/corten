@@ -2165,8 +2165,9 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    warm-up must have been idle 4.5 to below 4.75 s, or closed under 4.75 s idle before the probe;
    when the app replies does not matter. A request arrives when the read that completes its head
    reaches the upstream, before the upstream prepares its answer. A probe outside that window (a
-   late timer, an app that holds a request before sending it upstream, warm answers spread over
-   250 ms or more), or after any upstream request between the warm-up and the probe, is
+   late timer, an app that holds a request before sending it upstream, the still-open warmed
+   connections' answers spread over 250 ms or more), or after any upstream request between the
+   warm-up and the probe, is
    inconclusive and fails the check (`--bound-ms` sets the bound; see the script's header). It also requires the
    pool to reuse a connection before the idle, so Laravel's image needs `--no-reuse`. Drogon also hands the fixture
    parser's freed memory back to the system after loading (`malloc_trim`), so its memory with items

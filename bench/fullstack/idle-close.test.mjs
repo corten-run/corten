@@ -24,6 +24,7 @@ function fakeDocker(answer) {
   };
   return { run, calls, ports };
 }
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const owned = (runId, extra = {}) => JSON.stringify([{ Id: extra.Id, Config: { Labels: { [ownerKey]: runId } }, ...extra }]);
 
 // Whether nothing accepts a connection on `port` any more.
@@ -316,10 +317,10 @@ const warmUp = (lasts) => [...lasts.map((_, i) => answer(i, 900 + i)), ...lasts.
 // Probe requests on connections of their own, numbered from `from`.
 const fresh = (arrivals, from = 10) => arrivals.map((t, i) => answer(from + i, t));
 // One read judged as checkImage judges it: planned at the end of the first wait (or `planAt`) from
-// the idle's events by then, the probe's events kept only if one was made.
+// the warm-up's events and the idle's by then, the probe's events kept only if one was made.
 function judged({ warm, idle = [], probe = [], planAt }) {
   const conns = warmedSet(warm, T), now = planAt ?? firstWait(conns, limits) ?? 0;
-  const plan = planProbe(conns, idle.filter((e) => (e.time ?? e.arrival) <= now), now, limits);
+  const plan = planProbe(conns, [...warm, ...idle.filter((e) => (e.time ?? e.arrival) <= now)], now, limits);
   return judgeRead({ target: T, warmStatuses: warm.filter(isRequest).map(() => 200), warmEvents: warm, plan, idleEvents: idle,
     statuses: plan.skipped ? [] : probe.filter(isRequest).map(() => 200), probeEvents: plan.skipped ? [] : probe, sentMs: plan.skipped ? null : 4500, limits, bound: boundMs });
 }
@@ -413,6 +414,30 @@ test("a warm-up spread as wide as the window is not probed, and a straggler clos
   assert.equal(judged({ warm: [] }).after.probe.skipped, "no upstream answer in the warm-up");
 });
 
+test("a warmed connection closed during the warm-up is counted closed in time, not taken as open", () => {
+  // The review's sequence: warm answers 300 ms apart on connections of their own, the first closed
+  // 1 ms after its answer, inside the warm-up, so only the second is open and timed.
+  const warm = [answer(0, 1000), shut(0, 1002), answer(1, 1300)];
+  const read = judged({ warm, probe: fresh([5802, 5803]) });
+  assert.deepEqual([read.warm.connections, read.warm.open, read.warm.spreadMs], [2, 1, 0]);
+  assert.equal(read.after.probe.skipped, undefined);
+  assert.deepEqual([read.after.probe.fromMs, read.after.probe.toMs, read.after.probe.closedInTime], [5802 - 1301, 5803 - 1301, 1]);
+  assert.equal(read.after.inconclusive, false);
+  // The warm-up's requests are not traffic during the idle.
+  assert.equal(read.after.probe.interrupted, undefined);
+  assertPasses(resultOf({ catalog: read }), { reuse: false });
+  // Six connections of their own, two bursts 400 ms apart, every one closed inside the warm-up: none
+  // is open, so the spread does not apply and the probe is made; all six are counted.
+  const six = [0, 1, 2, 3, 4, 5].flatMap((i) => { const t = (i < 3 ? 1000 : 1400) + i; return [answer(i, t), shut(i, t + 2)]; });
+  const unpooled = judged({ warm: six, probe: fresh([5904, 5905, 5906]) });
+  assert.deepEqual([unpooled.warm.open, unpooled.after.probe.skipped, unpooled.after.probe.closedInTime, unpooled.after.inconclusive], [0, undefined, 6, false]);
+  assertPasses(resultOf({ catalog: unpooled }), { reuse: false });
+  // A connection that closed in the warm-up only after idling past the window is still timed.
+  const held = judged({ warm: [answer(0, 1000), answer(1, 1001), shut(0, 5800)], planAt: 5800, probe: fresh([5900]) });
+  assert.equal(held.after.probe.closedInTime, 0);
+  assert.equal(held.after.inconclusive, true);
+});
+
 test("any upstream request between the warm-up and the probe makes the read inconclusive", () => {
   const warm = warmUp([1000, 1001]), probe = [answer(0, 5502, { idle: 2001 }), answer(1, 5503, { idle: 2001 })];
   // The review's control: two ordinary GETs 2.5 s into the wait refresh both warmed connections. Judged
@@ -459,38 +484,62 @@ test("the success line ranges over timed probes only and says when nothing neede
 });
 
 // A stand-in for an app image: a server that reads API_BASE through an HTTP agent, so its pool's idle
-// bound is chosen by the test. `agent: false` opens a connection per request. `expireMs` closes a
-// pooled connection idle that long, on a timer of the stand-in's own rather than Node's.
-// `intervene: { after, inMs, count, sent }` sends `count` upstream GETs on the pool `inMs` after the
-// app's `after`th request (from 1) is answered, pushing each to `sent`.
-function standInDocker(runId, agentOptions, { intervene } = {}) {
+// bound is chosen by the test. `agent: false` opens a connection per request. `expireMs` is the
+// pool's idle bound, decided when a request takes a connection from the pool: a free connection whose
+// last request began `expireMs` or longer ago is closed and never handed out, however late any timer
+// runs. Its idle is counted from when that request began, which precedes the upstream's answer, so it
+// is never less than the idle the upstream records, even when the runner stalls between the answer
+// and the stand-in reading it. A timer also closes it when the runner is on time, as a real pool's would.
+// `delayMs(n)` holds the app's `n`th request (from 1) before it goes upstream, and `holdMs` holds
+// every reply after the upstream answered, so the stand-in's own upstream connection closes first.
+// The returned client's `intervene(count)` sends `count` upstream GETs on the pool at once.
+function standInDocker(runId, agentOptions, { delayMs, holdMs = 0 } = {}) {
   const { expireMs, ...options } = agentOptions ?? {};
   const containerId = id(9);
-  let app, removed = false;
+  let app, upstream, removed = false;
   const docker = fakeDocker(async (args) => {
     if (args[0] === "create") {
       const base = args[args.findIndex((a) => a.startsWith("API_BASE="))].slice("API_BASE=".length).replace("host.docker.internal", "127.0.0.1");
       const agent = agentOptions && new Agent(options);
-      if (expireMs) agent.on("free", (socket) => { clearTimeout(socket.expiry); socket.expiry = setTimeout(() => socket.destroy(), expireMs); });
-      const upstream = (path) => new Promise((resolve) => {
+      if (expireMs) {
+        agent.on("free", (socket) => {
+          clearTimeout(socket.expiry);
+          socket.expiry = setTimeout(() => socket.destroy(), expireMs);
+        });
+      }
+      // The pool's expiry at checkout: drop every free connection idle `expireMs` or longer before
+      // the agent picks one, so a stale connection is never reused even if its timer has not fired.
+      const expire = () => {
+        for (const [name, free] of Object.entries(agent.freeSockets)) {
+          for (const socket of [...free]) {
+            if (performance.now() - socket.usedAt < expireMs) continue;
+            free.splice(free.indexOf(socket), 1);
+            socket.destroy();
+          }
+          if (!free.length) delete agent.freeSockets[name];
+        }
+      };
+      upstream = (path) => new Promise((resolve) => {
+        if (expireMs) expire();
         const up = request(base + path, { agent: agent || false }, (answer) => {
           clearTimeout(answer.socket.expiry);
           const chunks = [];
           answer.on("data", (c) => chunks.push(c));
           answer.on("end", () => resolve({ status: answer.statusCode, body: Buffer.concat(chunks) }));
         });
+        // Assigned before the request is written, so before the upstream can read or answer it.
+        up.once("socket", (socket) => { socket.usedAt = performance.now(); clearTimeout(socket.expiry); });
         up.on("error", () => resolve({ status: 502, body: Buffer.alloc(0) }));
         up.end();
       });
       let served = 0;
       app = createServer(async (req, res) => {
-        const n = ++served;
+        const n = ++served, delay = delayMs?.(n) ?? 0;
+        if (delay) await sleep(delay);
         const { status, body } = await upstream({ "/catalog/record_1": "/catalog/records/record_1", "/api/marketplace/item_1": "/marketplace/records/item_1" }[req.url]);
+        if (holdMs) await sleep(holdMs);
         res.writeHead(status === 200 ? 200 : 502, { connection: "close" });
         res.end(body);
-        if (intervene && n === intervene.after) {
-          setTimeout(() => { for (let i = 0; i < intervene.count; i++) { intervene.sent.push(performance.now()); upstream("/catalog/records/record_1"); } }, intervene.inMs);
-        }
       });
       app.agent = agent;
       await new Promise((done) => app.listen(0, "127.0.0.1", done));
@@ -502,25 +551,34 @@ function standInDocker(runId, agentOptions, { intervene } = {}) {
     if (args[0] === "rm") { removed = true; app.agent?.destroy(); app.closeAllConnections(); await new Promise((done) => app.close(done)); return containerId; }
     assert.fail(args.join(" "));
   });
+  docker.intervene = (count) => Array.from({ length: count }, () => upstream("/catalog/records/record_1"));
   return docker;
 }
 
 test("against stand-in apps on real sockets, a healthy pool never fails and a stale or interrupted one never passes, however the runner is timed", async () => {
   // Real timers on a shared runner can put any probe outside its window; that is inconclusive, so
   // these assertions accept it, and assert only what a slow runner cannot flip.
-  const run = (name, agent, extra = {}, shape) => checkImage("img", { names: ["catalog"], concurrency: 3, docker: standInDocker(name, agent, shape).run, runId: name, window: 50, ...extra });
+  const run = (name, agent, extra = {}, docker = standInDocker(name, agent)) => checkImage("img", { names: ["catalog"], concurrency: 3, docker: docker.run, runId: name, window: 50, ...extra });
   const stale = { keepAlive: true, agentKeepAliveTimeoutBuffer: 200, expireMs: 4800 }, sent = [];
+  // The review's control on two pooled sockets: two ordinary GETs go upstream 2.5 s into the first
+  // idle wait, sent from the wait itself, which returns only once the upstream has recorded both, so
+  // they fall in the idle however the runner is timed (the upstream records a request before it answers).
+  const meddler = standInDocker("interrupted", { ...stale, maxSockets: 2 });
+  const meddle = async (ms) => {
+    if (sent.length) return sleep(ms);
+    await sleep(Math.min(ms, 2500));
+    sent.push(...meddler.intervene(2));
+    await Promise.all(sent);
+  };
   const [healthy, frozen, unpooled, late, interrupted] = await Promise.all([
-    // A 2 s pool: every warmed connection is closed long before the probe.
-    run("healthy", { keepAlive: true, timeout: 2000 }),
+    // A 2 s pool: no warmed connection idle 2 s is reused, and on time each is closed long before the probe.
+    run("healthy", { keepAlive: true, expireMs: 2000 }),
     // Every event stamped 0 ms: only the event order tells readiness from the warm bursts.
-    run("frozen", { keepAlive: true, timeout: 2000 }, { stamp: () => 0 }),
+    run("frozen", { keepAlive: true, expireMs: 2000 }, { stamp: () => 0 }),
     run("unpooled", null),
     // A pool that drops a connection idle 4.8 s, between the bound and the upstream's close.
     run("late", stale),
-    // The review's control on two pooled sockets: readiness is the app's first request and the two
-    // warm bursts of three the next six, so two ordinary GETs go upstream 2.5 s into the idle.
-    run("interrupted", { ...stale, maxSockets: 2 }, {}, { intervene: { after: 7, inMs: 2500, count: 2, sent } }),
+    run("interrupted", null, { idleWait: meddle }, meddler),
   ]);
   const verdict = (result, options) => { try { assertPasses(result, options); return "pass"; } catch (error) { return error.message; } };
   for (const [result, options] of [[healthy], [frozen], [unpooled, { reuse: false }]]) {
@@ -540,7 +598,25 @@ test("against stand-in apps on real sockets, a healthy pool never fails and a st
   if (!late.reads.catalog.after.inconclusive) assert.match(verdict(late), /idle 4000 ms or more was reused/);
   assert.notEqual(verdict(interrupted), "pass");
   assert.equal(sent.length, 2);
+  assert.deepEqual((await Promise.all(sent)).map((r) => r.status), [200, 200]);
   if (!interrupted.reads.catalog.after.probe.skipped) assert.ok(interrupted.reads.catalog.after.probe.interrupted, JSON.stringify(interrupted.reads.catalog.after));
+});
+
+test("on real sockets, a client that opens a connection per request and closes each during a staggered warm-up is probed and passes without reuse", async () => {
+  // Readiness is request 1 and the warm bursts of three are 2 to 4 and 5 to 7. The second burst is
+  // held 300 ms before going upstream, so the warm answers span over the window's 250 ms, and every
+  // reply waits 50 ms after its upstream answer, so each upstream connection is seen closed inside
+  // the warm-up. None is open: the probe is made and all six are counted closed in time.
+  const docker = standInDocker("staggered", null, { delayMs: (n) => (n >= 5 && n <= 7 ? 300 : 0), holdMs: 50 });
+  const result = await checkImage("img", { names: ["catalog"], concurrency: 3, docker: docker.run, runId: "staggered", window: 50 });
+  const { warm, after } = result.reads.catalog;
+  assert.deepEqual(warm.statuses, Array(6).fill(200));
+  assert.equal(warm.reused, 0);
+  assert.ok(warm.spreadMs === 0 && warm.open === 0, JSON.stringify(warm));
+  assert.equal(after.probe.skipped, undefined, JSON.stringify(after.probe));
+  assert.deepEqual([after.probe.closedInTime, after.probe.arrivals, after.inconclusive], [6, 3, false], JSON.stringify(after.probe));
+  assertPasses(result, { reuse: false });
+  assert.throws(() => assertPasses(result), /no upstream connection was reused before the idle/);
 });
 
 test("the idle wait rechecks the clock after an early wake and returns at once when the target has passed", async () => {

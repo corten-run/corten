@@ -26,7 +26,8 @@
 // One exception: a warmed connection the upstream saw close before the probe's first request,
 // while it was idle under 4.75 s, cannot be reused and was not held past the window, so it is
 // counted (`closedInTime`) rather than timed; a client that opens a connection per request closes
-// every one this way. A connection closed at 4.75 s idle or later is timed like an open one.
+// every one this way. A close counts from the warm-up's start, so a connection closed during the
+// warm-up itself is counted too, never taken as open; the warm-up's requests are not idle traffic. A connection closed at 4.75 s idle or later is timed like an open one.
 // The wait first runs until the oldest warmed connection is idle 4.5 s (by then the upstream has
 // seen the close of any connection the app ended with its request), then on until the newest one
 // still open is too, which needs the open ones' warm answers to span less than the window's 250 ms;
@@ -122,14 +123,15 @@ export function warmedSet(warmEvents, target) {
 export const firstWait = (conns, limits) => (conns.length ? span(conns).oldest + limits.fromMs : null);
 
 /**
- * Whether and when to probe, at `now`, after the first wait, from the events since the warm-up. The
- * connections still open must all be inside the window at one moment, so their warm answers must
- * span less than it; the probe goes once the newest is idle `fromMs`. Returns `{ open, spread, at }`,
- * or `{ open, spread, skipped }` with the reason no probe is made.
+ * Whether and when to probe, at `now`, after the first wait, from the read's events since its
+ * warm-up began (`sinceWarmStart`), so a connection closed during the warm-up is not taken as open.
+ * The connections still open must all be inside the window at one moment, so their warm answers
+ * must span less than it; the probe goes once the newest is idle `fromMs`. Returns
+ * `{ open, spread, at }`, or `{ open, spread, skipped }` with the reason no probe is made.
  */
-export function planProbe(conns, sinceWarm, now, limits) {
+export function planProbe(conns, sinceWarmStart, now, limits) {
   if (!conns.length) return { open: 0, spread: 0, skipped: "no upstream answer in the warm-up" };
-  const closed = closes(sinceWarm), open = conns.filter((c) => !closedInTime(c, closed, now, limits));
+  const closed = closes(sinceWarmStart), open = conns.filter((c) => !closedInTime(c, closed, now, limits));
   const timing = span(open.length ? open : conns), spread = open.length ? timing.newest - timing.oldest : 0;
   if (spread >= limits.belowMs - limits.fromMs) return { open: open.length, spread, skipped: `the warm answers span ${ms(spread)} ms, not less than the window's ${limits.belowMs - limits.fromMs} ms` };
   return { open: open.length, spread, at: timing.newest + limits.fromMs };
@@ -139,7 +141,8 @@ export function planProbe(conns, sinceWarm, now, limits) {
  * One read's verdict from its recorded events: `warmEvents` (the warm bursts), `idleEvents` (from
  * the warm-up's end to the probe's dispatch, or to the skip) and `probeEvents` (from the dispatch).
  * Each probe request is judged at its arrival against every warmed connection not closed in time
- * by the first arrival; any request during the idle makes the probe inconclusive (`interrupted`).
+ * by the first arrival, counting closes from the warm-up's start; any request during the idle (not
+ * the warm-up's own) makes the probe inconclusive (`interrupted`).
  * Returns `{ warm, after, closedIdle, reusedPastBound }`, the last two from the idle and the probe.
  */
 export function judgeRead({ target, warmStatuses, warmEvents, plan, idleEvents = [], statuses = [], probeEvents = [], sentMs = null, limits, bound }) {
@@ -153,7 +156,7 @@ export function judgeRead({ target, warmStatuses, warmEvents, plan, idleEvents =
   if (plan.skipped) {
     after = { statuses: [], answers: 0, connections: [], probe: { fromMs: null, toMs: null, arrivals: 0, skipped: plan.skipped, ...(interrupted && { interrupted }) } };
   } else {
-    const seen = answers(probeEvents), arrivals = seen.map((e) => e.arrival), first = Math.min(...arrivals), closed = closes(later);
+    const seen = answers(probeEvents), arrivals = seen.map((e) => e.arrival), first = Math.min(...arrivals), closed = closes([...warmEvents, ...later]);
     const timed = arrivals.length ? conns.filter((c) => !closedInTime(c, closed, first, limits)) : conns;
     const judged = timed.length && arrivals.length ? span(timed) : null;
     const probe = { fromMs: judged && first - judged.newest, toMs: judged && Math.max(...arrivals) - judged.oldest,
@@ -463,7 +466,8 @@ export async function checkImage(image, { names = ["catalog", "marketplace", "it
       // Wait until the oldest warmed connection is idle `fromMs`; by then the upstream has seen the
       // close of any the app ended with its request, so the open ones are known.
       if (conns.length) await waitUntil(firstWait(conns, limits), { wait: idleWait });
-      const plan = planProbe(conns, events.slice(warmEnd), performance.now(), limits);
+      // Closes during the warm-up count: a connection the app ended then is not open.
+      const plan = planProbe(conns, events.slice(warmMark), performance.now(), limits);
       let dispatch = events.length, statuses = [], sentMs = null;
       if (!plan.skipped) {
         // On until the newest open warmed connection is idle `fromMs` too, which the spread leaves
