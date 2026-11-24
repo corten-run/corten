@@ -1,4 +1,5 @@
 #include "items.h"
+#include "record_http.h"
 
 #include <drogon/HttpClient.h>
 #include <drogon/utils/Utilities.h>
@@ -7,6 +8,8 @@
 #include <trantor/utils/Logger.h>
 #include <malloc.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -27,17 +30,21 @@ std::string env(const char *name, const char *fallback)
 }
 
 // A client holds one connection, so each IO thread keeps the idle ones and opens another when
-// all are busy: concurrent requests do not queue behind one another.
-thread_local std::vector<HttpClientPtr> idleClients;
+// all are busy: concurrent requests do not queue behind one another. Each idle client is kept
+// with the time it went idle, oldest first, and dropped once idle for record_http::upstreamIdle.
+thread_local std::vector<std::pair<HttpClientPtr, std::chrono::steady_clock::time_point>> idleClients;
 
 HttpClientPtr takeClient()
 {
+    const auto now = std::chrono::steady_clock::now();
+    idleClients.erase(idleClients.begin(), std::find_if(idleClients.begin(), idleClients.end(),
+                                                        [&](const auto &idle) { return now - idle.second < record_http::upstreamIdle; }));
     if (idleClients.empty())
     {
         static const std::string base = env("API_BASE", "http://localhost:8080");
         return HttpClient::newHttpClient(base, trantor::EventLoop::getEventLoopOfCurrentThread());
     }
-    auto client = std::move(idleClients.back());
+    auto client = std::move(idleClients.back().first);
     idleClients.pop_back();
     return client;
 }
@@ -95,7 +102,7 @@ void get(const std::string &id, std::function<void(ItemPtr item, bool failed)> d
     auto req = HttpRequest::newHttpRequest();
     req->setPath("/api/discovery/items/" + utils::urlEncodeComponent(id));
     client->sendRequest(req, [client, done = std::move(done)](ReqResult result, const HttpResponsePtr &res) {
-        idleClients.push_back(client);
+        idleClients.emplace_back(client, std::chrono::steady_clock::now());
         if (result != ReqResult::Ok)
         {
             LOG_ERROR << "item API: " << result;

@@ -1,0 +1,1 @@
+- The benchmark apps are set to drop a pooled upstream connection idle 4 seconds (1 for Spring), under the upstreams' 5-second keep-alive, and the catalog load counts each failed request by class. [#1569 Benchmark r21 lean catalog: Corten HTTP page returns 500 on an upstream connection reset](https://github.com/corten-run/corten/issues/1569)

@@ -39,13 +39,18 @@ builder.Services.AddProblemDetails();
 builder.Services.AddResponseCompression();
 // A request that has not started its answer in 10 seconds gets a 503, as card-market's deadline.
 builder.Services.AddRequestTimeouts(o => o.DefaultPolicy = new RequestTimeoutPolicy { Timeout = TimeSpan.FromSeconds(10), TimeoutStatusCode = StatusCodes.Status503ServiceUnavailable });
-builder.Services.AddHttpClient(nameof(ItemSource), c => c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("API_BASE") ?? "http://localhost:8080"));
+// Every upstream client drops a pooled connection idle for 4 s, under the 5 s keep-alive each
+// benchmark upstream advertises, so no read is written to a connection the upstream is closing
+// (bench/fullstack/README.md). The handler's own default is 1 minute.
+var upstreamIdle = TimeSpan.FromSeconds(4);
+builder.Services.AddHttpClient(nameof(ItemSource), c => c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("API_BASE") ?? "http://localhost:8080"))
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { PooledConnectionIdleTimeout = upstreamIdle });
 builder.Services.AddSingleton(s => ItemSource.FromEnv(s.GetRequiredService<IHttpClientFactory>()));
 builder.Services.AddHttpClient(nameof(CatalogSource), c => c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("API_BASE") ?? "http://localhost:8080"))
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, PooledConnectionIdleTimeout = upstreamIdle });
 builder.Services.AddSingleton<CatalogSource>();
 builder.Services.AddHttpClient(nameof(MarketplaceSource), c => c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("API_BASE") ?? "http://localhost:8080"))
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, PooledConnectionIdleTimeout = upstreamIdle });
 builder.Services.AddSingleton<MarketplaceSource>();
 builder.Services.AddHealthChecks().AddCheck<ItemsReachable>("items", tags: ["ready"]);
 

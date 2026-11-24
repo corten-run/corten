@@ -40,6 +40,7 @@ func newItemSource() (*itemSource, error) {
 	// host, so it may keep as many as the transport keeps in all.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConnsPerHost = transport.MaxIdleConns
+	transport.IdleConnTimeout = upstreamIdle // record_http.go
 	s.client = &http.Client{Transport: transport}
 	return s, nil
 }
