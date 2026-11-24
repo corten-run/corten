@@ -10,7 +10,7 @@ import { debuglog } from "node:util";
 import { url as inspectorUrl } from "node:inspector";
 import { controlCheckpoint, controlEnvironment } from "./cloud-transport.mjs";
 import { fleetCatalogCommand, fleetCatalogSlugs, preloginUserData, providerCreateHost } from "./cloud-contract.mjs";
-import { providerDiagnostic, providerFailure, unsentDelete } from "./cloud-options.mjs";
+import { catalogClosureDetails, providerDiagnostic, providerFailure, unsentDelete } from "./cloud-options.mjs";
 
 const origin = "https://api.digitalocean.com";
 const stopped = (uncertain = false, diagnostic) => Object.assign(new Error("provider control failed; preserve state/evidence/host"),
@@ -57,9 +57,10 @@ async function placementCatalog(call) {
   return catalog;
 }
 // Private object identity, never a caller-supplied property or public diagnostic.
-const closedAccountRequests = new WeakMap(), settledAccountFailures = new WeakSet();
+const closedReads = new WeakMap(), settledAccountFailures = new WeakSet(), settledCatalogFailures = new WeakSet();
 const unsentDeletes = new WeakSet();
 export const isSettledAccountFailure = (error) => settledAccountFailures.has(error);
+export const isSettledCatalogFailure = (error) => settledCatalogFailures.has(error);
 const diagnosticOption = /^--(?:inspect(?:-brk|-wait)?|trace-tls|tls-keylog|heapsnapshot-signal|heap-prof|cpu-prof|report-on-signal|report-on-fatalerror|report-uncaught-exception|trace-events-enabled|trace-event-categories|experimental-network-inspection)$/;
 function nodeOptionArgs(text) {
   // Match Node's ParseNodeOptionsEnvVar: spaces separate arguments outside
@@ -93,9 +94,9 @@ function privateDiagnostics() {
     throw new Error("provider diagnostics must be disabled");
 }
 
-// One clock for an account command, including credential consumption, native
-// callbacks, any retry and final settlement. A later sample cannot undo a rollback.
-function accountClock(clock) {
+// One clock for the proved reads, including credential consumption, native
+// callbacks and final settlement. A later sample cannot undo a rollback.
+function readClock(clock) {
   let latest = -Infinity;
   return () => {
     const current = clock();
@@ -104,13 +105,15 @@ function accountClock(clock) {
   };
 }
 
-function restRequest({ method, path, credential, body, timeout, accountDeadline = Infinity, now = Date.now, interrupted = () => false, deleteProofExpiresAtMs, catalog = false }, connect, resources) {
+function restRequest({ method, path, credential, body, timeout, readDeadline = Infinity, now = Date.now, interrupted = () => false,
+  deleteProofExpiresAtMs, catalog = false, settleCatalog = false }, connect, resources) {
   return new Promise((resolve, reject) => {
     let settled = false, informationSeen = false, connectEntered = false, sendEntered = false, req, timer, cancellation, failureDetail = "internal-refusal";
     const account = method === "GET" && path === "/v2/account";
-    const started = now(), expires = Math.min(started + timeout, accountDeadline);
-    if (account && !(started < expires)) {
-      reject(stopped(true, { code: "account-request", detail: "deadline" })); return;
+    const readCode = account ? "account-request" : catalog ? "catalog-request" : undefined;
+    const started = now(), expires = Math.min(started + timeout, readDeadline);
+    if (readCode && !(started < expires)) {
+      reject(stopped(true, { code: readCode, detail: "deadline" })); return;
     }
     let lastTime = started, outcome;
     const inTime = () => {
@@ -130,13 +133,13 @@ function restRequest({ method, path, credential, body, timeout, accountDeadline 
       settled = true; clearTimeout(timer); clearInterval(cancellation); resources.notify.delete(closed);
       const { detail, result, reset } = outcome;
       if (detail) {
-        const error = stopped(true, account ? { code: "account-request", detail } : undefined);
+        const error = stopped(true, readCode ? { code: readCode, detail } : undefined);
         if (deleteProofExpiresAtMs !== undefined && method === "DELETE" && !sendEntered && !record.responseSeen
           && (!connectEntered || req instanceof ClientRequest && req.destroyed && !req.headersSent)) unsentDeletes.add(error);
-        if (proof) closedAccountRequests.set(error, { at: lastTime, reset });
+        if (proof) closedReads.set(error, { at: lastTime, reset });
         reject(error);
       } else {
-        if (proof) closedAccountRequests.set(result, { at: lastTime });
+        if (proof) closedReads.set(result, { at: lastTime });
         resolve(result);
       }
     };
@@ -160,7 +163,8 @@ function restRequest({ method, path, credential, body, timeout, accountDeadline 
       if (detail) {
         req?.destroy();
       }
-      if (account && record.native && !["internal-refusal", "connect", "deadline", "cancelled"].includes(detail)) {
+      if (record.native && (account && !["internal-refusal", "connect", "deadline", "cancelled"].includes(detail)
+        || settleCatalog && catalogClosureDetails.includes(detail))) {
         resources.notify.add(closed); closed();
       } else complete(false);
     };
@@ -169,7 +173,7 @@ function restRequest({ method, path, credential, body, timeout, accountDeadline 
       assert.ok(path.startsWith("/v2/") && !path.startsWith("//"));
       assert.ok(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 900000);
       failureDetail = "cancelled"; assert.ok(!interrupted()); failureDetail = "internal-refusal";
-      if (account && !inTime()) { finish("deadline"); return; }
+      if (readCode && !inTime()) { finish("deadline"); return; }
       const input = body === undefined ? undefined : JSON.stringify(body);
       const fresh = () => {
         if (deleteProofExpiresAtMs === undefined) return;
@@ -187,7 +191,7 @@ function restRequest({ method, path, credential, body, timeout, accountDeadline 
         const chunks = []; let bytes = 0;
         res.on("data", (chunk) => {
           bytes += chunk.length;
-          if (bytes > 16 * 1024 ** 2) { res.destroy(); finish("body-limit"); } else chunks.push(chunk);
+          if (bytes > 16 * 1024 ** 2) { finish("body-limit"); res.destroy(); } else chunks.push(chunk);
         });
         res.on("error", () => finish("response-error"));
         res.on("aborted", () => finish("response-aborted"));
@@ -224,7 +228,7 @@ function restRequest({ method, path, credential, body, timeout, accountDeadline 
         account && !outcome && record.native && !record.responseSeen && !informationSeen && Error.isError(error)
           && Object.getOwnPropertyDescriptor(error, "code")?.value === "ECONNRESET"));
       const timerStart = now();
-      if (account && !(timerStart < expires)) { finish("deadline"); return; }
+      if (readCode && !(timerStart < expires)) { finish("deadline"); return; }
       const remaining = Math.max(1, expires - timerStart);
       timer = setTimeout(() => finish("deadline"), deleteProofExpiresAtMs === undefined ? remaining
         : Math.min(remaining, Math.max(1, deleteProofExpiresAtMs - Date.now())));
@@ -236,7 +240,7 @@ function restRequest({ method, path, credential, body, timeout, accountDeadline 
         let detail = "internal-refusal";
         try {
           fresh(); detail = "cancelled"; assert.ok(!interrupted());
-          if (account && !inTime()) { finish("deadline"); return; }
+          if (readCode && !inTime()) { finish("deadline"); return; }
           detail = "send"; sendEntered = true; req.end(input);
         } catch { finish(detail); }
       };
@@ -261,22 +265,22 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
   const host = providerCreateHost(createMode);
   const env = controlEnvironment("doctl");
   const resources = { live: new Set(), notify: new Set() };
-  let unsafe = false, mutationPending = false;
+  let unsafe = false, mutationPending = false, mutationStarted = false;
   const nativeRequest = (options) => restRequest(options, connect, resources);
-  request ??= (options) => options.accountDeadline === undefined ? nativeRequest(options) : requestAccount(options);
+  request ??= (options) => options.method === "GET" && options.path === "/v2/account" ? requestAccount(options) : nativeRequest(options);
   async function requestAccount(options) {
     try { return await nativeRequest(options); }
     catch (error) {
-      const proof = closedAccountRequests.get(error);
+      const proof = closedReads.get(error);
       if (!proof?.reset || unsafe || mutationPending) throw error;
       // Spend the same command budget and keep the captured credential. No
       // outward diagnostic can authorize a retry or stand in for native close.
       try { await controlCheckpoint(interrupted); }
       catch { throw stopped(true, providerFailure(error)); }
       const current = options.now();
-      if (!(current >= proof.at && current < options.accountDeadline))
+      if (!(current >= proof.at && current < options.readDeadline))
         throw stopped(true, providerFailure(error));
-      return nativeRequest({ ...options, timeout: Math.ceil(options.accountDeadline - current) });
+      return nativeRequest({ ...options, timeout: Math.ceil(options.readDeadline - current) });
     }
   }
   let credential, context;
@@ -302,7 +306,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     finally { if (Buffer.isBuffer(result?.stdout)) result.stdout.fill(0); if (Buffer.isBuffer(result?.stderr)) result.stderr.fill(0); }
   };
   return async (args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) => {
-    const now = args?.[0] === "account" ? accountClock(clock) : clock;
+    const now = args?.[0] === "account" || args?.[1] === "placement" ? readClock(clock) : clock;
     const started = now(), deadline = started + timeout;
     assert.ok(Array.isArray(args) && args.at(-2) === "--context", "saved provider context required");
     if (args[2] === "create") assert.ok(host && args[7] === host.region, "provider create placement differs from authorized mode");
@@ -314,6 +318,9 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     assert.ok(!interrupted(), "controller cancelled");
     const command = args.slice(0, -2);
     const reportUnsent = command[2] === "delete" && allowFail && deleteProofExpiresAtMs !== undefined && !unsafe && !mutationPending;
+    // Only the launch worker can settle this failure. Read-only fleet previews
+    // and a worker that attempted a mutation keep their existing refusal path.
+    const settleCatalog = Boolean(host && createMode !== "legacy" && allowFail && !unsafe && !mutationStarted);
     let requestEntered = false, posted;
     let code = "provider-command";
     let listTime = deadline - timeout;
@@ -334,14 +341,15 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         assert.ok(phase === "delete" && current < deleteProofExpiresAtMs && deleteProofExpiresAtMs - current <= 60000, "current retirement proof expired");
       }
       try { requestEntered = true; response = await request({ method, path, body, credential, timeout: remaining, interrupted,
-        ...(phase === "account" ? { accountDeadline: deadline, now } : {}),
-        ...(phase === "catalog" ? { catalog: true } : {}),
+        ...(phase === "account" || phase === "catalog" ? { readDeadline: deadline, now } : {}),
+        ...(phase === "catalog" ? { catalog: true, settleCatalog } : {}),
         ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }); }
       catch (error) {
         if (reportUnsent && unsentDeletes.has(error)) throw error;
-        const diagnostic = phase === "account" ? providerFailure(error) : undefined;
-        const failure = stopped(true, diagnostic?.code === "account-request" ? diagnostic : undefined);
-        if (phase === "account" && closedAccountRequests.has(error)) closedAccountRequests.set(failure, closedAccountRequests.get(error));
+        const observedRead = phase === "account" || phase === "catalog";
+        const diagnostic = observedRead ? providerFailure(error) : undefined;
+        const failure = stopped(true, observedRead && diagnostic?.code === `${phase}-request` ? diagnostic : undefined);
+        if (observedRead && closedReads.has(error)) closedReads.set(failure, closedReads.get(error));
         throw failure;
       }
       try { await controlCheckpoint(interrupted); } catch { throw stopped(); }
@@ -349,11 +357,11 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       if (response?.status !== expected) {
         const diagnostic = providerDiagnostic({ code: `${phase}-http`, httpStatus: response?.status }) ?? { code: `${phase}-http` };
         const failure = Object.assign(stopped(false, diagnostic), { httpFailure: true });
-        if (phase === "account" && closedAccountRequests.has(response)) closedAccountRequests.set(failure, closedAccountRequests.get(response));
+        if (phase === "account" && closedReads.has(response)) closedReads.set(failure, closedReads.get(response));
         throw failure;
       }
       if (phase === "account") {
-        listTime = Math.max(listTime, closedAccountRequests.get(response)?.at ?? listTime);
+        listTime = Math.max(listTime, closedReads.get(response)?.at ?? listTime);
         readRemaining();
       }
       return response.value;
@@ -486,7 +494,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         assert.ok(/^corten-bench,corten-bench-groups,corten-bench-groups-run-[a-f0-9]{16}$/.test(command[13]));
         assert.equal(command[13], `corten-bench,corten-bench-groups,corten-bench-groups-run-${command[3].slice(-16)}`);
         const sshKey = Number(command[11]); assert.ok(positive(sshKey), "bounded numeric SSH key ID required");
-        mutationPending = true;
+        mutationStarted = mutationPending = true;
         const result = await call("create", "POST", "/v2/droplets", { name: command[3], size: host.size, region: host.region, image: host.image,
           ssh_keys: [sshKey], tags: command[13].split(","), ...(createMode === "legacy" ? {} : { user_data: preloginUserData }) }, 202);
         code = "create-response";
@@ -524,7 +532,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       } else {
         assert.equal(command.length, 5); assert.deepEqual(command.slice(0, 3), ["compute", "droplet", "delete"]); assert.equal(command[4], "--force");
         assert.ok(/^[1-9]\d*$/.test(command[3]));
-        mutationPending = true;
+        mutationStarted = mutationPending = true;
         await call("delete", "DELETE", `/v2/droplets/${command[3]}`, undefined, 204); value = null;
       }
       code = "provider-output";
@@ -543,10 +551,13 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       }
       const diagnostic = providerFailure(error) ?? { code };
       const current = now();
-      if (closedAccountRequests.has(error)) {
-        if (!unsafe && !mutationPending && current >= closedAccountRequests.get(error).at
-          && current >= started && current < deadline && !interrupted()) {
-          const failure = stopped(false, diagnostic); settledAccountFailures.add(failure); throw failure;
+      if (closedReads.has(error)) {
+        const account = command[0] === "account";
+        if (!unsafe && !mutationPending && (account || command[1] === "placement" && settleCatalog)
+          && current >= closedReads.get(error).at && current >= started && current < deadline && !interrupted()) {
+          const failure = stopped(false, diagnostic);
+          (account ? settledAccountFailures : settledCatalogFailures).add(failure);
+          throw failure;
         }
         unsafe = true; throw stopped(true, diagnostic);
       }
