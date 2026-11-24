@@ -308,6 +308,8 @@ test("each browser check receives exactly its image command from the image step,
   // A runner's uid and gid, and its Docker socket's group.
   tool("id", ["#!/bin/sh", 'case "$*" in -u) echo 1001 ;; -g) echo 127 ;; *) echo "unexpected id $*" >&2; exit 1 ;; esac']);
   tool("stat", ["#!/bin/sh", '[ "$*" = "-c %g /var/run/docker.sock" ] || { echo "unexpected stat $*" >&2; exit 1; }', "echo 118"]);
+  // The probe's bound runs its command; the probe test covers GNU timeout itself.
+  tool("timeout", ["#!/bin/sh", '[ "$1 $2 $3" = "-k 5 60" ] || { echo "unexpected timeout $*" >&2; exit 1; }', "shift 3", 'exec "$@"']);
   const values = { "$(id -u):$(id -g)": "1001:127", "$(stat -c %g /var/run/docker.sock)": "118",
     "$(command -v docker)": join(bin, "docker"), "$PWD": realpathSync(repo), "$image": image };
   const concrete = (word) => Object.entries(values).reduce((out, [name, value]) => out.replaceAll(name, value), word);
