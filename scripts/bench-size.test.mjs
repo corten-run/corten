@@ -37,6 +37,18 @@ test("a new file over 256 KiB under bench/ is refused", () => {
   ]);
 });
 
+test("a dependency lock file over 256 KiB is source input and needs no listing, but an archive named like one is refused", () => {
+  for (const name of ["composer.lock", "package-lock.json", "Cargo.lock", "yarn.lock", "pnpm-lock.yaml", "Gemfile.lock", "mix.lock", "go.sum"]) {
+    const lock = { path: `bench/fullstack/apps/x/${name}`, blob: blob("7"), size: 900 * 1024 };
+    assert.equal(reason(lock), null, name);
+    assert.deepEqual(check([lock], ""), [], name);
+  }
+  assert.match(reason({ path: "bench/x/notcomposer.lock", blob: blob("7"), size: 900 * 1024 }) ?? "", /over the 256 KiB limit/, "only the exact name is a lock file");
+  assert.match(reason({ path: "bench/x/package-lock.json.gz", blob: blob("7"), size: 20 }) ?? "", /archive/);
+  assert.deepEqual(check([{ path: "bench/x/composer.lock", blob: blob("7"), size: 900 * 1024 }], `${blob("7")} bench/x/composer.lock`),
+    [`${LIST}: bench/x/composer.lock is no longer an archive or over 256 KiB; remove its line`], "a listed lock file is a stale line");
+});
+
 test("exactly 256 KiB passes and one byte more does not", () => {
   const at = { path: "bench/live/results/r4/summary.json", blob: blob("6"), size: LIMIT };
   assert.equal(LIMIT, 262144);

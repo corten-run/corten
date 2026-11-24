@@ -369,9 +369,9 @@ under `bench/` that is an archive or compressed file (`.tar`, `.tgz`, `.gz`, `.x
 path with its exact blob ID. The list holds the files that were in the tree when the check came.
 They stay where they are: removing one shrinks no clone, since history keeps every blob, and their
 paths are cited. A listed file that changes fails, and a line whose file is gone or no longer
-needs it fails until the line is removed, so the list only shrinks. A file that is not benchmark
-output, such as a lock file an app builds from, is listed deliberately, with its new blob ID in the
-pull request that changes it, where review sees it.
+needs it fails until the line is removed, so the list only shrinks. A dependency lock file an app
+builds from (`Cargo.lock`, `package-lock.json`, `composer.lock` and the like) is source input,
+not output, so the size limit does not apply to it; an archive is refused whatever its name.
 
 ## Pull requests
 

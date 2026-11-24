@@ -5,8 +5,9 @@
 // holds the files that were in the tree when this check came, which stay because their paths are
 // cited and removing them shrinks no clone (history keeps every blob). A listed file that changes
 // fails too, and a line whose file is gone, or is now small and not an archive, fails as stale, so
-// the list only shrinks. A file that is not benchmark output, such as a lock file an app builds
-// from, is listed deliberately, where review sees it. The rule for benchmark authors is in
+// the list only shrinks. A dependency lock file an app builds from (LOCK) is source input, not
+// output, so the size limit does not apply to it; any other file that is not benchmark output is
+// listed deliberately, where review sees it. The rule for benchmark authors is in
 // CONTRIBUTING.md (Benchmark results).
 //
 // It reads the tree and the list as committed at HEAD (or the revision given), not the working
@@ -19,12 +20,17 @@ import { fileURLToPath } from "node:url";
 export const LIMIT = 256 * 1024;
 /** An archive or a compressed file, by its name. */
 export const ARCHIVE = /\.(?:tar|tgz|gz|xz|zst|bz2|zip|7z)$/i;
+/**
+ * A dependency lock file an app builds from, by its name: source input, not benchmark output, and
+ * rewritten by every dependency update, so the size limit does not apply to it (an archive still does).
+ */
+export const LOCK = /(?:^|\/)(?:Cargo\.lock|composer\.lock|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Gemfile\.lock|mix\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|go\.sum|gradle\.lockfile|packages\.lock\.json)$/;
 /** The grandfather list, as a path from the repository's root. */
 export const LIST = "scripts/bench-size.allow";
 /** What to do instead of committing raw data. */
 export const REMEDY =
   "Commit a report or summary small enough to diff, and keep the raw data outside the tree: the committed provenance names where it is published and its SHA-256 (CONTRIBUTING.md, Benchmark results). " +
-  `A file that is not benchmark output, such as a lock file an app builds from, is listed in ${LIST} as "<blob ID> <path>" instead, in the same pull request, where review sees it.`;
+  `A file that is not benchmark output (other than a dependency lock file, which the size limit skips) is listed in ${LIST} as "<blob ID> <path>" instead, in the same pull request, where review sees it.`;
 
 /** @typedef {{ path: string, blob: string, size: number }} Entry */
 
@@ -62,7 +68,7 @@ export function committedList(root, rev = "HEAD", env = process.env) {
 export function reason(entry) {
   const archive = ARCHIVE.exec(entry.path);
   if (archive) return `an archive or compressed file (${archive[0]})`;
-  if (entry.size > LIMIT) return `${(entry.size / 1024).toFixed(1)} KiB (${entry.size} bytes), over the ${LIMIT / 1024} KiB limit`;
+  if (entry.size > LIMIT && !LOCK.test(entry.path)) return `${(entry.size / 1024).toFixed(1)} KiB (${entry.size} bytes), over the ${LIMIT / 1024} KiB limit`;
   return null;
 }
 
