@@ -372,12 +372,15 @@ export function validateState(s, round, options) {
 export function ownedDroplet(droplets, s, options) {
   validateState(s, s.round, options);
   assert.ok(Array.isArray(droplets));
+  // An ownership tag is an exact member of a well-formed tag array (non-empty strings),
+  // never a substring of a string or a member beside malformed entries.
+  const tagged = (d, tag) => Array.isArray(d.tags) && d.tags.every((t) => typeof t === "string" && t.length > 0) && d.tags.includes(tag);
   const matches = droplets.filter((d) => s.id ? String(d.id) === s.id : d.name === s.name && d.tags?.includes(s.tag));
   assert.equal(matches.length, 1, "owned droplet missing or ambiguous; preserve reservation");
   const d = matches[0];
   full(String(d.id), /[1-9]\d*/, "droplet ID");
   assert.equal(d.name, s.name);
-  for (const tag of [...tags, s.tag]) assert.ok(d.tags?.includes(tag), `missing ownership tag ${tag}`);
+  for (const tag of [...tags, s.tag]) assert.ok(tagged(d, tag), `missing ownership tag ${tag}`);
   assert.equal(d.size_slug ?? d.size?.slug, s.host.size);
   assert.equal(d.region?.slug, s.host.region);
   if (s.ip) assert.equal(d.networks?.v4?.filter((n) => n.type === "public").find((n) => n.ip_address === s.ip)?.ip_address, s.ip,

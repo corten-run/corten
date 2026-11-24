@@ -12,7 +12,8 @@ const providerCodes = ["provider-command", "provider-credential", "provider-outp
   "catalog-request", "catalog-http", "catalog-response",
   "create-request", "create-http", "create-response", "create-link", "create-action-request", "create-action-http",
   "create-link-shape", "create-link-count", "create-link-id", "create-link-rel", "create-link-href",
-  "create-action-response", "create-action-pending", "delete-request", "delete-http"];
+  "create-action-response", "create-action-pending", "create-action-errored", "create-errored-absent", "delete-request", "delete-http",
+  "action-request", "action-http", "action-response"];
 const providerStatuses = [200, 201, 202, 204, 301, 302, 303, 304, 307, 308, 400, 401, 403, 404, 405, 408, 409, 410, 413, 415, 422, 429, 500, 501, 502, 503, 504];
 const providerDetails = {
   "account-request": ["internal-refusal", "connect", "send", "request-error", "response-error", "response-aborted",
@@ -42,6 +43,27 @@ export function providerFailure(error) {
   return error && typeof error === "object" ? providerDiagnostic(Object.getOwnPropertyDescriptor(error, "providerDiagnostic")?.value) : undefined;
 }
 
+// The engine's provider-terminal create failure: the exact action and the droplet
+// ID its single POST returned. Identity only, never proof that the droplet is gone.
+export function erroredCreate(result) {
+  if (!result || typeof result !== "object" || result.status !== 1 || providerFailure(result)?.code !== "create-action-errored") return undefined;
+  const stdout = result.stdout;
+  if (typeof stdout !== "string" || !/^\[\{"id":[1-9]\d{0,15},"actionId":[1-9]\d{0,15}\}\]$/.test(stdout)) return undefined;
+  const [{ id, actionId }] = JSON.parse(stdout);
+  if (!Number.isSafeInteger(id) || !Number.isSafeInteger(actionId)) return undefined;
+  return { dropletId: String(id), actionId: String(actionId) };
+}
+
+// The droplet and create action IDs of an accepted POST whose outcome is still
+// unknown. Identity only: never completion, failure or absence proof.
+export function pendingCreate(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || JSON.stringify(Object.keys(value).sort()) !== '["actionId","dropletId"]') return undefined;
+  const ids = [value.dropletId, value.actionId];
+  if (!ids.every((id) => typeof id === "string" && /^[1-9]\d{0,15}$/.test(id) && Number.isSafeInteger(Number(id)))) return undefined;
+  return { dropletId: value.dropletId, actionId: value.actionId };
+}
+
 export function fleetCatalogResult(result) {
   if (result.status !== 0 || result.error) {
     const diagnostic = providerFailure(result);
@@ -52,7 +74,11 @@ export function fleetCatalogResult(result) {
 
 const controllerStages = ["source-plan", "exact-approval", "remote-main-advertisement", "remote-main-fetch", "remote-main-ancestry",
   "source-recheck", "controller-construction", "controller-launch", "controller-collect", "controller-audit", "controller-cancellation", "controller-retirement", "controller-checkpoint", "provider-settlement",
-  "setup-watcher-proof-missing", "setup-host-proof-refused"];
+  "setup-watcher-proof-missing", "setup-host-proof-refused",
+  // Refusals whose supported operator route the CLI names (publicError).
+  "offline-never-started", "create-errored-contradicted", "create-contradiction-unpublished"];
+// Collect-time stages that name a route survive the production wrapper's phase mark.
+export const routeStages = ["setup-watcher-proof-missing", "setup-host-proof-refused", "offline-never-started", "create-errored-contradicted", "create-contradiction-unpublished"];
 export function controllerFailure(error) {
   const stage = error && typeof error === "object" ? Object.getOwnPropertyDescriptor(error, "controllerStage")?.value : undefined;
   return controllerStages.includes(stage) ? stage : undefined;
@@ -141,11 +167,16 @@ export function cancellationState(value) {
     full(value[key], /[a-f0-9]{64}/, "cancellation evidence hash");
 }
 export const unitQuery = (s) => `systemctl show ${s.unit} --property=Id --property=LoadState --property=FragmentPath --property=ActiveState --property=Restart --property=MainPID --property=ExecMainCode --property=ExecMainStartTimestamp`;
+function reappearance(r) {
+  assert.ok(r && typeof r === "object" && !Array.isArray(r) && JSON.stringify(Object.keys(r).sort()) === '["at","dropletId","via"]'
+    && ["exact-get", "inventory"].includes(r.via) && typeof r.at === "string" && new Date(r.at).toISOString() === r.at
+    && typeof r.dropletId === "string" && /^[1-9]\d{0,15}$/.test(r.dropletId), "create failure reappearance record");
+}
 export function controllerState(s, round, options) {
   validateState(s, round, options);
   const allowed = ["schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "createdAt", "status", "id", "ip",
     "createIntentAt", "archiveSha256", "evidenceSha256", "extractionAttempts", "evidence", "evidenceOutcome", "collectedAt", "deletionIntentAt", "destroyedAt",
-    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "gitSource", "trixieUpstream", "quietBootstrap", "remainingPlacement", "launchHostKeySha256"];
+    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "gitSource", "trixieUpstream", "quietBootstrap", "remainingPlacement", "launchHostKeySha256", "createErrored", "createPending", "createContradicted"];
   assert.ok(Object.keys(s).every((k) => allowed.includes(k)), "unknown controller state field");
   providerIdentity(s.provider);
   if (s.fleet) assert.deepEqual(s.provider, s.fleet.provider, "fleet account/context differs");
@@ -209,6 +240,61 @@ export function controllerState(s, round, options) {
       for (const key of ["archiveSha256", "evidenceSha256", "evidence", "bootstrapReady"])
         assert.equal(s[key], undefined, "unused retirement cannot claim campaign evidence");
     } else assert.ok(s.archiveSha256 && s.evidenceSha256 && s.evidence, "failed setup requires preserved archive evidence");
+  }
+  if (s.createPending !== undefined) {
+    // An accepted POST whose create action had not settled when the launch stopped.
+    assert.deepEqual(pendingCreate(s.createPending), s.createPending, "pending create identity");
+    assert.ok(!s.id || s.id === s.createPending.dropletId, "bound host differs from the posted create");
+  }
+  if (s.createErrored !== undefined) {
+    // Terminal provider failure of the one create: never bound, provisioned or deleted.
+    const c = s.createErrored;
+    assert.ok(c && typeof c === "object" && !Array.isArray(c), "create failure record required");
+    assert.deepEqual(Object.keys(c).filter((key) => key !== "reappeared").sort(), ["actionId", "dropletId", "evidenceSha256"]);
+    for (const key of ["actionId", "dropletId"]) assert.ok(Number.isSafeInteger(Number(full(c[key], /[1-9]\d{0,15}/, key))), key);
+    full(c.evidenceSha256, /[a-f0-9]{64}/, "create failure evidence hash");
+    // A later read saw the posted droplet again: a permanent contradiction of the receipt.
+    if (c.reappeared !== undefined) reappearance(c.reappeared);
+    assert.equal(s.status, "creating", "a provider-errored create is never bound");
+    for (const key of ["id", "ip", "archiveSha256", "evidenceSha256", "evidence", "extractionAttempts", "evidenceOutcome", "validation", "collectedAt",
+      "exitCode", "deletionIntentAt", "destroyedAt", "retirement", "bootstrapReady", "preBootstrapTerminal", "launchHostKeySha256", "mixedCancellation", "auditIntent", "auditIntents"])
+      assert.equal(s[key], undefined, "a provider-errored create cannot claim a host, deletion or campaign");
+    const m = s.control?.monitor;
+    assert.ok(!s.control || !s.control.ledger.length && !s.control.sealed.length && (!m || m.phase === "pending" && !m.registrationSha256),
+      "a provider-errored create cannot have guest control");
+    if (s.createPending) assert.deepEqual({ dropletId: c.dropletId, actionId: c.actionId }, s.createPending, "create failure differs from the posted create");
+  }
+  if (s.createContradicted !== undefined) {
+    // A provider-errored receipt (published or not) contradicted by its exact posted
+    // droplet, which then showed its saved ownership and was bound. Kept as evidence
+    // through the pinned unused retirement; never a create failure again. `reappeared`
+    // is the bind's own exact read; the first observation stays in the witness file,
+    // bound by `witnessSha256`. `receiptVerified` is false when the preserved receipt
+    // was not the canonical record for this state. `stages` binds each reappearance
+    // stage a failed publication left, by name and bytes, and each createErrored
+    // publication stage an interrupted receipt publication left.
+    const c = s.createContradicted;
+    assert.ok(c && typeof c === "object" && !Array.isArray(c), "create contradiction record required");
+    assert.deepEqual(Object.keys(c).filter((key) => key !== "stages").sort(),
+      ["actionId", "dropletId", "evidenceSha256", "reappeared", "receiptVerified", "witnessSha256"]);
+    for (const key of ["actionId", "dropletId"]) assert.ok(Number.isSafeInteger(Number(full(c[key], /[1-9]\d{0,15}/, key))), key);
+    full(c.evidenceSha256, /[a-f0-9]{64}/, "create contradiction evidence hash");
+    full(c.witnessSha256, /[a-f0-9]{64}/, "create contradiction witness hash");
+    assert.equal(typeof c.receiptVerified, "boolean", "create contradiction receipt verification");
+    if (c.stages !== undefined) {
+      assert.ok(Array.isArray(c.stages) && c.stages.length > 0, "create contradiction stages");
+      for (const stage of c.stages) {
+        assert.ok(stage && typeof stage === "object" && !Array.isArray(stage) && JSON.stringify(Object.keys(stage).sort()) === '["name","sha256"]', "create contradiction stage");
+        full(stage.name, /state\.json\.create-(?:reappeared|errored)-[a-f0-9]{32}\.tmp/, "create contradiction stage name");
+        full(stage.sha256, /[a-f0-9]{64}/, "create contradiction stage hash");
+      }
+      assert.equal(new Set(c.stages.map(({ name }) => name)).size, c.stages.length, "duplicate create contradiction stage");
+    }
+    reappearance(c.reappeared);
+    assert.equal(c.reappeared.dropletId, c.dropletId, "create contradiction names another droplet");
+    assert.ok(s.createErrored === undefined && s.id === c.dropletId && (s.status === "preparing" || s.status === "retired" && s.retirement?.kind === "unused"),
+      "a contradicted create is only its bound posted droplet, retired as unused");
+    if (s.createPending) assert.deepEqual({ dropletId: c.dropletId, actionId: c.actionId }, s.createPending, "create contradiction differs from the posted create");
   }
   if (s.evidence) assert.ok(s.archiveSha256 && s.evidenceSha256, "unhashed evidence");
   if (s.collectedAt || s.status === "collected") assert.ok(s.evidence && s.validation && ["validated", "failed", "blocked"].includes(s.evidenceOutcome), "incomplete collection state");

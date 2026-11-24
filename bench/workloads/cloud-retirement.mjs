@@ -15,6 +15,72 @@ import { campaignRounds, jsonPreparationRound, nativeArtifactRoot } from "./regi
 import { deploymentSha256 } from "./deployments.mjs";
 import { cancellationState, mixedDigest, mixedWait, originalMixedControls, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 
+// A provider-errored create: one accepted POST whose exact action ended errored and
+// whose droplet was proved absent on the saved account. Never a host or a deletion.
+export const createErroredReceipt = "provider-create-errored.json";
+export const createRecheckLock = "create-recheck.lock";
+export const createErroredBytes = (record) => `${JSON.stringify(record, null, 2)}\n`;
+export function createErroredRecord(s, { dropletId, actionId }, droplets, observedAt) {
+  return { schema: "benchmark-provider-create-errored/v1", round: s.round, commit: s.commit, ...(s.group === undefined ? {} : { group: s.group }),
+    name: s.name, tag: s.tag, host: s.host, createIntentAt: s.createIntentAt,
+    action: { id: Number(actionId), type: "create", resourceType: "droplet", resourceId: Number(dropletId), status: "errored" },
+    account: { id: s.provider.accountId, verified: "before-and-after-each-provider-call" },
+    absence: { exactGet: { id: Number(dropletId), httpStatus: 404 },
+      inventory: { complete: true, droplets, matchingId: 0, matchingName: 0, matchingTag: 0 } },
+    observedAt, dispatched: { create: 1, replacementCreate: 0, delete: 0, guest: false }, measurements: 0 };
+}
+// Rebuild the receipt from the saved state; only the census size and time come from the file.
+// A recorded reappearance of the posted droplet contradicts the receipt for good.
+export const createReappeared = "provider-errored create contradicted: its posted droplet was observed again on the saved account;"
+  + " this attempt never resolves or admits a retry; collect binds only that exact posted droplet under its saved name, tags, region"
+  + " and one public IPv4, then retire it by --collect --unused-bootstrap-known-hosts; otherwise account for it with the provider and preserve reservation";
+// A contradiction is made durable before its state publication: this witness first,
+// then the state through its own create-reappeared stage. Either one left behind (a
+// failed or interrupted publication) contradicts the receipt exactly as a published
+// reappearance does, so no later collect, launch, fleet check or successor accepts it.
+export const createReappearedWitness = "provider-create-reappeared";
+const reappearedStage = /^state\.json\.create-reappeared-[a-f0-9]{32}\.tmp$/;
+// The stages a failed contradiction publication left, by name (never read here).
+export const contradictionStages = (local) => readdirSync(local).filter((name) => reappearedStage.test(name)).sort();
+// The stages an interrupted createErrored publication left (written before its rename), by name.
+// They claim absence; beside a contradiction the bind checks their bytes and records them.
+const erroredStage = /^state\.json\.create-errored-[a-f0-9]{32}\.tmp$/;
+export const publicationStages = (local) => readdirSync(local).filter((name) => erroredStage.test(name)).sort();
+export function createContradiction(local) {
+  return !!lstatSync(join(local, createReappearedWitness), { throwIfNoEntry: false })
+    || readdirSync(local).some((name) => reappearedStage.test(name));
+}
+export function verifyCreateErrored(local, s) {
+  assert.ok(s.createErrored, "no provider-errored create record");
+  assert.ok(!s.createErrored.reappeared && !createContradiction(local), createReappeared);
+  const bytes = regular(join(local, createErroredReceipt), 64 * 1024), record = JSON.parse(bytes);
+  assert.equal(digest(bytes), s.createErrored.evidenceSha256, "create failure receipt changed; preserve reservation");
+  assert.ok(Number.isSafeInteger(record.absence?.inventory?.droplets) && record.absence.inventory.droplets >= 0
+    && typeof record.observedAt === "string" && new Date(record.observedAt).toISOString() === record.observedAt, "create failure receipt changed; preserve reservation");
+  assert.deepEqual(record, createErroredRecord(s, s.createErrored, record.absence.inventory.droplets, record.observedAt),
+    "create failure receipt changed; preserve reservation");
+  return true;
+}
+// A resolved provider-errored create leaves no custody behind: no launch or operation
+// lock, and no recheck lock (no controller writes one now; a stray one still refuses).
+// Any of them is unresolved until the operator's custody step accounts for its owner.
+export function createErroredCustody(local) {
+  for (const path of [join(dirname(local), ".groups-launch.lock"), join(local, "operation.lock"), join(local, createRecheckLock)])
+    assert.ok(!lstatSync(path, { throwIfNoEntry: false }),
+      "provider-errored create still holds custody; account for the lock's owner by the custody step; preserve reservation");
+  return true;
+}
+// A receipt written before its state publication (a crash between the two) is
+// adopted only if its bytes are exactly the canonical record for this saved state.
+export function pendingCreateErroredReceipt(bytes, s, posted) {
+  const record = JSON.parse(bytes);
+  assert.ok(Number.isSafeInteger(record?.absence?.inventory?.droplets) && record.absence.inventory.droplets >= 0
+    && typeof record.observedAt === "string" && new Date(record.observedAt).toISOString() === record.observedAt, "unpublished create failure receipt differs; preserve reservation");
+  assert.ok(Buffer.from(createErroredBytes(createErroredRecord(s, posted, record.absence.inventory.droplets, record.observedAt))).equals(bytes),
+    "unpublished create failure receipt differs; preserve reservation");
+  return bytes;
+}
+
 // This migration is not a general old-source collection or validation override.
 export const failedNativeCommit = "9f3d35884c67d90524f978d173fabeb3a17bc970";
 const failedNativeCases = [
@@ -745,15 +811,27 @@ function replayFailedNativeRetirement(local, state, expectedSha256, readGrouped)
   return record;
 }
 
+// An offline-handoff launch that stopped at its create, whose exact posted droplet a
+// later collect bound: no SSH, upload, seal or monitor ever existed. Its own pinned,
+// separately approved unused-host collection is the only route to retirement.
+export function offlineNeverStarted(state) {
+  const c = state.control;
+  return state.fleet?.single?.offlineHandoff === true && state.quietBootstrap === "prelogin" && c?.monitor === undefined
+    && Array.isArray(c?.ledger) && c.ledger.length === 0 && Array.isArray(c.sealed) && c.sealed.length === 0
+    && state.launchHostKeySha256 === undefined && state.createErrored === undefined
+    && typeof state.id === "string" && state.createPending?.dropletId === state.id;
+}
+
 function unusedBootstrapState(state, interrupted = false) {
   const c = state.control;
   const pending = c?.monitor?.phase === "pending" && !c.monitor.registrationSha256;
   // Offline launch has no monitor by design. Admit only this exact interrupted
-  // first-upload prefix, never an unmonitored no-op or settled prefix.
+  // first-upload prefix or a bound posted create that never started, never an
+  // unmonitored no-op or settled prefix.
   const offline = interrupted && state.fleet?.single?.offlineHandoff === true
     && state.quietBootstrap === "prelogin" && c?.monitor === undefined;
   return !!(state.id && state.ip && state.createIntentAt && c?.helperSha256 === guardianSha256
-    && (pending || offline) && !c.sealed.length
+    && (pending || offline || !interrupted && offlineNeverStarted(state)) && !c.sealed.length
     && (state.status === "preparing" ? !state.deletionIntentAt : state.status === "retired" && state.retirement?.kind === "unused")
     && ["bootstrapReady", "preBootstrapTerminal", "auditIntent", "auditIntents", "archiveSha256", "evidenceSha256", "extractionAttempts",
       "evidence", "evidenceOutcome", "exitCode", "validation", "collectedAt", "mixedCancellation"].every((key) => state[key] === undefined));

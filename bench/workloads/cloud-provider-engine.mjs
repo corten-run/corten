@@ -314,7 +314,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     assert.ok(!interrupted(), "controller cancelled");
     const command = args.slice(0, -2);
     const reportUnsent = command[2] === "delete" && allowFail && deleteProofExpiresAtMs !== undefined && !unsafe && !mutationPending;
-    let requestEntered = false;
+    let requestEntered = false, posted;
     let code = "provider-command";
     let listTime = deadline - timeout;
     const readRemaining = () => {
@@ -324,7 +324,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     };
     const call = async (phase, method, path, body, expected = 200) => {
       await controlCheckpoint(interrupted);
-      const read = ["account", "list", "get", "catalog"].includes(phase);
+      const read = ["account", "list", "get", "catalog", "action"].includes(phase);
       const remaining = read ? readRemaining() : Math.ceil(deadline - now());
       if (interrupted() || remaining <= 0) throw stopped(true);
       code = `${phase}-request`;
@@ -358,12 +358,12 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       }
       return response.value;
     };
-    const refuseCreate = (diagnostic) => {
+    const refuseCreate = (diagnostic, identity) => {
       // A known semantic refusal is recoverable on this worker, not success.
       // Deadline/cancellation must never be converted into that narrow result.
       const current = now();
       if (!Number.isFinite(current) || !Number.isFinite(deadline) || current < listTime || current >= deadline || interrupted()) throw stopped(true);
-      throw Object.assign(stopped(false, diagnostic), { createSemanticFailure: true });
+      throw Object.assign(stopped(false, diagnostic), { createSemanticFailure: true }, identity ? { createIdentity: identity } : {});
     };
     try {
       let value;
@@ -384,6 +384,42 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
           readRemaining();
           return refused({ code });
         }
+      } else if (command[1] === "action") {
+        // A later read of one known action. Only its identity and status leave the worker.
+        assert.equal(command.length, 6);
+        assert.deepEqual([...command.slice(0, 3), ...command.slice(4)], ["compute", "action", "get", "--output", "json"]);
+        assert.ok(/^[1-9]\d*$/.test(command[3]) && positive(Number(command[3])), "positive exact action ID required");
+        const action = (await call("action", "GET", `/v2/actions/${command[3]}`))?.action;
+        code = "action-response";
+        const word = (value) => typeof value === "string" && /^[a-z][a-z_-]{0,63}$/.test(value);
+        if (!(action && typeof action === "object" && !Array.isArray(action) && action.id === Number(command[3]) && word(action.type)
+          && word(action.resource_type) && word(action.status) && (action.resource_id === null || Number.isSafeInteger(action.resource_id) && action.resource_id >= 0)))
+          throw stopped(false, { code });
+        value = [{ id: action.id, type: action.type, resource_type: action.resource_type, resource_id: action.resource_id, status: action.status }];
+      } else if (command[2] === "list" && command[3] === "--single-response") {
+        // Absence proof for a provider-errored create: one response is the whole
+        // inventory. Offset pages are not a snapshot, so more than one page, a count
+        // mismatch or any row without an inspectable name and tags refuses. Nothing
+        // is retaken, so a row seen once can never be discarded.
+        assert.deepEqual(command, ["compute", "droplet", "list", "--single-response", "--output", "json"]);
+        const result = await call("list", "GET", "/v2/droplets?page=1&per_page=200");
+        code = "list-response";
+        if (!Array.isArray(result?.droplets)) throw stopped(false, { code: "list-response-shape" });
+        if (!(Number.isSafeInteger(result.meta?.total) && result.meta.total >= 0)) throw stopped(false, { code: "list-response-total" });
+        if (!(result.droplets.length <= 200 && result.meta.total <= 200)) throw stopped(false, { code: "list-response-bounds" });
+        if (result.links !== undefined && !(result.links && typeof result.links === "object" && !Array.isArray(result.links))) throw stopped(false, { code: "list-response-links" });
+        if (result.links?.pages !== undefined && !(result.links.pages && typeof result.links.pages === "object" && !Array.isArray(result.links.pages))) throw stopped(false, { code: "list-response-pages" });
+        if (result.links?.pages?.next !== undefined) throw stopped(false, { code: "list-response-bounds" });
+        if (result.droplets.length !== result.meta.total) throw stopped(false, { code: "list-response-count", detail: "terminal-count-mismatch" });
+        const seen = new Set(), text = (v) => typeof v === "string" && v.length > 0 && v.length <= 255;
+        value = result.droplets.map((droplet) => {
+          if (!positive(droplet?.id)) throw stopped(false, { code: "list-response-id" });
+          if (seen.has(droplet.id)) throw stopped(false, { code: "list-response-duplicate" });
+          if (!(text(droplet.name) && Array.isArray(droplet.tags) && droplet.tags.length <= 256 && droplet.tags.every(text)))
+            throw stopped(false, { code: "list-response-shape" });
+          seen.add(droplet.id); return { id: droplet.id, name: droplet.name, tags: [...droplet.tags] };
+        });
+        readRemaining();
       } else if (command[2] === "list") {
         assert.deepEqual(command, ["compute", "droplet", "list", "--output", "json"]);
         let requests = 0;
@@ -465,6 +501,8 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         // never read, parse, follow or forward it. The canonical GET proves the
         // action's actual type, resource and completion, not a link's spelling.
         const dropletId = result.droplet.id, actionId = actions[0].id;
+        // From here an unsettled outcome still identifies what the one POST created.
+        posted = { dropletId: String(dropletId), actionId: String(actionId) };
         for (;;) {
           const response = await call("create-action", "GET", `/v2/actions/${actionId}`);
           code = "create-action-response";
@@ -474,6 +512,10 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
           // completion proof: only a completed action bound to this droplet is.
           if (!(action.resource_id === dropletId || action.status === "in-progress" && (action.resource_id === null || action.resource_id === 0))) refuseCreate({ code });
           if (action.status === "completed") { assert.equal(action.resource_id, dropletId); readRemaining(); break; }
+          // A provider-terminal failure of this exact action and POST droplet. Only
+          // their IDs leave the worker; absence is the controller's separate proof.
+          if (action.status === "errored" && action.resource_id === dropletId)
+            refuseCreate({ code: "create-action-errored" }, [{ id: dropletId, actionId }]);
           if (action.status !== "in-progress") refuseCreate({ code });
           code = "create-action-pending";
           await sleep(Math.min(1000, Math.max(0, deadline - now())));
@@ -509,10 +551,13 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         unsafe = true; throw stopped(true, diagnostic);
       }
       if (error?.controlUncertain) unsafe = true;
-      if (error?.controlUncertain) throw stopped(true, diagnostic);
+      if (error?.controlUncertain) throw Object.assign(stopped(true, diagnostic), posted ? { pendingCreate: posted } : {});
       if (allowFail && !reportUnsent && (error?.createSemanticFailure === true || error?.httpFailure
-        && (command[2] !== "get" || diagnostic.code === "get-http" && diagnostic.httpStatus === 404)))
-        return refused(diagnostic);
+        && (command[2] !== "get" || diagnostic.code === "get-http" && diagnostic.httpStatus === 404))) {
+        const result = refused(diagnostic);
+        if (diagnostic.code === "create-action-errored" && error.createIdentity) result.stdout = JSON.stringify(error.createIdentity);
+        return result;
+      }
       throw stopped(false, diagnostic);
     }
   };
