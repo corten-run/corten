@@ -1700,11 +1700,15 @@ impl Asked {
 }
 
 /// A request's `Host` line, and whether it has another. Most requests have one line to a name,
-/// which the map's two counts say without a look at any of them.
+/// which the map's two counts say without a look at any of them, and `Host` first, where a
+/// client writes it (RFC 9110 7.2 asks it to), so the line is taken without a search for it.
 #[inline]
 fn host_lines(headers: &HeaderMap) -> (Option<&HeaderValue>, bool) {
     if headers.len() == headers.keys_len() {
-        return (headers.get(header::HOST), false);
+        return match headers.iter().next() {
+            Some((name, host)) if name == header::HOST => (Some(host), false),
+            _ => (headers.get(header::HOST), false),
+        };
     }
     let mut lines = headers.get_all(header::HOST).iter();
     let host = lines.next();
@@ -1815,8 +1819,9 @@ fn targeted(target: &str, host: Option<&HeaderValue>, req: &Request, hosts: Opti
 /// `IPvFuture` has no version defined, and its text asks for an error.
 ///
 /// A name the app answers to as it is written (`localhost`, an IPv4 address, a name in
-/// `names`) is a `reg-name` since what it matched is one, so only a name that matched by its end
-/// or not at all is read byte by byte, and a refused one is logged.
+/// `names`) is a `reg-name` since what it matched is one, so what is read byte by byte is only
+/// the part before a name the app holds subdomains under, a name it does not hold, and any name
+/// when it has none. A name refused as another host's is logged.
 fn named(host: &[u8], names: Option<&[String]>) -> Asked {
     // `[::1]:3000`: an IPv6 address is always in brackets.
     if host.first() == Some(&b'[') {
@@ -1842,22 +1847,23 @@ fn named(host: &[u8], names: Option<&[String]>) -> Asked {
         refused_host(host);
         return Asked::Elsewhere;
     }
-    let mut under = ends_with(bare, b".localhost");
+    // How much of the name's end is a name the app holds its subdomains under.
+    let mut held = if ends_with(bare, b".localhost") { Some(".localhost".len()) } else { None };
     for allowed in names {
         match allowed.strip_prefix('.') {
             Some(domain) if bare.eq_ignore_ascii_case(domain.as_bytes()) => return Asked::Here,
-            Some(_) => under |= ends_with(bare, allowed.as_bytes()),
+            Some(_) if ends_with(bare, allowed.as_bytes()) => held = Some(allowed.len()),
             None if bare.eq_ignore_ascii_case(allowed.as_bytes()) => return Asked::Here,
-            None => {}
+            _ => {}
         }
     }
-    if !reg_name(name) {
-        Asked::Malformed
-    } else if under {
-        Asked::Here
-    } else {
-        refused_host(host);
-        Asked::Elsewhere
+    match held {
+        Some(held) if reg_name(&bare[..bare.len() - held]) => Asked::Here,
+        None if reg_name(name) => {
+            refused_host(host);
+            Asked::Elsewhere
+        }
+        _ => Asked::Malformed,
     }
 }
 
@@ -1879,16 +1885,19 @@ fn reg_name(name: &[u8]) -> bool {
         }
         bytes
     };
+    // Few names hold a percent-encoded byte: one look at each byte says so of the rest.
+    if name.iter().all(|&byte| AS_WRITTEN[usize::from(byte)]) {
+        return !name.is_empty();
+    }
     let mut rest = name;
-    !name.is_empty()
-        && loop {
-            rest = match rest {
-                [] => break true,
-                [byte, rest @ ..] if AS_WRITTEN[usize::from(*byte)] => rest,
-                [b'%', high, low, rest @ ..] if high.is_ascii_hexdigit() && low.is_ascii_hexdigit() => rest,
-                _ => break false,
-            };
-        }
+    loop {
+        rest = match rest {
+            [] => break true,
+            [byte, rest @ ..] if AS_WRITTEN[usize::from(*byte)] => rest,
+            [b'%', high, low, rest @ ..] if high.is_ascii_hexdigit() && low.is_ascii_hexdigit() => rest,
+            _ => break false,
+        };
+    }
 }
 
 /// Whether `host`, which starts with `[`, is an IPv6 address in brackets and maybe a port
