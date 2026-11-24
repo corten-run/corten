@@ -380,6 +380,25 @@ too, so a setup step that fails part way is undone, and each of their removals r
 another fails. Neither the six-second outcome bound nor the window for detecting forbidden sends is
 extended.
 
+The watchlist's write-page checks on a page that reads itself again (`/smoke/written/again`)
+find and press their buttons in one page task, and require each write to reach the stand-in
+within five seconds of its press. That page swaps `<main>` about a second after it loads and
+whenever its answer changes, so a click that found the button before a swap can reach no button
+and send nothing
+([#2035 Five more Firefox smoke cases fail intermittently under load](https://github.com/corten-run/corten/issues/2035)).
+A write's own `<main>` they wait for is noted the moment it is drawn, since the page's next read
+draws the form over it a second later. The whole-poll stylesheet case requires its write, that
+write's page, the poll's request for the held stylesheet, the failing write and its failure in
+turn, does not make a press once a step before it failed, and lets go of the hold, removes its
+routes and closes its page however it ends. The check that a write's patch answered before a
+navigation is drawn by that page counts only the reads of the page it goes back to, since the
+page that comes can prefetch the link left under the pointer. The check that a page part's
+answer that asks again takes the place of the page's tag needs an answer that asks: the write
+lands 1.5 s after it is sent and the part's first read comes a second after the page loads, so a
+loaded browser can find it landed. A first read that finds it landed is answered as the server
+answers one while it lands (its status line saying so, and a tag asking again from the same
+address); the check requires an answer that asked, and every later read is the server's.
+
 The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
 same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a
 link from it loads the document in full instead of swapping the page. A visible control on that
