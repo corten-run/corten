@@ -161,7 +161,9 @@ export function replayCatalog(summary, { readJson, readText }, commit, expectedC
     assert.equal(summary.dirty, false); assert.equal(summary.complete, false); assert.equal(summary.checksPassed, false);
     assert.notEqual(summary.options.checkOnly, true); assert.deepEqual(summary.failures, []); assert.deepEqual(summary.cleanupFailures, []);
     assert.equal(summary.measurement.appMemoryBytes, 2 ** 30);
-    assert.equal(summary.tools?.upstream?.image, upstreamImage); assert.equal(summary.tools?.checker?.image, checkerImage);
+    // Image pins are this checkout's, so saved evidence replays from a checkout of its measured commit.
+    for (const [tool, pin] of [["upstream", upstreamImage], ["checker", checkerImage]]) assert.equal(summary.tools?.[tool]?.image, pin,
+      `retained ${tool} image ${summary.tools?.[tool]?.image} is not this checkout's pin ${pin}; verify from a checkout of the measured commit ${commit}`);
   }
   assert.equal(summary.commitAfter, commit);
   assert.equal(summary.dirtyAfter, false);

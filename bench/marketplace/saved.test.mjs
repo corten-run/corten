@@ -3,7 +3,7 @@ import test from "node:test";
 import { summaryFixture, writeSavedFixture } from "./saved-fixture.mjs";
 import { report, validateSummary } from "./report.mjs";
 import { validateSaved } from "./validate.mjs";
-import { containerReceipt, evidenceVersion, imageReceipt, producerSchema, sourceTree } from "./raw-contract.mjs";
+import { containerReceipt, evidenceVersion, imageReceipt, nodeImage, producerSchema, sourceTree } from "./raw-contract.mjs";
 import childProcess, { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
@@ -108,6 +108,22 @@ test("complete native fixture replays every raw profile, pass, phase, gate and c
   const command = spawnSync(process.execPath, ["bench/marketplace/validate.mjs", folder, "r17", commit], { encoding: "utf8", timeout: 30000 });
   assert.equal(command.status, 0, command.stderr); assert.match(command.stdout, /raw saved evidence valid/);
   assert.deepEqual(hashes(), before, "saved validation must not write evidence");
+});
+
+test("saved evidence replays from a checkout of its measured commit, never against another checkout's image pin", (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit };
+  writeSavedFixture(folder, commit, sourceTree(commit));
+  assert.ok(validateSaved(args), "the measuring checkout replays its own evidence");
+  // The same evidence as a checkout still pinned to the Debian 12 upstream image wrote it.
+  const earlier = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
+  let rewritten = 0;
+  for (const entry of readdirSync(folder, { recursive: true, withFileTypes: true })) if (entry.isFile() && entry.name.endsWith(".json")) {
+    const path = join(entry.parentPath, entry.name), text = readFileSync(path, "utf8");
+    if (text.includes(nodeImage)) { writeFileSync(path, text.replaceAll(nodeImage, earlier)); rewritten++; }
+  }
+  assert.ok(rewritten >= 3, "summary, upstream and CPU sidecar receipts carry the image");
+  assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
+    && e.message.includes(`retained image ${earlier} is not this checkout's pin ${nodeImage}; validate from a checkout of the measured commit ${commit}`));
 });
 
 test("native replay admits the producer's decimal sum overshoot, not an inconsistent mean", async (t) => {

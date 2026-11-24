@@ -53,6 +53,8 @@ export function validateSaved({ folder, round, commit }) {
 }
 function replay({ folder, round, commit }) {
   roundIdentity(round); assert.match(commit, /^[a-f0-9]{40}$/);
+  // Image pins are this checkout's, so saved evidence replays from a checkout of its measured commit.
+  const pinned = (image, pin) => assert.equal(image, pin, `retained image ${image} is not this checkout's pin ${pin}; validate from a checkout of the measured commit ${commit}`);
   const files = savedFiles(folder), s = files.json("summary.json");
   assert.equal(s.round, round, "wrong saved round"); assert.equal(s.commit, commit, "wrong saved commit");
   assert.ok([v5Schema, resultSchema].includes(s.schema), "saved replay requires a native raw result format");
@@ -152,7 +154,7 @@ function replay({ folder, round, commit }) {
   id(network.id); assert.equal(network.name, `${s.runId}-net`); assert.equal(network.owner, s.runId);
   const upstream = runtime(files.json("upstream-container.json"), s.tools.upstream.imageId, "api", 512 * 2 ** 20, { running: true });
   assert.equal(upstream.name, `${s.runId}-upstream`); assert.equal(upstream.network, network.name);
-  assert.equal(upstream.image, nodeImage); assert.equal(s.tools.upstream.image, nodeImage);
+  pinned(upstream.image, nodeImage); pinned(s.tools.upstream.image, nodeImage);
   assert.deepEqual(upstream.cmd, ["node", "/bench/marketplace/upstream.mjs"]);
   const fixtureMount = mount(upstream, "/fixtures", true), benchMount = mount(upstream, "/bench", true);
   assert.ok(benchMount.startsWith("/") && posix.normalize(benchMount) === benchMount && !benchMount.includes("\\") && posix.basename(benchMount) === "bench", "invalid native source root");
@@ -162,7 +164,7 @@ function replay({ folder, round, commit }) {
   const cpu = runtime(files.json("cpu-container.json"), s.tools.upstream.imageId, "load", 128 * 2 ** 20, { quota: 1, running: true });
   covers(cpu, firstLoad);
   assert.equal(cpu.name, `${s.runId}-cpu`); assert.equal(cpu.network, "none");
-  assert.equal(cpu.image, nodeImage);
+  pinned(cpu.image, nodeImage);
   mounts(cpu, [["/bench", benchMount], ["/sys/fs/cgroup", "/sys/fs/cgroup"]]);
   assert.deepEqual(cpu.cmd, ["node", "-e", "setInterval(() => {}, 1000)"]);
   const toolImages = files.json("tools.json"); exactKeys(toolImages, ["upstream", "checker", "k6"]);
@@ -171,7 +173,7 @@ function replay({ folder, round, commit }) {
   for (const tool of Object.keys(toolImages)) {
     imageId(toolImages[tool].id); assert.equal(toolImages[tool].id, s.tools[tool].imageId, "tool image receipt differs");
   }
-  assert.equal(s.tools.k6.image, k6Image); assert.deepEqual(toolImages.k6.repoDigests, s.tools.k6.repoDigests);
+  pinned(s.tools.k6.image, k6Image); assert.deepEqual(toolImages.k6.repoDigests, s.tools.k6.repoDigests);
   assert.ok(toolImages.k6.repoDigests.includes(k6Image), "k6 image does not carry the pinned digest");
   assert.deepEqual(toolImages.k6.entrypoint, ["k6"]);
   assert.deepEqual(toolImages.upstream.entrypoint, ["docker-entrypoint.sh"]);
@@ -228,7 +230,7 @@ function replay({ folder, round, commit }) {
       assert.ok(time(coldApp.state.StartedAt) >= time(run.startedAt), "cold start precedes its run");
       const probe = runtime(files.json(`${base}/probe-container.json`), s.tools.upstream.imageId, "load", 256 * 2 ** 20, { running: true });
       assert.ok(!probeIds.has(probe.id), "cold start reused a probe container"); probeIds.add(probe.id);
-      assert.equal(probe.image, nodeImage);
+      pinned(probe.image, nodeImage);
       assert.deepEqual(probe.entrypoint, toolImages.upstream.entrypoint);
       assert.equal(probe.name, `${coldApp.name}-probe`);
       assert.ok(time(probe.state.StartedAt) >= time(run.startedAt) && time(probe.state.StartedAt) <= time(coldApp.state.StartedAt), "cold probe outside run/before app start");
@@ -263,7 +265,7 @@ function replay({ folder, round, commit }) {
           covers(raw.upstream, time(run.startedAt));
         } else assert.equal(raw.upstream, null);
         const k6 = runtime(raw.load, s.tools.k6.imageId, "load", 2 * 2 ** 30);
-        assert.equal(k6.image, k6Image);
+        pinned(k6.image, k6Image);
         assert.deepEqual(k6.entrypoint, toolImages.k6.entrypoint);
         assert.equal(k6.name, `${s.runId}-k6`); assert.ok(!loadIds.has(k6.id), "load phase reused a k6 container"); loadIds.add(k6.id);
         assert.equal(k6.network, network.name); mounts(k6, [["/bench", benchMount]]);

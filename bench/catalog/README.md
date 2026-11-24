@@ -275,7 +275,8 @@ failure without a valid record-response failure receipt retains its original dia
 Such failures remain incomplete and block timing; they do not become replayable negative
 attempts or passing checks.
 
-Grouped campaigns additionally use `verify.mjs FOLDER cN FULL_COMMIT` to replay
+Grouped campaigns additionally use `verify.mjs FOLDER cN FULL_COMMIT`, run from a checkout of
+FULL_COMMIT (for example `git worktree add --detach <dir> FULL_COMMIT`), to replay
 `catalog-saved-evidence/v2`, `catalog-saved-evidence/v3` or `catalog-saved-evidence/v4` observations without running Docker, Git or a browser.
 This schema requires the selected k6 image, platform and actual executable version;
 older evidence is not retroactively assigned that identity.
@@ -288,6 +289,9 @@ and aggregate. Truncated stats framing fails in the producer as well as replay,
 preserving its raw bytes.
 Exit 0 means native evidence replay passed; exit 2 means required
 observations are missing; exit 1 means malformed or contradictory evidence.
+Retained tool image references are checked against the pins of the checkout that loads
+`verify.mjs`, so a round measured before a pin moved fails from a newer checkout, naming the
+pin it expected and the measured commit.
 This is not host-isolation or independent source-audit approval. Those remain
 separate campaign gates. Old summaries remain reportable, but cannot acquire the
 new raw proof retroactively; images not built in the native run are not qualified
