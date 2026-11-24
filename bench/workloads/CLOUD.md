@@ -651,9 +651,13 @@ terminal clock of the verified empty command lifetime. Both clocks must
 support the wait, the workers must be gone, and the final boundary must pass
 the ordinary cleanup checks. In-window workers, missing proof, survivors and
 foreign processes still block advancement. The untimed JSON preparation
-keeps its existing pre-phase cutoff. This does not change the measured window
-or qualify older evidence: replay uses the measured checkout, and r68 does
-not contain the terminal and executable proof needed for a settle.
+keeps its existing pre-phase cutoff. The offline timing phase's zero-SYN
+qualification fence stays open through the settle wait and second census.
+A denied SYN after native command exit can still disqualify the phase; keep
+probes stopped throughout the fenced phase, not just during measurement.
+This does not change the measured workload window or qualify older evidence:
+replay uses the measured checkout, and r68 does not contain the terminal and
+executable proof needed for a settle.
 
 ### Offline handoff
 

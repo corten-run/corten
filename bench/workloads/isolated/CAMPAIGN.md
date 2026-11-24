@@ -420,12 +420,15 @@ replay requires the exact policy with zero excess/non-SYN hits, monotonic counts
 for rate-bounded pre-login SYNs, and the ordinary lifetimes, workload evidence and
 audit gates. Replay reports the packet and byte deltas by sealed phase in
 `offlineIngress`. Untimed preparation permits bounded denied SYNs; official timing
-requires zero. A valid archive with denied SYNs during timing stays replayable
-but cannot supply a comparison. The udev settle checks use monotonic
-bookends taken on that boot, not workstation timestamps. For a finished archive
-the replay result can bind the boot, hostname, ownership token and exact
-bootstrap seal ledger to the collector's reservation. That binding is not a
-whole-host terminal observation or permission to destroy the host.
+requires zero throughout the fenced phase. The fence closes after any post-terminal
+udev settle wait and second census, so a SYN denied after native command exit can
+still disqualify the phase. Keep probes stopped throughout the fenced phase. The
+measured workload window is unchanged. A valid archive with denied SYNs in the
+timing phase stays replayable but cannot supply a comparison. The udev settle
+checks use monotonic bookends taken on that boot, not workstation timestamps.
+For a finished archive the replay result can bind the boot, hostname, ownership
+token and exact bootstrap seal ledger to the collector's reservation. That
+binding is not a whole-host terminal observation or permission to destroy the host.
 
 An offline JSON or mixed audit wait with no delivery or audit admission can
 seal a terminal failure after 24 hours. Replay matches the expired subject
