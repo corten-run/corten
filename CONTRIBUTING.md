@@ -330,8 +330,12 @@ a write's page comes requires the write's request, the navigation's request read
 Stocks page drawn in the same document (its title and its watch form in `<main>`), five seconds
 each; each press shares its five seconds with the wait for the request it sends, so a press that
 stalls fails the check too. Without one it fails and does no more work on its page, and the next
-check starts from the News page it left, gone back to within ten seconds; a page that does not get
-back stops the smoke, after the check's hold, listeners and the News page's route are removed.
+check starts from the News page it left, gone back to within ten seconds. The way back starts once
+the page it is on has loaded (the runtime handles navigations only then), may load the News page in
+full, and ends once that page has loaded; a read of the page that fails while it loads means only
+not yet. A check that stops before its first press never left the page and does not go back. Only a
+page that does not get back stops the smoke, after the check's hold, listeners and the News page's
+route are removed.
 The check that navigating away abandons a held write requires that write to
 fail while it is still held, within five seconds of the page's leaving. The check of a navigation
 during a patch's stylesheet load holds the one stylesheet the patch links until the runtime has

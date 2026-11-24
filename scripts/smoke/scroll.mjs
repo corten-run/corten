@@ -322,8 +322,11 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
       // runtime puts there after the title), each within 5 s (a result after them failing). Each press
       // and the wait for the request it sends share those 5 s, so a press that stalls fails the case
       // too. A case without one fails and does no more work on its page: the next case starts from
-      // the News page it left, gone back to by its history entry within 10 s. A page that does not
-      // get back there in that time stops the smoke, once the route and the listeners are removed.
+      // the News page it left, gone back to by its history entry within 10 s: from a page that has
+      // loaded, to a News page that has loaded, which may load in full on the way (a read of the page
+      // that fails while it loads is not yet an answer). A case that stops before its first press has
+      // not left the News page and does not go back. A page that does not get back in that time stops
+      // the smoke, once the route and the listeners are removed.
       {
         const name = "a navigation started before a write's page comes reads the whole page";
         /** @type {string[]} */
@@ -332,25 +335,39 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
         const onStocks = (/** @type {import("@playwright/test").Request} */ r) => stocks(r) && asked.push(swapped(r) ? r.headers()["corten"] : "whole");
         /**
          * Presses with `press` and waits for the request it sends, both within 5 s: the request, or
-         * why the case stops.
+         * why the case stops (a press that threw says so, whether or not its request went).
          * @param {string} what @param {(r: import("@playwright/test").Request) => boolean} sent @param {() => Promise<unknown>} press
          */
         const pressFor = async (what, sent, press) => {
           /** @type {import("@playwright/test").Request | null} */
           let got = null;
-          let pressed = false;
+          /** How the press ended: null while it runs, "" once it returned, or why it threw. @type {string | null} */
+          let pressed = null;
           await within(
             5000,
-            "",
-            Promise.all([page.waitForRequest(sent, { timeout: 5000 }).then((r) => (got = r)), press().then(() => (pressed = true))]),
+            `the press that asked for ${what} and its request not done within 5 s`,
+            Promise.all([
+              page.waitForRequest(sent, { timeout: 5000 }).then((r) => (got = r)),
+              press().then(
+                () => (pressed = ""),
+                (error) => {
+                  pressed = `the press that asked for ${what} threw: ${(error instanceof Error ? error.message.split("\n")[0] : String(error)) || "no message"}`;
+                  throw error;
+                },
+              ),
+            ]),
           ).catch(() => {});
-          return got && pressed ? got : got ? `the press that asked for ${what} did not return within 5 s` : `no request for ${what} within 5 s`;
+          if (pressed) return pressed;
+          if (!got) return `no request for ${what} within 5 s`;
+          return pressed === "" ? got : `the press that asked for ${what} did not return within 5 s`;
         };
         let release = () => {};
         /** Where the case stopped, if it did. */
         let stopped = "";
         /** The News page's history entry, which the next case starts from. @type {string | null} */
         let left = null;
+        /** Whether a press was made: before the first, the page has not left the News page. */
+        let began = false;
         // The listener and the hold go however the case ends.
         page.on("request", onStocks);
         try {
@@ -361,6 +378,7 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
               "the News page's history entry not read within 5 s",
               page.evaluate(() => (scrollTo(0, 0), navigation.currentEntry?.key ?? "")),
             );
+            began = true;
             const wrote = await pressFor("the write's page", (r) => news(new URL(r.url())) && !swapped(r), thank);
             if (typeof wrote === "string") stopped = wrote;
             else {
@@ -388,19 +406,45 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
           page.off("request", onStocks);
         }
         check(name, !stopped, stopped || `asked ${asked.join()}`);
-        // Back to the News page, in 10 s: by its entry after a failure, by its link after a pass.
+        // Back to the News page, in 10 s: by its entry after a failure, by its link after a pass, and
+        // not at all when the case stopped before its first press, as the page never left it.
         const back = steps(10_000, "not back on the News page within 10 s");
-        const atNews = await (async () => {
-          if (stopped) {
-            if (!left) return back.end("the News page's history entry was not read");
-            const entry = left;
-            await back.step(() => page.evaluate((key) => navigation.traverseTo(key).finished.catch(() => {}), entry));
-          } else await back.step(() => page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click()));
-          return back.poll(() => page.evaluate(() => document.title === "News | Watchlist" && !!document.getElementById("briefing")));
-        })().then(
-          () => true,
-          () => false,
-        );
+        /**
+         * A read of the page for `back.poll`: one that fails, or takes over 2 s, while a page loads
+         * is not yet an answer, and the 10 s still bound them all.
+         * @param {() => boolean} probe
+         */
+        const read = (probe) => within(2000, "the page not read within 2 s", page.evaluate(probe)).catch(() => false);
+        const atNews =
+          !began ||
+          (await (async () => {
+            if (stopped) {
+              if (!left) return back.end("the News page's history entry was not read");
+              const entry = left;
+              // From a page that has loaded, as the runtime handles navigations only then: a Stocks
+              // page loaded in full and gone back from while it still loads keeps its own content at
+              // the News page's address. The traverse is started, not awaited, as the poll below says
+              // whether the page got back, and a read made as its document goes is lost with it,
+              // which is not a failure.
+              await back.poll(() => read(() => document.readyState === "complete"));
+              await back.step(() =>
+                page
+                  .evaluate((key) => {
+                    const { committed, finished } = navigation.traverseTo(key);
+                    committed.catch(() => {});
+                    finished.catch(() => {});
+                  }, entry)
+                  .catch((error) => {
+                    if (!(error instanceof Error && error.message.includes("Execution context was destroyed"))) throw error;
+                  }),
+              );
+            } else await back.step(() => page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click()));
+            // Loaded too, after a way back that loads it in full: the next case's write is the runtime's.
+            return back.poll(() => read(() => document.readyState === "complete" && document.title === "News | Watchlist" && !!document.getElementById("briefing")));
+          })().then(
+            () => true,
+            () => false,
+          ));
         if (!atNews) {
           await leaveNews().catch(() => {});
           throw new Error(`${name}: ${back.over}, so the cases after it cannot run`);
