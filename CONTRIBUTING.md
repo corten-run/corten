@@ -661,7 +661,8 @@ establish a general ranking.
       resolve, its placement medians spreading 1.97% where the other's spread 1.17%, and the
       Choice works out, on a model of its own, that an A/A of 30 placements fails one of its two
       readings more often than not at the first figure and about one time in five at the first
-      run's own. More placements narrow the bound wherever the spread comes from, and the plan
+      run's own. More placements generally narrow the bound wherever the spread comes from, though not
+      at every step of K (the bound is an order statistic), and the plan
       sizes each workload's K before the run as the Choice says: from an A/A already read on its
       setup, workload and R that the Choice's checks find eligible, or, where there is none, from
       a pilot A/A at a K its own plan declares, read only for the spread of its placement

@@ -9051,12 +9051,16 @@ rules something out.
     and under a smoothed resample of the A/A's own medians, each reading centred on its median.
     If Shapiro-Wilk or Anderson-Darling rejects normality at 5%, only the smoothed resample is
     kept; otherwise both are. The K the plan declares is then checked at that K itself: under each
-    model kept, for each workload it covers, the chance is at most 5%. Neither a model's smallest
+    model kept, for each workload it covers, the chance is at most 5%, read with `size.mjs`'s
+    exported functions at that K from 200,000 draws on seed 1983 as the unrounded count of failing
+    draws against 5% (at most 10,000). The one-decimal rates it prints and its "K for at most 5%"
+    line illustrate and do not decide, and the rate is a model estimate, not a calibration shown
+    on a run. Neither a model's smallest
     such K rounded up nor the largest of several workloads' smallest will do, since the bound is an
     order statistic whose rank moves in steps, so a larger K can fail more often than a smaller
     one: from the fourth run's medians below, as a model calculation with `size.mjs` (200,000
-    seeded draws each, not a run), the normal model fails in 4.5% at 91 (the 54th of 91) and 5.4%
-    at 92 (the 55th), and the smoothed resample in 5.0% at 69 and 6.1% at 70. A plan may instead
+    seeded draws each, not a run), the normal model fails in 4.5185% at 91 (the 54th of 91) and
+    5.4115% at 92 (the 55th), and the smoothed resample in 4.998% at 69 and 6.067% at 70. A plan may instead
     declare a separate K for each workload. The K must also admit the two lists of pads the
     protocol asks for, 2K distinct multiples of 16 up to about 40,000 bytes whose q_i - p_i mod
     4096 take K distinct values: no K over 256 does, since 16-byte steps take 256 values mod 4096,
@@ -9202,8 +9206,9 @@ rules something out.
     at `old`'s 1.97%, in 4.6% at `young`'s 1.17% and in 18.1% and 20.8% at the first run's 1.44%
     and 1.48%; at 1.97%, 60 placements fail in 15.4% and 100 in 2.0%, and each figure is for a
     standard deviation taken from 30 medians and a median of exactly zero. So K = 30 is the
-    first run's size and not one to assume. More placements narrow the bound wherever the
-    spread comes from, where more pairs narrow only the part the pairs give; and a setup has no
+    first run's size and not one to assume. More placements generally narrow the bound
+    wherever the spread comes from, though not at every step of K (the bound is an order
+    statistic), where more pairs narrow only the part the pairs give; and a setup has no
     figure for its medians' spread before an A/A has been read on it and on its workload. The
     scripts for both calculations, `resolve-sim.mjs` and `spread.mjs`, are under the tag
     `evidence/c448780e` with what they print. The change on `young`: +0.03%, bound
@@ -9304,16 +9309,17 @@ rules something out.
     among the A/A's 200 padded placements of base's code, base's unpadded build costs 46,096
     cycles a request with 98 of 200 cheaper (one-sided p = 0.512), `92bc32678`'s 45,780 with 50
     (p = 0.751) and `705d14045`'s 46,551 with 159 (p = 0.209); head's 46,825 with 172 (p = 0.144)
-    mixes its code with its layout, so says nothing of a pad on its own; and the padded costs show
-    no drift in run order (Spearman's rho -0.067, p = 0.335). So for one exact base build and two
-    near-base builds this run did not reproduce the earlier direction, padded builds under their
-    unpadded one: none of the three offsets' intervals excludes zero, and each unpadded build sits
-    among the 200 padded placements. Head against its own pads is the exception: 7 of 8 cheaper
+    mixes its code with its layout, so says nothing of a pad on its own; and no drift of the padded
+    costs in run order was detected (Spearman's rho -0.067, p = 0.335), which does not show there
+    was none. So for one exact base build and two near-base builds this run did not reproduce the
+    earlier pattern, padded builds under their unpadded one: none of the three offsets' intervals
+    excludes zero, and each unpadded build sits among the 200 padded placements, though two of the
+    three offsets (base's and `705d14045`'s) still point the earlier way and one the other. Head against its own pads is the exception: 7 of 8 cheaper
     and an interval wholly below zero. Head's offset less base's, pad by pad, is -0.38% (-2.90% to
     +0.55%; mean -0.93%, 90% t interval -2.17% to +0.31%), zero inside, which establishes neither
     that a pad takes more from a change's head than from its base nor that it takes the same. For
     [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
-    this run adds three unpadded builds whose offsets do not repeat that direction, one (head's)
+    this run adds three unpadded builds whose offsets do not repeat that pattern, one (head's)
     that does, and a first paired reading of head against base that is inconclusive. It leaves
     open why the first two runs' unpadded builds sat above their padded ones; the controls that
     issue asks for, the unpadded build against every placement of both lists, a pad of 16 bytes
