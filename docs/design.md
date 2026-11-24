@@ -9645,9 +9645,9 @@ rules something out.
     here. The pads are no part of a spread's setup either way, so one recorded with second
     pads is read for a run without them on the same bet. A K sized from an eligible A/A
     read with one pad is taken for a run with two on it as well, and that covers the pilot
-    of a head that first brings such code: a pilot is an A/A with a plan of its own, its
-    sides are the base's, and where they have no such section the point asks no second pad
-    of it. The floor of
+    of a head that first brings such code: a pilot is an A/A with a plan of its own, so the
+    point holds for it by what its own sides show, its sides are the base's, and where they
+    have no such section the point asks no second pad of it. The floor of
     [design Choice 71](#choice-layout-floor) is not touched: its recorded floor is for its
     receipt's crate versions, which a build with another dependency does not match, and a
     same-run control's pads are in the source, where a change is.
