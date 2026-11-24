@@ -300,8 +300,10 @@ the Gin, Drogon, Topcoat and Leptos cells' browser checks run in Playwright's im
 `@playwright/test` version in `package.json`, with the Node 26 that image installs by major
 version, which can differ in patch; their image step prints both versions in its log, or warns that
 the image's version is unavailable when its bounded probe fails. The Nuxt cell launches that image
-itself and does not print its Node. `runner.test.mjs` runs that probe in bash with GNU `timeout -k`;
-a local host without them skips that one test, and hosted CI always runs it.
+itself and does not print its Node. `runner.test.mjs`'s shell tests run the image steps, that probe
+and the guarded check commands in bash; only the probe test also needs GNU `timeout -k`. A local
+host without bash skips the shell tests, and one without GNU `timeout` skips only the probe test,
+each with its reason; hosted CI always runs them.
 
 The generator explicitly gives only its public synthetic `fixtures/catalog.json` mode 0644
 and its `fixtures/` directory mode 0755, including when regenerating under umask 0077.

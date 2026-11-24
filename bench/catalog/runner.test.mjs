@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,6 +67,16 @@ const imageBase = ["docker", "run", "--rm", "--network", "host", "--ipc", "host"
 const dockerBoundary = ["--group-add", "$(stat -c %g /var/run/docker.sock)", "-v", "/tmp:/tmp",
   "-v", "$(command -v docker):/usr/local/bin/docker:ro", "-v", "/var/run/docker.sock:/var/run/docker.sock"];
 const forward = (...names) => names.flatMap((name) => ["-e", name]);
+// The complete argument list of each command a job's image step exports.
+const expectedCommands = {
+  harness: {
+    PLAYWRIGHT: [...imageBase, "$image"],
+    PLAYWRIGHT_WITH_DOCKER: [...imageBase, ...dockerBoundary, ...forward("CATALOG_DOCKER_TESTS", "RUNNER_ENVIRONMENT"), "$image"],
+  },
+  parity: {
+    PLAYWRIGHT_WITH_DOCKER: [...imageBase, ...dockerBoundary, ...forward("RUNNER_ENVIRONMENT"), "$image"],
+  },
+};
 // The image's Node is a bounded, best-effort diagnostic: a failed, empty or stalled probe says so
 // and leaves the step, and the browser checks after it, to run.
 const nodeProbe = [
@@ -149,10 +159,7 @@ test("catalog CI takes Chromium from Playwright's image, not the runner's apt mi
   // Both run unconditionally and fail the job when they fail; so does the image step.
   const harness = imageStep("harness");
   assert.deepEqual(Object.keys(harness.step).sort(), ["name", "run"]);
-  assert.deepEqual(harness.commands, {
-    PLAYWRIGHT: [...imageBase, "$image"],
-    PLAYWRIGHT_WITH_DOCKER: [...imageBase, ...dockerBoundary, ...forward("CATALOG_DOCKER_TESTS", "RUNNER_ENVIRONMENT"), "$image"],
-  });
+  assert.deepEqual(harness.commands, expectedCommands.harness);
   assert.deepEqual(after("harness", harness.at, (step) => step.run?.includes("check:marketplace"), "Marketplace oracle"),
     { run: "${PLAYWRIGHT:?} npm run check:marketplace" });
   assert.deepEqual(after("harness", harness.at, (step) => step.run?.includes("bench/catalog/*.test.mjs"), "catalog tests"),
@@ -163,9 +170,7 @@ test("catalog CI takes Chromium from Playwright's image, not the runner's apt mi
   const compiled = "contains(fromJSON('[\"gin\",\"drogon\",\"topcoat\",\"leptos\"]'), matrix.app)";
   assert.deepEqual(Object.keys(parity.step).sort(), ["if", "name", "run"]);
   assert.equal(parity.step.if, compiled);
-  assert.deepEqual(parity.commands, {
-    PLAYWRIGHT_WITH_DOCKER: [...imageBase, ...dockerBoundary, ...forward("RUNNER_ENVIRONMENT"), "$image"],
-  });
+  assert.deepEqual(parity.commands, expectedCommands.parity);
   const browserChecks = [
     { name: "Test native compiled alert forms and independent readback", if: compiled,
       run: "${PLAYWRIGHT_WITH_DOCKER:?} node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}" },
@@ -181,10 +186,22 @@ test("catalog CI takes Chromium from Playwright's image, not the runner's apt mi
   }
 });
 
+// The shell tests run workflow steps in bash, as GitHub does, and the probe test also needs GNU
+// timeout's -k. A local host without them skips those tests with the reason. Hosted CI always runs
+// them, and fails them if a tool is missing: the harness runs this file in Playwright's image, which
+// receives RUNNER_ENVIRONMENT but not GITHUB_ACTIONS, so either marks the hosted run.
+const hosted = Boolean(process.env.GITHUB_ACTIONS) || process.env.RUNNER_ENVIRONMENT === "github-hosted";
+const hasBash = process.platform !== "win32"
+  && spawnSync("bash", ["--noprofile", "--norc", "-c", "true"], { stdio: "ignore", timeout: 10000 }).status === 0;
+const hasTimeout = process.platform !== "win32"
+  && spawnSync("timeout", ["-k", "1", "5", "true"], { stdio: "ignore", timeout: 10000 }).status === 0;
+const unless = (available, reason) => !available && !hosted && reason;
+const bashSkip = unless(hasBash, "runs workflow steps in bash, which this host does not have");
+
 // A browser check names its image command as ${NAME:?}: when the image step did not set it, the
 // step fails under GitHub's bash -e instead of running the check on the runner with no image.
 test("a browser check whose image command is unset fails instead of running on the runner", {
-  skip: process.platform === "win32" && "runs the step's command in bash",
+  skip: bashSkip,
 }, () => {
   const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
   const oracle = workflow.jobs.harness.steps.find((step) => step.run?.includes("check:marketplace")).run;
@@ -201,12 +218,8 @@ test("a browser check whose image command is unset fails instead of running on t
   assert.equal(set.stdout, "image true ran\n");
 });
 
-// The probe runs in bash with GNU timeout's -k. Hosted CI (Ubuntu) always runs it; a local host
-// without both skips it, with the reason.
-const probeHost = process.platform !== "win32"
-  && spawnSync("timeout", ["-k", "1", "5", "true"], { stdio: "ignore" }).status === 0;
 test("the image step's Node probe reports a failed, empty or stalled docker run without failing the step", {
-  skip: !probeHost && !process.env.GITHUB_ACTIONS && "runs the probe in bash with GNU timeout -k and a stand-in docker",
+  skip: bashSkip || unless(hasTimeout, "runs the probe with GNU timeout -k, which this host does not have"),
 }, (t) => {
   const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
   const probe = probeLines(workflow.jobs.harness.steps.find((step) => step.name === "Playwright's image").run);
@@ -240,6 +253,105 @@ test("the image step's Node probe reports a failed, empty or stalled docker run 
     assert.equal(result.status, 0, `${mode}: ${result.stderr}`);
     assert.ok(result.stdout.includes(`::warning::Could not read the Node version in the-image (docker run exit ${status}, `), `${mode}: ${result.stdout}`);
     assert.match(result.stdout, /^Node on the runner v\S+, in the-image unavailable$/m, mode);
+  }
+});
+
+// Read a $GITHUB_ENV file as Actions does: NAME=value lines, and NAME<<DELIMITER blocks.
+function readGithubEnv(text) {
+  const env = {};
+  const lines = text.split("\n");
+  for (let at = 0; at < lines.length; at++) {
+    const line = lines[at];
+    if (line === "") continue;
+    const equals = line.indexOf("="), heredoc = line.indexOf("<<");
+    if (equals > 0 && (heredoc < 0 || equals < heredoc)) {
+      env[line.slice(0, equals)] = line.slice(equals + 1);
+      continue;
+    }
+    assert.ok(heredoc > 0, `GITHUB_ENV line ${at + 1} is neither NAME=value nor NAME<<DELIMITER: ${line}`);
+    const end = lines.indexOf(line.slice(heredoc + 2), at + 1);
+    assert.ok(end > at, `GITHUB_ENV line ${at + 1} has no closing delimiter`);
+    env[line.slice(0, heredoc)] = lines.slice(at + 1, end).join("\n");
+    at = end;
+  }
+  return env;
+}
+
+// The image step, run as GitHub runs a step, exports through $GITHUB_ENV the commands the browser
+// checks after it receive. This reads that file as Actions does, then runs each check's guarded
+// command line with that environment and a stand-in docker that records its argv, so a flag added
+// anywhere in the step, not only in its first run= line, fails.
+test("each browser check receives exactly its image command from the image step, run as GitHub runs it", {
+  skip: bashSkip,
+}, (t) => {
+  const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
+  const version = JSON.parse(readFileSync(join(repo, "node_modules/@playwright/test/package.json"), "utf8")).version;
+  const image = `mcr.microsoft.com/playwright:v${version}-noble`;
+  const dir = mkdtempSync(join(tmpdir(), "catalog-image-step-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const bin = join(dir, "bin");
+  const elsewhere = join(dir, "elsewhere");
+  mkdirSync(bin);
+  mkdirSync(elsewhere);
+  const log = join(dir, "docker.log");
+  const tool = (name, lines) => {
+    writeFileSync(join(bin, name), lines.join("\n") + "\n");
+    chmodSync(join(bin, name), 0o755);
+  };
+  // docker records every call; its pull succeeds and the image's node --version prints a version.
+  tool("docker", [
+    `#!${process.execPath}`,
+    'const args = process.argv.slice(2);',
+    'require("node:fs").appendFileSync(process.env.DOCKER_LOG, JSON.stringify(args) + "\\n");',
+    'if (args[0] === "run" && args.at(-2) === "node" && args.at(-1) === "--version") console.log("v26.13.1");',
+  ]);
+  // A runner's uid and gid, and its Docker socket's group.
+  tool("id", ["#!/bin/sh", 'case "$*" in -u) echo 1001 ;; -g) echo 127 ;; *) echo "unexpected id $*" >&2; exit 1 ;; esac']);
+  tool("stat", ["#!/bin/sh", '[ "$*" = "-c %g /var/run/docker.sock" ] || { echo "unexpected stat $*" >&2; exit 1; }', "echo 118"]);
+  const values = { "$(id -u):$(id -g)": "1001:127", "$(stat -c %g /var/run/docker.sock)": "118",
+    "$(command -v docker)": join(bin, "docker"), "$PWD": realpathSync(repo), "$image": image };
+  const concrete = (word) => Object.entries(values).reduce((out, [name, value]) => out.replaceAll(name, value), word);
+  const calls = () => existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+  // GitHub writes a step's script to a file and runs it with bash --noprofile --norc -eo pipefail.
+  const bash = (script, options) => {
+    const file = join(dir, "step.sh");
+    writeFileSync(file, script);
+    rmSync(log, { force: true });
+    return spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", file], { encoding: "utf8", timeout: 60000, ...options });
+  };
+  const path = `${bin}:${process.env.PATH}`;
+
+  for (const job of ["harness", "parity"]) {
+    const steps = workflow.jobs[job].steps;
+    const at = steps.findIndex((step) => step.name === "Playwright's image");
+    assert.ok(at >= 0, job);
+    const githubEnv = join(dir, `${job}.env`);
+    writeFileSync(githubEnv, "");
+    // Run from the checkout with no inherited PWD, so bash's $PWD is the checkout's real path.
+    const setup = bash(steps[at].run, { cwd: repo, env: { PATH: path, GITHUB_ENV: githubEnv, DOCKER_LOG: log } });
+    assert.equal(setup.status, 0, `${job} image step: ${setup.stderr}`);
+    assert.ok(setup.stdout.includes(`in ${image} v26.13.1\n`), `${job}: ${setup.stdout}`);
+    assert.deepEqual(calls(), [["pull", image], ["run", "--rm", image, "node", "--version"]], `${job}: the step's own docker calls`);
+    const exported = readGithubEnv(readFileSync(githubEnv, "utf8"));
+    assert.deepEqual(Object.keys(exported).sort(), Object.keys(expectedCommands[job]).sort(), `${job}: exported names`);
+
+    const checks = steps.slice(at + 1).flatMap((step) => (step.run ?? "").split("\n")
+      .filter((line) => line.includes("${PLAYWRIGHT")).map((line) => ({ step, line })));
+    assert.equal(checks.length, job === "harness" ? 2 : 3, `${job}: guarded browser-check lines`);
+    for (const { step, line } of checks) {
+      const guarded = /^\$\{(PLAYWRIGHT\w*):\?\} (.+)$/.exec(line);
+      assert.ok(guarded, `${job}: ${line}`);
+      // Actions substitutes the matrix value before bash runs the line; any compiled app will do.
+      const command = line.replaceAll("${{ matrix.app }}", "gin");
+      assert.ok(!command.includes("${{"), command);
+      // An empty directory leaves the catalog tests' glob as written, so its words compare as is.
+      const result = bash(command + "\n", { cwd: elsewhere,
+        env: { PATH: path, DOCKER_LOG: log, ...exported, ...(step.env ?? {}) } });
+      assert.equal(result.status, 0, `${job}: ${command}: ${result.stderr}`);
+      const tail = guarded[2].replaceAll("${{ matrix.app }}", "gin").split(" ");
+      assert.deepEqual(calls().map((args) => ["docker", ...args]),
+        [[...expectedCommands[job][guarded[1]].map(concrete), ...tail]], `${job}: ${command}`);
+    }
   }
 });
 
