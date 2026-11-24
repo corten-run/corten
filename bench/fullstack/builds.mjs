@@ -215,7 +215,7 @@ export const recipes = {
     edit: "Pages/Item.cshtml",
   },
   spring: {
-    tools: "maven:3.10-eclipse-temurin-27@sha256:3175c44b207d6698aecb9bbb5bf285b5b4efcf7f567d6f65d88cd218276a6ab2",
+    tools: "maven:3.10-eclipse-temurin-27@sha256:a83dca2f65c72ace081f55a63231adbd6d88741caa4fdc68f7d5c9e450d1070c",
     context: "",
     workdir: "/src",
     add: htmx("src/main/resources/static/htmx.min.js"),

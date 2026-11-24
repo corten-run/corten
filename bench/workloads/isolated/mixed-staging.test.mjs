@@ -9,6 +9,7 @@ import { registerHooks } from "node:module";
 import { deploymentSha256 } from "../deployments.mjs";
 import { digest, tree } from "./evidence.mjs";
 import { prepareMixedAudit, replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
+import { fixtureGitEnv } from "../../../scripts/fixture-git.mjs";
 
 // Verbatim native build-context.mjs from 288d10fcba8db3ec2de22f9875f80898c4d4930a.
 // Keep this immutable test dependency portable before the parent routes that commit.
@@ -29,7 +30,7 @@ test.after(() => hooks.deregister());
 async function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "isolated-mixed-audit-")), repo = join(root, "repo"), sources = join(root, "sources"); mkdirSync(repo);
   t.after(() => { assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep)); rmSync(root, { recursive: true }); });
-  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() }).trim();
   git("init", "--quiet"); git("config", "user.name", "Offline Test"); git("config", "user.email", "test@example.invalid"); git("config", "core.autocrlf", "false");
   for (const path of ["Cargo.toml", "bench/marketplace/corten/Dockerfile", "bench/fullstack/apps/express/server.mjs"] ) {
     mkdirSync(dirname(join(repo, path)), { recursive: true }); writeFileSync(join(repo, path), `synthetic ${path}\n`);
@@ -60,7 +61,7 @@ test("the native Docker output-file archive convention produces the exact retain
   for (const app of f.binding.selection.apps) {
     const output = join(f.root, `${app}-native-build-context.tar`);
     execFileSync("git", nativeBuildArchiveArgs(f.plan.commit, app, { output }), { cwd: f.repo, windowsHide: true,
-      env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+      env: fixtureGitEnv({ GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" }), stdio: ["ignore", "pipe", "pipe"] });
     assert.deepEqual(readFileSync(output), readFileSync(join(f.sources, `contexts/${app}.tar`)));
   }
 });

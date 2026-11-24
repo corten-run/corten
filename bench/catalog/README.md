@@ -304,7 +304,8 @@ ready-to-run replacement for catalog or the historical marketplace suite.
 
 ## Running it
 
-From the repository root, with Node 24, Docker and Playwright Chromium installed:
+From the repository root, with the Node version in [`.node-version`](../../.node-version), Docker
+and Playwright Chromium installed:
 
 ```sh
 npm ci
@@ -314,6 +315,16 @@ npm run check:catalog
 node --test bench/catalog/check.test.mjs
 node bench/catalog/run.mjs c1 --build --check-only
 ```
+
+The hosted Catalog checks' runner steps use the exact Node in `.node-version`. The harness's and
+the Gin, Drogon, Topcoat and Leptos cells' browser checks run in Playwright's image for the
+`@playwright/test` version in `package.json`, with the Node 26 that image installs by major
+version, which can differ in patch; their image step prints both versions in its log, or warns that
+the image's version is unavailable when its bounded probe fails. The Nuxt cell launches that image
+itself and does not print its Node. `runner.test.mjs`'s shell tests run the image steps, that probe
+and the guarded check commands in bash; only the probe test also needs GNU `timeout -k`. A local
+host without bash skips the shell tests, and one without GNU `timeout` skips only the probe test,
+each with its reason; hosted CI always runs them.
 
 The generator explicitly gives only its public synthetic `fixtures/catalog.json` mode 0644
 and its `fixtures/` directory mode 0755, including when regenerating under umask 0077.

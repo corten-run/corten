@@ -66,9 +66,9 @@ pub(crate) const PLAIN_NOTICE_COOKIE: &str = "corten-notice";
 const NOTICE_MAX: usize = 500;
 
 /// Responses depend on the mode header and, for [`Mode::Data`], on `Accept`.
-const VARY: &str = "corten, accept";
+pub(crate) const VARY: &str = "corten, accept";
 /// The same, for an answer whose locale follows `Accept-Language`.
-const VARY_LANGUAGE: &str = "corten, accept, accept-language";
+pub(crate) const VARY_LANGUAGE: &str = "corten, accept, accept-language";
 
 /// Settles the answer's dependency on `Accept-Language` as it leaves the app, whatever made it: a
 /// page, JSON, a redirect, the error page, or a middleware that read messages after `next` or put
@@ -185,8 +185,10 @@ impl Mode {
     /// mode. With them, that `Accept` as text, empty where it was not asked for, not sent or not
     /// text. The rule is written here and nowhere else in the request's path: [`Mode::asked`]
     /// looks the two up and `crate::kept` gives them from its pass over a request's headers, so
-    /// a header this function is made to read is an argument each of them has to give. Browsers
-    /// never put JSON first for a navigation.
+    /// a header this function is made to read is an argument each of them has to give. A request
+    /// under an API is the one the stages do not pass here: they ask nothing of its mode
+    /// ([`RequestPage::read`]), and a handler's [`Req`] there still does. Browsers never put JSON
+    /// first for a navigation.
     pub(crate) fn said<'a>(
         runtime: Option<&HeaderValue>,
         accept: impl FnOnce() -> Option<&'a HeaderValue>,
@@ -214,7 +216,10 @@ impl Mode {
     /// whether a kept page can answer without this function.
     fn read(headers: &HeaderMap, check_html: bool) -> ((Mode, bool), bool) {
         let (asked, accept) = Mode::said(headers.get(MODE_HEADER), || headers.get(header::ACCEPT));
-        (asked, check_html && asked.0 == Mode::Document && accept.contains("text/html"))
+        // A browser's navigation names HTML first, so the start is looked at before the line is
+        // searched: `str::contains` prepares a search made for long text before it looks.
+        let html = || accept.starts_with("text/html") || accept.contains("text/html");
+        (asked, check_html && asked.0 == Mode::Document && html())
     }
 }
 
@@ -896,6 +901,9 @@ pub(crate) struct Credentials {
 /// What the stages know about the page before dispatch. A handler or its extractors see the
 /// actual, possibly changed request, not this snapshot.
 pub(crate) struct RequestPage {
+    /// The request's mode where it is under no API. Under one it is `(Mode::Data, false)` and
+    /// `accepts_html` is `false` whatever the request said ([`RequestPage::read`]), so a stage
+    /// that reads either for a request under an API reads the request's headers instead.
     pub mode: (Mode, bool),
     pub accepts_html: bool,
     pub credentials: Credentials,
@@ -904,8 +912,12 @@ pub(crate) struct RequestPage {
 }
 
 impl RequestPage {
+    /// `is_page`: the request is under no API. Under one, the stages ask nothing of the mode
+    /// (every failure there is JSON, no answer a document the runtime swaps in, and a handler's
+    /// `Req` reads the request itself), so neither header is looked up and the mode is set to a
+    /// data client's, whatever the request said.
     pub(crate) fn read(headers: &HeaderMap, is_page: bool) -> Self {
-        let (mode, accepts_html) = Mode::read(headers, is_page);
+        let (mode, accepts_html) = if is_page { Mode::read(headers, true) } else { ((Mode::Data, false), false) };
         RequestPage {
             mode,
             accepts_html,
@@ -4560,7 +4572,7 @@ mod carried_tests {
         };
         // The mode, whether the runtime sent the request, and whether a document was asked for by
         // an `Accept` that names HTML.
-        let cases: [(Lines, Lines, Mode, bool, bool); 21] = [
+        let cases: [(Lines, Lines, Mode, bool, bool); 24] = [
             // No `corten`: the first item of the first `Accept` line, JSON or anything else.
             (&[], &[], Mode::Document, false, false),
             (&[], &[b"text/html,application/xhtml+xml,*/*;q=0.8"], Mode::Document, false, true),
@@ -4572,6 +4584,11 @@ mod carried_tests {
             (&[], &[b"application/problem+json"], Mode::Document, false, false),
             (&[], &[b"text/html", b"application/json"], Mode::Document, false, true),
             (&[], &[b"application/json", b"text/html"], Mode::Data, false, false),
+            // HTML is named or it is not, wherever in the line: another `text/` type at the start
+            // is not HTML, and HTML after it is.
+            (&[], &[b"text/plain"], Mode::Document, false, false),
+            (&[], &[b"text/event-stream"], Mode::Document, false, false),
+            (&[], &[b"text/plain, text/html;q=0.9"], Mode::Document, false, true),
             // One that is not text is read as none.
             (&[], &[b"application/json\xff"], Mode::Document, false, false),
             (&[], &[b"text/html\xff"], Mode::Document, false, false),

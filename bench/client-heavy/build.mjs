@@ -4,7 +4,7 @@ import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selectedApps } from "../workloads/registry.mjs";
 import { Evidence, sha256, json, clock } from "./evidence.mjs";
-import { collectCompiler, withCompilerTarget } from "./compiler.mjs";
+import { collectCompiler, withCompilerTarget, solidCompiler, solidCompilerVersion, solidRuntimeFiles, solidRuntimePrefix, matchesSolidRuntime } from "./compiler.mjs";
 import { buildOptions as fixedBuildOptions, documentMarkup } from "./contract.mjs";
 export { vendorConfiguration } from "./build-replay.mjs";
 import { vendorConfiguration } from "./build-replay.mjs";
@@ -12,13 +12,35 @@ import { evaluateLatestStable, latestStableSources, unsupportedSolidReason } fro
 
 export const here = dirname(fileURLToPath(import.meta.url));
 export const root = resolve(here, "../..");
-const require = createRequire(join(root, "bench/browser/package.json"));
+const browserPackage = join(root, "bench/browser/package.json");
+const require = createRequire(browserPackage);
 export { sha256 };
 export function readLatestStable() {
   const input = Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) => [key, readFileSync(join(root, path))]));
   const policy = evaluateLatestStable({ group: "client-heavy", ...input });
   if (!policy.valid || !Array.isArray(policy.candidates)) throw new Error("invalid-client-candidate-policy");
   return policy;
+}
+export function solidBuildPlugin(entry) {
+  const compiler = solidCompiler(browserPackage);
+  const plugin = { name: "solid", setup(b) {
+    b.onLoad({ filter: /\.jsx$/ }, ({ path }) => {
+      if (path !== entry) return;
+      return { contents: compiler.transform(readFileSync(path, "utf8"), path), loader: "js" };
+    });
+    b.onLoad({ filter: /\.js$/, namespace: "file" }, ({ path }) => {
+      const source = relative(root, path).replaceAll("\\", "/");
+      if (!source.startsWith(solidRuntimePrefix)) return;
+      const runtime = source.slice(solidRuntimePrefix.length);
+      if (!Object.hasOwn(solidRuntimeFiles, runtime)) return;
+      // Hand esbuild exactly the bytes we hash, rather than reopening them later.
+      const contents = readFileSync(path);
+      if (sha256(contents) !== solidRuntimeFiles[runtime])
+        throw new Error(`modified Solid 2 runtime input ${runtime}; run npm --prefix bench/browser ci`);
+      return { contents, loader: "js", resolveDir: dirname(path) };
+    });
+  } };
+  return { plugin, receipt: { version: solidCompilerVersion, target: compiler.target, files: compiler.files } };
 }
 // Cargo resolves config-file paths from two levels above that file. This file
 // lives at <out>/evidence/cargo-vendor.toml, so its base is <out>.
@@ -32,7 +54,8 @@ export async function buildApps(workload, directory, cargo = "cargo", evidence =
   const policy = readLatestStable();
   const { build } = require("esbuild");
   for (const app of selectedApps("client-heavy")) {
-    if (policy.candidates.find((row) => row.app === app)?.status === "unsupported") {
+    const candidate = policy.candidates.find((row) => row.app === app);
+    if (candidate?.status === "unsupported") {
       apps[app] = { outcome: "not-run", reason: unsupportedSolidReason };
       writeFileSync(join(out, "build.json"), json(apps));
       continue;
@@ -44,6 +67,7 @@ export async function buildApps(workload, directory, cargo = "cargo", evidence =
       let entry = join(here, "apps", `${app}.${app === "react" || app === "solid" ? "jsx" : app === "remix" ? "tsx" : "js"}`);
       let screen = "", footer = "";
       const plugins = [];
+      let solid;
       if (app === "corten") {
         const input = [relative(root, join(out, "workload.json")).replaceAll("\\", "/"), relative(root, dir).replaceAll("\\", "/")];
         let initialLock;
@@ -93,12 +117,10 @@ export async function buildApps(workload, directory, cargo = "cargo", evidence =
         footer = readFileSync(join(dir, "client.footer.js"), "utf8");
         writeFileSync(join(dir, "runtime.js"), readFileSync(join(root, "crates/corten/js/dist/corten.js")));
       }
-      if (app === "solid") plugins.push({ name: "solid", setup(b) {
-        b.onLoad({ filter: /\.jsx$/ }, async ({ path }) => {
-          const result = await require("@babel/core").transformAsync(readFileSync(path, "utf8"), { filename: path, babelrc: false, configFile: false, presets: [[require.resolve("babel-preset-solid"), { generate: "dom" }]] });
-          return { contents: result.code, loader: "js" };
-        });
-      } });
+      if (app === "solid") {
+        if (!candidate?.latestStableEligible) throw new Error("solid-2-compiler-policy-not-satisfied");
+        solid = solidBuildPlugin(entry); plugins.push(solid.plugin);
+      }
       if (app === "svelte") plugins.push({ name: "svelte", setup(b) {
         b.onLoad({ filter: /\.svelte$/ }, ({ path }) => ({ contents: require("svelte/compiler").compile(readFileSync(path, "utf8"), { filename: path, generate: "client", css: "external" }).js.code, loader: "js", resolveDir: dirname(path) }));
       } });
@@ -113,12 +135,14 @@ export async function buildApps(workload, directory, cargo = "cargo", evidence =
       const optionsForReceipt = { ...buildOptions, plugins: plugins.map((p) => p.name) };
       writeFileSync(join(dir, "build-options.json"), json(optionsForReceipt));
       const result = await build(buildOptions);
+      const inputs = Object.keys(result.metafile.inputs).sort().map((path) => ({ path: relative(root, resolve(root, path)).replaceAll("\\", "/"), sha256: sha256(readFileSync(resolve(root, path))) }));
+      if (solid && !matchesSolidRuntime(new Map(inputs.map((input) => [input.path, input]))))
+        throw new Error("missing or modified Solid 2 runtime inputs; run npm --prefix bench/browser ci");
       writeFileSync(join(dir, "metafile.json"), json(result.metafile));
       const code = result.outputFiles[0].text + "\n" + footer;
       const bundle = app === "corten" ? "client.js" : "app.js";
       writeFileSync(join(dir, bundle), code);
       writeFileSync(join(dir, "index.html"), documentMarkup(app, workload, screen));
-      const inputs = Object.keys(result.metafile.inputs).sort().map((path) => ({ path: relative(root, resolve(root, path)).replaceAll("\\", "/"), sha256: sha256(readFileSync(resolve(root, path))) }));
       apps[app] = { outcome: "built", inputs, bundleSha256: sha256(code), bytes: Buffer.byteLength(code), artifacts: Object.fromEntries(["index.html", bundle, ...(app === "corten" ? ["runtime.js", "views.js"] : [])].map((name) => [name, sha256(readFileSync(join(dir, name)))])) };
       const inputBytes = [];
       for (const input of inputs) inputBytes.push({ path: input.path, ...await evidence.file(root, input.path) });
@@ -126,7 +150,7 @@ export async function buildApps(workload, directory, cargo = "cargo", evidence =
         esbuild: { version: require("esbuild").version, entry: await evidence.blob(readFileSync(require.resolve("esbuild"))) },
         optionsSha256: sha256(json(optionsForReceipt)), metafileSha256: sha256(json(result.metafile)),
         rawBundle: await evidence.blob(result.outputFiles[0].contents), footer: await evidence.blob(Buffer.from(footer)),
-        inputs: inputBytes, artifacts: apps[app].artifacts }));
+        inputs: inputBytes, artifacts: apps[app].artifacts, ...(solid ? { solidCompiler: solid.receipt } : {}) }));
     } catch (error) {
       apps[app] = { outcome: "failed", reason: "native-build-failed", diagnosticSha256: sha256(String(error)) };
       writeFileSync(join(dir, "failure.log"), String(error));

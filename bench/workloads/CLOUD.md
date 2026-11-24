@@ -578,10 +578,18 @@ The continuation does not grant approval; the existing exact merged-source,
 native readiness, independent review and operator approval requirements apply.
 
 If prepare or detach refuses before writing intent, `fleet-operation-failed`
-can name the failing stage: `continuation-admission` (including custody and
-eligibility), `prepare-reservation`, `initial-plan` or `locked-plan` (including exact approval checks),
-or `final-pre-intent-recheck`. These labels identify the check, not its cause or
-whether locks were released. Placement keeps its separate
+can name the failing stage: `continuation-admission`, `prepare-reservation`,
+`initial-plan` or `locked-plan` (including exact approval checks), or
+`final-pre-intent-recheck`. Admission adds a fixed label: `lock-busy` means the
+continuation lock exists (not that its owner is live); `lock-check` means some
+other lock operation failed. `batch-owner` means the indexed fleet's batch
+owner could not be shown to have stopped. `custody-replay` means the selected
+group's archived result or retirement proof did not replay; `custody-read`
+is the fallback for other errors reading saved evidence. `custody-unresolved`
+means custody scanning found a blocker. `custody-account` and `custody-recheck`
+name the subsequent custody checks.
+`group-selection` covers reservation or eligibility checks. These labels name
+checks, not root causes or whether locks were released. Placement keeps its separate
 `fleet-placement-preflight-failed: STAGE` diagnostic. Inspect saved intent and custody
 before deciding what to do next; an unlabeled failure does not establish that
 intent was never written.
@@ -1061,6 +1069,15 @@ read-only standard bare Git object view of the exact committed source, with
 against the sealed checkout first. This is metadata for real Git, not a Git stub,
 commit override in controller state, or permission to substitute a different
 source tree. No native qualification or production action is run by the harness.
+
+`cloud-cancellation-controls.test.mjs` checks the original control bytes on every run; its two
+Python 3 cases run only when asked. `CORTEN_SYNTHETIC_CONTROL_BOUNDARY=1` runs the exact emitted
+cancellation and custody programs through `test-fixtures/mixed-controls-boundary.py` on Linux, which
+needs fresh private `/bench`, `/etc/systemd/system` and `/var/lib/cloud` directories, such as a
+disposable container's tmpfs mounts. That setting, or `CORTEN_REQUIRE_PYTHON=1` where Python 3 is
+guaranteed (CI sets it for `npm run check:workloads`), also checks that the boundary makes its Git
+repository without touching a caller named by `GIT_DIR` and `GIT_WORK_TREE`. With either set, a
+missing Python fails that check rather than skipping it.
 
 ### Terminal Custody Fences
 

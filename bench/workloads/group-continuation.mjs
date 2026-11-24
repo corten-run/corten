@@ -124,7 +124,7 @@ export async function continuationAdmission(root, group, deps) {
   return scanContinuation(root, deps, group);
 }
 
-async function scanContinuation(root, { repo, interrupted, inspect, processStart } = {}, admittedGroup) {
+async function scanContinuation(root, { repo, interrupted, inspect, processStart, admissionFailure } = {}, admittedGroup) {
   root = fleetRoot(root, repo);
   const bytes = continuationIndex(root), indexSha256 = digest(bytes), index = JSON.parse(bytes);
   assert.ok(Array.isArray(index) && index.length <= 64, "invalid continuation index");
@@ -166,6 +166,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       reservationCreatedAt: state.createdAt, manifestSha256: fleet.manifestSha256, selection: selected,
       matchesCurrentContract: matchesCurrentContract(selected), attemptRoot: fleet.root });
   };
+  const refuseAdmission = (check, error) => { admissionFailure?.(error, check); throw error; };
   const readAdmission = async (fleet, checkout, archives) => {
     assert.ok(!interrupted?.(), "continuation admission cancelled");
     const { manifest, manifestSha256 } = fleet, { round, commit, single } = manifest;
@@ -186,7 +187,10 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       // launch intent says nothing about a live remaining owner before intent.
       const consumed = [launchIntent, remainingIntent].find((it) => it && it.approvalSha256 === approvalSha256);
       requireDeadOwner = !consumed || !consumed.subject.jobs.every((job, i) => job.outcome !== "planned" || terminal(children[i]));
-      if (requireDeadOwner) assert.equal(fleetLockSnapshot(fleet.root), lock, "continuation source has an active batch");
+      if (requireDeadOwner) {
+        try { assert.equal(fleetLockSnapshot(fleet.root), lock, "continuation source has an active batch"); }
+        catch (error) { refuseAdmission("batch-owner", error); }
+      }
     }
     if (single) manifests.push({ ...fleet, lock, launch });
     else indexedCustody.push({ root: fleet.root, manifestSha256, lock, launch, remaining, ...(requireDeadOwner ? { requireDeadOwner } : {}) });
@@ -207,16 +211,18 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
         if (state.status === "retired") {
           if (selected) {
             try { verifyRetryRetirement(saved, processStart, retainedLocks); }
-            catch (cause) { throw new Error("unresolved custody: selected group retirement is not verified", { cause }); }
+            catch (cause) { refuseAdmission("custody-replay", new Error("unresolved custody: selected group retirement is not verified", { cause })); }
             receipt = retirementFile(state.retirement.kind);
           }
           outcome = `${state.retirement.kind}-retired`;
         } else {
           if (selected) {
-            const replay = inspect ? { inspect } : await measuredReplay(repo, measuredCheckout(root, checkout, commit), commit);
-            const { row, snapshot } = await verifyCollectedGroup(fleet, group, { ...replay, interrupted, bindArchive: true });
-            assert.equal(row.outcome, state.validation.status, "selected retry evidence differs");
-            retryEvidence.push({ fleet, snapshot });
+            try {
+              const replay = inspect ? { inspect } : await measuredReplay(repo, measuredCheckout(root, checkout, commit), commit);
+              const { row, snapshot } = await verifyCollectedGroup(fleet, group, { ...replay, interrupted, bindArchive: true });
+              assert.equal(row.outcome, state.validation.status, "selected retry evidence differs");
+              retryEvidence.push({ fleet, snapshot });
+            } catch (error) { refuseAdmission("custody-replay", error); }
           }
           outcome = state.validation.status;
         }

@@ -718,6 +718,41 @@ async fn an_api_at_the_root_makes_the_whole_app_json() {
     assert_eq!((status, &body[..]), (StatusCode::OK, "ok"), "Corten's own routes keep their behavior");
 }
 
+/// A request under an API is answered the same whatever mode its `corten` and `Accept` headers
+/// name: the stages do not look the two up there (`RequestPage::read`), and the handler's `Req`
+/// still reads them.
+#[tokio::test]
+async fn an_api_answers_the_same_whatever_mode_the_request_names() {
+    let router = App::new(Routes::new())
+        .api::<Root>(|api| api.route::<Items>(crate::Methods::reads(get(|req: Req| async move { format!("{:?}", req.mode) }))))
+        .router();
+    let said = |headers: &http::HeaderMap| {
+        ["content-type", "cache-control", "vary"].map(|name| headers.get(name).map(|value| value.to_str().unwrap().to_owned()))
+    };
+    let asked = [
+        (None, None, "Document"),
+        (Some("nav"), Some("application/json"), "Navigation"),
+        (Some("action"), Some("text/html"), "Action"),
+        (Some("page"), None, "Document"),
+        (None, Some("application/json"), "Data"),
+        (None, Some("text/html,application/xhtml+xml,*/*;q=0.8"), "Document"),
+    ];
+    let mut answers = Vec::new();
+    for (mode, accept, read) in asked {
+        let (status, headers, body) = call_with(router.clone(), "GET", "/items", mode, accept).await;
+        assert_eq!((status, &body[..]), (StatusCode::OK, read), "the handler's Req reads the two headers: {mode:?} {accept:?}");
+        let (missing, missing_headers, problem) = call_with(router.clone(), "GET", "/nope", mode, accept).await;
+        assert_eq!(
+            (missing, &problem[..]),
+            (StatusCode::NOT_FOUND, r#"{"title":"Not Found","status":404}"#),
+            "{mode:?} {accept:?}"
+        );
+        answers.push((said(&headers), said(&missing_headers)));
+    }
+    assert_eq!(answers[0].1[0].as_deref(), Some("application/problem+json"));
+    assert!(answers.iter().all(|answer| *answer == answers[0]), "one set of headers whatever the request names: {answers:?}");
+}
+
 /// An API's routes in a module of their own, sharing the module's state; its prefix route names
 /// no handler.
 #[crate::routes(api = ModRoot, state = u32)]

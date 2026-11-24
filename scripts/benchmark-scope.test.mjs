@@ -10,6 +10,7 @@ import { parse } from "yaml";
 import { teardownReserve } from "../bench/marketplace/alert-probe-run.mjs";
 import { sourceRoots } from "../bench/workloads/isolated/contract.mjs";
 import { eventPaths, selectEvidence, selectKernel, selectScope } from "./benchmark-scope.mjs";
+import { fixtureGitEnv } from "./fixture-git.mjs";
 
 const root = new URL("../", import.meta.url);
 const workflow = parse(readFileSync(new URL(".github/workflows/catalog.yml", root), "utf8"));
@@ -39,6 +40,20 @@ for (const [name, paths, apps, json] of [
 ]) {
   test(name, () => assert.deepEqual(selectScope(allApps, paths), { apps, json }));
 }
+
+// Every Catalog and Evidence job sets up Node from this file, so a pin bump alone has to run them
+// all on the new Node, not pass their scope jobs and skip the rest.
+test("a Node pin bump alone runs every Catalog app, both JSON jobs and both Evidence selections", () => {
+  const files = new Set(["catalog.yml", "benchmark-evidence.yml"].flatMap(name =>
+    Object.values(parse(readFileSync(new URL(`.github/workflows/${name}`, root), "utf8")).jobs)
+      .flatMap(job => job.steps ?? []).map(step => step.with?.["node-version-file"]).filter(Boolean)));
+  assert.deepEqual([...files], [".node-version"]);
+  for (const path of files) {
+    assert.deepEqual(selectScope(allApps, [path]), { apps: allApps, json: true }, path);
+    assert.equal(selectEvidence([path]), true, path);
+    assert.equal(selectKernel([path]), true, path);
+  }
+});
 
 test("fleet controller changes keep the harness, Corten build, JSON and evidence checks", () => {
   // First-parent diff of the stopped-sibling census fix at 63e7c3314.
@@ -92,9 +107,12 @@ async function localImports(entries) {
 }
 
 test("every local module used by the Catalog harness starts the harness", async () => {
-  const patterns = workflow.jobs.harness.steps.flatMap(({ run }) => {
-    if (!run || run.startsWith("npm ci ") || run.startsWith("npm --prefix bench ci ") || run.startsWith("npx playwright install ")) return [];
-    const command = run === "npm run check:marketplace" ? packageScripts["check:marketplace"] : run;
+  const patterns = workflow.jobs.harness.steps.flatMap(({ name, run }) => {
+    // Playwright's image takes its tag from package.json, which is shared tooling.
+    if (!run || name === "Playwright's image" || run.startsWith("npm ci ") || run.startsWith("npm --prefix bench ci ")) return [];
+    // A browser check runs the same command in that image.
+    const local = run.replace(/^\$\{PLAYWRIGHT(?:_WITH_DOCKER)?:\?\} /, "");
+    const command = local === "npm run check:marketplace" ? packageScripts["check:marketplace"] : local;
     assert.match(command, /^node (?:--test )?bench\//, "trace new harness commands here");
     return command.replace(/^node (?:--test )?/, "").split(" ");
   });
@@ -102,6 +120,7 @@ test("every local module used by the Catalog harness starts the harness", async 
     const { apps, json } = selectScope(allApps, [input]);
     assert.ok(apps.length > 0 || json, "harness input not selected: " + input);
   }
+  assert.ok(selectScope(allApps, ["package.json"]).apps.length > 0, "Playwright's image tag input not selected");
 });
 
 test("Catalog jobs whose replay parses bindings install the bench package's classic compiler", () => {
@@ -257,6 +276,7 @@ test("Evidence covers every real source-custody root and its descendants", () =>
 
 test("native kernel controls run for fixture and tooling inputs, not portable source custody alone", () => {
   for (const path of ["bench/workloads/isolated/bootstrap.mjs", "scripts/benchmark-kernel-ci.sh",
+    "scripts/ci-docker-hub-mirror.sh", "scripts/ci-docker-hub-mirror.mjs",
     ".github/workflows/benchmark-evidence.yml", "package-lock.json"]) {
     assert.equal(selectKernel([path]), true, path);
   }
@@ -302,10 +322,13 @@ test("every local module used by native kernel controls selects the kernel job",
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), "corten-benchmark-scope-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  // Git's environment for the fixture, in process and for the scope script: the caller's GIT_DIR and the like would
+  // choose another repository.
+  const env = fixtureGitEnv();
   const git = (...args) => execFileSync("git", [
     "-c", "core.autocrlf=false", "-c", "user.name=Catalog Fixture", "-c", "user.email=fixture@example.invalid",
     "-c", "commit.gpgsign=false", ...args,
-  ], { cwd, encoding: "utf8" }).trim();
+  ], { cwd, encoding: "utf8", env }).trim();
   git("init", "-q", "-b", "main");
   const write = (path, text = "fixture\n") => {
     const file = join(cwd, path);
@@ -326,13 +349,13 @@ function fixture(t) {
     git("merge", "--quiet", "--no-ff", "--no-edit", head);
     return git("rev-parse", "HEAD");
   };
-  return { cwd, git, write, commit, rename, merge };
+  return { cwd, env, git, write, commit, rename, merge };
 }
 
 const prEvent = GITHUB_SHA => ({ GITHUB_EVENT_NAME: "pull_request", GITHUB_SHA });
 
 test("PR diff excludes base-only changes and includes both sides of an app rename", t => {
-  const { cwd, git, write, commit, rename, merge } = fixture(t);
+  const { cwd, env: gitEnv, git, write, commit, rename, merge } = fixture(t);
   const before = "bench/fullstack/apps/rails/old file";
   const after = "bench/fullstack/apps/nextjs/new file";
   write(before);
@@ -342,18 +365,18 @@ test("PR diff excludes base-only changes and includes both sides of an app renam
   git("switch", "--quiet", "--detach", fork);
   rename(before, after);
   const event = prEvent(merge(commit()));
-  const paths = eventPaths(event, cwd);
+  const paths = eventPaths(event, cwd, gitEnv);
   assert.deepEqual(paths.sort(), [after, before]);
 
   const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
   const output = join(cwd, "output");
-  const env = { ...process.env, ...event, GITHUB_OUTPUT: output, PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS };
+  const env = fixtureGitEnv({ ...event, GITHUB_OUTPUT: output, PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS });
   for (const job of ["catalog", "evidence"]) execFileSync(process.execPath, [script, job], { cwd, env });
   assert.equal(readFileSync(output, "utf8"), 'apps=["nextjs","rails"]\njson=false\nrun=true\nkernel=true\n');
 });
 
 test("a base-side rename scopes the edited file where parity actually tests it", t => {
-  const { cwd, git, write, commit, rename, merge } = fixture(t);
+  const { cwd, env, git, write, commit, rename, merge } = fixture(t);
   const before = "bench/fullstack/apps/express/driver.mjs";
   const after = "bench/workloads/driver.mjs";
   write(before);
@@ -365,13 +388,13 @@ test("a base-side rename scopes the edited file where parity actually tests it",
   const head = commit();
   const merged = merge(head);
   assert.equal(git("diff", "--name-only", base + "..." + head), before);
-  const paths = eventPaths(prEvent(merged), cwd);
+  const paths = eventPaths(prEvent(merged), cwd, env);
   assert.deepEqual(paths, [after]);
   assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
 });
 
 test("a push to main scopes Catalog by its push diff, and an unknown base selects everything", t => {
-  const { cwd, write, commit } = fixture(t);
+  const { cwd, env: gitEnv, write, commit } = fixture(t);
   write("initial");
   const base = commit();
   write("docs/guide/views.md");
@@ -382,8 +405,8 @@ test("a push to main scopes Catalog by its push diff, and an unknown base select
   const output = join(cwd, "output");
   const scope = (PUSH_BEFORE, GITHUB_SHA) => {
     writeFileSync(output, "");
-    const env = { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_SHA, PUSH_BEFORE, GITHUB_OUTPUT: output,
-      PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS };
+    const env = fixtureGitEnv({ GITHUB_EVENT_NAME: "push", GITHUB_SHA, PUSH_BEFORE, GITHUB_OUTPUT: output,
+      PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS });
     execFileSync(process.execPath, [script, "catalog"], { cwd, env, stdio: ["ignore", "ignore", "ignore"] });
     return readFileSync(output, "utf8");
   };
@@ -395,12 +418,12 @@ test("a push to main scopes Catalog by its push diff, and an unknown base select
   // A rewound or rewritten push compares with a base that is not its ancestor.
   assert.equal(scope(framework, docs), all);
   for (const GITHUB_EVENT_NAME of ["workflow_dispatch", "schedule"]) {
-    assert.deepEqual(selectScope(allApps, eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA: framework }, cwd)), { apps: allApps, json: true });
+    assert.deepEqual(selectScope(allApps, eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA: framework }, cwd, gitEnv)), { apps: allApps, json: true });
   }
 });
 
 test("PR and multi-commit push diffs see inputs beyond the hosted path-filter limit", t => {
-  const { cwd, git, write, commit, merge } = fixture(t);
+  const { cwd, env, git, write, commit, merge } = fixture(t);
   write("initial");
   const base = commit();
   git("switch", "--quiet", "--detach", base);
@@ -412,7 +435,7 @@ test("PR and multi-commit push diffs see inputs beyond the hosted path-filter li
   const head = commit();
   const events = [prEvent(merge(head)), { GITHUB_EVENT_NAME: "push", GITHUB_SHA: head, PUSH_BEFORE: base }];
   for (const event of events) {
-    const paths = eventPaths(event, cwd);
+    const paths = eventPaths(event, cwd, env);
     assert.equal(paths.length, 303);
     assert.equal(paths[301], input);
     assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
@@ -420,8 +443,70 @@ test("PR and multi-commit push diffs see inputs beyond the hosted path-filter li
     assert.equal(selectKernel(paths), true);
   }
   for (const before of ["0".repeat(40), "a".repeat(40)]) {
-    const paths = eventPaths({ ...events[1], PUSH_BEFORE: before }, cwd);
+    const paths = eventPaths({ ...events[1], PUSH_BEFORE: before }, cwd, env);
     assert.equal(selectEvidence(paths), true);
     assert.equal(selectKernel(paths), true);
+  }
+});
+
+// The benchmark gates run on the framework CI's Node line and the release workflow's artifact
+// pin, so moving either is one edit and a literal Node or tag cannot drift back in. Each job that
+// needs Node or uploads evidence is named, so dropping its step fails instead of falling back to
+// the runner's default Node or losing that job's artifacts.
+const toolchainJobs = {
+  "catalog.yml": { node: ["scope", "harness", "parity", "json-harness", "json-aot"], upload: ["parity", "json-aot"] },
+  "benchmark-evidence.yml": { node: ["scope", "evidence", "kernel"], upload: [] },
+};
+
+function assertToolchain(workflows, pin) {
+  for (const [name, required] of Object.entries(toolchainJobs)) {
+    const jobs = workflows[name].jobs;
+    for (const job of [...required.node, ...required.upload]) assert.ok(jobs[job], `${name} has no job ${job}`);
+    for (const [job, { steps = [] }] of Object.entries(jobs)) {
+      const node = steps.filter((step) => step.uses?.startsWith("actions/setup-node@"));
+      const uploads = steps.filter((step) => step.uses?.startsWith("actions/upload-artifact@"));
+      if (required.node.includes(job)) assert.ok(node.length > 0, `${name} ${job} sets up no Node`);
+      if (required.upload.includes(job)) assert.ok(uploads.length > 0, `${name} ${job} uploads no artifact`);
+      for (const step of node) {
+        assert.equal(step.with?.["node-version-file"], ".node-version", `${name} ${job}`);
+        assert.equal(step.with?.["node-version"], undefined, `${name} ${job}`);
+      }
+      for (const step of uploads) assert.equal(step.uses, pin, `${name} ${job}`);
+    }
+  }
+}
+
+test("Catalog and Benchmark Evidence take Node from .node-version and upload-artifact from release.yml's pin", () => {
+  const read = (name) => parse(readFileSync(new URL(`.github/workflows/${name}`, root), "utf8"));
+  const pins = new Set(Object.values(read("release.yml").jobs).flatMap((job) => job.steps ?? [])
+    .map((step) => step.uses).filter((uses) => uses?.startsWith("actions/upload-artifact@")));
+  assert.equal(pins.size, 1);
+  const [pin] = pins;
+  assert.match(pin, /^actions\/upload-artifact@[0-9a-f]{40}$/);
+  const workflows = Object.fromEntries(Object.keys(toolchainJobs).map((name) => [name, read(name)]));
+  assertToolchain(workflows, pin);
+
+  // Each mutation leaves the rest of the workflow passing, so only the named job's gap fails.
+  const without = (name, job, prefix) => {
+    const copy = structuredClone(workflows);
+    const steps = copy[name].jobs[job].steps;
+    copy[name].jobs[job].steps = steps.filter((step) => !step.uses?.startsWith(prefix));
+    assert.ok(copy[name].jobs[job].steps.length < steps.length);
+    return copy;
+  };
+  const edit = (name, job, prefix, change) => {
+    const copy = structuredClone(workflows);
+    change(copy[name].jobs[job].steps.find((step) => step.uses?.startsWith(prefix)));
+    return copy;
+  };
+  for (const [workflowSet, message] of [
+    [without("catalog.yml", "parity", "actions/setup-node@"), /catalog\.yml parity sets up no Node/],
+    [without("catalog.yml", "json-aot", "actions/upload-artifact@"), /catalog\.yml json-aot uploads no artifact/],
+    [without("benchmark-evidence.yml", "kernel", "actions/setup-node@"), /benchmark-evidence\.yml kernel sets up no Node/],
+    [edit("catalog.yml", "json-harness", "actions/setup-node@", (step) => { step.with = { "node-version": 24 }; }), /catalog\.yml json-harness/],
+    [edit("benchmark-evidence.yml", "evidence", "actions/setup-node@", (step) => { step.with["node-version"] = 26; }), /benchmark-evidence\.yml evidence/],
+    [edit("catalog.yml", "json-aot", "actions/upload-artifact@", (step) => { step.uses = "actions/upload-artifact@v6"; }), /catalog\.yml json-aot/],
+  ]) {
+    assert.throws(() => assertToolchain(workflowSet, pin), message);
   }
 });
