@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { after, test } from "node:test";
+import { createHash } from "node:crypto";
+import * as packModule from "./pack.mjs";
 import { ARCHIVE, KEPT, pack, packed, rawOf } from "./pack.mjs";
 
 /** Folders the tests made, removed when they end. */
@@ -99,4 +101,16 @@ test("the files the bench README says a round keeps are the ones pack.mjs keeps"
   const item = readme.slice(readme.indexOf("## What the repository keeps")).split("\n2. ")[0];
   const named = [...item.matchAll(/`([a-z-]+\.(?:json|txt|log))`/g)].map((m) => m[1]);
   assert.deepEqual(new Set(named), KEPT);
+});
+
+test("an archive's SHA-256 is read in chunks, the same as hashing its bytes at once", () => {
+  const dir = temp("pack-hash-");
+  const file = join(dir, ARCHIVE);
+  // Over two chunks, ending partway into the third.
+  const bytes = Buffer.alloc(2 * 1024 * 1024 + 12345);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 31) & 0xff;
+  writeFileSync(file, bytes);
+  assert.equal(packModule.sha256File(file), createHash("sha256").update(bytes).digest("hex"));
+  writeFileSync(file, "");
+  assert.equal(packModule.sha256File(file), createHash("sha256").digest("hex"), "an empty file");
 });

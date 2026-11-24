@@ -19,16 +19,23 @@
 // 3. The tip's tree: a listed file that changed fails, and a line whose file is gone, or is now
 //    small and not an archive, fails as stale.
 // A dependency lock file an app builds from (LOCKS) is source input, not output, so the size limit
-// does not apply to it when the same commit has its manifest in the same directory; an archive
-// still fails. A path under bench/ that is not valid UTF-8, has a control character (a newline or
+// does not apply to it when it and its manifest are regular files in the same directory of the
+// same commit (not a directory, submodule or symbolic link of that name). History holds it to that
+// in every commit between the base and the tip that changes a lock file or a manifest in its
+// directory, so a manifest removed and later restored, or a lock deleted and added back alone,
+// fails. An archive still fails. A path under bench/ that is not valid UTF-8, has a control character (a newline or
 // a tab among them) or has a name starting or ending with a space fails as unsupported, shown as a
 // JSON string. The rule for benchmark authors is in CONTRIBUTING.md (Benchmark results).
 //
 // The base is --base <revision>, else CORTEN_BENCH_SIZE_BASE, else the first parent when the tip is
-// a merge commit (CI checks a pull request's merge with main, with the whole history), else the
-// merge base of the tip and origin/main. When none resolves the check fails and says how to give
-// one. It reads the commits as committed, not the working tree; untracked and ignored files are not
-// read, and nothing is published or fetched.
+// a merge commit, else the merge base of the tip and origin/main. An all-zero base, GitHub's before
+// for a push that creates a branch or tag, means the merge base with origin/main. CI gives the base
+// from its event (.github/workflows/ci.yml): a pull request's merge commit's first parent, and a
+// push's before, since a push to main has moved origin/main to the tip and its merge base would be
+// the tip itself. In GitHub Actions a missing base fails rather than fall back. When none resolves
+// the check fails and says how to give one. A shallow clone fails, since the commits between the
+// base and the tip may be missing and would go unread. It reads the commits as committed, not the
+// working tree; untracked and ignored files are not read, and nothing is published or fetched.
 // Usage: node scripts/bench-size.mjs [--base <revision>] [revision, HEAD by default]. Run by npm run check.
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -66,10 +73,26 @@ export const REMEDY =
   `${LIST} only shrinks: a line cannot be added or changed, even with the file it names.`;
 const UNSUPPORTED = "rename it with valid UTF-8, no control characters and no name starting or ending with a space";
 
-/** @typedef {{ key?: string, path: string, blob: string, size: number, unsupported?: string | null }} Entry */
+/**
+ * A file in a tree. `mode` is Git's (100644, 100755, 120000 for a symbolic link, 040000 for a
+ * directory, 160000 for a submodule); a hand-built entry without one is a regular file.
+ * @typedef {{ key?: string, path: string, blob: string, size: number, mode?: string, unsupported?: string | null }} Entry
+ */
 /** @typedef {Entry & { commit: string }} Change */
 
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+/** GitHub's before for a push that creates its branch or tag: no commit. */
+const ZERO = /^(?:0{40}|0{64})$/;
+
+/** Whether an entry is a regular file, executable or not: not a symbolic link, directory or submodule. @param {Entry} entry */
+export function regular(entry) {
+  return entry.mode === undefined || entry.mode === "100644" || entry.mode === "100755";
+}
+
+/** Whether a file's name is a lock file's or one of its manifests'. @param {string} name */
+export function pairName(name) {
+  return LOCKS.has(name) || [...LOCKS.values()].some((manifests) => manifests.some((m) => (typeof m === "string" ? m === name : m.test(name))));
+}
 
 /**
  * Why a path cannot be checked, or null: a control character (a newline or a tab among them), or a
@@ -135,7 +158,7 @@ export function commitOf(root, rev, env = process.env) {
   try {
     return git(root, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`], env).toString().trim();
   } catch {
-    throw new Error(`bench-size: ${JSON.stringify(rev)} is not a commit in this repository`);
+    throw new Error(`bench-size: ${JSON.stringify(rev)} is not a commit in this repository (fetch it, with its history)`);
   }
 }
 
@@ -147,8 +170,21 @@ export function commitOf(root, rev, env = process.env) {
  * @returns {{ sha: string, how: string }}
  */
 export function resolveBase(root, { head, base, env = process.env }) {
-  if (base) return { sha: commitOf(root, base, env), how: "--base" };
-  if (env[BASE_ENV]) return { sha: commitOf(root, /** @type {string} */ (env[BASE_ENV]), env), how: BASE_ENV };
+  const given = base ? { rev: base, how: "--base" } : env[BASE_ENV] ? { rev: /** @type {string} */ (env[BASE_ENV]), how: BASE_ENV } : null;
+  if (given && ZERO.test(given.rev)) {
+    try {
+      return { sha: git(root, ["merge-base", commitOf(root, head, env), "refs/remotes/origin/main"], env).toString().trim(), how: "the merge base with origin/main, for a new branch or tag (an all-zero base)" };
+    } catch {
+      throw new Error(`bench-size: an all-zero base (${given.how}) is a new branch or tag, and ${head} has no merge base with origin/main; fetch origin/main with its history, or give the commit the change merges into`);
+    }
+  }
+  if (given) return { sha: commitOf(root, given.rev, env), how: given.how };
+  if (env.GITHUB_ACTIONS === "true") {
+    throw new Error(
+      `bench-size: in GitHub Actions the base must be given, not guessed: a push to main has already moved origin/main to the tip. ` +
+        `Set ${BASE_ENV} from the event, as .github/workflows/ci.yml does (a pull request's merge commit's first parent, a push's before).`,
+    );
+  }
   const tip = commitOf(root, head, env);
   const parents = git(root, ["rev-list", "--parents", "-n", "1", tip], env).toString().trim().split(" ").slice(1);
   if (parents.length > 1) return { sha: parents[0], how: "the merge commit's first parent" };
@@ -170,10 +206,24 @@ export function tracked(root, rev = "HEAD", env = process.env) {
   const out = git(root, ["ls-tree", "-r", "-l", "-z", "--full-tree", "--end-of-options", rev, "--", "bench/"], env);
   return records(out).flatMap((record) => {
     const tab = record.indexOf(9);
-    const [, type, blob, size] = record.subarray(0, tab).toString("latin1").split(/ +/);
+    const [mode, type, blob, size] = record.subarray(0, tab).toString("latin1").split(/ +/);
     // A submodule is a commit, with no size; it is not a file of this repository.
     if (type !== "blob") return [];
-    return [{ ...decodePath(record.subarray(tab + 1)), blob, size: Number(size) }];
+    return [{ ...decodePath(record.subarray(tab + 1)), blob, size: Number(size), mode }];
+  });
+}
+
+/**
+ * The entries directly in `dir` in `commit`'s tree, of every kind, each with its mode: a directory
+ * or submodule has size 0.
+ * @param {string} root @param {string} commit @param {string} dir @param {NodeJS.ProcessEnv} [env] @returns {Entry[]}
+ */
+export function directoryIn(root, commit, dir, env = process.env) {
+  const out = git(root, ["ls-tree", "-l", "-z", "--full-tree", "--end-of-options", commit, "--", `${dir}/`], env);
+  return records(out).map((record) => {
+    const tab = record.indexOf(9);
+    const [mode, , blob, size] = record.subarray(0, tab).toString("latin1").split(/ +/);
+    return { ...decodePath(record.subarray(tab + 1)), blob, size: size === "-" ? 0 : Number(size), mode };
   });
 }
 
@@ -213,18 +263,21 @@ export function exemptLock(path, siblings) {
 export function reason(entry, siblings) {
   const archive = ARCHIVE.exec(entry.path);
   if (archive) return `an archive or compressed file (${archive[0]})`;
-  if (entry.size <= LIMIT || exemptLock(entry.path, siblings)) return null;
+  if (entry.size <= LIMIT || (regular(entry) && exemptLock(entry.path, siblings))) return null;
   const over = `${(entry.size / 1024).toFixed(1)} KiB (${entry.size} bytes), over the ${LIMIT / 1024} KiB limit`;
   const manifests = LOCKS.get(split(entry.path)[1]);
   return manifests ? `${over} (a lock file is exempt only beside its manifest, ${manifests.map(String).join(" or ")})` : over;
 }
 
-/** The names in each directory of `entries`, by directory. @param {Entry[]} entries */
+/**
+ * The names of the regular files in each directory of `entries`, by directory: a manifest is one
+ * of them, not a directory, submodule or symbolic link of its name. @param {Entry[]} entries
+ */
 function directories(entries) {
   /** @type {Map<string, Set<string>>} */
   const dirs = new Map();
   for (const entry of entries) {
-    if (entry.unsupported) continue;
+    if (entry.unsupported || !regular(entry)) continue;
     const [dir, name] = split(entry.path);
     dirs.set(dir, (dirs.get(dir) ?? new Set()).add(name));
   }
@@ -336,14 +389,19 @@ export function grandfathered(text, baseText, baseEntries, base) {
 }
 
 /**
- * Every blob a commit in `base`..`head` adds or changes under bench/ (merges against each parent),
- * once for each path and blob, with the earliest commit that has it, and its size.
- * @param {string} root @param {string} base @param {string} head @param {NodeJS.ProcessEnv} [env] @returns {Change[]}
+ * What a commit in `base`..`head` brings under bench/ (merges against each parent): `changes`, each
+ * blob it adds or changes, once for each path and blob, with the earliest commit that has it and its
+ * size; and `pairs`, each commit and directory where a lock file or a manifest was added, changed,
+ * deleted or changed mode, in commit order, so the pairing is checked in every commit it changes.
+ * @param {string} root @param {string} base @param {string} head @param {NodeJS.ProcessEnv} [env]
+ * @returns {{ changes: Change[], pairs: { commit: string, dir: string }[] }}
  */
 export function history(root, base, head, env = process.env) {
   const out = git(root, ["log", "--raw", "-z", "--no-abbrev", "-m", "--no-renames", "--no-color", "--no-ext-diff", "--reverse", "--format=%H", `${base}..${head}`], env);
   /** @type {Map<string, Omit<Change, "size">>} */
   const seen = new Map();
+  /** @type {Map<string, { commit: string, dir: string }>} */
+  const pairs = new Map();
   const parts = records(out);
   let commit = "";
   for (let i = 0; i < parts.length; i++) {
@@ -358,16 +416,20 @@ export function history(root, base, head, env = process.env) {
     const pathBytes = parts[++i];
     if (!m || !commit || !pathBytes) throw new Error(`bench-size: unexpected git log output ${JSON.stringify(text)}`);
     const [, mode, blob, status] = m;
-    // A deletion has no new blob, and a submodule is a commit, not a file of this repository.
-    if (status === "D" || mode === "160000" || /^0+$/.test(blob)) continue;
     if (!pathBytes.subarray(0, 6).equals(Buffer.from("bench/"))) continue;
     const path = decodePath(pathBytes);
+    if (!path.unsupported) {
+      const [dir, name] = split(path.path);
+      if (pairName(name)) pairs.set(`${commit}\0${dir}`, { commit, dir });
+    }
+    // A deletion has no new blob, and a submodule is a commit, not a file of this repository.
+    if (status === "D" || mode === "160000" || /^0+$/.test(blob)) continue;
     const id = `${path.key}\0${blob}`;
-    if (!seen.has(id)) seen.set(id, { ...path, blob, commit });
+    if (!seen.has(id)) seen.set(id, { ...path, blob, mode, commit });
   }
-  const changes = [...seen.values()];
-  if (changes.length === 0) return [];
-  const ids = [...new Set(changes.map((c) => c.blob))];
+  const found = [...seen.values()];
+  if (found.length === 0) return { changes: [], pairs: [...pairs.values()] };
+  const ids = [...new Set(found.map((c) => c.blob))];
   const sizes = new Map(
     git(root, ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], env, ids.join("\n") + "\n")
       .toString("latin1").trim().split("\n").map((line) => {
@@ -376,63 +438,80 @@ export function history(root, base, head, env = process.env) {
         return [id, Number(size)];
       }),
   );
-  return changes.map((c) => ({ ...c, size: /** @type {number} */ (sizes.get(c.blob)) }));
+  return { changes: found.map((c) => ({ ...c, size: /** @type {number} */ (sizes.get(c.blob)) })), pairs: [...pairs.values()] };
+}
+
+/** Whether a lock file's exemption decides `entry`: a lock file's name, over the limit and not an archive. @param {Entry} entry */
+function lockSized(entry) {
+  return LOCKS.has(split(entry.path)[1]) && entry.size > LIMIT && !ARCHIVE.test(entry.path);
 }
 
 /**
- * The names in `dir` in `commit`'s tree. @param {string} root @param {string} commit @param {string} dir
- * @param {NodeJS.ProcessEnv} [env] @returns {Set<string>}
+ * The problems with `changes` and `pairs` (history()'s): an unsupported path, and a blob that needs
+ * a listing and is not that path and blob in `trusted`. A lock file over the limit is held to its
+ * manifest in each commit and directory of `pairs`, whose entries `directory` gives; every commit
+ * that adds or changes one is among them.
+ * @param {{ changes: Change[], pairs: { commit: string, dir: string }[] }} brought @param {Map<string, string>} trusted
+ * @param {(commit: string, dir: string) => Entry[]} directory @returns {string[]}
  */
-export function namesIn(root, commit, dir, env = process.env) {
-  const out = git(root, ["ls-tree", "-z", "--name-only", "--full-tree", "--end-of-options", commit, "--", `${dir}/`], env);
-  return new Set(records(out).map((name) => split(name.toString("utf8"))[1]));
-}
-
-/**
- * The problems with `changes` (history()'s): an unsupported path, and a blob that needs a listing
- * and is not that path and blob in `trusted`. `siblings` gives the names in a change's directory in
- * its commit, read only for a lock file over the limit.
- * @param {Change[]} changes @param {Map<string, string>} trusted
- * @param {(commit: string, dir: string) => ReadonlySet<string>} siblings @returns {string[]}
- */
-export function checkHistory(changes, trusted, siblings) {
+export function checkHistory({ changes, pairs }, trusted, directory) {
   /** @type {string[]} */
   const problems = [];
+  const fail = (/** @type {Entry} */ entry, /** @type {string} */ why, /** @type {string} */ commit) =>
+    problems.push(
+      `${entry.path}: ${why}, at blob ${entry.blob} from commit ${commit}, which is not that path and blob in the base's list; a merged commit stays in every clone even when a later one deletes the file`,
+    );
   for (const change of changes) {
     if (change.unsupported) {
       problems.push(`${change.path}: an unsupported path under bench/ (${change.unsupported}), in commit ${change.commit}; ${UNSUPPORTED}`);
       continue;
     }
-    const [dir, name] = split(change.path);
-    const near = change.size > LIMIT && LOCKS.has(name) ? siblings(change.commit, dir) : undefined;
-    const why = reason(change, near);
-    if (!why || trusted.get(change.path) === change.blob) continue;
-    problems.push(
-      `${change.path}: ${why}, at blob ${change.blob} from commit ${change.commit}, which is not that path and blob in the base's list; a merged commit stays in every clone even when a later one deletes the file`,
-    );
+    if (lockSized(change)) continue;
+    const why = reason(change);
+    if (why && trusted.get(change.path) !== change.blob) fail(change, why, change.commit);
+  }
+  /** @type {Set<string>} */
+  const reported = new Set();
+  for (const { commit, dir } of pairs) {
+    const entries = directory(commit, dir);
+    const siblings = directories(entries).get(dir);
+    for (const entry of entries) {
+      if (entry.unsupported || !lockSized(entry)) continue;
+      const why = reason(entry, siblings);
+      const id = `${entry.path}\0${entry.blob}`;
+      if (!why || trusted.get(entry.path) === entry.blob || reported.has(id)) continue;
+      reported.add(id);
+      fail(entry, why, commit);
+    }
   }
   return problems;
 }
 
 /**
- * Every check, for `head` (HEAD by default) against its base (resolveBase()). Throws when no base
- * resolves or a revision is not a commit.
+ * Every check, for `head` (HEAD by default) against its base (resolveBase()). Throws when the clone
+ * is shallow, no base resolves or a revision is not a commit.
  * @param {string} root @param {{ head?: string, base?: string, env?: NodeJS.ProcessEnv }} [options]
  * @returns {{ problems: string[], entries: Entry[], head: string, base: { sha: string, how: string }, changes: Change[] }}
  */
 export function run(root, { head = "HEAD", base, env = process.env } = {}) {
+  if (git(root, ["rev-parse", "--is-shallow-repository"], env).toString().trim() === "true") {
+    throw new Error(
+      "bench-size: this clone is shallow, so commits between the base and the tip may be missing and would go unread; " +
+        "fetch the whole history (git fetch --unshallow; actions/checkout with fetch-depth: 0)",
+    );
+  }
   const tip = commitOf(root, head, env);
   const from = resolveBase(root, { head: tip, base, env });
   const entries = tracked(root, tip, env);
   const text = committedList(root, tip, env);
-  const changes = history(root, from.sha, tip, env);
+  const brought = history(root, from.sha, tip, env);
+  const { changes } = brought;
   if (text === null) return { problems: [`${head} has no ${LIST}`], entries, head: tip, base: from, changes };
   const baseText = committedList(root, from.sha, env);
   const { trusted, problems: listProblems } = grandfathered(text, baseText, baseText === null ? tracked(root, from.sha, env) : [], from.sha);
-  const problems = [...check(entries, text), ...listProblems, ...checkHistory(changes, trusted, (commit, dir) => namesIn(root, commit, dir, env))];
+  const problems = [...check(entries, text), ...listProblems, ...checkHistory(brought, trusted, (commit, dir) => directoryIn(root, commit, dir, env))];
   return { problems, entries, head: tip, base: from, changes };
 }
-
 /** The list's text for `entries`: a line for each one that needs a listing, sorted by path. @param {Entry[]} entries */
 export function listFor(entries) {
   const bench = entries.filter((e) => !e.unsupported && e.path.startsWith("bench/"));

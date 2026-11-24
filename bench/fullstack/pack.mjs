@@ -13,7 +13,7 @@
 // results/<round>` brings the files back for a look at one run.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, mkdtempSync, openSync, readSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -128,6 +128,22 @@ export const pack = (dir, tar = (args) => spawnSync("tar", args, { encoding: "ut
   return files.length;
 };
 
+/**
+ * The SHA-256 of the file at `path`, in hex, read a MiB at a time so an archive of any size needs no
+ * more memory than that. @param {string} path
+ */
+export const sha256File = (path) => {
+  const hash = createHash("sha256");
+  const chunk = Buffer.alloc(1024 * 1024);
+  const fd = openSync(path, "r");
+  try {
+    for (let n; (n = readSync(fd, chunk, 0, chunk.length, null)) > 0;) hash.update(chunk.subarray(0, n));
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
+};
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const round = process.argv[2];
   if (!round || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(round)) throw new Error("usage: node bench/fullstack/pack.mjs <round>");
@@ -136,7 +152,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   console.log(n === 0 ? `${round}: nothing to pack` : `${round}: ${n} files in ${join(dir, ARCHIVE)}`);
   const archive = join(dir, ARCHIVE);
   if (existsSync(archive)) {
-    const sha256 = createHash("sha256").update(readFileSync(archive)).digest("hex");
+    const sha256 = sha256File(archive);
     console.log(`${ARCHIVE}: ${statSync(archive).size} bytes, SHA-256 ${sha256}; record where it is published and this SHA-256 in ${join(dir, "raw.txt")}`);
   }
 }

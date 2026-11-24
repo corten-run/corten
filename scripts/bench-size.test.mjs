@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { LIMIT, LIST, check, committedList, listFor, parseList, reason, tracked } from "./bench-size.mjs";
 // The checks against a base, through the module's namespace, so one missing export fails only the tests that use it.
 import * as size from "./bench-size.mjs";
@@ -121,6 +121,8 @@ test("a list line not in its form, listed twice or out of order is refused", () 
 // A repository of its own, so the check reads a committed tree rather than this checkout's.
 const env = fixtureGitEnv();
 delete env.CORTEN_BENCH_SIZE_BASE;
+// CI sets it, and with it the check wants an explicit base; a test that means it passes it.
+delete env.GITHUB_ACTIONS;
 const git = (/** @type {string} */ cwd, /** @type {string[]} */ args) =>
   execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args], {
     cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env,
@@ -148,7 +150,7 @@ test("the tree is read as committed: untracked and uncommitted files are not", (
   const committed = tracked(dir, "HEAD", env);
   assert.deepEqual(committed.map((e) => e.path).sort(), ["bench/r1/raw.tar.xz", "bench/r1/run.log", "bench/r1/summary.json"]);
   assert.deepEqual(committed.find((e) => e.path === "bench/r1/run.log"), {
-    key: "bench/r1/run.log", path: "bench/r1/run.log", unsupported: null, blob: git(dir, ["rev-parse", "HEAD:bench/r1/run.log"]), size: LIMIT + 1,
+    key: "bench/r1/run.log", path: "bench/r1/run.log", unsupported: null, blob: git(dir, ["rev-parse", "HEAD:bench/r1/run.log"]), size: LIMIT + 1, mode: "100644",
   });
   assert.equal(committedList(dir, "HEAD", env), null, "no list committed yet");
   assert.equal(check(committed, "").length, 2);
@@ -308,7 +310,8 @@ test("a lock file over 256 KiB a pull request adds passes beside its manifest an
 });
 
 /** A row of `git mktree -z`'s input. @param {string} mode @param {string} object @param {Buffer | string} name */
-const row = (mode, object, name) => Buffer.concat([Buffer.from(`${mode} ${mode === "040000" ? "tree" : "blob"} ${object}\t`), Buffer.from(name), Buffer.from([0])]);
+const row = (mode, object, name) =>
+  Buffer.concat([Buffer.from(`${mode} ${mode === "040000" ? "tree" : mode === "160000" ? "commit" : "blob"} ${object}\t`), Buffer.from(name), Buffer.from([0])]);
 
 /**
  * A commit on `base` whose bench/ has `base`'s r1/ and the files `extra` (raw name bytes and
@@ -353,4 +356,98 @@ test("paths are read as bytes: two that are not UTF-8 are distinct, and a contro
     '"bench/review.zip ": an unsupported path under bench/ (a name that starts or ends with white space)',
     `"bench/review.zip ": an unsupported path under bench/ (a name that starts or ends with white space), in commit ${space}`,
   ]);
+});
+
+/** A commit on `parent` whose bench/ is `base`'s r1/ and app/ with `rows` (`git mktree -z` rows), and `base`'s scripts/. @param {string} d @param {string} parent @param {string} base @param {Buffer[]} rows */
+function appCommit(d, parent, base, rows) {
+  const app = gitIn(d, ["mktree", "-z"], Buffer.concat(rows));
+  const bench = gitIn(d, ["mktree", "-z"], Buffer.concat([row("040000", id(d, `${base}:bench/r1`), "r1"), row("040000", app, "app")]));
+  const root = gitIn(d, ["mktree", "-z"], Buffer.concat([row("040000", bench, "bench"), row("040000", id(d, `${base}:scripts`), "scripts")]));
+  return gitIn(d, ["commit-tree", root, "-p", parent, "-m", "app"], "");
+}
+
+test("a lock file's manifest is a regular file: a directory, a submodule or a symbolic link named like one does not exempt it, at the tip or in history", () => {
+  const { d, base } = history();
+  const hash = (/** @type {Buffer | string} */ content) => gitIn(d, ["hash-object", "-w", "--stdin"], content);
+  const lock = row("100644", hash(Buffer.alloc(LIMIT + 1, 97)), "Cargo.lock");
+  const kinds = {
+    directory: row("040000", gitIn(d, ["mktree", "-z"], row("100644", hash("[package]\n"), "x")), "Cargo.toml"),
+    submodule: row("160000", base, "Cargo.toml"),
+    "symbolic link": row("120000", hash("../r1/summary.json"), "Cargo.toml"),
+  };
+  for (const [kind, manifest] of Object.entries(kinds)) {
+    const tip = appCommit(d, base, base, [lock, manifest]);
+    const atTip = size.run(d, { head: tip, base, env }).problems;
+    assert.ok(atTip.includes(`bench/app/Cargo.lock: 256.0 KiB (262145 bytes), over the 256 KiB limit (a lock file is exempt only beside its manifest, Cargo.toml), not in ${LIST}`), `${kind} at the tip:\n${atTip.join("\n")}`);
+    // The lock deleted in the next commit: only history has it.
+    const deleted = appCommit(d, tip, base, [manifest]);
+    const inHistory = size.run(d, { head: deleted, base, env }).problems;
+    assert.equal(inHistory.length, 1, `${kind} in history:\n${inHistory.join("\n")}`);
+    assert.match(inHistory[0], new RegExp(`^bench/app/Cargo\\.lock: 256\\.0 KiB \\(262145 bytes\\), over the 256 KiB limit \\(a lock file is exempt only beside its manifest, Cargo\\.toml\\), at blob [0-9a-f]+ from commit ${tip}, `), kind);
+  }
+  for (const mode of ["100644", "100755"]) {
+    const tip = appCommit(d, base, base, [lock, row(mode, hash("[package]\n"), "Cargo.toml")]);
+    assert.deepEqual(size.run(d, { head: tip, base, env }).problems, [], `a manifest of mode ${mode}`);
+  }
+});
+
+test("a lock file over 256 KiB is checked in every commit that has it: its manifest removed then restored, or the lock deleted and added back alone, fails", () => {
+  const lock = Buffer.alloc(LIMIT + 1, 97);
+  {
+    const { d, base } = history();
+    commit(d, { "bench/app/Cargo.lock": lock, "bench/app/Cargo.toml": "[package]\n" });
+    const removed = commit(d, { "bench/app/Cargo.toml": null }, "manifest removed");
+    const restored = commit(d, { "bench/app/Cargo.toml": "[package]\n" }, "manifest restored");
+    const { problems } = size.run(d, { head: restored, base, env });
+    assert.equal(problems.length, 1, problems.join("\n"));
+    assert.match(problems[0], new RegExp(`^bench/app/Cargo\\.lock: .*exempt only beside its manifest, Cargo\\.toml\\), at blob [0-9a-f]+ from commit ${removed}, `));
+  }
+  {
+    const { d, base } = history();
+    commit(d, { "bench/app/Cargo.lock": lock, "bench/app/Cargo.toml": "[package]\n" });
+    commit(d, { "bench/app/Cargo.lock": null, "bench/app/Cargo.toml": null }, "both removed");
+    const alone = commit(d, { "bench/app/Cargo.lock": lock }, "lock back alone");
+    const gone = commit(d, { "bench/app/Cargo.lock": null }, "lock removed");
+    const { problems } = size.run(d, { head: gone, base, env });
+    assert.equal(problems.length, 1, problems.join("\n"));
+    assert.match(problems[0], new RegExp(`^bench/app/Cargo\\.lock: .*, at blob [0-9a-f]+ from commit ${alone}, `));
+  }
+});
+
+test("a push is checked from the commit before it, a new branch or tag (an all-zero base) from its merge base with origin/main, and GitHub Actions with no base fails", () => {
+  const { d, base } = history();
+  commit(d, { "bench/r2/run.log": Buffer.alloc(LIMIT + 1, 97) }, "add");
+  const tip = commit(d, { "bench/r2/run.log": null }, "delete");
+  // The push has moved origin/main to its tip, so the merge base with origin/main is the tip itself.
+  git(d, ["update-ref", "refs/remotes/origin/main", tip]);
+  assert.equal(size.run(d, { head: tip, base, env }).problems.length, 1, "the commit before the push");
+  assert.throws(() => size.run(d, { head: tip, env: { ...env, GITHUB_ACTIONS: "true" } }), /GitHub Actions.*CORTEN_BENCH_SIZE_BASE/);
+  // A new ref: the all-zero commit GitHub gives as its before.
+  for (const zero of ["0".repeat(40), "0".repeat(64)]) {
+    git(d, ["update-ref", "refs/remotes/origin/main", base]);
+    const fromZero = size.run(d, { head: tip, base: zero, env });
+    assert.deepEqual(fromZero.base, { sha: base, how: "the merge base with origin/main, for a new branch or tag (an all-zero base)" });
+    assert.equal(fromZero.problems.length, 1, zero.length.toString());
+    // A tag on main brings nothing main's own pushes did not.
+    git(d, ["update-ref", "refs/remotes/origin/main", tip]);
+    const onMain = size.run(d, { head: tip, env: { ...env, CORTEN_BENCH_SIZE_BASE: zero } });
+    assert.equal(onMain.base.sha, tip);
+    assert.deepEqual(onMain.problems, []);
+  }
+  git(d, ["update-ref", "-d", "refs/remotes/origin/main"]);
+  assert.throws(() => size.run(d, { head: tip, base: "0".repeat(40), env }), /all-zero base.*no merge base with origin\/main/);
+});
+
+test("a shallow clone fails, even with both ends of the range fetched, saying to fetch the whole history", () => {
+  const { d, base } = history();
+  commit(d, { "bench/r2/run.log": Buffer.alloc(LIMIT + 1, 97) }, "add");
+  commit(d, { "bench/r2/run.log": null }, "delete");
+  git(d, ["tag", "before", base]);
+  const shallow = mkdtempSync(join(tmpdir(), "bench-size-shallow-"));
+  scratch.push(shallow);
+  rmSync(shallow, { recursive: true });
+  git(d, ["clone", "-q", "--depth", "1", pathToFileURL(d).href, shallow]);
+  git(shallow, ["fetch", "-q", "--depth", "1", "origin", "refs/tags/before:refs/tags/before"]);
+  assert.equal(id(shallow, "before"), base, "the base is in the clone");
+  assert.throws(() => size.run(shallow, { head: "HEAD", base, env }), /shallow.*git fetch --unshallow/);
 });
