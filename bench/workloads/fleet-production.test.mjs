@@ -150,17 +150,21 @@ const synthetic = (${syntheticDependencies.toString()})({
   bootstrapMarker: syntheticMarker, bootstrapReadScript: syntheticRead, bootstrapWorkspaceScript, controlRegistration,
   EventEmitter, PassThrough, Writable, registration: ${JSON.stringify(registration)} });\n`;
     }
-    if (file === "bench/workloads/fleet-worker.mjs") {
+    if (file === "bench/workloads/cloud-production.mjs") {
       // The worker passes only closed fields to its parent, never a refusal's message. Record
-      // the message chain beside the trace so a test can tell which gate refused.
-      const before = "} catch (error) {\n  const diagnostic = providerFailure?.(error);";
-      assert.equal(source.split(before).length, 2, "review worker refusal seam");
-      source = source.replace(before, "} catch (error) {\n  syntheticRefusal(error);\n  const diagnostic = providerFailure?.(error);") + `
-import { appendFileSync as syntheticAppend } from 'node:fs';
-function syntheticRefusal(error) {
-  const messages = [];
-  for (let cause = error; cause && messages.length < 8; cause = cause.cause) messages.push(String(cause.message));
-  syntheticAppend(${JSON.stringify(refusalLog)}, JSON.stringify(messages) + "\\n");
+      // productionMain's message chain beside the trace so a test can tell which gate refused;
+      // the body and its result are unchanged.
+      const entry = "export async function productionMain(";
+      assert.equal(source.split(entry).length, 2, "review refusal-recording seam");
+      source = source.replace(entry, "async function syntheticProductionMain(") + `
+export async function productionMain(...args) {
+  try { return await syntheticProductionMain(...args); }
+  catch (error) {
+    const messages = [];
+    for (let cause = error; cause && messages.length < 8; cause = cause.cause) messages.push(String(cause.message));
+    syntheticFs.appendFileSync(${JSON.stringify(refusalLog)}, JSON.stringify(messages) + "\\n");
+    throw error;
+  }
 }
 `;
     }
