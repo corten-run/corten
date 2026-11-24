@@ -9,7 +9,7 @@ import { join, resolve, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { records as marketplaceRecords } from '../../../marketplace/fixtures.mjs';
 import { records as catalogRecords } from '../../../catalog/fixtures.mjs';
-import { cleanUp, containerBase, startupFailure, writeFixtures } from './compiled-check.mjs';
+import { cleanUp, closeServer, containerBase, recordedFirst, startupFailure, writeFixtures } from './compiled-check.mjs';
 import { containerTimeline, hydrationArtifactPath, observeHydration, readDockerEvents } from './hydration-diagnostics.mjs';
 
 const { chromium } = createRequire(import.meta.url)('@playwright/test');
@@ -53,7 +53,9 @@ await new Promise(resolve => upstream.listen(0, '0.0.0.0', resolve));
 let browser;
 let active;
 const moneyFailures = [];
-// A cleanup failure is reported beside a check's own error and never replaces it.
+const moneyMessage = 'native money confirmation/readback regressions';
+// A cleanup failure is reported beside a check's own error and never replaces it. Recorded
+// money regressions also outrank a cleanup failure that ends the check before they are asserted.
 const outcome = { failed: false };
 try {
   await writeFixtures(folder, { 'items.json': {}, 'catalog.json': catalogRecords(), 'marketplace.json': records });
@@ -117,7 +119,7 @@ try {
         }
       }
       console.log(`CHECKED ${app} ${source}: paired money confirmation/readback in all locales`);
-    } catch (error) { moneyOutcome.failed = true; throw error; } finally { await cleanUp(moneyOutcome, [() => moneyContext.close()]); }
+    } catch (error) { moneyOutcome.failed = true; throw error; } finally { await cleanUp(moneyOutcome, [['money-context.close', () => moneyContext.close()]]); }
     for (const javaScriptEnabled of focus === 'money' ? [] : [false, true]) {
       const context = await browser.newContext({ javaScriptEnabled });
       const other = await browser.newContext({ javaScriptEnabled: false });
@@ -227,21 +229,21 @@ try {
         assert.equal(new Set(rows.map(row => row.email)).size, 11, 'concurrent writes are neither lost nor duplicated');
         console.log(`PASS ${app} ${source} JS=${javaScriptEnabled}: native form, readback, locale validation, isolation, guards, concurrent writes`);
       } catch (error) { caseOutcome.failed = true; throw error; } finally {
-        await cleanUp(caseOutcome, [() => context.close(), () => other.close()]);
+        await cleanUp(caseOutcome, [['context.close', () => context.close()], ['other-context.close', () => other.close()]]);
       }
     }
     docker('rm', '-f', '-v', active); active = undefined;
   }
-  assert.deepEqual(moneyFailures, [], 'native money confirmation/readback regressions');
+  assert.deepEqual(moneyFailures, [], moneyMessage);
   console.log(`PASS ${app}: exact money confirmation and storage`);
-} catch (error) { outcome.failed = true; throw error; } finally {
+} catch (error) { outcome.failed = true; throw recordedFirst(error, moneyFailures, moneyMessage); } finally {
   await cleanUp(outcome, [
-    async () => { if (browser) await browser.close(); },
-    () => { if (active) docker('rm', '-f', '-v', active); },
-    () => new Promise(resolve => upstream.close(resolve)),
-    async () => {
+    ['browser.close', async () => { if (browser) await browser.close(); }],
+    ['container.rm', () => { if (active) docker('rm', '-f', '-v', active); }],
+    ['upstream.close', () => closeServer(upstream)],
+    ['fixtures.rm', async () => {
       assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep));
       await rm(folder, { recursive: true, force: true });
-    },
+    }],
   ]);
 }

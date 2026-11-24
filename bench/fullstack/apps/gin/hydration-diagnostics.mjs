@@ -93,8 +93,10 @@ export function containerTimeline(now = () => performance.now()) {
 // allowlisted action, time and whether the container is the check's own.
 // The reader owns its subprocess: at the deadline, on abort or past the byte cap it kills the
 // child with SIGKILL, destroys its stdout and settles without waiting for the pipe to close.
+// A child or stdout stream error takes the same path, so it becomes this promise's rejection
+// (which the observer records as an unavailable query) rather than an unhandled 'error'.
 export function readDockerEvents({ since, until, signal, command = 'docker', prefix = [],
-  timeoutMs = diagnosticLimits.dockerEventsMs, maxBytes = diagnosticLimits.dockerEventsBytes }) {
+  timeoutMs = diagnosticLimits.dockerEventsMs, maxBytes = diagnosticLimits.dockerEventsBytes, start = spawn }) {
   const actions = [...new Set([...containerActions, ...networkActions])].flatMap(action => ['--filter', `event=${action}`]);
   return new Promise((resolve, reject) => {
     let child, timer, text = '', bytes = 0, settled = false;
@@ -115,20 +117,23 @@ export function readDockerEvents({ since, until, signal, command = 'docker', pre
     signal?.addEventListener('abort', abort, { once: true });
     timer = setTimeout(() => finish(new Error('docker events deadline')), timeoutMs);
     try {
-      child = spawn(command, [...prefix, 'events', '--since', since.toFixed(3), '--until', until.toFixed(3),
+      child = start(command, [...prefix, 'events', '--since', since.toFixed(3), '--until', until.toFixed(3),
         '--filter', 'type=container', '--filter', 'type=network', ...actions, '--format',
         '[{{json .Type}},{{json .Action}},{{if eq .Type "network"}}{{json (index .Actor.Attributes "container")}}'
           + '{{else}}{{json .Actor.ID}}{{end}},{{json .TimeNano}}]'],
       { stdio: ['ignore', 'pipe', 'ignore'] });
-    } catch (error) { finish(error); return; }
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', chunk => {
-      if (settled) return;
-      bytes += Buffer.byteLength(chunk);
-      if (bytes > maxBytes) finish(new Error('docker events output exceeded its cap')); else text += chunk;
-    });
-    child.once('error', error => finish(error));
-    child.once('close', code => finish(code === 0 ? null : new Error('docker events failed'), text));
+      // Listeners stay attached after settling, so a later error (a failed kill, a second
+      // stream error) is absorbed by finish's settled guard instead of being unhandled.
+      child.on('error', error => finish(error));
+      child.stdout.on('error', error => finish(error));
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', chunk => {
+        if (settled) return;
+        bytes += Buffer.byteLength(chunk);
+        if (bytes > maxBytes) finish(new Error('docker events output exceeded its cap')); else text += chunk;
+      });
+      child.once('close', code => finish(code === 0 ? null : new Error('docker events failed'), text));
+    } catch (error) { finish(error); }
   });
 }
 

@@ -115,8 +115,15 @@ The Docker events are host-wide: each keeps its type, an allowlisted action, its
 whether the container is one of the driver's own. To decide that, the read-only
 `docker events` query prints container IDs (a container event's own, a network event's
 attached container, never a network's ID) to the reader's private stdout pipe, where they are
-compared in memory and never written. The reader kills the query at 2 s or 256 KiB; an
-unavailable or truncated result is inconclusive, not an absence of events.
+compared in memory and never written. The reader kills the query at 2 s, at 256 KiB or on an
+error from the query or its pipe; an unavailable or truncated result is inconclusive, not an
+absence of events.
+
+Every cleanup step runs even when an earlier one fails. After the driver fails, its own error is
+the one thrown and a cleanup failure prints one line with the step's fixed name and only an
+allowlisted error class and code, never the error's text; after a passing run a cleanup failure
+fails it. Money confirmation regressions, collected and asserted at the end, are thrown ahead
+of a cleanup failure that would otherwise end the run before that assertion.
 
 Alert POSTs require one complete upstream JSON document and the requested record
 identity. The native templ response is fully rendered into a buffer before a write;

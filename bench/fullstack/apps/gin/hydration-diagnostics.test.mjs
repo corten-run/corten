@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { containerTimeline, diagnosticLimits, failureCodes, gotoFailureCode, hydrationArtifactPath, observeHydration,
@@ -631,7 +632,6 @@ const alive = pid => {
 
 test('the Docker events reader kills a subprocess that ignores SIGTERM and settles, and its process exits', { timeout: 30_000 }, async () => {
   const folder = await mkdtemp(join(tmpdir(), 'fake-docker-'));
-  const leftovers = [];
   try {
     const fake = join(folder, 'docker.mjs');
     await writeFile(fake, fakeDocker);
@@ -645,32 +645,68 @@ const started = performance.now();
 try { await readDockerEvents({ since: 0, until: 1, command: process.execPath, prefix: ${JSON.stringify([fake, mode, pidFile])} });
   console.log(JSON.stringify({ settled: 'resolved' }));
 } catch (error) { console.log(JSON.stringify({ settled: error.message, ms: performance.now() - started })); }`;
-      const started = Date.now();
-      const runner = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'inherit'] });
-      let out = '';
-      runner.stdout.on('data', chunk => { out += chunk; });
-      const code = await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { runner.kill('SIGKILL'); reject(new Error(`${mode}: the reader's process did not exit`)); }, limit + 4000);
-        runner.once('exit', code => { clearTimeout(timer); resolve(code); });
-      });
-      const exited = Date.now() - started;
-      assert.equal(code, 0);
-      const result = JSON.parse(out.trim());
-      const pids = (await readFile(pidFile, 'utf8')).split(' ').map(Number);
-      leftovers.push(...pids.slice(1));
-      assert.notEqual(result.settled, 'resolved', `${mode}: a deadline or overflow is a failure`);
-      assert.ok(result.ms < limit, `${mode}: settled in ${Math.round(result.ms)} ms`);
-      assert.match(result.settled, mode === 'flood' ? /exceeded its cap/ : /deadline/);
-      // Node startup is outside the reader's budget; the process must exit promptly after it settles.
-      assert.ok(exited < limit + 3000, `${mode}: the reader's process exited after ${exited} ms`);
-      const deadline = Date.now() + 3000;
-      while (alive(pids[0]) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
-      assert.equal(alive(pids[0]), false, `${mode}: the SIGTERM-ignoring docker process is killed`);
+      let runner;
+      try {
+        const started = Date.now();
+        runner = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'inherit'] });
+        let out = '';
+        runner.stdout.on('data', chunk => { out += chunk; });
+        // 'close' rather than 'exit', so the reader's final output has been read before it is parsed.
+        const code = await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => { runner.kill('SIGKILL'); reject(new Error(`${mode}: the reader's process did not exit`)); }, limit + 4000);
+          runner.once('close', code => { clearTimeout(timer); resolve(code); });
+        });
+        const exited = Date.now() - started;
+        assert.equal(code, 0);
+        const result = JSON.parse(out.trim());
+        const pids = (await readFile(pidFile, 'utf8')).split(' ').map(Number);
+        assert.notEqual(result.settled, 'resolved', `${mode}: a deadline or overflow is a failure`);
+        assert.ok(result.ms < limit, `${mode}: settled in ${Math.round(result.ms)} ms`);
+        assert.match(result.settled, mode === 'flood' ? /exceeded its cap/ : /deadline/);
+        // Node startup is outside the reader's budget; the process must exit promptly after it settles.
+        assert.ok(exited < limit + 3000, `${mode}: the reader's process exited after ${exited} ms`);
+        // Checked before this test's own teardown signals anything: the reader killed it.
+        const deadline = Date.now() + 3000;
+        while (alive(pids[0]) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+        assert.equal(alive(pids[0]), false, `${mode}: the SIGTERM-ignoring docker process is killed`);
+      } finally {
+        // Whatever failed above, no fixture process (the stand-in docker or its holder) outlives the attempt.
+        if (runner && runner.exitCode === null && runner.signalCode === null) runner.kill('SIGKILL');
+        let pids = [];
+        try { pids = (await readFile(pidFile, 'utf8')).split(' ').map(Number).filter(pid => Number.isInteger(pid) && pid > 0); } catch { /* Never started. */ }
+        for (const pid of pids) { if (alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* Already exited. */ } } }
+      }
     }
   } finally {
-    for (const pid of leftovers) { try { process.kill(pid, 'SIGKILL'); } catch { /* Already exited. */ } }
     await rm(folder, { recursive: true, force: true });
   }
+});
+
+// A child whose stdout pipe fails; the child itself never closes or emits an error on its own.
+function brokenPipeChild(signals) {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.kill = signal => { signals.push(signal); return true; };
+  child.unref = () => signals.push('unref');
+  setImmediate(() => child.stdout.destroy(Object.assign(new Error('read EIO'), { code: 'EIO' })));
+  return child;
+}
+
+test('a Docker events stdout error kills the query, destroys its pipe and rejects once', async () => {
+  const signals = [];
+  let child;
+  const started = performance.now();
+  await assert.rejects(readDockerEvents({ since: 0, until: 1, start: () => (child = brokenPipeChild(signals)) }),
+    error => error.code === 'EIO');
+  assert.ok(performance.now() - started < 1000, 'settled on the stream error, not at the deadline');
+  assert.deepEqual(signals, ['SIGKILL', 'unref']);
+  assert.equal(child.stdout.destroyed, true);
+  // Errors after settling (a failed kill, another stream error) are absorbed, not unhandled.
+  child.emit('error', new Error('kill ESRCH'));
+  child.stdout.emit('error', new Error('second'));
+  child.emit('close', 1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(signals, ['SIGKILL', 'unref'], 'teardown runs once');
 });
 
 test('the Docker events reader returns a complete query and asks for no network ID', async () => {
