@@ -7392,7 +7392,8 @@ rules something out.
     answer, 14% of 230,402, lower in 8 of 10, from a command of 3,000 requests; ten earlier
     rounds of each on a busier machine gave 29% and 18%; one profiled build from an empty
     target directory took about eleven minutes against about four for one ordinary build;
-    what a command leaves out can cost more than no profile: on card-market, by callgrind, a
+    what a command leaves out can cost more instructions a request than no profile, cycles
+    and time not measured: on card-market, by callgrind, a
     profile whose command never asked for the item page made that page cost 4.1% more
     instructions a request than the ordinary build, and 7.2% more in Brotli, and one whose
     command never had an answer in Brotli made the two pages' Brotli answers cost 17.2% and
@@ -7406,7 +7407,10 @@ rules something out.
     separate target directory is the only place an instrumented build cannot be mistaken for
     the release; a refusal before the first build costs nothing, where a dropped linker flag
     or a missing tool found after it costs a build); bet (an app has, or will write, a command
-    that reaches the routes its readers do, which the build cannot check: a command that sent
+    that reaches the routes its readers do, in the codings they are answered in, which the
+    build cannot check (and a release it builds without a word from a command that left some
+    out is bet to be no slower than the ordinary one, where the counts above say it can take
+    more instructions on what was left out): a command that sent
     the copy nothing leaves a profile of the app starting and stopping; and the app listens on
     `PORT` as `corten dev` already asks of it); value (fast and proven fast, with mistakes
     failing early and one way to build a release, and the option kept off every app that does
@@ -7416,7 +7420,9 @@ rules something out.
     profile itself, so the refusal or the steps go; the standard library can ask a child
     process to stop, or an app on Windows needs the option; an app's release needs a Cargo
     argument not on the list (a cross build, a custom profile); or an app measures a profile from its own command
-    gaining nothing over the ordinary build.
+    gaining nothing over the ordinary build, or a release that is slower than the ordinary
+    build, in cycles or time, on what its command left out: the build would then have to say
+    what the copy was sent, or refuse a copy that was sent nothing.
 
     Last checked: 2026-11-19, the rounds above at `b032155e2` (the earlier ones on the sources
     of `70544a54a`) with rustc and Cargo 1.99.1 in `rust:1-bookworm`, the catalog app

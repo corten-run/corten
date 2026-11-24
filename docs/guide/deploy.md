@@ -350,14 +350,22 @@ corten build --profile-from sh train.sh
 ```
 
 The command is the app's own, since only the app knows what its requests are. It sends the copy
-requests like the ones the app will serve, at `127.0.0.1` on the port `PORT` names:
+requests like the ones the app will serve, at `127.0.0.1` on the port `PORT` names: each route
+whose cost matters, without an `Accept-Encoding` and with each line that reaches the app from
+its readers' browsers (what it has to cover, and why, is below). For an app with the one page:
 
 ```sh
 #!/bin/sh
 # train.sh
 set -e
-for i in $(seq 500); do
-    curl -fs -o /dev/null -H 'Accept-Encoding: gzip, deflate, br, zstd' "http://127.0.0.1:$PORT/"
+url="http://127.0.0.1:$PORT"
+for path in /; do
+    for i in $(seq 125); do
+        curl -fs -o /dev/null "$url$path"
+        curl -fs -o /dev/null -H 'Accept-Encoding: gzip, deflate, br, zstd' "$url$path"
+        curl -fs -o /dev/null -H 'Accept-Encoding: gzip, deflate, br' "$url$path"
+        curl -fs -o /dev/null -H 'Accept-Encoding: gzip, deflate' "$url$path"
+    done
 done
 ```
 
@@ -391,31 +399,51 @@ the build, and so does a copy that exits early, does not listen within a minute,
 running a minute after `SIGTERM` (it is killed then), or leaves no profile; `curl -f` fails this command on an answer that is not a success, so a profile of error
 pages is not taken for one of the app. The build cannot tell a command that sent the copy
 nothing, or sent its requests to another port, from one that did its work: the profile is then
-of the app starting and stopping, and the release is built with it all the same. What the command sends is the part that decides the gain:
+of the app starting and stopping, and the release is built with it all the same, without a word. Every route is then one the command left out, and a route left out cost more instructions a request than with no profile where that was measured (below); a release from a command that sent nothing was not measured. What the command sends is the part that decides the gain:
 in the measurements below a profile did not have to come from the load it was measured with,
 only from requests that reach the same routes, and one that barely reached them gained about
 half as much.
 
-It can decide a loss too. The compiler lays out and inlines the code the copy ran, and treats
-what the copy never ran as code that seldom runs, so what the command leaves out is not left as
-it was. The command covers what the app's readers ask for:
+It can decide a loss too, in the instructions a request takes: what the command leaves out is
+not left as it was. On one app, a route and a coding that a command left out each cost more
+instructions a request than in a build with no profile. Why is not something those counts
+show; the likely reason is that the compiler lays out and inlines the code the copy ran, and
+treats what the copy never ran as code that seldom runs. So the command covers what the app's
+readers ask for:
 
 1. Every route whose cost matters: each page readers reach, its JSON, a form's post. On
    card-market a command that asked for the home page and an item's JSON, and never for the
    item page, made the item page cost 4.1% more instructions a request than a build with no
    profile, and 7.2% more where its answer is in Brotli.
 2. Every response coding those routes are answered in. The app picks the coding from the
-   request's `Accept-Encoding`, so the command asks with each line the app's readers send, and
-   without one: `gzip, deflate, br, zstd` is Chromium's and Firefox's and is answered in zstd,
-   and `gzip, deflate, br` is WebKit's over HTTPS and is answered in Brotli. A command that
-   asked without a line and with the first, and never with the second, made Brotli answers cost
-   17.2% and 9.5% more than with no profile, on two pages it had asked for in the other codings.
+   request's `Accept-Encoding` as it reaches the app, so the command asks without the header
+   and with each line that reaches it. The lines the browsers Corten is tested in sent on
+   Linux are `gzip, deflate, br, zstd` (Chromium and Firefox), which the starter answers in
+   zstd, `gzip, deflate, br` (WebKit over HTTPS), answered in Brotli, and `gzip, deflate`
+   (WebKit over plain HTTP), answered in gzip
+   ([design Choice 28](../design.md#choice-fixed-stages) has the three, and
+   [Choice 32](../design.md#choice-stream-coding) which WebKit sends where). Behind a proxy
+   that takes the header off or rewrites it, the line that reaches the app is the proxy's, not
+   a browser's ([Response compression](#response-compression)). A command that asked without
+   a line and with the first, and never with the second, made Brotli answers cost 17.2% and
+   9.5% more instructions a request than with no profile, on two pages it had asked for in the
+   other codings.
 
-What a command did ask for cost 3.9% to 26.7% fewer instructions than with no profile, and the
-same within two points whichever of three commands had asked. The table is with the
-measurements below. Not measured: how few requests of each are enough (those profiles took 300
-of each), and a command that leaves out gzip, the coding of a reader that accepts neither zstd
-nor Brotli.
+Which coding an answer had is in its `Content-Encoding`, which curl prints with `-w`: `br`
+here, and an empty line for an answer with none.
+
+```sh
+curl -s -o /dev/null -w '%header{content-encoding}\n' -H 'Accept-Encoding: gzip, deflate, br' http://127.0.0.1:3000/
+```
+
+What a command did ask for cost 3.9% to 26.7% fewer instructions a request than with no
+profile, and the same within two points whichever of three commands had asked. The table is
+with the measurements below. All of it is instructions, counted on one app: whether what a
+command leaves out also costs more cycles or more time was not measured. Nor was a command
+that leaves out gzip, or the answer with no coding, or how few requests of each are enough:
+those profiles took 301 of each, and in the catalog table below a profile whose command had
+asked for the page once still took 40,480 instructions a request on it against 44,786 with no
+profile.
 
 The four steps are the toolchain's own, and Corten adds nothing to the binary:
 
@@ -513,8 +541,9 @@ build against about 580 MB with the instrumented copy beside the release.
 The app `corten new` writes, measured at `9fae8ff55` from binaries its Dockerfile's commands
 built in its build image, run on its run image and not from an image `docker build` made: built in `rust:1-trixie` (rustc 1.100.0) with the starter's release profile and
 `compress`, by the Dockerfile's `cargo build --release --locked` and by
-`corten build --locked --profile-from sh train.sh` in its place, with the script above (500
-requests for the home page); run on `debian:trixie-slim` with jemalloc preloaded and the
+`corten build --locked --profile-from sh train.sh` in its place, with the script above as it
+then was (500 requests for the home page, each with `Accept-Encoding: gzip, deflate, br, zstd`
+and none with another line or without one); run on `debian:trixie-slim` with jemalloc preloaded and the
 image's settings at that commit (a 64 KiB thread cache), as root, the two binaries in one container with `perf` and `wrk`. The home
 page is 1,274 bytes, and 649 in zstd, which the app chose from a browser's codings. The app on
 one CPU, `wrk` with 64 connections on three others, 10 rounds in which the two builds took
@@ -538,14 +567,16 @@ the same with `--profile-from` and three commands. The first asked for the home 
 item page, each with no `Accept-Encoding`, with Chromium's and Firefox's (answered in zstd) and
 with WebKit's over HTTPS (answered in Brotli), and for the item's JSON. The second asked for the
 same without the item page, and the third for the same as the first without the two Brotli
-lines. Each line was 300 requests by curl, five on a connection. Instructions a request are
-callgrind's, the server on one CPU with jemalloc preloaded and the image's thread cache: one
+lines. Each line was 301 requests by curl: 300, five on a connection, and one more whose coding
+the script printed. Instructions a request are
+callgrind's, the server on one CPU with jemalloc preloaded, the image's thread cache and no
+background thread (`background_thread:false`, which the image has on): one
 keep-alive connection sending what curl sends, 1,240 requests less 240, over 1,000, the median
 of three counts, which differed by at most 69 instructions. The four builds answered each
 request with the same status, coding, type and length. Each profiled build is given against
 the build with no profile:
 
-| Request | No profile | Every route and coding | Without the item page | Without Brotli |
+| Request | No profile | All seven of these requests | Without the item page | Without Brotli |
 |---|---|---|---|---|
 | the item page, no coding | 77,800 | 65,421 (-15.9%) | 80,967 (+4.1%) | 64,477 (-17.1%) |
 | the item page in zstd | 348,251 | 334,610 (-3.9%) | 350,013 (+0.5%) | 333,601 (-4.2%) |
@@ -558,11 +589,13 @@ the build with no profile:
 Each profile was then taken again and each profiled release built again from it, three other
 binaries: no count moved by more than 0.2%, and no percentage by more than a tenth of a point.
 So the route a command left out cost more than with no profile at all, and so did the coding
-another left out, on pages that command had asked for in the other codings. zstd moved least
-because it is the system's library in these builds, which a profile of the app does not reach;
-Brotli is compiled with the app. These are instructions, the work a request takes, not cycles
-or time, on one app. The scripts and their output are commit `30206df73`, kept under the tag
-`evidence/profile-coverage`.
+another left out, on pages that command had asked for in the other codings. zstd moved least:
+with the first command the zstd rows took 13,641 and 9,501 fewer instructions than with no
+profile, about what the rows with no coding did (12,379 and 8,125). An explanation, not a
+measurement: zstd is the system's library in these builds, which a profile of the app does not
+reach, and Brotli is compiled with the app. These are instructions, the work a request takes,
+not cycles or time, on one app, and gzip was in no command and no count. The scripts and their
+output are commit `30206df73`, kept under the tag `evidence/profile-coverage`.
 
 Not measured: another app or page in cycles, what a command left out in cycles or time, a profile taken from an earlier version of the app
 or with another rustc, and a profile used on another kind of CPU than it was taken on. Nor the
