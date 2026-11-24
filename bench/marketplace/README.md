@@ -40,6 +40,14 @@ See the [generated report](results/r20/report.md), [saved summary](results/r20/s
 [exact measured commit](results/r20/commit.txt) and [archive checksum receipt](results/r20/archive-sha256.txt).
 The original hash-verified archive remains outside Git; raw qualifications, browser checks,
 build logs, counted CPU, load summaries and sample streams are retained with these results.
+Those r20 files stay where they are; its `summary.json`, over 256 KiB, is listed in
+`scripts/bench-size.allow`. A new round commits its report, commit and provenance, small enough to
+diff, its summary only when that is within the limit and approved for public disclosure (else its
+SHA-256), and leaves its raw receipts in the archive
+([nightly procedure](nightly.md#finished-results)). A maintainer chooses
+where the archive is kept and publishes it there, and the committed provenance records where it
+can be fetched as well as its SHA-256: a checksum receipt alone says how to check a copy, not where
+to get one ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)).
 
 Each admitted adapter completed 8 profiles in 3 rotated passes: pages in
 en-US, fr-FR, de-DE and locale-neutral JSON once per source/pass, using memory and uncached HTTP
