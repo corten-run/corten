@@ -10,10 +10,18 @@ import test from "node:test";
 import { fixtureGitEnv } from "./fixture-git.mjs";
 
 /**
+ * The ambient environment without any `GIT_*` variable, whatever its case. Setup and the raw controls
+ * run on this, not on the helper under test, so a broken helper cannot reach an outer caller's
+ * repository before the assertions that detect it; the positive cases add only scratch selectors to it.
+ * @returns {NodeJS.ProcessEnv}
+ */
+const clean = () => Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
+
+/**
  * A scratch "caller" repository, an unrelated repository and config file that an inherited GIT_CONFIG
  * and GIT_COMMON_DIR point at, and the environments of a check run against them: `inherited` has
- * every variable, `callerEnv` only the scratch caller's (the control runs with it unsanitized, so it
- * must not reach anything outside the scratch directory).
+ * every scratch selector, `callerEnv` only the scratch caller's (the control runs with it unsanitized,
+ * so it must not reach anything outside the scratch directory). Neither carries an ambient `GIT_*`.
  * @param {import("node:test").TestContext} t
  */
 function scratch(t) {
@@ -23,7 +31,7 @@ function scratch(t) {
   const unrelated = join(dir, "unrelated"), unrelatedConfig = join(dir, "unrelated.gitconfig");
   for (const path of [caller, elsewhere, fixture, unrelated]) mkdirSync(path);
   for (const path of [caller, unrelated]) {
-    const own = { cwd: path, env: fixtureGitEnv(), stdio: /** @type {const} */ ("ignore") };
+    const own = { cwd: path, env: clean(), stdio: /** @type {const} */ ("ignore") };
     execFileSync("git", ["init", "-q"], own);
     // Not what a fresh init writes on Linux, so a re-init that probes the file system changes it.
     execFileSync("git", ["config", "core.filemode", "false"], own);
@@ -31,8 +39,8 @@ function scratch(t) {
   writeFileSync(unrelatedConfig, "[user]\n\temail = unrelated@example.invalid\n");
   const selectors = { GIT_DIR: join(caller, ".git"), GIT_WORK_TREE: elsewhere, GIT_INDEX_FILE: join(caller, ".git", "index"),
     GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "Caller" };
-  const inherited = { ...process.env, GIT_CONFIG: unrelatedConfig, GIT_COMMON_DIR: join(unrelated, ".git"), ...selectors };
-  const callerEnv = fixtureGitEnv(selectors);
+  const inherited = { ...clean(), GIT_CONFIG: unrelatedConfig, GIT_COMMON_DIR: join(unrelated, ".git"), ...selectors };
+  const callerEnv = { ...clean(), ...selectors };
   const files = () => [join(caller, ".git", "config"), join(unrelated, ".git", "config"), unrelatedConfig].map((path) => readFileSync(path));
   return { dir, caller, fixture, inherited, callerEnv, config: () => readFileSync(join(caller, ".git", "config")),
     unrelated: () => files().slice(1), files };
@@ -65,9 +73,9 @@ test("the same setup with the caller's environment rewrites the caller's config 
 test("a shallow clone ignores an inherited GIT_SHALLOW_FILE and leaves that file alone", (t) => {
   const s = scratch(t), source = join(s.dir, "source"), clone = join(s.dir, "clone"), shallow = join(s.dir, "other-shallow");
   writeFileSync(shallow, "");
-  runner(s.dir, fixtureGitEnv())("init", "-q", source);
-  const commit = runner(source, fixtureGitEnv({ GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid",
-    GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" }));
+  runner(s.dir, clean())("init", "-q", source);
+  const commit = runner(source, { ...clean(), GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid",
+    GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" });
   // Two commits, so a clone of the last one alone is shallow.
   for (const text of ["one\n", "two\n"]) {
     writeFileSync(join(source, "a.txt"), text);
@@ -75,19 +83,24 @@ test("a shallow clone ignores an inherited GIT_SHALLOW_FILE and leaves that file
   }
   const git = runner(s.dir, fixtureGitEnv({}, { ...s.inherited, GIT_SHALLOW_FILE: shallow }));
   git("clone", "-q", "--depth", "1", pathToFileURL(source).href, clone);
-  assert.equal(readFileSync(join(clone, ".git", "shallow"), "utf8").trim(), runner(clone, fixtureGitEnv())("rev-parse", "HEAD"));
+  assert.equal(readFileSync(join(clone, ".git", "shallow"), "utf8").trim(), runner(clone, clean())("rev-parse", "HEAD"));
   assert.equal(readFileSync(shallow, "utf8"), "");
 });
 
 test("design-refs' fixture setup, run under a caller's GIT_DIR, leaves the caller's config byte for byte", (t) => {
-  const s = scratch(t), before = s.files(), here = fileURLToPath(new URL(".", import.meta.url));
-  const env = { ...s.callerEnv };
+  const s = scratch(t), before = s.files(), here = fileURLToPath(new URL(".", import.meta.url)), trace = join(s.dir, "trace2.txt");
+  // Trace2 is not a selector, so the fixture's own Git commands keep it and record that its setup ran.
+  const env = { ...s.callerEnv, GIT_TRACE2: trace };
   delete env.NODE_TEST_CONTEXT;
   // Its before hook makes and commits to its repository; the one test it runs needs no Git.
   const run = spawnSync(process.execPath, ["--test", "--test-reporter=tap", "--test-name-pattern=^a code span", join(here, "design-refs.test.mjs")],
-    { cwd: here, env, encoding: "utf8", windowsHide: true });
+    { cwd: here, env, encoding: "utf8", windowsHide: true, timeout: 120000 });
+  assert.equal(run.error, undefined);
   assert.equal(run.status, 0, run.stdout + run.stderr);
-  assert.match(run.stdout, /# pass 1\b/);
+  for (const line of ["# tests 1", "# pass 1", "# fail 0", "# cancelled 0"]) assert.match(run.stdout, new RegExp(`^${line}$`, "m"));
+  assert.ok(existsSync(trace), "the fixture's before hook must have run Git");
+  const commands = new Set([...readFileSync(trace, "utf8").matchAll(/\bcmd_name (\S+)/g)].map(([, name]) => name));
+  for (const name of ["init", "commit", "tag"]) assert.ok(commands.has(name), `the fixture's before hook must have run git ${name}`);
   assert.deepEqual(s.files(), before);
 });
 

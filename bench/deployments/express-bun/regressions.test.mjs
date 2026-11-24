@@ -3,9 +3,10 @@ import test from "node:test";
 import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { command, here } from "./build.mjs";
-import { checkoutIdentity as identity, assertCheckoutUnchanged, verifyFixes } from "./verify-fixes.mjs";
+import { assertCheckoutUnchanged, verifyFixes } from "./verify-fixes.mjs";
 import { upstream, checkHttp, fixtureIndependent, read } from "./checks.mjs";
 import { records as catalogRecords } from "../../catalog/fixtures.mjs";
 import { records as marketplaceRecords } from "../../marketplace/fixtures.mjs";
@@ -72,18 +73,41 @@ test("command stream artifacts retain full stdout and stderr separately", async 
 test("receipt binds clean committed harness/oracle bytes and rejects changes after execution", () => {
   mkdirSync(join(here, "work"), { recursive: true });
   const base = mkdtempSync(join(here, "work/receipt-"));
-  // A disposable caller repository whose GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE the checks inherit, with a
-  // tracked file whose times differ from its index entry, so a status run against it would rewrite its index.
-  const caller = join(base, "caller"), callerGit = (...args) => execFileSync("git", args, { cwd: caller, stdio: "ignore", env: fixtureGitEnv() });
-  mkdirSync(caller); callerGit("init", "-q"); writeFileSync(join(caller, "tracked.txt"), "caller\n"); callerGit("add", "tracked.txt");
+  const verifier = "bench/deployments/express-bun/verify-fixes.mjs", oracle = "bench/workloads/json-check.mjs";
+  // Setup and the raw control run on the ambient environment without any GIT_* variable, built here rather than by
+  // the helper, so neither can reach a repository an outer caller selects.
+  const clean = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
+  // A disposable caller repository whose GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE the process calling checkoutIdentity
+  // inherits. It has its own commit tracking the verifier, so a checkoutIdentity that dropped its `env` would read it and
+  // return its commit, and a tracked file whose times differ from its index entry, so a status run against it would
+  // rewrite its index.
+  const caller = join(base, "caller");
+  const callerGit = (...args) => execFileSync("git", args, { cwd: caller, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: clean }).trim();
+  for (const path of [verifier, "tracked.txt"]) { mkdirSync(join(caller, path, ".."), { recursive: true }); writeFileSync(join(caller, path), "caller\n"); }
+  callerGit("init", "-q"); callerGit("add", ".");
+  callerGit("-c", "user.name=Caller", "-c", "user.email=caller@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "Caller");
+  const callerCommit = callerGit("rev-parse", "HEAD");
   utimesSync(join(caller, "tracked.txt"), new Date(2001, 0, 1), new Date(2001, 0, 1));
-  const callerEnv = fixtureGitEnv({ GIT_DIR: join(caller, ".git"), GIT_WORK_TREE: caller, GIT_INDEX_FILE: join(caller, ".git", "index") });
+  const callerEnv = { ...clean, GIT_DIR: join(caller, ".git"), GIT_WORK_TREE: caller, GIT_INDEX_FILE: join(caller, ".git", "index") };
   const callerIndex = () => readFileSync(join(caller, ".git", "index")), indexBefore = callerIndex();
   // Status only reads the fixture: no optional index refresh of its own.
-  const env = fixtureGitEnv({ GIT_OPTIONAL_LOCKS: "0" }, callerEnv), checkoutIdentity = (/** @type {string} */ path) => identity(path, env);
+  const env = fixtureGitEnv({ GIT_OPTIONAL_LOCKS: "0" }, callerEnv), module = pathToFileURL(join(here, "verify-fixes.mjs")).href;
+  // The real checkoutIdentity, called by a process whose own environment selects the caller: only the `env` it is
+  // given can point its Git at the fixture.
+  const checkoutIdentity = (/** @type {string} */ path) => {
+    const run = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      const { checkoutIdentity } = await import(process.argv[1]);
+      let result;
+      try { result = { identity: checkoutIdentity(process.argv[2], JSON.parse(process.argv[3])) }; } catch (error) { result = { error: error.message }; }
+      process.stdout.write(JSON.stringify(result));`, module, path, JSON.stringify(env)],
+    { cwd: base, env: callerEnv, encoding: "utf8", timeout: 60000, windowsHide: true });
+    assert.equal(run.error, undefined); assert.equal(run.status, 0, run.stderr);
+    const result = JSON.parse(run.stdout);
+    if (result.error) throw new Error(result.error);
+    return result.identity;
+  };
   const repo = join(base, "repo"); mkdirSync(repo);
-  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env }).trim();
-  const verifier = "bench/deployments/express-bun/verify-fixes.mjs", oracle = "bench/workloads/json-check.mjs";
+  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: clean }).trim();
   try {
     git("init", "-q");
     git("config", "user.name", "Local regression fixture"); git("config", "user.email", "fixture@example.invalid");
@@ -93,6 +117,7 @@ test("receipt binds clean committed harness/oracle bytes and rejects changes aft
     git("add", "."); git("-c", "commit.gpgsign=false", "commit", "-qm", "Committed receipt fixture");
     const before = checkoutIdentity(repo);
     assert.equal(before.dirty, false); assert.match(before.commit, /^[a-f0-9]{40}$/);
+    assert.equal(before.commit, git("rev-parse", "HEAD")); assert.notEqual(before.commit, callerCommit);
     assert.deepEqual(Object.keys(before.sources), [verifier, oracle]);
     assertCheckoutUnchanged(before, checkoutIdentity(repo));
     for (const path of [verifier, oracle]) {
@@ -112,8 +137,8 @@ test("receipt binds clean committed harness/oracle bytes and rejects changes aft
     git("rm", "--cached", verifier); git("-c", "commit.gpgsign=false", "commit", "-qm", "HEAD without verifier");
     assert.throws(() => checkoutIdentity(repo), /verifier must be tracked/);
     assert.deepEqual(callerIndex(), indexBefore, "the fixture's status must not refresh the caller's index");
-    // Control: the same status with the caller's environment does rewrite that index.
-    execFileSync("git", ["status", "--porcelain"], { cwd: repo, stdio: "ignore", env: callerEnv });
+    // Control: the same status with the caller's environment, optional locks on, does rewrite that index.
+    execFileSync("git", ["status", "--porcelain"], { cwd: repo, stdio: "ignore", env: { ...callerEnv, GIT_OPTIONAL_LOCKS: "1" } });
     assert.notDeepEqual(callerIndex(), indexBefore, "the control must show the write the sanitized environment prevents");
   } finally {
     assert.ok(base.startsWith(join(here, "work/receipt-")));
