@@ -304,7 +304,10 @@ passed, no failures, a clean tree at the plan's commit) and parts that did not r
    and verify any interrupted import separately before promotion. Before a replay or a comparison
    that reads a summary or raw receipt not in Git, fetch the archive from its recorded locator and
    verify its SHA-256 (and the summary's, where recorded) against the committed provenance;
-   refuse on a mismatch or a missing locator. Do not publish credentials or local control state.
+   refuse on a mismatch or a missing locator. The locator may be access-controlled: the archive
+   and its native summary can hold control state such as a reservation token, so neither is public
+   because a locator or an evidence tag exists, and a public copy is a separate derivative with its
+   own SHA-256. Do not publish credentials or local control state.
    Pre-measurement failures may have only run.log/exit-code in evidence.
 3. Fetch origin, create bench/rN from origin/main carrying only the untracked result folder.
    Commit results first and docs second. Push only bench/rN. Never overwrite another change.
