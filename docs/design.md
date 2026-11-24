@@ -7514,6 +7514,32 @@ rules something out.
     lookup. It is on unless the app says otherwise, holds at most 32 MiB
     (`App::kept_answers`), and is off under `corten dev`.
 
+    A `HEAD` that such a `GET` would be given a kept answer for is given it too
+    ([#1797 A `HEAD` for a kept page runs the handler](https://github.com/corten-run/corten/issues/1797)):
+    the same status and headers, its `Content-Length` the kept body's in the coding asked for, and
+    no body, which the router drops after every stage as it drops a handler's (RFC 9110 section
+    9.3.2: a `HEAD` is its `GET` without content). Before, the handler ran and rendered a page
+    whose body was then dropped. A `HEAD` nothing kept stands for is its handler's, and what it
+    makes is not kept: a handler is told the request is a `HEAD` (it may take `Method`, one of the
+    inputs the key covers, and `Req` leaves the notice for the `GET`), and the layout starts none
+    of its reads for one, so its page may not be the `GET`'s, and a store a `HEAD` filled would
+    give that page to every `GET` for its lifetime. Nor does such a `HEAD` leave a mark for its URL
+    in a full store or count toward a route's run of answers not kept, since neither could make
+    it kept. One given a kept answer counts as a `GET` given one does (the copy read, so it is not
+    the first to give way, and a route of bodies kept asking), since the `HEAD` is spared the
+    handler as the `GET` is. A route's handler for `HEAD` alone is never given the page its `GET`
+    handler made. Not chosen: keeping a `HEAD`'s answer, which would spare a second run where a
+    `HEAD` comes before any `GET`, at the price above. Under callgrind (the request-cost harness,
+    `ROUTER_TARGET=kept ROUTER_PUBLIC=page`, 1,200 requests less 200, three runs each, every run
+    of a build within 1 instruction a request), a kept `HEAD` took 18,655 to 18,656
+    instructions a request on `585df756e` against 22,013 to 22,014 for the handler's on main's
+    `56432f2fc`, 15.3% fewer; a kept `GET` took 14,440 to 14,441 against 14,431 to 14,432, 9
+    more (0.06%). The 4,215 a kept `HEAD` takes beyond a kept `GET` are its tag, which a `HEAD`
+    is always given ([Limit 21](#limit-etag)) and such a `GET` is not, and the length the router
+    writes; the handler's `HEAD` paid both. That fixture's page is small and reads nothing, so
+    what a `HEAD` saves grows with what the handler reads and renders. Cycles under load were not
+    measured.
+
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
     give to anyone is the rule checked when the app compiles, that a `Public` handler takes only
     inputs that cannot tell who asks, and that rule covers the handler alone. A middleware may
@@ -8519,7 +8545,8 @@ rules something out.
     How much more a `Public` page's first ask costs than the
     same page not kept, which the issue asks, stays open: the cut takes 536 of the bytes it
     holds, not that cost.
-    Not measured: a file kept for a handler that reads it from a disk, a database or a store
+    Not measured: a kept `HEAD` and a kept `GET` beside it in cycles, under load or for a
+    handler that reads, each counted only under callgrind (above); a file kept for a handler that reads it from a disk, a database or a store
     of objects, where the read is what a kept file saves; a body between 1,024 and 8,000
     bytes in cycles against its handler (the 1,999-byte JSON body above was measured in cycles
     only against main, for the cut of what it holds), under 1,024 or over 1 MiB; a head of many names or many values of one name (a page
@@ -8581,7 +8608,9 @@ rules something out.
     setting for the bound, README Values).
 
     Revisit when: apps report pages shown past what they meant, so the default should be off
-    or the lifetime the app's to set apart from `s-maxage`; an app's handler for bodies under
+    or the lifetime the app's to set apart from `s-maxage`; an app's `HEAD`s come mostly before
+    any `GET` for their URLs (a link checker over pages few visit), so a `HEAD`'s answer should
+    be kept where its handler cannot tell it from a `GET`; an app's handler for bodies under
     1,024 bytes waits on a
     database or another service, so keeping them would save more than asking costs and the
     rule should be the route's to widen; an app's kept pictures or downloads turn its pages
@@ -8632,7 +8661,9 @@ rules something out.
     against the sentence that a placement run declared after a single-build miss does not
     clear it.
 
-    Last checked: 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
+    Last checked: 2026-11-24 for a kept `HEAD`, `585df756e` against `56432f2fc` with the
+    former's request-cost harness, under callgrind (valgrind 3.24.0, glibc's allocator) with
+    rustc 1.100.0 in a Debian 13 container; 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
     against `14126d2a8` on the Xeon Platinum 8280 with jemalloc 5.3.0, rustc 1.100.0 and Linux
     6.12.117, the plan under the tag `evidence/ca2af2ab` and the results under
     `evidence/0c0c599c`, and for its instructions, `149e0f5b4` against `a03547c3c` under
@@ -9769,11 +9800,11 @@ by design; where it is known, a limit says what would lift it or why it is so.
     no compression and named no tag keeps a copy it cannot revalidate: a whole fetch, never a wrong
     answer. A `Public` file of 1,024 bytes or more from a route of files is kept by the app, and its tag
     is made once for as long as it is kept, for the requests the kept copy is given to
-    ([Choice 70](#choice-kept-pages)): a `GET` with no cookie but the time zone's and no
-    `Authorization`. Any other is hashed on each such request (a private file, one over an
+    ([Choice 70](#choice-kept-pages)): a `GET` or `HEAD` with no cookie but the time zone's and
+    no `Authorization`. Any other is hashed on each such request (a private file, one over an
     eighth of what the app keeps, one from an unstaged route, a kept one asked for with a
-    cookie or by `HEAD`, one whose route left the store out or whose URL is new to a full
-    store), about 2.5 instructions a byte (a 1 MiB PNG
+    cookie, a `HEAD` nothing kept stands for, one whose route left the store out or whose URL is
+    new to a full store), about 2.5 instructions a byte (a 1 MiB PNG
     `Media` took 2,645,906 instructions a request on `f56bef59` where it took 20,824 on `cdce43c7`,
     callgrind, release build, five runs, ranges under 0.01%), so a large file whose URL can name its
     content is better sent `Public::immutable`, which is never tagged. Other headers of the app's

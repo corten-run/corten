@@ -1562,6 +1562,15 @@ must show at once a short lifetime, or leave it private. An answer given again c
 counted from when the request it was made for reached the handler, so a browser and a CDN count
 the lifetime from when the page was made.
 
+A `HEAD` that would be given a kept page as a `GET` is given it too, in the handler's place: the
+same status and headers, its `Content-Length` the kept body's (in the coding asked for), no body,
+and a `304` for the page's tag. So a link checker or a preview that sends `HEAD` before its `GET`
+no longer runs the handler and renders a page it does not read. A `HEAD` nothing kept stands for
+is its handler's, and what the handler makes for it is not kept: it is told the request is a
+`HEAD` (it may take `Method`, and the layout starts none of its reads for one), so its page may
+not be the `GET`'s. A route with a handler for `HEAD` of its own has that handler answer every
+`HEAD`.
+
 A kept page stands where the handler does, after [your own middleware](#your-own-middleware). Every
 stage runs for every request: a middleware that refuses, counts or stamps a header still does, and
 sees the `200` with the whole body; the security headers and `Cache-Control` are written as for any
@@ -1583,7 +1592,7 @@ else a page could differ by, and the answer nothing made for one request:
 | | Kept and given again | The handler answers |
 |---|---|---|
 | the handler | takes only Corten's own inputs for a page | takes an extractor of the app's own |
-| the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
+| the request | a `GET` for the whole document, at the URL the router matched (and such a `HEAD`, which is given a kept page and keeps none) | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
 | what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
