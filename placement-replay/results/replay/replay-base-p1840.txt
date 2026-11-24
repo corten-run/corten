@@ -1,0 +1,5 @@
+.text: 3442 input sections unpadded (by alignment {"1":162,"4":42,"8":23,"16":3215}), 3443 in the placement; the pad first: true; the rest the same sections in order with the same sizes and alignments: true
+each at the first multiple of its alignment after the one before: unpadded true, placement true; the placement is the unpadded layout replayed with the pad: true
+before the first input section aligned beyond 16 bytes (none): 3442 sections holding 3514 symbols, 3442 moved by exactly the pad; from it on: 0 sections holding 0 symbols, shift less the pad {}
+.text grew by 1840; other output sections that moved, by shift less the pad: {"0":[".init",".fini",".plt",".tdata",".tbss",".fini_array",".init_array",".data.rel.ro",".dynamic",".got",".got.plt",".relro_padding",".tm_clone_table",".data",".bss"]}
+JSON {"pad":1840,"inputs":3442,"alignments":{"1":162,"4":42,"8":23,"16":3215},"padFirst":true,"same":true,"tightA":true,"tightB":true,"replayed":true,"before":3442,"beforeExact":3442,"symbolsBefore":3514,"symbolsFrom":0,"firstBeyond":null,"from":0,"fromShiftsLessPad":{},"largest":16,"textGrew":1840,"sectionsAfter":{"0":15},"ok":true}

@@ -1,0 +1,7 @@
+2002-api aa-api: K 60; pads sharing a place in a line: 15, sd 2.12%, median |d| 1.32%, range -4.95% to 2.01%; differing: 45, sd 2.01%, median |d| 0.89%, range -5.58% to 4.04%
+2002-browser aa-browser: K 60; pads sharing a place in a line: 15, sd 0.88%, median |d| 0.53%, range -1.96% to 1.03%; differing: 45, sd 1.13%, median |d| 0.68%, range -3.65% to 3.03%
+2002-plain aa-plain: K 60; pads sharing a place in a line: 15, sd 1.06%, median |d| 0.89%, range -1.64% to 1.83%; differing: 45, sd 0.92%, median |d| 0.71%, range -1.96% to 2.09%
+1971-plain aa-plain: K 30; pads sharing a place in a line: 7, sd 0.99%, median |d| 0.61%, range -1.81% to 1.06%; differing: 23, sd 1.44%, median |d| 1.04%, range -3.72% to 2.98%
+1971-zstd aa-zstd: K 30; pads sharing a place in a line: 7, sd 0.26%, median |d| 0.16%, range -0.16% to 0.51%; differing: 23, sd 0.95%, median |d| 0.60%, range -2.77% to 1.59%
+all, each centred on its own A/A's median: sharing 59, sd 1.31%, median |d| 0.71%; differing 181, sd 1.37%, median |d| 0.77%
+ratio of sds, differing over sharing: 1.05; 78.2% of 20000 seeded permutations reach it either way

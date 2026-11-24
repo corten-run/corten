@@ -1,0 +1,9 @@
+The head's captured link run once more with pads/pad-1088.o added and an ordering file that does
+not name it (it names _start, which is first anyway). The last four input sections of .text in
+that link's map (address, size in hex, alignment, input):
+ 3af9d0 9 16 liblibdeflate_sys-5c8cf0e00bd3ad12.rlib(409ab19b05e0b730-utils.o):(.text.libdeflate_aligned_free)
+ 3af9e0 c6 16 libcompiler_builtins-ea8da5fbd1b77660.rlib(...): the section of __udivti3
+ 3afab0 66 16 libcompiler_builtins-ea8da5fbd1b77660.rlib(...): the section of round
+ 3afb20 440 16 pads/pad-1088.o:(.text.corten_layout_pad)
+So a pad object the ordering file does not name is laid last in .text, after the C code and the
+two functions of compiler_builtins that follow it. One link; nothing was measured with it.

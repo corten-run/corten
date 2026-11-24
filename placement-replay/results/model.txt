@@ -1,0 +1,56 @@
+30 placements, 43 functions from the C code on, the same names in the same order in every one
+alignments taken from the archive's record: 13 at 64, 5 at 32, 25 at 16 or less
+(1) shift == pad rounded up to own alignment: holds 529, fails 761 of 1290; holds by alignment {"16":229,"32":105,"64":195}, fails by alignment {"16":521,"32":45,"64":195}
+    by pad mod 64: {"0":{"placements":8,"ok":344,"bad":0},"16":{"placements":8,"ok":24,"bad":320},"32":{"placements":7,"ok":28,"bad":273},"48":{"placements":7,"ok":133,"bad":168}}
+(2) functions aligned to 16 or less that moved as the function before them: 750, otherwise 0
+    functions aligned to 32 or 64: 540 shifts, 0 not a multiple of the alignment, 0 neither the previous shift rounded down nor up
+    deflate_set_costs_from_codes (64): rounded down when the previous shift mod 64 was 32 (15 times), up when - (0 times): slack in [32, 63] consistent
+    compute_length_counts (32): rounded down when the previous shift mod 32 was - (0 times), up when 16 (15 times): slack in [0, 15] consistent
+    one slack per function explains every rounding: 2 functions consistent, 0 not, over 30 shifts where the previous shift was not a multiple of the alignment
+(3) floor(pad, A) <= shift <= ceil(pad, A): holds 1290, fails 0
+shift minus pad over all 1290: {"0":387,"16":318,"-32":273,"-16":312}
+    build_tree (16): 4 of 4 places in a line, 30 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    compute_length_counts (32): 2 of 4 places in a line, 30 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    do_end_block_check (16): 2 of 4 places in a line, 30 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    calculate_min_match_len (32): 2 of 4 places in a line, 30 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    deflate_set_costs_from_codes (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    heap_sort (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    sort_symbols.constprop.0 (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    deflate_precompute_huffman_header (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    deflate_compute_true_cost (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    deflate_flush_block (32): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    sort_symbols.constprop.1 (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    sort_symbols.constprop.2 (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    deflate_make_huffman_codes (32): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    deflate_find_min_cost_path (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    deflate_compress_fastest (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    deflate_optimize_and_flush_block (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    deflate_compress_near_optimal (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    deflate_compress_greedy (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    deflate_compress_lazy (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    deflate_compress_lazy2 (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    libdeflate_alloc_compressor_ex (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    libdeflate_alloc_compressor (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    libdeflate_deflate_compress (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    libdeflate_free_compressor (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    libdeflate_get_compression_level (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    libdeflate_deflate_compress_bound (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    libdeflate_gzip_compress (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    libdeflate_gzip_compress_bound (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    crc32_slice8 (32): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    crc32_x86_pclmulqdq (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    crc32_x86_pclmulqdq_avx (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    crc32_x86_vpclmulqdq_avx2 (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    crc32_x86_vpclmulqdq_avx512_vl256 (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    crc32_x86_vpclmulqdq_avx512_vl512 (64): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    dispatch_crc32 (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    libdeflate_crc32 (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    libdeflate_init_x86_cpu_features (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    libdeflate_aligned_malloc (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    libdeflate_aligned_free (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    __udivti3 (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    round (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    _init (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+    _fini (16): 1 of 4 places in a line, 29 distinct page offsets of 30, by quarter of a page 8/7/8/7
+pads: by quarter of a page 8/7/8/7; by place in a line 8/8/7/7
+sections after .text: one shift for all of them in 30 of 30 placements; shift minus pad {"0":8,"16":7,"-32":7,"-16":8}; a multiple of 64 in 30
