@@ -679,14 +679,14 @@ establish a general ranking.
          not decided, which does not pass, in three cases: an input section of its `.text` is
          aligned beyond 64 bytes; a function whose symbol names a listed crate lies at or after the
          first section aligned beyond 16 bytes, or outside `.text`; or none of the four sizes puts a
-         placement's `.data` where the rule says. One workload alone has none where its request runs
-         a function on a side's list that the pull request changes, adds or removes, unless the plan
-         gave, before the first turn that counts cycles on any build of the pull request, a reason
-         the pull request's review accepts why that function's fixed place in a line does not bear
-         on that workload's reading. A reason refused or not given in time leaves that workload with
-         no reading across placements under the plan, and this point changes nothing of what a
-         single build decides. A plan may not build the C code with other flags to be read under the
-         first point alone.
+         placement's `.data` where the rule says. One workload has none where its request runs a
+         function on a side's list that the pull request changes, adds or removes, unless the plan
+         gave, before the first turn that counts cycles on a placement of any head of the pull
+         request, a reason its review accepts why that function's fixed place in a line does not
+         bear on that workload's reading (where its placement runs predate this point, in the one
+         plan declared under it: that Choice). A reason refused or late leaves the workload with no
+         reading across placements under the plan; what a single build decides is unchanged. A plan
+         may not build the C code with other flags to be read under the first point alone.
 
       The margin stays +1% with no floor: the workload meets it when the change's bound across
       placements is under +1% and its A/A resolves. A placement that fails a check above, or has

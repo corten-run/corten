@@ -9481,10 +9481,13 @@ rules something out.
     same comparison turned round. The refusal is the workload's and not the side's, since a
     request that never reaches the function reads nothing of its place. The reason is one
     the review accepts, as it accepts a negative control's, and it is in the plan before the
-    first turn that counts cycles on any build of the pull request: one added after a
-    result, or one nobody has to accept, would be met by any sentence. So no reason can be
-    in time for a function that first comes onto a list on a later head, or in a plan
-    written after the pull request's builds had such turns. The review comes after the run
+    first turn that counts cycles on a placement of any head of the pull request: one added
+    after a result, or one nobody has to accept, would be met by any sentence. A single
+    build's turns and a pilot's are not such turns, since neither reads a placement of a
+    head: a plan is written after a single-build reading lands inside a spread, and after
+    the pilot that sizes its K. So no reason can be in time for a function that first comes
+    onto a list on a later head, or in a plan written after such turns, but for the one
+    case in the next paragraph. The review comes after the run
     and may refuse. The workload then has no reading across placements under the plan, as
     when no reason was given, and what a single build of each side decides for it is what
     the spread test above says of any workload, which this point does not change. The
@@ -9498,6 +9501,24 @@ rules something out.
     worth to the request. The named crates' functions must
     also all be in `.text`: one in another output section would pass "same input section, as
     far from its start" and move with the data.
+
+    A pull request whose placement runs predate this point has a route, or the first one the
+    point is about could not be read under it. A pull request whose placement runs were made
+    before this point was on `main` declares one plan under it, before any further turn that
+    counts cycles on a placement of its head, and turns counted before that plan give no
+    bound under it. For that plan the reason asked for a listed function is in time if it is
+    in the plan, since no reason could have been asked before the point existed. That does
+    no harm where the paragraph on the pads covers the function (above): the reason is this
+    Choice's, it needs no judgment, and so no result could have shaped it. For any other
+    listed function the review still has to accept the reason, and it is written with
+    results on an earlier head known, which the plan says beside it. This opens nothing for
+    a pull request whose first placement plan is declared after the point is on `main`:
+    that plan is its one plan, and its reasons are in time or late as above. Nor does it
+    touch the rule that a single build's miss stays binding and that a placement run
+    declared after it does not clear it
+    ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2): whether a particular pull
+    request is excused from that rule is a maintainer's decision recorded in that pull
+    request, and nothing in this Choice grants it.
 
     Three kinds of side have no reading, for any workload, since what fails is the placement
     and not one request's code. One with a section aligned beyond 64 bytes: that
@@ -9765,7 +9786,8 @@ rules something out.
     cycles, since that pull request's dry run counted them for its change's comparison on
     five placements, and nothing bounds what a run so named does; a reason for a listed
     function given on a later head, which is written with results known; a new plan for a
-    later head, which is too; whose a function is decided by its input
+    later head, which is too (the one plan of a pull request whose placement runs predate
+    the point is the case above); whose a function is decided by its input
     file, which under thin LTO names a code unit of the program and not the crate a
     function is from; the crate list restated with a build's facts, which lets a side that
     was refused be described until it passes; and a side's facts stated once and held for
