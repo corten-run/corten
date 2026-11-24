@@ -1628,7 +1628,11 @@ read first removed (any `*-cache-control`, a name your deployment chose too, `Su
 it, whatever the handler's answer said. It also goes without the headers for its connection an
 answer of your own type set (`Connection` and the headers it names, `Keep-Alive`, `TE`, `Trailer`,
 `Transfer-Encoding`, `Upgrade`, a `Proxy-*`), which a middleware may have removed too: a
-`Connection` naming `Cache-Control` would have the next proxy remove the `private, no-store`. A `500`, `502`, `503` or `504` the handler
+`Connection` naming `Cache-Control` would have the next proxy remove the `private, no-store`. Where
+that `Connection` names a header that says what the body is or how it is read (any `Content-*`,
+`Location`, `Vary`, `X-Content-Type-Options`), the kept page is not sent at all, since without it
+the same bytes are another answer (a download shown inline, a page with no type): the request gets
+the panic's `500` or the deadline's `503`. A `500`, `502`, `503` or `504` the handler
 returns goes back through the middleware, and the kept page sent in its place leaves with what
 the middleware makes of it. Nor does the page sent for a panic or a deadline get any other
 change your middleware makes after `next` (a redaction, a header every answer must carry), so a

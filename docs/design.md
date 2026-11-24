@@ -7780,7 +7780,13 @@ rules something out.
     `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, a `Proxy-*`, RFC 9110 section
     7.6.1), which an answer type of the app's own may set though `Public::header` may not, and a
     middleware may have removed: a `Connection` naming `Cache-Control` would have the next proxy
-    remove the `private, no-store`. The same copy skips the middleware's other
+    remove the `private, no-store`. A copy whose `Connection` names a header that says what its
+    body is or how it is read (any `Content-*`, `Location`, `Vary`, `X-Content-Type-Options`;
+    none may be a connection's own, RFC 9110 section 7.6.1, but such an answer is not refused) is
+    not given at all: removed, the header would send the same bytes as another answer (a download
+    inline, a page with no type for the document policy to see), so the request has the panic's
+    `500` or the deadline's `503`; checked only as that copy is given, not on a hit or a miss.
+    The same copy skips the middleware's other
     changes after `next` too (a redaction, a header every answer needs), so the guide tells a
     route that needs one to leave `stale-if-error` off, which is off unless its answer sets it.
     Correctness ranks first: an app whose middleware makes its pages private must not

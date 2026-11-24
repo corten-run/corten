@@ -3206,6 +3206,47 @@ async fn a_kept_page_given_for_a_panic_has_no_header_for_its_connection_or_expir
     }
 }
 
+/// A copy whose `Connection` names a header that says what its body is or how it is read (its
+/// `Content-Disposition`, its `Content-Type`, any case, in a list or on a second line, a
+/// `Location`, a `Vary`) is not given for a panic or a passed deadline: removed as the connection's,
+/// it would send the same bytes as another answer (the download inline, the page with no type), so
+/// the request has the failure's own answer. The page given fresh carries the header, so the copy
+/// held it.
+#[tokio::test(start_paused = true)]
+async fn a_kept_page_whose_connection_names_what_its_body_is_is_not_given_for_a_panic_or_deadline() {
+    const NAMED: [&[(&str, &str)]; 6] = [
+        &[("connection", "Content-Disposition"), ("content-disposition", "attachment; filename=\"page.html\"")],
+        &[("connection", "close, CONTENT-TYPE")],
+        &[("connection", "close"), ("connection", " content-encoding ")],
+        &[("connection", "content-length")],
+        &[("connection", "location")],
+        &[("connection", "vary")],
+    ];
+    for extra in NAMED {
+        let (runs, reads) = (Runs::default(), std::sync::Arc::default());
+        let windows = |page: Public<Exact>| page.stale_if_error(Duration::from_secs(20));
+        let app = App::new(Routes::from(exact_routes_with(&runs, &reads, windows, extra))).deadline(Duration::from_secs(5));
+        let router = app.router();
+        for at in ["/?panic", "/?deadline"] {
+            fetch(&router, "GET", at, &[]).await;
+            let (_, headers, _) = fetch(&router, "GET", at, &[]).await;
+            assert_eq!(age_of(&headers), Some(0), "{extra:?} {at}: kept: {headers:?}");
+            assert!(extra.iter().all(|(name, _)| headers.contains_key(*name)), "{extra:?} {at}: given fresh with them");
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let never = Gate::new(tokio::sync::Semaphore::new(0));
+        for (at, read, failure) in [
+            ("/?panic", Read::HandlerPanics, StatusCode::INTERNAL_SERVER_ERROR),
+            ("/?deadline", Read::Gated(never.clone()), StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            reads.lock().unwrap().push_back(read);
+            let (status, headers, _) = fetch(&router, "GET", at, &[]).await;
+            assert_eq!((status, age_of(&headers)), (failure, None), "{extra:?} {at}: the failure's own: {headers:?}");
+            assert!(!headers.contains_key(header::CONTENT_DISPOSITION), "{extra:?} {at}: {headers:?}");
+        }
+    }
+}
+
 /// The same over HTTP/1, as a client reads it: the copy given for a panic past the lifetime of a
 /// page whose answer named `Cache-Control` as its connection's own goes out `private, no-store`
 /// with no `Connection` that names it, so no proxy removes it by that name.
@@ -3221,29 +3262,37 @@ async fn over_http1_the_copy_for_a_panic_does_not_name_its_policy_for_the_connec
     let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
         let _ = stopped.await;
     }));
+    // Bounded, so a connection the server does not close fails the test rather than stalling it.
     let head = || async move {
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        stream.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
-        let mut answer = Vec::new();
-        stream.read_to_end(&mut answer).await.unwrap();
+        let exchange = async {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            stream.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+            let mut answer = Vec::new();
+            stream.read_to_end(&mut answer).await.unwrap();
+            answer
+        };
+        let answer =
+            tokio::time::timeout(Duration::from_secs(10), exchange).await.expect("the answer within 10 s, its connection closed");
         let answer = String::from_utf8_lossy(&answer).to_ascii_lowercase();
         answer.split("\r\n\r\n").next().unwrap().to_owned()
     };
     head().await;
+    // Kept, at whatever age a slow host gives it (or made again, past its lifetime there): the
+    // clock is real time, as this runtime's is not paused.
     let second = head().await;
-    // Past its lifetime, on the clock the store counts by: real time, as this runtime's clock is
-    // not paused, so the copy's age is at least a second, more on a slow host.
+    // Past its lifetime, on the clock the store counts by, so the copy's age is at least a second.
     tokio::time::sleep(Duration::from_millis(1100)).await;
     reads.lock().unwrap().push_back(Read::HandlerPanics);
+    let before = runs.count();
     let panicked = head().await;
     let age = panicked.lines().find_map(|line| line.strip_prefix("age: ")).and_then(|age| age.parse::<u64>().ok());
     assert!(panicked.starts_with("http/1.1 200") && age.is_some_and(|age| age >= 1), "the copy: {panicked}");
     assert!(panicked.contains("\r\ncache-control: private, no-store"), "{panicked}");
     assert!(!panicked.lines().any(|line| line.starts_with("connection:") && line.contains("cache-control")), "{panicked}");
-    assert!(second.starts_with("http/1.1 200") && second.contains("\r\nage: 0"), "kept: {second}");
-    assert_eq!(runs.count(), 2, "made, then panicked");
+    assert!(second.starts_with("http/1.1 200"), "{second}");
+    assert_eq!(runs.count(), before + 1, "the handler ran once, and panicked");
     stop.send(()).unwrap();
-    server.await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), server).await.expect("the server stops within 10 s").unwrap().unwrap();
 }
 
 /// The body a failure is stood in for as it is read is one the store reads to keep it. An answer

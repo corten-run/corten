@@ -1543,9 +1543,21 @@ impl Held {
 /// read `Cache-Control` keeps by, not with the handler's `public` and windows, so no cache after
 /// the app keeps or shares it; and without its headers for the connection, which the middleware
 /// may have removed too, so a `Connection` naming `Cache-Control` does not have the next proxy
-/// remove the `private, no-store` ([`drop_connection_headers`]).
+/// remove the `private, no-store` ([`drop_connection_headers`]). Not given where its
+/// `Connection` names a header that says what its body is or how it is read
+/// ([`says_what_the_body_is`]), which removed would send the same bytes as something else (a
+/// download inline, a page with no type): the request has the failure's own answer.
 pub(crate) fn held(signal: &crate::Signal) -> Option<Response> {
-    let mut res = signal.take::<HeldCopy>()?.given(signal)?;
+    let copy = signal.take::<HeldCopy>()?;
+    // Read of the copy's own lines before it is given, so one not given leaves no mark on the
+    // request (the language it was kept for).
+    if copy.0.upgrade().is_some_and(|entry| {
+        connection_names(entry.head.iter().filter(|(name, _)| name == header::CONNECTION).map(|(_, line)| line))
+            .any(|name| says_what_the_body_is(name.as_str()))
+    }) {
+        return None;
+    }
+    let mut res = copy.given(signal)?;
     let headers = res.headers_mut();
     drop_connection_headers(headers);
     crate::cache::drop_every_cdn_caching(headers);
@@ -1560,12 +1572,7 @@ pub(crate) fn held(signal: &crate::Signal) -> Option<Response> {
 /// middleware ([`held`]) alone: a copy given any other way leaves through the middleware, as its
 /// handler's answer would.
 fn drop_connection_headers(headers: &mut HeaderMap) {
-    let named: Vec<header::HeaderName> = headers
-        .get_all(header::CONNECTION)
-        .iter()
-        .flat_map(|line| line.as_bytes().split(|&byte| byte == b','))
-        .filter_map(|name| header::HeaderName::from_bytes(name.trim_ascii()).ok())
-        .collect();
+    let named: Vec<header::HeaderName> = connection_names(headers.get_all(header::CONNECTION).iter()).collect();
     let hop = |name: &str| {
         matches!(name, "connection" | "keep-alive" | "te" | "trailer" | "transfer-encoding" | "upgrade")
             || name.starts_with("proxy-")
@@ -1574,6 +1581,26 @@ fn drop_connection_headers(headers: &mut HeaderMap) {
     for name in named.into_iter().chain(own) {
         headers.remove(name);
     }
+}
+
+/// The header names `Connection` lines list, each line a comma-separated list, any case.
+fn connection_names<'a>(lines: impl Iterator<Item = &'a HeaderValue> + 'a) -> impl Iterator<Item = header::HeaderName> + 'a {
+    lines
+        .flat_map(|line| line.as_bytes().split(|&byte| byte == b','))
+        .filter_map(|name| header::HeaderName::from_bytes(name.trim_ascii()).ok())
+}
+
+/// Whether the header `name` (lowercase) says what an answer's body is or how it is read, so that
+/// the same bytes sent without it are another answer: what RFC 9110 calls the representation's
+/// metadata and its content's (any `Content-*`: its type, coding, language, location and range,
+/// section 8 and 14.4, a `Content-Disposition` that makes it a download, RFC 6266, and a
+/// `Content-Security-Policy` that holds what it may run; its `Content-Length` too, though the
+/// server writes that again from the whole body, as one rule for the family), the `Location` a redirect is followed
+/// to (section 10.2.2), the `Vary` it was chosen by (section 12.5.5) and `X-Content-Type-Options`,
+/// which keeps a browser from reading it as another type. None of them may be a connection's own
+/// (section 7.6.1), but an answer type of the app's can name one, and a proxy would remove it.
+fn says_what_the_body_is(name: &str) -> bool {
+    name.starts_with("content-") || matches!(name, "location" | "vary" | "x-content-type-options")
 }
 
 /// The answer for a body of a size it gave that could not be read: not a page to send as it is.
