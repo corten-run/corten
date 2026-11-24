@@ -306,11 +306,8 @@ test("a real failed producer invocation saves complete six-app accounting but no
   assert.deepEqual(JSON.parse(await readFile(join(out, "plan.json"), "utf8")).invocation.argv, args);
   for (const app of selectedApps("client-heavy")) {
     assert.deepEqual(JSON.parse(await readFile(join(out, `${app}.json`), "utf8")), saved.cells[app]);
-    if (app === "solid") {
-      assert.equal(saved.cells[app].outcome, "unsupported");
-      assert.equal(saved.cells[app].reason, "latest-stable-solid-2-needs-compatible-stable-compiler");
-      assert.equal(saved.cells[app].qualification, null);
-    } else assert.ok(["passed", "failed", "not-run"].includes(saved.cells[app].outcome));
+    assert.equal(saved.cells[app].outcome, "not-run");
+    assert.equal(saved.cells[app].qualification, null);
     if (saved.cells[app].outcome !== "passed") assert.equal(saved.cells[app].measurement, null);
   }
   // Missing Cargo guarantees no Rust build and no Corten performance qualification,
