@@ -1,0 +1,6 @@
+default.async           518062 req/s  17.15 cores    37066 switches/s    94226 cycles a request    38086 instructions a request
+alt.async               745997 req/s  23.62 cores     6097 switches/s    93376 cycles a request    37348 instructions a request
+percore.async           763826 req/s  23.99 cores      207 switches/s    92588 cycles a request    39625 instructions a request
+thread.async            595692 req/s  22.55 cores    15892 switches/s   109301 cycles a request    46076 instructions a request
+default64.baseline      438788 req/s  12.38 cores    32313 switches/s    75638 cycles a request    38325 instructions a request
+percore64.baseline      696489 req/s  20.80 cores    72740 switches/s    79232 cycles a request    43142 instructions a request

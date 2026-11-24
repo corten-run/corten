@@ -1,0 +1,114 @@
+### p72-percore-own.pool.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   16
+  Conns:     4096 (256/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  8s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   127.39ms   128.00ms   139.40ms   157.70ms   160.20ms
+
+  256470 requests in 8.00s, 256470 responses
+  Throughput: 32.05K req/s
+  Bandwidth:  5.62MB/s
+  Status codes: 2xx=256470, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 256470 / 256470 responses (100.0%)
+### p72-percore-own.pool.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   16
+  Conns:     4096 (256/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  8s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   127.81ms   129.50ms   139.40ms   146.80ms   148.80ms
+
+  255350 requests in 8.00s, 255350 responses
+  Throughput: 31.91K req/s
+  Bandwidth:  5.60MB/s
+  Status codes: 2xx=255350, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 255350 / 255350 responses (100.0%)
+### p72-percore-own.pool.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   16
+  Conns:     4096 (256/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  8s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   127.42ms   127.20ms   139.20ms   145.10ms   147.00ms
+
+  256000 requests in 8.00s, 256000 responses
+  Throughput: 31.99K req/s
+  Bandwidth:  5.61MB/s
+  Status codes: 2xx=256000, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 256000 / 256000 responses (100.0%)
+### p72-percore-own.spool.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   16
+  Conns:     4096 (256/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  8s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   127.69ms   127.00ms   140.80ms   145.80ms   147.80ms
+
+  255204 requests in 8.00s, 255204 responses
+  Throughput: 31.89K req/s
+  Bandwidth:  11.86MB/s
+  Status codes: 2xx=255204, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 255204 / 255204 responses (100.0%)
+### p72-percore-own.spool.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   16
+  Conns:     4096 (256/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  8s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   127.89ms   127.70ms   141.20ms   154.80ms   157.70ms
+
+  255179 requests in 8.00s, 255179 responses
+  Throughput: 31.89K req/s
+  Bandwidth:  11.86MB/s
+  Status codes: 2xx=255179, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 255179 / 255179 responses (100.0%)
+### p72-percore-own.spool.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   16
+  Conns:     4096 (256/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  8s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   128.28ms   129.80ms   143.40ms   147.70ms   149.60ms
+
+  254334 requests in 8.00s, 254334 responses
+  Throughput: 31.79K req/s
+  Bandwidth:  11.82MB/s
+  Status codes: 2xx=254334, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 254334 / 254334 responses (100.0%)

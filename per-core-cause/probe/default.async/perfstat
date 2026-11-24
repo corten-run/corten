@@ -1,0 +1,13 @@
+# started on Tue Nov 24 04:02:57 2026
+
+
+ Performance counter stats for process id '43752':
+
+          51510.27 msec task-clock                                                            
+            111348      context-switches                                                      
+                 0      cpu-migrations                                                        
+      146641110008      cycles                                                                
+       59272370335      instructions                                                          
+
+       3.004041281 seconds time elapsed
+

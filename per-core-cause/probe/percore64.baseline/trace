@@ -1,0 +1,455 @@
+LOST 59 events!
+LOST 8 events!
+LOST 1 events!
+LOST 339 events!
+LOST 469 events!
+LOST 3932 events!
+LOST 2255 events!
+LOST 409 events!
+LOST 3097 events!
+LOST 5455 events!
+LOST 8843 events!
+LOST 6588 events!
+LOST 7065 events!
+LOST 8452 events!
+LOST 7941 events!
+LOST 10010 events!
+LOST 13121 events!
+LOST 9450 events!
+LOST 5976 events!
+LOST 9351 events!
+LOST 21991 events!
+LOST 5649 events!
+LOST 11592 events!
+LOST 15660 events!
+LOST 15703 events!
+LOST 13827 events!
+LOST 11807 events!
+LOST 18496 events!
+LOST 12111 events!
+LOST 5913 events!
+LOST 10306 events!
+LOST 13625 events!
+LOST 17634 events!
+LOST 12644 events!
+LOST 12310 events!
+LOST 13405 events!
+LOST 11743 events!
+LOST 13340 events!
+LOST 16568 events!
+LOST 11097 events!
+LOST 7786 events!
+LOST 10062 events!
+LOST 15688 events!
+LOST 5511 events!
+LOST 20097 events!
+LOST 14785 events!
+LOST 14716 events!
+LOST 12952 events!
+LOST 10941 events!
+LOST 17683 events!
+LOST 11496 events!
+LOST 5411 events!
+LOST 9797 events!
+LOST 13088 events!
+LOST 20359 events!
+LOST 12256 events!
+LOST 12021 events!
+LOST 22269 events!
+LOST 11499 events!
+LOST 13100 events!
+LOST 13814 events!
+LOST 10749 events!
+LOST 7097 events!
+LOST 9987 events!
+LOST 15438 events!
+LOST 6568 events!
+LOST 12031 events!
+LOST 14841 events!
+LOST 14673 events!
+LOST 13363 events!
+LOST 11228 events!
+LOST 17708 events!
+LOST 11509 events!
+LOST 5058 events!
+LOST 9946 events!
+LOST 13029 events!
+LOST 21308 events!
+LOST 12286 events!
+LOST 11947 events!
+LOST 23780 events!
+LOST 11275 events!
+LOST 12847 events!
+LOST 12409 events!
+LOST 10249 events!
+LOST 5798 events!
+LOST 9793 events!
+LOST 15200 events!
+LOST 6576 events!
+LOST 11792 events!
+LOST 14274 events!
+LOST 14223 events!
+LOST 13079 events!
+LOST 11058 events!
+LOST 17903 events!
+LOST 11629 events!
+LOST 5070 events!
+LOST 9898 events!
+LOST 12961 events!
+LOST 23293 events!
+LOST 12379 events!
+LOST 12037 events!
+LOST 19093 events!
+LOST 11393 events!
+LOST 12793 events!
+LOST 10580 events!
+LOST 5475 events!
+LOST 9893 events!
+LOST 22153 events!
+LOST 5360 events!
+LOST 16383 events!
+LOST 14124 events!
+LOST 10607 events!
+LOST 13165 events!
+LOST 10496 events!
+LOST 17482 events!
+LOST 11298 events!
+LOST 4012 events!
+LOST 10025 events!
+LOST 13138 events!
+LOST 16509 events!
+LOST 11833 events!
+LOST 11655 events!
+LOST 12773 events!
+LOST 11133 events!
+LOST 12348 events!
+LOST 10789 events!
+LOST 11990 events!
+LOST 10816 events!
+LOST 9435 events!
+LOST 9850 events!
+LOST 25805 events!
+LOST 5279 events!
+LOST 11244 events!
+LOST 14782 events!
+LOST 16778 events!
+LOST 13453 events!
+LOST 11280 events!
+LOST 18023 events!
+LOST 11615 events!
+LOST 5145 events!
+LOST 9825 events!
+LOST 13093 events!
+LOST 17397 events!
+LOST 12566 events!
+LOST 12262 events!
+LOST 15163 events!
+LOST 11477 events!
+LOST 13097 events!
+LOST 12117 events!
+LOST 10864 events!
+LOST 8041 events!
+LOST 9902 events!
+LOST 16681 events!
+LOST 5431 events!
+LOST 11141 events!
+LOST 14630 events!
+LOST 24062 events!
+LOST 13452 events!
+LOST 11159 events!
+LOST 18059 events!
+LOST 11507 events!
+LOST 4998 events!
+LOST 9764 events!
+LOST 12985 events!
+LOST 16280 events!
+LOST 11977 events!
+LOST 11858 events!
+LOST 12590 events!
+LOST 11259 events!
+LOST 12885 events!
+LOST 12288 events!
+LOST 10944 events!
+LOST 5802 events!
+LOST 9744 events!
+LOST 25590 events!
+LOST 5114 events!
+LOST 10941 events!
+LOST 14595 events!
+LOST 15157 events!
+LOST 13481 events!
+LOST 10574 events!
+LOST 17604 events!
+LOST 11488 events!
+LOST 4742 events!
+LOST 9752 events!
+LOST 12876 events!
+LOST 16498 events!
+LOST 12006 events!
+LOST 11799 events!
+LOST 12815 events!
+LOST 11341 events!
+LOST 12880 events!
+LOST 12538 events!
+LOST 11053 events!
+
+ Summary of events:
+
+ corten-clock (254339), 2 events, 0.0%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   clock_nanosleep        1      0     0.000     0.000     0.000     0.000      0.00%
+
+
+ corten-core-17 (254332), 49332 events, 4.2%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   epoll_wait          8219      0   301.619     0.002     0.037    62.701     27.97%
+   writev              8221      0   237.880     0.008     0.029    67.919     37.61%
+   recvfrom            8218      0    81.552     0.002     0.010    54.878     67.29%
+   futex                  4      0     0.065     0.002     0.016     0.044     60.35%
+
+
+ corten-core-20 (254335), 49459 events, 4.2%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              8241      0   410.857     0.012     0.050    59.945     30.03%
+   epoll_wait          8242      0   280.867     0.002     0.034    54.496     27.31%
+   recvfrom            8241      0    32.087     0.003     0.004     0.067      0.32%
+   futex                  3      0     0.055     0.005     0.018     0.043     67.96%
+
+
+ corten-core-18 (254333), 50492 events, 4.3%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev             10608      0   362.610     0.010     0.034    67.081     31.76%
+   recvfrom           10603      0   101.788     0.003     0.010    63.098     61.99%
+   epoll_wait          2683      0     9.172     0.003     0.003     0.021      0.56%
+   write               1344      0     3.311     0.002     0.002     0.021      0.78%
+   futex                  2      0     0.059     0.005     0.029     0.054     82.10%
+
+
+ corten-core-15 (254330), 51854 events, 4.4%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev             10308      0   497.747     0.006     0.048    69.935     30.76%
+   recvfrom           10301      0   105.837     0.002     0.010    68.890     65.09%
+   futex                  7      0    66.911     0.002     9.559    66.812     99.83%
+   epoll_wait          3537      0    11.131     0.002     0.003     0.098      1.03%
+   write               1771      0     4.640     0.001     0.003     0.030      0.92%
+
+
+ corten-core-14 (254329), 52138 events, 4.4%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev             10364      0   498.261     0.007     0.048    86.148     32.14%
+   recvfrom           10361      0   178.644     0.002     0.017    72.829     56.95%
+   epoll_wait          5341      0    14.100     0.001     0.003     0.124      1.16%
+   futex                  4      0     0.083     0.005     0.021     0.063     68.38%
+
+
+ corten-core-4 (254318), 52165 events, 4.4%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   epoll_wait          8694      0   521.425     0.003     0.060    57.582     22.99%
+   writev              8694      0   171.463     0.010     0.020    41.152     24.10%
+   recvfrom            8696      0   137.603     0.003     0.016    53.320     54.19%
+
+
+ corten-core-12 (254327), 52218 events, 4.4%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              9811      0   359.439     0.011     0.037    71.797     33.67%
+   recvfrom            9815      0   174.673     0.003     0.018    69.982     56.19%
+   epoll_wait          1694      0    55.585     0.003     0.033    48.873     87.92%
+   write               4784      0    10.937     0.002     0.002     0.099      0.96%
+   futex                  6      0     0.474     0.002     0.079     0.364     72.91%
+
+
+ corten-core-21 (254336), 52269 events, 4.4%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev             11593      0   437.864     0.007     0.038    72.481     31.98%
+   recvfrom           11590      0   109.725     0.002     0.009    71.168     64.86%
+   epoll_wait          2941      0     9.249     0.002     0.003     0.027      0.58%
+   futex                  4      0     0.049     0.001     0.012     0.028     48.45%
+
+
+ corten-core-13 (254328), 52788 events, 4.4%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              8824      0   494.455     0.011     0.056    74.998     32.84%
+   recvfrom            8818      0   104.669     0.003     0.012    72.902     69.65%
+   epoll_wait          8750      0    22.316     0.002     0.003     0.160      1.19%
+   futex                  1      0     0.007     0.007     0.007     0.007      0.00%
+
+
+ corten-core-9 (254324), 53744 events, 4.5%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              9796      0   477.230     0.010     0.049    73.357     31.20%
+   write               4680      0    82.267     0.002     0.018    70.956     86.25%
+   recvfrom            9789      0    35.701     0.003     0.004     0.130      0.57%
+   epoll_wait          2603      0     9.007     0.002     0.003     0.079      1.09%
+   futex                  4      1     0.040     0.001     0.010     0.031     69.82%
+
+
+ corten-core-8 (254323), 54456 events, 4.6%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev             10197      0   548.403     0.010     0.054    73.673     30.08%
+   write               3434      0    77.196     0.002     0.022    68.746     89.05%
+   recvfrom           10192      0    35.415     0.003     0.003     0.168      0.75%
+   epoll_wait          3404      0    11.084     0.003     0.003     0.148      1.46%
+   futex                  2      0     0.399     0.002     0.200     0.397     99.05%
+
+
+ corten-core-1 (254313), 54482 events, 4.6%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev             10154      0   230.801     0.011     0.023    67.979     29.47%
+   recvfrom           10148      0   105.304     0.003     0.010    68.546     65.09%
+   epoll_wait          3447      0    10.952     0.003     0.003     0.029      0.54%
+   write               3479      0     8.632     0.002     0.002     0.039      0.80%
+   futex                  6      0     0.049     0.002     0.008     0.037     71.60%
+
+
+ corten-core-3 (254317), 54846 events, 4.6%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev             10946      0   447.305     0.011     0.041    73.073     31.55%
+   recvfrom           10941      0   109.570     0.003     0.010    70.259     64.12%
+   epoll_wait          5525      0    15.014     0.002     0.003     0.085      0.64%
+   futex                  4      2     0.010     0.002     0.002     0.003     20.32%
+
+
+ corten-core-5 (254320), 54960 events, 4.6%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   epoll_wait         10974      0   354.712     0.002     0.032    69.017     34.19%
+   writev              5499      0   159.412     0.011     0.029    68.666     43.06%
+   recvfrom            5500      0    90.576     0.003     0.016    68.407     75.52%
+   write               5499      0    13.504     0.002     0.002     0.034      0.55%
+   futex                  2      0     0.013     0.007     0.007     0.007      2.01%
+
+
+ corten-core-22 (254337), 54994 events, 4.6%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              7878      0   423.606     0.011     0.054    78.678     35.71%
+   recvfrom            7875      0    28.868     0.003     0.004     0.058      0.42%
+   epoll_wait          7812      0    20.022     0.002     0.003     0.058      0.67%
+   write               3922      0     9.427     0.002     0.002     0.020      0.45%
+   futex                  1      0     0.006     0.006     0.006     0.006      0.00%
+
+
+ corten-core-0 (254311), 55191 events, 4.7%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              8932      0   430.972     0.009     0.048    76.852     34.48%
+   epoll_wait          4835      0    85.968     0.002     0.018    72.508     84.34%
+   write               4896      0    85.630     0.002     0.017    73.943     86.35%
+   recvfrom            8926      0    31.480     0.003     0.004     0.056      0.39%
+
+
+ corten-core-11 (254326), 55408 events, 4.7%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev             10969      0   280.894     0.007     0.026    84.229     36.43%
+   recvfrom           10965      0   107.986     0.002     0.010    74.295     68.80%
+   epoll_wait          5771      0    90.838     0.001     0.016    76.887     84.64%
+
+
+ corten-core-6 (254321), 55861 events, 4.7%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              9337      0   536.453     0.010     0.057    75.912     31.13%
+   recvfrom            9331      0   106.671     0.003     0.011    73.318     68.73%
+   epoll_wait          9258      0    95.793     0.002     0.010    72.679     75.87%
+
+
+ corten-core-23 (254338), 56548 events, 4.8%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              8129      0   189.739     0.007     0.023    74.500     39.26%
+   epoll_wait          8005      0    96.989     0.001     0.012    75.928     78.28%
+   write               4004      0    95.974     0.001     0.024    86.909     90.55%
+   recvfrom            8127      0    27.690     0.002     0.003     0.039      0.37%
+   futex                  3      0     0.083     0.002     0.028     0.078     90.94%
+
+
+ corten-core-19 (254334), 56979 events, 4.8%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              8125      0   408.278     0.007     0.050    78.773     37.26%
+   recvfrom            8123      0   110.924     0.002     0.014    86.114     77.63%
+   epoll_wait          8188      0    95.801     0.001     0.012    76.359     79.70%
+   write               4047      0     8.450     0.001     0.002     0.032      0.52%
+   futex                  1      0     0.007     0.007     0.007     0.007      0.00%
+
+
+ corten-core-2 (254315), 57492 events, 4.8%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              8263      0   362.922     0.009     0.044    83.011     38.63%
+   epoll_wait          8164      0   183.171     0.002     0.022    80.094     61.83%
+   recvfrom            8257      0    27.646     0.003     0.003     0.044      0.35%
+   write               4054      0     8.747     0.002     0.002     0.023      0.52%
+
+
+ corten-core-7 (254322), 58928 events, 5.0%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              8439      0   432.797     0.006     0.051    86.040     37.11%
+   epoll_wait          8387      0   216.567     0.001     0.026    78.670     54.26%
+   recvfrom            8436      0    27.414     0.002     0.003     0.043      0.40%
+   write               4191      0     8.986     0.001     0.002     0.032      0.48%
+   futex                  4      1     0.063     0.002     0.016     0.057     86.41%
+
+

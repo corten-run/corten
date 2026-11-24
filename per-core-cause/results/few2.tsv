@@ -1,0 +1,48 @@
+h-default	baseline@8	1	0	na	na	na	na	0/0/8	rc=0 server=0.0c echo=0.0c
+h-default	baseline@8	2	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-default	baseline@8	3	0	na	na	na	0	0/0/8	rc=0 server=0.0c echo=0.0c
+h-default	baseline@8	4	0	na	na	na	na	0/0/8	rc=0 server=0.0c echo=0.0c
+h-default	baseline@16	1	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-default	baseline@16	2	0	na	na	na	0	0/0/15	rc=0 server=0.0c echo=0.0c
+h-default	baseline@16	3	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-default	baseline@16	4	0	na	na	na	na	0/0/8	rc=0 server=0.0c echo=0.0c
+h-default	baseline@24	1	365188	65us	118us	32.00	53	0/64/69	4xx=0 5xx=0 rc=0 server=11.0c echo=0.0c
+h-default	baseline@24	2	371248	63us	116us	31.60	53	0/66/68	4xx=0 5xx=0 rc=0 server=11.0c echo=0.0c
+h-default	baseline@24	3	362451	65us	121us	32.29	53	0/65/69	4xx=0 5xx=0 rc=0 server=11.0c echo=0.0c
+h-default	baseline@24	4	355150	66us	123us	32.87	53	0/64/69	4xx=0 5xx=0 rc=0 server=11.0c echo=0.0c
+h-default	json@16	1	0	na	na	na	na	0/0/8	rc=0 server=0.0c echo=0.0c
+h-default	json@16	2	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-default	json@16	3	0	na	na	na	na	0/7/15	rc=0 server=0.0c echo=0.0c
+h-default	json@16	4	0	na	na	na	na	0/0/13	rc=0 server=0.0c echo=0.0c
+h-default	json@64	1	380385	167us	376us	43.51	47	63/66/69	4xx=0 5xx=0 rc=0 server=15.6c echo=0.0c
+h-default	json@64	2	404744	157us	279us	43.99	46	70/71/72	4xx=0 5xx=0 rc=0 server=16.8c echo=0.0c
+h-default	json@64	3	402638	158us	281us	43.23	47	68/69/71	4xx=0 5xx=0 rc=0 server=16.4c echo=0.0c
+h-default	json@64	4	402239	158us	281us	44.06	47	69/71/71	4xx=0 5xx=0 rc=0 server=16.7c echo=0.0c
+h-default	json@4096	1	543430	7.57ms	14.30ms	44.36	47	91/95/95	4xx=0 5xx=0 rc=0 server=22.7c echo=0.0c
+h-default	json@4096	2	542115	7.57ms	15.30ms	44.65	48	94/95/95	4xx=0 5xx=0 rc=0 server=22.8c echo=0.0c
+h-default	json@4096	3	542828	7.55ms	16.80ms	44.62	47	94/95/95	4xx=0 5xx=0 rc=0 server=22.8c echo=0.0c
+h-default	json@4096	4	544225	7.55ms	16.10ms	44.54	47	95/95/95	4xx=0 5xx=0 rc=0 server=22.8c echo=0.0c
+h-percore	baseline@8	1	0	na	na	na	na	0/0/13	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@8	2	0	na	na	na	na	0/0/21	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@8	3	0	na	na	na	21	0/0/13	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@8	4	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@16	1	0	na	na	na	na	0/0/8	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@16	2	0	na	na	na	22	0/0/14	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@16	3	0	na	na	na	na	0/0/13	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@16	4	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@24	1	425905	55us	174us	28.99	57	0/68/96	4xx=0 5xx=0 rc=0 server=11.6c echo=0.0c
+h-percore	baseline@24	2	423457	56us	207us	28.92	57	0/64/96	4xx=0 5xx=0 rc=0 server=11.6c echo=0.0c
+h-percore	baseline@24	3	433422	54us	123us	26.34	58	0/64/96	4xx=0 5xx=0 rc=0 server=10.8c echo=0.0c
+h-percore	baseline@24	4	419007	56us	163us	25.06	57	0/63/96	4xx=0 5xx=0 rc=0 server=9.9c echo=0.0c
+h-percore	json@16	1	0	na	na	na	na	0/0/7	rc=0 server=0.0c echo=0.0c
+h-percore	json@16	2	0	na	na	na	na	0/0/13	rc=0 server=0.0c echo=0.0c
+h-percore	json@16	3	0	na	na	na	na	0/0/12	rc=0 server=0.0c echo=0.0c
+h-percore	json@16	4	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-percore	json@64	1	531883	119us	251us	40.90	48	0/96/96	4xx=0 5xx=0 rc=0 server=20.5c echo=0.0c
+h-percore	json@64	2	546002	116us	246us	40.84	47	54/94/96	4xx=0 5xx=0 rc=0 server=21.0c echo=0.0c
+h-percore	json@64	3	500675	127us	279us	40.29	47	0/96/96	4xx=0 5xx=0 rc=0 server=19.0c echo=0.0c
+h-percore	json@64	4	502900	126us	287us	40.58	48	0/96/96	4xx=0 5xx=0 rc=0 server=19.2c echo=0.0c
+h-percore	json@4096	1	564158	7.31ms	8.96ms	42.57	48	94/94/95	4xx=0 5xx=0 rc=0 server=22.6c echo=0.0c
+h-percore	json@4096	2	562213	7.29ms	8.61ms	42.94	47	93/95/95	4xx=0 5xx=0 rc=0 server=22.7c echo=0.0c
+h-percore	json@4096	3	563539	7.27ms	8.67ms	42.94	48	95/95/95	4xx=0 5xx=0 rc=0 server=22.8c echo=0.0c
+h-percore	json@4096	4	561238	7.30ms	9.18ms	43.16	47	95/95/95	4xx=0 5xx=0 rc=0 server=22.8c echo=0.0c

@@ -1,0 +1,21 @@
+# 03:50:46 load 1.45 server=0-23 load=24-47 threads=24 conns=4096 runs=3
+Unable to find image 'busybox:latest' locally
+latest: Pulling from library/busybox
+37bb94b0940b: Pulling fs layer
+37bb94b0940b: Download complete
+37bb94b0940b: Pull complete
+46500c34ad0c: Download complete
+Digest: sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
+Status: Downloaded newer image for busybox:latest
+r1-default     baseline       rps=796787 avg=5.14ms p99=12.00ms 4xx=0 5xx=0  reconnects=0 cpu_us_per_req=30.44 mem=78.04MiB
+r1-default     async          rps=546462 avg=58.52ms p99=97.60ms 4xx=0 5xx=0  reconnects=0 cpu_us_per_req=40.24 mem=313.7MiB
+r1-percore     baseline       rps=834596 avg=4.91ms p99=9.25ms 4xx=0 5xx=0  reconnects=0 cpu_us_per_req=29.01 mem=75.77MiB
+r1-percore     async          rps=873472 avg=36.69ms p99=47.80ms 4xx=0 5xx=0  reconnects=0 cpu_us_per_req=27.65 mem=246.7MiB
+# done 03:52:51
+# 03:52:51 load 27.32 server=0-23 load=24-47 threads=24 conns=4096 runs=3
+r2-percore     baseline       rps=830594 avg=4.93ms p99=9.38ms 4xx=0 5xx=0  reconnects=0 cpu_us_per_req=29.10 mem=75.04MiB
+r2-percore     async          rps=852417 avg=37.63ms p99=48.10ms 4xx=0 5xx=0  reconnects=0 cpu_us_per_req=28.37 mem=312.6MiB
+r2-default     baseline       rps=795098 avg=5.16ms p99=12.10ms 4xx=0 5xx=0  reconnects=0 cpu_us_per_req=30.46 mem=76.65MiB
+r2-default     async          rps=544474 avg=58.74ms p99=97.70ms 4xx=0 5xx=0  reconnects=0 cpu_us_per_req=40.49 mem=352.6MiB
+# done 03:54:56
+ALLDONE

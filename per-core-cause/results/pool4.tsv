@@ -1,0 +1,15 @@
+k-default	spool	1	424767	9.67ms	15.20ms	55.67	63	92/95/96	4xx=0 5xx=0 rc=0 server=22.7c echo=7.1c
+k-default	spool	2	425428	9.64ms	15.10ms	56.22	63	96/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=7.2c
+k-default	spool	3	428101	9.58ms	14.80ms	55.95	63	96/96/96	4xx=0 5xx=0 rc=0 server=23.0c echo=7.3c
+k-default-keep	spool	1	445511	9.22ms	14.30ms	53.23	63	89/96/96	4xx=0 5xx=0 rc=0 server=22.8c echo=7.0c
+k-default-keep	spool	2	446486	9.18ms	14.20ms	53.75	63	93/97/97	4xx=0 5xx=0 rc=0 server=23.0c echo=7.1c
+k-default-keep	spool	3	450380	9.10ms	14.00ms	53.37	63	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.2c
+k-default-off	spool	1	440179	9.32ms	14.50ms	53.94	64	94/96/96	4xx=0 5xx=0 rc=0 server=22.8c echo=7.4c
+k-default-off	spool	2	442271	9.27ms	14.30ms	54.37	64	95/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.5c
+k-default-off	spool	3	439809	9.32ms	14.50ms	54.63	64	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.4c
+k-default-keep	spool	1	434195	9.46ms	14.70ms	54.68	63	94/96/96	4xx=0 5xx=0 rc=0 server=22.8c echo=7.2c
+k-default-keep	spool	2	436915	9.38ms	14.60ms	55.01	63	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.3c
+k-default-keep	spool	3	436151	9.40ms	14.50ms	54.97	63	94/97/97	4xx=0 5xx=0 rc=0 server=23.0c echo=7.3c
+k-default	spool	1	429125	9.57ms	14.90ms	54.94	63	90/96/96	4xx=0 5xx=0 rc=0 server=22.7c echo=6.8c
+k-default	spool	2	437885	9.36ms	14.50ms	54.67	62	94/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=7.1c
+k-default	spool	3	437118	9.38ms	14.50ms	54.73	62	95/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=7.1c

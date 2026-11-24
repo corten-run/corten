@@ -1,0 +1,38 @@
+### z-alt.async.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   42.16ms   17.40ms   69.80ms   121.80ms   947.40ms
+
+  7592945 requests in 10.00s, 7592945 responses
+  Throughput: 759.17K req/s
+  Bandwidth:  133.94MB/s
+  Status codes: 2xx=7592945, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 7592945 / 7592945 responses (100.0%)
+### z-alt.async.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   42.47ms   17.70ms   70.40ms   122.20ms   529.80ms
+
+  7529935 requests in 10.00s, 7529935 responses
+  Throughput: 752.92K req/s
+  Bandwidth:  132.84MB/s
+  Status codes: 2xx=7529935, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 7529935 / 7529935 responses (100.0%)

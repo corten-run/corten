@@ -1,0 +1,246 @@
+### v-default.baseline.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.21ms   4.77ms   8.63ms   12.20ms   19.10ms
+
+  3959589 requests in 5.00s, 3959589 responses
+  Throughput: 791.84K req/s
+  Bandwidth:  295.27MB/s
+  Status codes: 2xx=3959589, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3959589 / 3959589 responses (100.0%)
+  Per-template: 1561455,1596941,801193
+  Per-template-ok: 1561455,1596941,801193
+### v-default.baseline.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.15ms   4.76ms   8.59ms   12.00ms   14.00ms
+
+  3985608 requests in 5.00s, 3985608 responses
+  Throughput: 797.04K req/s
+  Bandwidth:  297.21MB/s
+  Status codes: 2xx=3985608, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3985608 / 3985608 responses (100.0%)
+  Per-template: 1570278,1608909,806421
+  Per-template-ok: 1570278,1608909,806421
+### v-default.baseline.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.14ms   4.76ms   8.56ms   12.10ms   14.40ms
+
+  3993589 requests in 5.00s, 3993589 responses
+  Throughput: 798.61K req/s
+  Bandwidth:  297.79MB/s
+  Status codes: 2xx=3993589, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3993589 / 3993589 responses (100.0%)
+  Per-template: 1573684,1610971,808934
+  Per-template-ok: 1573684,1610971,808934
+### v-default.async.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   57.88ms   54.30ms   92.00ms   98.10ms   962.00ms
+
+  5515202 requests in 10.00s, 5515202 responses
+  Throughput: 551.28K req/s
+  Bandwidth:  97.26MB/s
+  Status codes: 2xx=5515202, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5515202 / 5515202 responses (100.0%)
+### v-default.async.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   58.60ms   54.80ms   92.70ms   98.20ms   473.50ms
+
+  5459933 requests in 10.00s, 5459933 responses
+  Throughput: 545.93K req/s
+  Bandwidth:  96.32MB/s
+  Status codes: 2xx=5459933, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5459933 / 5459933 responses (100.0%)
+### v-default.async.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   58.46ms   54.60ms   92.60ms   98.60ms   951.10ms
+
+  5470941 requests in 10.00s, 5470941 responses
+  Throughput: 547.03K req/s
+  Bandwidth:  96.51MB/s
+  Status codes: 2xx=5470941, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5470941 / 5470941 responses (100.0%)
+### v-default.baseline.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.23ms   4.76ms   8.77ms   12.70ms   34.30ms
+
+  3929378 requests in 5.00s, 3929378 responses
+  Throughput: 785.79K req/s
+  Bandwidth:  293.01MB/s
+  Status codes: 2xx=3929378, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3929378 / 3929378 responses (100.0%)
+  Per-template: 1540019,1591122,798237
+  Per-template-ok: 1540019,1591122,798237
+### v-default.baseline.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.51ms   5.11ms   9.26ms   13.20ms   15.90ms
+
+  3717529 requests in 5.00s, 3717529 responses
+  Throughput: 743.43K req/s
+  Bandwidth:  277.22MB/s
+  Status codes: 2xx=3717529, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3717529 / 3717529 responses (100.0%)
+  Per-template: 1479205,1490677,747647
+  Per-template-ok: 1479205,1490677,747647
+### v-default.baseline.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.30ms   4.90ms   8.81ms   12.50ms   15.00ms
+
+  3872241 requests in 5.00s, 3872241 responses
+  Throughput: 774.38K req/s
+  Bandwidth:  288.76MB/s
+  Status codes: 2xx=3872241, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3872241 / 3872241 responses (100.0%)
+  Per-template: 1528184,1561395,782662
+  Per-template-ok: 1528184,1561395,782662
+### v-default.async.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   59.00ms   55.00ms   93.00ms   98.70ms   559.90ms
+
+  5420159 requests in 10.00s, 5420159 responses
+  Throughput: 541.77K req/s
+  Bandwidth:  95.58MB/s
+  Status codes: 2xx=5420159, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5420159 / 5420159 responses (100.0%)
+### v-default.async.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   58.96ms   55.00ms   93.20ms   99.60ms   961.20ms
+
+  5414323 requests in 10.00s, 5414323 responses
+  Throughput: 541.21K req/s
+  Bandwidth:  95.48MB/s
+  Status codes: 2xx=5414323, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5414323 / 5414323 responses (100.0%)
+### v-default.async.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   59.02ms   55.10ms   93.30ms   99.00ms   339.40ms
+
+  5415652 requests in 10.00s, 5415652 responses
+  Throughput: 541.30K req/s
+  Bandwidth:  95.50MB/s
+  Status codes: 2xx=5415652, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5415652 / 5415652 responses (100.0%)

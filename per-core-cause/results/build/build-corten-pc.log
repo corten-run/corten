@@ -1,0 +1,340 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.19kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/rust:1-trixie
+#2 ...
+
+#3 [internal] load metadata for docker.io/library/debian:trixie-slim
+#3 DONE 0.9s
+
+#2 [internal] load metadata for docker.io/library/rust:1-trixie
+#2 DONE 1.0s
+
+#4 [internal] load .dockerignore
+#4 transferring context:
+#4 transferring context: 2B done
+#4 DONE 0.0s
+
+#5 [build 1/5] FROM docker.io/library/rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8
+#5 resolve docker.io/library/rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8 done
+#5 ...
+
+#6 [internal] load build context
+#6 transferring context: 11.17MB 0.1s done
+#6 DONE 0.1s
+
+#5 [build 1/5] FROM docker.io/library/rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 7.34MB / 224.06MB 0.2s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 0B / 237.23MB 0.2s
+#5 sha256:e8a88afca2bd37d4058d4b33d9d4d29b0557f8b811bb8c106942b5b51e1e4aad 0B / 25.63MB 0.2s
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 30.41MB / 224.06MB 0.3s
+#5 sha256:e8a88afca2bd37d4058d4b33d9d4d29b0557f8b811bb8c106942b5b51e1e4aad 25.63MB / 25.63MB 0.4s done
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 51.38MB / 224.06MB 0.5s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 18.87MB / 237.23MB 0.5s
+#5 sha256:411d2dc8717dbb4bb0d3cfa27e6e0275fca455c5220029d7a14dc7a75fbe8665 18.87MB / 67.82MB 0.3s
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 62.91MB / 224.06MB 0.6s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 32.51MB / 237.23MB 0.6s
+#5 sha256:411d2dc8717dbb4bb0d3cfa27e6e0275fca455c5220029d7a14dc7a75fbe8665 27.26MB / 67.82MB 0.5s
+#5 sha256:a6dd1c05fbba4f9028078a11f143cbb625d2408921eb8207bfa1dd1ad301276f 3.15MB / 49.41MB 0.2s
+#5 sha256:411d2dc8717dbb4bb0d3cfa27e6e0275fca455c5220029d7a14dc7a75fbe8665 34.60MB / 67.82MB 0.6s
+#5 sha256:a6dd1c05fbba4f9028078a11f143cbb625d2408921eb8207bfa1dd1ad301276f 13.63MB / 49.41MB 0.3s
+#5 ...
+
+#7 [stage-1 1/3] FROM docker.io/library/debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+#7 resolve docker.io/library/debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 done
+#7 sha256:37fb86c2a767b88d500c6872195f88078f64765fe0d2f9cc375cc2efbd4c0a41 29.86MB / 29.86MB 0.3s done
+#7 extracting sha256:37fb86c2a767b88d500c6872195f88078f64765fe0d2f9cc375cc2efbd4c0a41 0.7s done
+#7 DONE 1.1s
+
+#5 [build 1/5] FROM docker.io/library/rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 78.64MB / 224.06MB 0.9s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 48.23MB / 237.23MB 0.9s
+#5 sha256:a6dd1c05fbba4f9028078a11f143cbb625d2408921eb8207bfa1dd1ad301276f 25.17MB / 49.41MB 0.5s
+#5 sha256:411d2dc8717dbb4bb0d3cfa27e6e0275fca455c5220029d7a14dc7a75fbe8665 48.23MB / 67.82MB 0.9s
+#5 sha256:a6dd1c05fbba4f9028078a11f143cbb625d2408921eb8207bfa1dd1ad301276f 35.65MB / 49.41MB 0.6s
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 97.52MB / 224.06MB 1.2s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 62.91MB / 237.23MB 1.2s
+#5 sha256:a6dd1c05fbba4f9028078a11f143cbb625d2408921eb8207bfa1dd1ad301276f 49.41MB / 49.41MB 0.8s done
+#5 extracting sha256:a6dd1c05fbba4f9028078a11f143cbb625d2408921eb8207bfa1dd1ad301276f
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 75.50MB / 237.23MB 1.4s
+#5 sha256:411d2dc8717dbb4bb0d3cfa27e6e0275fca455c5220029d7a14dc7a75fbe8665 67.82MB / 67.82MB 1.2s done
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 126.88MB / 224.06MB 1.7s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 90.18MB / 237.23MB 1.5s
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 139.46MB / 224.06MB 1.8s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 111.15MB / 237.23MB 1.7s
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 153.09MB / 224.06MB 2.0s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 132.12MB / 237.23MB 1.8s
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 168.82MB / 224.06MB 2.1s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 152.04MB / 237.23MB 2.0s
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 186.65MB / 224.06MB 2.3s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 174.06MB / 237.23MB 2.1s
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 203.42MB / 224.06MB 2.4s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 189.79MB / 237.23MB 2.3s
+#5 extracting sha256:a6dd1c05fbba4f9028078a11f143cbb625d2408921eb8207bfa1dd1ad301276f 1.1s done
+#5 extracting sha256:e8a88afca2bd37d4058d4b33d9d4d29b0557f8b811bb8c106942b5b51e1e4aad
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 222.30MB / 224.06MB 2.6s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 206.57MB / 237.23MB 2.4s
+#5 sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 224.06MB / 224.06MB 2.6s done
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 222.30MB / 237.23MB 2.6s
+#5 sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 237.23MB / 237.23MB 2.7s done
+#5 extracting sha256:e8a88afca2bd37d4058d4b33d9d4d29b0557f8b811bb8c106942b5b51e1e4aad 0.5s done
+#5 DONE 2.9s
+
+#8 [stage-1 2/3] RUN apt-get update && apt-get install -y --no-install-recommends libzstd1 libjemalloc2 && rm -rf /var/lib/apt/lists/*
+#8 0.234 Get:1 http://deb.debian.org/debian trixie InRelease [140 kB]
+#8 0.247 Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+#8 0.247 Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+#8 0.276 Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9679 kB]
+#8 1.622 Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [1108 B]
+#8 1.622 Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [309 kB]
+#8 2.530 Fetched 10.2 MB in 2s (4439 kB/s)
+#8 2.530 Reading package lists...
+#8 3.202 Reading package lists...
+#8 3.818 Building dependency tree...
+#8 3.964 Reading state information...
+#8 4.172 libzstd1 is already the newest version (1.5.7+dfsg-1).
+#8 4.172 libzstd1 set to manually installed.
+#8 4.172 The following NEW packages will be installed:
+#8 4.173   libjemalloc2
+#8 4.199 0 upgraded, 1 newly installed, 0 to remove and 6 not upgraded.
+#8 4.199 Need to get 274 kB of archives.
+#8 4.199 After this operation, 897 kB of additional disk space will be used.
+#8 4.199 Get:1 http://deb.debian.org/debian trixie/main amd64 libjemalloc2 amd64 5.3.0-3 [274 kB]
+#8 4.320 debconf: unable to initialize frontend: Dialog
+#8 4.320 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#8 4.320 debconf: falling back to frontend: Readline
+#8 4.320 debconf: unable to initialize frontend: Readline
+#8 4.320 debconf: (Can't locate Term/ReadLine.pm in @INC (you may need to install the Term::ReadLine module) (@INC entries checked: /etc/perl /usr/local/lib/x86_64-linux-gnu/perl/5.40.1 /usr/local/share/perl/5.40.1 /usr/lib/x86_64-linux-gnu/perl5/5.40 /usr/share/perl5 /usr/lib/x86_64-linux-gnu/perl-base /usr/lib/x86_64-linux-gnu/perl/5.40 /usr/share/perl/5.40 /usr/local/lib/site_perl) at /usr/share/perl5/Debconf/FrontEnd/Readline.pm line 8, <STDIN> line 1.)
+#8 4.320 debconf: falling back to frontend: Teletype
+#8 4.325 debconf: unable to initialize frontend: Teletype
+#8 4.325 debconf: (This frontend requires a controlling tty.)
+#8 4.325 debconf: falling back to frontend: Noninteractive
+#8 4.949 Fetched 274 kB in 0s (16.3 MB/s)
+#8 4.966 Selecting previously unselected package libjemalloc2:amd64.
+#8 4.966 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 4951 files and directories currently installed.)
+#8 4.967 Preparing to unpack .../libjemalloc2_5.3.0-3_amd64.deb ...
+#8 4.969 Unpacking libjemalloc2:amd64 (5.3.0-3) ...
+#8 4.997 Setting up libjemalloc2:amd64 (5.3.0-3) ...
+#8 5.000 Processing triggers for libc-bin (2.41-12+deb13u4) ...
+#8 DONE 5.4s
+
+#5 [build 1/5] FROM docker.io/library/rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8
+#5 extracting sha256:411d2dc8717dbb4bb0d3cfa27e6e0275fca455c5220029d7a14dc7a75fbe8665 1.4s done
+#5 extracting sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb
+#5 extracting sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb 4.0s done
+#5 DONE 8.3s
+
+#5 [build 1/5] FROM docker.io/library/rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8
+#5 extracting sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1
+#5 extracting sha256:298036cbc6850564df5f4ac67bd70e66c38142d20da7ffb839ef8a1bb2d11ca1 2.9s done
+#5 DONE 11.3s
+
+#9 [build 2/5] RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libzstd-dev && rm -rf /var/lib/apt/lists/*
+#9 0.181 Get:1 http://deb.debian.org/debian trixie InRelease [140 kB]
+#9 0.193 Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+#9 0.193 Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+#9 0.209 Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9679 kB]
+#9 0.272 Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [1108 B]
+#9 0.273 Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [309 kB]
+#9 1.117 Fetched 10.2 MB in 1s (10.9 MB/s)
+#9 1.117 Reading package lists...
+#9 1.724 Reading package lists...
+#9 2.346 Building dependency tree...
+#9 2.480 Reading state information...
+#9 2.685 libzstd-dev is already the newest version (1.5.7+dfsg-1).
+#9 2.685 libzstd-dev set to manually installed.
+#9 2.685 The following NEW packages will be installed:
+#9 2.685   pkg-config
+#9 2.801 0 upgraded, 1 newly installed, 0 to remove and 35 not upgraded.
+#9 2.801 Need to get 14.0 kB of archives.
+#9 2.801 After this operation, 29.7 kB of additional disk space will be used.
+#9 2.801 Get:1 http://deb.debian.org/debian trixie/main amd64 pkg-config amd64 1.8.1-4 [14.0 kB]
+#9 2.954 debconf: unable to initialize frontend: Dialog
+#9 2.954 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#9 2.954 debconf: falling back to frontend: Readline
+#9 2.961 debconf: unable to initialize frontend: Readline
+#9 2.961 debconf: (This frontend requires a controlling tty.)
+#9 2.961 debconf: falling back to frontend: Teletype
+#9 2.965 debconf: unable to initialize frontend: Teletype
+#9 2.965 debconf: (This frontend requires a controlling tty.)
+#9 2.965 debconf: falling back to frontend: Noninteractive
+#9 3.584 Fetched 14.0 kB in 0s (133 kB/s)
+#9 3.601 Selecting previously unselected package pkg-config:amd64.
+#9 3.601 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 26060 files and directories currently installed.)
+#9 3.616 Preparing to unpack .../pkg-config_1.8.1-4_amd64.deb ...
+#9 3.619 Unpacking pkg-config:amd64 (1.8.1-4) ...
+#9 3.642 Setting up pkg-config:amd64 (1.8.1-4) ...
+#9 DONE 4.2s
+
+#10 [build 3/5] WORKDIR /src
+#10 DONE 0.0s
+
+#11 [build 4/5] COPY . .
+#11 DONE 0.1s
+
+#12 [build 5/5] RUN --mount=type=cache,target=/var/cache/cargo     --mount=type=cache,id=bench-httparena-corten.target,target=/src/bench/httparena/corten/target,sharing=locked     find crates bench/httparena/corten -name target -prune -o -type f -exec touch {} +     && cargo build --manifest-path bench/httparena/corten/Cargo.toml --release     && cp bench/httparena/corten/target/release/httparena-corten /server
+#12 0.474     Updating crates.io index
+#12 0.689      Locking 86 packages to highest Rust 1.100.0 compatible versions
+#12 0.708  Downloading crates ...
+#12 0.750   Downloaded alloc-stdlib v0.3.0
+#12 0.751   Downloaded adler2 v2.0.1
+#12 0.752   Downloaded alloc-no-stdlib v3.0.0
+#12 0.754   Downloaded jobserver v0.1.35
+#12 0.756   Downloaded mio v1.2.5
+#12 0.761   Downloaded serde_path_to_error v0.1.20
+#12 0.762   Downloaded http-body v1.1.0
+#12 0.763   Downloaded rustls-pki-types v1.16.0
+#12 0.765   Downloaded flate2 v1.1.11
+#12 0.770   Downloaded form_urlencoded v1.2.3
+#12 0.771   Downloaded pin-project-lite v0.2.18
+#12 0.776   Downloaded simd-adler32 v0.3.10
+#12 0.777   Downloaded getrandom v0.2.17
+#12 0.780   Downloaded pkg-config v0.3.34
+#12 0.781   Downloaded memchr v2.8.3
+#12 0.787   Downloaded atomic-waker v1.1.2
+#12 0.788   Downloaded itoa v1.0.19
+#12 0.789   Downloaded matchit v0.9.2
+#12 0.792   Downloaded proc-macro2 v1.0.107
+#12 0.795   Downloaded crc32fast v1.5.5
+#12 0.797   Downloaded find-msvc-tools v0.1.15
+#12 0.799   Downloaded serde_core v1.0.229
+#12 0.802   Downloaded tokio-macros v2.7.2
+#12 0.803   Downloaded once_cell v1.21.4
+#12 0.805   Downloaded shlex v2.0.1
+#12 0.807   Downloaded percent-encoding v2.3.2
+#12 0.807   Downloaded futures-core v0.3.34
+#12 0.809   Downloaded quote v1.0.47
+#12 0.811   Downloaded serde_json v1.0.154
+#12 0.818   Downloaded tower-service v0.3.3
+#12 0.819   Downloaded errno v0.3.15
+#12 0.820   Downloaded futures-task v0.3.34
+#12 0.821   Downloaded serde_derive v1.0.229
+#12 0.824   Downloaded slab v0.4.12
+#12 0.825   Downloaded smallvec v1.16.6
+#12 0.826   Downloaded zeroize v1.9.2
+#12 0.828   Downloaded zmij v1.0.23
+#12 0.829   Downloaded subtle v2.6.1
+#12 0.830   Downloaded untrusted v0.9.0
+#12 0.831   Downloaded signal-hook-registry v1.4.8
+#12 0.832   Downloaded rustls-webpki v0.103.17
+#12 0.836   Downloaded cfg-if v1.0.5
+#12 0.837   Downloaded tower-layer v0.3.3
+#12 0.837   Downloaded httpdate v1.0.3
+#12 0.838   Downloaded tokio-rustls v0.26.6
+#12 0.840   Downloaded zstd v0.14.4
+#12 0.843   Downloaded getrandom v0.4.3
+#12 0.846   Downloaded miniz_oxide v0.9.1
+#12 0.849   Downloaded serde v1.0.229
+#12 0.852   Downloaded unicode-ident v1.0.27
+#12 0.854   Downloaded zstd-safe v8.3.0
+#12 0.856   Downloaded bytes v1.12.2
+#12 0.860   Downloaded httparse v1.10.1
+#12 0.862   Downloaded tracing-core v0.1.36
+#12 0.864   Downloaded socket2 v0.6.5
+#12 0.866   Downloaded futures-util v0.3.34
+#12 0.877   Downloaded http v1.5.0
+#12 0.881   Downloaded hyper-util v0.1.21
+#12 0.886   Downloaded cc v1.11.3
+#12 0.891   Downloaded hyper v1.13.0
+#12 0.897   Downloaded syn v3.0.10
+#12 0.908   Downloaded zlib-rs v0.6.8
+#12 0.915   Downloaded brotli-decompressor v6.3.2
+#12 0.925   Downloaded rustls v0.23.46
+#12 0.938   Downloaded tracing v0.1.44
+#12 0.954   Downloaded brotli v9.1.3
+#12 0.972   Downloaded zstd-sys v2.1.3+zstd.1.5.7
+#12 0.990   Downloaded libc v0.2.191
+#12 1.031   Downloaded tokio v1.54.1
+#12 1.074   Downloaded ring v0.17.14
+#12 1.136    Compiling libc v0.2.191
+#12 1.136    Compiling find-msvc-tools v0.1.15
+#12 1.136    Compiling shlex v2.0.1
+#12 1.139    Compiling proc-macro2 v1.0.107
+#12 1.139    Compiling quote v1.0.47
+#12 1.139    Compiling unicode-ident v1.0.27
+#12 1.142    Compiling cfg-if v1.0.5
+#12 1.144    Compiling pkg-config v0.3.34
+#12 1.147    Compiling pin-project-lite v0.2.18
+#12 1.147    Compiling itoa v1.0.19
+#12 1.149    Compiling serde_core v1.0.229
+#12 1.149    Compiling once_cell v1.21.4
+#12 1.149    Compiling bytes v1.12.2
+#12 1.153    Compiling httparse v1.10.1
+#12 1.156    Compiling zeroize v1.9.2
+#12 1.158    Compiling crc32fast v1.5.5
+#12 1.160    Compiling zmij v1.0.23
+#12 1.160    Compiling zstd-safe v8.3.0
+#12 1.163    Compiling alloc-no-stdlib v3.0.0
+#12 1.167    Compiling futures-core v0.3.34
+#12 1.171    Compiling untrusted v0.9.0
+#12 1.171    Compiling atomic-waker v1.1.2
+#12 1.171    Compiling adler2 v2.0.1
+#12 1.172    Compiling simd-adler32 v0.3.10
+#12 1.172    Compiling serde v1.0.229
+#12 1.172    Compiling smallvec v1.16.6
+#12 1.172    Compiling getrandom v0.4.3
+#12 1.172    Compiling rustls v0.23.46
+#12 1.172    Compiling serde_json v1.0.154
+#12 1.172    Compiling httpdate v1.0.3
+#12 1.172    Compiling tower-service v0.3.3
+#12 1.172    Compiling slab v0.4.12
+#12 1.172    Compiling futures-task v0.3.34
+#12 1.173    Compiling subtle v2.6.1
+#12 1.173    Compiling memchr v2.8.3
+#12 1.173    Compiling percent-encoding v2.3.2
+#12 1.173    Compiling corten-macros v0.2.0 (/src/crates/corten-macros)
+#12 1.173    Compiling matchit v0.9.2
+#12 1.173    Compiling tower-layer v0.3.3
+#12 1.271    Compiling alloc-stdlib v0.3.0
+#12 1.275    Compiling rustls-pki-types v1.16.0
+#12 1.324    Compiling form_urlencoded v1.2.3
+#12 1.329    Compiling tracing-core v0.1.36
+#12 1.341    Compiling brotli-decompressor v6.3.2
+#12 1.377    Compiling miniz_oxide v0.9.1
+#12 1.382    Compiling futures-util v0.3.34
+#12 1.705    Compiling tracing v0.1.44
+#12 1.800    Compiling http v1.5.0
+#12 1.827    Compiling flate2 v1.1.11
+#12 1.927    Compiling syn v3.0.10
+#12 2.352    Compiling brotli v9.1.3
+#12 2.411    Compiling errno v0.3.15
+#12 2.411    Compiling socket2 v0.6.5
+#12 2.411    Compiling mio v1.2.5
+#12 2.411    Compiling getrandom v0.2.17
+#12 2.452    Compiling jobserver v0.1.35
+#12 2.466    Compiling signal-hook-registry v1.4.8
+#12 2.569    Compiling http-body v1.1.0
+#12 2.612    Compiling cc v1.11.3
+#12 3.473    Compiling serde_path_to_error v0.1.20
+#12 3.688    Compiling zstd-sys v2.1.3+zstd.1.5.7
+#12 3.688    Compiling ring v0.17.14
+#12 4.056    Compiling zstd v0.14.4
+#12 4.169    Compiling tokio-macros v2.7.2
+#12 4.169    Compiling serde_derive v1.0.229
+#12 4.450    Compiling tokio v1.54.1
+#12 7.389    Compiling hyper v1.13.0
+#12 8.136    Compiling hyper-util v0.1.21
+#12 8.242    Compiling corten-run v0.2.0 (/src/crates/corten)
+#12 9.074    Compiling rustls-webpki v0.103.17
+#12 12.67    Compiling tokio-rustls v0.26.6
+#12 29.20    Compiling httparena-corten v0.1.0 (/src/bench/httparena/corten)
+#12 50.47     Finished `release` profile [optimized] target(s) in 50.03s
+#12 DONE 50.5s
+
+#13 [stage-1 3/3] COPY --from=build /server /server
+#13 DONE 0.0s
+
+#14 exporting to image
+#14 exporting layers
+#14 exporting layers 0.3s done
+#14 exporting manifest sha256:f0ac5f48781f5589d5a088361e6c2d73b44ab5758d75ca544fcd6e78e2c12993 done
+#14 exporting config sha256:1379467a91ab16053e916e535061fcbe39b9836ac3bd3ad95975408389e97de2 done
+#14 exporting attestation manifest sha256:9e9bff903e1efabe9771d7127c6979a6fb9eacf52b16f830e7f86cf90bcfc8b3 done
+#14 exporting manifest list sha256:e60b7a5f45d3737724bc991c9668a1abb66abd703e8d5ef6bdb8695aef23d472 done
+#14 naming to docker.io/library/httparena-corten:pc done
+#14 unpacking to docker.io/library/httparena-corten:pc
+#14 unpacking to docker.io/library/httparena-corten:pc 0.6s done
+#14 DONE 0.9s

@@ -1,0 +1,8 @@
+s-default	async30	1	544850	58.72ms	97.40ms	37.37	58	44/61/62	4xx=0 5xx=0 rc=0 server=18.8c echo=0.0c
+s-default	async30	2	541997	59.05ms	97.30ms	38.49	57	57/63/64	4xx=0 5xx=0 rc=0 server=19.3c echo=0.0c
+s-alt	async30	1	756528	42.30ms	122.30ms	31.95	59	95/96/96	4xx=0 5xx=0 rc=0 server=23.0c echo=0.0c
+s-alt	async30	2	751269	42.59ms	122.90ms	32.84	59	98/98/98	4xx=0 5xx=0 rc=0 server=23.5c echo=0.0c
+s-percore	async30	1	813218	39.37ms	49.90ms	29.48	63	98/98/99	4xx=0 5xx=0 rc=0 server=23.6c echo=0.0c
+s-percore	async30	2	802541	39.87ms	49.90ms	30.03	63	99/99/99	4xx=0 5xx=0 rc=0 server=23.7c echo=0.0c
+s-alt	async30	1	756933	42.52ms	122.70ms	33.00	59	95/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=0.0c
+s-default	async30	1	542660	59.34ms	97.70ms	38.00	61	80/81/81	4xx=0 5xx=0 rc=0 server=19.0c echo=0.0c

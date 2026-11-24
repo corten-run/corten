@@ -1,0 +1,114 @@
+### p72-default-alt.pool.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   16
+  Conns:     4096 (256/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  8s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   127.43ms   127.80ms   129.60ms   131.40ms   200.90ms
+
+  256204 requests in 8.00s, 256204 responses
+  Throughput: 32.02K req/s
+  Bandwidth:  5.62MB/s
+  Status codes: 2xx=256204, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 256204 / 256204 responses (100.0%)
+### p72-default-alt.pool.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   16
+  Conns:     4096 (256/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  8s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   127.69ms   127.90ms   130.30ms   132.30ms   142.10ms
+
+  255543 requests in 8.00s, 255543 responses
+  Throughput: 31.94K req/s
+  Bandwidth:  5.60MB/s
+  Status codes: 2xx=255543, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 255543 / 255543 responses (100.0%)
+### p72-default-alt.pool.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   16
+  Conns:     4096 (256/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  8s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   127.53ms   128.10ms   130.10ms   131.60ms   142.30ms
+
+  255730 requests in 8.00s, 255730 responses
+  Throughput: 31.96K req/s
+  Bandwidth:  5.61MB/s
+  Status codes: 2xx=255730, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 255730 / 255730 responses (100.0%)
+### p72-default-alt.spool.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   16
+  Conns:     4096 (256/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  8s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   128.17ms   128.60ms   131.10ms   133.80ms   147.80ms
+
+  254696 requests in 8.00s, 254696 responses
+  Throughput: 31.83K req/s
+  Bandwidth:  11.84MB/s
+  Status codes: 2xx=254696, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 254696 / 254696 responses (100.0%)
+### p72-default-alt.spool.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   16
+  Conns:     4096 (256/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  8s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   128.47ms   128.90ms   131.10ms   134.20ms   143.50ms
+
+  253775 requests in 8.00s, 253775 responses
+  Throughput: 31.71K req/s
+  Bandwidth:  11.80MB/s
+  Status codes: 2xx=253775, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 253775 / 253775 responses (100.0%)
+### p72-default-alt.spool.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   16
+  Conns:     4096 (256/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  8s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   128.03ms   128.50ms   130.90ms   134.00ms   138.10ms
+
+  254548 requests in 8.00s, 254548 responses
+  Throughput: 31.81K req/s
+  Bandwidth:  11.83MB/s
+  Status codes: 2xx=254548, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 254548 / 254548 responses (100.0%)

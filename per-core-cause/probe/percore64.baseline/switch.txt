@@ -1,0 +1,236 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 90K of event 'sched:sched_switch'
+# Event count (approx.): 90820
+#
+# Overhead  Command        
+# ........  ...............
+#
+    19.59%  corten-core-4  
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --19.59%--schedule_hrtimeout_range_clock
+                          schedule_hrtimeout_range
+                          ep_poll
+                          do_epoll_wait
+                          __x64_sys_epoll_wait
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          0x7df950e4072e
+                          <tokio::runtime::time::Driver>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park
+                          std::sys::backtrace::__rust_begin_short_backtrace::<corten::app::cores::{closure#0}::{closure#1}::{closure#0}, ()>
+    18.99%  corten-core-17 
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --18.99%--schedule_hrtimeout_range_clock
+                          schedule_hrtimeout_range
+                          ep_poll
+                          do_epoll_wait
+                          __x64_sys_epoll_wait
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          0x7df950e4072e
+                          <tokio::runtime::time::Driver>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park
+                          std::sys::backtrace::__rust_begin_short_backtrace::<corten::app::cores::{closure#0}::{closure#1}::{closure#0}, ()>
+    18.61%  corten-core-20 
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --18.61%--schedule_hrtimeout_range_clock
+                          schedule_hrtimeout_range
+                          ep_poll
+                          do_epoll_wait
+                          __x64_sys_epoll_wait
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          0x7df950e4072e
+                          <tokio::runtime::time::Driver>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park
+                          std::sys::backtrace::__rust_begin_short_backtrace::<corten::app::cores::{closure#0}::{closure#1}::{closure#0}, ()>
+    17.73%  corten-core-5  
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --17.72%--schedule_hrtimeout_range_clock
+                          schedule_hrtimeout_range
+                          ep_poll
+                          do_epoll_wait
+                          __x64_sys_epoll_wait
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          0x7df950e4072e
+                          <tokio::runtime::time::Driver>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park
+                          std::sys::backtrace::__rust_begin_short_backtrace::<corten::app::cores::{closure#0}::{closure#1}::{closure#0}, ()>
+     6.22%  corten-core-19 
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --6.22%--schedule_hrtimeout_range_clock
+                          schedule_hrtimeout_range
+                          ep_poll
+                          do_epoll_wait
+                          __x64_sys_epoll_wait
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          0x7df950e4072e
+                          <tokio::runtime::time::Driver>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park
+                          std::sys::backtrace::__rust_begin_short_backtrace::<corten::app::cores::{closure#0}::{closure#1}::{closure#0}, ()>
+     4.43%  corten-core-7  
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --4.43%--schedule_hrtimeout_range_clock
+                          schedule_hrtimeout_range
+                          ep_poll
+                          do_epoll_wait
+                          __x64_sys_epoll_wait
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          0x7df950e4072e
+                          <tokio::runtime::time::Driver>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park
+                          std::sys::backtrace::__rust_begin_short_backtrace::<corten::app::cores::{closure#0}::{closure#1}::{closure#0}, ()>
+     3.38%  corten-core-6  
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --3.37%--schedule_hrtimeout_range_clock
+                          schedule_hrtimeout_range
+                          ep_poll
+                          do_epoll_wait
+                          __x64_sys_epoll_wait
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          0x7df950e4072e
+                          <tokio::runtime::time::Driver>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park
+                          std::sys::backtrace::__rust_begin_short_backtrace::<corten::app::cores::{closure#0}::{closure#1}::{closure#0}, ()>
+     3.15%  corten-core-2  
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --3.14%--schedule_hrtimeout_range_clock
+                          schedule_hrtimeout_range
+                          ep_poll
+                          do_epoll_wait
+                          __x64_sys_epoll_wait
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          0x7df950e4072e
+                          <tokio::runtime::time::Driver>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park
+                          std::sys::backtrace::__rust_begin_short_backtrace::<corten::app::cores::{closure#0}::{closure#1}::{closure#0}, ()>
+     2.57%  corten-core-13 
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --2.56%--schedule_hrtimeout_range_clock
+                          schedule_hrtimeout_range
+                          ep_poll
+                          do_epoll_wait
+                          __x64_sys_epoll_wait
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          0x7df950e4072e
+                          <tokio::runtime::time::Driver>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park
+                          std::sys::backtrace::__rust_begin_short_backtrace::<corten::app::cores::{closure#0}::{closure#1}::{closure#0}, ()>
+     2.44%  corten-core-22 
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --2.44%--schedule_hrtimeout_range_clock
+                          schedule_hrtimeout_range
+                          ep_poll
+                          do_epoll_wait
+                          __x64_sys_epoll_wait
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          0x7df950e4072e
+                          <tokio::runtime::time::Driver>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park
+                          std::sys::backtrace::__rust_begin_short_backtrace::<corten::app::cores::{closure#0}::{closure#1}::{closure#0}, ()>
+     2.00%  corten-core-23 
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --1.99%--schedule_hrtimeout_range_clock
+                          schedule_hrtimeout_range
+                          ep_poll
+                          do_epoll_wait
+                          __x64_sys_epoll_wait
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          0x7df950e4072e
+                          <tokio::runtime::time::Driver>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park_internal
+                          <tokio::runtime::scheduler::current_thread::Context>::park
+                          std::sys::backtrace::__rust_begin_short_backtrace::<corten::app::cores::{closure#0}::{closure#1}::{closure#0}, ()>
+     0.39%  corten-core-11 
+     0.33%  corten-core-14 
+     0.05%  corten-core-18 
+     0.04%  jemalloc_bg_thd
+     0.03%  corten-core-3  
+     0.02%  corten-core-0  
+     0.01%  corten-core-1  
+     0.01%  corten-core-12 
+     0.01%  corten-core-15 
+     0.00%  corten-core-21 
+     0.00%  corten-core-8  
+     0.00%  corten-core-9  
+     0.00%  corten-clock   
+#
+# (Cannot load tips.txt file, please install perf!)
+#

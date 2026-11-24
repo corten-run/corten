@@ -1,0 +1,41 @@
+### stat-percore.async.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   44.38ms   46.50ms   50.30ms   53.00ms   187.50ms
+
+  7227823 requests in 10.00s, 7227823 responses
+  Throughput: 722.71K req/s
+  Bandwidth:  127.51MB/s
+  Status codes: 2xx=7227823, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 7227823 / 7227823 responses (100.0%)
+### stat-percore.baseline.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.28ms   4.69ms   8.29ms   10.50ms   11.80ms
+
+  3876551 requests in 5.00s, 3876551 responses
+  Throughput: 775.24K req/s
+  Bandwidth:  289.08MB/s
+  Status codes: 2xx=3876551, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3876551 / 3876551 responses (100.0%)
+  Per-template: 1392684,1650898,832969
+  Per-template-ok: 1392684,1650898,832969

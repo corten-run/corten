@@ -1,0 +1,76 @@
+### z-default.async-staged.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   85.22ms   85.70ms   148.40ms   163.70ms    1.92s
+
+  3749657 requests in 10.00s, 3749657 responses
+  Throughput: 374.81K req/s
+  Bandwidth:  139.76MB/s
+  Status codes: 2xx=3749657, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3749657 / 3749657 responses (100.0%)
+### z-default.async-staged.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   87.90ms   88.90ms   155.70ms   164.70ms   170.20ms
+
+  3659782 requests in 10.00s, 3659782 responses
+  Throughput: 365.92K req/s
+  Bandwidth:  136.45MB/s
+  Status codes: 2xx=3659782, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3659782 / 3659782 responses (100.0%)
+### z-default.async.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   59.03ms   54.70ms   92.40ms   99.00ms   524.50ms
+
+  5409748 requests in 10.00s, 5409748 responses
+  Throughput: 540.77K req/s
+  Bandwidth:  95.41MB/s
+  Status codes: 2xx=5409748, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5409748 / 5409748 responses (100.0%)
+### z-default.async.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   58.93ms   54.80ms   92.80ms   98.50ms   518.20ms
+
+  5429077 requests in 10.00s, 5429077 responses
+  Throughput: 542.68K req/s
+  Bandwidth:  95.74MB/s
+  Status codes: 2xx=5429077, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5429077 / 5429077 responses (100.0%)

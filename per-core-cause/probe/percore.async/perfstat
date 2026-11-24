@@ -1,0 +1,13 @@
+# started on Tue Nov 24 04:32:39 2026
+
+
+ Performance counter stats for process id '92387':
+
+          72095.19 msec task-clock                                                            
+               622      context-switches                                                      
+                 0      cpu-migrations                                                        
+      212498447537      cycles                                                                
+       90943315078      instructions                                                          
+
+       3.004743975 seconds time elapsed
+

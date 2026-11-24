@@ -1,0 +1,125 @@
+h-default	baseline@8	1	0	na	na	na	na	0/0/8	rc=0 server=0.0c echo=0.0c
+h-default	baseline@8	2	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-default	baseline@8	3	0	na	na	na	0	0/0/8	rc=0 server=0.0c echo=0.0c
+h-default	baseline@8	4	0	na	na	na	na	0/0/8	rc=0 server=0.0c echo=0.0c
+h-default	baseline@16	1	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-default	baseline@16	2	0	na	na	na	0	0/0/15	rc=0 server=0.0c echo=0.0c
+h-default	baseline@16	3	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-default	baseline@16	4	0	na	na	na	na	0/0/8	rc=0 server=0.0c echo=0.0c
+h-default	baseline@24	1	365188	65us	118us	32.00	53	0/64/69	4xx=0 5xx=0 rc=0 server=11.0c echo=0.0c
+h-default	baseline@24	2	371248	63us	116us	31.60	53	0/66/68	4xx=0 5xx=0 rc=0 server=11.0c echo=0.0c
+h-default	baseline@24	3	362451	65us	121us	32.29	53	0/65/69	4xx=0 5xx=0 rc=0 server=11.0c echo=0.0c
+h-default	baseline@24	4	355150	66us	123us	32.87	53	0/64/69	4xx=0 5xx=0 rc=0 server=11.0c echo=0.0c
+h-default	json@16	1	0	na	na	na	na	0/0/8	rc=0 server=0.0c echo=0.0c
+h-default	json@16	2	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-default	json@16	3	0	na	na	na	na	0/7/15	rc=0 server=0.0c echo=0.0c
+h-default	json@16	4	0	na	na	na	na	0/0/13	rc=0 server=0.0c echo=0.0c
+h-default	json@64	1	380385	167us	376us	43.51	47	63/66/69	4xx=0 5xx=0 rc=0 server=15.6c echo=0.0c
+h-default	json@64	2	404744	157us	279us	43.99	46	70/71/72	4xx=0 5xx=0 rc=0 server=16.8c echo=0.0c
+h-default	json@64	3	402638	158us	281us	43.23	47	68/69/71	4xx=0 5xx=0 rc=0 server=16.4c echo=0.0c
+h-default	json@64	4	402239	158us	281us	44.06	47	69/71/71	4xx=0 5xx=0 rc=0 server=16.7c echo=0.0c
+h-default	json@4096	1	543430	7.57ms	14.30ms	44.36	47	91/95/95	4xx=0 5xx=0 rc=0 server=22.7c echo=0.0c
+h-default	json@4096	2	542115	7.57ms	15.30ms	44.65	48	94/95/95	4xx=0 5xx=0 rc=0 server=22.8c echo=0.0c
+h-default	json@4096	3	542828	7.55ms	16.80ms	44.62	47	94/95/95	4xx=0 5xx=0 rc=0 server=22.8c echo=0.0c
+h-default	json@4096	4	544225	7.55ms	16.10ms	44.54	47	95/95/95	4xx=0 5xx=0 rc=0 server=22.8c echo=0.0c
+h-percore	baseline@8	1	0	na	na	na	na	0/0/13	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@8	2	0	na	na	na	na	0/0/21	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@8	3	0	na	na	na	21	0/0/13	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@8	4	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@16	1	0	na	na	na	na	0/0/8	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@16	2	0	na	na	na	22	0/0/14	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@16	3	0	na	na	na	na	0/0/13	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@16	4	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-percore	baseline@24	1	425905	55us	174us	28.99	57	0/68/96	4xx=0 5xx=0 rc=0 server=11.6c echo=0.0c
+h-percore	baseline@24	2	423457	56us	207us	28.92	57	0/64/96	4xx=0 5xx=0 rc=0 server=11.6c echo=0.0c
+h-percore	baseline@24	3	433422	54us	123us	26.34	58	0/64/96	4xx=0 5xx=0 rc=0 server=10.8c echo=0.0c
+h-percore	baseline@24	4	419007	56us	163us	25.06	57	0/63/96	4xx=0 5xx=0 rc=0 server=9.9c echo=0.0c
+h-percore	json@16	1	0	na	na	na	na	0/0/7	rc=0 server=0.0c echo=0.0c
+h-percore	json@16	2	0	na	na	na	na	0/0/13	rc=0 server=0.0c echo=0.0c
+h-percore	json@16	3	0	na	na	na	na	0/0/12	rc=0 server=0.0c echo=0.0c
+h-percore	json@16	4	0	na	na	na	na	0/0/14	rc=0 server=0.0c echo=0.0c
+h-percore	json@64	1	531883	119us	251us	40.90	48	0/96/96	4xx=0 5xx=0 rc=0 server=20.5c echo=0.0c
+h-percore	json@64	2	546002	116us	246us	40.84	47	54/94/96	4xx=0 5xx=0 rc=0 server=21.0c echo=0.0c
+h-percore	json@64	3	500675	127us	279us	40.29	47	0/96/96	4xx=0 5xx=0 rc=0 server=19.0c echo=0.0c
+h-percore	json@64	4	502900	126us	287us	40.58	48	0/96/96	4xx=0 5xx=0 rc=0 server=19.2c echo=0.0c
+h-percore	json@4096	1	564158	7.31ms	8.96ms	42.57	48	94/94/95	4xx=0 5xx=0 rc=0 server=22.6c echo=0.0c
+h-percore	json@4096	2	562213	7.29ms	8.61ms	42.94	47	93/95/95	4xx=0 5xx=0 rc=0 server=22.7c echo=0.0c
+h-percore	json@4096	3	563539	7.27ms	8.67ms	42.94	48	95/95/95	4xx=0 5xx=0 rc=0 server=22.8c echo=0.0c
+h-percore	json@4096	4	561238	7.30ms	9.18ms	43.16	47	95/95/95	4xx=0 5xx=0 rc=0 server=22.8c echo=0.0c
+F1-DONE
+c-default	pool	1	520296	7.89ms	12.20ms	45.54	70	94/95/96	4xx=0 5xx=0 rc=0 server=22.8c echo=8.2c
+c-default	pool	2	522271	7.85ms	12.10ms	45.87	69	96/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=8.2c
+c-default	pool	3	523210	7.83ms	12.10ms	45.71	69	95/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=8.3c
+c-default	spool	1	427121	9.60ms	14.90ms	55.93	62	96/96/96	4xx=0 5xx=0 rc=0 server=22.9c echo=7.1c
+c-default	spool	2	428746	9.56ms	14.70ms	55.78	62	96/96/96	4xx=0 5xx=0 rc=0 server=23.0c echo=7.1c
+c-default	spool	3	424003	9.67ms	15.10ms	56.35	62	96/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=7.0c
+c-default-off	spool	1	439460	9.35ms	14.60ms	53.87	64	94/95/96	4xx=0 5xx=0 rc=0 server=22.8c echo=7.4c
+c-default-off	spool	2	443083	9.25ms	14.30ms	54.16	64	96/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=7.5c
+c-default-off	spool	3	444402	9.23ms	14.20ms	54.08	64	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.5c
+c-alt	pool	1	517755	7.94ms	12.40ms	45.68	70	93/95/96	4xx=0 5xx=0 rc=0 server=22.7c echo=8.3c
+c-alt	pool	2	516876	7.93ms	12.30ms	46.36	70	96/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=8.4c
+c-alt	pool	3	517490	7.92ms	12.20ms	46.27	70	96/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=8.4c
+c-alt	spool	1	432461	9.48ms	14.80ms	55.48	62	96/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=7.3c
+c-alt	spool	2	430581	9.52ms	14.70ms	55.84	62	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.2c
+c-alt	spool	3	430979	9.51ms	14.60ms	55.74	62	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.2c
+c-percore-shared	pool	1	533223	7.70ms	10.30ms	44.40	72	94/95/96	4xx=0 5xx=0 rc=0 server=22.7c echo=8.3c
+c-percore-shared	pool	2	535531	7.65ms	10.10ms	44.83	72	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=8.3c
+c-percore-shared	pool	3	536496	7.63ms	9.91ms	44.75	72	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=8.3c
+c-percore-shared	spool	1	446648	9.17ms	11.90ms	53.83	64	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.4c
+c-percore-shared	spool	2	442433	9.26ms	13.10ms	54.36	64	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.3c
+c-percore-shared	spool	3	448758	9.13ms	12.10ms	53.63	64	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.3c
+c-percore-shr-off	spool	1	453948	9.06ms	11.60ms	52.53	65	94/96/96	4xx=0 5xx=0 rc=0 server=22.9c echo=7.4c
+c-percore-shr-off	spool	2	455280	9.00ms	11.70ms	52.87	65	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.5c
+c-percore-shr-off	spool	3	456751	8.97ms	12.00ms	52.64	65	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.5c
+wget: can't connect to remote host (127.0.0.1): Connection refused
+c-percore-main	pool	1	530701	7.72ms	16.90ms	43.88	72	92/94/95	4xx=0 5xx=0 rc=0 server=22.4c echo=8.4c
+c-percore-main	pool	2	529533	7.74ms	16.40ms	44.00	72	92/94/95	4xx=0 5xx=0 rc=0 server=22.3c echo=8.5c
+c-percore-main	pool	3	530073	7.73ms	16.80ms	44.09	72	93/94/95	4xx=0 5xx=0 rc=0 server=22.4c echo=8.5c
+c-percore-main	spool	1	436148	9.39ms	19.20ms	53.30	64	90/94/95	4xx=0 5xx=0 rc=0 server=22.4c echo=7.4c
+c-percore-main	spool	2	438021	9.35ms	19.40ms	53.30	64	93/94/95	4xx=0 5xx=0 rc=0 server=22.4c echo=7.4c
+c-percore-main	spool	3	439051	9.33ms	18.90ms	53.28	64	93/94/95	4xx=0 5xx=0 rc=0 server=22.4c echo=7.4c
+c-percore-own	pool	1	572972	7.17ms	8.77ms	41.75	73	95/96/96	4xx=0 5xx=0 rc=0 server=23.0c echo=8.8c
+c-percore-own	pool	2	577549	7.09ms	8.75ms	41.79	73	97/97/97	4xx=0 5xx=0 rc=0 server=23.2c echo=9.0c
+c-percore-own	pool	3	576864	7.10ms	8.83ms	41.82	73	97/97/97	4xx=0 5xx=0 rc=0 server=23.2c echo=8.9c
+c-percore-own	spool	1	483599	8.47ms	10.40ms	49.91	65	97/97/97	4xx=0 5xx=0 rc=0 server=23.2c echo=7.8c
+c-percore-own	spool	2	485993	8.43ms	10.60ms	49.65	65	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.9c
+c-percore-own	spool	3	479914	8.53ms	10.40ms	50.26	65	97/97/97	4xx=0 5xx=0 rc=0 server=23.2c echo=7.7c
+F2a-DONE
+e-percore-own	pool	1	573211	7.17ms	9.67ms	41.63	73	95/96/96	4xx=0 5xx=0 rc=0 server=22.9c echo=8.7c
+e-percore-own	pool	2	575250	7.12ms	8.87ms	41.95	73	97/97/97	4xx=0 5xx=0 rc=0 server=23.2c echo=8.8c
+e-percore-own	pool	3	575652	7.12ms	9.22ms	41.88	73	97/97/97	4xx=0 5xx=0 rc=0 server=23.2c echo=8.9c
+e-percore-own	spool	1	482743	8.48ms	11.20ms	49.96	65	97/97/97	4xx=0 5xx=0 rc=0 server=23.2c echo=7.8c
+e-percore-own	spool	2	479459	8.54ms	10.30ms	50.37	65	97/97/97	4xx=0 5xx=0 rc=0 server=23.2c echo=7.8c
+e-percore-own	spool	3	481641	8.50ms	10.40ms	50.09	65	97/97/97	4xx=0 5xx=0 rc=0 server=23.2c echo=7.8c
+wget: can't connect to remote host (127.0.0.1): Connection refused
+e-percore-main	pool	1	515857	7.95ms	16.60ms	44.05	72	90/92/93	4xx=0 5xx=0 rc=0 server=21.8c echo=8.2c
+e-percore-main	pool	2	513059	7.98ms	16.60ms	44.25	72	90/92/93	4xx=0 5xx=0 rc=0 server=21.8c echo=8.1c
+e-percore-main	pool	3	515251	7.95ms	16.30ms	44.43	72	91/92/93	4xx=0 5xx=0 rc=0 server=22.0c echo=8.2c
+e-percore-main	spool	1	432632	9.47ms	18.90ms	53.24	65	91/93/95	4xx=0 5xx=0 rc=0 server=22.1c echo=7.3c
+e-percore-main	spool	2	434914	9.42ms	19.00ms	53.19	65	91/93/94	4xx=0 5xx=0 rc=0 server=22.2c echo=7.4c
+e-percore-main	spool	3	432610	9.47ms	18.90ms	53.08	64	91/93/94	4xx=0 5xx=0 rc=0 server=22.1c echo=7.3c
+e-percore-shr-off	spool	1	452270	9.08ms	11.70ms	52.62	65	93/96/96	4xx=0 5xx=0 rc=0 server=22.9c echo=7.4c
+e-percore-shr-off	spool	2	455155	9.00ms	11.70ms	52.82	65	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.4c
+e-percore-shr-off	spool	3	453624	9.03ms	12.00ms	53.02	65	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.4c
+e-percore-shared	pool	1	533896	7.70ms	9.96ms	44.52	72	93/96/96	4xx=0 5xx=0 rc=0 server=22.8c echo=8.3c
+e-percore-shared	pool	2	538830	7.60ms	10.10ms	44.57	72	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=8.4c
+e-percore-shared	pool	3	538543	7.61ms	10.50ms	44.62	72	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=8.5c
+e-percore-shared	spool	1	446781	9.17ms	12.00ms	53.78	64	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.4c
+e-percore-shared	spool	2	445352	9.20ms	12.70ms	54.03	64	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.3c
+e-percore-shared	spool	3	448464	9.13ms	11.80ms	53.57	64	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.4c
+e-alt	pool	1	527709	7.78ms	12.10ms	44.87	70	94/95/96	4xx=0 5xx=0 rc=0 server=22.7c echo=8.2c
+e-alt	pool	2	529175	7.74ms	11.90ms	45.31	70	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=8.2c
+e-alt	pool	3	531765	7.71ms	11.90ms	45.07	70	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=8.3c
+e-alt	spool	1	437341	9.38ms	14.50ms	54.97	62	97/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.1c
+e-alt	spool	2	437417	9.37ms	14.50ms	54.96	62	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.0c
+e-alt	spool	3	442043	9.27ms	14.30ms	54.33	62	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.1c
+e-default-off	spool	1	450924	9.11ms	14.00ms	52.39	64	90/95/96	4xx=0 5xx=0 rc=0 server=22.7c echo=7.3c
+e-default-off	spool	2	454819	9.01ms	14.00ms	52.83	64	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.4c
+e-default-off	spool	3	454807	9.01ms	13.90ms	52.83	63	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=7.4c
+e-default	pool	1	520012	7.91ms	12.30ms	45.64	70	95/96/96	4xx=0 5xx=0 rc=0 server=22.8c echo=8.3c
+e-default	pool	2	522397	7.85ms	12.10ms	45.90	70	96/97/97	4xx=0 5xx=0 rc=0 server=23.1c echo=8.5c
+e-default	pool	3	522038	7.85ms	12.20ms	45.90	70	95/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=8.4c
+e-default	spool	1	427030	9.61ms	14.80ms	56.07	63	96/96/97	4xx=0 5xx=0 rc=0 server=23.0c echo=7.2c
+e-default	spool	2	427441	9.59ms	15.00ms	55.92	62	95/96/96	4xx=0 5xx=0 rc=0 server=23.0c echo=7.2c
+e-default	spool	3	426593	9.61ms	15.00ms	56.02	62	95/96/96	4xx=0 5xx=0 rc=0 server=23.0c echo=7.2c
+BATCH-DONE

@@ -1,0 +1,123 @@
+### r2-percore baseline run 1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.01ms   4.38ms   8.07ms   9.33ms   33.80ms
+
+  4108072 requests in 5.00s, 4108072 responses
+  Throughput: 821.52K req/s
+  Bandwidth:  306.34MB/s
+  Status codes: 2xx=4108072, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4108072 / 4108072 responses (100.0%)
+  Per-template: 1535969,1711855,860248
+  Per-template-ok: 1535969,1711855,860248
+### r2-percore baseline run 2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   4.93ms   4.38ms   8.03ms   9.38ms   10.30ms
+
+  4152973 requests in 5.00s, 4152973 responses
+  Throughput: 830.50K req/s
+  Bandwidth:  309.68MB/s
+  Status codes: 2xx=4152973, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4152973 / 4152973 responses (100.0%)
+  Per-template: 1525286,1752973,874714
+  Per-template-ok: 1525286,1752973,874714
+### r2-percore baseline run 3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   4.93ms   4.39ms   7.97ms   9.45ms   9.83ms
+
+  4151652 requests in 5.00s, 4151652 responses
+  Throughput: 830.25K req/s
+  Bandwidth:  309.59MB/s
+  Status codes: 2xx=4151652, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4151652 / 4151652 responses (100.0%)
+  Per-template: 1540864,1731258,879530
+  Per-template-ok: 1540864,1731258,879530
+### r2-percore async run 1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   37.63ms   36.50ms   45.90ms   48.10ms   105.50ms
+
+  8524172 requests in 10.00s, 8524172 responses
+  Throughput: 852.35K req/s
+  Bandwidth:  150.38MB/s
+  Status codes: 2xx=8524172, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 8524172 / 8524172 responses (100.0%)
+### r2-percore async run 2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   37.76ms   36.90ms   40.50ms   49.20ms   52.90ms
+
+  8470100 requests in 10.00s, 8470100 responses
+  Throughput: 846.93K req/s
+  Bandwidth:  149.42MB/s
+  Status codes: 2xx=8470100, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 8470100 / 8470100 responses (100.0%)
+### r2-percore async run 3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   38.43ms   36.80ms   47.60ms   49.90ms   50.80ms
+
+  8324870 requests in 10.00s, 8324870 responses
+  Throughput: 832.40K req/s
+  Bandwidth:  146.86MB/s
+  Status codes: 2xx=8324870, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 8324870 / 8324870 responses (100.0%)

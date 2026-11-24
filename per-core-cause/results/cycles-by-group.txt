@@ -1,0 +1,14 @@
+cycles a request                 default         alt     percore
+kernel futex+sched                  2783        1429        1350
+kernel epoll/eventfd                1502        1664        1200
+kernel syscall entry                2104        1796        1668
+kernel tcp/net                     50807       50440       58233
+tokio time (wheel, sleep)           2611        1909        1003
+std mutex/futex (user)              1205         517          94
+tokio scheduler                     4534        4655        3449
+tokio io/net/sync                   9153        9770        8482
+hyper                               4486        5003        4096
+corten + app                        4715        4899        4789
+malloc                              2267        2323        1603
+other user                          8752        8924        7180
+total                              95646       94035       93728

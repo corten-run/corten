@@ -1,0 +1,14 @@
+# started on Tue Nov 24 03:59:47 2026
+
+
+ Performance counter stats for process id '37633':
+
+          60129.19 msec task-clock                                                            
+               406      context-switches                                                      
+                 1      cpu-migrations                                                        
+      172422035795      cycles                                                                
+       81147268952      instructions                                                          
+         261831970      cache-misses                                                          
+
+       2.505131778 seconds time elapsed
+

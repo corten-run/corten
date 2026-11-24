@@ -1,0 +1,264 @@
+### h-percore.baseline@8.1
+Error: -c (8) must be at least -t (24); every thread needs at least one connection
+### h-percore.baseline@8.2
+Error: -c (8) must be at least -t (24); every thread needs at least one connection
+### h-percore.baseline@8.3
+Error: -c (8) must be at least -t (24); every thread needs at least one connection
+### h-percore.baseline@8.4
+Error: -c (8) must be at least -t (24); every thread needs at least one connection
+### h-percore.baseline@16.1
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-percore.baseline@16.2
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-percore.baseline@16.3
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-percore.baseline@16.4
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-percore.baseline@24.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     24 (1/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     55us     50us     82us    174us    200us
+
+  2129529 requests in 5.00s, 2129529 responses
+  Throughput: 425.85K req/s
+  Bandwidth:  158.79MB/s
+  Status codes: 2xx=2129529, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2129529 / 2129529 responses (100.0%)
+  Per-template: 807364,723971,598194
+  Per-template-ok: 807364,723971,598194
+### h-percore.baseline@24.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     24 (1/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     56us     52us     74us    207us    240us
+
+  2117288 requests in 5.00s, 2117288 responses
+  Throughput: 423.42K req/s
+  Bandwidth:  157.89MB/s
+  Status codes: 2xx=2117288, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2117288 / 2117288 responses (100.0%)
+  Per-template: 835380,660950,620958
+  Per-template-ok: 835380,660950,620958
+### h-percore.baseline@24.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     24 (1/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     54us     51us     80us    123us    149us
+
+  2167112 requests in 5.00s, 2167112 responses
+  Throughput: 433.38K req/s
+  Bandwidth:  161.60MB/s
+  Status codes: 2xx=2167112, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2167112 / 2167112 responses (100.0%)
+  Per-template: 800491,827583,539038
+  Per-template-ok: 800491,827583,539038
+### h-percore.baseline@24.4
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     24 (1/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     56us     50us     84us    163us    194us
+
+  2095035 requests in 5.00s, 2095035 responses
+  Throughput: 418.96K req/s
+  Bandwidth:  156.23MB/s
+  Status codes: 2xx=2095035, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2095035 / 2095035 responses (100.0%)
+  Per-template: 810882,726422,557731
+  Per-template-ok: 810882,726422,557731
+### h-percore.json@16.1
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-percore.json@16.2
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-percore.json@16.3
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-percore.json@16.4
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-percore.json@64.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    119us    113us    189us    251us    283us
+
+  2659419 requests in 5.00s, 2659419 responses
+  Throughput: 531.84K req/s
+  Bandwidth:  4.33GB/s
+  Status codes: 2xx=2659419, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2659419 / 2659419 responses (100.0%)
+### h-percore.json@64.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    116us    100us    180us    246us    287us
+
+  2730010 requests in 5.00s, 2730010 responses
+  Throughput: 545.95K req/s
+  Bandwidth:  4.44GB/s
+  Status codes: 2xx=2730010, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2730010 / 2730010 responses (100.0%)
+### h-percore.json@64.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    127us    115us    203us    279us    321us
+
+  2503376 requests in 5.00s, 2503376 responses
+  Throughput: 500.63K req/s
+  Bandwidth:  4.08GB/s
+  Status codes: 2xx=2503376, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2503376 / 2503376 responses (100.0%)
+### h-percore.json@64.4
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    126us    115us    200us    287us    330us
+
+  2514502 requests in 5.00s, 2514502 responses
+  Throughput: 502.85K req/s
+  Bandwidth:  4.09GB/s
+  Status codes: 2xx=2514502, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2514502 / 2514502 responses (100.0%)
+### h-percore.json@4096.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   7.31ms   7.19ms   8.15ms   8.96ms   45.90ms
+
+  2820792 requests in 5.00s, 2820792 responses
+  Throughput: 564.02K req/s
+  Bandwidth:  4.59GB/s
+  Status codes: 2xx=2820792, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2820792 / 2820792 responses (100.0%)
+### h-percore.json@4096.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   7.29ms   7.26ms   8.05ms   8.61ms   9.09ms
+
+  2811068 requests in 5.00s, 2811068 responses
+  Throughput: 562.15K req/s
+  Bandwidth:  4.58GB/s
+  Status codes: 2xx=2811068, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2811068 / 2811068 responses (100.0%)
+### h-percore.json@4096.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   7.27ms   7.25ms   8.11ms   8.67ms   9.27ms
+
+  2817695 requests in 5.00s, 2817695 responses
+  Throughput: 563.48K req/s
+  Bandwidth:  4.59GB/s
+  Status codes: 2xx=2817695, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2817695 / 2817695 responses (100.0%)
+### h-percore.json@4096.4
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   7.30ms   7.17ms   8.27ms   9.18ms   9.61ms
+
+  2806193 requests in 5.00s, 2806193 responses
+  Throughput: 561.18K req/s
+  Bandwidth:  4.57GB/s
+  Status codes: 2xx=2806193, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2806193 / 2806193 responses (100.0%)

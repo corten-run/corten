@@ -1,0 +1,85 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 50K of event 'sched:sched_switch'
+# Event count (approx.): 50235
+#
+# Overhead  Command        
+# ........  ...............
+#
+   100.00%  tokio-rt-worker
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --99.94%--futex_do_wait
+                          __futex_wait
+                          futex_wait
+                          do_futex
+                          __x64_sys_futex
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          |          
+                           --99.92%--syscall
+                                     |          
+                                     |--36.04%--<tokio::runtime::time::entry::TimerEntry as core::ops::drop::Drop>::drop
+                                     |          core::ptr::drop_glue::<core::option::Option<tokio::runtime::Timer>>
+                                     |          httparena_corten::wait::{closure#0}
+                                     |          <httparena_corten::delay as corten::handler::Handler<(corten::handler::private::ViaParts, corten::route::Params<httparena_corten::url::Delay>), ()>>::call::{closure#0}
+                                     |          corten::route::laned::<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>::{closure#0}
+                                     |          <hyper::proto::h1::dispatch::Server<hyper_util::service::glue::TowerToHyperService<corten::app::Connection>, hyper::body::incoming::Incoming> as hyper::proto::h1::dispatch::Dispatch>::poll_msg
+                                     |          <hyper::proto::h1::dispatch::Dispatcher<hyper::proto::h1::dispatch::Server<hyper_util::service::glue::TowerToHyperService<corten::app::Connection>, hyper::body::incoming::Incoming>, corten::watch::Answered, hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper::proto::h1::role::Server>>::poll_write
+                                     |          <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Connection>>> as core::future::future::Future>::poll
+                                     |          corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}
+                                     |          tokio::runtime::task::raw::poll::<corten::app::serve_listener<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>
+                                     |          <tokio::runtime::scheduler::multi_thread::worker::Context>::run_task
+                                     |          tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                                     |          std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+                                     |          <std::thread::lifecycle::spawn_unchecked<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                                     |          <std::sys::thread::unix::Thread>::new::thread_start
+                                     |          0x7bc7fd3808bb
+                                     |          
+                                     |--33.63%--<tokio::runtime::time::handle::Handle>::reregister
+                                     |          <tokio::time::sleep::Sleep as core::future::future::Future>::poll
+                                     |          httparena_corten::wait::{closure#0}
+                                     |          <httparena_corten::delay as corten::handler::Handler<(corten::handler::private::ViaParts, corten::route::Params<httparena_corten::url::Delay>), ()>>::call::{closure#0}
+                                     |          corten::route::laned::<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>::{closure#0}
+                                     |          <hyper::proto::h1::dispatch::Server<hyper_util::service::glue::TowerToHyperService<corten::app::Connection>, hyper::body::incoming::Incoming> as hyper::proto::h1::dispatch::Dispatch>::poll_msg
+                                     |          <hyper::proto::h1::dispatch::Dispatcher<hyper::proto::h1::dispatch::Server<hyper_util::service::glue::TowerToHyperService<corten::app::Connection>, hyper::body::incoming::Incoming>, corten::watch::Answered, hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper::proto::h1::role::Server>>::poll_write
+                                     |          <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Connection>>> as core::future::future::Future>::poll
+                                     |          corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}
+                                     |          tokio::runtime::task::raw::poll::<corten::app::serve_listener<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>
+                                     |          <tokio::runtime::scheduler::multi_thread::worker::Context>::run_task
+                                     |          tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                                     |          std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+                                     |          <std::thread::lifecycle::spawn_unchecked<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                                     |          <std::sys::thread::unix::Thread>::new::thread_start
+                                     |          0x7bc7fd3808bb
+                                     |          
+                                     |--24.86%--<tokio::runtime::scheduler::multi_thread::handle::Handle>::next_remote_task
+                                     |          tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                                     |          std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+                                     |          <std::thread::lifecycle::spawn_unchecked<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                                     |          <std::sys::thread::unix::Thread>::new::thread_start
+                                     |          0x7bc7fd3808bb
+                                     |          
+                                     |--3.42%--<tokio::runtime::scheduler::multi_thread::worker::Core>::maintenance
+                                     |          tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                                     |          std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+                                     |          <std::thread::lifecycle::spawn_unchecked<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                                     |          <std::sys::thread::unix::Thread>::new::thread_start
+                                     |          0x7bc7fd3808bb
+                                     |          
+                                      --0.83%--tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                                                std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+                                                <std::thread::lifecycle::spawn_unchecked<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                                                <std::sys::thread::unix::Thread>::new::thread_start
+                                                0x7bc7fd3808bb
+     0.00%  corten-clock   
+#
+# (Cannot load tips.txt file, please install perf!)
+#

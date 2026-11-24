@@ -1,0 +1,62 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.41kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/rust:1-trixie
+#2 DONE 0.5s
+
+#3 [internal] load metadata for docker.io/library/debian:trixie-slim
+#3 DONE 0.5s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 2B done
+#4 DONE 0.0s
+
+#5 [stage-1 1/3] FROM docker.io/library/debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+#5 resolve docker.io/library/debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 done
+#5 DONE 0.0s
+
+#6 [build 1/5] FROM docker.io/library/rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8
+#6 resolve docker.io/library/rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8 0.0s done
+#6 DONE 0.0s
+
+#7 [internal] load build context
+#7 transferring context: 66.93kB 0.0s done
+#7 DONE 0.0s
+
+#8 [build 2/5] RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libzstd-dev && rm -rf /var/lib/apt/lists/*
+#8 CACHED
+
+#9 [build 3/5] WORKDIR /src
+#9 CACHED
+
+#10 [build 4/5] COPY . .
+#10 DONE 0.1s
+
+#11 [build 5/5] RUN --mount=type=cache,target=/var/cache/cargo     --mount=type=cache,id=bench-httparena-corten.target,target=/src/bench/httparena/corten/target,sharing=locked     find crates bench/httparena/corten -name target -prune -o -type f -exec touch {} +     && cargo build --manifest-path bench/httparena/corten/Cargo.toml --release     && cp bench/httparena/corten/target/release/httparena-corten /server
+#11 0.576     Updating crates.io index
+#11 0.774      Locking 86 packages to highest Rust 1.100.0 compatible versions
+#11 0.850    Compiling corten-macros v0.2.0 (/src/crates/corten-macros)
+#11 4.532    Compiling corten-run v0.2.0 (/src/crates/corten)
+#11 25.32    Compiling httparena-corten v0.1.0 (/src/bench/httparena/corten)
+#11 48.29     Finished `release` profile [optimized] target(s) in 47.72s
+#11 DONE 48.3s
+
+#12 [stage-1 2/3] RUN apt-get update && apt-get install -y --no-install-recommends libzstd1 libjemalloc2 && rm -rf /var/lib/apt/lists/*
+#12 CACHED
+
+#13 [stage-1 3/3] COPY --from=build /server /server
+#13 DONE 0.0s
+
+#14 exporting to image
+#14 exporting layers
+#14 exporting layers 0.3s done
+#14 exporting manifest sha256:ed17cf63eed475e551120f3f2e846899048084edf2e3b4bcbf5f3a4fc8ac75eb done
+#14 exporting config sha256:f0e5ebc9d8caf36e600b275f353560c9b3c0fba470a74ced3a02a30a32415696 done
+#14 exporting attestation manifest sha256:9332919b656699fb1c4f2373efd3afa3218e9df0efd2f982958fc59327106dc9 done
+#14 exporting manifest list sha256:e66ad262ddc2e6f29bdc7018864a0ae1f4ac5db5a7058ba8e9269e42170b3d93 done
+#14 naming to docker.io/library/httparena-corten:var done
+#14 unpacking to docker.io/library/httparena-corten:var 0.0s done
+#14 DONE 0.3s

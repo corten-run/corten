@@ -1,0 +1,264 @@
+### h-default.baseline@8.1
+Error: -c (8) must be at least -t (24); every thread needs at least one connection
+### h-default.baseline@8.2
+Error: -c (8) must be at least -t (24); every thread needs at least one connection
+### h-default.baseline@8.3
+Error: -c (8) must be at least -t (24); every thread needs at least one connection
+### h-default.baseline@8.4
+Error: -c (8) must be at least -t (24); every thread needs at least one connection
+### h-default.baseline@16.1
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-default.baseline@16.2
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-default.baseline@16.3
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-default.baseline@16.4
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-default.baseline@24.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     24 (1/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     65us     63us     86us    118us    173us
+
+  1825940 requests in 5.00s, 1825940 responses
+  Throughput: 365.16K req/s
+  Bandwidth:  136.16MB/s
+  Status codes: 2xx=1825940, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 1825940 / 1825940 responses (100.0%)
+  Per-template: 637428,614926,573586
+  Per-template-ok: 637428,614926,573586
+### h-default.baseline@24.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     24 (1/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     63us     62us     84us    116us    164us
+
+  1856244 requests in 5.00s, 1856244 responses
+  Throughput: 371.22K req/s
+  Bandwidth:  138.42MB/s
+  Status codes: 2xx=1856244, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 1856244 / 1856244 responses (100.0%)
+  Per-template: 640606,638657,576981
+  Per-template-ok: 640606,638657,576981
+### h-default.baseline@24.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     24 (1/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     65us     63us     87us    121us    167us
+
+  1812255 requests in 5.00s, 1812255 responses
+  Throughput: 362.41K req/s
+  Bandwidth:  135.14MB/s
+  Status codes: 2xx=1812255, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 1812255 / 1812255 responses (100.0%)
+  Per-template: 639329,613869,559057
+  Per-template-ok: 639329,613869,559057
+### h-default.baseline@24.4
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     24 (1/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     66us     64us     88us    123us    172us
+
+  1775751 requests in 5.00s, 1775751 responses
+  Throughput: 355.12K req/s
+  Bandwidth:  132.42MB/s
+  Status codes: 2xx=1775751, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 1775751 / 1775751 responses (100.0%)
+  Per-template: 617256,603111,555384
+  Per-template-ok: 617256,603111,555384
+### h-default.json@16.1
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-default.json@16.2
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-default.json@16.3
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-default.json@16.4
+Error: -c (16) must be at least -t (24); every thread needs at least one connection
+### h-default.json@64.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    167us    158us    223us    376us   1.08ms
+
+  1901928 requests in 5.00s, 1901928 responses
+  Throughput: 380.34K req/s
+  Bandwidth:  3.10GB/s
+  Status codes: 2xx=1901928, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 1901928 / 1901928 responses (100.0%)
+### h-default.json@64.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    157us    153us    211us    279us    364us
+
+  2023724 requests in 5.00s, 2023724 responses
+  Throughput: 404.71K req/s
+  Bandwidth:  3.29GB/s
+  Status codes: 2xx=2023724, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2023724 / 2023724 responses (100.0%)
+### h-default.json@64.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    158us    154us    213us    281us    360us
+
+  2013191 requests in 5.00s, 2013191 responses
+  Throughput: 402.60K req/s
+  Bandwidth:  3.28GB/s
+  Status codes: 2xx=2013191, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2013191 / 2013191 responses (100.0%)
+### h-default.json@64.4
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    158us    154us    213us    281us    363us
+
+  2011195 requests in 5.00s, 2011195 responses
+  Throughput: 402.19K req/s
+  Bandwidth:  3.27GB/s
+  Status codes: 2xx=2011195, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2011195 / 2011195 responses (100.0%)
+### h-default.json@4096.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   7.57ms   7.43ms   10.70ms   14.30ms   64.80ms
+
+  2717153 requests in 5.00s, 2717153 responses
+  Throughput: 543.37K req/s
+  Bandwidth:  4.42GB/s
+  Status codes: 2xx=2717153, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2717153 / 2717153 responses (100.0%)
+### h-default.json@4096.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   7.57ms   7.37ms   10.90ms   15.30ms   20.70ms
+
+  2710579 requests in 5.00s, 2710579 responses
+  Throughput: 542.07K req/s
+  Bandwidth:  4.41GB/s
+  Status codes: 2xx=2710579, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2710579 / 2710579 responses (100.0%)
+### h-default.json@4096.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   7.55ms   7.14ms   11.40ms   16.80ms   21.30ms
+
+  2714142 requests in 5.00s, 2714142 responses
+  Throughput: 542.78K req/s
+  Bandwidth:  4.42GB/s
+  Status codes: 2xx=2714142, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2714142 / 2714142 responses (100.0%)
+### h-default.json@4096.4
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   7.55ms   7.29ms   11.00ms   16.10ms   22.60ms
+
+  2721125 requests in 5.00s, 2721125 responses
+  Throughput: 544.17K req/s
+  Bandwidth:  4.43GB/s
+  Status codes: 2xx=2721125, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 2721125 / 2721125 responses (100.0%)

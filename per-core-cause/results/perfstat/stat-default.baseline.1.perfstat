@@ -1,0 +1,14 @@
+# started on Tue Nov 24 03:59:28 2026
+
+
+ Performance counter stats for process id '36842':
+
+          59813.90 msec task-clock                                                            
+               933      context-switches                                                      
+                10      cpu-migrations                                                        
+      171308224181      cycles                                                                
+       76648038251      instructions                                                          
+         235582390      cache-misses                                                          
+
+       2.506342529 seconds time elapsed
+

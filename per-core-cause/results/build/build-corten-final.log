@@ -1,0 +1,105 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.41kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/rust:1-trixie
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/debian:trixie-slim
+#3 DONE 0.8s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 2B done
+#4 DONE 0.0s
+
+#5 [build 1/5] FROM docker.io/library/rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8
+#5 resolve docker.io/library/rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8 0.0s done
+#5 DONE 0.0s
+
+#6 [stage-1 1/3] FROM docker.io/library/debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0
+#6 resolve docker.io/library/debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0 done
+#6 ...
+
+#7 [internal] load build context
+#7 transferring context: 11.19MB 0.1s done
+#7 DONE 0.1s
+
+#8 [build 2/5] RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libzstd-dev && rm -rf /var/lib/apt/lists/*
+#8 CACHED
+
+#9 [build 3/5] WORKDIR /src
+#9 CACHED
+
+#10 [build 4/5] COPY . .
+#10 DONE 0.1s
+
+#6 [stage-1 1/3] FROM docker.io/library/debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0
+#6 sha256:40748add9f4f6f944f334cbfc286590d6e93f60fb06f6ee7ffa1b894080ad861 6.29MB / 29.84MB 0.2s
+#6 sha256:40748add9f4f6f944f334cbfc286590d6e93f60fb06f6ee7ffa1b894080ad861 29.84MB / 29.84MB 0.3s done
+#6 extracting sha256:40748add9f4f6f944f334cbfc286590d6e93f60fb06f6ee7ffa1b894080ad861
+#6 extracting sha256:40748add9f4f6f944f334cbfc286590d6e93f60fb06f6ee7ffa1b894080ad861 0.6s done
+#6 DONE 1.0s
+
+#11 [stage-1 2/3] RUN apt-get update && apt-get install -y --no-install-recommends libzstd1 libjemalloc2 && rm -rf /var/lib/apt/lists/*
+#11 0.167 Get:1 http://deb.debian.org/debian trixie InRelease [140 kB]
+#11 0.177 Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+#11 0.177 Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+#11 0.191 Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9679 kB]
+#11 0.270 Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [1108 B]
+#11 0.272 Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [309 kB]
+#11 1.099 Fetched 10.2 MB in 1s (10.9 MB/s)
+#11 1.099 Reading package lists...
+#11 1.764 Reading package lists...
+#11 2.419 Building dependency tree...
+#11 2.556 Reading state information...
+#11 2.760 libzstd1 is already the newest version (1.5.7+dfsg-1).
+#11 2.760 libzstd1 set to manually installed.
+#11 2.760 The following NEW packages will be installed:
+#11 2.760   libjemalloc2
+#11 2.802 0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.
+#11 2.802 Need to get 274 kB of archives.
+#11 2.802 After this operation, 897 kB of additional disk space will be used.
+#11 2.802 Get:1 http://deb.debian.org/debian trixie/main amd64 libjemalloc2 amd64 5.3.0-3 [274 kB]
+#11 2.957 debconf: unable to initialize frontend: Dialog
+#11 2.957 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#11 2.957 debconf: falling back to frontend: Readline
+#11 2.957 debconf: unable to initialize frontend: Readline
+#11 2.957 debconf: (Can't locate Term/ReadLine.pm in @INC (you may need to install the Term::ReadLine module) (@INC entries checked: /etc/perl /usr/local/lib/x86_64-linux-gnu/perl/5.40.1 /usr/local/share/perl/5.40.1 /usr/lib/x86_64-linux-gnu/perl5/5.40 /usr/share/perl5 /usr/lib/x86_64-linux-gnu/perl-base /usr/lib/x86_64-linux-gnu/perl/5.40 /usr/share/perl/5.40 /usr/local/lib/site_perl) at /usr/share/perl5/Debconf/FrontEnd/Readline.pm line 8, <STDIN> line 1.)
+#11 2.957 debconf: falling back to frontend: Teletype
+#11 2.962 debconf: unable to initialize frontend: Teletype
+#11 2.962 debconf: (This frontend requires a controlling tty.)
+#11 2.962 debconf: falling back to frontend: Noninteractive
+#11 3.668 Fetched 274 kB in 0s (5280 kB/s)
+#11 3.681 Selecting previously unselected package libjemalloc2:amd64.
+#11 3.681 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 4950 files and directories currently installed.)
+#11 3.687 Preparing to unpack .../libjemalloc2_5.3.0-3_amd64.deb ...
+#11 3.689 Unpacking libjemalloc2:amd64 (5.3.0-3) ...
+#11 3.717 Setting up libjemalloc2:amd64 (5.3.0-3) ...
+#11 3.720 Processing triggers for libc-bin (2.41-12+deb13u5) ...
+#11 DONE 3.8s
+
+#12 [build 5/5] RUN --mount=type=cache,target=/var/cache/cargo     --mount=type=cache,id=bench-httparena-corten.target,target=/src/bench/httparena/corten/target,sharing=locked     find crates bench/httparena/corten -name target -prune -o -type f -exec touch {} +     && cargo build --manifest-path bench/httparena/corten/Cargo.toml --release     && cp bench/httparena/corten/target/release/httparena-corten /server
+#12 0.476     Updating crates.io index
+#12 0.649      Locking 86 packages to highest Rust 1.100.0 compatible versions
+#12 0.727    Compiling corten-macros v0.2.0 (/src/crates/corten-macros)
+#12 4.634    Compiling corten-run v0.2.0 (/src/crates/corten)
+#12 26.03    Compiling httparena-corten v0.1.0 (/src/bench/httparena/corten)
+#12 49.03     Finished `release` profile [optimized] target(s) in 48.56s
+#12 DONE 49.1s
+
+#13 [stage-1 3/3] COPY --from=build /server /server
+#13 DONE 0.0s
+
+#14 exporting to image
+#14 exporting layers
+#14 exporting layers 0.3s done
+#14 exporting manifest sha256:7a13b5cc5a34b0a1dcf84964e101040f9bf72cfa37a7df5d0a3cc7cb010810f9 done
+#14 exporting config sha256:f109be3f0655cb2821097e93b224b1789791c2ca752d4ecb29e4a2a7fb0e2e03 done
+#14 exporting attestation manifest sha256:dc0d05cebe3a78d297f6c21debf70532c93b4107baf9a5ef429fc37c01b1e635 done
+#14 exporting manifest list sha256:100af5d1275de298e52d57d8c932a1e4d24e8ce6f21e530fbf03c3628072f142 done
+#14 naming to docker.io/library/httparena-corten:final done
+#14 unpacking to docker.io/library/httparena-corten:final
+#14 unpacking to docker.io/library/httparena-corten:final 0.6s done
+#14 DONE 0.9s

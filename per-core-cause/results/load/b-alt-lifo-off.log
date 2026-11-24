@@ -1,0 +1,123 @@
+### b-alt-lifo-off.baseline.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.22ms   4.77ms   8.63ms   12.10ms   24.40ms
+
+  3938687 requests in 5.00s, 3938687 responses
+  Throughput: 787.65K req/s
+  Bandwidth:  293.71MB/s
+  Status codes: 2xx=3938687, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3938687 / 3938687 responses (100.0%)
+  Per-template: 1534948,1599742,803997
+  Per-template-ok: 1534948,1599742,803997
+### b-alt-lifo-off.baseline.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.25ms   4.82ms   8.68ms   12.20ms   14.40ms
+
+  3912597 requests in 5.00s, 3912597 responses
+  Throughput: 782.43K req/s
+  Bandwidth:  291.76MB/s
+  Status codes: 2xx=3912597, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3912597 / 3912597 responses (100.0%)
+  Per-template: 1522899,1591127,798571
+  Per-template-ok: 1522899,1591127,798571
+### b-alt-lifo-off.baseline.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.27ms   4.84ms   8.71ms   12.30ms   14.30ms
+
+  3901665 requests in 5.00s, 3901665 responses
+  Throughput: 780.26K req/s
+  Bandwidth:  290.95MB/s
+  Status codes: 2xx=3901665, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3901665 / 3901665 responses (100.0%)
+  Per-template: 1526974,1581658,793033
+  Per-template-ok: 1526974,1581658,793033
+### b-alt-lifo-off.async.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   42.28ms   17.50ms   69.90ms   121.70ms   548.20ms
+
+  7564186 requests in 10.00s, 7564186 responses
+  Throughput: 756.35K req/s
+  Bandwidth:  133.44MB/s
+  Status codes: 2xx=7564186, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 7564186 / 7564186 responses (100.0%)
+### b-alt-lifo-off.async.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   42.36ms   17.70ms   69.20ms   120.30ms   606.50ms
+
+  7550923 requests in 10.00s, 7550923 responses
+  Throughput: 755.01K req/s
+  Bandwidth:  133.21MB/s
+  Status codes: 2xx=7550923, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 7550923 / 7550923 responses (100.0%)
+### b-alt-lifo-off.async.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   42.52ms   17.60ms   69.40ms   120.70ms   890.40ms
+
+  7522845 requests in 10.00s, 7522845 responses
+  Throughput: 752.19K req/s
+  Bandwidth:  132.71MB/s
+  Status codes: 2xx=7522845, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 7522845 / 7522845 responses (100.0%)

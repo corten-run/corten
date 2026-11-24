@@ -1,0 +1,8 @@
+stat-default	async	1	518831	62.39ms	134.90ms	42.63	62	76/78/78	4xx=0 5xx=0 rc=0
+stat-default	baseline	1	745319	5.51ms	13.60ms	32.43	55	92/95/95	4xx=0 5xx=0 rc=0
+stat-percore	async	1	722782	44.38ms	53.00ms	33.23	66	94/96/96	4xx=0 5xx=0 rc=0
+stat-percore	baseline	1	775310	5.28ms	10.50ms	31.15	55	91/95/95	4xx=0 5xx=0 rc=0
+rec-default	async	1	533829	59.97ms	114.50ms	37.56	59	48/53/55	4xx=0 5xx=0 rc=0
+rec-default	baseline	1	735917	5.58ms	13.40ms	32.89	50	95/95/95	4xx=0 5xx=0 rc=0
+rec-percore	async	1	783773	40.95ms	51.80ms	30.72	63	95/96/96	4xx=0 5xx=0 rc=0
+rec-percore	baseline	1	794199	5.16ms	10.10ms	30.48	54	95/95/95	4xx=0 5xx=0 rc=0

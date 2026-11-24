@@ -1,0 +1,7 @@
+async 32000: 24 event loops, connections 32000 per loop 1255 1270 1273 1276 1295 1308 1316 1320 1323 1330 1331 1333 1335 1345 1347 1355 1357 1362 1364 1367 1374 1377 1379 1408
+baseline 4096: 24 event loops, connections 4096 per loop 153 153 153 156 158 159 160 161 162 162 170 171 171 173 175 176 177 177 178 181 184 192 193 201
+baseline 256: 24 event loops, connections 256 per loop 4 7 7 7 8 9 9 10 10 10 10 10 10 11 12 12 12 12 13 13 14 14 16 16
+baseline 64: 24 event loops, connections 64 per loop 0 0 1 1 1 2 2 2 2 2 2 2 2 3 3 3 3 3 4 4 5 5 6 6
+baseline 64 again: 24 event loops, connections 64 per loop 0 1 1 1 1 1 2 2 2 2 2 2 2 3 3 3 3 3 4 4 4 5 6 7
+baseline 24: 24 event loops, connections 24 per loop 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 2 2 2 2 3 4
+CONNS-DONE

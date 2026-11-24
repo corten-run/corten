@@ -1,0 +1,123 @@
+### b-gqi31.baseline.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.20ms   4.05ms   8.18ms   28.30ms   52.20ms
+
+  3951003 requests in 5.00s, 3951003 responses
+  Throughput: 790.12K req/s
+  Bandwidth:  294.63MB/s
+  Status codes: 2xx=3951003, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3951003 / 3951003 responses (100.0%)
+  Per-template: 1284148,1775898,890957
+  Per-template-ok: 1284148,1775898,890957
+### b-gqi31.baseline.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.18ms   4.10ms   8.21ms   28.00ms   37.50ms
+
+  3967948 requests in 5.00s, 3967948 responses
+  Throughput: 793.52K req/s
+  Bandwidth:  295.89MB/s
+  Status codes: 2xx=3967948, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3967948 / 3967948 responses (100.0%)
+  Per-template: 1284805,1787631,895512
+  Per-template-ok: 1284805,1787631,895512
+### b-gqi31.baseline.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.12ms   4.05ms   8.08ms   27.80ms   36.30ms
+
+  4008715 requests in 5.00s, 4008715 responses
+  Throughput: 801.65K req/s
+  Bandwidth:  298.93MB/s
+  Status codes: 2xx=4008715, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4008715 / 4008715 responses (100.0%)
+  Per-template: 1299094,1806358,903263
+  Per-template-ok: 1299094,1806358,903263
+### b-gqi31.async.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   57.69ms   52.80ms   89.10ms   95.40ms   534.00ms
+
+  5547448 requests in 10.00s, 5547448 responses
+  Throughput: 554.49K req/s
+  Bandwidth:  97.83MB/s
+  Status codes: 2xx=5547448, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5547448 / 5547448 responses (100.0%)
+### b-gqi31.async.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   57.75ms   52.70ms   88.40ms   95.20ms   546.40ms
+
+  5534723 requests in 10.00s, 5534723 responses
+  Throughput: 553.31K req/s
+  Bandwidth:  97.62MB/s
+  Status codes: 2xx=5534723, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5534723 / 5534723 responses (100.0%)
+### b-gqi31.async.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   58.44ms   53.20ms   89.90ms   95.50ms   98.50ms
+
+  5474382 requests in 10.00s, 5474382 responses
+  Throughput: 547.21K req/s
+  Bandwidth:  96.54MB/s
+  Status codes: 2xx=5474382, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5474382 / 5474382 responses (100.0%)

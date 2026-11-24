@@ -1,0 +1,5 @@
+c-default	pool	1	505481	8.13ms	10.40ms	44.59	70	89/91/91	4xx=0 5xx=0 rc=0 server=21.6c echo=7.6c
+c-default	pool	2	508049	8.07ms	10.40ms	44.96	69	87/92/92	4xx=0 5xx=0 rc=0 server=21.9c echo=7.7c
+c-default	pool	3	507451	8.08ms	10.30ms	44.86	69	91/92/92	4xx=0 5xx=0 rc=0 server=21.9c echo=7.7c
+c-default	spool	1	436347	9.40ms	15.20ms	54.81	62	93/96/96	4xx=0 5xx=0 rc=0 server=22.9c echo=6.8c
+c-default	spool	2	433760	9.46ms	15.30ms	55.07	62	94/96/97	4xx=0 5xx=0 rc=0 server=22.9c echo=6.7c

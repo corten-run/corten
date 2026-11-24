@@ -1,0 +1,220 @@
+### f-percore.baseline@64.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     83us     75us    134us    195us    228us
+
+  3809311 requests in 5.00s, 3809311 responses
+  Throughput: 761.78K req/s
+  Bandwidth:  284.06MB/s
+  Status codes: 2xx=3809311, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3809311 / 3809311 responses (100.0%)
+  Per-template: 1382214,1274666,1152431
+  Per-template-ok: 1382214,1274666,1152431
+### f-percore.baseline@64.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     87us     71us    151us    257us    340us
+
+  3648720 requests in 5.00s, 3648720 responses
+  Throughput: 729.68K req/s
+  Bandwidth:  272.09MB/s
+  Status codes: 2xx=3648720, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3648720 / 3648720 responses (100.0%)
+  Per-template: 1294147,1397516,957057
+  Per-template-ok: 1294147,1397516,957057
+### f-percore.baseline@64.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     86us     72us    149us    219us    320us
+
+  3673290 requests in 5.00s, 3673290 responses
+  Throughput: 734.59K req/s
+  Bandwidth:  273.92MB/s
+  Status codes: 2xx=3673290, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3673290 / 3673290 responses (100.0%)
+  Per-template: 1187984,1474224,1011082
+  Per-template-ok: 1187984,1474224,1011082
+### f-percore.baseline@64.4
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     77us     70us    116us    193us    232us
+
+  4079450 requests in 5.00s, 4079450 responses
+  Throughput: 815.82K req/s
+  Bandwidth:  304.21MB/s
+  Status codes: 2xx=4079450, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4079450 / 4079450 responses (100.0%)
+  Per-template: 1584934,1467774,1026742
+  Per-template-ok: 1584934,1467774,1026742
+### f-percore.baseline@64.5
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     64 (3/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency     86us     74us    158us    275us    364us
+
+  3662350 requests in 5.00s, 3662350 responses
+  Throughput: 732.41K req/s
+  Bandwidth:  273.11MB/s
+  Status codes: 2xx=3662350, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3662350 / 3662350 responses (100.0%)
+  Per-template: 1446886,1355649,859815
+  Per-template-ok: 1446886,1355649,859815
+### f-percore.baseline@256.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     256 (11/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    282us    258us    452us    714us    891us
+
+  4520296 requests in 5.00s, 4520296 responses
+  Throughput: 903.98K req/s
+  Bandwidth:  337.08MB/s
+  Status codes: 2xx=4520296, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4520296 / 4520296 responses (100.0%)
+  Per-template: 1730064,1686988,1103244
+  Per-template-ok: 1730064,1686988,1103244
+### f-percore.baseline@256.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     256 (11/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    279us    265us    390us    658us    768us
+
+  4571392 requests in 5.00s, 4571392 responses
+  Throughput: 914.19K req/s
+  Bandwidth:  340.89MB/s
+  Status codes: 2xx=4571392, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4571392 / 4571392 responses (100.0%)
+  Per-template: 1696738,1710061,1164593
+  Per-template-ok: 1696738,1710061,1164593
+### f-percore.baseline@256.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     256 (11/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    278us    261us    414us    677us    790us
+
+  4589195 requests in 5.00s, 4589195 responses
+  Throughput: 917.75K req/s
+  Bandwidth:  342.22MB/s
+  Status codes: 2xx=4589195, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4589195 / 4589195 responses (100.0%)
+  Per-template: 1734497,1784748,1069950
+  Per-template-ok: 1734497,1784748,1069950
+### f-percore.baseline@256.4
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     256 (11/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    281us    261us    434us    694us    828us
+
+  4530265 requests in 5.00s, 4530265 responses
+  Throughput: 905.97K req/s
+  Bandwidth:  337.82MB/s
+  Status codes: 2xx=4530265, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4530265 / 4530265 responses (100.0%)
+  Per-template: 1690653,1727650,1111962
+  Per-template-ok: 1690653,1727650,1111962
+### f-percore.baseline@256.5
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     256 (11/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency    281us    250us    459us    607us   1.03ms
+
+  4542075 requests in 5.00s, 4542075 responses
+  Throughput: 908.33K req/s
+  Bandwidth:  338.70MB/s
+  Status codes: 2xx=4542075, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4542075 / 4542075 responses (100.0%)
+  Per-template: 1650841,1765811,1125423
+  Per-template-ok: 1650841,1765811,1125423

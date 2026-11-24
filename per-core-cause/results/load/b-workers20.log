@@ -1,0 +1,123 @@
+### b-workers20.baseline.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.98ms   5.32ms   10.10ms   14.90ms   52.80ms
+
+  3442231 requests in 5.00s, 3442231 responses
+  Throughput: 688.38K req/s
+  Bandwidth:  256.69MB/s
+  Status codes: 2xx=3442231, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3442231 / 3442231 responses (100.0%)
+  Per-template: 1295437,1429277,717517
+  Per-template-ok: 1295437,1429277,717517
+### b-workers20.baseline.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.86ms   5.23ms   10.10ms   14.80ms   18.60ms
+
+  3501751 requests in 5.00s, 3501751 responses
+  Throughput: 700.26K req/s
+  Bandwidth:  261.12MB/s
+  Status codes: 2xx=3501751, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3501751 / 3501751 responses (100.0%)
+  Per-template: 1307456,1461436,732859
+  Per-template-ok: 1307456,1461436,732859
+### b-workers20.baseline.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.89ms   5.25ms   10.10ms   14.70ms   18.30ms
+
+  3483145 requests in 5.00s, 3483145 responses
+  Throughput: 696.55K req/s
+  Bandwidth:  259.73MB/s
+  Status codes: 2xx=3483145, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3483145 / 3483145 responses (100.0%)
+  Per-template: 1304643,1451364,727138
+  Per-template-ok: 1304643,1451364,727138
+### b-workers20.async.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   62.09ms   60.30ms   102.90ms   110.80ms   115.80ms
+
+  5152366 requests in 10.00s, 5152366 responses
+  Throughput: 515.03K req/s
+  Bandwidth:  90.87MB/s
+  Status codes: 2xx=5152366, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5152366 / 5152366 responses (100.0%)
+### b-workers20.async.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   63.38ms   61.70ms   105.90ms   112.10ms   115.50ms
+
+  5047724 requests in 10.00s, 5047724 responses
+  Throughput: 504.72K req/s
+  Bandwidth:  89.05MB/s
+  Status codes: 2xx=5047724, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5047724 / 5047724 responses (100.0%)
+### b-workers20.async.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   62.26ms   60.40ms   103.30ms   111.90ms   536.80ms
+
+  5138806 requests in 10.00s, 5138806 responses
+  Throughput: 513.66K req/s
+  Bandwidth:  90.63MB/s
+  Status codes: 2xx=5138806, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5138806 / 5138806 responses (100.0%)

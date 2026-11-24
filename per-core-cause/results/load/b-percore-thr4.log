@@ -1,0 +1,57 @@
+### b-percore-thr4.async.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   39.66ms   35.30ms   49.00ms   77.50ms   144.70ms
+
+  8073425 requests in 10.00s, 8073425 responses
+  Throughput: 807.27K req/s
+  Bandwidth:  142.43MB/s
+  Status codes: 2xx=8073425, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 8073425 / 8073425 responses (100.0%)
+### b-percore-thr4.async.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   39.32ms   35.40ms   48.50ms   65.80ms   93.60ms
+
+  8136985 requests in 10.00s, 8136985 responses
+  Throughput: 813.62K req/s
+  Bandwidth:  143.55MB/s
+  Status codes: 2xx=8136985, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 8136985 / 8136985 responses (100.0%)
+### b-percore-thr4.async.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   39.57ms   35.60ms   50.90ms   65.20ms   94.20ms
+
+  8085455 requests in 10.00s, 8085455 responses
+  Throughput: 808.46K req/s
+  Bandwidth:  142.64MB/s
+  Status codes: 2xx=8085455, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 8085455 / 8085455 responses (100.0%)

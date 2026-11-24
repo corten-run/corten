@@ -1,0 +1,123 @@
+### b-ioev4096.baseline.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.21ms   4.75ms   8.61ms   12.20ms   29.10ms
+
+  3947406 requests in 5.00s, 3947406 responses
+  Throughput: 789.38K req/s
+  Bandwidth:  294.35MB/s
+  Status codes: 2xx=3947406, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3947406 / 3947406 responses (100.0%)
+  Per-template: 1547387,1597444,802575
+  Per-template-ok: 1547387,1597444,802575
+### b-ioev4096.baseline.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.20ms   4.81ms   8.66ms   12.10ms   14.00ms
+
+  3946350 requests in 5.00s, 3946350 responses
+  Throughput: 789.19K req/s
+  Bandwidth:  294.28MB/s
+  Status codes: 2xx=3946350, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3946350 / 3946350 responses (100.0%)
+  Per-template: 1549777,1596722,799851
+  Per-template-ok: 1549777,1596722,799851
+### b-ioev4096.baseline.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     4096 (171/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Templates: 3
+  Expected:  200
+  Duration:  5s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   5.25ms   4.87ms   8.76ms   12.30ms   14.50ms
+
+  3907082 requests in 5.00s, 3907082 responses
+  Throughput: 781.32K req/s
+  Bandwidth:  291.35MB/s
+  Status codes: 2xx=3907082, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3907082 / 3907082 responses (100.0%)
+  Per-template: 1541890,1575550,789642
+  Per-template-ok: 1541890,1575550,789642
+### b-ioev4096.async.1
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   59.11ms   55.00ms   93.00ms   98.30ms   574.00ms
+
+  5412480 requests in 10.00s, 5412480 responses
+  Throughput: 541.18K req/s
+  Bandwidth:  95.48MB/s
+  Status codes: 2xx=5412480, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5412480 / 5412480 responses (100.0%)
+### b-ioev4096.async.2
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   59.02ms   54.80ms   92.80ms   98.30ms   964.90ms
+
+  5408692 requests in 10.00s, 5408692 responses
+  Throughput: 540.64K req/s
+  Bandwidth:  95.38MB/s
+  Status codes: 2xx=5408692, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5408692 / 5408692 responses (100.0%)
+### b-ioev4096.async.3
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   59.55ms   55.30ms   93.40ms   97.90ms   100.60ms
+
+  5372950 requests in 10.00s, 5372950 responses
+  Throughput: 537.05K req/s
+  Bandwidth:  94.75MB/s
+  Status codes: 2xx=5372950, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 5372950 / 5372950 responses (100.0%)

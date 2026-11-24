@@ -1,0 +1,397 @@
+LOST 3013 events!
+LOST 14 events!
+LOST 9 events!
+LOST 5387 events!
+LOST 15 events!
+LOST 8 events!
+LOST 3 events!
+LOST 1 events!
+LOST 1 events!
+LOST 1 events!
+LOST 1 events!
+LOST 8192 events!
+LOST 11635 events!
+LOST 11 events!
+LOST 1 events!
+LOST 1 events!
+LOST 15221 events!
+LOST 20 events!
+LOST 6 events!
+LOST 16 events!
+LOST 6 events!
+LOST 19389 events!
+LOST 29 events!
+LOST 1 events!
+LOST 1 events!
+LOST 1 events!
+LOST 23403 events!
+LOST 16 events!
+LOST 1 events!
+LOST 14 events!
+LOST 3 events!
+LOST 24777 events!
+LOST 27405 events!
+LOST 25 events!
+LOST 1 events!
+LOST 13 events!
+LOST 7 events!
+LOST 30555 events!
+LOST 23935 events!
+LOST 53 events!
+LOST 36237 events!
+LOST 39 events!
+LOST 4 events!
+LOST 1 events!
+LOST 1 events!
+LOST 40241 events!
+LOST 30 events!
+LOST 1 events!
+LOST 43918 events!
+LOST 17 events!
+LOST 2 events!
+LOST 4 events!
+LOST 1 events!
+LOST 1 events!
+LOST 44047 events!
+LOST 1461 events!
+LOST 59028 events!
+LOST 53350 events!
+LOST 45408 events!
+LOST 50200 events!
+LOST 60745 events!
+LOST 1 events!
+LOST 57983 events!
+LOST 56104 events!
+LOST 67374 events!
+LOST 63102 events!
+LOST 63322 events!
+LOST 63765 events!
+LOST 61730 events!
+LOST 58631 events!
+LOST 58947 events!
+LOST 58438 events!
+LOST 57052 events!
+LOST 52327 events!
+LOST 47078 events!
+LOST 52284 events!
+LOST 49563 events!
+
+ Summary of events:
+
+ corten-clock (249187), 2 events, 0.0%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   clock_nanosleep        1      0     0.000     0.000     0.000     0.000      0.00%
+
+
+ jemalloc_bg_thd (249167), 8 events, 0.0%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   madvise                2      0     0.066     0.003     0.033     0.063     91.53%
+   futex                  2      0     0.002     0.000     0.001     0.002    100.00%
+
+
+ jemalloc_bg_thd (249158), 30 events, 0.0%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   madvise               13      0     0.327     0.002     0.025     0.057     23.67%
+   futex                  2      0     0.002     0.000     0.001     0.002    100.00%
+
+
+ jemalloc_bg_thd (249168), 66 events, 0.0%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   madvise               31      0     0.926     0.002     0.030     0.072     12.14%
+   futex                  2      0     0.002     0.000     0.001     0.002    100.00%
+
+
+ jemalloc_bg_thd (249160), 70 events, 0.0%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   madvise               33      0     1.464     0.002     0.044     0.345     22.19%
+   futex                  2      0     0.002     0.000     0.001     0.002    100.00%
+
+
+ arena-timer-0 (249159), 9865 events, 2.6%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   futex               4781   1119   220.424     0.001     0.046     3.699      7.81%
+   clock_nanosleep      151      0   168.091     0.000     1.113     3.002      1.87%
+
+
+ tokio-rt-worker (249164), 11803 events, 3.1%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   recvfrom            2901      0   586.648     0.004     0.202   555.694     94.72%
+   writev              2730      0    43.308     0.010     0.016     0.049      0.42%
+   futex                222     17    11.551     0.001     0.052     2.105     20.99%
+   epoll_wait            44      0     1.146     0.006     0.026     0.082      9.89%
+
+
+ tokio-rt-worker (249186), 11886 events, 3.1%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              2931      0   495.068     0.009     0.169   448.323     90.55%
+   recvfrom            2797      0    31.559     0.004     0.011     0.080      0.58%
+   futex                170     21     4.103     0.001     0.024     0.186     10.86%
+   epoll_wait            42      0     1.156     0.005     0.028     0.060      7.13%
+
+
+ tokio-rt-worker (249185), 12175 events, 3.2%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              3112      0   891.077     0.009     0.286   421.524     66.87%
+   recvfrom            2708      0    27.760     0.003     0.010     0.054      0.64%
+   futex                217     12     8.240     0.002     0.038     2.056     26.38%
+   epoll_wait            47      0     1.468     0.008     0.031     0.146     11.79%
+
+
+ tokio-rt-worker (249163), 12233 events, 3.2%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              2922      0   536.431     0.009     0.184   490.778     91.49%
+   recvfrom            2889      0    31.529     0.003     0.011     0.074      0.51%
+   futex                253     25    25.561     0.001     0.101     3.004     19.73%
+   epoll_wait            51      0     1.473     0.005     0.029     0.177     14.13%
+
+
+ tokio-rt-worker (249183), 12333 events, 3.2%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              2791      0   399.590     0.009     0.143   355.938     89.07%
+   recvfrom            3126      0   389.813     0.004     0.125   356.366     91.42%
+   futex                201     17     7.353     0.001     0.037     2.157     29.93%
+   epoll_wait            47      0     1.341     0.009     0.029     0.064      7.65%
+
+
+ tokio-rt-worker (249184), 12339 events, 3.2%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   recvfrom            3175      0   424.694     0.004     0.134   390.263     91.89%
+   writev              2752      0    43.400     0.010     0.016     0.070      0.46%
+   futex                191     15     5.133     0.002     0.027     0.264     10.06%
+   epoll_wait            48      0     1.316     0.006     0.027     0.082      9.36%
+
+
+ tokio-rt-worker (249162), 12569 events, 3.3%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              2505      0    39.001     0.008     0.016     0.066      0.47%
+   recvfrom            3536      0    36.263     0.003     0.010     0.073      0.54%
+   futex                180      9     8.714     0.002     0.048     2.081     27.20%
+   epoll_wait            59      0     2.041     0.004     0.035     0.315     16.77%
+
+
+ tokio-rt-worker (249161), 12674 events, 3.3%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   recvfrom            3206      0   523.423     0.004     0.163   493.328     94.25%
+   writev              2909      0    38.895     0.008     0.013     0.069      0.60%
+   futex                168     11     4.760     0.001     0.028     0.644     16.10%
+   epoll_wait            47      0     1.728     0.007     0.037     0.452     25.05%
+
+
+ tokio-rt-worker (249182), 12772 events, 3.3%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   recvfrom            3238      0   519.669     0.003     0.160   484.602     93.25%
+   writev              2787      0    43.898     0.009     0.016     0.159      0.73%
+   futex                308     28    22.921     0.001     0.074     2.167     14.74%
+   epoll_wait            51      0     1.708     0.006     0.033     0.272     15.90%
+
+
+ tokio-rt-worker (249169), 13452 events, 3.5%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   recvfrom            2864      0   592.976     0.003     0.207   565.330     95.34%
+   writev              3551      0    51.807     0.008     0.015     0.849      1.68%
+   futex                258     16    30.579     0.001     0.119     2.953     18.55%
+   epoll_wait            50      0     1.383     0.007     0.028     0.092      9.91%
+
+
+ tokio-rt-worker (249165), 13461 events, 3.5%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              3143      0   621.109     0.008     0.198   572.106     92.11%
+   recvfrom            3338      0   608.160     0.004     0.182   572.118     94.07%
+   futex                196     13     6.278     0.002     0.032     1.612     26.24%
+   epoll_wait            50      0     1.336     0.004     0.027     0.151     12.60%
+
+
+ tokio-rt-worker (249166), 14673 events, 3.8%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              3325      0   635.050     0.009     0.191   583.408     91.87%
+   recvfrom            3742      0    39.319     0.003     0.011     0.051      0.52%
+   futex                211     16    10.277     0.002     0.049     2.021     26.07%
+   epoll_wait            55      0     1.774     0.005     0.032     0.202     12.62%
+
+
+ tokio-rt-worker (249180), 16279 events, 4.2%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   futex                276     23   549.651     0.001     1.991   534.148     97.17%
+   writev              3770      0   328.830     0.008     0.087   269.071     81.82%
+   recvfrom            4028      0    45.169     0.004     0.011     0.137      0.54%
+   epoll_wait            64      0     2.224     0.007     0.035     0.285     14.02%
+
+
+ tokio-rt-worker (249170), 16596 events, 4.3%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   futex                243     16   621.700     0.001     2.558   612.799     98.56%
+   writev              4195      0    64.143     0.008     0.015     0.056      0.36%
+   recvfrom            3794      0    40.619     0.003     0.011     0.114      0.58%
+   epoll_wait            63      0     1.757     0.003     0.028     0.089      8.60%
+
+
+ tokio-rt-worker (249181), 16687 events, 4.3%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              3522      0    56.768     0.010     0.016     0.163      0.62%
+   recvfrom            4518      0    49.308     0.004     0.011     0.094      0.46%
+   futex                233     25     6.408     0.001     0.028     0.577     12.90%
+   epoll_wait            70      0     2.256     0.007     0.032     0.435     19.32%
+
+
+ tokio-rt-worker (249173), 18766 events, 4.9%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              4991      0   686.114     0.008     0.137   610.497     88.98%
+   recvfrom            4056      0    92.626     0.002     0.023    50.761     54.79%
+   futex                268     20    10.279     0.002     0.038     2.664     27.70%
+   epoll_wait            65      0     1.557     0.003     0.024     0.082      7.85%
+
+
+ tokio-rt-worker (249171), 18824 events, 4.9%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              4882      0   684.973     0.011     0.140   610.422     89.11%
+   recvfrom            4149      0    43.618     0.004     0.011     0.068      0.45%
+   futex                297     21     9.742     0.002     0.033     1.270     15.31%
+   epoll_wait            79      0     1.955     0.005     0.025     0.078      7.30%
+
+
+ tokio-rt-worker (249178), 18852 events, 4.9%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   recvfrom            3866      0   257.829     0.003     0.067   217.617     84.40%
+   writev              5210      0    78.570     0.008     0.015     0.169      0.38%
+   futex                282     24     9.283     0.001     0.033     1.216     17.20%
+   epoll_wait            65      0     1.876     0.002     0.029     0.132      9.98%
+
+
+ tokio-rt-worker (249176), 19128 events, 5.0%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              4786      0   218.639     0.008     0.046   146.030     66.78%
+   recvfrom            4440      0    46.128     0.004     0.010     0.052      0.40%
+   futex                256     35    11.081     0.001     0.043     2.716     29.10%
+   epoll_wait            78      0     1.884     0.002     0.024     0.083      8.52%
+
+
+ tokio-rt-worker (249179), 19171 events, 5.0%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              4502      0   607.522     0.008     0.135   537.139     88.41%
+   recvfrom            4719      0    51.837     0.004     0.011     0.065      0.41%
+   futex                288     29     6.905     0.001     0.024     0.369      9.60%
+   epoll_wait            73      0     2.099     0.006     0.029     0.110      6.88%
+
+
+ tokio-rt-worker (249172), 19309 events, 5.0%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              4348      0   704.976     0.009     0.162   610.986     86.75%
+   recvfrom            4945      0    51.151     0.003     0.010     0.088      0.45%
+   futex                273     26     7.143     0.001     0.026     0.413     10.99%
+   epoll_wait            86      0     2.358     0.002     0.027     0.279     12.35%
+
+
+ tokio-rt-worker (249177), 19393 events, 5.0%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              4683      0   253.600     0.008     0.054   181.682     71.64%
+   recvfrom            4665      0    48.598     0.004     0.010     0.047      0.37%
+   futex                270     29     9.367     0.001     0.035     1.030     18.11%
+   epoll_wait            77      0     1.735     0.002     0.023     0.070      6.73%
+
+
+ tokio-rt-worker (249174), 19741 events, 5.1%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   writev              5217      0   750.562     0.008     0.144   600.872     80.73%
+   recvfrom            4300      0    37.169     0.003     0.009     0.049      0.55%
+   futex                280     35    10.862     0.001     0.039     2.151     27.65%
+   epoll_wait            70      0     2.044     0.002     0.029     0.360     18.35%
+
+
+ tokio-rt-worker (249175), 20069 events, 5.2%
+
+   syscall            calls  errors  total       min       avg       max       stddev
+                                     (msec)    (msec)    (msec)    (msec)        (%)
+   --------------- --------  ------ -------- --------- --------- ---------     ------
+   recvfrom            5105      0   159.407     0.003     0.031   105.788     66.36%
+   writev              4553      0    69.568     0.008     0.015     0.112      0.41%
+   futex                295     27    12.747     0.001     0.043     2.150     24.41%
+   epoll_wait            80      0     2.536     0.002     0.032     0.402     16.20%
+
+

@@ -1,0 +1,50 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 70K of event 'sched:sched_switch'
+# Event count (approx.): 70208
+#
+# Overhead  Command        
+# ........  ...............
+#
+   100.00%  tokio-rt-worker
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --99.98%--futex_do_wait
+                          __futex_wait
+                          futex_wait
+                          do_futex
+                          __x64_sys_futex
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          syscall
+                          |          
+                          |--88.08%--tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                          |          std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+                          |          <std::thread::lifecycle::spawn_unchecked<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                          |          <std::sys::thread::unix::Thread>::new::thread_start
+                          |          
+                          |--6.33%--<tokio::runtime::time::handle::Handle>::reregister
+                          |          <tokio::time::sleep::Sleep as core::future::future::Future>::poll
+                          |          corten::page::waited_until::<http::response::Response<corten::body::Body>>
+                          |          corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closure#0}::{closure#1}>::{closure#0}
+                          |          
+                          |--4.56%--<tokio::runtime::time::entry::TimerEntry as core::ops::drop::Drop>::drop
+                          |          core::ptr::drop_glue::<core::option::Option<tokio::runtime::Timer>>
+                          |          corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closure#0}::{closure#1}>::{closure#0}
+                          |          <corten::app::At<corten::app::Plain<()>> as corten::router::Stages>::run::{closure#0}
+                          |          
+                           --0.77%--<tokio::runtime::time::Driver>::park_internal
+                                     <tokio::runtime::scheduler::multi_thread::worker::Context>::park_internal
+                                     tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                                     std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+     0.00%  corten-clock   
+#
+# (Cannot load tips.txt file, please install perf!)
+#

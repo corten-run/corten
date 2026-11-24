@@ -1,0 +1,84 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 7K of event 'sched:sched_switch'
+# Event count (approx.): 7582
+#
+# Overhead  Command        
+# ........  ...............
+#
+    99.99%  tokio-rt-worker
+            |
+            ---perf_trace_sched_switch
+               __schedule
+               schedule
+               |          
+                --99.53%--futex_do_wait
+                          __futex_wait
+                          futex_wait
+                          do_futex
+                          __x64_sys_futex
+                          x64_sys_call
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          |          
+                           --99.37%--syscall
+                                     |          
+                                     |--77.74%--<tokio::runtime::scheduler::multi_thread::handle::Handle>::next_remote_task
+                                     |          tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                                     |          std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+                                     |          <std::thread::lifecycle::spawn_unchecked<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                                     |          <std::sys::thread::unix::Thread>::new::thread_start
+                                     |          0x7bb1d08138bb
+                                     |          
+                                     |--15.66%--<tokio::runtime::scheduler::multi_thread::worker::Core>::maintenance
+                                     |          tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                                     |          std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+                                     |          <std::thread::lifecycle::spawn_unchecked<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                                     |          <std::sys::thread::unix::Thread>::new::thread_start
+                                     |          0x7bb1d08138bb
+                                     |          
+                                     |--2.68%--<tokio::sync::notify::NotifiedProject>::poll_notified
+                                     |          <tokio::sync::watch::Receiver<core::option::Option<corten::app::Closing>>>::wait_for::<<core::option::Option<corten::app::Closing>>::is_some>::{closure#0}
+                                     |          corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}
+                                     |          tokio::runtime::task::raw::poll::<corten::app::serve_listener<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>
+                                     |          <tokio::runtime::scheduler::multi_thread::worker::Context>::run_task
+                                     |          tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                                     |          std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+                                     |          <std::thread::lifecycle::spawn_unchecked<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                                     |          <std::sys::thread::unix::Thread>::new::thread_start
+                                     |          0x7bb1d08138bb
+                                     |          
+                                     |--2.06%--<tokio::runtime::scheduler::multi_thread::queue::Local<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>::push_overflow::<tokio::runtime::scheduler::multi_thread::handle::Handle>
+                                     |          <tokio::runtime::scheduler::multi_thread::handle::Handle>::schedule_task
+                                     |          tokio::runtime::task::waker::wake_by_val
+                                     |          |          
+                                     |          |--1.04%--<tokio::runtime::time_alt::wake_queue::WakeQueue>::wake_all
+                                     |          |          <tokio::runtime::scheduler::multi_thread::worker::Context>::park_internal
+                                     |          |          tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                                     |          |          std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+                                     |          |          <std::thread::lifecycle::spawn_unchecked<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                                     |          |          <std::sys::thread::unix::Thread>::new::thread_start
+                                     |          |          0x7bb1d08138bb
+                                     |          |          
+                                     |           --1.02%--<tokio::runtime::io::scheduled_io::ScheduledIo>::wake
+                                     |                     <tokio::runtime::io::driver::Driver>::turn
+                                     |                     <tokio::runtime::driver::Driver>::park_timeout
+                                     |                     <tokio::runtime::scheduler::multi_thread::worker::Context>::park_internal
+                                     |                     tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                                     |                     std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+                                     |                     <std::thread::lifecycle::spawn_unchecked<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                                     |                     <std::sys::thread::unix::Thread>::new::thread_start
+                                     |                     0x7bb1d08138bb
+                                     |          
+                                      --1.19%--tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+                                                std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>
+                                                <std::thread::lifecycle::spawn_unchecked<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                                                <std::sys::thread::unix::Thread>::new::thread_start
+                                                0x7bb1d08138bb
+     0.01%  corten-clock   
+#
+# (Cannot load tips.txt file, please install perf!)
+#
