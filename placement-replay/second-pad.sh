@@ -2,14 +2,15 @@
 # second-pad.sh: a second pad in every placement of both sides, sized by one rule (after the
 # kit's build.sh and replay-all.sh, which leaves the unpadded links' maps in /w/maps):
 #   sh second-pad.sh <kit directory> <scripts directory> <output directory> <crate>,<crate>...
-# The rule: a placement with a first pad of p bytes has a second pad last in .text, sized so
-# that .data begins p mod 64 bytes further into a 64-byte line than in its side's unpadded link.
+# The rule: a placement with a first pad of p bytes has a second pad last in .text, of one of
+# SIZES, the smallest that puts .data's offset in a 64-byte line at its side's unpadded link's
+# plus p, mod 64.
 # A second pad of n bytes is one function nothing calls, corten_layout_pad2, in a section of its
 # own aligned to 16 bytes, which the ordering file does not name and relink-two.mjs gives last
 # on the link line. For every placement of the plan (the base with each pad of PADS_P and
 # PADS_Q, the head with each pad of PADS_P) this links the side with the first pad and a second
 # pad of each of SIZES, reads from each link's map how much further into a line .data begins,
-# keeps the first size that puts it where the rule says, checks that link with
+# keeps the first size that puts it where the rule says (the smallest: SIZES rises), checks that link with
 # replay.mjs --last-pad <size> --data-further rule, and links it once more without the map to
 # compare the two binaries. A placement with no such size stops the script. It ends with
 # second-pad-negative.sh: what replay.mjs must refuse, on real links.

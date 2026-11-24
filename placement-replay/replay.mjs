@@ -3,6 +3,7 @@
 //   node replay.mjs <map of the unpadded link A> <map of the padded link B> <pad bytes> [--own <crate>,<crate>...]
 //        [--last-pad <bytes> [--data-further <bytes>|rule]] [--pad-section <name>] [--last-pad-section <name>]
 //   node replay.mjs --facts <map of the unpadded link A> [--own <crate>,<crate>...]
+//   node replay.mjs --stated <map of the unpadded link A>
 // LLD lays the input sections of an output section in order, each at the first multiple of its
 // own alignment at or after the end of the one before it. The checks, on .text:
 //   1. B's input sections are the pad's and then A's, in A's order, each with A's size and
@@ -23,10 +24,11 @@
 //      other output section that holds code (.init, .fini, the .plt sections, one named .text.*
 //      or one that holds an input section named .text*) holds one;
 //   7. with --data-further, .data begins that many bytes further into a 64-byte line in B than
-//      in A (0 for a second pad that leaves the data's place as the unpadded link has it); with
+//      in A, mod 64 (0 for a second pad that leaves the data's place as the unpadded link has it); with
 //      --data-further rule, the first pad's size mod 64, the plan's rule for a second pad: the
 //      data then takes the place in a line that the first pad alone gives it on a side with no
-//      section aligned beyond STEP bytes.
+//      section aligned beyond STEP bytes. Under the rule the second pad is one of SIZES (16, 32,
+//      48 and 64 bytes), and another size is refused wherever it puts the data.
 // A function is one of a crate's by its symbol alone: its section's mangled name holds the
 // crate's name as an identifier (its length before it), or a symbol's printed name holds it as a
 // path. The input file is not asked: under thin LTO it names a code unit of the program.
@@ -35,6 +37,10 @@
 // builds of one commit by one toolchain print the same line): the count of .text's input
 // sections by alignment, each section aligned beyond STEP bytes, the first of them, the number of
 // sections and of symbols before it, and the functions from it on by input file.
+// --stated prints, as one line of JSON, the three facts a plan states of a side and nothing that
+// changes with code before them: each section aligned beyond STEP bytes with its alignment, the
+// first of them, and the functions from it on by input file, names as --facts writes them. Two
+// builds whose three facts are equal print the same line.
 // Prints what it found and, last, a line of JSON; exits 1 when a check fails.
 import { readFileSync } from "node:fs";
 
@@ -45,13 +51,14 @@ const padName = opt("--pad-section") ?? ".text.corten_layout_pad";
 const lastName = opt("--last-pad-section") ?? ".text.corten_layout_pad2";
 const lastArg = opt("--last-pad"), furtherArg = opt("--data-further");
 const lastPad = lastArg === undefined ? null : Number(lastArg);
-const factsOnly = argv[0] === "--facts";
+const statedOnly = argv[0] === "--stated";
+const factsOnly = argv[0] === "--facts" || statedOnly;
 if (factsOnly) argv.shift();
 const [mapA, mapB, padArg] = argv;
-const pad = Number(padArg), STEP = 16, LIMIT = 64, LINE = 64;
+const pad = Number(padArg), STEP = 16, LIMIT = 64, LINE = 64, SIZES = [16, 32, 48, 64];
 const further = furtherArg === undefined ? null : furtherArg === "rule" ? pad % LINE : Number(furtherArg);
 if (!mapA || (!factsOnly && (!mapB || !Number.isInteger(pad))) || (lastPad !== null && !Number.isInteger(lastPad)) || (further !== null && (lastPad === null || !Number.isInteger(further))))
-  throw new Error("usage: node replay.mjs <map A> <map B> <pad bytes> [--own a,b] [--last-pad <bytes> [--data-further <bytes>|rule]] | node replay.mjs --facts <map A> [--own a,b]");
+  throw new Error("usage: node replay.mjs <map A> <map B> <pad bytes> [--own a,b] [--last-pad <bytes> [--data-further <bytes>|rule]] | node replay.mjs --facts <map A> [--own a,b] | node replay.mjs --stated <map A>");
 
 const read = (file) => {
   const out = [];
@@ -114,6 +121,10 @@ const noReading = [];
 if (largestOfAll > LIMIT) noReading.push(`an input section of .text is aligned to ${largestOfAll} bytes, beyond ${LIMIT}`);
 if (ownFrom.length) noReading.push(`${ownFrom.length} input sections from the first one aligned beyond ${STEP} bytes on hold a function of ${own.join(" or ")}: ${ownFrom.slice(0, 3).join(", ")}`);
 if (ownElsewhere.length) noReading.push(`${ownElsewhere.length} input sections outside .text hold a function of ${own.join(" or ")}: ${ownElsewhere.slice(0, 3).join(", ")}`);
+if (statedOnly) {
+  console.log(JSON.stringify({ beyond: big.map((s) => ({ section: short(s.id), align: s.align })), first: facts.first, from: facts.from }));
+  process.exit(0);
+}
 if (factsOnly) {
   for (const w of noReading) console.error(`replay.mjs: ${w}`);
   console.log(JSON.stringify(facts));
@@ -132,6 +143,7 @@ if (!padFirst) why.push(`the first input section of .text is ${first.id}, ${firs
 const last = lastPad === null ? null : tB.inputs[tB.inputs.length - 1];
 const padLast = last === null ? null : last.id.endsWith(`:(${lastName})`) && last.size === lastPad && tB.inputs.length > 1;
 if (padLast === false) why.push(`the last input section of .text is ${last.id}, ${last.size} bytes, not a second pad of ${lastPad}`);
+if (furtherArg === "rule" && !SIZES.includes(lastPad)) why.push(`a second pad of ${lastPad} bytes is not one of the sizes the rule allows (${SIZES.join(", ")})`);
 const rest = tB.inputs.slice(1, last === null ? undefined : -1);
 let same = rest.length === tA.inputs.length;
 if (same) for (let i = 0; i < rest.length; i++) { const a = tA.inputs[i], b = rest[i]; if (a.id !== b.id || a.size !== b.size || a.align !== b.align) { same = false; why.push(`input section ${i} differs: ${a.id} (${a.size}, ${a.align}) against ${b.id} (${b.size}, ${b.align})`); break; } }

@@ -74,10 +74,22 @@ passed
 == the real link of the head with a first pad of 25824 and a second of 16, .data where the rule says
 passed
 == the real link of the head with a first pad of 320 and a second of 8, which the rule does not take
+replay.mjs: a second pad of 8 bytes is not one of the sizes the rule allows (16, 32, 48, 64)
 replay.mjs: .data begins 16 bytes further into a 64-byte line than in the unpadded link, not 0
 refused
 == the real link of the head with a first pad of 320 and a second of 48, which it does
 passed
 == base, a pad of 320 bytes and a second pad of 48 last (a written map: its .text only)
 passed
+== head, a pad of 320 bytes and a second pad of 48 last, by the rule (a written map)
+passed
+== head, a pad of 320 bytes and a second pad of 112 last, by the rule (a written map)
+replay.mjs: a second pad of 112 bytes is not one of the sizes the rule allows (16, 32, 48, 64)
+refused
+== the three facts of the base
+{"beyond":[],"first":null,"from":{}}
+== the three facts of the head
+{"beyond":[{"section":"liblibdeflate_sys.rlib(deflate_compress.o):(.text.compute_length_counts)","align":32},{"section":"liblibdeflate_sys.rlib(deflate_compress.o):(.text.calculate_min_match_len)","align":32},{"section":"liblibdeflate_sys.rlib(deflate_compress.o):(.text.deflate_set_costs_from_codes)","align":64},{"section":"liblibdeflate_sys.rlib(deflate_compress.o):(.text.sort_symbols.constprop.0)","align":64},{"section":"liblibdeflate_sys.rlib(deflate_compress.o):(.text.deflate_precompute_huffman_header)","align":64},{"section":"liblibdeflate_sys.rlib(deflate_compress.o):(.text.deflate_flush
+== the head's unpadded link and its placement with a pad of 320 bytes state the same three facts
+the same line, 3352 bytes
 SYNTHETIC-DONE

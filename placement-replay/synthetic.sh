@@ -6,8 +6,10 @@
 # It passes a placement of each side at each place in a line, and of the head with a second pad
 # last, and refuses: the wrong pad; the base's link against the head's placement; a second pad
 # the check is not told of; the wrong second pad size; a placement without the second pad it is
-# told of; a second pad that is not last; a function after the first section aligned beyond 16
-# bytes whose symbol names an own crate; and a function of an own crate in .init. The places
+# told of; a second pad that is not last; a second pad of a size the rule does not allow; a
+# function after the first section aligned beyond 16 bytes whose symbol names an own crate; and
+# a function of an own crate in .init. It prints the three facts a plan states of each side, and
+# checks that a placement's map, with a pad before them, states the same three. The places
 # these maps give the sections after .text are synth.mjs's assumption, so --data-further is
 # tested on real links: all of them by last-pad.sh and second-pad.sh, and the six kept here
 # at the end, four of them with the second pad the rule asks.
@@ -67,4 +69,18 @@ t "the real link of the head with a first pad of 320 and a second of 8, which th
 pass "the real link of the head with a first pad of 320 and a second of 48, which it does" $W/head.map $W/real-l48.map 320 --own $OWN --last-pad 48 --data-further rule
 node $S/synth.mjs $W/base.map $W/base-p320-l48.map 320 --last-pad 48 >/dev/null
 pass "base, a pad of 320 bytes and a second pad of 48 last (a written map: its .text only)" $W/base.map $W/base-p320-l48.map 320 --own $OWN --last-pad 48
+# The rule allows a second pad of 16, 32, 48 or 64 bytes. On a written map, where .data is as
+# synth.mjs assumes, a second pad of 112 bytes is refused for its size alone; 48 bytes, which
+# the same map takes, passes.
+node $S/synth.mjs $W/head.map $W/head-p320-l112.map 320 --last-pad 112 >/dev/null
+node $S/synth.mjs $W/head.map $W/head-p320-l48.map 320 --last-pad 48 >/dev/null
+pass "head, a pad of 320 bytes and a second pad of 48 last, by the rule (a written map)" $W/head.map $W/head-p320-l48.map 320 --own $OWN --last-pad 48 --data-further rule
+t "head, a pad of 320 bytes and a second pad of 112 last, by the rule (a written map)" $W/head.map $W/head-p320-l112.map 320 --own $OWN --last-pad 112 --data-further rule
+# The three facts a plan states of a side, and that code before them does not change the line:
+# the head's placement with a pad of 320 bytes states what its unpadded link states.
+for side in base head; do echo "== the three facts of the $side"; node $S/replay.mjs --stated $W/$side.map | cut -c1-600; done
+node $S/replay.mjs --stated $W/head.map >$W/stated-a.json
+node $S/replay.mjs --stated $W/head-p320.map >$W/stated-b.json
+echo "== the head's unpadded link and its placement with a pad of 320 bytes state the same three facts"
+if cmp -s $W/stated-a.json $W/stated-b.json; then echo "the same line, $(wc -c <$W/stated-a.json | tr -d " ") bytes"; else echo "DIFFERENT, which is wrong"; exit 1; fi
 echo SYNTHETIC-DONE

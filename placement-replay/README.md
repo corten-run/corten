@@ -5,11 +5,38 @@ placement plan's fifth point): how a placement run checks a build that links cod
 16 bytes. Read and run on 2026-11-24. Nothing here counted a cycle: these are layouts, read from
 recorded files and from links run again, and placement medians read from earlier runs' reports.
 
-This commit's four ancestors hold earlier versions of these files. What this one changes:
+This commit's five ancestors hold earlier versions of these files. What this one changes, with
+node alone on the files kept here (nothing was built or linked for it):
+
+1. Under the rule the second pad is one of four sizes, 16, 32, 48 or 64 bytes, the smallest
+   that puts `.data` where the rule says. `replay.mjs --data-further rule` now refuses any
+   other size wherever it puts the data; before, a second pad of 112 bytes behind a first pad
+   of 320 passed, since it leaves the head's `.data` in its place. `synthetic.sh` has that
+   case on a written map and was run again (`results/synthetic.txt`: 22 passed, 11 refused).
+   `second-pad.sh` tries the sizes in rising order and keeps the first that fits, so the
+   smallest; its comments say so now, and it was not run again.
+2. The rule is worded as an offset: `.data`'s offset in a 64-byte line is the unpadded link's
+   plus the first pad's size, mod 64. "Begins further into a line by the first pad's size mod
+   64", read literally, is false where the sum passes 64 (27 of the 90 placements); the check
+   always took the difference mod 64.
+3. A plan states three facts of a side: each input section of `.text` aligned beyond 16 bytes
+   with its alignment, the first of them, and the functions from it on by symbol and object
+   file. The count of `.text`'s input sections by alignment is no longer one: it changes with
+   every change to the code. `replay.mjs --stated` prints the three as one line of JSON, file
+   names without their directories and without cargo's hashes, so two builds whose three
+   facts are equal print the same line (`results/stated-base.json`, `stated-head.json`;
+   `synthetic.sh` checks that the head's placement with a pad of 320 bytes prints the line
+   its unpadded link prints). `--facts` prints what it did.
+4. `second-pad-after.mjs` (`results/second-pad-after.txt`) reads, from the 90 kept
+   placements' files, how far each output section after `.text` moved (below).
+5. One sentence of this file is corrected: `.init` and `.fini` moved 8 bytes less than the
+   data with every second pad that is a multiple of 16, 64 included.
+
+What the commit before this one changed, kept here:
 
 1. The rule it stands behind: a second pad in every placement of both sides, sized so that
-   `.data` begins further into a 64-byte line than in the side's unpadded link by the first
-   pad's size mod 64. `second-pad.sh` is new and links every placement of the kit's plan
+   `.data`'s offset in a 64-byte line is the unpadded link's plus the first pad's size, mod
+   64. `second-pad.sh` links every placement of the kit's plan
    that way; `replay.mjs` takes `--data-further rule` for that place; `relink-two.mjs` can
    link without the map, to compare the two binaries.
 2. The measurement of the data's place that the commit before this one described is no
@@ -27,7 +54,7 @@ This commit's four ancestors hold earlier versions of these files. What this one
    `results/build.out`, `results/replay-all.out`, `results/last-pad*` and
    `results/maps.sha256` are the third build's, as the commit before this one left them.
 
-What the commit before this one changed, kept here:
+What the commit before that one changed, kept here:
 
 1. `replay.mjs` decides whose a function is by its symbol alone, no longer by its input file;
    refuses a side with a function of a crate named as its own in another output section that
@@ -105,7 +132,8 @@ below). The checks:
    an input section named `.text*`) holds one;
 7. with `--last-pad`, one more section follows the unpadded link's, the second pad's, of the
    size given; with `--data-further`, `.data` begins that many bytes further into a 64-byte
-   line than in the unpadded link.
+   line than in the unpadded link, mod 64; with `--data-further rule`, the first pad's size
+   mod 64 further, and the second pad is one of 16, 32, 48 and 64 bytes.
 
 The base's `.text` has 3,442 input sections (3,215 aligned to 16 bytes, 23 to 8, 42 to 4 and 162
 to 1) and all moved by exactly the pad in its 60 placements (206,520 of 206,520), with the 3,514
@@ -160,9 +188,10 @@ pad of 48, 56 or 112 bytes leaves it at its place in a 64-byte line (moved by 64
 8, 64, 72 or 128 puts it 16 bytes further; 16, 24 or 80, 32 further; 32, 40 or 96, 48 further.
 So the place does not follow the pad's size alone: the sections between `.text` and `.data`
 round it. `.plt` moves as the data does (from 0 to 16, 32 and 48). `.init` and `.fini` are
-moved too, but not always as far: with second pads of 16, 32 and 48 bytes they moved 8 bytes
-less than the data did (with 16, `.init` went from 24 to 48 where `.data` went from 32 to 0),
-and with 8 as far. With sizes 48, 8, 16 and 32 and a first pad at each place in a
+moved too, but not always as far: with each second pad that is a multiple of 16 bytes (16,
+32, 48, 64, 80, 96, 112 and 128) they moved 8 bytes less than the data did (with 16, `.init`
+went from 24 to 48 where `.data` went from 32 to 0), and with 8, 24, 40, 56 and 72 as far.
+With sizes 48, 8, 16 and 32 and a first pad at each place in a
 line (320, 15120, 25824 and 40624 bytes), all sixteen links have `.data` where the size put it
 with the first pad of 320, since on this head a first pad moves the end of `.text` by a
 multiple of 64. `results/last-pad-negative.txt`: `replay.mjs` refuses a placement with a
@@ -174,10 +203,10 @@ bytes a first pad alone can move the data by 32, which these links do not show.
 
 ## A second pad in every placement of both sides
 
-The rule: a placement with a first pad of p bytes has a second pad last in `.text`, sized so
-that `.data` begins p mod 64 bytes further into a 64-byte line than in its side's unpadded
-link, which is where a first pad alone puts it on a side with no section aligned beyond 16
-bytes. `second-pad.sh` (`results/second-pad.txt`, one file a placement under
+The rule: a placement with a first pad of p bytes has a second pad last in `.text`, of 16,
+32, 48 or 64 bytes, the smallest that puts `.data`'s offset in a 64-byte line at its side's
+unpadded link's plus p, mod 64, which is where a first pad alone puts it on a side with no
+section aligned beyond 16 bytes. `second-pad.sh` (`results/second-pad.txt`, one file a placement under
 `results/second-pad/`) does that for every placement of the kit's plan on the fourth build:
 the base with each of its 60 pads and the head with each of its 30. It links each placement
 with second pads of 16, 32, 48 and 64 bytes (360 links), reads from each link's map how far
@@ -197,7 +226,16 @@ a second pad of 48 bytes in all 60 placements (16, 16, 15 and 13 of them with fi
 0, 16, 32 and 48 mod 64 (8, 8, 7 and 7 placements). The 90 binaries have 90 SHA-256s
 (`results/second-pad.sha256`; their maps' are in `results/second-pad-maps.sha256`), and
 four of the maps are kept: `results/base-p15120-l48.map.gz`, `base-p25824-l48.map.gz`,
-`head-p15120-l64.map.gz` and `head-p25824-l16.map.gz`.
+`head-p15120-l64.map.gz` and `head-p25824-l16.map.gz`. Exactly one of the four sizes fits
+each placement (`results/second-pad.txt` lists what each size did).
+
+After `.text` (`results/second-pad-after.txt`, by `second-pad-after.mjs`): in all 90
+placements every output section from `.plt` to `.bss` moved as `.data` did, and `.init` and
+`.fini` 8 bytes less. The base's `.data` moved by its first pad plus 64 bytes in all 60. The
+head's moved by its first pad plus 64 bytes in 23 and by its first pad alone in the 7 whose
+first pad is 32 mod 64, so in those 7 the two sides' data, at the same offset in a line,
+lies 64 bytes apart in the page against where their unpadded links have it. The base takes
+one second-pad size, so its A/A, base against base, has the same second pad in both lists.
 
 The sizes were found by trying, not worked out. The arithmetic that gives the same answer
 here: a second pad of s bytes aligned to 16 begins at the end of `.text` rounded up to 16,
@@ -226,7 +264,12 @@ by its symbol, and an own function in `.init`. It ends on the six real links wit
 pad that are kept, where `.data` begins included: the two of `last-pad.sh`
 (`results/head-p320-l48.map.gz` and `head-p320-l8.map.gz`) and the four of `second-pad.sh`
 above, each checked with `--data-further rule`, which also refuses the link with a second pad
-of 8 bytes behind a first pad of 320. In all it passes 21 and refuses 10. `results/synth-compare.txt`: for four first pads on each side and four second
+of 8 bytes behind a first pad of 320, for its size and for where it puts the data. On written
+maps of the head with a first pad of 320 it then passes a second pad of 48 bytes by the rule
+and refuses one of 112 for its size alone. It prints the three facts `--stated` gives of
+each side, and checks that the head's placement with a pad of 320 bytes prints the line its
+unpadded link prints. In all it passes 22 and refuses 11.
+`results/synth-compare.txt`: for four first pads on each side and four second
 pads on the head, every line of `.text` that `synth.mjs` writes is the real link's map's, so
 the synthetic maps are what LLD made. What `synth.mjs` writes for the sections after `.text`
 is an assumption and is not compared.

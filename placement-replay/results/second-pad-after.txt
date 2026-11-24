@@ -1,0 +1,8 @@
+base: 60 placements; second pad sizes {"48":60}
+base: .data moved by the first pad plus (first pad mod 64: bytes -> placements) {"0:64":16,"32:64":15,"16:64":16,"48:64":13}
+base: .init moved less than .data by (bytes -> placements) {"8":60}; .fini {"8":60}
+base: every other output section after .text (.plt, .tdata, .tbss, .fini_array, .init_array, .data.rel.ro, .dynamic, .got, .got.plt, .relro_padding, .tm_clone_table, .data, .bss) moved as .data did in 60 placements
+head: 30 placements; second pad sizes {"16":7,"32":7,"48":8,"64":8}
+head: .data moved by the first pad plus (first pad mod 64: bytes -> placements) {"0:64":8,"32:0":7,"16:64":8,"48:64":7}
+head: .init moved less than .data by (bytes -> placements) {"8":30}; .fini {"8":30}
+head: every other output section after .text (.plt, .tdata, .tbss, .fini_array, .init_array, .data.rel.ro, .dynamic, .got, .got.plt, .relro_padding, .tm_clone_table, .data, .bss) moved as .data did in 30 placements
