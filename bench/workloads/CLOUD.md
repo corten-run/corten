@@ -399,6 +399,22 @@ The direct CLI renders that same closed controller stage and the provider's
 allowlisted code-specific detail or HTTP status. It never prints a native error's
 message, stack, response or accessor. These labels identify the stopped operation,
 not its cause or successful cleanup; the retained state still governs recovery.
+For the common-bootstrap marker read, `controller-launch` can also report
+`Bootstrap marker: LOCAL-LABEL` (the same closed detail in the fleet receipt's
+`providerDiagnostic` field, under code `bootstrap-marker`):
+
+- `local-control-uncertain`: the local SSH invocation did not provide a valid
+  process result. Its process tree is not proved gone.
+- `remote-completion-unconfirmed`: the local process result did not prove the
+  registered remote command's completion. This does not say whether it ran.
+- `acknowledged-exit-refused`: an acknowledged exit other than ready (0) or
+  not yet ready (3).
+- `marker-invalid`: an acknowledged ready read did not pass marker validation.
+
+The first two retain custody and never poll again. Only an acknowledged exit 3
+uses the existing bounded poll. These labels do not attest to monitor
+registration, establish a cause for r64, or grant a recovery action.
+
 For `offline-never-started` and `create-errored-contradicted` it adds fixed text
 naming the pinned route, `--collect --unused-bootstrap-known-hosts`; for
 `create-contradiction-unpublished` it names the custody step and the
