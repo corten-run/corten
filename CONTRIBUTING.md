@@ -123,10 +123,12 @@ uses `scripts/benchmark-kernel-ci.sh` with fresh delegated systemd test units an
 one owned, digest-pinned Docker fixture. It exercises real process accounting and
 cancellation, matched Docker PID/cgroup observations and a private-PID-namespace
 negative. Any skipped or cancelled native control fails the job. Before the driver,
-the hosted job adds Google's Docker Hub cache as the runner daemon's registry mirror
-(`scripts/ci-docker-hub-mirror.sh`), so a cached pull does not count against Docker Hub's
-anonymous limit. The daemon falls back to Docker Hub when the cache lacks the image, and the
-image keeps its Hub reference and digest. The driver
+the hosted job adds Google's Docker Hub cache to the runner daemon's registry mirrors
+(`scripts/ci-docker-hub-mirror.sh`), after any it already lists, and reloads Docker without
+restarting it. The daemon tries its mirrors before falling back to Docker Hub, so a pull the
+cache serves does not count against Docker Hub's anonymous limit; a miss still goes to Docker
+Hub. The image keeps its Hub reference and digest. If Docker does not list the cache within a
+minute, the step puts back any configuration it changed and fails. The driver
 never edits a Docker configuration. A static coverage
 check rejects any other omitted core test file. Browser CI runs every
 portable saved-verifier test, excluding only the optional historical `retained real w28`

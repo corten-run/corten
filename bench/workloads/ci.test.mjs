@@ -1,13 +1,14 @@
 // CI coverage checks, not native workload qualification.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync,
+  rmSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { addMirror, mirror, withMirror } from "../../scripts/ci-docker-hub-mirror.mjs";
+import { addMirror, mirror, publish, restoreConfig, withMirror } from "../../scripts/ci-docker-hub-mirror.mjs";
 
 const root = new URL("../../", import.meta.url);
 const packageJSON = JSON.parse(readFileSync(new URL("package.json", root), "utf8"));
@@ -132,75 +133,239 @@ test("Docker Hub cache merge keeps every daemon setting and adds the mirror once
   assert.deepEqual(JSON.parse(withMirror(JSON.stringify(other)) ?? ""), { ...other, "registry-mirrors": ["https://cache.example", mirror] });
   for (const listed of [[mirror], [`${mirror}/`], ["https://cache.example", mirror]])
     assert.equal(withMirror(JSON.stringify({ "registry-mirrors": listed, debug: true })), null, String(listed));
-  for (const bad of ["", "{", "{} {}", "[]", "null", "3", '{"registry-mirrors":"https://mirror.gcr.io"}', '{"registry-mirrors":[1]}'])
+  for (const bad of ["", "{", "{} {}", "[]", "null", "3", '{"registry-mirrors":"https://mirror.gcr.io"}', '{"registry-mirrors":[1]}',
+    '{"registry-mirrors":null}', '{"debug":true,"registry-mirrors":null}'])
     assert.throws(() => withMirror(bad), bad);
 });
 
-test("Docker Hub cache merge writes the daemon config only when it adds the mirror, and never over a malformed one", () => {
+test("Docker Hub cache merge writes the daemon config only when it adds the mirror, saves the original and restores it", () => {
   const folder = mkdtempSync(join(tmpdir(), "corten-docker-mirror-"));
   try {
-    const absent = join(folder, "absent.json");
-    assert.equal(addMirror(absent), true);
+    const configs = join(folder, "docker"), saves = join(folder, "saved");
+    mkdirSync(configs); mkdirSync(saves);
+    const absent = join(configs, "absent.json");
+    assert.equal(addMirror(absent, join(saves, "absent")), true);
     assert.deepEqual(JSON.parse(readFileSync(absent, "utf8")), { "registry-mirrors": [mirror] });
-    const existing = join(folder, "existing.json");
-    writeFileSync(existing, '{"exec-opts":["native.cgroupdriver=cgroupfs"],"registry-mirrors":["https://cache.example"]}');
-    assert.equal(addMirror(existing), true);
+    restoreConfig(absent, join(saves, "absent"));
+    assert.ok(!existsSync(absent), "restoring a config that was absent removes it");
+    const existing = join(configs, "existing.json");
+    const original = '{"exec-opts":["native.cgroupdriver=cgroupfs"],"registry-mirrors":["https://cache.example"]}';
+    writeFileSync(existing, original);
+    assert.equal(addMirror(existing, join(saves, "existing")), true);
     const merged = readFileSync(existing, "utf8");
     assert.deepEqual(JSON.parse(merged), { "exec-opts": ["native.cgroupdriver=cgroupfs"], "registry-mirrors": ["https://cache.example", mirror] });
-    assert.equal(addMirror(existing), false);
+    assert.equal(addMirror(existing, join(saves, "again")), false);
+    assert.ok(!existsSync(join(saves, "again")), "an unchanged config saves nothing");
     assert.equal(readFileSync(existing, "utf8"), merged, "a second run leaves the file as it is");
-    const malformed = join(folder, "malformed.json"), text = '{"exec-opts": [';
-    writeFileSync(malformed, text);
-    assert.throws(() => addMirror(malformed), SyntaxError);
-    assert.equal(readFileSync(malformed, "utf8"), text);
-    assert.deepEqual(readdirSync(folder).sort(), ["absent.json", "existing.json", "malformed.json"], "no temporary file is left");
+    restoreConfig(existing, join(saves, "existing"));
+    assert.equal(readFileSync(existing, "utf8"), original, "restoring puts back the original bytes");
+    for (const [name, text] of [["malformed.json", '{"exec-opts": ['], ["null.json", '{"registry-mirrors":null}']]) {
+      const path = join(configs, name);
+      writeFileSync(path, text);
+      assert.throws(() => addMirror(path, join(saves, name)), name);
+      assert.equal(readFileSync(path, "utf8"), text);
+      assert.ok(!existsSync(join(saves, name)), `${name} saves nothing`);
+    }
+    assert.deepEqual(readdirSync(configs).sort(), ["existing.json", "malformed.json", "null.json"], "no temporary file is left");
   } finally {
     assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true });
   }
 });
 
-test("Docker Hub cache step restarts Docker only for a change and fails unless Docker lists the mirror", {
-  skip: process.platform !== "linux" && "requires the Linux CI shell",
-}, () => {
-  const folder = mkdtempSync(join(tmpdir(), "corten-docker-mirror-step-"));
+test("Docker Hub cache merge removes its staged file when publishing fails", () => {
+  const folder = mkdtempSync(join(tmpdir(), "corten-docker-mirror-publish-"));
   try {
-    const bin = join(folder, "bin"), log = join(folder, "calls"), listed = join(folder, "listed");
-    // Stand-ins record their calls; docker info lists what the test says the daemon loaded.
-    const stub = (name, body) => { const path = join(bin, name); writeFileSync(path, `#!/bin/bash\nprintf '%s\\n' "${name} $*" >> '${log}'\n${body}\n`); chmodSync(path, 0o755); };
-    mkdirSync(bin);
-    stub("systemctl", "exit 0");
-    stub("docker", `[[ "$*" == *RegistryConfig.Mirrors* ]] && cat '${listed}'; exit 0`);
-    const script = fileURLToPath(new URL("scripts/ci-docker-hub-mirror.sh", root));
-    const run = (config, loaded) => {
-      writeFileSync(listed, loaded); writeFileSync(log, "");
-      const result = spawnSync("/bin/bash", [script, process.execPath, config], { encoding: "utf8", timeout: 30000,
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
-      assert.equal(result.error, undefined);
-      return { status: result.status, calls: readFileSync(log, "utf8").split("\n").filter(Boolean), stderr: result.stderr };
-    };
-    const config = join(folder, "docker", "daemon.json");
-    const first = run(config, "https://mirror.gcr.io/\n");
-    assert.equal(first.status, 0, first.stderr);
-    assert.deepEqual(first.calls, ["systemctl restart docker", "docker info",
-      "docker info --format {{range .RegistryConfig.Mirrors}}{{println .}}{{end}}"]);
-    assert.deepEqual(JSON.parse(readFileSync(config, "utf8")), { "registry-mirrors": [mirror] });
-    const again = run(config, "https://mirror.gcr.io/\n");
-    assert.equal(again.status, 0, again.stderr);
-    assert.ok(!again.calls.some((call) => call.startsWith("systemctl")), "an unchanged config does not restart Docker");
-    for (const loaded of ["", "https://cache.example/\n", "https://mirror.gcr.io.example/\n"]) {
-      const result = run(config, loaded);
-      assert.notEqual(result.status, 0, loaded);
-      assert.match(result.stderr, /does not list https:\/\/mirror\.gcr\.io/);
-    }
-    const malformed = join(folder, "malformed.json");
-    writeFileSync(malformed, "{");
-    const refused = run(malformed, "https://mirror.gcr.io/\n");
-    assert.notEqual(refused.status, 0);
-    assert.deepEqual(refused.calls, [], "a malformed config stops the step before Docker is touched");
-    assert.equal(readFileSync(malformed, "utf8"), "{");
+    const target = join(folder, "daemon.json");
+    mkdirSync(join(target, "occupied"), { recursive: true });
+    assert.throws(() => publish(target, Buffer.from("{}\n"), { mode: 0o644, uid: 0, gid: 0 }));
+    assert.deepEqual(readdirSync(folder), ["daemon.json"], "the staged file is removed");
   } finally {
     assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true });
   }
+});
+
+/**
+ * Runs scripts/ci-docker-hub-mirror.sh against stand-in systemctl, docker and kill on PATH.
+ * The stand-ins record their calls; docker info lists what the test says the daemon loaded.
+ */
+function mirrorStep() {
+  const folder = mkdtempSync(join(tmpdir(), "corten-docker-mirror-step-"));
+  const bin = join(folder, "bin"), state = join(folder, "state"), log = join(folder, "calls");
+  mkdirSync(bin); mkdirSync(state);
+  const stub = (name, body) => {
+    const path = join(bin, name);
+    writeFileSync(path, `#!/bin/bash\nstate='${state}'\nprintf '%s\\n' "${name} $*" >> '${log}'\n${body}\n`);
+    chmodSync(path, 0o755);
+  };
+  stub("systemctl", `case "$*" in
+  "show --property=MainPID --value docker") cat "$state/mainpid" ;;
+  "show --property=ExecStart --value docker") cat "$state/execstart" ;;
+  "show --property=ExecReload --value docker") cat "$state/execreload" ;;
+  "reload docker") n=$(cat "$state/reloadfail"); if (( n > 0 )); then echo $((n - 1)) > "$state/reloadfail"; exit 1; fi ;;
+  *) exit 3 ;;
+esac`);
+  stub("docker", `if [[ -e $state/stuck ]]; then trap '' TERM; sleep 30; fi
+[[ "$*" == *RegistryConfig.Mirrors* ]] && cat "$state/listed"; exit 0`);
+  stub("kill", "exit 0");
+  const script = fileURLToPath(new URL("scripts/ci-docker-hub-mirror.sh", root));
+  const set = (name, text) => writeFileSync(join(state, name), text);
+  /**
+   * @param {string} config
+   * @param {{ listed?: string, execStart?: string, execReload?: string, reloadFail?: number, stuck?: boolean,
+   *   pid?: number, deadline?: number, umask?: string }} [options]
+   */
+  const run = (config, options = {}) => {
+    set("listed", options.listed ?? "https://mirror.gcr.io/\n");
+    set("execstart", options.execStart ?? "{ path=/usr/bin/dockerd ; argv[]=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock ; }\n");
+    set("execreload", options.execReload ?? "{ path=/bin/kill ; argv[]=/bin/kill -s HUP $MAINPID ; }\n");
+    set("reloadfail", String(options.reloadFail ?? 0));
+    set("mainpid", `${options.pid ?? process.pid}\n`);
+    rmSync(join(state, "stuck"), { force: true });
+    if (options.stuck) set("stuck", "");
+    writeFileSync(log, "");
+    const started = performance.now();
+    const result = spawnSync("/bin/bash", ["-c", `umask ${options.umask ?? "022"}; exec /bin/bash "$0" "$@"`, script, process.execPath, config], {
+      encoding: "utf8", timeout: 60000,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CI_DOCKER_MIRROR_DEADLINE: String(options.deadline ?? 2), CI_DOCKER_MIRROR_CALL: "1" },
+    });
+    assert.equal(result.error, undefined);
+    return { status: result.status, stderr: result.stderr, stdout: result.stdout, seconds: (performance.now() - started) / 1000,
+      calls: readFileSync(log, "utf8").split("\n").filter(Boolean) };
+  };
+  const cleanup = () => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true }); };
+  return { folder, run, cleanup };
+}
+
+const linuxShell = { skip: process.platform !== "linux" && "requires the Linux CI shell" };
+const root0 = process.getuid?.() === 0;
+const info = "docker info --format {{range .RegistryConfig.Mirrors}}{{println .}}{{end}}";
+const touchesDocker = (calls) => calls.filter((call) => !call.startsWith("systemctl show "));
+
+test("Docker Hub cache step reloads Docker only for a change, never restarts it, and fails unless Docker lists the mirror", linuxShell, () => {
+  const { folder, run, cleanup } = mirrorStep();
+  try {
+    const config = join(folder, "docker", "daemon.json");
+    const first = run(config);
+    assert.equal(first.status, 0, first.stderr);
+    assert.deepEqual(touchesDocker(first.calls), ["systemctl reload docker", info]);
+    assert.ok(!first.calls.some((call) => /restart|stop|start /.test(call)), first.calls.join("\n"));
+    assert.match(first.stdout, /lists https:\/\/mirror\.gcr\.io among its registry mirrors/);
+    assert.doesNotMatch(first.stdout, /first/);
+    assert.deepEqual(JSON.parse(readFileSync(config, "utf8")), { "registry-mirrors": [mirror] });
+    const again = run(config);
+    assert.equal(again.status, 0, again.stderr);
+    assert.deepEqual(touchesDocker(again.calls), [info], "an unchanged config does not reload Docker");
+    for (const listed of ["", "https://cache.example/\n", "https://mirror.gcr.io.example/\n"]) {
+      const result = run(config, { listed });
+      assert.notEqual(result.status, 0, listed);
+      assert.match(result.stderr, /does not list https:\/\/mirror\.gcr\.io as a registry mirror within 2 s/);
+    }
+    const hup = join(folder, "hup.json");
+    const signalled = run(hup, { execReload: "" });
+    assert.equal(signalled.status, 0, signalled.stderr);
+    assert.deepEqual(touchesDocker(signalled.calls), [`kill -s HUP ${process.pid}`, info], "a unit without ExecReload gets SIGHUP");
+  } finally { cleanup(); }
+});
+
+test("Docker Hub cache step restores the original config and reloads again when activation fails", linuxShell, () => {
+  const { folder, run, cleanup } = mirrorStep();
+  try {
+    const config = join(folder, "daemon.json"), original = '{"debug": false}\n';
+    writeFileSync(config, original);
+    if (root0) chownSync(config, 65534, 65534);
+    chmodSync(config, 0o664);
+    const refused = run(config, { reloadFail: 1, umask: "077" });
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /could not reload Docker/);
+    assert.match(refused.stderr, /restored .*daemon\.json/);
+    assert.deepEqual(touchesDocker(refused.calls), ["systemctl reload docker", "systemctl reload docker"]);
+    assert.equal(readFileSync(config, "utf8"), original);
+    const kept = statSync(config);
+    assert.equal(kept.mode & 0o7777, 0o664);
+    if (root0) assert.deepEqual([kept.uid, kept.gid], [65534, 65534]);
+    const unlisted = run(config, { listed: "" });
+    assert.notEqual(unlisted.status, 0);
+    assert.equal(readFileSync(config, "utf8"), original, "a mirror Docker never lists is taken back out");
+    assert.deepEqual(touchesDocker(unlisted.calls).at(-1), "systemctl reload docker");
+    const absent = join(folder, "absent", "daemon.json");
+    const created = run(absent, { reloadFail: 1 });
+    assert.notEqual(created.status, 0);
+    assert.ok(!existsSync(absent), "a config the step created is removed again");
+    assert.deepEqual(readdirSync(folder).filter((name) => name.includes(".tmp")), []);
+  } finally { cleanup(); }
+});
+
+test("Docker Hub cache step gives up on a stuck Docker client at its elapsed deadline", linuxShell, () => {
+  const { folder, run, cleanup } = mirrorStep();
+  try {
+    const config = join(folder, "daemon.json");
+    const stuck = run(config, { stuck: true, deadline: 3 });
+    assert.notEqual(stuck.status, 0);
+    assert.match(stuck.stderr, /within 3 s/);
+    assert.ok(stuck.seconds < 15, `took ${stuck.seconds} s, well under the job's 10 minutes`);
+    assert.ok(!existsSync(config), "the config is restored to its absence");
+  } finally { cleanup(); }
+});
+
+test("Docker Hub cache step refuses a daemon whose command line sets a registry mirror, before writing", linuxShell, () => {
+  const { folder, run, cleanup } = mirrorStep();
+  const flagged = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)", "--", "--registry-mirror=https://cache.example"], { stdio: "ignore" });
+  try {
+    const config = join(folder, "daemon.json");
+    for (const [name, options] of [
+      ["unit", { execStart: "{ path=/usr/bin/dockerd ; argv[]=/usr/bin/dockerd -H fd:// --registry-mirror https://cache.example ; }\n" }],
+      ["process", { pid: flagged.pid }]]) {
+      const result = run(config, options);
+      assert.notEqual(result.status, 0, name);
+      assert.match(result.stderr, /--registry-mirror/, name);
+      assert.deepEqual(touchesDocker(result.calls), [], name);
+      assert.ok(!existsSync(config), `${name}: nothing is written`);
+    }
+  } finally { flagged.kill(); cleanup(); }
+});
+
+test("Docker Hub cache step keeps the config's owner and mode under a restrictive umask", linuxShell, () => {
+  const { folder, run, cleanup } = mirrorStep();
+  try {
+    const config = join(folder, "daemon.json");
+    writeFileSync(config, "{}\n");
+    if (root0) chownSync(config, 65534, 65534);
+    chmodSync(config, 0o664);
+    const kept = run(config, { umask: "077" });
+    assert.equal(kept.status, 0, kept.stderr);
+    const stat = statSync(config);
+    assert.equal(stat.mode & 0o7777, 0o664);
+    if (root0) assert.deepEqual([stat.uid, stat.gid], [65534, 65534]);
+    const fresh = join(folder, "fresh.json");
+    const created = run(fresh, { umask: "077" });
+    assert.equal(created.status, 0, created.stderr);
+    const made = statSync(fresh);
+    assert.equal(made.mode & 0o7777, 0o644);
+    if (root0) assert.deepEqual([made.uid, made.gid], [0, 0]);
+  } finally { cleanup(); }
+});
+
+test("Docker Hub cache step refuses a symlinked, malformed or explicitly null config before touching Docker", linuxShell, () => {
+  const { folder, run, cleanup } = mirrorStep();
+  try {
+    const target = join(folder, "target.json"), link = join(folder, "daemon.json");
+    writeFileSync(target, "{}\n");
+    symlinkSync(target, link);
+    const linked = run(link);
+    assert.notEqual(linked.status, 0);
+    assert.match(linked.stderr, /symbolic link/);
+    assert.deepEqual(touchesDocker(linked.calls), []);
+    assert.ok(lstatSync(link).isSymbolicLink());
+    assert.equal(readFileSync(target, "utf8"), "{}\n");
+    for (const text of ["{", '{"registry-mirrors":null}']) {
+      const path = join(folder, "refused.json");
+      writeFileSync(path, text);
+      const refused = run(path);
+      assert.notEqual(refused.status, 0, text);
+      assert.deepEqual(touchesDocker(refused.calls), [], `${text} stops the step before Docker is touched`);
+      assert.equal(readFileSync(path, "utf8"), text);
+    }
+  } finally { cleanup(); }
 });
 
 test("kernel preflight accepts systemd's degraded exit without accepting other host states", {
