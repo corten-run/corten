@@ -649,12 +649,12 @@ establish a general ranking.
          have no such section says so in one line, and this point asks nothing more of it. A
          plan with one on either side also lists the crates that are this repository's and
          the measured program's, and the rest of this point holds for both sides, in the
-         change comparison and in the A/A.
+         change comparison, in the A/A and in a pilot A/A that sizes K for the run.
 
          The run records the four facts from each build before its first turn that counts
-         cycles for a reading (a dry run's turns are not such turns). Where they are not the
-         plan's, as on a later head, the pull request restates them before that turn, and a
-         build measured with facts that were not the plan's gives no bound. Nothing else is
+         cycles, a pilot's included (a dry run's turns are not such turns). Where they are not
+         the plan's, as on a later head, the pull request restates them before that turn, and
+         a build measured with facts that were not the plan's gives no bound. Nothing else is
          restated: the crates, pads, K, R, statistic, workloads and margins stay.
 
          Every placement of both sides has a second pad: a function nothing calls that the
@@ -663,9 +663,10 @@ establish a general ranking.
          by the placement's first pad's size mod 64. The kit links each placement with second
          pads of 16, 32, 48 and 64 bytes and keeps the one whose map shows `.data` there.
 
-         Each measured binary is linked with the map, and its map is checked against the
-         unpadded link's, in place of "every function moved by exactly the pad's size":
-         `.text` begins where it did and holds the first pad's section, then the unpadded
+         Each measured binary is linked with the map, as is the unpadded link the first point
+         compares with the build's own binary, and each placement's map is checked against
+         that link's, in place of "every function moved by exactly the pad's size": `.text`
+         begins where it did and holds the first pad's section, then the unpadded
          link's input sections in its order, each with its size and alignment, then the
          second pad's section; in both links every input section begins at the first multiple
          of its alignment at or after the end of the one before it; every input section
@@ -702,7 +703,7 @@ establish a general ranking.
       11th of 30) above it in both readings, and the A/A resolved as above: a run whose A/A is
       not resolved establishes no win either. The reading measures the change across the plan's
       placements, not the release binary, which has a placement of its own: the unpadded build,
-      which no comparison the gate reads includes (the two runs so far read it only in a
+      which no comparison the gate reads includes (the runs so far read it only in a
       diagnostic).
       A run of K = 30 placements of R = 8 pairs, for the
       change and the A/A on `kept` and an A/A on `plain`, takes about 2 hours on a c-8 (the first
@@ -711,10 +712,22 @@ establish a general ranking.
       resolve, its placement medians spreading 1.97% where the other's spread 1.17%, and the
       Choice works out, on a model of its own, that an A/A of 30 placements fails one of its two
       readings more often than not at the first figure and about one time in five at the first
-      run's own. This rule sets no size. More placements narrow the bound wherever the spread
-      comes from, and a plan with an A/A already read on its setup and workload can take K from
-      that calculation at that A/A's spread; a plan with none has no such figure, and its A/A
-      may not resolve.
+      run's own. More placements generally narrow the bound wherever the spread comes from, though not
+      at every step of K (the bound is an order statistic), and the plan
+      sizes each workload's K before the run as the Choice says: from an A/A already read on its
+      setup, workload and R that the Choice's checks find eligible, or, where there is none, from
+      a pilot A/A at a K its own plan declares, read only for the spread of its placement
+      medians, never with a change's comparison, whose turns are no part of the gated run. The
+      kit's sizing gives the chance that an A/A fails at each K under two models, the normal
+      model and a smoothed resample of the eligible A/A's medians: both are used when normality
+      is not rejected, the smoothed resample alone when it is. The K the plan declares must
+      itself meet 5% under each model used, for each workload it covers, and admit the pad lists
+      above; when no K the pads allow does, the plan declares none and does not read that
+      workload across placements, and it never takes a smaller K than the models ask. The size is
+      that setup, workload and R's, not a constant (the Choice's fourth run took 100 placements on
+      `old`, and its medians, at a standard deviation of 2.05%, give an estimated 69 by the
+      smoothed resample, where the normal model, which they reject, gives 91); K = 30 is not to be
+      used by default; and the run's own A/A still decides.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
