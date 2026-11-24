@@ -1,0 +1,15 @@
+checked 1 requests: same
+plain: done, /m/dl/results/aa-plain/p002/counts-plain.csv
+checked 1 requests: same
+Terminated
+change-plain p2: stopped after 1 s (timeout, exit 124)
+checked 1 requests: same
+plain: done, /m/dl/results/change-plain/p003/counts-plain.csv
+checked 1 requests: same
+plain: done, /m/dl/results/aa-plain/p003/counts-plain.csv
+checked 1 requests: same
+plain: done, /m/dl/results/aa-plain/p001/counts-plain.csv
+checked 1 requests: same
+plain: done, /m/dl/results/change-plain/p001/counts-plain.csv
+checked 1 requests: same
+plain: done, /m/dl/results/change-plain/p002/counts-plain.csv

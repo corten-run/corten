@@ -1,0 +1,4 @@
+1. wrong answer: stopped before any turn (exit 1, no counts file): run-pair: plain: base and head answer differently
+2. failed requests: the turn was not recorded (exit 1, 0 rows): run-pair: plain: errors in pair w1 base: w1 base 68993 0 0 0 68993 0
+3. time limit: stopped (exit 124), no recorded pair, no server left
+SELFTEST-OK

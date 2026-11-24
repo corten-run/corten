@@ -1,0 +1,17 @@
+== cycles-deadline-2029 gated plain run 3612218b-804f-40e2-8025-9369fc727498 verify start 17:50:57
+verify: 9 placements answer as their unpadded binary
+== check start 17:51:00
+aa-plain: checked 1 requests: same
+change-plain: checked 1 requests: same
+== checks ok 17:51:06; 6 placements to run
+1 aa-plain p002 ok 17:51:15
+2 change-plain p002 FAILED 17:51:16
+3 change-plain p003 ok 17:51:24
+4 aa-plain p003 ok 17:51:33
+5 aa-plain p001 ok 17:51:42
+6 change-plain p001 ok 17:51:51
+7 change-plain p002 ok (retry of seq 2) 17:52:00
+failed: 2:change-plain:2; retried 1; lost (no bound for their comparison): none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

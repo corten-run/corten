@@ -1,0 +1,2 @@
+case              median     least      most  runs
+row7               20619     20611     20619  20611 20619 20619

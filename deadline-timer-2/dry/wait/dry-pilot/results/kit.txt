@@ -1,0 +1,5 @@
+kit cycles-deadline-2029
+run feacdaa5-515b-4bdd-a67c-5a21a554cf7a
+plan 235bf66b63628ea163de742aa826dd00366d72d6d812a4df5f722835f2ee872d
+part pilot
+workload wait

@@ -1,0 +1,2 @@
+case              median     least      most  runs
+row7               20799     20795     20802  20802 20795 20799

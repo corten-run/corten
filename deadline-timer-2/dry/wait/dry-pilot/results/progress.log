@@ -1,0 +1,13 @@
+== cycles-deadline-2029 pilot wait run feacdaa5-515b-4bdd-a67c-5a21a554cf7a verify start 17:48:12
+verify: 6 placements answer as their unpadded binary
+== check start 17:48:14
+pilot-wait: checked 1 requests: same
+== checks ok 17:48:17; 3 placements to run
+1 pilot-wait p003 ok 17:48:26
+2 pilot-wait p002 FAILED 17:48:27
+3 pilot-wait p001 ok 17:48:36
+4 pilot-wait p002 ok (retry of seq 2) 17:48:45
+failed: 2:pilot-wait:2; retried 1; lost (no bound for their comparison): none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

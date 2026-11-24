@@ -1,0 +1,9 @@
+checked 1 requests: same
+wait: done, /m/dl/results/pilot-wait/p003/counts-wait.csv
+checked 1 requests: same
+Terminated
+pilot-wait p2: stopped after 1 s (timeout, exit 124)
+checked 1 requests: same
+wait: done, /m/dl/results/pilot-wait/p001/counts-wait.csv
+checked 1 requests: same
+wait: done, /m/dl/results/pilot-wait/p002/counts-wait.csv

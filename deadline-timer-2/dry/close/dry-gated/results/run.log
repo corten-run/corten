@@ -1,0 +1,15 @@
+checked 1 requests: same
+close: done, /m/dl/results/aa-close/p003/counts-close.csv
+checked 1 requests: same
+Terminated
+change-close p3: stopped after 1 s (timeout, exit 124)
+checked 1 requests: same
+close: done, /m/dl/results/change-close/p001/counts-close.csv
+checked 1 requests: same
+close: done, /m/dl/results/aa-close/p001/counts-close.csv
+checked 1 requests: same
+close: done, /m/dl/results/aa-close/p002/counts-close.csv
+checked 1 requests: same
+close: done, /m/dl/results/change-close/p002/counts-close.csv
+checked 1 requests: same
+close: done, /m/dl/results/change-close/p003/counts-close.csv

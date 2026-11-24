@@ -1,0 +1,55 @@
+--- a-deadline.rs
++++ b-deadline.rs
+@@ -24,10 +24,12 @@
+ 
+ /// No connection is being polled on the thread.
+ const NOWHERE: u64 = 0;
+-/// A connection that has made no timer is being polled.
++/// A connection none of whose deadlines has waited is being polled.
+ const UNNAMED: u64 = 1;
+-/// The same, and a deadline has waited during this poll: the connection makes its timer.
+-const ASKED: u64 = 2;
++/// A connection one of whose deadlines has waited, in an earlier poll, is being polled.
++const WAITED: u64 = 2;
++/// Either of those, and a deadline has waited during this poll.
++const ASKED: u64 = 3;
+ /// The number of the next connection to make a timer.
+ static NAMES: AtomicU64 = AtomicU64::new(ASKED + 1);
+ 
+@@ -131,12 +133,12 @@
+         let this = self.project();
+         // A connection no deadline of whose has waited tells the thread only that.
+         let polling = Polling { by: BY.replace(this.mine.id), mine: this.mine };
+-        if polling.mine.id != UNNAMED {
++        if polling.mine.id > ASKED {
+             swap(&mut polling.mine.timer);
+         }
+         let polled = this.conn.poll(cx);
+         if BY.get() == ASKED && polled.is_pending() {
+-            *polling.mine = made();
++            *polling.mine = asked(polling.mine.id);
+         }
+         polled
+     }
+@@ -150,7 +152,11 @@
+ /// own runtime has no clock: the connection then has its number and no timer, and its deadlines
+ /// go on making their own.
+ #[cold]
+-fn made() -> Mine {
++fn asked(id: u64) -> Mine {
++    // The first request to wait: the connection makes its timer once a second one has.
++    if id == UNNAMED {
++        return Mine { id: WAITED, timer: None };
++    }
+     let timer = std::panic::catch_unwind(|| Box::pin(tokio::time::sleep(Duration::MAX))).ok().map(Held);
+     #[cfg(test)]
+     LIVE.with(|live| live.set(live.get() + isize::from(timer.is_some())));
+@@ -189,7 +195,7 @@
+ /// it makes its timer when this poll of it ends, for its next deadline.
+ #[inline]
+ fn ask() {
+-    if BY.get() == UNNAMED {
++    if matches!(BY.get(), UNNAMED | WAITED) {
+         BY.set(ASKED);
+     }
+ }

@@ -1,0 +1,9 @@
+comparison change-plain placement 1 workload plain
+A base-p320 cc418ffc07aec7831cc5533b6c5cdd8a014eff2a4f14d8fa44e0c1b4d2083acc
+B head-p320 aa1d8a0ce3ffb8656f9822699a2e984bfc1651bd17d4100a5edfaaec920b7b91
+kit cycles-deadline-2029
+run 3612218b-804f-40e2-8025-9369fc727498
+plan 10aad555178ba057320dad8bfa972aaff2eac9f78008818a0be181c6fbb0655d
+seq 6
+started 2026-11-24T17:51:42Z
+ended 2026-11-24T17:51:51Z

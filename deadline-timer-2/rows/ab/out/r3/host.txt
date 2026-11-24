@@ -1,0 +1,7 @@
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+cargo 1.100.0 (3acc79c0c 2026-11-05)
+valgrind-3.24.0
+6.12.117+deb13-amd64
+model name	: Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz
+8
+Version: 5.3.0-3

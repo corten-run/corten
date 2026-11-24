@@ -1,0 +1,9 @@
+comparison pilot-unstaged placement 96 workload unstaged
+A base-p24496 047da57021743ce00cfe755c96527c0cc4deb01f5865f04f6edda5210f3cda63
+B base-p3120 713811991e4b3ed5059af5fe8d1f1be517ea6a736cc82725c955e9eb189abbe0
+kit cycles-deadline-2029
+run ab8fddfc-23b8-4a31-bf3b-d5fc2068ef81
+plan 235bf66b63628ea163de742aa826dd00366d72d6d812a4df5f722835f2ee872d
+seq 69
+started 2026-11-24T19:16:10Z
+ended 2026-11-24T19:17:12Z

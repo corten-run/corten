@@ -1,0 +1,9 @@
+comparison pilot-wait placement 59 workload wait
+A base-p18144 3454aed98cf15704b9c2159001197cc0eccbd330f28b75f044602bb6b429c29f
+B base-p4192 48130b249744095ccadd10653e301c8d7a0dccfbe5e5b4643d4e63bc8c518de8
+kit cycles-deadline-2029
+run c86c01fb-17ae-4eeb-ac40-5e304b0ed427
+plan 235bf66b63628ea163de742aa826dd00366d72d6d812a4df5f722835f2ee872d
+seq 66
+started 2026-11-24T19:12:22Z
+ended 2026-11-24T19:13:24Z

@@ -1,0 +1,350 @@
+38443.2	TOTAL
+2809.8	__memcpy_avx_unaligned_erms
+1607.3	tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+1282.0	<hyper::proto::h1::role::Server as hyper::proto::h1::Http1Transaction>::encode
+1011.8	free
+853.5	malloc
+810.0	<core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Connection>>> as core::future::future::Future>::poll
+809.6	<tokio::runtime::time::handle::Handle>::process_at_time
+794.0	<corten::app::At<corten::app::Plain<()>> as corten::router::Stages>::run::{closure#0}
+747.4	<tokio::sync::notify::NotifiedProject>::poll_notified
+737.7	<tokio::runtime::time::Driver>::park_internal
+713.0	<http::header::map::HeaderMap>::try_insert2::<http::header::name::HeaderName>
+644.0	http::header::map::hash_elem_using::<http::header::name::HeaderName>
+562.0	<std::thread::local::LocalKey<tokio::runtime::context::Context>>::try_with::<tokio::runtime::context::budget<core::task::poll::Poll<tokio::task::coop::RestoreOnPending>, tokio::task::coop::poll_proceed::{closure#0}>::{closure#0}, core::task::poll::Poll<tokio::task::coop::RestoreOnPending>>
+550.0	<std::sys::pal::unix::time::Timespec>::sub_timespec
+545.8	<tokio::sync::watch::Receiver<core::option::Option<corten::app::Closing>>>::wait_for::<<core::option::Option<corten::app::Closing>>::is_some>::{closure#0}
+534.5	<tokio::runtime::scheduler::multi_thread::worker::Context>::park_internal
+533.7	corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}
+528.0	<hyper::proto::h1::io::Buffered<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>>>::poll_flush
+512.9	<tokio::runtime::io::driver::Driver>::turn
+497.0	<corten::router::Router>::answer
+485.0	corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closure#0}::{closure#1}>::{closure#0}
+444.4	corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}
+429.0	<hyper::proto::h1::role::Server as hyper::proto::h1::Http1Transaction>::parse
+424.8	<tokio::runtime::scheduler::multi_thread::worker::Core>::maintenance
+406.0	<tokio::runtime::io::registration::Registration>::poll_ready
+393.0	corten::compress::finish::{closure#0}
+390.2	<std::sys::pal::unix::time::Timespec>::now
+373.1	__internal_syscall_cancel
+373.0	<tokio::net::tcp::listener::TcpListener>::accept::{closure#0}
+371.0	<hyper::proto::h1::dispatch::Dispatcher<hyper::proto::h1::dispatch::Server<hyper_util::service::glue::TowerToHyperService<corten::app::Connection>, hyper::body::incoming::Incoming>, corten::watch::Answered, hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper::proto::h1::role::Server>>::poll_write
+347.8	<tokio::runtime::io::scheduled_io::ScheduledIo>::wake
+337.0	<hyper::proto::h1::dispatch::Server<hyper_util::service::glue::TowerToHyperService<corten::app::Connection>, hyper::body::incoming::Incoming> as hyper::proto::h1::dispatch::Dispatch>::poll_msg
+334.0	<tokio::time::sleep::Sleep as core::future::future::Future>::poll
+320.8	<tokio::runtime::scheduler::multi_thread::worker::Context>::run_task
+314.7	__ieee754_pow_fma
+314.0	<http::header::map::HeaderMap>::get::<http::header::name::HeaderName>
+304.0	<tokio::runtime::io::scheduled_io::Readiness as core::future::future::Future>::poll
+283.0	tokio::runtime::task::raw::poll::<corten::app::serve_listener<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>
+279.0	<corten::security::Applied>::headers
+261.0	<http::header::map::HeaderMap>::get_all::<http::header::name::HeaderName>
+258.0	<http::header::map::HeaderMap>::try_reserve
+247.0	<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>> as hyper::rt::io::Read>::poll_read
+247.0	<futures_util::future::either::Either<futures_util::future::future::Map<<httparena_corten::staged_delay as corten::handler::Handler<(corten::handler::private::ViaParts, corten::route::Params<httparena_corten::url::StagedDelay>), ()>>::call::{closure#0}, corten::answer::marked<alloc::string::String>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+243.9	clock_gettime@@GLIBC_2.17
+237.0	<http::header::map::HeaderMap>::try_append2::<http::header::name::HeaderName>
+235.0	<tokio::net::tcp::stream::TcpStream>::poll_read_priv
+231.3	core::str::converts::from_utf8
+224.0	<http::header::map::HeaderMap>::try_reserve_one
+224.0	<tokio::runtime::time::handle::Handle>::reregister
+210.0	<http::header::map::HeaderMap>::contains_key::<http::header::name::HeaderName>
+208.0	httparse::parse_headers_iter_uninit
+193.4	__syscall_cancel_arch
+180.1	posix_memalign
+180.0	<http::header::map::VacantEntry<http::header::value::HeaderValue>>::try_insert
+178.2	<tokio::sync::notify::NotifiedProject>::drop_notified
+177.0	corten::shutdown_signal::{closure#0}
+174.0	corten::security::answers
+172.0	<hashbrown::map::HashMap<core::any::TypeId, alloc::boxed::Box<dyn http::extensions::AnyClone + core::marker::Send + core::marker::Sync>, core::hash::BuildHasherDefault<http::extensions::IdHasher>>>::insert
+172.0	<corten::route::__private::InPath<(u64,)> as corten::route::__private::ReadPath>::read
+170.0	<http::uri::path::PathAndQuery>::from_shared
+167.0	<alloc::collections::vec_deque::iter::Iter<hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>> as core::iter::traits::iterator::Iterator>::fold::<usize, core::iter::adapters::map::map_fold<&hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>, usize, usize, <hyper::common::buf::BufList<hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>> as bytes::buf::buf_impl::Buf>::remaining::{closure#0}, <usize as core::iter::traits::accum::Sum>::sum<core::iter::adapters::map::Map<alloc::collections::vec_deque::iter::Iter<hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>>, <hyper::common::buf::BufList<hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>> as bytes::buf::buf_impl::Buf>::remaining::{closure#0}>>::{closure#0}>::{closure#0}>
+162.0	tokio::signal::make_future::{closure#0}
+160.0	<http::header::map::HeaderMap>::try_entry2::<http::header::name::HeaderName>
+156.9	<tokio::runtime::scheduler::multi_thread::handle::Handle>::schedule_task
+152.0	<httparse::Request>::parse_with_config_and_uninit_headers
+147.5	0x00000000000aac90
+135.0	<tokio::runtime::time::entry::TimerEntry as core::ops::drop::Drop>::drop
+134.9	__floattidf
+130.0	<tokio::runtime::task::core::Core<corten::app::serve_listener<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}, alloc::sync::Arc<tokio::runtime::scheduler::current_thread::Handle>>>::set_stage
+128.3	__syscall_cancel
+127.0	<hyper::proto::h1::dispatch::Dispatcher<hyper::proto::h1::dispatch::Server<hyper_util::service::glue::TowerToHyperService<corten::app::Connection>, hyper::body::incoming::Incoming>, corten::watch::Answered, hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper::proto::h1::role::Server>>::poll_flush
+125.0	httparena_corten::wait::{closure#0}
+124.0	corten::app::serve_on::<tokio::net::tcp::listener::TcpListener, ()>::{closure#0}
+124.0	tokio::time::sleep::sleep
+121.0	<alloc::raw_vec::RawVecInner>::finish_grow
+121.0	<bytes::bytes_mut::BytesMut>::reserve_inner
+119.0	<tokio::net::tcp::listener::TcpListener as corten::listener::Listener>::accept::{closure#0}
+118.0	<hyper::proto::h1::dispatch::Server<hyper_util::service::glue::TowerToHyperService<corten::app::Connection>, hyper::body::incoming::Incoming> as hyper::proto::h1::dispatch::Dispatch>::recv_msg
+115.0	<hyper::proto::h1::io::WriteBuf<hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>> as bytes::buf::buf_impl::Buf>::chunks_vectored
+111.0	<tokio::sync::task::atomic_waker::AtomicWaker>::register_by_ref
+104.0	<hyper::proto::h1::conn::Conn<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, bytes::bytes::Bytes, hyper::proto::h1::role::Server>>::write_head
+103.0	hyper::headers::te_is_trailers
+101.3	0x00000000000ae5b0
+101.0	<corten::app::Connection as tower_service::Service<http::request::Request<hyper::body::incoming::Incoming>>>::call
+99.3	0x0000000000038460
+97.0	<corten::watch::Clock>::watch
+97.0	<hyper::proto::h1::io::Buffered<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>>>::poll_read_from_io
+96.5	<tokio::runtime::signal::Driver>::process
+96.1	<hyper::proto::h1::role::Server as hyper::proto::h1::Http1Transaction>::update_date
+96.0	<hyper::proto::h1::io::WriteBuf<hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>>>::can_buffer
+96.0	<tokio::runtime::scheduler::Handle>::current
+92.0	<hashbrown::raw::RawTable<(core::any::TypeId, alloc::boxed::Box<dyn http::extensions::AnyClone + core::marker::Send + core::marker::Sync>)>>::reserve_rehash::<hashbrown::map::make_hasher<core::any::TypeId, alloc::boxed::Box<dyn http::extensions::AnyClone + core::marker::Send + core::marker::Sync>, core::hash::BuildHasherDefault<http::extensions::IdHasher>>::{closure#0}>
+92.0	<tokio::runtime::park::Inner>::park
+91.0	corten::middleware::handle
+91.0	core::ptr::drop_glue::<hashbrown::raw::RawTable<(core::any::TypeId, alloc::boxed::Box<dyn http::extensions::AnyClone + core::marker::Send + core::marker::Sync>)>>
+90.0	core::ptr::drop_glue::<[http::header::map::Bucket<http::header::value::HeaderValue>]>
+87.0	corten::api::json_failure::{closure#0}
+85.0	<tokio::runtime::task::list::OwnedTasks<alloc::sync::Arc<tokio::runtime::scheduler::current_thread::Handle>>>::bind_inner
+84.0	core::ptr::drop_glue::<tokio::net::tcp::stream::TcpStream>
+84.0	core::ptr::drop_glue::<hyper_util::service::oneshot::Oneshot<corten::app::Connection, http::request::Request<hyper::body::incoming::Incoming>>>
+82.0	corten::signal::follow
+82.0	<tokio::runtime::io::scheduled_io::Readiness as core::ops::drop::Drop>::drop
+81.0	<hyper::common::buf::BufList<hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>> as bytes::buf::buf_impl::Buf>::advance
+80.6	<mio::sys::unix::waker::Waker>::wake
+80.0	httparse::simd::avx2::match_header_value_vectored
+79.2	<tokio::runtime::scheduler::multi_thread::idle::Idle>::worker_to_notify
+79.0	core::ptr::drop_glue::<core::option::Option<tokio::runtime::Timer>>
+79.0	<tokio::io::poll_evented::PollEvented<mio::net::tcp::stream::TcpStream>>::new_with_interest
+77.0	core::ptr::drop_glue::<http::header::map::HeaderMap>
+76.8	0x00000000000a8f50
+75.0	<mio::net::tcp::listener::TcpListener>::accept
+74.0	tokio::runtime::task::waker::wake_by_val
+73.0	corten::compress::vary
+72.0	<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle> as tokio::runtime::task::Schedule>::release
+71.0	<matchit::params::ParamsIter as core::iter::traits::iterator::Iterator>::next
+70.0	<http::header::name::StandardHeader>::as_str
+69.0	httparena_corten::serve::{closure#0}
+69.0	core::ptr::drop_glue::<alloc::vec::Vec<http::header::map::ExtraValue<http::header::value::HeaderValue>>>
+66.2	<tokio::runtime::driver::Driver>::park
+65.0	<corten::router::Handled<corten::answer::Endpoint<httparena_corten::staged_delay, alloc::string::String>, (corten::handler::private::ViaParts, corten::route::Params<httparena_corten::url::StagedDelay>), ()> as corten::router::Endpoint>::call
+63.0	<hyper::proto::h1::conn::Conn<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, bytes::bytes::Bytes, hyper::proto::h1::role::Server>>::maybe_notify
+62.0	<bytes::bytes_mut::BytesMut>::split_to
+61.0	corten::cache::settle
+61.0	<http::header::name::HeaderName>::from_bytes
+61.0	corten::response::typed
+59.9	pow@@GLIBC_2.29
+59.2	0x0000000000033340
+58.0	bytes::bytes_mut::shared_v_drop
+56.0	<http::uri::Uri>::from_shared
+56.0	corten::compress::negotiate
+55.3	<tokio::runtime::scheduler::multi_thread::handle::Handle>::next_remote_task
+54.0	<tokio::runtime::task::harness::Harness<corten::app::serve_listener<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>::complete
+54.0	<tokio::runtime::io::registration_set::RegistrationSet>::allocate
+53.0	<http::uri::Uri as core::clone::Clone>::clone
+53.0	<tokio::runtime::time::wheel::Wheel>::remove
+53.0	<hyper::proto::h1::io::WriteBuf<hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>>>::buffer::<bytes::bytes::Bytes>
+53.0	<tokio::net::tcp::stream::TcpStream>::poll_write_vectored_priv
+52.0	<tokio::signal::RxFuture>::poll_recv
+52.0	bytes::bytes::static_drop
+52.0	<corten::answer::marked<alloc::string::String> as futures_util::fns::FnOnce1<http::response::Response<corten::body::Body>>>::call_once
+49.6	0x00000000000a99e0
+49.0	corten::page::waited_until::<http::response::Response<corten::body::Body>>
+48.3	epoll_wait
+48.0	core::ptr::drop_glue::<corten::app::Connection>
+48.0	core::ptr::drop_glue::<http::uri::Uri>
+48.0	core::ptr::drop_glue::<hyper::proto::h1::conn::State>
+46.0	<tokio::runtime::scheduler::multi_thread::handle::Handle>::push_remote_task
+45.0	<tokio::runtime::park::Inner>::unpark
+45.0	<tokio::runtime::io::registration::Registration as core::ops::drop::Drop>::drop
+44.0	<bytes::bytes::Bytes>::slice_ref
+44.0	<hyper::proto::h1::encode::Encoder>::encode_and_end::<bytes::bytes::Bytes>
+42.0	tokio::runtime::task::waker::clone_waker
+41.1	0x00000000000360c0
+41.0	core::ptr::drop_glue::<corten::watch::Answered>
+40.0	bytes::bytes_mut::shared_v_clone
+39.0	<http::header::name::StandardHeader>::from_bytes
+39.0	<tokio::runtime::metrics::batch::MetricsBatch>::end_poll
+38.0	<corten::body::Body as core::convert::From<alloc::string::String>>::from
+38.0	core::ptr::drop_glue::<(<tokio::net::tcp::listener::TcpListener as corten::listener::Listener>::accept::{closure#0}, <tokio::sync::watch::Receiver<core::option::Option<corten::app::Closing>>>::wait_for<<core::option::Option<corten::app::Closing>>::is_some>::{closure#0})>
+36.0	core::ptr::drop_glue::<http::header::map::Drain<http::header::value::HeaderValue>>
+36.0	<corten::body::Whole as http_body::Body>::size_hint
+36.0	__memcmp_avx2_movbe
+34.0	<tokio::sync::notify::NotifyGuard>::notify_waiters
+34.0	<alloc::borrow::Cow<[u8]> as core::convert::From<percent_encoding::PercentDecode>>::from
+33.0	httparse::simd::avx2::match_uri_vectored
+32.0	<http::extensions::Extensions>::insert::<corten::signal::Signal>
+32.0	tokio::runtime::task::waker::drop_waker
+32.0	<corten::app::At<corten::app::Plain<()>> as corten::router::Stages>::run
+32.0	<corten::body::Whole as http_body::Body>::poll_frame
+32.0	<http::method::Method>::from_bytes
+31.0	httparena_corten::main
+30.0	core::ptr::drop_glue::<core::pin::PinMacroHelper<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Connection>>>>
+30.0	bytes::bytes::static_clone
+30.0	core::ptr::drop_glue::<hyper::proto::h1::conn::Conn<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, bytes::bytes::Bytes, hyper::proto::h1::role::Server>>
+30.0	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+29.0	core::ptr::drop_glue::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>
+29.0	httparena_corten::main::{closure#5}
+29.0	<alloc::sync::Arc<corten::watch::Watch>>::drop_slow
+27.0	<alloc::raw_vec::RawVec<hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>>>::grow_one
+27.0	<alloc::raw_vec::RawVec<usize>>::grow_one
+27.0	core::ptr::drop_glue::<tokio::runtime::task::core::Cell<corten::app::serve_listener<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>
+26.9	write
+26.6	<tokio::runtime::scheduler::multi_thread::park::Unparker>::unpark
+25.3	0x00000000000ac310
+25.2	std::sys::backtrace::__rust_begin_short_backtrace::<<corten::watch::Clock>::start::{closure#1}, ()>
+25.0	<matchit::params::Params>::push
+24.8	0x00000000000ac320
+24.0	core::ptr::drop_glue::<corten::app::serve_listener<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}>
+24.0	core::ptr::drop_glue::<hyper::common::buf::BufList<hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>>>
+24.0	core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<alloc::sync::Arc<tokio::runtime::io::scheduled_io::ScheduledIo>>>
+24.0	core::ptr::drop_glue::<std::sync::poison::mutex::Mutex<alloc::vec::Vec<alloc::sync::Arc<dyn core::any::Any + core::marker::Send + core::marker::Sync>>>>
+23.0	core::ptr::drop_glue::<alloc::vec::Vec<http::header::map::Bucket<http::header::value::HeaderValue>>>
+23.0	<alloc::sync::Arc<tokio::runtime::io::scheduled_io::ScheduledIo>>::drop_slow
+22.0	core::ptr::drop_glue::<<corten::app::Layer<corten::app::Plain<()>>>::secure::{closure#0}>
+22.0	httparse::parse_version
+22.0	core::ptr::drop_glue::<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>>
+22.0	syscall
+21.0	<corten::api::Mount>::preflight
+21.0	<alloc::collections::vec_deque::VecDeque<hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes>>>::grow
+21.0	core::ptr::drop_glue::<http::request::Parts>
+21.0	<alloc::sync::Arc<corten::signal::Inner>>::drop_slow
+20.0	core::ptr::drop_glue::<hyper::proto::h1::encode::Encoder>
+20.0	tokio::runtime::task::raw::schedule::<alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>
+20.0	core::ptr::drop_glue::<corten::page::errors_rendered<corten::app::Plain<()>>::{closure#0}>
+19.0	core::ptr::drop_glue::<<httparena_corten::staged_delay as corten::handler::Handler<(corten::handler::private::ViaParts, corten::route::Params<httparena_corten::url::StagedDelay>), ()>>::call::{closure#0}>
+19.0	<u64 as itoa::Unsigned>::fmt
+19.0	core::ptr::drop_glue::<tokio::runtime::io::registration::Registration>
+18.0	<hyper::proto::h1::encode::EncodedBuf<bytes::bytes::Bytes> as bytes::buf::buf_impl::Buf>::advance
+18.0	bytes::bytes::promotable_even_drop
+18.0	recv
+18.0	core::ptr::drop_glue::<<corten::app::At<corten::app::Plain<()>> as corten::router::Stages>::run::{closure#0}>
+18.0	accept4
+18.0	core::ptr::drop_glue::<http::extensions::Extensions>
+18.0	core::ptr::drop_glue::<corten::api::json_failure::{closure#0}>
+18.0	core::ptr::drop_glue::<corten::compress::finish::{closure#0}>
+18.0	core::ptr::drop_glue::<corten::router::MatchedPath>
+18.0	<tokio::net::tcp::stream::TcpStream as tokio::io::async_write::AsyncWrite>::poll_shutdown
+17.0	core::ptr::drop_glue::<futures_util::future::either::Either<futures_util::future::future::Map<<httparena_corten::staged_delay as corten::handler::Handler<(corten::handler::private::ViaParts, corten::route::Params<httparena_corten::url::StagedDelay>), ()>>::call::{closure#0}, corten::answer::marked<alloc::string::String>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>
+17.0	core::ptr::drop_glue::<<corten::route::Params<httparena_corten::url::StagedDelay> as corten::handler::FromRequest<(), corten::handler::private::ViaParts>>::from_request::{closure#0}>
+17.0	<matchit::params::Params>::for_each_key_mut::<<matchit::tree::Node<usize>>::at::{closure#3}>
+16.9	pthread_mutex_trylock@@GLIBC_2.34
+16.3	0x0000000000036f40
+16.0	tokio::runtime::park::clone
+15.1	tokio::runtime::task::raw::drop_join_handle_slow::<corten::app::serve_listener<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio::net::tcp::stream::TcpStream, !, ()>::{closure#0}::{closure#1}, alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>
+15.1	0x00000000000ae3f0
+15.0	corten::compress::compressible
+15.0	<hyper::proto::h1::dispatch::SenderDropGuard as core::ops::drop::Drop>::drop
+15.0	<corten::api::Mount>::cors
+15.0	tokio::runtime::park::wake
+14.0	core::ptr::drop_glue::<httparena_corten::wait::{closure#0}>
+14.0	core::ptr::drop_glue::<corten::page::run<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closure#0}::{closure#1}>::{closure#0}>
+14.0	core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}>
+13.0	httparse::simd::runtime::match_uri_vectored
+12.4	__pthread_mutex_unlock_usercnt
+12.0	0x0000000000082430
+12.0	epoll_ctl
+12.0	<corten::body::Whole as http_body::Body>::is_end_stream
+12.0	core::ptr::drop_glue::<hyper::proto::h1::dispatch::SenderDropGuard>
+11.8	0x0000000000082090
+11.0	std::sys::io::error::unix::decode_error_kind
+11.0	close
+10.7	0x00000000000afc00
+10.5	__memset_avx2_unaligned_erms
+10.0	writev
+10.0	core::ptr::drop_glue::<corten::body::Boxing<corten::extract::Arriving<hyper::body::incoming::Incoming>>>
+10.0	tokio::runtime::park::drop_waker
+9.0	core::ptr::drop_glue::<corten::body::Whole>
+9.0	__rustc::__rust_alloc
+8.2	0x0000000000086a90
+7.0	<corten::router::MatchedPath as core::any::Any>::type_id
+7.0	core::ptr::drop_glue::<corten::signal::Signal>
+7.0	core::ptr::drop_glue::<core::option::Option<http::method::Method>>
+6.0	0x00000000000a9950
+6.0	<corten::router::MatchedPath as http::extensions::AnyClone>::as_any
+6.0	setsockopt
+5.8	0x0000000000084270
+5.0	0x0000000000089b30
+5.0	shutdown
+4.7	0x0000000000085820
+4.7	0x0000000000086680
+4.0	0x00000000000868a0
+3.3	0x00000000000a8790
+3.1	0x00000000000337d0
+3.0	__errno_location
+2.9	0x00000000000940b0
+2.7	0x0000000000034f20
+2.5	0x0000000000082ab0
+2.4	0x000000000007f8a0
+2.3	0x0000000000094380
+2.0	0x0000000000081cc0
+1.9	0x000000000003c4c0
+1.9	0x0000000000089690
+1.9	0x00000000000952e0
+1.6	0x0000000000085270
+1.5	0x0000000000084aa0
+1.4	0x0000000000095200
+1.4	0x00000000000a9910
+1.4	0x0000000000096990
+1.4	0x00000000000a9930
+1.4	0x0000000000096a10
+1.3	<tokio::runtime::driver::Driver>::park_timeout
+1.0	pthread_mutex_unlock@@GLIBC_2.2.5
+0.9	0x0000000000089fb0
+0.8	0x000000000003d750
+0.8	0x0000000000035700
+0.6	0x0000000000036e40
+0.6	0x0000000000089a90
+0.6	0x0000000000087b20
+0.5	0x0000000000034e60
+0.5	<httpdate::date::HttpDate as core::convert::From<std::time::SystemTime>>::from
+0.5	0x0000000000085c80
+0.4	<httpdate::date::HttpDate as core::fmt::Display>::fmt
+0.4	0x000000000003d190
+0.3	0x000000000003be20
+0.3	0x0000000000083560
+0.3	0x0000000000081cb0
+0.3	0x0000000000022250
+0.3	0x00000000000a8820
+0.2	0x0000000000085dc0
+0.2	0x000000000007f620
+0.2	core::fmt::write
+0.2	realloc
+0.2	0x00000000000386d0
+0.2	0x0000000000095c50
+0.2	0x0000000000034380
+0.1	0x00000000000355c0
+0.1	0x0000000000088290
+0.1	0x0000000000088c80
+0.1	0x0000000000084210
+0.1	0x0000000000095580
+0.1	0x00000000000374c0
+0.1	0x000000000008a010
+0.1	0x0000000000093d30
+0.1	<hyper::common::date::CachedDate as core::fmt::Write>::write_str
+0.1	0x00000000000a96b0
+0.0	0x0000000000086630
+0.0	clock_nanosleep@@GLIBC_2.17
+0.0	0x0000000000088a60
+0.0	0x0000000000080360
+0.0	0x0000000000093c20
+0.0	0x0000000000093c50
+0.0	<alloc::raw_vec::RawVec<alloc::sync::Arc<corten::kept::Entry>>>::grow_one
+0.0	0x0000000000093c30
+0.0	0x000000000008c0c0
+0.0	0x000000000008c230
+0.0	0x0000000000095ef0
+0.0	0x0000000000083e10
+0.0	0x0000000000083db0
+0.0	0x0000000000083df0
+0.0	0x0000000000093cb0
+0.0	0x0000000000093c90
+0.0	0x0000000000093c70
+0.0	0x0000000000093a70
+0.0	0x0000000000093ba0
+0.0	0x0000000000093b70
+0.0	madvise
+0.0	0x00000000000884a0
+-0.0	<std::sys::sync::condvar::futex::Condvar>::wait_optional_timeout
+-0.0	0x0000000000083e20
+-0.1	0x0000000000084980
+-0.1	0x000000000008ae60
+-0.1	0x0000000000080750
+-0.2	0x0000000000083620
+-0.2	0x0000000000085ed0
+-0.3	0x0000000000085e00
+-0.3	0x0000000000087920
+-0.5	0x00000000000875d0
+-0.7	0x0000000000084670
+-0.8	<alloc::sync::Arc<corten::watch::Clock>>::drop_slow

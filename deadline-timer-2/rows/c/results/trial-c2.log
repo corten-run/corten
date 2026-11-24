@@ -1,0 +1,42 @@
+fd9d1196021e3b71
+== default c2
+case              median     least      most  runs
+get                20612     20612     20612  20612
+sdelay0            18998     18998     18998  18998
+sdelay1            24972     24972     24972  24972
+delay1             18250     18250     18250  18250
+pipeline           12202     12202     12202  12202
+case              median     least      most  runs
+row7               20802     20802     20802  20802
+== percore-by-hand c2
+case              median     least      most  runs
+get                20008     20008     20008  20008
+sdelay0            18416     18416     18416  18416
+sdelay1            23733     23733     23733  23733
+delay1             17033     17033     17033  17033
+pipeline           11622     11622     11622  11622
+case              median     least      most  runs
+row7               20196     20196     20196  20196
+get: 20612 a request, in /w/out/attr/c2-get.txt
+sdelay1: 24982 a request, in /w/out/attr/c2-sdelay1.txt
+== get: main to c2
+    -31.0     372.0     341.0  corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()
+    +26.0     264.0     290.0  <hyper::proto::h1::dispatch::Server<hyper_util::service::glue::TowerToHyperService<corten::app::Connection>, hyper::body::incoming::Incomin
+    +19.0       0.0      19.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+    +16.0       0.0      16.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+    -14.0      14.0       0.0  core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc:
+    +10.6   20601.6   20612.2  TOTAL
+     +7.0     101.0     108.0  <corten::app::Connection as tower_service::Service<http::request::Request<hyper::body::incoming::Incoming>>>::call
+     -4.1     447.0     442.9  tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::l
+== sdelay1: a to c2
+   -565.0     565.0       0.0  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch
+   +481.0       0.0     481.0  <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tc
+    +56.2   24925.8   24982.0  TOTAL
+    +51.0     337.0     388.0  <hyper::proto::h1::dispatch::Server<hyper_util::service::glue::TowerToHyperService<corten::app::Connection>, hyper::body::incoming::Incomin
+    +45.0       0.0      45.0  <corten::deadline::Kept as core::ops::drop::Drop>::drop
+    +29.0     104.0     133.0  <corten::deadline::Timer>::poll
+     +8.6    1025.4    1034.0  tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::l
+     +7.0     101.0     108.0  <corten::app::Connection as tower_service::Service<http::request::Request<hyper::body::incoming::Incoming>>>::call
+     -4.0      35.0      31.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+TRIAL-DONE
+# TRIAL rc=0

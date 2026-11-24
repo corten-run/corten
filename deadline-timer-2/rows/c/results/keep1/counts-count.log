@@ -1,0 +1,171 @@
+== default main round 1 19:07:18
+case              median     least      most  runs
+get                20590     20590     20594  20594 20590 20590
+sdelay0            18985     18975     18985  18975 18985 18985
+sdelay1            25055     25051     25055  25055 25055 25051
+delay1             18195     18193     18197  18197 18195 18193
+pipeline           12167     12166     12167  12166 12167 12167
+== default, a connection for each request: main round 1 19:08:09
+case              median     least      most  runs
+get                33169     33169     33187  33169 33169 33187
+sdelay1            38434     38323     38436  38436 38434 38323
+== default, row 7: main round 1 19:08:34
+case              median     least      most  runs
+row7               20628     20627     20629  20629 20628 20627
+== default a round 1 19:08:41
+case              median     least      most  runs
+get                20593     20592     20596  20593 20596 20592
+sdelay0            18978     18978     18978  18978 18978 18978
+sdelay1            24932     24918     24933  24932 24933 24918
+delay1             18234     18224     18239  18239 18234 18224
+pipeline           12206     12180     12206  12206 12206 12180
+== default, a connection for each request: a round 1 19:09:31
+case              median     least      most  runs
+get                33242     33015     33257  33242 33015 33257
+sdelay1            38553     38064     38942  38553 38942 38064
+== default, row 7: a round 1 19:09:55
+case              median     least      most  runs
+row7               20619     20617     20626  20619 20617 20626
+== default c round 1 19:10:02
+case              median     least      most  runs
+get                20633     20630     20651  20651 20633 20630
+sdelay0            19055     19017     19060  19060 19055 19017
+sdelay1            25028     25019     25029  25028 25019 25029
+delay1             18301     18297     18309  18309 18301 18297
+pipeline           12240     12217     12240  12217 12240 12240
+== default, a connection for each request: c round 1 19:10:53
+case              median     least      most  runs
+get                33318     33318     33342  33342 33318 33318
+sdelay1            38975     38806     39000  39000 38975 38806
+== default, row 7: c round 1 19:11:18
+case              median     least      most  runs
+row7               20820     20818     20835  20820 20818 20835
+== default c round 2 19:11:24
+case              median     least      most  runs
+get                20630     20627     20635  20635 20627 20630
+sdelay0            19019     19016     19023  19019 19023 19016
+sdelay1            25014     25011     25015  25015 25011 25014
+delay1             18298     18288     18299  18299 18298 18288
+pipeline           12217     12216     12218  12217 12218 12216
+== default, a connection for each request: c round 2 19:12:14
+case              median     least      most  runs
+get                33329     33312     33376  33312 33376 33329
+sdelay1            38798     38733     39257  38798 38733 39257
+== default, row 7: c round 2 19:12:39
+case              median     least      most  runs
+row7               20818     20816     20820  20820 20818 20816
+== default a round 2 19:12:46
+case              median     least      most  runs
+get                20593     20589     20594  20594 20593 20589
+sdelay0            18980     18978     18981  18980 18981 18978
+sdelay1            24928     24928     24942  24942 24928 24928
+delay1             18238     18236     18241  18238 18241 18236
+pipeline           12183     12183     12183  12183 12183 12183
+== default, a connection for each request: a round 2 19:13:36
+case              median     least      most  runs
+get                33237     33184     33253  33184 33237 33253
+sdelay1            38555     38356     38588  38555 38588 38356
+== default, row 7: a round 2 19:14:02
+case              median     least      most  runs
+row7               20619     20618     20620  20619 20620 20618
+== default main round 2 19:14:08
+case              median     least      most  runs
+get                20590     20589     20595  20595 20589 20590
+sdelay0            19000     18996     19005  19005 19000 18996
+sdelay1            25052     25051     25063  25051 25052 25063
+delay1             18203     18195     18209  18195 18209 18203
+pipeline           12188     12188     12193  12188 12188 12193
+== default, a connection for each request: main round 2 19:15:00
+case              median     least      most  runs
+get                33220     33172     33973  33973 33220 33172
+sdelay1            38271     37937     38430  38430 38271 37937
+== default, row 7: main round 2 19:15:25
+case              median     least      most  runs
+row7               20591     20583     20592  20592 20583 20591
+== percore-by-hand main round 1 19:15:32
+case              median     least      most  runs
+get                19982     19981     19983  19983 19982 19981
+sdelay0            18369     18367     18369  18369 18369 18367
+sdelay1            23809     23809     23811  23809 23811 23809
+delay1             16978     16964     16981  16978 16981 16964
+pipeline           11591     11589     11591  11589 11591 11591
+== percore-by-hand, a connection for each request: main round 1 19:16:22
+case              median     least      most  runs
+get                31149     31147     31156  31147 31149 31156
+sdelay1            35061     34943     35070  34943 35070 35061
+== percore-by-hand, row 7: main round 1 19:16:46
+case              median     least      most  runs
+row7               19981     19980     19981  19981 19980 19981
+== percore-by-hand a round 1 19:16:52
+case              median     least      most  runs
+get                19988     19987     19988  19988 19987 19988
+sdelay0            18374     18373     18396  18373 18374 18396
+sdelay1            23676     23676     23681  23676 23681 23676
+delay1             17012     17009     17013  17013 17009 17012
+pipeline           11606     11594     11607  11606 11594 11607
+== percore-by-hand, a connection for each request: a round 1 19:17:43
+case              median     least      most  runs
+get                31217     31217     31235  31217 31217 31235
+sdelay1            35427     35185     35441  35185 35441 35427
+== percore-by-hand, row 7: a round 1 19:18:06
+case              median     least      most  runs
+row7               20013     20013     20014  20013 20014 20013
+== percore-by-hand c round 1 19:18:13
+case              median     least      most  runs
+get                20026     20026     20027  20026 20026 20027
+sdelay0            18412     18411     18414  18414 18412 18411
+sdelay1            23776     23768     23778  23778 23776 23768
+delay1             17071     17066     17076  17071 17066 17076
+pipeline           11639     11639     11640  11640 11639 11639
+== percore-by-hand, a connection for each request: c round 1 19:19:03
+case              median     least      most  runs
+get                31248     31238     31395  31248 31395 31238
+sdelay1            35621     35417     35629  35621 35629 35417
+== percore-by-hand, row 7: c round 1 19:19:27
+case              median     least      most  runs
+row7               20214     20214     20214  20214 20214 20214
+== percore-by-hand c round 2 19:19:34
+case              median     least      most  runs
+get                20026     20026     20026  20026 20026 20026
+sdelay0            18412     18411     18433  18412 18433 18411
+sdelay1            23771     23769     23772  23772 23769 23771
+delay1             17072     17068     17083  17083 17068 17072
+pipeline           11640     11639     11640  11639 11640 11640
+== percore-by-hand, a connection for each request: c round 2 19:20:24
+case              median     least      most  runs
+get                31235     31156     31261  31156 31261 31235
+sdelay1            35105     35099     35250  35250 35099 35105
+== percore-by-hand, row 7: c round 2 19:20:48
+case              median     least      most  runs
+row7               20213     20212     20213  20212 20213 20213
+== percore-by-hand a round 2 19:20:54
+case              median     least      most  runs
+get                19988     19987     19988  19987 19988 19988
+sdelay0            18374     18374     18395  18395 18374 18374
+sdelay1            23684     23680     23688  23680 23688 23684
+delay1             17014     17007     17017  17017 17007 17014
+pipeline           11606     11605     11607  11606 11605 11607
+== percore-by-hand, a connection for each request: a round 2 19:21:44
+case              median     least      most  runs
+get                31214     31211     31273  31211 31214 31273
+sdelay1            35353     35330     35363  35353 35363 35330
+== percore-by-hand, row 7: a round 2 19:22:08
+case              median     least      most  runs
+row7               20013     20012     20014  20014 20013 20012
+== percore-by-hand main round 2 19:22:14
+case              median     least      most  runs
+get                19981     19981     19982  19981 19982 19981
+sdelay0            18347     18347     18367  18347 18367 18347
+sdelay1            23807     23804     23808  23804 23808 23807
+delay1             16975     16974     16980  16974 16975 16980
+pipeline           11591     11590     11591  11591 11590 11591
+== percore-by-hand, a connection for each request: main round 2 19:23:03
+case              median     least      most  runs
+get                31198     31161     31251  31198 31251 31161
+sdelay1            35050     34925     35084  34925 35050 35084
+== percore-by-hand, row 7: main round 2 19:23:27
+case              median     least      most  runs
+row7               19981     19980     19981  19981 19980 19981
+STEP-DONE count 19:23:33
+COUNT-DONE
+# COUNTS-DONE rc=0

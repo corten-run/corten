@@ -1,0 +1,7 @@
+    Updating crates.io index
+error: failed to select a version for the requirement `tokio = "^1.51.0"`
+candidate versions found which didn't match: 1.44.0
+location searched: crates.io index
+required by package `tokio-util v0.7.20`
+    ... which satisfies dependency `tokio-util = "^0.7"` (locked to 0.7.20) of package `async-nats v0.53.0`
+    ... which satisfies dependency `async-nats = "^0.53"` (locked to 0.53.0) of package `listings-feed v0.1.0 (/src/examples/listings-feed)`

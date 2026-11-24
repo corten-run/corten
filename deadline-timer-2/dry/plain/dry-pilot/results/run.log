@@ -1,0 +1,9 @@
+checked 1 requests: same
+plain: done, /m/dl/results/pilot-plain/p001/counts-plain.csv
+checked 1 requests: same
+Terminated
+pilot-plain p3: stopped after 1 s (timeout, exit 124)
+checked 1 requests: same
+plain: done, /m/dl/results/pilot-plain/p002/counts-plain.csv
+checked 1 requests: same
+plain: done, /m/dl/results/pilot-plain/p003/counts-plain.csv

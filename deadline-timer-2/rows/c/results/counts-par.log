@@ -1,0 +1,88 @@
+== default, allocations: main 19:43:27
+row       blocks       bytes  runs (blocks/bytes)
+1         16.000     13959.0  16.000/13959.0 16.000/13959.0 16.000/13959.0
+2         14.000     12925.0  14.000/12925.0 14.000/12925.0 14.000/12925.0
+5         28.003     32983.7  28.003/32983.7 28.004/32983.7 28.003/32983.7
+6         26.001     31925.1  26.001/31925.1 26.001/31925.1 26.001/31925.1
+7         16.000     13959.0  16.000/13959.0 16.000/13959.0 16.000/13959.0
+== default, idle connections: main 19:44:27
+state                    bytes    blocks  runs (bytes/blocks)
+after-get              20158.3    10.000  20158.3/10.000 20158.3/10.000 20158.3/10.000  (longest hold 1.7 s)
+after-sdelay1          20158.1     9.998  20158.1/9.998 20158.1/9.998 20158.1/9.998  (longest hold 3.0 s)
+after-sdelay1-get      20158.1     9.998  20158.1/9.998 20158.1/9.998 20158.1/9.998  (longest hold 3.2 s)
+== default, allocations: a 19:45:17
+row       blocks       bytes  runs (blocks/bytes)
+1         16.000     13959.0  16.000/13959.0 16.000/13959.0 16.000/13959.0
+2         14.000     12925.0  14.000/12925.0 14.000/12925.0 14.000/12925.0
+5         28.003     33111.7  28.004/33111.7 28.003/33111.7 28.003/33111.7
+6         27.001     32165.1  27.001/32165.1 27.001/32165.1 27.001/32165.1
+7         16.000     13959.0  16.000/13959.0 16.000/13959.0 16.000/13959.0
+== default, idle connections: a 19:46:17
+state                    bytes    blocks  runs (bytes/blocks)
+after-get              20286.3    10.000  20286.3/10.000 20286.3/10.000 20286.3/10.000  (longest hold 1.6 s)
+after-sdelay1          20398.1    10.998  20398.1/10.998 20398.1/10.998 20398.1/10.998  (longest hold 3.0 s)
+after-sdelay1-get      20398.1    10.998  20398.1/10.998 20398.1/10.998 20398.1/10.998  (longest hold 3.3 s)
+== default, allocations: c 19:47:07
+row       blocks       bytes  runs (blocks/bytes)
+1         16.000     13959.0  16.000/13959.0 16.000/13959.0 16.000/13959.0
+2         14.000     12925.0  14.000/12925.0 14.000/12925.0 14.000/12925.0
+5         28.003     32999.7  28.003/32999.7 28.003/32999.7 28.003/32999.7
+6         27.001     32053.1  27.001/32053.1 27.001/32053.1 27.001/32053.1
+7         16.000     13959.0  16.000/13959.0 16.000/13959.0 16.000/13959.0
+== default, idle connections: c 19:48:06
+state                    bytes    blocks  runs (bytes/blocks)
+after-get              20174.3    10.000  20174.3/10.000 20174.3/10.000 20174.3/10.000  (longest hold 1.7 s)
+after-sdelay1          20286.1    10.998  20286.1/10.998 20286.1/10.998 20286.1/10.998  (longest hold 3.0 s)
+after-sdelay1-get      20286.1    10.998  20286.1/10.998 20286.1/10.998 20286.1/10.998  (longest hold 3.3 s)
+STEP-DONE extra 19:48:57
+== percore-by-hand, a connection for each request, 10 ms after each close: main round 1 19:48:57
+case              median     least      most  runs
+get                31992     31736     32047  31736 31992 32047
+sdelay1            35051     35043     35059  35059 35051 35043
+== percore-by-hand, a connection for each request, 10 ms after each close: a round 1 19:50:51
+case              median     least      most  runs
+get                32033     31711     32144  31711 32033 32144
+sdelay1            35516     35500     35525  35516 35500 35525
+== percore-by-hand, a connection for each request, 10 ms after each close: c round 1 19:52:46
+case              median     least      most  runs
+get                32017     31696     32026  31696 32026 32017
+sdelay1            35556     35555     35567  35555 35567 35556
+== percore-by-hand, a connection for each request, 10 ms after each close: c round 2 19:54:41
+case              median     least      most  runs
+get                32021     31508     32139  31508 32139 32021
+sdelay1            35561     35553     35574  35561 35574 35553
+== percore-by-hand, a connection for each request, 10 ms after each close: a round 2 19:56:36
+case              median     least      most  runs
+get                32018     31741     32151  31741 32151 32018
+sdelay1            35522     35508     35532  35522 35532 35508
+== percore-by-hand, a connection for each request, 10 ms after each close: main round 2 19:58:31
+case              median     least      most  runs
+get                31599     31534     32030  31534 31599 32030
+sdelay1            35061     35060     35065  35065 35061 35060
+== default, a connection for each request, 10 ms after each close: main round 1 20:00:26
+case              median     least      most  runs
+get                34237     34067     34244  34067 34244 34237
+sdelay1            38570     38565     38586  38565 38570 38586
+== default, a connection for each request, 10 ms after each close: a round 1 20:02:22
+case              median     least      most  runs
+get                34235     33841     34294  33841 34235 34294
+sdelay1            38955     38949     38965  38955 38949 38965
+== default, a connection for each request, 10 ms after each close: c round 1 20:04:18
+case              median     least      most  runs
+get                34327     34122     34359  34122 34359 34327
+sdelay1            39085     39080     39111  39111 39080 39085
+== default, a connection for each request, 10 ms after each close: c round 2 20:06:14
+case              median     least      most  runs
+get                34275     34263     34285  34263 34275 34285
+sdelay1            39076     39058     39111  39076 39111 39058
+== default, a connection for each request, 10 ms after each close: a round 2 20:08:11
+case              median     least      most  runs
+get                34157     33820     34328  33820 34328 34157
+sdelay1            39013     38978     39022  39022 39013 38978
+== default, a connection for each request, 10 ms after each close: main round 2 20:10:08
+case              median     least      most  runs
+get                34015     33803     34257  33803 34015 34257
+sdelay1            38610     38597     38614  38614 38610 38597
+STEP-DONE settle 20:12:04
+COUNT-DONE
+# COUNTS-DONE rc=0

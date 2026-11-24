@@ -1,0 +1,6 @@
+# started on Tue Nov 24 18:04:25 2026
+
+3537558887,,cycles:u,996406215,100.00,,
+3445688,,cycles:k,996388099,100.00,,
+9498618936,,instructions:u,996378425,100.00,2.69,insn per cycle
+33724210,,L1-icache-load-misses,996366090,100.00,,

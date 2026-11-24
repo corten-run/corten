@@ -1,0 +1,2 @@
+case              median     least      most  runs
+row7               20194     20194     20195  20194 20195 20194

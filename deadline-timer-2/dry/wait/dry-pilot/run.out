@@ -1,0 +1,22 @@
+padlists: plain: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: wait: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: close: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: unstaged: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+== cycles-deadline-2029 pilot wait run feacdaa5-515b-4bdd-a67c-5a21a554cf7a verify start 17:48:12
+verify: 6 placements answer as their unpadded binary
+== check start 17:48:14
+pilot-wait: checked 1 requests: same
+== checks ok 17:48:17; 3 placements to run
+1 pilot-wait p003 ok 17:48:26
+2 pilot-wait p002 FAILED 17:48:27
+checked 1 requests: same
+wait: done, /m/dl/results/pilot-wait/p003/counts-wait.csv
+checked 1 requests: same
+Terminated
+pilot-wait p2: stopped after 1 s (timeout, exit 124)
+3 pilot-wait p001 ok 17:48:36
+4 pilot-wait p002 ok (retry of seq 2) 17:48:45
+failed: 2:pilot-wait:2; retried 1; lost (no bound for their comparison): none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

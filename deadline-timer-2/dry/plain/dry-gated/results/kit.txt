@@ -1,0 +1,5 @@
+kit cycles-deadline-2029
+run 3612218b-804f-40e2-8025-9369fc727498
+plan 10aad555178ba057320dad8bfa972aaff2eac9f78008818a0be181c6fbb0655d
+part gated
+workload plain

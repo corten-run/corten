@@ -1,0 +1,4 @@
+== check 1: /private -H 'Accept:' -H 'User-Agent:'
+== check 2: /wait -H 'Accept:' -H 'User-Agent:'
+== check 3: /wait -H 'Accept:' -H 'User-Agent:' -H 'Connection: close'
+== check 4: /unstaged -H 'Accept:' -H 'User-Agent:'

@@ -1,0 +1,22 @@
+DRYRUN: K=3, PADS_P=320 15120 25824, PADS_Q=22848 12160 38336 (not a measurement)
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+pads: 6 objects, each one function of its size
+== base: 81e77162a666a8be1360a6f4705b9f54feb7d511, 17:47:24
+warning: `pstage` (bin "probe") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 42.75s
+warning: linker stderr: link-capture: /m/target-dl-base/release/build/pstage/97b40b09bf6f0805/out/probe: 99 arguments, 69 inputs copied to /m/dl/capture/base
+base: the captured link run again unpadded is byte-identical to cargo's binary
+base 0ac282b0bbfe1945fad0dd7afdeef094bf90d6a80fef2fa7804832112a7a9e2d 4409384 bytes
+base built in 43 s
+base pad 320 relinked again is byte-identical
+6 placements: functions moved by exactly their pad 19410 of 19410; neighbours kept 18996 of 18996
+7 binaries, every sha256 distinct; placements relinked in 3 s
+== layout-base-p320.txt
+.text: A 2248310 bytes at 0x152be0; B 2248630 bytes at 0x152be0 (B - A 320 bytes; pad 320)
+other sections moved: .init +320, .fini +320, .plt +320, .tdata +320, .tbss +320, .fini_array +320, .init_array +320, .data.rel.ro +320, .dynamic +320, .got +320, .got.plt +320, .relro_padding +320, .tm_clone_table +320, .data +320, .bss +320
+pad function: at 0x152be0, the start of .text
+all functions in both: 3235; moved by exactly the pad: 3235; not moved: 0; shifts: +320 B: 3235; same offset in a 64-byte line: 3235, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3166 of 3166
+corten functions in both: 1651; moved by exactly the pad: 1651; not moved: 0; shifts: +320 B: 1651; same offset in a 64-byte line: 1651, in a 4 KiB page: 0; A's neighbours still next in B, in order: 1614 of 1614
+probe functions in both: 718; moved by exactly the pad: 718; not moved: 0; shifts: +320 B: 718; same offset in a 64-byte line: 718, in a 4 KiB page: 0; A's neighbours still next in B, in order: 717 of 717
+only in A: 0; only in B: 1 (corten_layout_pad)
+BUILD-DONE

@@ -1,0 +1,2 @@
+case              median     least      most  runs
+row7               20013     20012     20013  20013 20013 20012

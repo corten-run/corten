@@ -1,0 +1,19 @@
+plain start 1 of base: none
+wait start 1 of base: none
+close start 1 of base: none
+unstaged start 1 of base: none
+plain start 2 of base: none
+wait start 2 of base: none
+close start 2 of base: none
+unstaged start 2 of base: none
+plain: no ETag, nothing masked
+wait: no ETag, nothing masked
+close: no ETag, nothing masked
+unstaged: no ETag, nothing masked
+base-p320 as base: checked 4 requests: same; bodies of 6124, 6124, 6124 and 2 bytes as received
+base-p15120 as base: checked 4 requests: same; bodies of 6124, 6124, 6124 and 2 bytes as received
+base-p25824 as base: checked 4 requests: same; bodies of 6124, 6124, 6124 and 2 bytes as received
+base-p22848 as base: checked 4 requests: same; bodies of 6124, 6124, 6124 and 2 bytes as received
+base-p12160 as base: checked 4 requests: same; bodies of 6124, 6124, 6124 and 2 bytes as received
+base-p38336 as base: checked 4 requests: same; bodies of 6124, 6124, 6124 and 2 bytes as received
+verify: 6 placements answer as their unpadded binary

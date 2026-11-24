@@ -1,0 +1,32 @@
+   Compiling corten-macros v0.2.0 (/src/crates/corten-macros)
+   Compiling corten-protocol v0.2.0 (/src/crates/corten-protocol)
+   Compiling corten-feed v0.2.0 (/src/crates/corten-feed)
+   Compiling corten-run v0.2.0 (/src/crates/corten)
+warning: unused import: `future::Future`
+    --> crates/corten/src/tests/server.rs:2919:15
+     |
+2919 |     use std::{future::Future, panic::AssertUnwindSafe, pin::pin, task::Poll};
+     |               ^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `corten-run` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 32.78s
+     Running unittests src/lib.rs (/target/debug/build/corten-run/03072fc088ecfe1b/out/corten-03072fc088ecfe1b)
+
+running 1 test
+SCRATCH 1 under the guard: kept=true fired after 51.53043ms timers=1 taken=0
+SCRATCH 2 no guard, other runtime alive: kept=true fired=Some(51.639496ms) timers=1 taken=1
+
+thread 'tests::server::scratch_a_timer_made_under_another_runtimes_guard' (696) panicked at /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/runtime/time/entry.rs:534:9:
+A Tokio 1.x context was found, but it is being shutdown.
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'tests::server::scratch_a_timer_made_under_another_runtimes_guard' (696) panicked at /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/runtime/time/entry.rs:534:9:
+A Tokio 1.x context was found, but it is being shutdown.
+SCRATCH 3 no guard, other runtime shut down: kept=true panicked timers=1 taken=2
+SCRATCH 4 no guard, other runtime shut down: kept=true panicked timers=1 taken=3
+test tests::server::scratch_a_timer_made_under_another_runtimes_guard ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1078 filtered out; finished in 0.31s
+

@@ -1,0 +1,32 @@
+== default, two waiting requests first: main 9ec12399a0e5e15f
+case              median     least      most  runs
+row7x2             20613     20592     20629  20613 20629 20592
+== default, two waiting requests first: a ac6e6ddeaeb6c9c6
+case              median     least      most  runs
+row7x2             20805     20804     20805  20805 20805 20804
+== default, two waiting requests first: c a21dd07cc22da1fe
+case              median     least      most  runs
+row7x2             20800     20800     20805  20805 20800 20800
+== default, two waiting requests first: d d638dcb580f1eb90
+case              median     least      most  runs
+row7x2             20802     20799     20805  20802 20799 20805
+== default, two waiting requests first: t 807605d506c51c8e
+case              median     least      most  runs
+row7x2             20800     20799     20800  20800 20800 20799
+== percore-by-hand, two waiting requests first: main 9ec12399a0e5e15f
+case              median     least      most  runs
+row7x2             19981     19980     19982  19982 19980 19981
+== percore-by-hand, two waiting requests first: a ac6e6ddeaeb6c9c6
+case              median     least      most  runs
+row7x2             20199     20199     20201  20201 20199 20199
+== percore-by-hand, two waiting requests first: c a21dd07cc22da1fe
+case              median     least      most  runs
+row7x2             20195     20195     20196  20195 20195 20196
+== percore-by-hand, two waiting requests first: d d638dcb580f1eb90
+case              median     least      most  runs
+row7x2             20196     20194     20196  20196 20194 20196
+== percore-by-hand, two waiting requests first: t 807605d506c51c8e
+case              median     least      most  runs
+row7x2             20195     20195     20195  20195 20195 20195
+X2-DONE
+# X2 rc=0

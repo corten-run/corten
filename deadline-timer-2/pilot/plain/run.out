@@ -1,0 +1,113 @@
+padlists: plain: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: wait: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: close: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: unstaged: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+== cycles-deadline-2029 pilot plain run b77b26ee-8583-4541-a64b-246f5c9a0758 verify start 18:04:33
+verify: 200 placements answer as their unpadded binary
+== check start 18:05:30
+pilot-plain: checked 1 requests: same
+== checks ok 18:05:37; 100 placements to run
+1 pilot-plain p039 ok 18:06:40
+2 pilot-plain p053 ok 18:07:42
+3 pilot-plain p067 ok 18:08:45
+4 pilot-plain p082 ok 18:09:47
+5 pilot-plain p022 ok 18:10:49
+6 pilot-plain p071 ok 18:11:52
+7 pilot-plain p055 ok 18:12:54
+8 pilot-plain p068 ok 18:13:57
+9 pilot-plain p060 ok 18:14:59
+10 pilot-plain p002 ok 18:16:02
+11 pilot-plain p062 ok 18:17:04
+12 pilot-plain p038 ok 18:18:07
+13 pilot-plain p058 ok 18:19:09
+14 pilot-plain p043 ok 18:20:12
+15 pilot-plain p064 ok 18:21:14
+16 pilot-plain p006 ok 18:22:17
+17 pilot-plain p074 ok 18:23:19
+18 pilot-plain p013 ok 18:24:21
+19 pilot-plain p066 ok 18:25:24
+20 pilot-plain p059 ok 18:26:26
+21 pilot-plain p086 ok 18:27:29
+22 pilot-plain p003 ok 18:28:31
+23 pilot-plain p052 ok 18:29:33
+24 pilot-plain p088 ok 18:30:36
+25 pilot-plain p011 ok 18:31:38
+26 pilot-plain p083 ok 18:32:40
+27 pilot-plain p049 ok 18:33:43
+28 pilot-plain p037 ok 18:34:45
+29 pilot-plain p073 ok 18:35:48
+30 pilot-plain p050 ok 18:36:50
+31 pilot-plain p046 ok 18:37:53
+32 pilot-plain p018 ok 18:38:55
+33 pilot-plain p081 ok 18:39:57
+34 pilot-plain p032 ok 18:41:00
+35 pilot-plain p033 ok 18:42:02
+36 pilot-plain p079 ok 18:43:05
+37 pilot-plain p065 ok 18:44:07
+38 pilot-plain p085 ok 18:45:09
+39 pilot-plain p004 ok 18:46:12
+40 pilot-plain p051 ok 18:47:14
+41 pilot-plain p029 ok 18:48:17
+42 pilot-plain p091 ok 18:49:19
+43 pilot-plain p005 ok 18:50:21
+44 pilot-plain p021 ok 18:51:24
+45 pilot-plain p098 ok 18:52:26
+46 pilot-plain p036 ok 18:53:29
+47 pilot-plain p023 ok 18:54:31
+48 pilot-plain p057 ok 18:55:34
+49 pilot-plain p078 ok 18:56:36
+50 pilot-plain p072 ok 18:57:39
+51 pilot-plain p014 ok 18:58:41
+52 pilot-plain p041 ok 18:59:44
+53 pilot-plain p010 ok 19:00:46
+54 pilot-plain p024 ok 19:01:48
+55 pilot-plain p031 ok 19:02:51
+56 pilot-plain p075 ok 19:03:53
+57 pilot-plain p020 ok 19:04:56
+58 pilot-plain p076 ok 19:05:58
+59 pilot-plain p087 ok 19:07:01
+60 pilot-plain p012 ok 19:08:03
+61 pilot-plain p030 ok 19:09:06
+62 pilot-plain p061 ok 19:10:08
+63 pilot-plain p056 ok 19:11:10
+64 pilot-plain p080 ok 19:12:13
+65 pilot-plain p027 ok 19:13:15
+66 pilot-plain p028 ok 19:14:18
+67 pilot-plain p025 ok 19:15:20
+68 pilot-plain p096 ok 19:16:23
+69 pilot-plain p077 ok 19:17:25
+70 pilot-plain p017 ok 19:18:28
+71 pilot-plain p054 ok 19:19:30
+72 pilot-plain p001 ok 19:20:33
+73 pilot-plain p019 ok 19:21:35
+74 pilot-plain p007 ok 19:22:38
+75 pilot-plain p084 ok 19:23:40
+76 pilot-plain p100 ok 19:24:43
+77 pilot-plain p070 ok 19:25:45
+78 pilot-plain p016 ok 19:26:48
+79 pilot-plain p042 ok 19:27:50
+80 pilot-plain p069 ok 19:28:53
+81 pilot-plain p044 ok 19:29:55
+82 pilot-plain p045 ok 19:30:57
+83 pilot-plain p097 ok 19:32:00
+84 pilot-plain p099 ok 19:33:02
+85 pilot-plain p015 ok 19:34:05
+86 pilot-plain p008 ok 19:35:07
+87 pilot-plain p009 ok 19:36:10
+88 pilot-plain p063 ok 19:37:12
+89 pilot-plain p040 ok 19:38:15
+90 pilot-plain p093 ok 19:39:17
+91 pilot-plain p089 ok 19:40:20
+92 pilot-plain p026 ok 19:41:22
+93 pilot-plain p094 ok 19:42:25
+94 pilot-plain p035 ok 19:43:27
+95 pilot-plain p048 ok 19:44:29
+96 pilot-plain p047 ok 19:45:32
+97 pilot-plain p090 ok 19:46:34
+98 pilot-plain p095 ok 19:47:36
+99 pilot-plain p092 ok 19:48:39
+100 pilot-plain p034 ok 19:49:42
+failed: none; retried 0; lost (no bound for their comparison): none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

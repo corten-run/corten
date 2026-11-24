@@ -1,0 +1,95 @@
+d: d638dcb580f1eb90
+t: 807605d506c51c8e
+== default d 20:15:56
+case              median     least      most  runs
+get                20612     20612     20613  20612 20612 20613
+sdelay0            19004     18999     19005  18999 19004 19005
+sdelay1            24983     24969     24988  24983 24988 24969
+delay1             18251     18246     18259  18259 18251 18246
+pipeline           12203     12199     12238  12199 12238 12203
+== default, a connection for each request: d
+case              median     least      most  runs
+get                33242     33238     33455  33242 33238 33455
+sdelay1            38851     38562     38912  38851 38912 38562
+== default, row 7: d
+case              median     least      most  runs
+row7               20613     20606     20614  20613 20606 20614
+== default, a connection for each request, 10 ms after each close: d
+case              median     least      most  runs
+sdelay1            38981     38936     38989  38989 38936 38981
+== percore-by-hand d 20:18:21
+case              median     least      most  runs
+get                20008     20008     20008  20008 20008 20008
+sdelay0            18416     18415     18417  18417 18416 18415
+sdelay1            23730     23728     23731  23728 23730 23731
+delay1             17036     17033     17045  17033 17045 17036
+pipeline           11621     11609     11622  11609 11621 11622
+== percore-by-hand, a connection for each request: d
+case              median     least      most  runs
+get                31214     31204     31234  31204 31234 31214
+sdelay1            35501     35451     35521  35501 35521 35451
+== percore-by-hand, row 7: d
+case              median     least      most  runs
+row7               20010     20009     20010  20009 20010 20010
+== percore-by-hand, a connection for each request, 10 ms after each close: d
+case              median     least      most  runs
+sdelay1            35507     35500     35513  35513 35507 35500
+== default, allocations: d
+row       blocks       bytes  runs (blocks/bytes)
+1         16.000     13959.0  16.000/13959.0
+2         14.000     12925.0  14.000/12925.0
+5         28.003     33007.7  28.003/33007.7
+6         27.001     32061.1  27.001/32061.1
+7         16.000     13959.0  16.000/13959.0
+== default, idle connections: d
+state                    bytes    blocks  runs (bytes/blocks)
+after-get              20182.3    10.000  20182.3/10.000  (longest hold 1.5 s)
+after-sdelay1          20294.1    10.998  20294.1/10.998  (longest hold 3.0 s)
+after-sdelay1-get      20294.1    10.998  20294.1/10.998  (longest hold 3.2 s)
+== default t 20:21:20
+case              median     least      most  runs
+get                20612     20612     20612  20612 20612 20612
+sdelay0            19017     19000     19026  19000 19026 19017
+sdelay1            24972     24965     24977  24972 24977 24965
+delay1             18260     18250     18260  18260 18250 18260
+pipeline           12199     12199     12200  12199 12200 12199
+== default, a connection for each request: t
+case              median     least      most  runs
+get                33589     33335     33592  33589 33592 33335
+sdelay1            37895     37695     38499  38499 37695 37895
+== default, row 7: t
+case              median     least      most  runs
+row7               20614     20605     20616  20605 20614 20616
+== default, a connection for each request, 10 ms after each close: t
+case              median     least      most  runs
+sdelay1            38719     38676     38723  38719 38676 38723
+== percore-by-hand t 20:23:45
+case              median     least      most  runs
+get                20008     20008     20009  20008 20009 20008
+sdelay0            18395     18394     18396  18396 18394 18395
+sdelay1            23729     23726     23735  23729 23726 23735
+delay1             17035     17033     17037  17035 17033 17037
+pipeline           11622     11621     11623  11621 11623 11622
+== percore-by-hand, a connection for each request: t
+case              median     least      most  runs
+get                31218     31208     31221  31218 31208 31221
+sdelay1            34795     34685     35203  35203 34685 34795
+== percore-by-hand, row 7: t
+case              median     least      most  runs
+row7               20008     20007     20009  20008 20009 20007
+== percore-by-hand, a connection for each request, 10 ms after each close: t
+case              median     least      most  runs
+sdelay1            35217     35200     35220  35200 35217 35220
+== default, allocations: t
+row       blocks       bytes  runs (blocks/bytes)
+1         16.000     13959.0  16.000/13959.0
+2         14.000     12925.0  14.000/12925.0
+5         28.003     33007.7  28.003/33007.7
+6         26.001     31949.1  26.001/31949.1
+7         16.000     13959.0  16.000/13959.0
+== default, idle connections: t
+state                    bytes    blocks  runs (bytes/blocks)
+after-get              20182.3    10.000  20182.3/10.000  (longest hold 1.6 s)
+after-sdelay1          20182.1     9.998  20182.1/9.998  (longest hold 3.0 s)
+after-sdelay1-get      20182.1     9.998  20182.1/9.998  (longest hold 3.2 s)
+COUNT-DONE

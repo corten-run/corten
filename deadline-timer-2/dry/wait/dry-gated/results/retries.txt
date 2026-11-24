@@ -1,0 +1,1 @@
+7 change-wait 3 retry-of 2

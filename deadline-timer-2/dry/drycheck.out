@@ -1,0 +1,126 @@
+== plain
+-- pilot: RUN-ENDED complete: every comparison complete; results/report.md
+kit: kit cycles-deadline-2029 run fb770dbf-541a-43a3-8c90-a5116f074e25 plan 235bf66b63628ea163de742aa826dd00366d72d6d812a4df5f722835f2ee872d part pilot workload plain
+schedule: 1 pilot-plain 1;2 pilot-plain 3;3 pilot-plain 2
+retries: 4 pilot-plain 3 retry-of 2; failed: pilot-plain-p003-seq2
+verify: 6 binaries same; built-for: part pilot workload plain K 3 sides base
+placements checked: 6; summary: 6 placements: functions moved by exactly their pad 19410 of 19410; neighbours kept 18996 of 18996
+pilot-plain: p001 p002 p003 | verdicts:       3 checked 1 requests: same | rows: 12
+selftest: SELFTEST-OK
+# The deadline's timer, part 1 (the pilot): cycles across placements, workload `plain`
+**DRY RUN: a test of the scripts, not a measurement. No figure below is read.**
+Placements that failed a check or their time limit on a first attempt and were run again: pilot-plain 3 (seq 2, again as seq 4). Every recorded turn is one in which wrk reported no error of any kind (a turn with one fails its placement).
+## The spread
+3 of 3 placements read, N requests in their recorded turns. Placement medians: median N%, standard deviation N% (labels swapped N%), from N% to N%; 2 above zero. Within a placement the pooled standard deviation of the per-pair changes is N%.
+## Eligibility
+**The pilot is not eligible.** Normality of the medians: Shapiro-Wilk p 0.009, Anderson-Darling p -; models kept: smoothed.
+## The K the plan's rule gives
+## pilot-plain: every measure
+| L1 icache misses user | N% | - | - | N% to N% | N% | - | N% | N% | N% |
+| seq | placement | A | B | A cycles/request | B cycles/request | median change | range | instructions:u | L1 icache misses:u |
+report.err: 
+-- gated: RUN-ENDED complete: every comparison complete; results/report.md
+kit: kit cycles-deadline-2029 run 3612218b-804f-40e2-8025-9369fc727498 plan 10aad555178ba057320dad8bfa972aaff2eac9f78008818a0be181c6fbb0655d part gated workload plain
+schedule: 1 aa-plain 2;2 change-plain 2;3 change-plain 3;4 aa-plain 3;5 aa-plain 1;6 change-plain 1
+retries: 7 change-plain 2 retry-of 2; failed: change-plain-p002-seq2
+verify: 9 binaries same; built-for: part gated workload plain K 3 sides base head
+placements checked: 9; summary: 9 placements: functions moved by exactly their pad 29145 of 29145; neighbours kept 28524 of 28524
+aa-plain: p001 p002 p003 | verdicts:       3 checked 1 requests: same | rows: 12
+change-plain: p001 p002 p003 | verdicts:       3 checked 1 requests: same | rows: 12
+selftest: SELFTEST-OK
+# The deadline's timer, part 2 (the gated run): cycles across placements, workload `plain`
+**DRY RUN: a test of the scripts, not a measurement. No figure below is read.**
+Placements that failed a check or their time limit on a first attempt and were run again: change-plain 2 (seq 2, again as seq 7). Every recorded turn is one in which wrk reported no error of any kind (a turn with one fails its placement).
+## Verdicts
+| aa-plain | 3 of 3 | N% | none | none | A/A: **not resolved (incomplete)** |
+## aa-plain: every measure
+| L1 icache misses user | N% | - | - | N% to N% | N% | - | N% | N% | N% |
+| seq | placement | A | B | A cycles/request | B cycles/request | median change | range | instructions:u | L1 icache misses:u |
+## change-plain: every measure
+| L1 icache misses user | N% | - | - | N% to N% | N% | - | N% | N% | N% |
+| seq | placement | A | B | A cycles/request | B cycles/request | median change | range | instructions:u | L1 icache misses:u |
+report.err: 
+== wait
+-- pilot: RUN-ENDED complete: every comparison complete; results/report.md
+kit: kit cycles-deadline-2029 run feacdaa5-515b-4bdd-a67c-5a21a554cf7a plan 235bf66b63628ea163de742aa826dd00366d72d6d812a4df5f722835f2ee872d part pilot workload wait
+schedule: 1 pilot-wait 3;2 pilot-wait 2;3 pilot-wait 1
+retries: 4 pilot-wait 2 retry-of 2; failed: pilot-wait-p002-seq2
+verify: 6 binaries same; built-for: part pilot workload wait K 3 sides base
+placements checked: 6; summary: 6 placements: functions moved by exactly their pad 19410 of 19410; neighbours kept 18996 of 18996
+pilot-wait: p001 p002 p003 | verdicts:       3 checked 1 requests: same | rows: 12
+selftest: SELFTEST-OK
+# The deadline's timer, part 1 (the pilot): cycles across placements, workload `wait`
+**DRY RUN: a test of the scripts, not a measurement. No figure below is read.**
+Placements that failed a check or their time limit on a first attempt and were run again: pilot-wait 2 (seq 2, again as seq 4). Every recorded turn is one in which wrk reported no error of any kind (a turn with one fails its placement).
+## The spread
+3 of 3 placements read, N requests in their recorded turns. Placement medians: median N%, standard deviation N% (labels swapped N%), from N% to N%; 1 above zero. Within a placement the pooled standard deviation of the per-pair changes is N%.
+## Eligibility
+**The pilot is not eligible.** Normality of the medians: Shapiro-Wilk p 0.764, Anderson-Darling p -; models kept: normal and smoothed.
+## The K the plan's rule gives
+## pilot-wait: every measure
+| L1 icache misses user | N% | - | - | N% to N% | N% | - | N% | N% | N% |
+| seq | placement | A | B | A cycles/request | B cycles/request | median change | range | instructions:u | L1 icache misses:u |
+report.err: 
+-- gated: RUN-ENDED complete: every comparison complete; results/report.md
+kit: kit cycles-deadline-2029 run 27a0a374-416e-4231-ae37-4a8a8a080c37 plan 10aad555178ba057320dad8bfa972aaff2eac9f78008818a0be181c6fbb0655d part gated workload wait
+schedule: 1 aa-wait 3;2 change-wait 3;3 change-wait 1;4 aa-wait 1;5 aa-wait 2;6 change-wait 2
+retries: 7 change-wait 3 retry-of 2; failed: change-wait-p003-seq2
+verify: 9 binaries same; built-for: part gated workload wait K 3 sides base head
+placements checked: 9; summary: 9 placements: functions moved by exactly their pad 29145 of 29145; neighbours kept 28524 of 28524
+aa-wait: p001 p002 p003 | verdicts:       3 checked 1 requests: same | rows: 12
+change-wait: p001 p002 p003 | verdicts:       3 checked 1 requests: same | rows: 12
+selftest: SELFTEST-OK
+# The deadline's timer, part 2 (the gated run): cycles across placements, workload `wait`
+**DRY RUN: a test of the scripts, not a measurement. No figure below is read.**
+Placements that failed a check or their time limit on a first attempt and were run again: change-wait 3 (seq 2, again as seq 7). Every recorded turn is one in which wrk reported no error of any kind (a turn with one fails its placement).
+## Verdicts
+| aa-wait | 3 of 3 | N% | none | none | A/A: **not resolved (incomplete)** |
+## aa-wait: every measure
+| L1 icache misses user | N% | - | - | N% to N% | N% | - | N% | N% | N% |
+| seq | placement | A | B | A cycles/request | B cycles/request | median change | range | instructions:u | L1 icache misses:u |
+## change-wait: every measure
+| L1 icache misses user | N% | - | - | N% to N% | N% | - | N% | N% | N% |
+| seq | placement | A | B | A cycles/request | B cycles/request | median change | range | instructions:u | L1 icache misses:u |
+report.err: 
+== unstaged
+-- pilot: RUN-ENDED complete: every comparison complete; results/report.md
+kit: kit cycles-deadline-2029 run a421d8fa-3be5-44e1-a2c6-5e57ce9b7a93 plan 235bf66b63628ea163de742aa826dd00366d72d6d812a4df5f722835f2ee872d part pilot workload unstaged
+schedule: 1 pilot-unstaged 2;2 pilot-unstaged 3;3 pilot-unstaged 1
+retries: 4 pilot-unstaged 3 retry-of 2; failed: pilot-unstaged-p003-seq2
+verify: 6 binaries same; built-for: part pilot workload unstaged K 3 sides base
+placements checked: 6; summary: 6 placements: functions moved by exactly their pad 19410 of 19410; neighbours kept 18996 of 18996
+pilot-unstaged: p001 p002 p003 | verdicts:       3 checked 1 requests: same | rows: 12
+selftest: SELFTEST-OK
+# The deadline's timer, part 1 (the pilot): cycles across placements, workload `unstaged`
+**DRY RUN: a test of the scripts, not a measurement. No figure below is read.**
+Placements that failed a check or their time limit on a first attempt and were run again: pilot-unstaged 3 (seq 2, again as seq 4). Every recorded turn is one in which wrk reported no error of any kind (a turn with one fails its placement).
+## The spread
+3 of 3 placements read, N requests in their recorded turns. Placement medians: median N%, standard deviation N% (labels swapped N%), from N% to N%; 1 above zero. Within a placement the pooled standard deviation of the per-pair changes is N%.
+## Eligibility
+**The pilot is not eligible.** Normality of the medians: Shapiro-Wilk p 0.745, Anderson-Darling p -; models kept: normal and smoothed.
+## The K the plan's rule gives
+## pilot-unstaged: every measure
+| L1 icache misses user | N% | - | - | N% to N% | N% | - | N% | N% | N% |
+| seq | placement | A | B | A cycles/request | B cycles/request | median change | range | instructions:u | L1 icache misses:u |
+report.err: 
+-- gated: RUN-ENDED complete: every comparison complete; results/report.md
+kit: kit cycles-deadline-2029 run e524b9e1-5a0a-4e7b-9d0a-263b14bf5e86 plan 10aad555178ba057320dad8bfa972aaff2eac9f78008818a0be181c6fbb0655d part gated workload unstaged
+schedule: 1 aa-unstaged 2;2 change-unstaged 2;3 change-unstaged 3;4 aa-unstaged 3;5 aa-unstaged 1;6 change-unstaged 1
+retries: 7 change-unstaged 2 retry-of 2; failed: change-unstaged-p002-seq2
+verify: 9 binaries same; built-for: part gated workload unstaged K 3 sides base head
+placements checked: 9; summary: 9 placements: functions moved by exactly their pad 29145 of 29145; neighbours kept 28524 of 28524
+aa-unstaged: p001 p002 p003 | verdicts:       3 checked 1 requests: same | rows: 12
+change-unstaged: p001 p002 p003 | verdicts:       3 checked 1 requests: same | rows: 12
+selftest: SELFTEST-OK
+# The deadline's timer, part 2 (the gated run): cycles across placements, workload `unstaged`
+**DRY RUN: a test of the scripts, not a measurement. No figure below is read.**
+Placements that failed a check or their time limit on a first attempt and were run again: change-unstaged 2 (seq 2, again as seq 7). Every recorded turn is one in which wrk reported no error of any kind (a turn with one fails its placement).
+## Verdicts
+| aa-unstaged | 3 of 3 | N% | none | none | A/A: **not resolved (incomplete)** |
+## aa-unstaged: every measure
+| L1 icache misses user | N% | - | - | N% to N% | N% | - | N% | N% | N% |
+| seq | placement | A | B | A cycles/request | B cycles/request | median change | range | instructions:u | L1 icache misses:u |
+## change-unstaged: every measure
+| L1 icache misses user | N% | - | - | N% to N% | N% | - | N% | N% | N% |
+| seq | placement | A | B | A cycles/request | B cycles/request | median change | range | instructions:u | L1 icache misses:u |
+report.err: 

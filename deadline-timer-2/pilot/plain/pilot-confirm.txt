@@ -1,0 +1,13 @@
+pilot/plain/results/pilot-plain: 100 placements read (0 without their ended line); sd of the medians 1.249%
+lag-1 r1 -0.021 p 0.9068; Spearman rho -0.077 p 0.4451; zero interval -0.261% to 0.235% (ranks 42,59), inside: true
+Shapiro-Wilk p 0.0031; Anderson-Darling p 0.0336; models kept: smoothed; eligible if every placement of the plan is here: true
+K = 37: smoothed 7282 of 200000 (rank 24)
+  K 30: smoothed 15496
+  K 31: smoothed 19151
+  K 32: smoothed 23341
+  K 33: smoothed 13975
+  K 34: smoothed 17159
+  K 35: smoothed 10102
+  K 36: smoothed 12603
+  K 37: smoothed 7282
+sizePilot(readPilot(dir), { K: [37], draws: 200000, seed: 1983 }): normal 6046, smoothed 7282 failing draws

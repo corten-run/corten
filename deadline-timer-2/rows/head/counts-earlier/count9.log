@@ -1,0 +1,28 @@
+main: 9ec12399a0e5e15f
+b: 017b6775b57c4c53
+== default, kept-alive, the first three requests wait (row 9): main round 1 21:29:24
+case              median     least      most  runs | allocations a request: median, runs | frees: runs
+get                20596     20588     20596  20596 20596 20588 | 16.000, 16.000 16.000 16.000 | 16.000 16.000 16.000
+== percore-by-hand, kept-alive, the first three requests wait (row 9): main round 1 21:29:30
+case              median     least      most  runs | allocations a request: median, runs | frees: runs
+get                19981     19981     19981  19981 19981 19981 | 16.000, 16.000 16.000 16.000 | 16.000 16.000 16.000
+== default, kept-alive, the first three requests wait (row 9): b round 1 21:29:36
+case              median     least      most  runs | allocations a request: median, runs | frees: runs
+get                20805     20804     20807  20804 20805 20807 | 16.000, 16.000 16.000 16.000 | 16.000 16.000 16.000
+== percore-by-hand, kept-alive, the first three requests wait (row 9): b round 1 21:29:42
+case              median     least      most  runs | allocations a request: median, runs | frees: runs
+get                20200     20200     20201  20200 20200 20201 | 16.000, 16.000 16.000 16.000 | 16.000 16.000 16.000
+== default, kept-alive, the first three requests wait (row 9): b round 2 21:29:48
+case              median     least      most  runs | allocations a request: median, runs | frees: runs
+get                20805     20805     20816  20816 20805 20805 | 16.000, 16.000 16.000 16.000 | 16.000 16.000 16.000
+== percore-by-hand, kept-alive, the first three requests wait (row 9): b round 2 21:29:55
+case              median     least      most  runs | allocations a request: median, runs | frees: runs
+get                20200     20200     20200  20200 20200 20200 | 16.000, 16.000 16.000 16.000 | 16.000 16.000 16.000
+== default, kept-alive, the first three requests wait (row 9): main round 2 21:30:01
+case              median     least      most  runs | allocations a request: median, runs | frees: runs
+get                20589     20589     20589  20589 20589 20589 | 16.000, 16.000 16.000 16.000 | 16.000 16.000 16.000
+== percore-by-hand, kept-alive, the first three requests wait (row 9): main round 2 21:30:07
+case              median     least      most  runs | allocations a request: median, runs | frees: runs
+get                19981     19981     19981  19981 19981 19981 | 16.000, 16.000 16.000 16.000 | 16.000 16.000 16.000
+COUNT-DONE
+# R5-COUNT-DONE

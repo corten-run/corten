@@ -1,0 +1,17 @@
+== cycles-deadline-2029 gated close run bdb0ee5a-5c98-4456-8498-02cf06caac20 verify start 17:50:29
+verify: 9 placements answer as their unpadded binary
+== check start 17:50:32
+aa-close: checked 1 requests: same
+change-close: checked 1 requests: same
+== checks ok 17:50:38; 6 placements to run
+1 aa-close p003 ok 17:50:47
+2 change-close p003 FAILED 17:50:48
+3 change-close p001 ok 17:50:57
+4 aa-close p001 ok 17:51:06
+5 aa-close p002 ok 17:51:14
+6 change-close p002 ok 17:51:23
+7 change-close p003 ok (retry of seq 2) 17:51:32
+failed: 2:change-close:3; retried 1; lost (no bound for their comparison): none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

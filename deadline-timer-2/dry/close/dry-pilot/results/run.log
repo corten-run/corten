@@ -1,0 +1,9 @@
+checked 1 requests: same
+close: done, /m/dl/results/pilot-close/p002/counts-close.csv
+checked 1 requests: same
+Terminated
+pilot-close p3: stopped after 1 s (timeout, exit 124)
+checked 1 requests: same
+close: done, /m/dl/results/pilot-close/p001/counts-close.csv
+checked 1 requests: same
+close: done, /m/dl/results/pilot-close/p003/counts-close.csv

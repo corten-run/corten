@@ -1,0 +1,13 @@
+== cycles-deadline-2029 pilot plain run fb770dbf-541a-43a3-8c90-a5116f074e25 verify start 17:48:17
+verify: 6 placements answer as their unpadded binary
+== check start 17:48:19
+pilot-plain: checked 1 requests: same
+== checks ok 17:48:22; 3 placements to run
+1 pilot-plain p001 ok 17:48:31
+2 pilot-plain p003 FAILED 17:48:32
+3 pilot-plain p002 ok 17:48:41
+4 pilot-plain p003 ok (retry of seq 2) 17:48:50
+failed: 2:pilot-plain:3; retried 1; lost (no bound for their comparison): none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE
