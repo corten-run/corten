@@ -594,13 +594,16 @@ establish a general ranking.
       1. Placements: each side is compiled once, and its K placements are that build's final link
          run again with one more object, a function of a declared size that nothing calls (a pad),
          placed first in `.text` by `-Wl,--symbol-ordering-file`, so every other function moves by
-         the pad and keeps its order and its neighbours. The plan lists every pad size, spread
+         the pad and keeps its order and its neighbours (code aligned beyond 16 bytes moves as
+         the fifth point says). The plan lists every pad size, spread
          across the phases of a 64-byte line and a 4 KiB page and up to about 40,000 bytes.
          Placement i of the change is base with pad p_i against head with pad p_i. Before
          anything is measured, the run records that the link run again without a pad is
          byte-identical to the build's own binary; that each placement has exactly that binary's
          functions and the pad, the pad first, every function moved by exactly the pad's size (so
-         the placement has the line and page phase the plan declared) and every pair of neighbours
+         the placement has the line and page phase the plan declared; a side with code aligned
+         beyond 16 bytes is held to the fifth point's check in place of this one) and every pair
+         of neighbours
          still next to each other in order; that each placement of one build has a SHA-256 no
          other placement of that build has (base and head at one pad may be one binary, when the
          change compiles to the same code); and that each answers the workload's requests as the unpadded binary does: status, headers but
@@ -636,6 +639,103 @@ establish a general ranking.
          change's own bound. Only a complete, resolved A/A records or replaces a spread, through a
          pull request that changes the Choice; a run reads the spread recorded in the Choice on
          `main` when its plan is declared, whatever a later run records.
+      5. Code aligned beyond 16 bytes: "every function moved by exactly the pad's size" is the
+         check for a side whose `.text` has no input section aligned beyond 16 bytes, and no
+         build of rustc's code alone read so far has one. LLD lays `.text`'s input sections in
+         order, each at the first multiple of its own alignment at or after the end of the one
+         before it, so a section aligned to 32 or 64 bytes moves only by a multiple of that,
+         whatever the pad. C code a dependency compiles can have such sections: gcc 14.2.0, at
+         `-O2` and at `-O3`, compiling one file of `libdeflate-sys` 1.26.1 by hand and not
+         with the crate's own flags, aligned code inside that file's functions to 64 bytes,
+         and each such function's section with it. A side with such a section is read across
+         placements only as this point says
+         ([design Choice 72](docs/design.md#choice-placement-runs) has the reasons).
+
+         What the side holds. The plan states, for each side, from LLD's map (`-Wl,-Map`) of
+         the unpadded link of the commit the run reads, built with the rustc, LLD and C
+         compiler it names by version: how many of `.text`'s input sections have each
+         alignment; each one aligned beyond 16 bytes, with its input file, size and alignment;
+         the first of them; this repository's crates and the measured program's, by name; and
+         every function from that first section on, by symbol and input file. A function is
+         Corten's or the program's when its symbol names one of those crates. Its input file
+         does not say: under thin LTO the link's inputs are the program's own objects, not
+         each crate's library. The pull request's review reads the list of functions, since a
+         dependency's function is on it whether or not a request runs it. A side has no
+         reading across placements if an input section of its `.text` is aligned beyond 64
+         bytes, or if a function of Corten's or the program's lies at or after the first
+         section aligned beyond 16 bytes. A workload that must be read across placements on
+         such a side is not decided, which does not pass, until a pull request changes this
+         point with a reading of such a build.
+
+         These facts are a build's, not the plan's to keep: a later head has other counts, and
+         another host's C compiler may align otherwise. So the run records them again from
+         each build it measures, before that build's first turn that counts cycles. Where they
+         differ from the plan's, no such turn runs until the plan states that build's facts in
+         the pull request, where its review reads the new list of functions. Restating them
+         changes nothing else the plan declared: its pads, K, R, statistic, workloads and
+         margins stay. No fact is restated after a turn that counts cycles on the build it
+         describes. The run also records that asking LLD for the map changed no link: the
+         unpadded link run again with the map is byte-identical to the binary, and each
+         placement's link run again with it is byte-identical to that placement.
+
+         The check, in place of "every function moved by exactly the pad's size", from the
+         unpadded link's map and each placement's: `.text` begins where it did and holds the
+         pad's section first and then the unpadded link's input sections in its order, each
+         with its size and alignment; in both links every input section begins at the first
+         multiple of its alignment at or after the end of the one before it; every input
+         section before the first one aligned beyond 16 bytes moved by exactly the pad's size;
+         and every function the map lists is in the same input section in both links and as
+         far from that section's start, so that every function before that first section,
+         each of Corten's and the program's among them, moved by exactly the pad's size. The
+         other checks of the plan's first point stand as written. The run also records how far
+         each section from that first one on moved and, for each output section after `.text`,
+         how far it moved and where in a 64-byte line it begins, unpadded and in the placement.
+
+         The pads. The plan lists them for such a side as for any other: in steps of 16 bytes,
+         with the phases its first and fourth points ask for read from their sizes. The code
+         before the first section aligned beyond 16 bytes takes the place in a line and in a
+         page each pad declares. The code from the first section aligned to 64 bytes on begins
+         at one place in a 64-byte line in every placement, and takes the pads' places in a
+         page to within 64 bytes. (Code between a first section aligned to 32 bytes and that
+         one takes two of the four places in a line.) A build puts that code there too: a
+         section aligned to 64 bytes begins a line in every build of the program.
+
+         The data, which the pads do not vary. The output sections after `.text`, the data
+         among them, move as the end of `.text` does. With a section aligned to 64 bytes in
+         `.text`, the pads move that end only by multiples of 64 bytes, so each of those
+         sections begins at one place in a 64-byte line in every placement of that side (at
+         one of two where 32 bytes is the largest alignment): the place the unpadded build
+         gives it. A later change to the size of anything laid before the data moves that
+         place, so it is one draw among the builds a change can land in. On such a side the
+         pads do not vary it and the run's A/A does not see it: both of the A/A's lists leave
+         the base's data at its one place, and the head's data is in no A/A. Where only one
+         side has such code, the other side's data takes each pad's place while this side's
+         keeps its one. Reading such a side across placements is therefore a bet, that the
+         data's place in a line moves a request's cycles little beside what the pads do vary
+         ([design Choice 72](docs/design.md#choice-placement-runs), Stands on). Until that
+         Choice records the measurement below, the pull request says beside every bound read
+         on such a side, naming the side or both: "the data of the head began at one place in
+         a 64-byte line in every placement, which the pads did not vary and the A/A did not
+         see".
+
+         The measurement that settles the bet has not been made. Until that Choice records one
+         from a run whose own A/A on the workload resolved, a placement run whose base and
+         head both have such code makes it, in that run and on one workload its plan names,
+         and the pull request does not merge on that run's readings without it. It is three
+         more comparisons of the base against itself, each with the run's K, R and statistic.
+         Both builds of placement i have pad p_i first. One of the two also has a
+         second pad, a function nothing calls that the ordering file does not name and LLD
+         lays last in `.text`, sized so that `.data` begins 16 bytes further into a 64-byte
+         line than without it in the first comparison, 32 in the second and 48 in the third.
+         So the code is where it was, and the data takes each of the other three places in a
+         line. The plan lists these placements with the rest. The run checks each as above,
+         with the second pad's section last in `.text` and nothing else changed, and records
+         where each output section after `.text` began. Each comparison is read as the A/A
+         is, both ways, and its bounds are reported. They decide nothing for the change. The
+         pull request records them in that Choice, which says what each outcome asks of later
+         runs.
+
+         A recorded spread is read for such a build as for any other (that Choice says why).
 
       The margin stays +1% with no floor: the workload meets it when the change's bound across
       placements is under +1% and its A/A resolves. A placement that fails a check above, or has
