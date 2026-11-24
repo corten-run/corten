@@ -82,20 +82,34 @@ export function checkLabels(labels) {
   return labels;
 }
 
-// Whether a `docker run` argument sets a label: `--label` or `--label-file` with or without
-// `=VALUE`, or a single-dash cluster reaching `l` before any value-taking shorthand (`-l`,
-// `-l=K=V`, `-lK=V`, `-dl`). An unknown shorthand letter is treated as one that takes no value,
-// so a cluster is refused rather than missed; a letter that takes a value (`-e`, `-v`, ...) ends
-// it, as in Docker's flag parser.
-const valueShorthands = 'acehmpuvw';
-function labelOption(arg) {
-  if (/^--label(-file)?(=|$)/.test(arg)) return true;
-  if (!/^-[^-]/.test(arg)) return false;
-  for (const letter of arg.slice(1)) {
-    if (letter === 'l') return true;
-    if (valueShorthands.includes(letter) || letter === '=') return false;
-  }
-  return false;
+// The `docker run` options a check may set, as a structured object; the helper writes the argv
+// itself, so a caller cannot pass a label, a positional argument or `--` that would change the
+// image Docker runs. Each value is passed as its flag's separate argument.
+const text = value => typeof value === 'string' && value.length > 0 && !/[\0\r\n]/.test(value);
+const strings = (value, flag) => {
+  assert.ok(Array.isArray(value) && value.every(text), `${flag} values are non-empty strings`);
+  return value.flatMap(item => [flag, item]);
+};
+const runOptions = {
+  cpus(value) { assert.ok(typeof value === 'string' && /^\d+(\.\d+)?$/.test(value), 'cpus is a decimal string'); return ['--cpus', value]; },
+  memory(value) { assert.ok(typeof value === 'string' && /^\d+[bkmg]?$/.test(value), 'memory is a size such as 512m'); return ['--memory', value]; },
+  addHosts: value => strings(value, '--add-host'),
+  publish: value => strings(value, '--publish'),
+  volumes: value => strings(value, '--volume'),
+  env(value) {
+    assert.ok(value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype, 'env is a plain object');
+    return Object.entries(value).flatMap(([key, item]) => {
+      assert.ok(/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && typeof item === 'string' && !/[\0\r\n]/.test(item), 'env maps variable names to strings');
+      return ['--env', `${key}=${item}`];
+    });
+  },
+};
+// The argv for `options`, in the order of runOptions; throws before any Docker command on an
+// unknown key or a value of the wrong type or shape.
+export function runArguments(options) {
+  assert.ok(options && typeof options === 'object' && !Array.isArray(options) && Object.getPrototypeOf(options) === Object.prototype, 'options are a plain object');
+  for (const key of Object.keys(options)) assert.ok(Object.hasOwn(runOptions, key), `unknown docker run option ${key}`);
+  return Object.entries(runOptions).flatMap(([key, build]) => options[key] === undefined ? [] : build(options[key]));
 }
 
 export function ownedContainers({ docker, runId, labels = [], window = reconcileWindow, wait = sleep, now = () => performance.now() }) {
@@ -139,15 +153,15 @@ export function ownedContainers({ docker, runId, labels = [], window = reconcile
   };
   return {
     record,
-    // `docker run -d` with the ownership labels, then `options`, then `image` as the last
-    // argument. No option may set a label in any spelling. Returns the ID.
+    // `docker run -d` with the ownership labels, the argv runArguments builds from `options`,
+    // then `--` and `image`, so the image Docker runs is always this one. The image is only
+    // checked not to look like an option; its reference syntax is Docker's. Returns the ID.
     run(options, image, name) {
-      assert.ok(Array.isArray(options) && options.every(option => typeof option === 'string'), 'options are separate strings');
-      assert.ok(!options.some(labelOption), 'labels go through the labels option');
-      assert.ok(typeof image === 'string' && /^[\w][\w.:/@-]*$/.test(image), 'the image is an image reference');
+      const args = runArguments(options);
+      assert.ok(typeof image === 'string' && image.length > 0 && !image.startsWith('-'), 'the image is a non-empty argument that is not an option');
       const label = `${attemptKey}=${runId}-${++attempts}`;
       let id;
-      try { id = docker(['run', '-d', '--name', name, ...labels.flatMap(value => ['--label', value]), '--label', owner, '--label', label, ...options, image]); } catch (error) {
+      try { id = docker(['run', '-d', '--name', name, ...labels.flatMap(value => ['--label', value]), '--label', owner, '--label', label, ...args, '--', image]); } catch (error) {
         if (error?.sent !== false) record.unacknowledged.push({ name, label });
         throw error;
       }

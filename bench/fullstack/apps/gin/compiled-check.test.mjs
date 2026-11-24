@@ -245,31 +245,51 @@ test('caller labels in the owner namespace are refused before any Docker command
   }
   const daemon = fakeDaemon();
   const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1', labels: ['agent.owner=codex', `${ownerKey}-other=x`] });
-  assert.throws(() => owned.run(['--label', `${ownerKey}=other`], 'image', 'n'), /labels go through the labels option/);
+  assert.throws(() => owned.run({ labels: [`${ownerKey}=other`] }, 'image', 'n'), /unknown docker run option labels/);
   assert.deepEqual(daemon.calls, []);
-  const id = owned.run([], 'image', 'compiled-alerts-test');
+  const id = owned.run({}, 'image', 'compiled-alerts-test');
   assert.deepEqual(daemon.containers.get(id).labels, { 'agent.owner': 'codex', [`${ownerKey}-other`]: 'x', [ownerKey]: 'run-1', [attemptKey]: 'run-1-1' });
 });
 
-test('every spelling of a label option, and an image that is not one, is refused before any Docker command', () => {
+test('docker run options are a structured object: an unknown key, a wrong type or an option-like image makes no Docker call', () => {
   const daemon = fakeDaemon();
   const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1' });
-  for (const option of ['--label', `--label=${ownerKey}=other`, '--label=', '-l', `-l=${ownerKey}=other`, `-l${ownerKey}=other`,
-    '--label-file', '--label-file=labels.txt', '-dl', `-dl${ownerKey}=other`, `-tdl=${ownerKey}=other`]) {
-    assert.throws(() => owned.run([option, `${ownerKey}=other`], 'image', 'n'), /labels go through the labels option/, option);
+  // The old argv form, a string and anything that is not a plain object.
+  for (const options of [[], ['--', 'alpine:substitute'], '--cpus 1', null, undefined, Object.create(null)]) {
+    assert.throws(() => owned.run(options, 'image', 'n'), /options are a plain object/, inspect(options));
   }
-  for (const image of ['', '-limage', '--label=x', 'two words', undefined]) {
-    assert.throws(() => owned.run([], image, 'n'), /an image reference/, String(image));
+  for (const key of ['labels', 'label', 'labelFile', 'args', 'entrypoint', 'image', '--']) {
+    assert.throws(() => owned.run({ [key]: ['x'] }, 'image', 'n'), new RegExp(`unknown docker run option ${key.replace(/-/g, '\\-')}`), key);
   }
-  assert.throws(() => owned.run('--cpus 1', 'image', 'n'), /options are separate strings/);
+  for (const options of [{ cpus: 1 }, { cpus: '1 --label x' }, { cpus: '' }, { memory: 512 }, { memory: '512m --label=x' },
+    { publish: '127.0.0.1::8080' }, { publish: [''] }, { publish: [8080] }, { volumes: ['/a:/b\n--label=x'] }, { addHosts: 'h:1' },
+    { env: [['A', 'b']] }, { env: { 'A B': 'x' } }, { env: { '': 'x' } }, { env: { A: 1 } }, { env: { A: 'x\ny' } }, { env: 'A=b' }]) {
+    assert.throws(() => owned.run(options, 'image', 'n'), assert.AssertionError, JSON.stringify(options));
+  }
+  for (const image of ['', '-', '-limage', '--label=x', '--', undefined, 1, ['image']]) {
+    assert.throws(() => owned.run({}, image, 'n'), /the image is a non-empty argument that is not an option/, String(image));
+  }
   assert.deepEqual(daemon.calls, [], 'no Docker command');
-  // Ordinary options, including value-taking shorthands whose inline value contains an l, are kept
-  // in order, and the image is the last argument.
-  const options = ['--cpus', '1', '-m512m', '-eLEVEL=low', '-e', 'label=plain', '-p', '127.0.0.1::8080', '-v', '/tmp/l:/fixtures:ro', '--rm=false'];
-  const id = owned.run(options, 'registry.local/app:1@sha256:' + 'a'.repeat(64), 'compiled-alerts-test');
-  const [args] = daemon.calls;
-  assert.deepEqual(args.slice(-options.length - 1), [...options, 'registry.local/app:1@sha256:' + 'a'.repeat(64)]);
-  assert.deepEqual(daemon.containers.get(id).labels, { [ownerKey]: 'run-1', [attemptKey]: 'run-1-1' });
+  assert.deepEqual(owned.record.unacknowledged, [], 'nothing was attempted');
+});
+
+test('the helper writes the run argv: labels first, the built options, then -- and the image as the last argument', () => {
+  const daemon = fakeDaemon();
+  const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1', labels: ['agent.owner=codex', 'agent.task=compiled-alerts'] });
+  const labels = ['--label', 'agent.owner=codex', '--label', 'agent.task=compiled-alerts'];
+  // The driver's shape. A value that looks like an option stays its flag's separate argument.
+  const image = 'registry.local/app:1@sha256:' + 'a'.repeat(64);
+  const id = owned.run({ cpus: '1', memory: '512m', addHosts: ['host.docker.internal:host-gateway'], publish: ['127.0.0.1::8080'],
+    volumes: ['/tmp/l:/fixtures:ro'], env: { PROFILE: 'defaults', MARKETPLACE_SOURCE: 'api', NOTE: '--label=x' } }, image, 'compiled-alerts-test');
+  assert.deepEqual(daemon.calls[0], ['run', '-d', '--name', 'compiled-alerts-test', ...labels,
+    '--label', `${ownerKey}=run-1`, '--label', `${attemptKey}=run-1-1`,
+    '--cpus', '1', '--memory', '512m', '--add-host', 'host.docker.internal:host-gateway', '--publish', '127.0.0.1::8080',
+    '--volume', '/tmp/l:/fixtures:ro', '--env', 'PROFILE=defaults', '--env', 'MARKETPLACE_SOURCE=api', '--env', 'NOTE=--label=x', '--', image]);
+  assert.deepEqual(daemon.containers.get(id).labels, { 'agent.owner': 'codex', 'agent.task': 'compiled-alerts', [ownerKey]: 'run-1', [attemptKey]: 'run-1-1' });
+  // Reference syntax is Docker's: an IPv6 registry is passed through unchanged after --.
+  owned.run({}, '[::1]:5000/alpine:expected', 'compiled-alerts-ipv6');
+  assert.deepEqual(daemon.calls[1], ['run', '-d', '--name', 'compiled-alerts-ipv6', ...labels,
+    '--label', `${ownerKey}=run-1`, '--label', `${attemptKey}=run-1-2`, '--', '[::1]:5000/alpine:expected']);
 });
 
 test('an error class is read once, so a getter that changes cannot pass the allowlist and print other text', async t => {
@@ -292,7 +312,7 @@ test('a name collision never inspects or removes the container that holds the na
   const daemon = fakeDaemon(), clock = fakeClock();
   const foreign = daemon.add('compiled-alerts-gin-fixture', { 'agent.owner': 'someone-else' }, 'f'.repeat(64));
   const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1', window: 1000, ...clock });
-  assert.throws(() => owned.run([], 'image', 'compiled-alerts-gin-fixture'), error => error.code === 'ERR_DOCKER_EXIT' && error.status === 125);
+  assert.throws(() => owned.run({}, 'image', 'compiled-alerts-gin-fixture'), error => error.code === 'ERR_DOCKER_EXIT' && error.status === 125);
   const record = await owned.teardown();
   assert.equal(record.complete, false, 'an unacknowledged create is reported, not assumed absent');
   assert.equal(record.unacknowledged[0].outcome, 'unconfirmed');
@@ -305,7 +325,7 @@ test('a name collision never inspects or removes the container that holds the na
 test('a name reused after removal is never removed by name, and an ID that lost its owner label is refused', async () => {
   const daemon = fakeDaemon();
   const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1' });
-  const id = owned.run([], 'image', 'compiled-alerts-gin-fixture');
+  const id = owned.run({}, 'image', 'compiled-alerts-gin-fixture');
   // Someone else removes it and starts a container under the same name.
   daemon.containers.delete(id);
   const foreign = daemon.add('compiled-alerts-gin-fixture', {}, 'e'.repeat(64));
@@ -319,7 +339,7 @@ test('a name reused after removal is never removed by name, and an ID that lost 
   // An ID whose owner label is not this run's is never removed, and teardown says so.
   const other = fakeDaemon();
   const second = ownedContainers({ docker: other.docker, runId: 'run-2' });
-  const relabelled = second.run([], 'image', 'n');
+  const relabelled = second.run({}, 'image', 'n');
   other.containers.get(relabelled).labels[ownerKey] = 'someone-else';
   assert.throws(() => second.inspect(relabelled), /refusing unowned container/);
   assert.throws(() => second.remove(relabelled), /refusing unowned container/);
@@ -332,7 +352,7 @@ test('a name reused after removal is never removed by name, and an ID that lost 
 test('a run that failed after the daemon made its container is found by its attempt label and removed by ID', async () => {
   const daemon = fakeDaemon({ runFails: 'after-create' }), clock = fakeClock();
   const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1', window: 1000, ...clock });
-  assert.throws(() => owned.run([], 'image', 'n'), error => error.code === 'ERR_DOCKER_EXIT');
+  assert.throws(() => owned.run({}, 'image', 'n'), error => error.code === 'ERR_DOCKER_EXIT');
   const record = await owned.teardown();
   assert.equal(record.complete, true);
   assert.equal(record.unacknowledged[0].outcome, 'removed');
@@ -367,6 +387,19 @@ test('the driver throws recorded money regressions ahead of a failed removal bet
   assert.equal(removals[0].at(-1), removals[1].at(-1));
   assert.equal(daemon.containers.size, 0);
   assert.equal(daemon.calls.filter(args => args[0] === 'run').length, 1, 'the api source did not start');
+  // The driver's own options become exactly this argv, with the image last after --.
+  const [run] = daemon.calls.filter(args => args[0] === 'run');
+  const at = run.indexOf('--cpus');
+  assert.deepEqual(run.slice(0, at), ['run', '-d', '--name', 'compiled-alerts-test-gin-fixture', '--label', 'agent.owner=codex',
+    '--label', 'agent.task=compiled-alerts', '--label', `${ownerKey}=compiled-alerts-test`, '--label', `${attemptKey}=compiled-alerts-test-1`]);
+  const volume = run[run.indexOf('--volume') + 1], api = run.find(arg => arg.startsWith('API_BASE='));
+  assert.match(volume, /compiled-alerts-.+:\/fixtures:ro$/);
+  assert.match(api, /^API_BASE=http:\/\/host\.docker\.internal:\d+$/);
+  assert.deepEqual(run.slice(at), ['--cpus', '1', '--memory', '512m',
+    ...(process.platform === 'linux' ? ['--add-host', 'host.docker.internal:host-gateway'] : []),
+    '--publish', '127.0.0.1::8080', '--volume', volume, '--env', 'PROFILE=defaults', '--env', 'ITEM_SOURCE=fixture',
+    '--env', 'FIXTURE_PATH=/fixtures/items.json', '--env', 'CATALOG_SOURCE=fixture', '--env', 'MARKETPLACE_SOURCE=fixture',
+    '--env', 'MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json', '--env', api, '--', 'cb-catalog-gin']);
 });
 
 test('the driver never touches a container that already holds its name', async t => {

@@ -66,13 +66,12 @@ export async function checkAlerts({ app, image, profile = 'defaults', focus = 'a
     await writeFixtures(folder, { 'items.json': {}, 'catalog.json': catalogRecords(), 'marketplace.json': records });
     browser = await browserType.launch({ headless: true });
     for (const source of ['fixture', 'api']) {
-      const id = owned.run(['--cpus', '1', '--memory', '512m',
-        ...(process.platform === 'linux' ? ['--add-host', 'host.docker.internal:host-gateway'] : []),
-        '-e', `PROFILE=${profile}`,
-        '-p', '127.0.0.1::8080', '-v', `${folder}:/fixtures:ro`,
-        '-e', 'ITEM_SOURCE=fixture', '-e', 'FIXTURE_PATH=/fixtures/items.json', '-e', 'CATALOG_SOURCE=fixture',
-        '-e', `MARKETPLACE_SOURCE=${source}`, '-e', 'MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json',
-        '-e', `API_BASE=http://host.docker.internal:${upstream.address().port}`], image, `${runId}-${app}-${source}`);
+      const id = owned.run({ cpus: '1', memory: '512m',
+        ...(process.platform === 'linux' ? { addHosts: ['host.docker.internal:host-gateway'] } : {}),
+        publish: ['127.0.0.1::8080'], volumes: [`${folder}:/fixtures:ro`],
+        env: { PROFILE: profile, ITEM_SOURCE: 'fixture', FIXTURE_PATH: '/fixtures/items.json', CATALOG_SOURCE: 'fixture',
+          MARKETPLACE_SOURCE: source, MARKETPLACE_FIXTURE_PATH: '/fixtures/marketplace.json',
+          API_BASE: `http://host.docker.internal:${upstream.address().port}` } }, image, `${runId}-${app}-${source}`);
       const base = containerBase(byId, id);
       const pageURL = `${base}/marketplace/en-US/item_1`;
       await assert.doesNotReject(async () => {

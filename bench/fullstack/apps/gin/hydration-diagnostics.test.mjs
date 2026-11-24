@@ -786,17 +786,37 @@ try { await readDockerEvents({ since: 0, until: 1, command: process.execPath, pr
   }
 });
 
-// A fixture process that starts late: after `delay` ms it publishes its PID as `role` as its first
-// act, as the stand-ins above do, then exits once the stop file appears (or after 20 s overall).
+// A fixture process for the partial handshake. It marks itself running (BASE.ROLE.ready, not a PID
+// file) and exits once the stop file appears, or after 20 s overall. 'now' publishes its PID at
+// once; 'on-stop' publishes only after the stop file appears, then keeps running for 300 ms, so a
+// teardown sees its PID while it is still alive and must wait for its exit.
 const lateScript = `import { existsSync, renameSync, writeFileSync } from 'node:fs';
-const [base, role, delay] = process.argv.slice(2);
+const [base, role, mode] = process.argv.slice(2);
 setTimeout(() => process.exit(0), 20_000);
-setTimeout(() => {
+const publish = () => {
   writeFileSync(base + '.' + role + '.pid.tmp', String(process.pid));
   renameSync(base + '.' + role + '.pid.tmp', base + '.' + role + '.pid');
-  setInterval(() => { if (existsSync(base + '.stop')) process.exit(0); }, 25);
-}, Number(delay));
+};
+if (mode === 'now') publish();
+writeFileSync(base + '.' + role + '.ready', '');
+const poll = setInterval(() => {
+  if (!existsSync(base + '.stop')) return;
+  clearInterval(poll);
+  if (mode === 'now') process.exit(0);
+  publish();
+  setTimeout(() => process.exit(0), 300);
+}, 25);
 `;
+
+// Resolves once `path` exists, or rejects with `message` after `milliseconds`.
+async function appears(path, milliseconds, message) {
+  const deadline = Date.now() + milliseconds;
+  for (;;) {
+    try { await readFile(path); return; } catch { /* Not yet. */ }
+    if (Date.now() > deadline) throw new Error(message);
+    await pause(25);
+  }
+}
 
 test('a partial handshake keeps what was published, and teardown waits for every fixture process', { timeout: 30_000 }, async () => {
   const folder = await mkdtemp(join(tmpdir(), 'fake-docker-'));
@@ -804,18 +824,24 @@ test('a partial handshake keeps what was published, and teardown waits for every
   try {
     const script = join(folder, 'late.mjs');
     await writeFile(script, lateScript);
-    // The docker stand-in publishes at once; the holder publishes only after the handshake's deadline.
-    for (const [role, delay] of [['docker', 0], ['holder', 900]]) {
-      const child = spawn(process.execPath, [script, base, role, String(delay)], { stdio: 'ignore' });
+    // The docker stand-in publishes at once; the holder cannot publish until the teardown's stop file.
+    for (const [role, mode] of [['docker', 'now'], ['holder', 'on-stop']]) {
+      const child = spawn(process.execPath, [script, base, role, mode], { stdio: 'ignore' });
       children.push(new Promise(resolve => child.once('exit', resolve)));
     }
+    // The first handshake, explicitly: the docker PID is published and both processes are running,
+    // however long their startup takes.
+    const first = await published(base, ['docker'], 15_000);
+    await appears(`${base}.holder.ready`, 15_000, 'the holder did not start');
+    // So the partial timeout fires with only the docker PID published, whatever the scheduling.
     const pids = {};
     await assert.rejects(published(base, ['docker', 'holder'], 300, pids), /did not publish their PIDs: holder$/);
-    assert.ok(pids.docker > 0, 'the PID published before the deadline is kept');
+    assert.equal(pids.docker, first.docker, 'the PID published before the deadline is kept');
     assert.equal(pids.holder, undefined);
-    const { checked, survivors, unpublished } = await stopFixture(base, ['docker', 'holder']);
+    // The stop file releases the holder, which publishes only now and then runs for 300 ms more.
+    const { checked, survivors, unpublished } = await stopFixture(base, ['docker', 'holder'], 3000, pids);
     assert.deepEqual(Object.keys(checked).sort(), ['docker', 'holder'], 'teardown rereads the PID files');
-    assert.equal(checked.docker, pids.docker);
+    assert.equal(checked.docker, first.docker);
     assert.deepEqual(unpublished, []);
     assert.deepEqual(survivors, []);
     assert.equal(alive(checked.docker), false);

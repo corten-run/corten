@@ -102,9 +102,10 @@ goes through that ID after confirming the owner label, never through the contain
 so a name collision or a reused name cannot make it touch another container. A `run` that
 returned no ID is looked for by its attempt label for 10 s at teardown and removed by
 confirmed ID if found; otherwise its cleanup is reported unconfirmed rather than guessed.
-Labels from the caller cannot use the owner key or its namespace, and no `docker run` option
-may set a label in any spelling (`--label`, `--label-file`, `-l`, `-lKEY=VALUE`, `-dl`). Every
-Docker command has a deadline. JS and no-JS contexts use their own browser cookie jars for real
+Labels from the caller cannot use the owner key or its namespace. Other `docker run` options are
+a structured object (CPUs, memory, extra hosts, published ports, volumes and environment) from
+which the helper writes the arguments itself, ending with `--` and the image, so a caller cannot
+set a label or change the image Docker runs. Every Docker command has a deadline. JS and no-JS contexts use their own browser cookie jars for real
 readback, including locale validation, isolation, cross-site rejection and concurrent writes.
 This driver is test code only; no adapter imports it or uses a common alert store.
 
