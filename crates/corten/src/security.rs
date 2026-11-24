@@ -1755,7 +1755,8 @@ pub(crate) struct Unnamed;
 /// Marks `req`, which the server has just read off a connection, when it is an HTTP/1.1 message
 /// with no `Host` line: only the server knows that of a request, and the host check answers it
 /// ([`unnamed`]). A client writes `Host` first (RFC 9110 7.2 asks it to), so the first name is
-/// looked at before the map is searched, and only a request without one is given the mark.
+/// looked at first, and only a request without one is given the mark. Where `Host` is not
+/// first it is most often near it, so the names are read in turn and not searched by hash.
 #[inline]
 pub(crate) fn mark_unnamed(req: &mut Request) {
     if req.headers().keys().next() != Some(&header::HOST) {
@@ -1766,7 +1767,7 @@ pub(crate) fn mark_unnamed(req: &mut Request) {
 #[cold]
 #[inline(never)]
 fn mark_if_unnamed(req: &mut Request) {
-    if req.version() == http::Version::HTTP_11 && !req.headers().contains_key(header::HOST) {
+    if req.version() == http::Version::HTTP_11 && !req.headers().keys().any(|name| name == header::HOST) {
         req.extensions_mut().insert(Unnamed);
     }
 }
