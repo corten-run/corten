@@ -313,6 +313,12 @@ The local `wN` commands do not create a droplet, collect c1, update nightly stat
 
 ### Saved raw evidence
 
+Marketplace uses the same bounded command runner as Catalog. If a command
+is stopped and a descendant holds its output pipes open, the runner releases
+the pipes after the stop grace and reports a failed command, not a successful
+or complete sample. Existing command deadlines, load settings and owned
+container cleanup still apply.
+
 The browser gate observes native enhanced form transports without replacing them.
 Livewire alert updates must identify the same-origin marketplace alert component,
 item, locale, save call and submitted values. The complete rendered-page and
