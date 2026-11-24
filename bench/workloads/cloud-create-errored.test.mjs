@@ -805,10 +805,34 @@ const contradictionRoutes = {
     o.action = actionRow({ status: "completed" }); h.hosts([h.host()]);
     return { h, run: o.run };
   },
+  // Review round 5, finding 3. A published receipt contradicted by another ID carrying
+  // its saved name and tags; the exact posted droplet later shows its saved ownership.
+  "a published receipt contradicted by an inventory alias whose posted droplet then shows its ownership": async (t) => {
+    const { h, run, task } = erroredLaunch(t, { flags: { missingUnit: true } });
+    await assert.rejects(task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
+    h.hosts([{ ...h.host(), id: 999 }]);
+    await assert.rejects(h.task({ run }).collect(), /observed again/);
+    assert.deepEqual([h.saved().createErrored.reappeared.via, h.saved().createErrored.reappeared.dropletId], ["inventory", "999"]);
+    h.hosts([h.host()]);
+    return { h, run, witnessed: "999" };
+  },
+  // Review round 5, findings 2 and 3, unpublished: the census alias is recorded, then the exact droplet binds.
+  "an unpublished receipt contradicted by an inventory alias whose posted droplet then shows its ownership": async (t) => {
+    const { h, o, task } = lateLaunch(t, { flags: { missingUnit: true } });
+    await assert.rejects(task.launch(), { controlUncertain: true });
+    release(h);
+    const state = h.saved();
+    writeFileSync(join(h.local, "provider-create-errored.json"), createErroredBytes(createErroredRecord(state, state.createPending, 0, "2026-11-20T00:00:00.000Z")));
+    h.hosts([{ ...h.host(), id: 999 }]);
+    await assert.rejects(o.collect(), (error) => error.controllerStage === "create-errored-contradicted");
+    assert.equal(h.saved().id, undefined);
+    h.hosts([h.host()]);
+    return { h, run: o.run, witnessed: "999" };
+  },
 };
 for (const [name, setup] of Object.entries(contradictionRoutes)) {
   test(`${name} binds only that exact owned droplet, keeps the evidence, and retires only by the pinned unused route`, async (t) => {
-    const { h, run } = await setup(t);
+    const { h, run, witnessed = "123" } = await setup(t);
     const receipt = readFileSync(join(h.local, "provider-create-errored.json"));
     assert.equal(await h.task({ run }).collect(), 3);
     const bound = h.saved();
@@ -817,8 +841,12 @@ for (const [name, setup] of Object.entries(contradictionRoutes)) {
     assert.deepEqual({ dropletId: bound.createContradicted.dropletId, actionId: bound.createContradicted.actionId, evidenceSha256: bound.createContradicted.evidenceSha256 },
       { dropletId: "123", actionId: "456", evidenceSha256: digest(receipt) });
     assert.equal(bound.createContradicted.reappeared.dropletId, "123");
+    assert.equal(bound.createContradicted.receiptVerified, true, "a canonical receipt is verified evidence");
     assert.ok(readFileSync(join(h.local, "provider-create-errored.json")).equals(receipt), "the receipt is kept as evidence");
     assert.ok(existsSync(join(h.local, "provider-create-reappeared")), "the contradiction witness is kept");
+    // The first observation stays in the witness, bound by hash; the bind's exact read is recorded beside it.
+    const witness = readFileSync(join(h.local, "provider-create-reappeared"));
+    assert.equal(JSON.parse(witness).dropletId, witnessed); assert.equal(bound.createContradicted.witnessSha256, digest(witness));
     assert.ok(!existsSync(join(h.local, "operation.lock")));
     assert.ok(!h.calls.some(([binary, ...args]) => binary === "ssh" || binary === "scp" || binary === "doctl" && args[2] === "delete"));
     // The receipt is never accepted again: a later round still waits for this reservation.
@@ -841,6 +869,9 @@ test("a contradicted receipt binds nothing that is not exactly and positively ow
     "no public address": (h) => [{ ...h.host(), networks: { v4: [] } }],
     "two public addresses": (h) => [{ ...h.host(), networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }, { type: "public", ip_address: "192.0.2.11" }] } }],
     "another ID with its name and tags": (h) => [{ ...h.host(), id: 999 }],
+    // Review round 5, finding 1. Substrings of a string are not ownership tags.
+    "tags as one string of lookalikes": (h) => [{ ...h.host(), tags: h.host().tags.map((tag) => `lookalike-${tag}`).join(",") }],
+    "a non-string tag beside the ownership tags": (h) => [{ ...h.host(), tags: [...h.host().tags, 7] }],
   };
   for (const [name, hosts] of Object.entries(cases)) {
     const { h, run, task } = erroredLaunch(t);
@@ -858,6 +889,98 @@ test("a contradicted receipt binds nothing that is not exactly and positively ow
     assert.deepEqual(h.calls.slice(before).map(([, ...args]) => args[0] === "account" ? "account" : args[2]), ["account", "get", "account"], name);
     assert.equal(h.deletes, 0); assert.equal(h.creates, 1);
     assert.ok(!h.calls.some(([binary]) => binary === "ssh" || binary === "scp"));
+  }
+});
+
+// Review round 5, finding 1. The fresh ownership check before a DELETE accepted a string of lookalikes.
+test("a bound contradicted droplet whose tags then arrive malformed is never deleted", async (t) => {
+  const { h, run } = await contradictionRoutes["a published receipt whose droplet reappears"](t);
+  assert.equal(await h.task({ run }).collect(), 3);
+  const bound = h.saved();
+  h.hosts([{ ...h.host(), tags: h.host().tags.map((tag) => `lookalike-${tag}`).join(",") }]);
+  await assert.rejects(h.pinnedUnused({ run }).collect(), /ownership tag/);
+  assert.equal(h.deletes, 0); assert.deepEqual(h.saved(), bound, "no retirement record or deletion intent");
+  assert.ok(!existsSync(join(h.local, "operation.lock")));
+  h.hosts([h.host()]);
+  assert.equal(await h.pinnedUnused({ run }).collect(), 1); assert.equal(h.deletes, 1);
+});
+
+// Review round 5, finding 2 and the benchmark lane's census case. The previous controller
+// refused the first collect without a witness, then adopted the receipt on the second.
+const notFound = () => ({ status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } });
+test("an unpublished receipt whose posted ID the census lists after an exact 404 is contradicted for good", async (t) => {
+  const { h, o, task } = lateLaunch(t);
+  await assert.rejects(task.launch(), { controlUncertain: true });
+  release(h);
+  const state = h.saved(), receipt = join(h.local, "provider-create-errored.json");
+  const bytes = createErroredBytes(createErroredRecord(state, state.createPending, 0, "2026-11-20T00:00:00.000Z"));
+  writeFileSync(receipt, bytes);
+  // The exact GET is 404 while the single-response census lists the posted ID, renamed and untagged.
+  o.get = notFound; h.hosts([{ ...h.host(), name: "renamed-by-someone", tags: [] }]);
+  let before = h.calls.length;
+  await assert.rejects(o.collect(), (error) => {
+    assert.equal(error.controllerStage, "create-errored-contradicted"); assert.match(error.message, /observed again/); return true;
+  });
+  assert.deepEqual(o.after(before), ["account", "action", "account", "account", "get", "account", "account", "list", "account"]);
+  const witness = JSON.parse(readFileSync(join(h.local, "provider-create-reappeared")));
+  assert.deepEqual([witness.via, witness.dropletId], ["inventory", "123"]);
+  assert.deepEqual(h.saved(), state, "nothing is bound or published");
+  assert.ok(!existsSync(join(h.local, "operation.lock")), "the contradiction is recorded, not retained custody");
+  // Gone again: a fresh exact 404 cannot adopt the contradicted receipt, and no census is read.
+  h.hosts([]);
+  before = h.calls.length;
+  await assert.rejects(o.collect(), (error) => error.controllerStage === "create-errored-contradicted");
+  assert.deepEqual(o.after(before), ["account", "action", "account", "account", "get", "account"]);
+  assert.deepEqual(h.saved(), state, "the receipt is never adopted; no create intent is recorded");
+  assert.equal(readFileSync(receipt, "utf8"), bytes);
+  // No create intent or POST, here or in a later round in this root.
+  const next = harness(t, { stateRoot: h.base, round: "r22" });
+  await assert.rejects(next.launch().launch());
+  assert.equal(next.creates, 0); assert.ok(!next.calls.some(([binary, ...args]) => binary === "doctl" && args[2] === "create"));
+  assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+  assert.ok(!h.calls.some(([binary, ...args]) => binary === "ssh" || binary === "scp" || binary === "doctl" && args[2] === "delete"));
+});
+
+// Review round 5, finding 4. A stage left by a failed contradiction rename stranded the bound host.
+test("a stage left by a failed contradiction rename is recorded at the bind and admitted at retirement only with its bytes", async (t) => {
+  const { h, run, task } = erroredLaunch(t, { flags: { missingUnit: true } });
+  await assert.rejects(task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
+  h.hosts([{ ...h.host(), name: "renamed-by-someone", tags: [] }]);
+  await assert.rejects(h.task({ run, createReappearedIo: { durable, rename() { throw eio(); } } }).collect(),
+    (error) => error.controllerStage === "create-contradiction-unpublished");
+  const [stage] = reappearedStage(h);
+  assert.ok(stage, "the failed rename left its stage");
+  unlinkSync(join(h.local, "operation.lock")); // The custody step for that collect.
+  h.hosts([h.host()]);
+  assert.equal(await h.task({ run }).collect(), 3);
+  const bound = h.saved(), path = join(h.local, stage), bytes = readFileSync(path);
+  assert.deepEqual(bound.createContradicted.stages, [{ name: stage, sha256: digest(bytes) }]);
+  // Changed bytes or an unrecorded stage are not admitted.
+  writeFileSync(path, "changed");
+  await assert.rejects(h.pinnedUnused({ run }).collect(), /stage changed/); assert.equal(h.deletes, 0);
+  writeFileSync(path, bytes);
+  const stray = join(h.local, `state.json.create-reappeared-${"cd".repeat(16)}.tmp`);
+  writeFileSync(stray, "{}");
+  await assert.rejects(h.pinnedUnused({ run }).collect(), /unexpected local bootstrap custody/); assert.equal(h.deletes, 0);
+  unlinkSync(stray);
+  assert.equal(await h.pinnedUnused({ run }).collect(), 1);
+  assert.equal(h.deletes, 1); assert.ok(readFileSync(path).equals(bytes), "the stage is kept as evidence");
+});
+
+// Review round 5, finding 5. Arbitrary bytes were recorded as this attempt's verified receipt.
+test("an unpublished receipt that is not the canonical record is kept only as an unverified artifact", async (t) => {
+  for (const kind of ["canonical", "truncated"]) {
+    const { h, o, task } = lateLaunch(t, { flags: { missingUnit: true } });
+    await assert.rejects(task.launch(), { controlUncertain: true });
+    release(h);
+    const state = h.saved();
+    const bytes = kind === "canonical" ? createErroredBytes(createErroredRecord(state, state.createPending, 0, "2026-11-20T00:00:00.000Z")) : "{truncated";
+    writeFileSync(join(h.local, "provider-create-errored.json"), bytes);
+    h.hosts([h.host()]);
+    assert.equal(await o.collect(), 3, kind);
+    const c = h.saved().createContradicted;
+    assert.equal(c.receiptVerified, kind === "canonical", kind); assert.equal(c.evidenceSha256, digest(bytes), kind);
+    assert.equal(await h.pinnedUnused({ run: o.run }).collect(), 1, kind); assert.equal(h.deletes, 1);
   }
 });
 
