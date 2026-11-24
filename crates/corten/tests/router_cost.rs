@@ -13,6 +13,8 @@
 //! `Public` text is too small to keep, or with `ROUTER_PUBLIC=page` a `Public` page.
 //! `ROUTER_ASKED=1` asks for that route three times first, so a page is kept by then.
 //! `ROUTER_TARGET=kept` with `ROUTER_PUBLIC=page` counts the kept page given again.
+//! `ROUTER_METHOD=HEAD` with them counts a `HEAD` for that page instead (after the three `GET`s
+//! that keep it), and prints how many of its answers were the kept page's (an `Age`).
 //! `ROUTER_KEPT=0` turns the store off (`App::kept_answers(0)`), for what a write pays the store
 //! in the same app; with it nothing is kept, so `ROUTER_ASKED=1` and `ROUTER_TARGET=kept` with a
 //! page, which assert that one is, do not go with it.
@@ -103,7 +105,9 @@ fn request_cost() {
     let target = std::env::var("ROUTER_TARGET").unwrap_or_default();
     let public = std::env::var("ROUTER_PUBLIC").unwrap_or_default();
     let asked = std::env::var("ROUTER_ASKED").is_ok_and(|asked| asked == "1");
+    let head = std::env::var("ROUTER_METHOD").is_ok_and(|method| method == "HEAD");
     let (missing, write, kept, unstaged) = (target == "missing", target == "write", target == "kept", target == "unstaged");
+    assert!(!head || kept, "ROUTER_METHOD=HEAD goes with ROUTER_TARGET=kept");
     let path = if missing { "/items/7/unknown" } else { "/items/7/edit" };
     let status = if missing { 404 } else { 200 };
     let (routes, shared) = match (write || kept, public.as_str()) {
@@ -137,6 +141,20 @@ fn request_cost() {
         }
         if kept {
             let shared = shared.expect("ROUTER_TARGET=kept needs ROUTER_PUBLIC=page");
+            if head {
+                // Counted, not asserted: a build from before a `HEAD` was given the kept page
+                // runs the handler for each.
+                let mut aged = 0;
+                for _ in 0..requests {
+                    let req = http::Request::head(shared).body(corten::http::Body::empty()).unwrap();
+                    let response = router.clone().oneshot(req).await.unwrap();
+                    assert_eq!(response.status().as_u16(), 200);
+                    aged += usize::from(response.headers().contains_key("age"));
+                    assert!(response.into_body().collect().await.unwrap().to_bytes().is_empty());
+                }
+                eprintln!("kept HEAD answers: {aged} of {requests}");
+                return;
+            }
             for _ in 0..requests {
                 assert!(ask(shared).await, "the kept page");
             }

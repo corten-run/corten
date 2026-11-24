@@ -1265,9 +1265,9 @@ async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
         assert_eq!(runs.count(), ran, "{asked:?}");
         assert!(!headers.contains_key(header::AGE), "{asked:?}");
     }
-    let (_, headers, _) = fetch(&router, "HEAD", "/", &[]).await;
-    assert!(runs.count() == ran + 1 && !headers.contains_key(header::AGE), "a HEAD is the handler's");
-    ran += 1;
+    // A `HEAD` that shows nothing either is given the kept page, without its body.
+    let (_, headers, nothing) = fetch(&router, "HEAD", "/", &[]).await;
+    assert!(runs.count() == ran && headers.contains_key(header::AGE) && nothing.is_empty(), "a HEAD is given the kept page");
     for _ in 0..2 {
         let (status, headers, _) = fetch(&router, "GET", "http://localhost/", &[]).await;
         ran += 1;
@@ -1291,6 +1291,94 @@ async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
     fetch(&router, "GET", "/?page=2", &[]).await;
     fetch(&router, "GET", "/?page=2", &[]).await;
     assert_eq!(runs.count(), ran + 1);
+}
+
+/// A `HEAD` for a kept page is given it in the handler's place, as the same `GET` is: every
+/// header the `GET` gets, in each coding asked for, its `Content-Length` the kept body's, and no
+/// body; and a `304` where the `GET` gets one. A `HEAD` nothing kept stands for, or that shows
+/// who asks, is its handler's, and what the handler makes for it is not kept: it is told the
+/// request is a `HEAD`. A route's handler for `HEAD` alone is not given the `GET`'s page.
+#[tokio::test]
+async fn a_head_is_given_a_kept_page_and_keeps_none() {
+    // Every header but `Age`, which counts the seconds since the page was made.
+    let without_age = |headers: &HeaderMap| {
+        let mut headers = headers.clone();
+        headers.remove(header::AGE);
+        headers
+    };
+    let runs = Runs::default();
+    let router = App::new(Routes::from(kept_routes(&runs))).router();
+
+    // Before any `GET`: the handler's, with its length, and nothing kept from it.
+    let (status, head, nothing) = fetch(&router, "HEAD", "/", &[]).await;
+    assert_eq!((status, runs.count(), nothing.len()), (StatusCode::OK, 1, 0));
+    assert!(!head.contains_key(header::AGE), "{head:?}");
+    let (status, made, body) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((status, runs.count()), (StatusCode::OK, 2), "the HEAD kept nothing");
+    assert!(!made.contains_key(header::AGE), "{made:?}");
+    assert_eq!(head[header::CONTENT_LENGTH].to_str().unwrap(), body.len().to_string());
+
+    // After it: the kept page, line for line as the `GET` is given it, with no body.
+    for asked in [&[][..], &[("accept-encoding", "gzip")], &[("accept-encoding", "br, gzip, zstd")]] {
+        let (status, got, body) = fetch(&router, "GET", "/", asked).await;
+        let (head_status, head, nothing) = fetch(&router, "HEAD", "/", asked).await;
+        assert_eq!((status, head_status, runs.count(), nothing.len()), (StatusCode::OK, StatusCode::OK, 2, 0), "{asked:?}");
+        assert!(got.contains_key(header::AGE) && head.contains_key(header::AGE), "{asked:?}: {head:?}");
+        let mut head = without_age(&head);
+        let length = head.remove(header::CONTENT_LENGTH).expect("a HEAD says the GET's length");
+        assert_eq!(length.to_str().unwrap(), body.len().to_string(), "{asked:?}: the kept body's length");
+        // A tag where the `GET` has none: a `HEAD` is always tagged (RFC 9111 section 4.3.5).
+        if !got.contains_key(header::ETAG) {
+            head.remove(header::ETAG).expect("a HEAD is tagged");
+        }
+        assert_eq!(head, without_age(&got), "{asked:?}");
+    }
+
+    // Asked with the kept page's tag: the `304` the `GET` gets, from the kept page.
+    let (_, head, _) = fetch(&router, "HEAD", "/", &[]).await;
+    let tag = head[header::ETAG].to_str().unwrap().to_string();
+    let named = [("if-none-match", tag.as_str())];
+    let (status, unchanged, body) = fetch(&router, "GET", "/", &named).await;
+    let (head_status, head_unchanged, nothing) = fetch(&router, "HEAD", "/", &named).await;
+    assert_eq!((status, head_status), (StatusCode::NOT_MODIFIED, StatusCode::NOT_MODIFIED));
+    assert_eq!((body.len(), nothing.len(), runs.count()), (0, 0, 2));
+    assert!(head_unchanged.contains_key(header::AGE) && !head_unchanged.contains_key(header::CONTENT_LENGTH));
+    assert_eq!(without_age(&head_unchanged), without_age(&unchanged));
+
+    // One that shows who asks is its handler's, as the `GET` is, and leaves the kept page as it is.
+    let mut ran = runs.count();
+    for asked in [("cookie", "session=abc"), ("authorization", "Bearer t"), ("corten", "nav"), ("corten-notice", "saved")] {
+        let (status, headers, nothing) = fetch(&router, "HEAD", "/", &[asked]).await;
+        ran += 1;
+        assert_eq!((status, runs.count(), nothing.len()), (StatusCode::OK, ran, 0), "{asked:?}");
+        assert!(!headers.contains_key(header::AGE), "{asked:?}");
+    }
+    let (_, headers, _) = fetch(&router, "HEAD", "/", &[]).await;
+    assert!(runs.count() == ran && headers.contains_key(header::AGE), "still kept");
+
+    // A route with a handler for `HEAD` of its own: that handler answers it, kept page or not.
+    let (gets, heads) = (Runs::default(), Runs::default());
+    let page = {
+        let gets = gets.clone();
+        move |req: Req| {
+            gets.ran();
+            async move { Public::new(Duration::from_secs(60), req.test_page_for("Kept", html! { <p>{"kept ".repeat(400)}</p> })) }
+        }
+    };
+    let own = {
+        let heads = heads.clone();
+        move || {
+            heads.ran();
+            async { StatusCode::NO_CONTENT }
+        }
+    };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0.head(own)))).router();
+    for _ in 0..2 {
+        fetch(&router, "GET", "/", &[]).await;
+    }
+    let (status, headers, _) = fetch(&router, "HEAD", "/", &[]).await;
+    assert_eq!((status, gets.count(), heads.count()), (StatusCode::NO_CONTENT, 1, 1), "{headers:?}");
+    assert!(!headers.contains_key(header::AGE), "{headers:?}");
 }
 
 /// A `Public` body whose head has `names` names: `Public`'s own and as many of `x-0`, `x-1`, ..
@@ -2969,12 +3057,13 @@ async fn a_public_json_or_text_answer_is_kept_and_given_again() {
         ran += 1;
         assert!(runs.count() == ran && !headers.contains_key(header::AGE), "{asked:?}");
     }
-    let (_, headers, _) = fetch(&router, "HEAD", "/items", &[]).await;
-    assert!(runs.count() == ran + 1 && !headers.contains_key(header::AGE), "a HEAD is the handler's");
+    let (_, headers, nothing) = fetch(&router, "HEAD", "/items", &[]).await;
+    assert!(runs.count() == ran && headers.contains_key(header::AGE) && nothing.is_empty(), "a HEAD is given the kept body");
+    assert_eq!(headers[header::CONTENT_LENGTH].to_str().unwrap(), body.len().to_string(), "the kept body's length");
     assert!(fetch(&router, "GET", "/items", &[]).await.1.contains_key(header::AGE));
     // The time zone's cookie says where the visitor is, not who, and a `Public` answer is in UTC.
     let zone = [("cookie", "corten-zone=America/Chicago")];
-    assert!(fetch(&router, "GET", "/items", &zone).await.1.contains_key(header::AGE) && runs.count() == ran + 1);
+    assert!(fetch(&router, "GET", "/items", &zone).await.1.contains_key(header::AGE) && runs.count() == ran);
     assert!(fetch(&router, "GET", "/items?page=2", &[]).await.1.get(header::AGE).is_none(), "another query is another answer");
 
     // A write to the path drops every copy kept there.
@@ -3213,21 +3302,22 @@ async fn a_file_is_kept_from_1024_bytes() {
         fetch(&bounded, "GET", path, &[]).await;
         assert_eq!(fetch(&bounded, "GET", path, &[]).await.1.contains_key(header::AGE), kept, "{path}");
     }
-    // A kept file is a kept answer in every other way: its tag answers `304`, a `HEAD` is its
-    // handler's, and a write to its path drops it.
+    // A kept file is a kept answer in every other way: its tag answers `304`, a `HEAD` is given
+    // it, and a write to its path drops it.
     {
         let named = [("accept-encoding", "gzip"), ("if-none-match", cards[header::ETAG].to_str().unwrap())];
         let before = runs.count();
         let (status, unchanged, body) = fetch(&router, "GET", "/cards.csv", &named).await;
         assert_eq!((status, body.len(), runs.count() - before), (StatusCode::NOT_MODIFIED, 0, 0), "{unchanged:?}");
         let (status, head, _) = fetch(&router, "HEAD", "/cards.csv", &[]).await;
-        assert_eq!((status, head.contains_key(header::AGE), runs.count() - before), (StatusCode::OK, false, 1));
+        assert_eq!((status, head.contains_key(header::AGE), runs.count() - before), (StatusCode::OK, true, 0));
+        assert_eq!(head[header::CONTENT_DISPOSITION], cards[header::CONTENT_DISPOSITION], "its handler's headers");
         let (status, ..) = fetch(&router, "POST", "/cards.csv", &[("sec-fetch-site", "same-origin")]).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (_, made, _) = fetch(&router, "GET", "/cards.csv", &[]).await;
-        assert_eq!((made.contains_key(header::AGE), runs.count() - before), (false, 2), "made again after the write");
+        assert_eq!((made.contains_key(header::AGE), runs.count() - before), (false, 1), "made again after the write");
         let (_, kept, _) = fetch(&router, "GET", "/cards.csv", &[]).await;
-        assert_eq!((kept.contains_key(header::AGE), runs.count() - before), (true, 2), "and kept again");
+        assert_eq!((kept.contains_key(header::AGE), runs.count() - before), (true, 1), "and kept again");
     }
 }
 

@@ -6,6 +6,18 @@
 //! that lifetime (`s-maxage` where the answer has one, else `max-age`, RFC 9111 section 4.2.1)
 //! gives it to the next such request in the handler's place, with an `Age`.
 //!
+//! A `HEAD` that would be given a kept answer were it a `GET` is given it too, with every header
+//! the `GET` gets, its `Content-Length` the kept body's, and no body: the router drops it after
+//! every stage, as it drops the handler's (RFC 9110 section 9.3.2). A `HEAD` nothing kept stands
+//! for is its handler's, and what it makes is not kept: a handler is told the request is a
+//! `HEAD` (it may take `Method`, and `Req` leaves the notice for the `GET`), the layout starts
+//! none of its reads for one, and so its page may not be the `GET`'s. Nor does it leave a mark
+//! that its URL was asked for ([`Store::asked`]) or count toward a run of answers not kept
+//! ([`Unkept`]): it was never one that could be. One given a kept answer counts as a `GET` given
+//! one does, the answer read and its route found to have bodies worth asking for, since it was
+//! spared its handler as the `GET` is. A route's handler for `HEAD` alone gives no kept answer:
+//! the one kept was another handler's.
+//!
 //! While the store has room every such answer is kept. Once it is full, keeping an answer may
 //! drop another page, so an answer is kept then only when its URL was asked for before, as far
 //! back as the marks that say so go ([`Store::asked`]): a crawler's first walk over more URLs
@@ -1006,7 +1018,7 @@ impl Answers {
 
 /// A request a kept answer can stand for: a `GET` that shows nothing about who is asking, for
 /// the whole document where the route answers a page, read as the handler would see it (after
-/// the app's middleware).
+/// the app's middleware); or such a `HEAD`, which a kept answer stands for and none is kept for.
 pub(crate) struct Asked<'a> {
     answers: &'a Answers,
     signal: &'a crate::Signal,
@@ -1016,6 +1028,8 @@ pub(crate) struct Asked<'a> {
     host: Option<&'a HeaderValue>,
     language: Option<&'a HeaderValue>,
     data: bool,
+    /// A `HEAD`: given a kept answer, whose body the router drops, and none of its own kept.
+    head: bool,
 }
 
 /// What a request's headers say of whether a kept answer can stand for it, and what of them its
@@ -1086,10 +1100,16 @@ impl<'a> Sent<'a> {
 }
 
 impl<'a> Asked<'a> {
-    pub(crate) fn of(req: &'a Request, shape: Shape) -> Option<Self> {
-        if *req.method() != http::Method::GET {
-            return None;
-        }
+    /// `head`: whether the route's answer to a `HEAD` is its handler's to a `GET`, which is so
+    /// unless the route has a handler for `HEAD` of its own.
+    pub(crate) fn of(req: &'a Request, shape: Shape, head: bool) -> Option<Self> {
+        let head = match *req.method() {
+            http::Method::GET => false,
+            // A `HEAD` asks for what its `GET` would answer (RFC 9110 section 9.3.2), with the
+            // same headers and no body, which the router drops after every stage.
+            http::Method::HEAD if head => true,
+            _ => return None,
+        };
         let signal = req.extensions().get::<crate::Signal>()?;
         let answers = signal.shared()?.kept.as_ref()?;
         // A caller a middleware read makes the answer that caller's, and the error page's request
@@ -1110,7 +1130,14 @@ impl<'a> Asked<'a> {
             return None;
         }
         let hash = answers.0.keys.hash_one(at.as_str());
-        Some(Asked { answers, signal, at, hash, host, language, data })
+        Some(Asked { answers, signal, at, hash, host, language, data, head })
+    }
+
+    /// A `HEAD`, for which no answer is kept: its handler is told it is one (`Method`, and `Req`
+    /// leaves the notice for the `GET`), the layout starts none of its reads, and so it may
+    /// make another page than the `GET`'s.
+    pub(crate) fn head(&self) -> bool {
+        self.head
     }
 
     /// The kept answer for this request, as its handler gave it, with its age.

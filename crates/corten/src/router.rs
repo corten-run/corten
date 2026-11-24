@@ -117,11 +117,14 @@ impl Endpoint for Giving {
 /// A handler whose answer is the same for everyone (`Public`), a page or a whole body: a kept
 /// answer is given in its place, and the one it makes is kept ([`crate::kept`]). A page is filled
 /// here, as [`crate::middleware`] would after it, so what is kept is the page as it leaves the
-/// route.
+/// route. A `HEAD` the route answers with this handler is given the kept answer too, whose body
+/// the router drops, and what its handler makes for it is not kept.
 struct Keeping {
     shape: crate::kept::Shape,
     /// Of a route of whole bodies: whether any of the answers it made last was kept.
     unkept: Option<Arc<crate::kept::Unkept>>,
+    /// Whether the route's `HEAD` is this handler's `GET`: not for a handler of `HEAD` alone.
+    head: bool,
     inner: Route,
 }
 
@@ -134,12 +137,16 @@ impl Endpoint for Keeping {
             return self.inner.call(req);
         }
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
-        let Some(asked) = crate::kept::Asked::of(&req, self.shape) else { return self.inner.call(req) };
+        let Some(asked) = crate::kept::Asked::of(&req, self.shape, self.head) else { return self.inner.call(req) };
         if let Some(kept) = asked.find() {
             if let Some(route) = &self.unkept {
                 route.found();
             }
             return Box::pin(std::future::ready(kept));
+        }
+        // A `HEAD` no kept answer stood for is its handler's, as before, and leaves no mark.
+        if asked.head() {
+            return self.inner.call(req);
         }
         // In a full store a URL not asked for before is the handler's as any other request.
         let Some(missed) = asked.missed(&req, self.unkept.clone()) else { return self.inner.call(req) };
@@ -293,7 +300,8 @@ impl<S> Clone for Slot<S> {
 }
 
 impl<S: Clone + Send + Sync + 'static> Slot<S> {
-    fn handler<H: Handler<T, S>, T: 'static>(handler: H) -> Self {
+    /// `head`: whether the route's `HEAD` reaches this handler as its `GET` does.
+    fn handler<H: Handler<T, S>, T: 'static>(handler: H, head: bool) -> Self {
         // Known when the route is made, so no other route's requests ask.
         let keeps = handler.keeps();
         Slot::Unbound(Arc::new(move |state| {
@@ -301,7 +309,7 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
             match keeps {
                 Some(shape) => {
                     let unkept = (shape == crate::kept::Shape::Body).then(Default::default);
-                    Arc::new(Keeping { shape, unkept, inner: handled })
+                    Arc::new(Keeping { shape, unkept, head, inner: handled })
                 }
                 None => handled,
             }
@@ -443,7 +451,8 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
     fn on<H: Handler<T, S>, T: 'static>(mut self, at: usize, handler: H) -> Self {
         assert!(self.slots[at].is_none(), "corten: a route has two handlers for {}", NAMES[at]);
         self.keeps |= handler.keeps().is_some();
-        self.slots[at] = Some(Slot::handler(handler));
+        // A handler for `HEAD` alone is not the one a kept answer was made by.
+        self.slots[at] = Some(Slot::handler(handler, at != HEAD));
         let names: &[&'static str] = if at == GET { &["GET", "HEAD"] } else { &NAMES[at..=at] };
         if let Allow::Methods(allowed) = &mut self.allow {
             for name in names {
@@ -460,7 +469,8 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
     pub(crate) fn fallback<H: Handler<T, S>, T: 'static>(mut self, handler: H) -> Self {
         assert!(self.fallback.is_none(), "corten: a route has two handlers for any method");
         self.keeps |= handler.keeps().is_some();
-        self.fallback = Some(Slot::handler(handler));
+        // It answers a `HEAD` only where it answers the `GET` too.
+        self.fallback = Some(Slot::handler(handler, true));
         self
     }
 
