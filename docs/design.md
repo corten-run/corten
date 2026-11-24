@@ -9712,7 +9712,13 @@ rules something out.
     to 32 bytes with none before it, and 23 by the second, all 38 libdeflate's
     (`results/kinds-recorded.txt` under that tag). `__udivti3` and `round`
     are not: they come from compiler_builtins' archive, which has no such section, and lie behind
-    libdeflate's code, where a change to that code can move them by 16 bytes and no pad does. A
+    libdeflate's code, where a change to that code can move them by 16 bytes and no pad does.
+    Whether a request of that pull request's workloads runs either of the two is not measured:
+    no report as the next paragraph defines it has been made on that head, and a map holds no
+    calls. A run of that pull request under this point needs the report for each workload it
+    reads across placements, `plain` and `zstd` in its recorded plan; if a request of one runs
+    either function, that workload has no reading across placements, which is the Revisit when
+    condition below on such a workload, met by the pull request the point was written for. A
     workload whose request runs a function the condition does not excuse has no way back to a
     reading across placements (Not chosen: a reason the review accepts), and what a single build
     of each side decides for it is what the spread test above says of any workload. The
