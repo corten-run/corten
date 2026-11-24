@@ -530,6 +530,23 @@ test("timed parser checks failure classes when a producer wrote them and reads t
   assert.throws(() => readTimedLoad(loadSummary({ invalid: 1 })), /corrupt response/);
 });
 
+test("timed parser refuses an unknown series under the failure-class prefix, alone or beside a counted class", () => {
+  const counts = { http_errors: 10, invalid_responses: 0 };
+  // Alone: a misspelled class must not read as a summary from before the split.
+  assert.throws(() => readFailureClasses(loadSummary({ httpErrors: 10, classes: { http_50x: 10 } }), counts), /unknown timed failure class series: catalog_failed_http_50x/);
+  assert.throws(() => readTimedLoad(loadSummary({ httpErrors: 10, classes: { http_50x: 10 } })), /unknown timed failure class/);
+  // Beside a valid class that already accounts for every HTTP error.
+  assert.throws(() => readFailureClasses(loadSummary({ httpErrors: 10, classes: { http_5xx: 10, http_50x: 1 } }), counts), /unknown timed failure class series: catalog_failed_http_50x/);
+  assert.throws(() => readTimedLoad(loadSummary({ httpErrors: 10, classes: { http_5xx: 10, http_50x: 1 } })), /unknown timed failure class/);
+  // An empty suffix is not a class either.
+  assert.throws(() => readFailureClasses(loadSummary({ classes: { "": 1 } }), { http_errors: 0, invalid_responses: 0 }), /unknown timed failure class/);
+  // A legacy summary with no class series stays valid and its split stays unknown.
+  assert.equal(readFailureClasses(loadSummary({ httpErrors: 10 }), counts), null);
+  assert.equal(readTimedLoad(loadSummary({ httpErrors: 10 })).httpErrors, 10);
+  assert.deepEqual(readFailureClasses(loadSummary({ httpErrors: 10, classes: { http_5xx: 10 } }), counts),
+    { http_429: 0, http_502: 0, http_503: 0, http_5xx: 10, transport: 0, other: 0 });
+});
+
 test("timed request classification does not turn bad content types or arbitrary transport errors into target outcomes", () => {
   const response = (status, type = "text/html", error_code = 0) => ({ status, headers: { "Content-Type": type }, error_code });
   assert.equal(requestOutcome(response(200), "page"), "successes");

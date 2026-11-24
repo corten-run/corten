@@ -2157,10 +2157,12 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    qualification with no timed load, and the shared Express source is left unchanged for it, so no
    idle bound is claimed or checked there; a timed Bun run would need its own bound and this check
    first. `node bench/fullstack/idle-close.mjs <image>` checks an image against an upstream that
-   resets any connection reused after 5 s idle: after 4.5 s with no request it fails a client
-   that still reuses a connection, so it verifies that idle connections are dropped by 4.5 s,
-   under the upstream's 5 s close, not the configured 4 s itself, which a pool expiring
-   between 4 and 4.5 s would also pass (`--bound-ms` sets the bound; see the script's header). It also requires the
+   resets any connection reused after 5 s idle: it probes each read 4.5 to 4.75 s after its
+   last upstream answer and fails a client that still reuses a connection, so it verifies that
+   idle connections are dropped by the probe, under the upstream's 5 s close, not the configured
+   4 s itself, which a pool expiring between 4 s and the probe would also pass. A probe outside
+   that window (a late timer, a slow app) is inconclusive and fails the check (`--bound-ms` sets
+   the bound; see the script's header). It also requires the
    pool to reuse a connection before the idle, so Laravel's image needs `--no-reuse`. Drogon also hands the fixture
    parser's freed memory back to the system after loading (`malloc_trim`), so its memory with items
    in memory is the items' rather than the parser's peak, which the Rust apps avoid by parsing one

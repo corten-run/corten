@@ -41,8 +41,8 @@ a second under what the upstream advertises. Spring is the exception at 1 s, sin
 drops an expired connection late, and Drogon and Django check the idle time when they take a
 connection from the pool, so an expired one is skipped at checkout rather than closed at 4 s. The
 full-stack [Caveats](../fullstack/README.md#caveats), item 5, list each client's setting.
-`bench/fullstack/idle-close.mjs` checks that an image has dropped them by 4.5 s idle, under the
-upstream's 5 s close; it does not measure the configured 4 s itself. This is the pool policy
+`bench/fullstack/idle-close.mjs` checks that an image has dropped them when probed 4.5 to 4.75 s
+idle, under the upstream's 5 s close; it does not measure the configured 4 s itself. This is the pool policy
 alone: no retry, no cache, and still one upstream GET per record read.
 
 The stand-in upstream alone pre-serializes and UTF-8 encodes its records at
@@ -402,7 +402,8 @@ series that received a sample. The six class Counters are still created at init 
 success makes one more comparison; that cost is not measured. A replay reads the classes when any is present, requires
 them to account exactly for the HTTP errors and invalid responses, and names a transport
 error when it refuses a phase; without any (no failures, or a producer from before the
-split) the split is unknown, and the phase replays to the same metrics either way. Counts,
+split) the split is unknown, and the phase replays to the same metrics either way. Any
+other series named `catalog_failed_...` is refused, alone or beside the known ones. Counts,
 root checks, rates, completed iterations and all three threshold results must
 agree exactly. Existing full page/JSON content and browser correctness gates
 remain mandatory; timed requests still discard bodies and check status/type,

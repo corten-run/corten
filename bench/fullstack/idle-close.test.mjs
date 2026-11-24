@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { createServer, request, Agent } from "node:http";
 import test from "node:test";
-import { assertPasses, attemptKey, boundMs, checkImage, checkOptions, closingUpstream, marginMs, ownerKey, parseArgs } from "./idle-close.mjs";
+import { assertPasses, attemptKey, boundMs, checkImage, checkOptions, closingUpstream, keepAliveMs, marginMs, ownerKey, parseArgs, probeWindow, slackMs, waitUntil } from "./idle-close.mjs";
 
 // Listening servers once the event loop has had a turn to release closed handles.
 const listeners = async () => {
@@ -158,7 +158,8 @@ test("a lookup line that is not a full container ID is a failure and is never in
       if (args[0] === "create") return created;
       if (args[0] === "container") return owned("r8", { Id: created });
       if (args[0] === "start") throw new Error("docker start: exit 1\nno such image");
-      if (args[0] === "ps") return removed ? "" : `${odd}\n${created}`;
+      // The sweeps return the odd line beside the real ID; the lookup by ID is clean.
+      if (args[0] === "ps") return removed ? "" : args.includes(`id=${created}`) ? created : `${odd}\n${created}`;
       if (args[0] === "rm") { removed = true; return args.at(-1); }
       assert.fail(args.join(" "));
     });
@@ -168,6 +169,35 @@ test("a lookup line that is not a full container ID is a failure and is never in
     assert.ok(error.cleanup.failures.some((f) => /not a full container ID/.test(f.error)), odd);
     assert.equal(error.cleanup.complete, false);
   }
+});
+
+test("a lookup by ID that returns a short ID records no removal and runs no rm", async () => {
+  const created = id(3);
+  for (const out of [created.slice(0, 12), `${created}\n${id(4)}`, "not-an-id"]) {
+    const docker = fakeDocker((args) => {
+      if (args[0] === "create") return created;
+      if (args[0] === "container") return owned("r9", { Id: created });
+      if (args[0] === "start") throw new Error("docker start: exit 1\nno such image");
+      if (args[0] === "ps") return args.includes(`id=${created}`) ? out : created;
+      assert.fail(`must not run docker ${args.join(" ")}`);
+    });
+    const error = await checkImage("img", { names: ["catalog"], docker: docker.run, runId: "r9", window: 50 }).then(() => assert.fail("passed"), (e) => e);
+    assert.ok(!docker.calls.some((args) => args[0] === "rm"), out);
+    assert.deepEqual(error.cleanup.removed, [], out);
+    assert.ok(error.cleanup.failures.some((f) => f.resource === `container ${created}` && /removal is unconfirmed/.test(f.error)), JSON.stringify(error.cleanup.failures));
+    assert.equal(error.cleanup.complete, false);
+  }
+  // A clean empty lookup by ID is a container already gone: recorded, with no rm.
+  const gone = fakeDocker((args) => {
+    if (args[0] === "create") return created;
+    if (args[0] === "container") return owned("r10", { Id: created });
+    if (args[0] === "start") throw new Error("docker start: exit 1\nno such image");
+    if (args[0] === "ps") return args.includes(`id=${created}`) ? "" : created;
+    assert.fail(`must not run docker ${args.join(" ")}`);
+  });
+  const error = await checkImage("img", { names: ["catalog"], docker: gone.run, runId: "r10", window: 50 }).then(() => assert.fail("passed"), (e) => e);
+  assert.deepEqual(error.cleanup.removed, [created]);
+  assert.equal(error.cleanup.complete, true);
 });
 
 test("a failed start and a failed removal both surface, and only the confirmed ID is ever removed", async () => {
@@ -232,20 +262,30 @@ test("the upstream records each request's idle, answers before the close and res
 });
 
 // A stand-in for an app image: a server that reads API_BASE through an HTTP agent, so its pool's idle
-// bound is chosen by the test. `agent: false` opens a connection per request.
-function standInDocker(runId, agentOptions) {
+// bound is chosen by the test. `agent: false` opens a connection per request. `expireMs` closes a
+// pooled connection idle that long, on a timer of the stand-in's own rather than Node's. `delay(path,
+// n)` holds the nth answer to a path (from 1) that many ms after its upstream answer.
+function standInDocker(runId, agentOptions, delay = () => 0) {
+  const { expireMs, ...options } = agentOptions ?? {};
   const containerId = id(9);
   let app, removed = false;
   const docker = fakeDocker(async (args) => {
     if (args[0] === "create") {
       const base = args[args.findIndex((a) => a.startsWith("API_BASE="))].slice("API_BASE=".length).replace("host.docker.internal", "127.0.0.1");
-      const agent = agentOptions && new Agent(agentOptions);
+      const agent = agentOptions && new Agent(options), served = new Map();
+      if (expireMs) agent.on("free", (socket) => { clearTimeout(socket.expiry); socket.expiry = setTimeout(() => socket.destroy(), expireMs); });
       app = createServer((req, res) => {
-        const path = { "/catalog/record_1": "/catalog/records/record_1" }[req.url];
+        const path = { "/catalog/record_1": "/catalog/records/record_1", "/api/marketplace/item_1": "/marketplace/records/item_1" }[req.url];
+        const n = (served.get(req.url) ?? 0) + 1;
+        served.set(req.url, n);
         const up = request(base + path, { agent: agent ?? false }, (answer) => {
+          clearTimeout(answer.socket.expiry);
           const chunks = [];
           answer.on("data", (c) => chunks.push(c));
-          answer.on("end", () => { res.writeHead(answer.statusCode === 200 ? 200 : 502, { connection: "close" }); res.end(Buffer.concat(chunks)); });
+          answer.on("end", () => setTimeout(() => {
+            res.writeHead(answer.statusCode === 200 ? 200 : 502, { connection: "close" });
+            res.end(Buffer.concat(chunks));
+          }, delay(req.url, n)));
         });
         up.on("error", () => { res.writeHead(502, { connection: "close" }); res.end(); });
         up.end();
@@ -263,43 +303,99 @@ function standInDocker(runId, agentOptions) {
   return docker;
 }
 
-test("the whole check passes a pool under the bound and fails one still reusing at 4.5 s or opening a connection per request", async () => {
-  const run = (name, agent, extra = {}) => checkImage("img", { names: ["catalog"], concurrency: 3, docker: standInDocker(name, agent).run, runId: name, window: 50, ...extra });
-  const [safe, frozen, late, unpooled] = await Promise.all([
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+const inWindow = ({ fromMs, toMs }) => fromMs >= boundMs + marginMs && toMs < keepAliveMs - slackMs;
+
+test("the whole check passes a pool under the bound and fails one still reusing at 4.5 s, one probed late, or one opening a connection per request", async () => {
+  const run = (name, agent, extra = {}, delay) => checkImage("img", { names: ["catalog"], concurrency: 3, docker: standInDocker(name, agent, delay).run, runId: name, window: 50, ...extra });
+  const early = [];
+  const [safe, frozen, late, slept, woke, unpooled, slow] = await Promise.all([
     run("safe", { keepAlive: true, timeout: 2000 }),
     // Every event stamped 0 ms: readiness and the warm bursts share a timestamp, so only the
     // event order can tell them apart.
     run("frozen", { keepAlive: true, timeout: 2000 }, { stamp: () => 0 }),
-    // Node's agent keeps a connection until the server's keep-alive hint less this buffer: 4.8 s.
-    run("late", { keepAlive: true, agentKeepAliveTimeoutBuffer: 200 }),
+    // A pool that drops a connection idle 4.8 s, between the bound and the upstream's close (Node's
+    // own expiry, the keep-alive hint less this buffer, is pushed past it).
+    run("late", { keepAlive: true, agentKeepAliveTimeoutBuffer: 200, expireMs: 4800 }),
+    // The same 4.8 s pool, with an idle timer that fires 700 ms late: the probe comes after the pool
+    // has expired, so nothing is reused and only the window shows the probe proves nothing.
+    run("slept", { keepAlive: true, agentKeepAliveTimeoutBuffer: 200, expireMs: 4800 }, { idleWait: (ms) => sleep(ms + 700) }),
+    // A timer that fires after a third of the time asked: the wait still reaches the window.
+    run("woke", { keepAlive: true, timeout: 2000 }, { idleWait: (ms) => { early.push(ms); return sleep(Math.floor(ms / 3)); } }),
     run("unpooled", null),
+    // Marketplace first, its probe answered 400 ms late (its 8th to 10th requests, after one
+    // readiness read and two warm bursts of three): it is inconclusive, and catalog after it still
+    // idles from its own last answer and probes inside its window.
+    run("slow", { keepAlive: true, timeout: 2000 }, { names: ["marketplace", "catalog"] }, (path, n) => (path === "/api/marketplace/item_1" && n >= 8 ? 400 : 0)),
   ]);
   assertPasses(safe);
   assert.ok(safe.reads.catalog.warm.reused > 0);
-  assert.ok(safe.idleMs >= boundMs + marginMs && safe.idleMs < 5000, String(safe.idleMs));
+  assert.ok(inWindow(safe.reads.catalog.after.probe), JSON.stringify(safe.reads.catalog.after.probe));
+  assert.equal(safe.reads.catalog.after.inconclusive, false);
+  assert.deepEqual(safe.window, { fromMs: boundMs + marginMs, belowMs: keepAliveMs - slackMs });
   assert.equal(safe.cleanup.complete, true);
   // The readiness answer is not counted as a warm answer, whatever the stamps say.
   assert.equal(frozen.reads.catalog.warm.answers, 6, JSON.stringify(frozen.reads.catalog.warm));
-  assert.ok(frozen.idleMs >= boundMs + marginMs, String(frozen.idleMs));
   assertPasses(frozen);
   // Expiring at 4.8 s, between the bound and the upstream's close: every read still answers 200 and
   // the upstream closed nothing, but each reused connection had been idle past the bound.
   assert.deepEqual(late.reads.catalog.after.statuses, [200, 200, 200]);
   assert.deepEqual(late.closedIdle, []);
+  assert.ok(inWindow(late.reads.catalog.after.probe), JSON.stringify(late.reads.catalog.after.probe));
   assert.ok(late.reusedPastBound.length > 0 && late.reusedPastBound.every((e) => e.idle >= boundMs + marginMs - 50), JSON.stringify(late.reusedPastBound));
   assert.throws(() => assertPasses(late), /idle 4000 ms or more was reused/);
+  // Probed late, the same pool shows no reuse at all; the window makes that inconclusive, a failure.
+  const probe = slept.reads.catalog.after.probe;
+  assert.ok(probe.fromMs >= keepAliveMs - slackMs, JSON.stringify(probe));
+  assert.equal(slept.reads.catalog.after.inconclusive, true);
+  assert.deepEqual(slept.reusedPastBound, []);
+  assert.deepEqual(slept.closedIdle, []);
+  assert.throws(() => assertPasses(slept), /catalog: inconclusive: probed \d+ to \d+ ms/);
+  // Only the window catches it: the same result with its probe moved inside passes.
+  assertPasses({ ...slept, reads: { catalog: { ...slept.reads.catalog, after: { ...slept.reads.catalog.after, probe: { fromMs: 4500, toMs: 4600 } } } } });
+  // Woken early, the wait rechecked the clock and waited again until the window opened.
+  assert.ok(early.length > 1, JSON.stringify(early));
+  assert.ok(inWindow(woke.reads.catalog.after.probe), JSON.stringify(woke.reads.catalog.after.probe));
+  assertPasses(woke);
   assert.equal(unpooled.reads.catalog.warm.reused, 0);
   assert.throws(() => assertPasses(unpooled), /no upstream connection was reused before the idle/);
   assertPasses(unpooled, { reuse: false });
+  // A slow read is inconclusive itself and does not push the next read's probe out of its window.
+  assert.ok(slow.reads.marketplace.after.probe.toMs >= keepAliveMs - slackMs, JSON.stringify(slow.reads.marketplace.after.probe));
+  assert.equal(slow.reads.marketplace.after.inconclusive, true);
+  assert.ok(inWindow(slow.reads.catalog.after.probe), JSON.stringify(slow.reads.catalog.after.probe));
+  assert.equal(slow.reads.catalog.after.inconclusive, false);
+  assert.throws(() => assertPasses(slow), /marketplace: inconclusive/);
 });
 
-test("the check refuses a result that did not wait past the bound or checked no reads", () => {
-  const read = { warm: { statuses: [200, 200], answers: 2, reused: 1 }, after: { statuses: [200], answers: 1, connections: [] } };
-  const good = { boundMs, marginMs, idleMs: boundMs + marginMs, reads: { catalog: read }, closedIdle: [], reusedPastBound: [] };
+test("the idle wait rechecks the clock after an early wake and returns at once when the target has passed", async () => {
+  let clock = 0;
+  const asked = [];
+  // A timer that advances the clock by only half of what was asked.
+  const waits = await waitUntil(1000, { now: () => clock, wait: async (ms) => { asked.push(ms); clock += ms / 2; } });
+  assert.ok(clock >= 1000, String(clock));
+  assert.equal(waits, asked.length);
+  assert.ok(asked.length > 1 && asked.every((ms) => Number.isInteger(ms) && ms >= 1), JSON.stringify(asked));
+  // A fractional remainder is rounded up, never down to a zero-length wait that returns early.
+  clock = 0;
+  const fractions = [];
+  await waitUntil(0.4, { now: () => clock, wait: async (ms) => { fractions.push(ms); clock += ms; } });
+  assert.deepEqual(fractions, [1]);
+  assert.equal(await waitUntil(5, { now: () => 10, wait: () => assert.fail("no wait once the target has passed") }), 0);
+});
+
+test("the check refuses a result probed outside its window or that checked no reads", () => {
+  const window = probeWindow(boundMs);
+  const read = (probe) => ({ warm: { statuses: [200, 200], answers: 2, reused: 1 }, after: { statuses: [200], answers: 1, connections: [], probe } });
+  const good = { boundMs, marginMs, window, reads: { catalog: read({ fromMs: 4500, toMs: 4749 }) }, closedIdle: [], reusedPastBound: [] };
   assertPasses(good);
   assert.throws(() => assertPasses({ ...good, reads: {} }), /no reads were checked/);
-  assert.throws(() => assertPasses({ ...good, idleMs: boundMs }), /ended before the bound/);
-  assert.throws(() => assertPasses({ ...good, reads: { catalog: { ...read, warm: { ...read.warm, answers: 1 } } } }), /one upstream answer per read before/);
-  assert.throws(() => assertPasses({ ...good, reads: { catalog: { ...read, warm: { ...read.warm, statuses: [200, 500] } } } }), /before the idle/);
+  assert.throws(() => assertPasses({ ...good, reads: { catalog: read({ fromMs: 4499, toMs: 4600 }) } }), /catalog: inconclusive/);
+  assert.throws(() => assertPasses({ ...good, reads: { catalog: read({ fromMs: 4500, toMs: 4750 }) } }), /catalog: inconclusive/);
+  assert.throws(() => assertPasses({ ...good, reads: { catalog: read({ fromMs: 4500, toMs: 4600 }), items: read({ fromMs: 5158, toMs: 5170 }) } }), /items: inconclusive/);
+  assert.throws(() => assertPasses({ ...good, window: { fromMs: 0, belowMs: Infinity } }), /window is not the bound's/);
+  const { after } = good.reads.catalog;
+  assert.throws(() => assertPasses({ ...good, reads: { catalog: { ...good.reads.catalog, warm: { ...good.reads.catalog.warm, answers: 1 } } } }), /one upstream answer per read before/);
+  assert.throws(() => assertPasses({ ...good, reads: { catalog: { warm: { ...good.reads.catalog.warm, statuses: [200, 500] }, after } } }), /before the idle/);
   assert.throws(() => assertPasses({ ...good, closedIdle: [{ idle: 5000 }] }), /past its keep-alive/);
 });

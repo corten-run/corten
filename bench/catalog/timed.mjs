@@ -36,12 +36,18 @@ export function timedContainerEvidence(info) {
 // and neither does a summary from the producer before the split: absence alone is not a count.
 // When any series is present, the four HTTP classes must account for every HTTP error and
 // `transport` and `other` for every invalid response, exactly, each present series with at least
-// one request. Without any, the split is unknown (null), never zero.
+// one request. Without any, the split is unknown (null), never zero. The `catalog_failed_` prefix
+// is reserved for these classes: a series under it with any other suffix is refused, alone or
+// beside known ones, so a misspelled class can neither pass for a summary without the split nor
+// hide beside a counted one.
 export const timedFailureClasses = Object.freeze(["http_429", "http_502", "http_503", "http_5xx", "transport", "other"]);
 const httpClasses = ["http_429", "http_502", "http_503", "http_5xx"];
+const failurePrefix = "catalog_failed_";
 
 export function readFailureClasses(summary, { http_errors: httpErrors, invalid_responses: invalid }) {
   const metric = (name) => summary?.metrics?.[name]?.values ?? summary?.metrics?.[name];
+  const unknown = Object.keys(summary?.metrics ?? {}).filter((key) => key.startsWith(failurePrefix) && !timedFailureClasses.includes(key.slice(failurePrefix.length)));
+  assert.equal(unknown.length, 0, `unknown timed failure class series: ${unknown.join(", ")}`);
   const present = timedFailureClasses.filter((name) => metric(`catalog_failed_${name}`) !== undefined);
   if (!present.length) return null;
   const classes = Object.fromEntries(timedFailureClasses.map((name) => [name, present.includes(name) ? metric(`catalog_failed_${name}`)?.count : 0]));

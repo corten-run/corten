@@ -6,20 +6,29 @@
 // sees it. The apps therefore do not reuse a connection idle for 4 s (`boundMs`; Spring's 1 s is
 // under it).
 //
-// The check, per read: the app answers 200 (readiness); two bursts of concurrent reads, each read
-// one upstream answer, of which at least one comes on a connection that had already answered, so
-// the pool is shown to be in use before the idle (`--no-reuse` for a client that opens a connection
-// per request); then nothing for `boundMs + marginMs` (4.5 s) after the last answer, which is
-// 500 ms past the bound and 500 ms before the upstream here closes (1.5 s before Node's own close);
-// then a burst again. It passes when every read after the idle is a 200 from exactly one upstream
-// answer and no request arrived on a connection idle for the bound or longer. So a client that
-// still reuses a connection idle 4.5 s fails, as well as one that reuses a connection the upstream
-// closes: here a request on a connection idle the advertised 5 s or more meets a reset and no
-// answer. A library that retries a lost request still shows the reuse. What it verifies is that
-// the pool has dropped its idle connections by 4.5 s, under the upstream's 5 s close: a pool that
-// expires anywhere between 4 s and 4.5 s also passes, so each app's configured 4 s is read from its
-// source, not measured here. Each burst's answers are the upstream events recorded after the burst
-// began (by position in the event list, not by timestamp), so a readiness answer is never counted.
+// The check: the app answers 200 on every read (readiness); then, one read at a time, two bursts of
+// concurrent reads, each read one upstream answer, of which at least one comes on a connection that
+// had already answered, so the pool is shown to be in use before the idle (`--no-reuse` for a client
+// that opens a connection per request); then nothing until `boundMs + marginMs` (4.5 s) after the
+// last upstream answer, which is 500 ms past the bound; then a burst again (the probe), before the
+// next read starts its own warm bursts and idle. Each read idles after its own warm bursts, so a
+// slow read never delays another's probe. The wait rechecks the monotonic clock after every wake,
+// so a timer that fires early only means another wait. A probe counts only inside its window: it
+// starts at least 4.5 s after the latest answer on any connection, and its last read is answered
+// before `keepAliveMs - slackMs` (4.75 s) after that read's own last warm answer, so the pool chose
+// its connections inside the window, 250 ms before the upstream here closes (1.25 s before Node's
+// own close). A probe outside it (a late timer, a slow app) is inconclusive and fails the check:
+// a pool that expires at 4.8 s would pass a probe made at 5.2 s.
+// It passes when every probe is inside its window, every read after the idle is a 200 from exactly
+// one upstream answer and no request arrived on a connection idle for the bound or longer. So a
+// client that still reuses a connection idle 4.5 s fails, as well as one that reuses a connection
+// the upstream closes: here a request on a connection idle the advertised 5 s or more meets a reset
+// and no answer. A library that retries a lost request still shows the reuse. What it verifies is
+// that the pool had dropped its idle connections when probed, 4.5 to 4.75 s after their last
+// answer, under the upstream's 5 s close: a pool that expires anywhere between 4 s and the probe
+// also passes, so each app's configured 4 s is read from its source, not measured here. Each
+// burst's answers are the upstream events recorded after the burst began (by position in the event
+// list, not by timestamp), so a readiness answer is never counted.
 //
 // Docker is used the way bench/marketplace/alert-probe-run.mjs uses it: every command has a
 // deadline; the container carries this run's owner label and is registered only by the immutable
@@ -29,7 +38,9 @@
 // only the time left in it, and none starts once it is spent), and its cleanup is reported
 // unconfirmed if nothing appears. The owner-label sweep runs after that search whatever it found.
 // Every ID a lookup returns must be a full 64-hex container ID before it is inspected or removed.
-// A failed or unconfirmed removal fails the run.
+// A container counts as gone only when the lookup by its ID comes back empty, or with exactly that
+// ID and a removal that confirms it; any other output leaves it unconfirmed. A failed or
+// unconfirmed removal fails the run.
 // Usage: node bench/fullstack/idle-close.mjs <image> [catalog,marketplace,items] [NAME=value ...] [--json-only] [--no-reuse] [--bound-ms=N] [--label=key=value ...]
 // A functional check, not a measurement.
 import assert from "node:assert/strict";
@@ -47,8 +58,12 @@ import { records as marketplaceRecords } from "../marketplace/fixtures.mjs";
 export const keepAliveMs = 5000;
 /** The idle time past which the apps' clients do not reuse a connection. */
 export const boundMs = 4000;
-/** How far past the bound the idle wait goes; the wait must still end before `keepAliveMs`. */
+/** How far past the bound the idle wait goes. */
 export const marginMs = 500;
+/** How long before the upstream's close a probe's last read must have been answered. */
+export const slackMs = 250;
+/** The window a probe must fall in, in ms after the last upstream answer: from `fromMs`, ending before `belowMs`. */
+export const probeWindow = (bound = boundMs) => ({ fromMs: bound + marginMs, belowMs: keepAliveMs - slackMs });
 export const ownerKey = "run.corten.fullstack.idle-close";
 // The create's own label, so a create whose acknowledgement never came back can be found as itself.
 export const attemptKey = `${ownerKey}.create`;
@@ -69,7 +84,7 @@ export function reads(pages = true) {
 /**
  * The run's options, checked before anything is opened or any Docker command is sent: a nonempty
  * list of known reads without repeats, caller labels outside this run's own label namespace, and a
- * bound whose idle wait ends before the upstream's close.
+ * bound that leaves the probe a window before the upstream's close.
  */
 export function checkOptions({ names, labels = [], bound = boundMs, concurrency = 6 }) {
   const known = Object.keys(reads());
@@ -81,8 +96,8 @@ export function checkOptions({ names, labels = [], bound = boundMs, concurrency 
     assert.ok(key, `labels are key=value, not ${JSON.stringify(label)}`);
     assert.ok(key !== ownerKey && !key.startsWith(`${ownerKey}.`), `label ${key} is reserved for the check's ownership labels`);
   }
-  assert.ok(Number.isInteger(bound) && bound > 0 && bound + marginMs < keepAliveMs,
-    `the bound (${bound} ms) plus the ${marginMs} ms margin must end before the upstream's ${keepAliveMs} ms close`);
+  assert.ok(Number.isInteger(bound) && bound > 0 && probeWindow(bound).fromMs < probeWindow(bound).belowMs,
+    `the bound (${bound} ms) plus the ${marginMs} ms margin must end before the upstream's ${keepAliveMs} ms close less ${slackMs} ms`);
   assert.ok(Number.isInteger(concurrency) && concurrency > 1, "concurrency is an integer above 1");
 }
 
@@ -94,11 +109,13 @@ export function checkOptions({ names, labels = [], bound = boundMs, concurrency 
  * `answered` event's `idle` is how long its connection had been idle when the request arrived (null
  * on a connection's first request), and a `closedIdle` event's `lastPath` is the path its connection
  * last answered. The event is recorded before the answer is written. `lastAnswer()` is the
- * `performance.now()` of the latest answer. `close()` ends every connection and the listener.
+ * `performance.now()` of the latest answer, and `lastAnswer(path)` of the latest to that path.
+ * `close()` ends every connection and the listener.
  */
 export function closingUpstream(bodies, keepAlive = keepAliveMs, { stamp } = {}) {
   const started = performance.now(), events = [], sockets = new Set();
   const now = stamp ?? (() => Math.round(performance.now() - started));
+  const lastByPath = new Map();
   let next = 0, last = null;
   const server = createServer((socket) => {
     const connection = next++;
@@ -125,6 +142,7 @@ export function closingUpstream(bodies, keepAlive = keepAliveMs, { stamp } = {})
           "connection: keep-alive\r\nkeep-alive: timeout=5\r\n\r\n");
         socket.write(body);
         answered = last = performance.now();
+        lastByPath.set(path, last);
         lastPath = path;
       }
     });
@@ -133,7 +151,7 @@ export function closingUpstream(bodies, keepAlive = keepAliveMs, { stamp } = {})
     for (const socket of sockets) socket.destroy();
     if (server.listening) server.close(() => done()); else done();
   });
-  return { server, events, now, close, lastAnswer: () => last };
+  return { server, events, now, close, lastAnswer: (path) => (path === undefined ? last : lastByPath.get(path) ?? null) };
 }
 
 /** One GET on a new connection to the app: its status, or the error that ended it. */
@@ -151,6 +169,16 @@ export function get(url) {
 }
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
+/**
+ * Waits until `now()` reaches `target`, rechecking after every wake, so a timer that fires early
+ * (or a fractional delay Node truncates) only means another wait. Returns how many waits it took.
+ */
+export async function waitUntil(target, { now = () => performance.now(), wait = sleep } = {}) {
+  let waits = 0;
+  for (let left; (left = target - now()) > 0; waits++) await wait(Math.ceil(left));
+  return waits;
+}
 const canonical = /^[0-9a-f]{64}$/;
 const brief = (error) => String(error?.message ?? error).slice(0, 2048);
 
@@ -176,7 +204,10 @@ export function docker(args, { timeout = commandTimeout, combined = false } = {}
  * by the ID its create returned, confirmed to carry this run's owner label before every inspect, log
  * read and removal. `teardown()` removes it, and anything else carrying the owner label, by
  * confirmed ID; reconciles a create that returned no ID by its attempt label within `window` ms;
- * and records every failure. It never throws.
+ * and records every failure. It never throws. `removed` (the created container) and `recovered`
+ * (any other) list IDs confirmed gone: removed here by confirmed ID, or absent from a clean lookup
+ * by that ID. A lookup by ID that returns anything but nothing or exactly that ID is a failure and
+ * leaves the container in neither list.
  */
 export function ownedContainer({ docker: run = docker, runId, labels = [], window = reconcileWindow, wait = sleep, now = () => performance.now() }) {
   const owner = `${ownerKey}=${runId}`, attempt = `${attemptKey}=${runId}`;
@@ -190,6 +221,15 @@ export function ownedContainer({ docker: run = docker, runId, labels = [], windo
     const odd = lines.filter((l) => !canonical.test(l));
     if (odd.length) fail(`containers matching ${filter}`, `docker ps returned ${JSON.stringify(odd[0].slice(0, 200))}, not a full container ID; it is not inspected or removed`);
     return lines.filter((l) => canonical.test(l));
+  };
+  // Whether `target` still exists, from a lookup by its own ID.
+  const present = async (target) => {
+    const lines = (await run(["ps", "-a", "--no-trunc", "--filter", `id=${target}`, "--format", "{{.ID}}"]))
+      .split("\n").map((l) => l.trim()).filter(Boolean);
+    if (!lines.length) return false;
+    assert.ok(lines.length === 1 && lines[0] === target,
+      `docker ps --filter id=${target} returned ${JSON.stringify(lines.join(" ").slice(0, 200))}, not that full ID; its removal is unconfirmed`);
+    return true;
   };
   const confirm = async (target) => {
     const [info] = JSON.parse(await run(["container", "inspect", target]));
@@ -240,7 +280,7 @@ export function ownedContainer({ docker: run = docker, runId, labels = [], windo
       catch (error) { fail(`containers labelled ${owner}`, error); }
       for (const target of targets) {
         try {
-          if ((await list(`id=${target}`)).includes(target)) {
+          if (await present(target)) {
             await confirm(target);
             assert.equal(await run(["rm", "-f", "-v", target]), target, `docker rm did not confirm ${target}`);
           }
@@ -263,10 +303,11 @@ export function ownedContainer({ docker: run = docker, runId, labels = [], windo
  * idle, with the container's cleanup record. Rejects, after closing the upstream and tearing down
  * the container, if a step fails or the teardown is incomplete; the error carries `cleanup`.
  * `stamp` replaces the clock of the upstream's event timestamps, which are reported but never
- * used to decide which events belong to a burst (a test holds it still to show that).
+ * used to decide which events belong to a burst (a test holds it still to show that). `idleWait`
+ * replaces the timer of the idle wait (a test makes it fire early or late).
  */
 export async function checkImage(image, { names = ["catalog", "marketplace", "items"], env = [], labels = [], pages = true, concurrency = 6, bound = boundMs,
-  docker: run = docker, runId = `idle-close-${randomBytes(5).toString("hex")}`, window = reconcileWindow, readyTimeout = 180_000, stamp } = {}) {
+  docker: run = docker, runId = `idle-close-${randomBytes(5).toString("hex")}`, window = reconcileWindow, readyTimeout = 180_000, stamp, idleWait = sleep } = {}) {
   checkOptions({ names, labels, bound, concurrency });
   const all = reads(pages), chosen = Object.fromEntries(names.map((name) => [name, all[name]]));
   const upstream = closingUpstream(Object.fromEntries(Object.values(chosen).map((r) => [r.upstream, r.body])), keepAliveMs, { stamp });
@@ -296,28 +337,30 @@ export async function checkImage(image, { names = ["catalog", "marketplace", "it
     }
     // What the upstream did since `mark`, an index into its event list taken before a burst.
     const since = (mark) => upstream.events.slice(mark);
-    const answers = (mark, target) => since(mark).filter((e) => e.kind === "answered" && e.path === target);
+    const answers = (events, target) => events.filter((e) => e.kind === "answered" && e.path === target);
     const burst = async (path) => Promise.all(Array.from({ length: concurrency }, () => get(base + path)));
-    // Two bursts per read, to show the pool reuses connections before the idle.
-    const warm = {};
+    const limits = probeWindow(bound), checked = {}, closedIdle = [], reusedPastBound = [];
+    // One read at a time, each with its own idle, so no read's probe waits on another's.
     for (const [read, { path, upstream: target }] of Object.entries(chosen)) {
-      const mark = upstream.events.length, statuses = [...await burst(path)];
+      // Two bursts, to show the pool reuses connections before the idle.
+      const warmMark = upstream.events.length, warmStatuses = [...await burst(path)];
       await sleep(100);
-      statuses.push(...await burst(path));
-      const seen = answers(mark, target);
-      warm[read] = { statuses, answers: seen.length, reused: seen.filter((e) => e.idle !== null).length };
+      warmStatuses.push(...await burst(path));
+      const warmed = answers(since(warmMark), target);
+      const warm = { statuses: warmStatuses, answers: warmed.length, reused: warmed.filter((e) => e.idle !== null).length };
+      await waitUntil(upstream.lastAnswer() + limits.fromMs, { wait: idleWait });
+      // The probe's window is measured from the freshest connection any read could reuse (its
+      // start) and from this read's own last answer (its end), so it holds whether the app keeps
+      // one pool for every upstream path or one per path.
+      const mark = upstream.events.length, start = performance.now(), latest = upstream.lastAnswer(), own = upstream.lastAnswer(target);
+      const statuses = await burst(path), end = performance.now(), events = since(mark), seen = answers(events, target);
+      const probe = { fromMs: Math.floor(start - latest), toMs: Math.ceil(end - own) };
+      checked[read] = { warm, after: { statuses, answers: seen.length, connections: seen.map(({ connection, idle }) => ({ connection, idle })),
+        probe, inconclusive: !(probe.fromMs >= limits.fromMs && probe.toMs < limits.belowMs) } };
+      closedIdle.push(...events.filter((e) => e.kind === "closedIdle"));
+      reusedPastBound.push(...events.filter((e) => e.kind === "answered" && e.idle !== null && e.idle >= bound));
     }
-    const idleFrom = upstream.lastAnswer();
-    await sleep(Math.max(0, idleFrom + bound + marginMs - performance.now()));
-    const after = performance.now(), afterMark = upstream.events.length;
-    const checked = {};
-    for (const [read, { path, upstream: target }] of Object.entries(chosen)) {
-      const mark = upstream.events.length, statuses = await burst(path), seen = answers(mark, target);
-      checked[read] = { warm: warm[read], after: { statuses, answers: seen.length, connections: seen.map(({ connection, idle }) => ({ connection, idle })) } };
-    }
-    const closedIdle = since(afterMark).filter((e) => e.kind === "closedIdle");
-    const reusedPastBound = since(afterMark).filter((e) => e.kind === "answered" && e.idle !== null && e.idle >= bound);
-    result = { image, boundMs: bound, marginMs, keepAliveMs, idleMs: Math.floor(after - idleFrom), concurrency, reads: checked, closedIdle, reusedPastBound };
+    result = { image, boundMs: bound, marginMs, keepAliveMs, slackMs, window: limits, concurrency, reads: checked, closedIdle, reusedPastBound };
   } catch (error) {
     failure = error;
   } finally {
@@ -330,13 +373,19 @@ export async function checkImage(image, { names = ["catalog", "marketplace", "it
 }
 
 /**
- * The check. Before the idle, every read answers 200 from one upstream answer each and, unless
- * `reuse` is false, some on a connection that had answered already. After it, the same, with none
- * on a connection idle for the bound or longer and none meeting the upstream's close.
+ * The check. Every probe fell inside its window; one outside it is inconclusive and fails. Before
+ * the idle, every read answers 200 from one upstream answer each and, unless `reuse` is false, some
+ * on a connection that had answered already. After it, the same, with none on a connection idle
+ * for the bound or longer and none meeting the upstream's close.
  */
 export function assertPasses(result, { reuse = true } = {}) {
   assert.ok(Object.keys(result.reads).length > 0, "no reads were checked");
-  assert.ok(result.idleMs >= result.boundMs + result.marginMs, `the idle (${result.idleMs} ms) ended before the bound and its margin`);
+  assert.deepEqual(result.window, probeWindow(result.boundMs), "the probe window is not the bound's");
+  const { fromMs, belowMs } = result.window;
+  for (const [read, { after: { probe } }] of Object.entries(result.reads)) {
+    assert.ok(probe.fromMs >= fromMs && probe.toMs < belowMs,
+      `${read}: inconclusive: probed ${probe.fromMs} to ${probe.toMs} ms after the last upstream answer, outside ${fromMs} to below ${belowMs} ms`);
+  }
   for (const [read, { warm, after }] of Object.entries(result.reads)) {
     assert.deepEqual(warm.statuses, warm.statuses.map(() => 200), `${read}: statuses before the idle`);
     assert.equal(warm.answers, warm.statuses.length, `${read}: one upstream answer per read before the idle`);
@@ -376,5 +425,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   console.log(JSON.stringify(result));
   assertPasses(result, { reuse });
-  console.log(`${image}: no upstream connection reused after ${result.idleMs} ms idle (bound ${bound} ms, upstream close ${keepAliveMs} ms)`);
+  const probes = Object.values(result.reads).map(({ after: { probe } }) => probe);
+  console.log(`${image}: no upstream connection reused when probed ${Math.min(...probes.map((p) => p.fromMs))} to ${Math.max(...probes.map((p) => p.toMs))} ms ` +
+    `after the last answer (window ${result.window.fromMs} to below ${result.window.belowMs} ms, bound ${bound} ms, upstream close ${keepAliveMs} ms)`);
 }
