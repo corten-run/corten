@@ -1,0 +1,25 @@
+# 0e170186f Lay the new API test out as rustfmt does node v24.22.3
+PASS 1 fmt, corten fmt, clippy, tests, release tests (1031 s)
+PASS 2 no-default-features, corten new and check, publish dry run (159 s)
+PASS 3 MSRV 1.89 check (13 s)
+PASS 4 npm run check (14 s)
+PASS 5 watchlist image (79 s)
+FAIL 6 watchlist smoke (290 s) log /root/fc/6.log
+PASS 7 watchlist dev smoke (11 s)
+PASS 8 card-market image (76 s)
+PASS 9 card-market smoke (29 s)
+PASS 10 ui-gallery image (43 s)
+PASS 11 ui-gallery smoke (275 s)
+PASS 12 corten-site image (60 s)
+PASS 13 corten-site smoke (27 s)
+PASS 14 corten-site held smoke (9 s)
+PASS 15 seller-desk image (51 s)
+PASS 16 seller-desk smoke (13 s)
+PASS 17 deck-builder image (52 s)
+FAIL 18 deck-builder smoke (33 s) log /root/fc/18.log
+PASS 19 deck-builder preview smoke (11 s)
+PASS 20 auction-room image (58 s)
+PASS 21 auction-room smoke (3 s)
+PASS 22 listings-feed image (83 s)
+PASS 23 listings-feed smoke (2 s)
+# full checks done

@@ -1,0 +1,28 @@
+head 1c0ecbff8 Record the browser lines' premises in Choice 28, what Linux WebKit sends in Choice 32 and the third placement run in Choice 72
+   Compiling corten-feed v0.2.0 (/src/crates/corten-feed)
+   Compiling corten-run v0.2.0 (/src/crates/corten)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 54s
+     Running unittests src/lib.rs (/target/debug/build/corten-run/03072fc088ecfe1b/out/corten-03072fc088ecfe1b)
+
+running 3 tests
+test compress::tests::a_browsers_line_is_read_as_the_parser_reads_it ... ok
+test page::carried_tests::a_request_s_mode_is_its_corten_header_s_or_its_first_accept_line_s ... ok
+test tests::api::an_api_answers_the_same_whatever_mode_the_request_names ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1054 filtered out; finished in 0.00s
+
+== base with the head's test changes
+ crates/corten/src/page.rs      |  5 ++++-
+ crates/corten/src/tests/api.rs | 31 +++++++++++++++++++++++++++++++
+ 2 files changed, 35 insertions(+), 1 deletion(-)
+   Compiling corten-run v0.2.0 (/src/crates/corten)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 01s
+     Running unittests src/lib.rs (/target/debug/build/corten-run/03072fc088ecfe1b/out/corten-03072fc088ecfe1b)
+
+running 2 tests
+test page::carried_tests::a_request_s_mode_is_its_corten_header_s_or_its_first_accept_line_s ... ok
+test tests::api::an_api_answers_the_same_whatever_mode_the_request_names ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1052 filtered out; finished in 0.00s
+
+PRECHECK-DONE
