@@ -380,6 +380,8 @@ export function recheckPostedCreate(row) {
   assert.ok(fleet.manifestSha256 === row.manifestSha256 && fleet.manifest.provider.accountId === row.accountId, changed);
   const saved = readGroup(fleet, row.group);
   assert.ok(saved.outcome === row.outcome && saved.stateSha256 === row.stateSha256, changed);
+  // A launch, operation or recheck lock beside the attempt is custody, as for the selected group's own attempt.
+  try { createErroredCustody(saved.local); } catch (cause) { throw new Error(changed, { cause }); }
   assert.equal((saved.state.createErrored ?? saved.state.createContradicted)?.dropletId, row.dropletId, changed);
   const contradicted = postedContradiction(saved);
   assert.equal(contradicted, row.contradicted, changed);
