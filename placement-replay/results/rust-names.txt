@@ -1,0 +1,54 @@
+== the head as recorded
+   .text: 3483 input sections, 3438 named for a Rust-mangled symbol (3188 as .text.<symbol>, 250 as .text.unlikely.<symbol>)
+   .text: 4 sections from rustc's objects not so named: .text.main .text.rust_eh_personality .text.__udivti3 .text.round
+   .text: first section aligned beyond 16 bytes is .text.compute_length_counts (alignment 32), after 3443 sections; from it on, 0 of 40 sections are named for a Rust-mangled symbol
+   other output sections: 0 .text* input sections; 2018 input sections of other names end in a Rust-mangled symbol, which the case leaves out
+   the case refuses nothing on this side
+   exit 0, as expected
+== the base as recorded
+   .text: 3442 input sections, 3436 named for a Rust-mangled symbol (3186 as .text.<symbol>, 250 as .text.unlikely.<symbol>)
+   .text: 4 sections from rustc's objects not so named: .text.main .text.rust_eh_personality .text.__udivti3 .text.round
+   .text: no input section aligned beyond 16 bytes
+   other output sections: 0 .text* input sections; 2017 input sections of other names end in a Rust-mangled symbol, which the case leaves out
+   the case refuses nothing on this side
+   exit 0, as expected
+== a built-in behind the library named as rustc's v0 scheme names a function
+   .text: 3483 input sections, 3439 named for a Rust-mangled symbol (3189 as .text.<symbol>, 250 as .text.unlikely.<symbol>)
+   .text: 3 sections from rustc's objects not so named: .text.main .text.rust_eh_personality .text.__udivti3
+   .text: first section aligned beyond 16 bytes is .text.compute_length_counts (alignment 32), after 3443 sections; from it on, 1 of 40 sections are named for a Rust-mangled symbol
+   other output sections: 0 .text* input sections; 2018 input sections of other names end in a Rust-mangled symbol, which the case leaves out
+   refused: .text, behind the first aligned section: .text._RNvNtCs9ltgdHTiPiY_17compiler_builtins4math5round [libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_builtins.7910cdbfc192a4de-cgu.167.rcgu.o)]
+   the side has no reading across placements (1 refused)
+   exit 1, as expected
+== the other named as the legacy scheme does
+   .text: 3483 input sections, 3439 named for a Rust-mangled symbol (3189 as .text.<symbol>, 250 as .text.unlikely.<symbol>)
+   .text: 3 sections from rustc's objects not so named: .text.main .text.rust_eh_personality .text.round
+   .text: first section aligned beyond 16 bytes is .text.compute_length_counts (alignment 32), after 3443 sections; from it on, 1 of 40 sections are named for a Rust-mangled symbol
+   other output sections: 0 .text* input sections; 2018 input sections of other names end in a Rust-mangled symbol, which the case leaves out
+   refused: .text, behind the first aligned section: .text._ZN17compiler_builtins3int4udiv8__udivti317h0123456789abcdefE [libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_builtins.7910cdbfc192a4de-cgu.152.rcgu.o)]
+   the side has no reading across placements (1 refused)
+   exit 1, as expected
+== a cold section there, under .text.unlikely.
+   .text: 3483 input sections, 3439 named for a Rust-mangled symbol (3188 as .text.<symbol>, 251 as .text.unlikely.<symbol>)
+   .text: 3 sections from rustc's objects not so named: .text.main .text.rust_eh_personality .text.__udivti3
+   .text: first section aligned beyond 16 bytes is .text.compute_length_counts (alignment 32), after 3443 sections; from it on, 1 of 40 sections are named for a Rust-mangled symbol
+   other output sections: 0 .text* input sections; 2018 input sections of other names end in a Rust-mangled symbol, which the case leaves out
+   refused: .text, behind the first aligned section: .text.unlikely._RNvNtCs9ltgdHTiPiY_17compiler_builtins4math5round [libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_builtins.7910cdbfc192a4de-cgu.167.rcgu.o)]
+   the side has no reading across placements (1 refused)
+   exit 1, as expected
+== a section so named in another output section
+   .text: 3483 input sections, 3438 named for a Rust-mangled symbol (3188 as .text.<symbol>, 250 as .text.unlikely.<symbol>)
+   .text: 4 sections from rustc's objects not so named: .text.main .text.rust_eh_personality .text.__udivti3 .text.round
+   .text: first section aligned beyond 16 bytes is .text.compute_length_counts (alignment 32), after 3443 sections; from it on, 0 of 40 sections are named for a Rust-mangled symbol
+   other output sections: 1 .text* input sections; 2018 input sections of other names end in a Rust-mangled symbol, which the case leaves out
+   refused: .init: .text._RNvCs9ltgdHTiPiY_4init4init [crti.o]
+   the side has no reading across placements (1 refused)
+   exit 1, as expected
+== a name that only begins like one (no hash under the legacy scheme) is not refused
+   .text: 3483 input sections, 3438 named for a Rust-mangled symbol (3188 as .text.<symbol>, 250 as .text.unlikely.<symbol>)
+   .text: 4 sections from rustc's objects not so named: .text.main .text.rust_eh_personality .text.__udivti3 .text._ZN5round5roundE
+   .text: first section aligned beyond 16 bytes is .text.compute_length_counts (alignment 32), after 3443 sections; from it on, 0 of 40 sections are named for a Rust-mangled symbol
+   other output sections: 0 .text* input sections; 2018 input sections of other names end in a Rust-mangled symbol, which the case leaves out
+   the case refuses nothing on this side
+   exit 0, as expected
+every case as expected

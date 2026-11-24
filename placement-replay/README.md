@@ -5,8 +5,36 @@ placement plan's fifth point): how a placement run checks a build that links cod
 16 bytes. Read and run on 2026-11-24. Nothing here counted a cycle: these are layouts, read from
 recorded files and from links run again, and placement medians read from earlier runs' reports.
 
-This commit's six ancestors hold earlier versions of these files. What this one adds, with
-node alone on the files kept here (nothing was built or linked for it):
+This commit's seven ancestors hold earlier versions of these files. What this one adds, with
+node alone on files kept under tags (nothing was built or linked for it):
+
+1. `rust-names.mjs <an unpadded link's map>` applies the fifth point's second case to one
+   side: it refuses a side with a `.text*` input section whose name ends in a Rust-mangled
+   symbol (`_R...`, or `_ZN...17h<hash>E` under the legacy scheme) at or after the first input
+   section of `.text` aligned beyond 16 bytes, or in another output section. The map prints
+   symbols demangled, so the script reads each input section's name, which rustc makes from
+   the function's mangled symbol. `rust-names-cases.mjs` runs it on the two unpadded maps kept
+   here and on the head's with one section's name rewritten, five ways
+   (`results/rust-names.txt`). As recorded, the head has 3,483 input sections in `.text`, 3,438
+   so named (3,188 as `.text.<symbol>` and 250 as `.text.unlikely.<symbol>`), and none of the 40
+   from its first aligned section on; the base has 3,436 of 3,442 and no section aligned
+   beyond 16 bytes; neither has a `.text*` input section in another output section, and the
+   case refuses nothing on either. Four sections from rustc's objects are not so named on each
+   side (`main`, `rust_eh_personality`, `__udivti3`, `round`), the last two behind the
+   library on the head: Rust under C names, which the case does not see. Sections of data are
+   named for mangled symbols too (2,018 on the head) and the case leaves them out. The
+   `replay.mjs` kept here tests less: a function of the crates it is given by name.
+2. `pads-compare.mjs <the first runs' pads.mjs> <the sizing kit's pads.mjs>` runs both pad
+   generators at every K from 31 to 254 against the plan's fourth point, written in the script
+   from the point's text (`results/pads-compare.txt`; the script's head says how each file is
+   taken from its tag, `evidence/ee7b0b41` and `evidence/placement-sizing-1999`). At K = 30
+   the two give the same lists. Run on past 30, the first runs' generator meets the rule at 31
+   and 32 alone (from 33 on its differences mod 4096 repeat: 32 distinct of 33), and the
+   sizing kit's meets it at all 224; both keep the 30 pairs first, and the two give different
+   lists at all 224. The sizing kit's stops at 255 ("no free difference").
+
+What the commit before this one added, kept here though the Choice did not choose the rule
+its mode applies (Not chosen there has the alternative and the reason):
 
 1. `replay.mjs --kinds <the base's unpadded map> <the head's>` prints, for each function from
    the first section aligned beyond 16 bytes on (a listed function) of either side, which
@@ -48,7 +76,7 @@ node alone on the files kept here (nothing was built or linked for it):
    build; it was not run for this commit, which built nothing, and those two maps are the two
    kept here (`results/maps.sha256` has their SHA-256, and the two kept here have it).
 
-What the commit before this one changed, kept here (it built and linked nothing either):
+What the commit before that one changed, kept here (it built and linked nothing either):
 
 1. Under the rule the second pad is one of four sizes, 16, 32, 48 or 64 bytes, the smallest
    that puts `.data` where the rule says. `replay.mjs --data-further rule` now refuses any
@@ -74,14 +102,14 @@ What the commit before this one changed, kept here (it built and linked nothing 
 5. One sentence of this file is corrected: `.init` and `.fini` moved 8 bytes less than the
    data with every second pad that is a multiple of 16, 64 included.
 
-What the commit before that one changed, kept here:
+What the commit three before this one changed, kept here:
 
 1. The rule it stands behind: a second pad in every placement of both sides, sized so that
    `.data`'s offset in a 64-byte line is the unpadded link's plus the first pad's size, mod
    64. `second-pad.sh` links every placement of the kit's plan
    that way; `replay.mjs` takes `--data-further rule` for that place; `relink-two.mjs` can
    link without the map, to compare the two binaries.
-2. The measurement of the data's place that the commit before this one described is no
+2. The measurement of the data's place that the commit before it described is no
    longer asked by the rule. `measure-sim.mjs` and what it printed stay as the record of what
    that measurement would have read by chance.
 3. Two sentences of this file that the files here did not support are corrected: `.init` and
@@ -94,7 +122,7 @@ What the commit before that one changed, kept here:
    (`results/maps-4.sha256` against `results/maps.sha256`). The files under
    `results/replay/`, `results/facts-*.json`, `results/totals.txt`, `results/negative.txt`,
    `results/build.out`, `results/replay-all.out`, `results/last-pad*` and
-   `results/maps.sha256` are the third build's, as the commit before this one left them.
+   `results/maps.sha256` are the third build's, as the commit before it left them.
 
 What the one before that changed, kept here:
 

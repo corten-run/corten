@@ -1,0 +1,9 @@
+K = 30: the two give the same lists: true; the rule's complaints of them: []
+the first runs' generator: meets the rule at K = 31 to 32 (2 of 224); its first 30 pairs are the lists at K = 30 at K = 31 to 254 (224 of 224)
+  the first K it fails at: 33: 32 distinct differences of 33 | 34: 32 distinct differences of 34 | 35: 32 distinct differences of 35
+the sizing kit's generator: meets the rule at K = 31 to 254 (224 of 224); its first 30 pairs are the lists at K = 30 at K = 31 to 254 (224 of 224)
+K from 31 to 254 at which the two give different lists: 224 of 224
+the sizing kit's generator at K = 255: pads: no free difference for placement 254
+the sizing kit's generator at K = 256: pads: no free difference for placement 254
+the sizing kit's generator at K = 257: pads: no free difference for placement 254
+the sizing kit's generator at K = 258: pads: no free difference for placement 254
