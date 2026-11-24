@@ -266,28 +266,33 @@ rather than a setting to remember.
 
 The same check answers `400 Bad Request` to a request HTTP does not allow, whatever names the
 app has and with `Policy::any_host()` too, and nothing of the app runs for it either. The
-first two are what HTTP requires, the third what it recommends, the fourth Corten's reading, and
-the fifth its choice where HTTP leaves one:
+first two are what HTTP requires, and the third is Corten's choice where HTTP leaves one:
 
 1. an HTTP/1.1 request with no `Host` line, or a request with more than one, the same value or
    not, which [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112#section-3.2) (3.2) requires;
 2. a `Host` that is not a host and maybe a port, which it requires too: one with a user
-   (`user@shop.example`), a path (`shop.example/x`), a list (`shop.example, other.example`) or
-   an IPv6 address with a zone (`[fe80::1%25eth0]`, which
-   [RFC 9844](https://www.rfc-editor.org/rfc/rfc9844) took back out of a URI's host);
-3. a request-target with a byte outside ASCII, an invalid request-line, which the same section
-   says a server should refuse (or redirect). A browser percent-encodes those bytes, as in
-   `/caf%C3%A9`, which is answered as before; a client that sends them as they are was routed
-   before and is not now;
-4. `*` with a method other than `OPTIONS`, by Corten's reading: HTTP keeps that target for
-   `OPTIONS` and does not say what a server answers to another method;
-5. by Corten's choice, a `Host` with nothing in it, which HTTP lets a server read as its own
-   default name, and a target that names its host with a user in it
+   (`user@shop.example`), a path (`shop.example/x`), a space (`shop.example, other.example`),
+   a port that is no number, or an IPv6 address with a zone (`[fe80::1%25eth0]`, which
+   [RFC 9844](https://www.rfc-editor.org/rfc/rfc9844) took back out of a URI's host). Names
+   joined by a comma alone (`shop.example,other.example`) are not refused: a comma is a
+   character a host's name may hold
+   ([RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.2.2), 3.2.2), so the value
+   is read as one name, as it was before: the `421` unless the app answers to any host, and a
+   subdomain where its end is under a name the app lists with a leading dot;
+3. by Corten's choice: a `Host` with nothing in it, or a port alone, which HTTP lets a server
+   read as its own default name (also beside a target that names its host, as in
+   `GET http://shop.example/ HTTP/1.1` with `Host:`, where HTTP has a server ignore what `Host`
+   says); a target that names its host with a user in it
    (`GET http://user@shop.example/ HTTP/1.1`), which HTTP says a server should treat as an
-   error.
+   error; and an address in brackets that is not IPv6 (`[v1.fe80]`: the grammar has a place
+   for an address of a later version, none is defined, and RFC 3986 asks for an error where
+   the version is not known).
 
-Corten looks for nothing else in a target: any other the parse lets through (a `|` in a path,
-a host alone with a method other than `CONNECT`) is routed as before.
+Nothing in a request-target is refused: whatever the parse lets through is routed as before,
+though HTTP says a server should answer an invalid request-line with a `400` or a redirect. That
+is a byte outside ASCII (`/café` from a client that sends it as typed, where a browser sends
+`/caf%C3%A9`), a `|` or a `%` before no hex digits, `*` with any method, and a host alone with a
+method other than `CONNECT`.
 
 The connection stays open after it, as after the `421`: the server knows where the request
 ends, so the next one on the connection is answered (one whose body had not all arrived is
@@ -298,12 +303,18 @@ server did not read it off a connection: a test's `app().test()`, or a `Router` 
 library's server calls as a tower `Service`, which answers for the requests it reads (every
 other case above is a `400` there too). What reaches the server is what counts: a proxy that
 speaks HTTP/1.1 to the app and passes on no `Host` for a client that sent none sends a request
-that gets the `400` (nginx's documentation says it leaves out a header it is given an empty
-value for, as `proxy_set_header Host $http_host` then is; this was not run). The first request
+that gets the `400`. nginx as [the deploy guide](deploy.md#nginx) sets it up is not
+such a proxy. Run with that configuration (nginx 1.31.9, `proxy_set_header Host $http_host`,
+the app with `HOSTS=shop.example`): for an HTTP/1.0 client that sends no `Host`, nginx writes
+`Host: app`, the name of its `upstream` block, as the first line of an HTTP/1.1 request, and
+the app answers that name with the `421`, as it did before this check refused anything; an
+HTTP/1.1 client with no `Host` gets nginx's own `400` and the app is not asked; a client that
+names `shop.example`, over HTTP/1.0 or HTTP/1.1, is answered. The first request
 refused for each reason is logged, with its method, its path and the reason: never its query,
 and of a `Host` or a target's host that is none only the name in it, without a user before or a
 path after (no name at all where an `@` comes after a `/`, a `?` or a `#`, since which part is
-the user cannot then be told; a list or a name with a space in it is logged as sent).
+the user cannot then be told; a name with a space in it is logged as sent). A path or a name
+longer than 200 bytes is given by its first 200 and its length.
 
 A deployed app lists the names it is served under, where the deploy sets `HOST` and `PORT`:
 
@@ -1346,16 +1357,15 @@ glibc), and wall times did not tell them apart.
 The host check, with what
 carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
 check's read of `Host` and its match against the app's names. Refusing what HTTP does not allow
-([Host names](#host-names)) added about 100 to a request whose first header line is not `Host`:
-77 to 98 with `Host` second, and 127 to 137 with it last of a browser's eight lines, about
-where Playwright's WebKit on Linux writes it (its Chromium and Firefox write it first). A
-request with `Host` first is no longer searched for it and costs 15 to 51 fewer than before
-when the app holds its name as written (`localhost`, a name in `HOSTS`), and 4 to 22 fewer for
-a subdomain of one. An app that answers to any host now reads `Host` too: about 230 more with
-it first, 360 with it second and 420 to 430 with it last of eight
-(counted over a socket at `c4c19eee5`, with no control beside it, so the smaller of these are
-within what two builds of the same code differ by;
-[design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+([Host names](#host-names)) added to a request whose first header line is not `Host`: 46 to 50
+with `Host` second, and 80 to 85 with it last of a browser's eight lines, about where
+Playwright's WebKit on Linux writes it (its Chromium and Firefox write it first, and so does
+nginx as the deploy guide sets it up). A request with `Host` first is no longer searched for it
+and costs 59 to 96 fewer than before in an app that names its hosts. An app that answers to any
+host now reads `Host` too: 177 to 183 more with it first and 377 to 384 with it last of eight
+(counted over a socket at the final code, `31212aa1d`, each build in turn, with main built a
+second time counting within 4 of main but for one request, 12 away, so the 46 is not told from
+34; [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 
