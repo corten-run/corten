@@ -2276,7 +2276,8 @@ headers! {
 /// the connection's, not the answer's. Names under `corten-` and `access-control-` (an API's
 /// CORS) are Corten's too, and so are the caching headers a CDN obeys over `Cache-Control`, which
 /// Corten makes `private` for an answer it must not share: those it removes from such an answer
-/// (`crate::cache::CDN_CACHING`, the same list) and any other `*cache-control`.
+/// (`crate::cache::read_before_cache_control`, the same rule: `crate::cache::CDN_CACHING` and any
+/// other `*cache-control`).
 const NOT_SHARED: [&str; 27] = [
     "set-cookie",
     "clear-site-data",

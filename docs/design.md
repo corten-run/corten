@@ -7725,9 +7725,11 @@ rules something out.
     (a flag on the entry, set only while the copy is still the store's, with no write to its path
     since its handler read), with a signal of its own that aborts at the area's deadline counted
     afresh from its start, the window's end, shutdown (which waits for it as for `Signal::finish`
-    work), once its copy leaves the store (told by the store as the copy goes, since what it makes
-    could no longer be kept: so a store holds no more refreshes than copies, however many turns of
-    new pages go through it) or once it has answered; a guard aborts it however the task ends, a
+    work), once its copy leaves the store (told by the store as the copy goes, that refresh and no
+    other, since what it makes could no longer be kept) or once it has answered; and none is
+    claimed while as many are under way as the store holds copies, each counted until its task has
+    ended though its copy went: so a store holds no more refreshes than copies, however many turns
+    of new pages go through it. A guard aborts it however the task ends, a
     panic or the task dropped too. Reading the answer's body is inside those limits, and a panic
     there is caught as the handler's is; none
     starts once shutdown has begun or its time is up. What it makes is kept as a miss's answer is
@@ -7735,22 +7737,25 @@ rules something out.
     lock, while the copy it was made for is still the store's, with no write to the path since
     the handler read and before shutdown or its end: so it never takes the place of a page
     another request kept after the copy went for room, was replaced or was ended. A `500`, `502`,
-    `503` or `504`, a panic, a passed deadline or a body of a known size that could not be read
-    leaves the old copy given until its window ends, and any other answer takes it out. Its
+    `503` or `504`, a panic, a passed deadline or a page it would keep whose body could not be
+    read leaves the old copy given until its window ends, and any other answer takes it out. Its
     handler sees the request as the app's middleware left it, its headers and extensions and a
     locale the middleware chose from the URL (`Req::set_locale`, carried to the refresh's signal);
     not the middleware again, nor what it set around `next` or on the request's signal otherwise,
     which the guide tells a route that depends on to leave the window off. Within
     `stale-if-error`, past the other window, the request runs the handler as a miss does, with
     the copy held on its signal: a `500`, `502`, `503` or `504` from the route, a panic or a
-    passed deadline (both caught where every handler's are), or a body of a known size that could
-    not be read, is answered with the copy and its `Age` (the copy stays on the signal until the
-    answer's body is read, so a deadline or a panic while it is read finds it), while the copy is
+    passed deadline (both caught where every handler's are), or a page the store would keep whose
+    body could not be read, is answered with the copy and its `Age` (the copy stays on the signal
+    until that body is read, so a deadline or a panic while it is read finds it), while the copy is
     still the store's and
     within its window when the failure comes: not once another request's answer ended or replaced
     it, or it went for room. Any other answer is the handler's (a `4xx`, since the page is gone,
-    not failing, and a `501`, which RFC 5861 does not name), decided once its body is read. A
-    write to the path ends both windows, as it ends the lifetime. A copy in either window counts
+    not failing, and a `501`, which RFC 5861 does not name), decided once a body to keep is read.
+    The store reads a body only to keep it: one it would not keep (made over more than its
+    lifetime, say) is passed on unread, as a miss's is, the copy taken out at once, and a failure
+    as a later stage reads that body (the tag's hash, the client's connection) is that answer's
+    own. A write to the path ends both windows, as it ends the lifetime. A copy in either window counts
     against the bound and goes, as one past its lifetime does, when the hand comes to it, before
     one that stands and was read; a refresh or a request it is held for holds it by its identity
     alone (a `Weak`), so one that goes takes its body and head with it. The windows are the
@@ -7760,8 +7765,10 @@ rules something out.
     lookup returns (below). The copy given for a panic or a passed deadline is given outside the
     middleware, whose response half the panic unwound or the deadline dropped, so whatever it
     would have said of caching after `next` was never said: that copy goes out `private, no-store`,
-    with the headers a CDN reads first removed, rather than with the handler's `public` and
-    windows. Correctness ranks first: an app whose middleware makes its pages private must not
+    with every header a CDN may read first removed (`cache::read_before_cache_control`, the rule an
+    unstaged answer that sets a cookie follows and `Public::header` checks: any `*cache-control`, a
+    deployment's own name too, and the others Corten names), rather than with the handler's
+    `public` and windows. Correctness ranks first: an app whose middleware makes its pages private must not
     have a stale page shared because its handler failed. A copy given for a returned failure is
     inside the middleware and leaves with what it says.
 
@@ -7807,9 +7814,17 @@ rules something out.
     middleware's response half, which is not there to run (the panic unwound it, the deadline
     dropped it), and running the middleware again around the copy, which would run its request
     half twice; and the handler's own header kept where the app has no middleware, a second rule
-    for a path that is a failure's. For bounding refreshes: a count of them against a cap of its
-    own, a second limit to choose where one refresh for each copy kept, ended as the copy goes,
-    already follows the store's bound.
+    for a path that is a failure's. For bounding refreshes: a cap of their own, a second limit to
+    choose where the copies kept already follow the store's bound; letting a refresh's count go as
+    its copy goes, before its task has ended, which let copies turned out and kept again start
+    more refreshes than copies (the fourth review found it); and a mark for each URL, which holds
+    one refresh to a URL but not the store's to its copies. For telling a refresh its copy went:
+    one notice for the store, which woke every refresh at each copy that went; and a notice in
+    each entry, whose 16 bytes take an entry and its `Arc`'s counts past jemalloc's class of 448.
+    The refreshes are counted in a map by the copy's address, under a lock taken only to claim or
+    end a refresh, or as a copy being made again goes. For a body the store would not keep: holding
+    the old copy as its fallback until a later stage has read it, which needs the outer stages to
+    give the copy in its place or the body to be buffered where it now passes through.
 
     Stands on: measured (the catalog benchmark's app with its page marked `Public` for a minute,
     `44323327e` on this change's `f7e53a594` against `60a77b231` on main's `6045710b0`, each

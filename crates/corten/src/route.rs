@@ -4631,19 +4631,8 @@ fn unstaged_headers(mut res: crate::response::Response) -> crate::response::Resp
         let no_store = headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
         headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::NO_STORE } else { crate::cache::PRIVATE });
         // A CDN reads its own before `Cache-Control`: any `*cache-control`, as a
-        // [`crate::Public`] answer may not set, and the others Corten names
-        // ([`crate::cache::CDN_CACHING`]).
-        let cdn: Vec<header::HeaderName> = headers
-            .keys()
-            .filter(|name| {
-                let name = name.as_str();
-                (name.ends_with("cache-control") && name != "cache-control") || crate::cache::CDN_CACHING.contains(&name)
-            })
-            .cloned()
-            .collect();
-        for name in cdn {
-            headers.remove(name);
-        }
+        // [`crate::Public`] answer may not set, and the others Corten names.
+        crate::cache::drop_every_cdn_caching(headers);
     }
     res
 }

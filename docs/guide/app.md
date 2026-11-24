@@ -1032,7 +1032,8 @@ before it (a route that says `unstaged` goes through none;
    includes the reads' wait ([design Choice 20](../design.md#choice-layout-reads)).
    A `Public` page, JSON, text or file the app has kept is given here in the handler's place
    ([Caching](#the-pages-the-app-keeps)): stages 1 to 5 ran for the request as for any other,
-   and 7 and 8 follow.
+   and 7 and 8 follow. A kept page given in place of a panic or a passed deadline leaves without
+   5's response half, which the panic unwound or the deadline dropped.
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
    page for a browser. For a failure the request is at fault for (an unknown URL, a wrong method,
    a method no route has (the router's 501, not one a handler or a middleware answers), a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
@@ -1575,11 +1576,14 @@ replaces a newer page. The refresh has the area's deadline counted afresh from w
 not what was left of the request's, and stops at the earlier of that and the window's end, or
 at shutdown, which waits for it; reading its body is part of that time, and none starts once
 shutdown has begun. It also stops as soon as the old page leaves the store (it went for room, or
-another page took its place), since what it made could no longer be kept: so the store never has
-more pages being made again than pages it keeps. When it stops, however it stops, the signal its
+another page took its place), since what it made could no longer be kept. A refresh counts
+until it has ended, though its page left, and none starts while as many are under way as the
+store keeps pages (the old page is given meanwhile, and the next request past its lifetime tries
+again): so the store never has more pages being made again than it keeps, however fast pages
+are turned out and kept again. When it stops, however it stops, the signal its
 handler was given aborts, and work the handler started on that signal ends. A failure there (a
 `500`, `502`, `503` or `504`, a panic in the handler or as its body is read, a passed deadline,
-a body of a known size that could not be read) leaves the old page given until its window
+a page it would keep whose body could not be read) leaves the old page given until its window
 ends, and the next request has it made again; any other answer (a `404`, a redirect, a page
 that may not be kept) ends the old page.
 
@@ -1592,14 +1596,17 @@ that.
 
 Within `.stale_if_error(..)` (past the other window, where both are set) a request waits for
 the handler, as when nothing is kept, and when the handler answers `500`, `502`, `503` or `504`,
-panics, passes its deadline or gives a body of a known size that cannot be read (a deadline
+panics, passes its deadline or gives a page the app would keep whose body cannot be read (a deadline
 that passes or a panic while that body is read counts too), the kept page
 is sent in the place of that failure with its `Age`, if it may still be given then: not once
 another request's answer ended it (a `404`, a redirect, a page that may not be kept) or
 replaced it, it went for room, a write to its path came, or its window ended while the handler
 ran. Any other answer is the handler's, a `501` too, which RFC 5861 does not name: a success is
 kept as a miss's would be, and a `404`, a redirect or a page that may not be kept ends the old
-page. In this window every request runs the handler, failing or not. A write to the page's
+page. The app reads a body only to keep it: a page it would not keep (one made over more than
+its lifetime, say) is passed on unread, as when nothing is kept, so the old page has already
+gone, and a failure as that body is read later (for the `ETag`, or as it is sent) is that
+answer's own. In this window every request runs the handler, failing or not. A write to the page's
 path ends both windows, and with `.shared(..)` there are none, since `s-maxage` forbids a
 shared cache to give the page stale.
 
@@ -1610,15 +1617,18 @@ is still given within its windows. Leave the windows off a route whose kept page
 its lifetime.
 
 A panic or a passed deadline ends your middleware before it sees an answer, so the kept page
-sent in place of either cannot carry what the middleware would have said. It goes out
-`private, no-store`, with the headers a CDN reads first removed, so no cache after the app keeps
-or shares it, whatever the handler's answer said; a `500`, `502`, `503` or `504` the handler
+sent in place of either cannot carry what the middleware would have said, and it is the one
+answer a middleware does not see. It goes out `private, no-store`, with every header a CDN may
+read first removed (any `*-cache-control`, a name your deployment chose too, `Surrogate-Control`,
+`Edge-Control`, `X-Accel-Expires`), so no cache after the app keeps or shares it, whatever the
+handler's answer said; a `500`, `502`, `503` or `504` the handler
 returns goes back through the middleware, and the kept page sent in its place leaves with what
 the middleware makes of it.
 
 A kept page stands where the handler does, after [your own middleware](#your-own-middleware). Every
 stage runs for every request: a middleware that refuses, counts or stamps a header still does, and
-sees the `200` with the whole body; the security headers and `Cache-Control` are written as for any
+sees the `200` with the whole body (all but a kept page sent for a panic or a passed deadline,
+above); the security headers and `Cache-Control` are written as for any
 answer; and a request that names the page's tag gets its `304`. What a kept page saves is the
 handler with what it reads, the render, the tag's hash and the compression, since the hash and each
 coding's bytes are made once and stay with the page. On the catalog benchmark's page, marked

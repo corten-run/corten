@@ -482,6 +482,25 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     }
 }
 
+/// Whether the header `name` (lowercase) is one a CDN or proxy may read before `Cache-Control`:
+/// one of [`CDN_CACHING`], or any other `*cache-control`, as a deployment may name its own (RFC
+/// 9213). The headers a [`crate::Public`] answer may not set (`crate::answer`, which checks the
+/// same when the app compiles), and those an answer loses where no shared cache may keep it and
+/// its headers may be ones Corten did not check: an unstaged route's that sets a cookie, and a
+/// kept copy given outside the app's middleware (`crate::kept::held`).
+pub(crate) fn read_before_cache_control(name: &str) -> bool {
+    (name.ends_with("cache-control") && name != "cache-control") || CDN_CACHING.contains(&name)
+}
+
+/// Removes every header [`read_before_cache_control`] names.
+pub(crate) fn drop_every_cdn_caching(headers: &mut HeaderMap) {
+    let names: Vec<header::HeaderName> =
+        headers.keys().filter(|name| read_before_cache_control(name.as_str())).cloned().collect();
+    for name in names {
+        headers.remove(name);
+    }
+}
+
 /// Removes the caching headers a CDN reads before `Cache-Control` ([`CDN_CACHING`]) from an
 /// answer no shared cache may keep.
 pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
