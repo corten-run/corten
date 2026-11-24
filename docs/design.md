@@ -9028,8 +9028,8 @@ rules something out.
     the run resolves; this Choice's floor and its calibration are for single-build runs, whose
     protocol that Choice leaves as it was except for a touched workload, where a single-build
     bound whose distance from its threshold is inside the placement spread recorded for its
-    setup, or with none recorded that Choice's default band, by that Choice's one test, no
-    longer decides it, for the margin or for a win.
+    setup or, with none, that Choice's default band, by that Choice's one test, no longer
+    decides it, for the margin or for a win.
 
     The runs: one host with nothing else running (Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD
     23.1.5 and the repository's release profile, jemalloc 5.3.0 preloaded), every binary built there
@@ -9137,7 +9137,7 @@ rules something out.
 72. <a id="choice-placement-runs"></a>**A touched workload may be read across placements the run's
     plan declares, each side compiled once and relinked with a never-called pad of a declared size
     first in its code, and must be when a single build's distance from its threshold lands inside the placement
-    spread recorded for its setup or, with none recorded, a default band.** The
+    spread recorded for its setup or, with none recorded, the widest of the recorded spreads.** The
     paired-cycle gate reads one build of each side
     ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2), and builds of one commit whose code sits at
     different places have differed in a touched request's cycles by more than its +1% margin:
@@ -9181,8 +9181,8 @@ rules something out.
     When it is required. A placement run of 30 placements costs about two hours of a c-8 for one
     workload's change and A/A beside an A/A on `plain` (the second run's four comparisons took 164
     minutes, and more placements cost in proportion), against about 35 minutes for three
-    single-build comparisons of 100 pairs ([design Choice 71](#choice-layout-floor)'s runs), so it is not the rule for every
-    change. Each placement run's A/A records the workload's
+    single-build comparisons of 100 pairs ([design Choice 71](#choice-layout-floor)'s runs), so it is asked only
+    where one build cannot decide. Each placement run's A/A records the workload's
     placement spread here, its lowest and highest placement median. One test decides:
     a single-build bound's distance from its threshold (the bound less +1% for the margin, the
     bound plus the smallest worthwhile reduction for a CPU-cost win) is inside the spread when it is
@@ -9235,69 +9235,36 @@ rules something out.
     8280. Its A/A on that request with the answer 10,005 seconds old did not resolve, so it
     records none.
 
-    The default band. This Choice first left a run with no recorded spread its single-build bound
-    as the reading at any distance, so a setup nobody had read was held to less than one somebody
-    had: a pass placement could have given passed, and a miss it could have given bound. The
-    two comparisons [design Choice 71](#choice-layout-floor) made of 100 pairs of one commit
-    moved by a pad, the gate's own statistic, read bounds of +1.62% and +1.39% on flat
-    instructions where the same build twice read +0.59%, and on a setup with no spread nothing
-    measured says how far placement moves a bound. So the test is made there against a default
-    band: the lowest and highest placement median of every A/A across placements this Choice holds,
-    resolved or not, in either labelling, -11.57% to +13.10% from the eight A/As of the four
-    runs below (`shares.txt`, printed by `shares.mjs` from the counts under their tags, no cycle
-    counted: `259278e75`, tag `evidence/single-build-undecided`). Both ends are one placement of
-    the fourth run's A/A, +13.10% as recorded and -11.57% with its labels swapped; the next
-    furthest are -5.47% and +5.80%, one placement of the third run's on the API. It is read as a
-    spread is, to two decimals from this Choice on `main` when the plan is declared, and a pull
-    request that records an A/A with a median past either end restates it. Both labellings are
-    taken because which list is called A is arbitrary (as recorded alone the ends are -5.47% and
-    +13.10%). It only widens, being the extremes of a growing sample, and that errs toward not
-    deciding: a wider band sends more readings to a placement run and passes none. It is a
-    default by policy, not a bound on what placement moves: its medians are of 8 pairs on other
-    setups than the run's, and the 400 of them restate the standard deviations recorded here
-    without separating placement from the pairs' own noise.
-
-    For the margin the band leaves one build a bound under -10.57% or over +14.10%, so nearly
-    every no-regression workload on a setup with no spread is read across placements; for a
-    reduction r declared before the run it leaves one build a bound under -11.57% less r, a
-    reduction no placement median on record could account for. The band was proposed by the
-    author of
-    [#1971 Compress a request's small body with gzip by libdeflate for a client without zstd](https://github.com/corten-run/corten/pull/1971),
-    which read a bound of -28.76% against a declared 5% on one build: under a later plan one
-    build decides a reduction of that size, and whoever accepts the band accepts that.
-
-    The band does not reach two kinds of workload. One that item 2 sends to
-    `bench/fullstack/count.mjs` is decided by one build as before: nothing in the tree relinks
-    an image's binary with a pad and starts it, so a band there would ask for a reading nobody
-    can give, a gap left open and not a finding that placement spares those targets. And a
-    negative control keeps [design Choice 71](#choice-layout-floor)'s rule: its code is not the
-    change's, so what one build reads on it beyond noise is placement, which that Choice screens
-    by flat instructions and a floor; one with no floor is still passed or bound by one build at
-    any distance, as before. What keeps a touched workload from being named a control, or a
-    reduction from being declared to fit a reading, is that both are those of the plan the pull
-    request published before the first reading it reports; an earlier private look rests on the
-    author's word.
-
-    A plan its pull request published before 2026-11-24 (UTC), the day the band was proposed, is
-    read by the rule as it then stood, run or not: with no spread its single-build bound is the
-    reading, a pass as much as a miss, and a placement run declared after it does not clear its
-    miss. The cutoff goes by the plan, as [design Choice 71](#choice-layout-floor)'s does and as
-    a recorded spread is read when a plan is declared, and by the day of the proposal, not of
-    its merge, so no plan published once the band was known is read without it. That leaves
-    standing the passes one build gave on setups nobody had read, and the misses placement may
-    have given.
-
-    A placement of 8 recorded pairs took 62 s of turns in the third run (120 in 124 minutes 46
-    seconds on the API's host) and 101 s in the fourth (132 in 222 minutes 25 seconds, its
-    workload waiting 2 s on a stepped clock at each start), so one workload's change and A/A
-    took 125 minutes at K = 60 where a single-build comparison of 100 pairs took 11.6 minutes
-    ([design Choice 71](#choice-layout-floor)). That leaves out the pilot a setup with no
-    eligible A/A reads first, the builds and relinks, the host's setup and adapting a kit, which
-    nobody has timed: no kit is in the tree, and each run below adapted the one before by hand,
-    under its evidence tag. The band makes this the usual reading of a no-regression workload,
-    so it stands on a kit under `bench/` that reads a workload across placements from a probe
-    and its requests (Stands on, reasoned). An author with no quiet Linux host with counters can
-    give no cycle reading, by one build or by many, as before.
+    The default band. One build whose distance from its threshold is inside the range placement
+    alone has been seen to move a reading says where the code landed, not what the change costs,
+    whether or not its own setup has been read. So where no recorded spread applies, the one
+    test above is made against the widest of them, the default band: from the lowest low end to
+    the highest high end of the spreads recorded above (those a complete, resolved A/A recorded
+    by a pull request that changed this Choice; no other A/A's medians reported here), each end
+    as printed and the two not always one spread's: -2.98% to +3.33% today, both `kept`'s. It is
+    read as a spread is, either end inside, from this Choice on `main` when the plan is
+    declared: a pull request that records or replaces a spread restates the band here and in
+    Pull requests, a band that moves after a reading does not reopen it, and a plan declared
+    before `main` gave a band is read without one, so nobody is held to a rule `main` did not
+    show them and no reading changes what it decided. The band is the same whatever reads the
+    workload, `bench/fullstack/count.mjs` or a probe, so nothing is gained against it by
+    choosing one. The test gives what it gives with a spread of the setup's own. A negative
+    control keeps [design Choice 71](#choice-layout-floor)'s rule. Outside, one build decides
+    the margin or a declared reduction. Inside, it decides neither, and the workload is read
+    across placements with the dead ends that reading already has: an A/A that does not resolve
+    does not pass, and a workload no K the pads allow can size is not read across placements,
+    so its reading inside the band does not pass (How many placements, below). For the margin
+    the band holds every bound from -1.98% to +4.33%, so a workload the change leaves about as
+    fast as it was is read across placements on any setup, as it already was where a spread
+    applies; one build decides it only when it reads clearly faster or slower. That reading
+    needs what Pull requests' plan lists: each side's final link captured and run again with
+    pads, each placement checked, K sized from a pilot or an eligible A/A, and the change and
+    its A/A under the turn protocol. The rule does not wait on a kit for it: each run below
+    adapted the kit before it, under its evidence tag; on 2026-11-24 no script under `bench/`
+    did any of it (`df9242b56`); and no run has read the image `count.mjs` starts across
+    placements, so the first catalog target the band leaves not decided has that to build. The
+    band is a default by policy, not a bound on what placement moves on a setup nobody has read
+    (Stands on, bet).
 
     How many placements. A plan declares each workload's K before the run, for at most a 5% chance
     that an A/A of a commit against itself fails one of its two readings, sized from an eligible
@@ -9330,10 +9297,7 @@ rules something out.
     declare a separate K for each workload. The K must also admit the two lists of pads the
     protocol asks for, 2K distinct multiples of 16 up to about 40,000 bytes whose q_i - p_i mod
     4096 take K distinct values: no K over 256 does, since 16-byte steps take 256 values mod 4096,
-    and the kit's `pads.mjs` builds lists for K up to 254. A gated run takes those lists for its
-    K, or lists its pilot's plan declared for it before the pilot ran, so no pad is chosen with a
-    pilot's medians known (a plan published before 2026-11-24 (UTC) keeps the lists it
-    declared). A plan never takes a smaller K than the
+    and the kit's `pads.mjs` builds lists for K up to 254. A plan never takes a smaller K than the
     models ask: if no K the pads allow meets the target, it declares none, the workload is not read
     across placements on that setup at that R (a single-build reading the spread test leaves
     inside then does not pass), and only a new eligible A/A, at another R or on another setup, can
@@ -9613,20 +9577,17 @@ rules something out.
     source moves only what follows it, by an amount inlining and alignment decide, where one at the
     start of `.text` moves each function by an amount the run checks is exactly its size; the protocol for every change, at
     more than three times a single-build run's cost, for readings no placement could flip as well
-    as those it could; a placement run only after a single-build miss, which reads a
+    as those it could, or for every one on a setup with no recorded spread, which would read
+    again a bound further from its threshold than any recorded spread reaches; a placement run
+    only after a single-build miss, which reads a
     miss again and never a pass, though a lucky placement passes a real cost as easily as an
-    unlucky one blocks a free change; one build left deciding at any distance where no spread is
-    recorded (this Choice as first written), for the reason the default band gives; one build
-    deciding nothing there (the band's first draft), which left undecided a reading no placement
-    on record could account for, a bound of -28.76% where the furthest of 400 medians is 13.10%,
-    and left nothing to a workload that
-    [#2024 Check a placement of a build that links code aligned beyond 16 bytes against LLD's rule, and give every placement a second pad that restores its data's place](https://github.com/corten-run/corten/pull/2024),
-    not yet merged, would give no reading across placements; the band from one labelling,
-    without its furthest median or from resolved A/As alone, each a pick among medians already
-    read; a single-build reading already taken with no spread no longer deciding in a pull
-    request not yet merged, a pass as much as a miss (one such miss is the band's proposer's),
-    which changes what readings already taken decide by a rule written with them in hand, where
-    the gate changes no declaration after a run to clear its result; the mean across placements with a Student t bound as the
+    unlucky one blocks a free change; a setup with no recorded spread left its single-build bound
+    as the reading at any distance (this Choice as first written), which held the setups nobody
+    had read to less than the ones somebody had; a default band from the lowest and highest
+    placement median of every A/A reported here, resolved or not, whose high end would be one
+    placement of the fourth run's A/A (+13.10%, the next +3.89%), since a maximum is the
+    statistic one unlucky placement moves most and that run's plan recorded no spread; the mean
+    across placements with a Student t bound as the
     gate's statistic, which assumes the placement medians are near normal, which nothing measured
     shows, and lets one unlucky placement move the bound as far as it is from the rest (reported
     as a diagnostic); more pairs on one build, since more pairs narrow the bound around that
@@ -9649,14 +9610,12 @@ rules something out.
     sizing, since the fourth run's medians reject it; and a pilot read beside a change's comparison
     or counted in the gated run, which would let a plan choose its K after a look at the change.
 
-    Stands on: measured ([design Choice 71](#choice-layout-floor)'s two comparisons of 100 pairs
-    of one commit moved by a pad, as that Choice records them, and the default band's two ends,
-    recomputed from the counts under the four runs' tags, tag `evidence/single-build-undecided`;
-    the five pad builds of each side of that pull request above and main
+    Stands on: measured (the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
     in [design Choice 70](#choice-kept-pages); the first placement run above, tag
     `evidence/ee7b0b41`, its A/As on main rather than the change's base, its answers compared after
-    its kit's normalization, which this Choice accepts for that receipt alone; and the second
+    its kit's normalization, which this Choice accepts for that receipt alone, and its `kept`
+    spread both ends of the default band; and the second
     above, tags `evidence/ca2af2ab` and `evidence/0c0c599c`, the first under the rule as written,
     one of its two A/As resolved; and the third above, tag `evidence/stage-header-checks-2002`,
     its three A/As at 60 placements resolved; and the fourth above, tag
@@ -9673,11 +9632,9 @@ rules something out.
     read across placements, not at one; relinking the same objects with a pad changes placement
     alone, as the answers, the unchanged symbol set and the kept neighbours check; a bound inside
     the spread is one the build's own placement could account for, by the spread one run measured;
-    on a setup with no spread nothing measured there puts a distance beyond what placement
-    moves, so the test is made against the furthest any A/A's placement median has read; that
-    band makes a reading across placements the usual one for a no-regression workload, which no
-    script in the tree gives, so it should not merge before a kit under `bench/` reads a
-    workload across placements from a probe and its requests, a change of its own;
+    with no spread of the setup's own, a bound inside the widest recorded is one placement has
+    been seen to account for elsewhere, which is reason to read it across placements and no
+    measure of that setup;
     the A/A read with its lists' labels swapped takes away any advantage one list's placements
     gave its bound, since both readings use the same pairs; and the order statistic's coverage
     holds for any distribution of placement medians that are
@@ -9691,10 +9648,10 @@ rules something out.
     the fourth read one exact base and two near-base unpadded builds among their padded
     placements and head's above its own, and head's offset less base's at -0.38%, zero inside an
     interval that eight pads leave wide, which shows neither a difference nor its absence); the
-    default band, from medians of 8 pairs on the four runs' setups, is at least as wide as what
-    placement moves a bound of 100 pairs on a setup nobody has read; a pass one build gave with
-    no spread under a plan published before 2026-11-24, which stands, hid no cost above its
-    margin; no cycle of a change was read before the plan its pull request published; an
+    widest recorded spread, from three A/As of 30 placements on two CPU models, sorts a setup
+    nobody has read into decided and not decided well enough, which no run has shown and which
+    is not a bound there (the fourth run's A/A on `old`, resolved and by its plan recorded as no
+    spread, ran from -3.98% to +13.10%); an
     A/A sized by the rule above fails to resolve +1% no more often than it was sized for, which
     takes the medians of the A/A it was sized from as independent and alike over time and the
     setup's spread as holding from one run to the next
@@ -9730,19 +9687,16 @@ rules something out.
     zero inside from eight pads, settles it neither way);
     rustc stops emitting a section per function or aligning functions to 16 bytes, the gate's
     linker is not LLD, or LLD stops placing an ordering file's sections first; a recorded spread
-    is so wide that most single-build readings land inside it, so the protocol is the rule in
-    practice, or so narrow that none do; a placement run with another kernel or toolchain on an
+    or the default band is so wide that no single-build reading lands outside it, so one build
+    decides no touched workload, or so narrow that none land inside; a pull request records or
+    replaces a spread and an end of the default band moves, which changes what one build decides
+    on every setup with no spread of its own; a single-build reading the default band left
+    decided is read the other way across placements on the same commits and setup; a placement
+    run with another kernel or toolchain on an
     otherwise matching setup records a spread wider than the one here, so they belong among what a
     spread must match; a run's time across placements falls to a single-build
-    run's, so the protocol could be the rule rather than an option; something in the tree
-    relinks an image's binary with a pad and starts it, so a catalog target need not be left to
-    one build; a pass left standing by the cutoff above is later read over +1% across
-    placements; a single-build bound outside the default band and a placement run on the same
-    sources disagree past their bounds, or a run reads the gate's own statistic, 100 pairs a
-    build, across placements of one commit, which would give the band in that statistic (the
-    entry above on a spread so wide that most single-build readings land inside it is met by
-    the default band for a no-regression workload on a setup with no spread, by this rule and
-    not by a measurement); or the release binary's own placement is asked to be checked.
+    run's, so the protocol could be the rule rather than an option; or the release binary's own
+    placement is asked to be checked.
 
     Last checked: 2026-11-22 for the source pads of each side of
     [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
@@ -9764,17 +9718,14 @@ rules something out.
     the fourth run on a c-8 (base `14126d2a8` against itself, and unpadded builds of it, of head
     `8d02090bf`, of `92bc32678` and of `705d14045`, rustc 1.100.0 with LLD 23.1.5, Linux
     6.12.117, a Xeon Platinum 8280, tag `evidence/placement-sizing-1999`), with its sizing and
-    tests as the kit's `report.mjs` printed them from those results; 2026-11-24, the default
-    band's ends from the counts under `evidence/ee7b0b41`, `evidence/0c0c599c`,
-    `evidence/stage-header-checks-2002` and `evidence/placement-sizing-1999` by
-    `node shares.mjs` at `259278e75` (tag `evidence/single-build-undecided`), and the third and
-    fourth runs' time a placement from their `progress.log`s under those tags, no cycle counted
-    for either; 2026-11-24, the model
+    tests as the kit's `report.mjs` printed them from those results; 2026-11-24, the model
     failure rates at K = 69, 70, 91 and 92 from that tag's `results/aa-old` at `912199b97`, by
     `sizePilot(readPilot("../results/aa-old"), { K: [69, 70, 91, 92], draws: 200000, seed: 1983 })`
     from `size.mjs` in its `kit/`, each model's `Math.round(rate * draws)` in `rows`,
     and that its `pads.mjs` builds lists meeting the rule for every K from 5 to 254 and none from
-    255 to 400.
+    255 to 400; 2026-11-24, the default band's two ends read from the spreads recorded above, and
+    `bench/` searched for a script that relinks a build with a pad or sizes K, none found, at
+    `df9242b56`.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at

@@ -456,10 +456,7 @@ establish a general ranking.
       [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs) with target `page` or `json` and
       one repeat per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`).
       Use a fresh round name each time and tag each build in turn with the image name the script
-      expects. One build of each side decides such a target, without the default band below:
-      nothing in the tree relinks an image's binary with a pad and starts it, a gap
-      [design Choice 72](docs/design.md#choice-placement-runs) records. Otherwise, measure the
-      affected route with an equivalent under-load test; an
+      expects. Otherwise, measure the affected route with an equivalent under-load test; an
       unaffected route does not count. Alternate the two release builds, verify the response bytes
       and headers before measuring, and report any failed requests.
 
@@ -475,8 +472,7 @@ establish a general ranking.
 
       The no-regression margin is separate from that smallest worthwhile reduction: a workload the
       change should leave as fast as it was is held to +1%, declared before the run. Read on one
-      build of each side (for a touched workload, only where the placement test below lets one
-      build decide), if the one-sided 95% upper bound on the median per-pair change in user
+      build of each side, if the one-sided 95% upper bound on the median per-pair change in user
       plus kernel cycles per request is under +1%, the margin is met. If it is at or above +1%,
       the margin is not met, with one exception, for a negative control: a workload the run's
       plan (its `margin.md`) names before the run as one whose code paths the change does not
@@ -484,13 +480,10 @@ establish a general ranking.
       touches is held to +1% with no floor, however flat its instructions, and so is a workload
       not named so before the run; a declaration is never added or changed after a run to clear
       its result, and a plan that made +1% decisive before this exception existed stays bound by
-      it. A negative control and a smallest worthwhile reduction are those of the plan the pull
-      request published before the first reading it reports; an earlier private look rests on
-      the author's word.
-      This single-build reading and the CPU-win rule above do not decide a touched workload
+      it. This single-build reading and the CPU-win rule above do not decide a touched workload
       whose single-build bound's distance from its threshold is inside its recorded placement
-      spread or, with none, the default band, or one read across placements; both are decided as
-      described below.
+      spread or, where none applies, the default band, or one read across placements; both are
+      decided as described below.
 
       A negative control whose bound is at or above +1% but under the layout floor that applies
       to it may go ahead when its user instructions pass a screen: the median of the paired
@@ -582,20 +575,22 @@ establish a general ranking.
       and 3 s turns) and the CPU model (each recorded spread names its own: a Xeon Platinum 8358
       for the first run's two, an 8280 for the second's one). A
       run that differs in any has no recorded spread for the workload
-      until a placement run on its setup records one, and is tested against the default band in
-      its place: the lowest and highest placement median of every A/A across placements the
-      Choice holds, in either labelling, as the Choice gives them on `main` when the plan is
-      declared (-11.57% to +13.10% today). The test is one: a single-build bound's
+      until a placement run on its setup records one, and is tested until then against the
+      **default band**: from the lowest low end to the highest high end among the spreads the
+      Choice records, as the Choice prints the band on `main` when the plan is declared (-2.98%
+      to +3.33% today), whatever a later run records and whatever reads the workload,
+      `bench/fullstack/count.mjs` as much as a probe. The test is one: a single-build bound's
       distance from its threshold (the bound less +1% for the margin; the bound plus the smallest
       worthwhile reduction for a CPU-cost win) is **inside** the spread that applies, or the
-      default band where none does, when it is at or above its lowest and at or below its
-      highest, and **outside** otherwise. Inside
+      default band where none does, when it is at
+      or above its lowest and at or below its highest, and **outside** otherwise. Inside
       does not decide, a pass as much as a miss, and a win no more than a loss: the pull request
-      reports it as "inside the placement spread: not decided", which does not pass and claims no
+      reports it as "inside the placement spread: not decided" (or "inside the default band"),
+      which does not pass and claims no
       win, and reads the workload across placements in a run whose plan is written before that
-      run (a declared win may be dropped instead; the workload is then still held to +1% by this
-      test). Outside, the single-build bound is the reading by the rules above.
-      A workload with no single-build bound (a run that failed, too few pairs)
+      run. Outside, the single-build bound is
+      the reading by the rules above, binding by policy, not because placement is shown unable to
+      move it. A workload with no single-build bound (a run that failed, too few pairs)
       does not pass, as before, and a control the plan declared keeps
       [design Choice 71](docs/design.md#choice-layout-floor)'s rule. Item 2's other requirements
       apply to a run read across placements as to any other: every counter at 100%; the user and
@@ -655,9 +650,9 @@ establish a general ranking.
       placement is rerun, replaced or dropped for its result. A layout floor never applies to a
       workload read across placements. A single-build run stays valid, and binding for each
       workload its plan read that way whose distance from its threshold is outside the spread or
-      the default band, by the test above, or that had no spread that applied under a plan its
-      pull request published before 2026-11-24 (UTC), which is read by the rule as it then
-      stood, run or not (a control
+      the default band, by the test above, or that had no spread that applied under a plan
+      declared before the Choice on `main` gave a default band, which the band does not test
+      (a control
       keeps [design Choice 71](docs/design.md#choice-layout-floor)'s rule): a placement
       run declared after it does not clear such a miss. The benefit side may use the same protocol
       if the plan declares it, with its smallest worthwhile reduction, before the run: a CPU-cost
@@ -686,9 +681,7 @@ establish a general ranking.
       is not rejected, the smoothed resample alone when it is. The K the plan declares must
       itself meet 5% under each model used, for each workload it covers, and admit the pad lists
       above; when no K the pads allow does, the plan declares none and does not read that
-      workload across placements, and it never takes a smaller K than the models ask. The gated
-      run's pad lists are those the sizing kit's `pads.mjs` gives for its K, or lists the
-      pilot's plan declared for it before the pilot ran. The size is
+      workload across placements, and it never takes a smaller K than the models ask. The size is
       that setup, workload and R's, not a constant (the Choice's fourth run took 100 placements on
       `old`, and its medians, at a standard deviation of 2.05%, give an estimated 69 by the
       smoothed resample, where the normal model, which they reject, gives 91); K = 30 is not to be
