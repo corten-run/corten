@@ -40,6 +40,8 @@ export const createReappeared = "provider-errored create contradicted: its poste
 // reappearance does, so no later collect, launch, fleet check or successor accepts it.
 export const createReappearedWitness = "provider-create-reappeared";
 const reappearedStage = /^state\.json\.create-reappeared-[a-f0-9]{32}\.tmp$/;
+// The stages a failed contradiction publication left, by name (never read here).
+export const contradictionStages = (local) => readdirSync(local).filter((name) => reappearedStage.test(name)).sort();
 export function createContradiction(local) {
   return !!lstatSync(join(local, createReappearedWitness), { throwIfNoEntry: false })
     || readdirSync(local).some((name) => reappearedStage.test(name));

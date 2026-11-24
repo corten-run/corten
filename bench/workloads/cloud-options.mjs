@@ -267,12 +267,28 @@ export function controllerState(s, round, options) {
   if (s.createContradicted !== undefined) {
     // A provider-errored receipt (published or not) contradicted by its exact posted
     // droplet, which then showed its saved ownership and was bound. Kept as evidence
-    // through the pinned unused retirement; never a create failure again.
+    // through the pinned unused retirement; never a create failure again. `reappeared`
+    // is the bind's own exact read; the first observation stays in the witness file,
+    // bound by `witnessSha256`. `receiptVerified` is false when the preserved receipt
+    // was not the canonical record for this state. `stages` binds each reappearance
+    // stage a failed publication left, by name and bytes.
     const c = s.createContradicted;
     assert.ok(c && typeof c === "object" && !Array.isArray(c), "create contradiction record required");
-    assert.deepEqual(Object.keys(c).sort(), ["actionId", "dropletId", "evidenceSha256", "reappeared"]);
+    assert.deepEqual(Object.keys(c).filter((key) => key !== "stages").sort(),
+      ["actionId", "dropletId", "evidenceSha256", "reappeared", "receiptVerified", "witnessSha256"]);
     for (const key of ["actionId", "dropletId"]) assert.ok(Number.isSafeInteger(Number(full(c[key], /[1-9]\d{0,15}/, key))), key);
     full(c.evidenceSha256, /[a-f0-9]{64}/, "create contradiction evidence hash");
+    full(c.witnessSha256, /[a-f0-9]{64}/, "create contradiction witness hash");
+    assert.equal(typeof c.receiptVerified, "boolean", "create contradiction receipt verification");
+    if (c.stages !== undefined) {
+      assert.ok(Array.isArray(c.stages) && c.stages.length > 0, "create contradiction stages");
+      for (const stage of c.stages) {
+        assert.ok(stage && typeof stage === "object" && !Array.isArray(stage) && JSON.stringify(Object.keys(stage).sort()) === '["name","sha256"]', "create contradiction stage");
+        full(stage.name, /state\.json\.create-reappeared-[a-f0-9]{32}\.tmp/, "create contradiction stage name");
+        full(stage.sha256, /[a-f0-9]{64}/, "create contradiction stage hash");
+      }
+      assert.equal(new Set(c.stages.map(({ name }) => name)).size, c.stages.length, "duplicate create contradiction stage");
+    }
     reappearance(c.reappeared);
     assert.equal(c.reappeared.dropletId, c.dropletId, "create contradiction names another droplet");
     assert.ok(s.createErrored === undefined && s.id === c.dropletId && (s.status === "preparing" || s.status === "retired" && s.retirement?.kind === "unused"),

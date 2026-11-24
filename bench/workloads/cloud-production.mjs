@@ -293,7 +293,8 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
         for (const stillIdle of checks) stillIdle(); // Another attempt's archive may have taken time to hash.
         // Last, immediately before the create is recorded and dispatched under this child's
         // own locks: an earlier provider-errored attempt of this group must still hold no
-        // custody. After this point that attempt's collect can only recheck read-only.
+        // custody. After this point that attempt's collect never creates or provisions: it
+        // rechecks read-only, or records a reappearance and binds only the exact owned posted droplet.
         for (const row of current.subject.continuation.createFailures ?? []) recheckCreateErroredAttempt(root, row);
       }
       return currentPeers;

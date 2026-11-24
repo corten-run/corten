@@ -16,7 +16,7 @@ import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, v
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
   interruptedFirstUpload, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
   verifyUnusedEvidence, createErroredBytes, createErroredCustody, createErroredReceipt, createErroredRecord, createRecheckLock, pendingCreateErroredReceipt,
-  verifyCreateErrored, offlineNeverStarted, createContradiction, createReappeared, createReappearedWitness } from "./cloud-retirement.mjs";
+  verifyCreateErrored, offlineNeverStarted, createContradiction, contradictionStages, createReappeared, createReappearedWitness } from "./cloud-retirement.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { controlCheckpoint, pinnedHostOptions } from "./cloud-transport.mjs";
 
@@ -242,23 +242,34 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       return d;
     } catch { return undefined; }
   };
-  const bindContradicted = (d, posted, reappeared) => {
-    const receipt = regular(join(local, createErroredReceipt), 64 * 1024);
-    if (state.createErrored) assert.equal(digest(receipt), state.createErrored.evidenceSha256, "create failure receipt changed; preserve reservation");
+  // The bind records its own exact read of the posted droplet. The first observation (an
+  // exact GET or a census alias with another ID) stays in the witness file, which is
+  // written first, so a later read failure cannot lose it, and bound by hash. A receipt
+  // that is not the published hash or the canonical unpublished record is kept as an
+  // unverified artifact, never as verified evidence. A reappearance stage left by a
+  // failed publication is bound by name and bytes, so the pinned retirement can admit it.
+  const bindContradicted = (d, posted) => {
+    const reappeared = { at: new Date().toISOString(), via: "exact-get", dropletId: posted.dropletId };
     writeWitness(reappeared);
-    state.createContradicted = { dropletId: posted.dropletId, actionId: posted.actionId, evidenceSha256: digest(receipt), reappeared };
+    const witnessed = regular(witness, 64 * 1024), receipt = regular(join(local, createErroredReceipt), 64 * 1024);
+    let receiptVerified = true;
+    if (state.createErrored) assert.equal(digest(receipt), state.createErrored.evidenceSha256, "create failure receipt changed; preserve reservation");
+    else try { pendingCreateErroredReceipt(receipt, state, posted); } catch { receiptVerified = false; }
+    const stages = contradictionStages(local).map((name) => ({ name, sha256: digest(regular(join(local, name), 1024 * 1024)) }));
+    state.createContradicted = { dropletId: posted.dropletId, actionId: posted.actionId, evidenceSha256: digest(receipt), receiptVerified, reappeared,
+      witnessSha256: digest(witnessed), ...(stages.length ? { stages } : {}) };
     delete state.createErrored;
     bind(d);
     return 3;
   };
-  const contradictedCreate = async (posted, reappeared) => {
+  const contradictedCreate = async (posted) => {
     assert.ok(lstatSync(join(local, createErroredReceipt), { throwIfNoEntry: false }), "contradiction without its receipt; preserve reservation");
     const exact = await execute("doctl", ["compute", "droplet", "get", posted.dropletId, "--output", "json"], 60000, true);
     let rows;
     try { rows = exact.status === 0 && !exact.error ? JSON.parse(exact.stdout) : undefined; } catch { rows = undefined; }
     const d = Array.isArray(rows) && rows.length === 1 ? ownedPosted(rows[0], posted) : undefined;
     if (!d) throw contradicted();
-    return bindContradicted(d, posted, reappeared ?? { at: new Date().toISOString(), via: "exact-get", dropletId: posted.dropletId });
+    return bindContradicted(d, posted);
   };
   // A launch that stopped while its accepted create was unsettled kept the POST's IDs
   // and, normally, its own locks. Those locks stay until the operator's custody step:
@@ -318,18 +329,21 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       const census = await providerAbsence(posted);
       // An unpublished receipt is adopted only after this fresh action and absence
       // proof, and only if its bytes are exactly the canonical record for this state.
-      if (census?.witnessed && unpublished && census.witnessed.via === "exact-get") {
-        // The exact posted droplet contradicts the unpublished receipt: record the
-        // witness, then bind it only if positively owned, otherwise refuse.
-        const reappeared = { at: new Date().toISOString(), via: "exact-get", dropletId: posted.dropletId };
-        const d = ownedPosted(census.witnessed.droplet, posted);
-        if (!d) { writeWitness(reappeared); throw contradicted(); }
-        return bindContradicted(d, posted, reappeared);
+      if (census?.witnessed && unpublished) {
+        // Any reappearance that would contradict a published receipt (the exact GET, or a
+        // census row with its ID, name or tag after a 404) contradicts the unpublished one:
+        // the witness is written first, so a later absence can never adopt that receipt.
+        // Only the exact posted droplet, positively owned, is bound; anything else refuses.
+        const { via, droplet } = census.witnessed;
+        writeWitness({ at: new Date().toISOString(), via, dropletId: String(droplet.id) });
+        const d = via === "exact-get" && ownedPosted(droplet, posted);
+        if (d) return bindContradicted(d, posted);
+        throw contradicted();
       }
       if (census?.witnessed) {
         // Only the exact GET of the posted ID, positively owned, can bind; a census
-        // match after a 404, another ID or a receipt claiming absence stays unresolved.
-        assert.ok(census.witnessed.via === "exact-get" && !unpublished,
+        // match after a 404 or another ID stays unresolved.
+        assert.ok(census.witnessed.via === "exact-get",
           "provider-errored allocation not verified absent and not the exact posted droplet; preserve reservation without binding");
         const d = ownedDroplet([census.witnessed.droplet], state);
         assert.equal(d.networks?.v4?.filter((n) => n.type === "public").length, 1, "ambiguous public host address");
@@ -716,7 +730,14 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(digest(regular(join(local, createErroredReceipt), 64 * 1024)), state.createContradicted.evidenceSha256,
         "contradicted create receipt changed; preserve host");
       assert.ok(lstatSync(join(local, createReappearedWitness), { throwIfNoEntry: false }), "contradiction witness missing; preserve host");
+      assert.equal(digest(regular(join(local, createReappearedWitness), 64 * 1024)), state.createContradicted.witnessSha256,
+        "contradiction witness changed; preserve host");
       names.push(createErroredReceipt, createReappearedWitness);
+      // Only the reappearance stages bound at the bind, with their recorded bytes.
+      for (const { name, sha256 } of state.createContradicted.stages ?? []) {
+        assert.equal(digest(regular(join(local, name), 1024 * 1024)), sha256, "contradiction stage changed; preserve host");
+        names.push(name);
+      }
     }
     if (uploads) {
       if (interrupted) assert.equal(state.launchHostKeySha256, unusedBootstrapApproval.knownHostsSha256, "verified key differs from launch");
@@ -1141,7 +1162,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (observed.createErrored.reappeared || createContradiction(local)) return locked(async () => {
           assert.ok(state.createErrored, "create failure record changed; preserve reservation");
           assert.ok(!existsSync(join(local, recheckLock)) && !existsSync(join(base, ".groups-launch.lock")), custody);
-          return contradictedCreate(state.createErrored, state.createErrored.reappeared);
+          return contradictedCreate(state.createErrored);
         });
         verifyCreateErrored(local, observed);
         return locked(async () => {
@@ -1152,9 +1173,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           verifyCreateErrored(local, state);
           const posted = state.createErrored, census = await providerAbsence(posted);
           if (census?.witnessed) {
-            const reappeared = recordReappeared(census.witnessed);
+            recordReappeared(census.witnessed);
             const d = census.witnessed.via === "exact-get" && ownedPosted(census.witnessed.droplet, posted);
-            if (d) return bindContradicted(d, posted, reappeared);
+            if (d) return bindContradicted(d, posted);
             throw contradicted();
           }
           assert.ok(census?.droplets !== undefined, "provider-errored allocation no longer verified absent; preserve reservation");
