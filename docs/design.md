@@ -7549,8 +7549,16 @@ rules something out.
     is kept only when each input of its handler is one of Corten's own whose reading of a page's
     request is known (`Params`, `Form`, `State`, `Req`, `Signal`, `Method`, `Uri`), which is
     also known when the route is made (`Anonymous::KEYED`, whose type an app cannot name, so
-    an extractor of the app's own cannot claim it); a page whose handler takes another is made
-    for every request. What those inputs read of the whole document's `GET` is the key:
+    an extractor of the app's own cannot claim it). Each is keyed only as Corten fills it: the
+    trait that reads a route's path for `Params`, the one part of it given the whole request, is
+    sealed; `Params` and `Form` are keyed only within the bounds of Corten's extractor for them,
+    so one the app could fill with an extractor of its own is not; a `Form` counts only as the
+    handler's last argument, the one place Corten reads it; and an `Option` of one, which
+    Corten never fills, is not keyed
+    ([#1803 A hand-written impl of a doc-hidden route trait can read a header under `Params`](https://github.com/corten-run/corten/issues/1803)).
+    `State` is not yet bound that way, since the rule does not see the router's state type
+    ([#2031 An app can fill `State<T>` with an extractor of its own and read a header under a kept page](https://github.com/corten-run/corten/issues/2031)).
+    A page whose handler takes another is made for every request. What those inputs read of the whole document's `GET` is the key:
     the `Host`, the path and the query, and the `Accept-Language` when the page's `Vary` names
     it (`App::messages`, or a locale negotiated from it, named in `Vary` once the handler's answer is finished and before it is kept, however late the read). The header is compared as it was
     sent, as a CDN compares it ([Choice 22](#choice-locale-in-url)), with at most eight copies
