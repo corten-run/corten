@@ -138,7 +138,7 @@ jobs:
         run: node --test bench/catalog/gin-permissions.test.mjs
         env:
           CATALOG_GIN_DOCKER_TESTS: "1"
-      - name: Compile the native Gin lean logging and recovery test
+      - name: Compile the native Gin tests
         if: matrix.app == 'gin'
         run: |
           docker build --target build -t cb-catalog-gin-tests bench/fullstack/apps/gin
@@ -152,13 +152,14 @@ jobs:
             done
             exit "$status"
           '
-      - name: Test native Gin lean logging and panic recovery
+      - name: Test the native Gin app
         if: matrix.app == 'gin'
         run: |
           docker run --rm --cpus 1 --memory 1g -v "$RUNNER_TEMP/gin-tests:/test-out:ro" cb-catalog-gin-tests sh -ec '
-            name=TestCatalogLeanLoggingAndRecovery
-            test "$(/test-out/itempage.test -test.list "^$name$")" = "$name"
-            exec /test-out/itempage.test -test.v -test.count=1 -test.timeout=10m -test.paniconexit0 -test.run "^$name$"
+            for name in TestCatalogLeanLoggingAndRecovery TestNativeProductionBoundsAndFollowup; do
+              test "$(/test-out/itempage.test -test.list "^$name$")" = "$name"
+            done
+            exec /test-out/itempage.test -test.v -test.count=1 -test.timeout=10m -test.paniconexit0
           '
       - name: Test native FastAPI record boundaries
         if: matrix.app == 'fastapi'

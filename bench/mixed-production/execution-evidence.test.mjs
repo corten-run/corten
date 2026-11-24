@@ -491,7 +491,7 @@ test("execution actual Docker limits and cleanup receipts", { skip: process.env.
   const s = summary(); s.runId = `mixed-w999-${randomBytes(4).toString("hex")}`;
   s.executionMounts.output = mountSourceHash(folder);
   s.provenance.nativeSource.commit = immutableGit(process.cwd(), ["rev-parse", "HEAD"]).toString().trim();
-  const actualImage = JSON.parse(await docker(["image", "inspect", "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"]))[0].Id;
+  const actualImage = JSON.parse(await docker(["image", "inspect", "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067"]))[0].Id;
   s.tools.nodeImage = actualImage; s.tools.browserImage = actualImage; s.apps.corten.image.id = actualImage;
   const collector = createExecutionEvidence({ folder, summary: s, docker }), name = `${s.runId}-corten-fixture`, network = `${s.runId}-net`;
   const labels = ["--label", "agent.owner=codex", "--label", `agent.task=${s.runId}`, "--label", `run.corten.mixed-production=${s.runId}`];
