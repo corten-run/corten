@@ -1,1 +1,0 @@
-- Stopped Marketplace commands routed through Catalog's bounded runner now fail after a grace period even if their output pipes stay open, using the runner from [#1995 Save a failure receipt for a catalog app start or log collection, and settle a command whose pipes outlive its client](https://github.com/corten-run/corten/pull/1995).
