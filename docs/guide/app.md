@@ -1574,8 +1574,9 @@ and 46.3% fewer where each answer is, at the medians of 12 paired rounds
 
 What makes it safe is the rule above, checked when the app compiles: a `Public` handler takes
 only inputs that cannot tell who is asking. A page is kept when each of them is one of Corten's
-own for a page (`Params`, `Form`, `State`, `Req`, `Signal`, `Method`, `Uri`), since all those
-read of a page's request is in the key below. An extractor of the app's own that is `Anonymous`
+own for a page (`Params`, `Form`, `State`, `Req`, `Signal`, `Method`, `Uri`), as Corten fills
+it, since all those read of a page's request is in the key below. An `Option` of one is not:
+Corten never fills one, so it would be the app's own. An extractor of the app's own that is `Anonymous`
 may read another header (a device, a country) and still not tell who asks, so a page whose
 handler takes one is made for every request, and an extractor has no way to say otherwise. The request must show nothing
 else a page could differ by, and the answer nothing made for one request:

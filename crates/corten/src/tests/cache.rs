@@ -1755,7 +1755,9 @@ fn a_handler_s_inputs_say_whether_its_page_can_be_kept() {
     {
         <AnonymousInputs as Accepts<Args>>::KEYED
     }
-    assert!(keyed::<()>() && keyed::<(Req,)>() && keyed::<(Option<Req>,)>());
+    assert!(keyed::<()>() && keyed::<(Req,)>());
+    // Corten fills none of its keyed inputs as an `Option`, so an `Option` of one is the app's (#1803).
+    assert!(!keyed::<(Option<Req>,)>() && !keyed::<(Option<crate::Params<caller_url::Catalog>>,)>());
     assert!(keyed::<(
         crate::Params<caller_url::Catalog>,
         crate::Form<()>,

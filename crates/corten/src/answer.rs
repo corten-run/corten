@@ -2500,14 +2500,34 @@ pub trait Anonymous {
     ///     const KEYED: corten::answer::sealed::Keyed = corten::answer::sealed::Keyed(true);
     /// }
     /// ```
+    ///
+    /// Corten's own inputs are keyed only as Corten fills them: a `Form` of a type its extractor
+    /// cannot read, which only an extractor of the app's own could fill, is not one at all.
+    ///
+    /// ```
+    /// fn input<T: corten::answer::Anonymous>() {}
+    /// input::<corten::Form<String>>();
+    /// ```
+    ///
+    /// ```compile_fail,E0277
+    /// fn input<T: corten::answer::Anonymous>() {}
+    /// struct Raw;
+    /// input::<corten::Form<Raw>>();
+    /// ```
     #[doc(hidden)]
     const KEYED: sealed::Keyed = sealed::Keyed(false);
 }
 
-impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {
+// Each is keyed only with the bounds Corten's own extractor for it has, so a type that falls
+// outside them, which the app could fill with an extractor of its own for Corten's type, is not.
+impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R>
+where
+    R::Path: crate::route::__private::ReadPath,
+    R::Params: Send,
+{
     const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
-impl<T> Anonymous for crate::Form<T> {
+impl<T: serde::de::DeserializeOwned> Anonymous for crate::Form<T> {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
 impl<T> Anonymous for State<T> {
@@ -2525,9 +2545,9 @@ impl Anonymous for Method {
 impl Anonymous for Uri {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
-impl<T: Anonymous> Anonymous for Option<T> {
-    const KEYED: sealed::Keyed = T::KEYED;
-}
+// Corten fills an `Option` only through `OptionalFromRequestParts`, which none of its keyed
+// inputs implement, so an `Option` of one is filled by the app's own code: not keyed.
+impl<T: Anonymous> Anonymous for Option<T> {}
 // What these read is not in the key (a body, where a stream stopped): a page whose handler takes
 // one is not kept.
 impl<T> Anonymous for crate::form::Upload<T> {}
