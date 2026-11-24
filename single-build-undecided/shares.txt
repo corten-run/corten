@@ -1,0 +1,48 @@
+Same-commit comparisons across placements, from the A/As design Choice 72 records.
+
+| A/A | tag (commit) | K | lowest median | highest median | standard deviation |
+| --- | --- | ---: | ---: | ---: | ---: |
+| first run, `plain` | `evidence/ee7b0b41` (`ee7b0b417`) | 30 | -2.42% | +2.92% | 1.48% |
+| first run, `kept` | `evidence/ee7b0b41` (`ee7b0b417`) | 30 | -2.98% | +3.33% | 1.44% |
+| second run, `young` | `evidence/0c0c599c` (`0c0c599cb`) | 30 | -2.26% | +2.22% | 1.17% |
+| second run, `old` | `evidence/0c0c599c` (`0c0c599cb`) | 30 | -3.63% | +4.38% | 1.97% |
+| third run, `page` | `evidence/stage-header-checks-2002` (`2fb31fbaa`) | 60 | -1.96% | +2.10% | 0.96% |
+| third run, `page, browser headers` | `evidence/stage-header-checks-2002` (`2fb31fbaa`) | 60 | -3.64% | +3.04% | 1.07% |
+| third run, `api` | `evidence/stage-header-checks-2002` (`2fb31fbaa`) | 60 | -5.47% | +4.15% | 2.02% |
+| fourth run, `old` | `evidence/placement-sizing-1999` (`912199b97`) | 100 | -3.98% | +13.10% | 2.05% |
+
+Placement medians as recorded (B / A - 1):
+
+| A/A | placements | median at or above +1% | median at or below -1% | under +1% with a cost of +1% | of +2% | of +3% |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| first run, `plain` | 30 | 10 of 30 (33.3%) | 8 of 30 (26.7%) | 12 of 30 (40.0%) | 8 of 30 (26.7%) | 4 of 30 (13.3%) |
+| first run, `kept` | 30 | 5 of 30 (16.7%) | 10 of 30 (33.3%) | 19 of 30 (63.3%) | 10 of 30 (33.3%) | 4 of 30 (13.3%) |
+| second run, `young` | 30 | 9 of 30 (30.0%) | 3 of 30 (10.0%) | 11 of 30 (36.7%) | 3 of 30 (10.0%) | 2 of 30 (6.7%) |
+| second run, `old` | 30 | 10 of 30 (33.3%) | 11 of 30 (36.7%) | 16 of 30 (53.3%) | 11 of 30 (36.7%) | 2 of 30 (6.7%) |
+| third run, `page` | 60 | 8 of 60 (13.3%) | 12 of 60 (20.0%) | 29 of 60 (48.3%) | 13 of 60 (21.7%) | 1 of 60 (1.7%) |
+| third run, `page, browser headers` | 60 | 8 of 60 (13.3%) | 10 of 60 (16.7%) | 30 of 60 (50.0%) | 10 of 60 (16.7%) | 3 of 60 (5.0%) |
+| third run, `api` | 60 | 19 of 60 (31.7%) | 13 of 60 (21.7%) | 26 of 60 (43.3%) | 13 of 60 (21.7%) | 7 of 60 (11.7%) |
+| fourth run, `old` | 100 | 27 of 100 (27.0%) | 27 of 100 (27.0%) | 49 of 100 (49.0%) | 28 of 100 (28.0%) | 11 of 100 (11.0%) |
+| pooled, every placement counted once | 400 | 96 of 400 (24.0%) | 94 of 400 (23.5%) | 192 of 400 (48.0%) | 96 of 400 (24.0%) | 34 of 400 (8.5%) |
+| mean of the eight A/As' shares | 8 A/As | 24.8% | 24.0% | 48.0% | 24.3% | 8.7% |
+
+A/As with a placement median at or above +1% and another at or below -1%: 8 of 8.
+
+Placement medians with the lists' labels swapped (A / B - 1):
+
+| A/A | placements | median at or above +1% | median at or below -1% | under +1% with a cost of +1% | of +2% | of +3% |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| first run, `plain` | 30 | 8 of 30 (26.7%) | 10 of 30 (33.3%) | 18 of 30 (60.0%) | 10 of 30 (33.3%) | 3 of 30 (10.0%) |
+| first run, `kept` | 30 | 10 of 30 (33.3%) | 5 of 30 (16.7%) | 11 of 30 (36.7%) | 5 of 30 (16.7%) | 2 of 30 (6.7%) |
+| second run, `young` | 30 | 3 of 30 (10.0%) | 9 of 30 (30.0%) | 19 of 30 (63.3%) | 9 of 30 (30.0%) | 5 of 30 (16.7%) |
+| second run, `old` | 30 | 11 of 30 (36.7%) | 10 of 30 (33.3%) | 14 of 30 (46.7%) | 10 of 30 (33.3%) | 5 of 30 (16.7%) |
+| third run, `page` | 60 | 13 of 60 (21.7%) | 8 of 60 (13.3%) | 31 of 60 (51.7%) | 9 of 60 (15.0%) | 1 of 60 (1.7%) |
+| third run, `page, browser headers` | 60 | 10 of 60 (16.7%) | 7 of 60 (11.7%) | 30 of 60 (50.0%) | 8 of 60 (13.3%) | 1 of 60 (1.7%) |
+| third run, `api` | 60 | 13 of 60 (21.7%) | 19 of 60 (31.7%) | 34 of 60 (56.7%) | 19 of 60 (31.7%) | 9 of 60 (15.0%) |
+| fourth run, `old` | 100 | 28 of 100 (28.0%) | 26 of 100 (26.0%) | 51 of 100 (51.0%) | 28 of 100 (28.0%) | 9 of 100 (9.0%) |
+| pooled, every placement counted once | 400 | 96 of 400 (24.0%) | 94 of 400 (23.5%) | 208 of 400 (52.0%) | 98 of 400 (24.5%) | 35 of 400 (8.8%) |
+| mean of the eight A/As' shares | 8 A/As | 24.3% | 24.5% | 52.0% | 25.2% | 9.7% |
+
+A/As with a placement median at or above +1% and another at or below -1%: 8 of 8.
+
+Pooled: 400 placements, medians from -5.47% to +13.10%; with the labels swapped, from -11.57% to +5.80%.
