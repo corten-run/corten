@@ -365,8 +365,9 @@ fn sets_cookie(headers: &HeaderMap) -> bool {
 
 /// Sets the response's `Cache-Control`: the default when it has none, and a private one instead
 /// of a shared one when the response may differ between users. An answer Corten knows is personal
-/// (it sets a cookie, has the nonce, drew a submit key, read a caller, or is a [`Cache`] answer to
-/// a request with credentials), one [`crate::NoStore`] keeps out of every cache, and a page route's
+/// (it sets a cookie, has the nonce, drew a submit key, read a caller, is a [`Cache`] answer to a
+/// request with credentials, or another Corten app marked it [`Personal`]), one
+/// [`crate::NoStore`] keeps out of every cache, and a page route's
 /// [`Cache`] answer asked for as anything but its full document also lose the caching headers a
 /// CDN reads first ([`CDN_CACHING`]), whatever its `Cache-Control` says, and a `NoStore` one goes
 /// out `private, no-store` whatever a middleware made of its header.
@@ -383,6 +384,10 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     if drew_key {
         drop_cdn_caching(res.headers_mut());
     }
+    // Another Corten app settled it as one visitor's ([`Personal`]) and a middleware here relays
+    // it: it is that visitor's still, as if this request had read the caller.
+    let marked = res.extensions().get::<Personal>().is_some();
+    let caller = seen.caller || marked;
     // The directives of every line count, as HTTP joins them (a second line is rare: only a header
     // written by hand has one). Only a plain `private` makes the answer private:
     // `private="set-cookie"` still lets a shared cache keep the rest. A `no-store` or `private` is
@@ -408,8 +413,11 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
             // lookup. A marked one whose header a middleware took out is settled below as one that
             // says `private, no-cache`.
             if typed.is_none() {
-                if !drew_key && (seen.nonce || seen.caller || sets_cookie(res.headers())) {
+                if !drew_key && (seen.nonce || caller || sets_cookie(res.headers())) {
                     drop_cdn_caching(res.headers_mut());
+                }
+                if !marked && (seen.nonce || seen.caller) {
+                    res.extensions_mut().insert(Personal);
                 }
                 return;
             }
@@ -449,7 +457,13 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         None
     };
     // The answer is this visitor's, whoever set its header.
-    let personal = bug.is_some() || seen.caller || typed.is_some_and(|typed| seen.credentials && !typed.named);
+    let asked_by = typed.is_some_and(|typed| seen.credentials && !typed.named);
+    let personal = bug.is_some() || caller || asked_by;
+    // What makes it personal that the answer itself does not show goes on it as a mark, for an app
+    // that relays it inline (a cookie it sets and a key it drew are on it already).
+    if !marked && (seen.nonce || seen.caller || asked_by) {
+        res.extensions_mut().insert(Personal);
+    }
     // `NoStore`, whatever a middleware made of its header since.
     let kept_out = typed.is_some_and(|typed| typed.no_store);
     // A page route's answer asked for as anything but its full document is the browser's alone:
@@ -528,6 +542,26 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     if !typed.named {
         headers.append(header::VARY, HeaderValue::from_static("cookie"));
     }
+}
+
+/// The mark of an answer [`settle`] found to be one visitor's for a reason its headers do not show:
+/// it read a caller, has this request's nonce, or is a [`Cache`] answer to a request with
+/// credentials ([`Seen`]); or the MCP endpoint made it for a caller its check found
+/// ([`personal`]). A cookie it sets and a submit key it drew ([`Unrepeatable`]) are on the answer
+/// already. Put on as the answer is settled, it stays on the answer as [`Unshared`] does: another
+/// Corten app whose staged middleware relays it inline, as it is or changed in place, settles it
+/// as personal too ([`settle`]), though that app's own request read no caller, so a middleware
+/// there cannot give it a CDN's lifetime. An answer made in its place is its own, and an answer
+/// nothing made personal is not marked. Only in process: an app that relays it over HTTP sees its
+/// headers alone.
+#[derive(Clone, Copy)]
+pub(crate) struct Personal;
+
+/// `res`, made for one caller (the MCP endpoint's answer to a caller its check found), marked
+/// [`Personal`]: settled as one visitor's here and by an app that relays it inline.
+pub(crate) fn personal(mut res: Response) -> Response {
+    res.extensions_mut().insert(Personal);
+    res
 }
 
 /// Removes the caching headers a CDN reads before `Cache-Control` ([`CDN_CACHING`]) from an
@@ -643,15 +677,16 @@ pub(crate) fn settle_refused(res: &mut Response) {
 /// stage after this one settles it, `private, no-store` (an empty answer no cache may keep in place
 /// of the page), with none of the caching headers a CDN reads first, and without the answer's
 /// validators or length, which were about the body it does not have. Its status is the answer's.
+/// It is a [`crate::NoStore`] answer too ([`Marks`]), so an app that relays it inline and rewrites
+/// its `Cache-Control` still sends it `private, no-store`.
 #[cold]
 pub(crate) fn unread(mut parts: http::response::Parts) -> Response {
     for name in [header::ETAG, header::LAST_MODIFIED, header::CONTENT_LENGTH, header::CONTENT_ENCODING, header::CONTENT_RANGE] {
         parts.headers.remove(name);
     }
-    parts.extensions.insert(Unshared);
     let mut res = Response::from_parts(parts, Body::empty());
     drop_cdn_caching(res.headers_mut());
-    res.headers_mut().insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
+    Marks { unshared: true, no_store: true }.put(&mut res);
     res
 }
 

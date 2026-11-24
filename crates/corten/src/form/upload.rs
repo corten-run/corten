@@ -70,6 +70,12 @@ type Result<T, E = UploadError> = std::result::Result<T, E>;
 /// }
 /// # let _: Methods = post(create);
 /// ```
+///
+/// That `Error` is Corten's refusal of the request, never shared, wherever the handler answers it,
+/// as a [`BodyError`](crate::extract::BodyError)'s is. One the handler builds itself
+/// (`UploadError::Fields` for its own check of a field) is treated the same way: building one opts
+/// in to a refusal's caching. A failure of the handler's own is an `Error` of its own
+/// (`Error::status`), which keeps its usual caching.
 #[derive(Debug)]
 pub enum UploadError {
     /// The request took more of the body than [`Upload::limit`] (413): fields, files it read or

@@ -1454,7 +1454,12 @@ plain `private`, or `no-store`), so a CDN that obeys them does not keep one visi
 the next: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
 `Vercel-CDN-Cache-Control`, `Surrogate-Control`, Akamai's `Edge-Control` and nginx's
 `X-Accel-Expires`. Such an answer read a caller, sets a cookie, has the request's nonce or draws a
-submit key, or is a `Public` answer to a request with credentials. A `no-store` on it goes out
+submit key, or is a `Public` answer to a request with credentials, or is a tool's answer from an
+MCP endpoint whose `Tools::auth` found its caller. The answer carries that with it: another app
+of Corten's whose staged middleware asks it for an answer inline and relays it (as it is, or
+changed in place) sends it the same way, though that app's own request read no caller, while an
+answer that middleware makes in its place, or a relayed answer nothing made personal, keeps what
+it writes. An answer relayed over HTTP carries only its headers. A `no-store` on it goes out
 `private, no-store`: some CDNs ignore a bare `no-store`, and none keeps a `private` answer. A
 `NoStore` answer, a `Public` one the third row sends as the browser's alone, a refused write's
 error page, the error page for a failure Corten made rather than a handler, and a refusal or the router's own
@@ -1555,7 +1560,9 @@ read it to tag or compress it (`private, no-store`, without the answer's validat
 build's error about the app's code, which keeps a `NoStore` answer's `private, no-store` where it
 replaces one. A handler that passes such a failure on with `?`, or gives it another status, keeps
 the mark, as one does that met an extractor's rejection as a value (`Result<Json<T>, BodyRejection>`,
-a `FormRejection` the extractor made) and passes it on with `?`; a `FormRejection` the handler made
+a `FormRejection` the extractor made) and passes it on with `?`. A `BodyError` or `UploadError`
+is the request's refusal whoever made it: one a handler builds itself and passes on with `?` is
+never shared either, so a failure of the handler's own is an `Error` of its own (`Error::status`); a `FormRejection` the handler made
 itself (`FormRejection::new`) is its own, passed on or answered, and one that wraps a rejection
 (`Error::new(error)`) makes it its own, except an `Error` that holds a refusal (`Refused`), which `Error::new` keeps as the refusal it
 is (inside an error of another type, `io::Error::other(error)`, it is the handler's). A handler's own failure is its answer, a plain-text one too: the error

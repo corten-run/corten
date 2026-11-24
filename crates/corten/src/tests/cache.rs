@@ -1946,6 +1946,67 @@ async fn another_app_s_refusal_relayed_inline_is_still_not_shared() {
     assert!(wrong.is_empty(), "another app's refusal relayed inline, open to a CDN: {wrong:#?}");
 }
 
+/// Another Corten app's answer that is one visitor's for a reason its headers do not show (it read
+/// a caller, or has the request's nonce, a `Public` page's included), relayed inline by a staged
+/// middleware, is that visitor's in the relaying app too, though that app's own request read no
+/// caller: `private` whatever the middleware made of its `Cache-Control` (`private, no-store` where
+/// it named `no-store`), with none of the caching headers a CDN reads first, as it came or turned
+/// into a `200`. The other app's answers nothing made personal (a `Public` page, a plain one),
+/// relayed the same way, and the relaying app's own answer given in a personal one's place keep
+/// what the middleware wrote (the controls).
+#[tokio::test]
+async fn another_app_s_personal_answer_relayed_inline_is_still_not_shared() {
+    let minute = Duration::from_secs(60);
+    let other = App::new(Routes::from(
+        Table::new()
+            .route("/me", get(my_slips))
+            .route("/nonce", get(inline_default_page))
+            .route("/nonce-public", get(inline_page))
+            .route(
+                "/public",
+                get(move |req: Req| async move { Public::new(minute, req.test_page_for("Home", html! { <p>"home"</p> })) }),
+            )
+            .route("/plain", get(|| async { "plain" })),
+    ))
+    .router();
+    let home = || get(|| async { "home" });
+    let routes = || {
+        Table::new()
+            .route("/me", home())
+            .route("/nonce", home())
+            .route("/nonce-public", home())
+            .route("/public", home())
+            .route("/plain", home())
+    };
+    let viewer: &[(&'static str, &'static str)] = &[("viewer", "ann")];
+    let mut wrong = Vec::new();
+    for (cache, sent) in
+        [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
+    {
+        let router = App::new(Routes::from(routes())).middleware((CdnRecaches(cache), RelaysAnotherApp(other.clone()))).router();
+        for turned in [&[][..], &[("x-ok", "1")]] {
+            for (uri, asked) in [("/me", viewer), ("/nonce", &[]), ("/nonce-public", &[])] {
+                let asked = [asked, turned].concat();
+                let (status, headers) = asked_for(&router, uri, &asked).await;
+                assert_eq!(status, StatusCode::OK, "{uri} {asked:?} {cache:?}");
+                for what in kept_from_cdns(&headers, sent) {
+                    wrong.push(format!("{uri} {turned:?}, {cache:?}: {what}"));
+                }
+            }
+        }
+        for (uri, asked) in [("/public", &[][..]), ("/plain", &[]), ("/me", &[("viewer", "ann"), ("x-discard", "1")])] {
+            let (status, headers) = asked_for(&router, uri, asked).await;
+            assert_eq!(status, StatusCode::OK, "{uri} {asked:?} {cache:?}");
+            for name in CDN_OVERRIDES {
+                if headers.get(name).is_none_or(|value| value != "public, max-age=60") {
+                    wrong.push(format!("{uri} {asked:?}, {cache:?}: nothing made it personal, and it lost {name}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "another app's personal answer relayed inline, open to a CDN: {wrong:#?}");
+}
+
 /// Staged middleware that answers with a typed refusal turned into a `200`, made before the request's
 /// stages ran (when the app was built, held here) or, with `x-spawned`, on another thread.
 struct AnswersAMadeRefusal(std::sync::Mutex<Vec<crate::response::Response>>);
@@ -5694,7 +5755,9 @@ struct CostFound {
 /// message: `call` (the default), a call the tool answers (its result, the tool's own answer);
 /// `unfit`, a call whose arguments do not fit the tool's input (the `isError` result Corten makes in
 /// the tool's place); `unknown`, a call to a tool the endpoint does not have (Corten's JSON-RPC
-/// error, `-32602`, at `200`). With `MCP_CDN` set, a staged middleware writes the six caching
+/// error, `-32602`, at `200`); `checked`, the call `call` makes to an endpoint whose `Tools::auth` finds the
+/// caller in the request's bearer token (the tool's answer is that caller's, never shared). With
+/// `MCP_CDN` set, a staged middleware writes the six caching
 /// headers a CDN reads first on every answer, and each answer is checked to keep them (`kept`) or
 /// not (`dropped`). Counted under callgrind at two numbers of requests, as
 /// [`what_settling_a_page_costs`] is: `MCP_REQUESTS=1200 LD_PRELOAD=.. valgrind --tool=callgrind
@@ -5703,7 +5766,7 @@ struct CostFound {
 #[test]
 #[ignore]
 fn what_an_mcp_call_costs() {
-    use crate::agent::Tools;
+    use crate::agent::{ToolError, Tools};
 
     struct Cdn;
 
@@ -5725,28 +5788,46 @@ fn what_an_mcp_call_costs() {
         other => panic!("MCP_CDN is kept or dropped, not {other:?}"),
     });
     let message = match case.as_str() {
-        "call" => r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find","arguments":{"id":"7"}}}"#,
+        "call" | "checked" => r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find","arguments":{"id":"7"}}}"#,
         "unfit" => r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find","arguments":{}}}"#,
         "unknown" => r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lost","arguments":{}}}"#,
-        other => panic!("MCP_CASE is call, unfit or unknown, not {other:?}"),
+        other => panic!("MCP_CASE is call, checked, unfit or unknown, not {other:?}"),
     };
-    let tools = Tools::new("cost", "1.0")
-        .read_tool("find", "Finds an item", |(), item: CostItem| async move { Ok(CostFound { id: item.id }) });
-    let app = App::new(Routes::new()).api::<CostMcp>(|api| api.route::<CostMcp>(tools.route()));
+    let checked = case == "checked";
+    let route = if checked {
+        Tools::new("cost", "1.0")
+            .auth(|headers| {
+                let token = headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok());
+                token.and_then(|token| token.strip_prefix("Bearer ")).map(str::to_owned).ok_or(ToolError::Unauthorized)
+            })
+            .read_tool("find", "Finds an item", |caller: String, item: CostItem| async move {
+                Ok(CostFound { id: format!("{caller}:{}", item.id) })
+            })
+            .route()
+    } else {
+        Tools::new("cost", "1.0")
+            .read_tool("find", "Finds an item", |(), item: CostItem| async move { Ok(CostFound { id: item.id }) })
+            .route()
+    };
+    let app = App::new(Routes::new()).api::<CostMcp>(|api| api.route::<CostMcp>(route));
     let router = if kept.is_some() { app.middleware(Cdn).router() } else { app.router() };
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
         for _ in 0..requests {
-            let req = Request::post("/mcp")
+            let mut req = Request::post("/mcp")
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::ACCEPT, "application/json, text/event-stream")
                 .body(Body::from(message))
                 .unwrap();
+            if checked {
+                req.headers_mut().insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer ann"));
+            }
             let (parts, body) = router.clone().oneshot(req).await.unwrap().into_parts();
             let body = String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap();
             assert_eq!(parts.status, StatusCode::OK, "{body}");
             match case.as_str() {
                 "call" => assert!(body.contains(r#""isError":false"#) && body.contains(r#"\"id\":\"7\""#), "{body}"),
+                "checked" => assert!(body.contains(r#""isError":false"#) && body.contains(r#"\"id\":\"ann:7\""#), "{body}"),
                 "unfit" => assert!(body.contains(r#""isError":true"#), "{body}"),
                 _ => assert!(body.contains(r#""code":-32602"#), "{body}"),
             }
@@ -5823,7 +5904,9 @@ impl http_body::Body for CutOff {
 /// Corten's, not the handler's, so no cache keeps it: `private, no-store`, with none of the caching
 /// headers a CDN reads first that a staged middleware wrote, no validator and no stated length,
 /// though the handler's answer was one a CDN could keep. Asked for with a tag (a page), and as an
-/// API answer worth compressing (it has a tag of its own, so it is not tagged first).
+/// API answer worth compressing (it has a tag of its own, so it is not tagged first), directly and
+/// from another app whose staged middleware relays it inline and rewrites its `Cache-Control`,
+/// which still sends it `private, no-store`: it is a `NoStore` answer, not one that only says so.
 #[tokio::test]
 async fn an_answer_whose_body_fails_after_the_cache_rules_is_never_kept() {
     let cut = |kind: &'static str, tag: Option<&'static str>| {
@@ -5839,20 +5922,32 @@ async fn an_answer_whose_body_fails_after_the_cache_rules_is_never_kept() {
         .api::<ApiItems>(|items| items.route::<ApiItem>(crate::Methods::reads(get(cut("application/json", Some("\"v1\""))))))
         .middleware(CdnRecaches(Some("public, max-age=60")))
         .router();
+    // The same answers asked for inline by another app, whose middleware rewrites the empty
+    // answer's `Cache-Control`: still `private, no-store`, by its mark.
+    let other = App::new(Routes::from(Table::new().route("/page", get(cut("text/html; charset=utf-8", None)))))
+        .api::<ApiItems>(|items| items.route::<ApiItem>(crate::Methods::reads(get(cut("application/json", Some("\"v1\""))))))
+        .router();
+    let relaying = App::new(Routes::from(Table::new().route("/page", get(|| async { "home" }))))
+        .api::<ApiItems>(|items| items.route::<ApiItem>(crate::Methods::reads(get(|| async { "item" }))))
+        .middleware((CdnRecaches(Some("public, max-age=60")), RelaysAnotherApp(other)))
+        .router();
     let mut cases = vec![("tagged", "/page", &[("if-none-match", "W/\"0000000000000000\"")][..])];
     #[cfg(feature = "compress")]
     cases.push(("compressed", "/api/items/7", &[("accept-encoding", "gzip"), ("accept", "application/json")][..]));
     let mut wrong = Vec::new();
-    for (item, uri, asked) in cases {
-        let (status, headers, body) = sent_by_ann(&router, "GET", uri, asked, b"").await;
-        if status != StatusCode::OK || !body.is_empty() {
-            wrong.push(format!("{item}: {status}, {body:?}"));
-        }
-        wrong.extend(kept_from_cdns(&headers, "private, no-store").into_iter().map(|what| format!("{item}: {what}")));
-        for name in [header::ETAG, header::CONTENT_LENGTH, header::CONTENT_ENCODING] {
-            if let Some(value) = headers.get(&name) {
-                if !(name == header::CONTENT_LENGTH && value == "0") {
-                    wrong.push(format!("{item}: {name} {value:?}"));
+    for (router, how) in [(&router, "direct"), (&relaying, "relayed inline")] {
+        for &(item, uri, asked) in &cases {
+            let item = format!("{item}, {how}");
+            let (status, headers, body) = sent_by_ann(router, "GET", uri, asked, b"").await;
+            if status != StatusCode::OK || !body.is_empty() {
+                wrong.push(format!("{item}: {status}, {body:?}"));
+            }
+            wrong.extend(kept_from_cdns(&headers, "private, no-store").into_iter().map(|what| format!("{item}: {what}")));
+            for name in [header::ETAG, header::CONTENT_LENGTH, header::CONTENT_ENCODING] {
+                if let Some(value) = headers.get(&name) {
+                    if !(name == header::CONTENT_LENGTH && value == "0") {
+                        wrong.push(format!("{item}: {name} {value:?}"));
+                    }
                 }
             }
         }
@@ -6751,28 +6846,34 @@ struct McpFound {
 /// `isError` for arguments that do not fit the tool's input or a caller [`Tools::auth`] turned away
 /// before any tool ran (without an `Authorization`, whose metadata would make that a `403`). Behind
 /// a staged middleware that marks every answer for a CDN, each goes out `private, no-cache` with none
-/// of the caching headers a CDN reads first. What a tool itself answers, its own `isError` result
-/// included, and what the endpoint answers to a message it serves keep what the middleware wrote
-/// (the controls).
+/// of the caching headers a CDN reads first. What a tool of an endpoint without `auth` answers,
+/// its own `isError` result included, and what the endpoint answers to a message it serves keep
+/// what the middleware wrote (the controls).
 ///
 /// [`Tools::auth`]: crate::agent::Tools::auth
 #[cfg(feature = "agent")]
 #[tokio::test]
 async fn the_mcp_endpoint_s_own_errors_are_never_shared() {
     use crate::agent::{ToolError, Tools};
-    let tools = Tools::new("test", "1.0")
+    let find = |(), item: McpItem| async move {
+        if item.id == "locked" {
+            return Err(ToolError::Forbidden("that item is locked".into()));
+        }
+        Ok(McpFound { id: item.id })
+    };
+    let checked = Tools::new("test", "1.0")
         .auth(|headers| match headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok()) {
             Some("Bearer banned") => Err(ToolError::Forbidden("suspended".into())),
             _ => Ok(()),
         })
-        .read_tool("find", "Finds an item", |(), item: McpItem| async move {
-            if item.id == "locked" {
-                return Err(ToolError::Forbidden("that item is locked".into()));
-            }
-            Ok(McpFound { id: item.id })
-        });
+        .read_tool("find", "Finds an item", find);
     let router = App::new(Routes::new())
-        .api::<McpAt>(|api| api.route::<McpAt>(tools.route()))
+        .api::<McpAt>(|api| api.route::<McpAt>(checked.route()))
+        .middleware(CdnRecaches(Some("public, max-age=60")))
+        .router();
+    // Without `auth`, a tool's answer is for anyone (with it, for the caller it found: the next test).
+    let open = App::new(Routes::new())
+        .api::<McpAt>(|api| api.route::<McpAt>(Tools::new("test", "1.0").read_tool("find", "Finds an item", find).route()))
         .middleware(CdnRecaches(Some("public, max-age=60")))
         .router();
     let call = |arguments: &str| {
@@ -6817,7 +6918,8 @@ async fn the_mcp_endpoint_s_own_errors_are_never_shared() {
     ];
     let mut wrong = Vec::new();
     for (item, message, asked, says, corten) in cases {
-        let (status, headers, body) = sent_by_ann(&router, "POST", "/mcp", asked, message.as_bytes()).await;
+        let router = if corten { &router } else { &open };
+        let (status, headers, body) = sent_by_ann(router, "POST", "/mcp", asked, message.as_bytes()).await;
         let body: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
         // The protocol's status and envelope, as before.
         let said = match &says {
@@ -6835,6 +6937,154 @@ async fn the_mcp_endpoint_s_own_errors_are_never_shared() {
             for name in CDN_OVERRIDES {
                 if headers.get(name).is_none_or(|value| value != "public, max-age=60") {
                     wrong.push(format!("{item}: what the endpoint served lost {name}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// Staged middleware that answers with another Corten app's answer to the whole request (its
+/// method, URI, headers and body), asked inline on the same poll.
+#[cfg(feature = "agent")]
+struct RelaysTheWholeRequest(Router);
+
+#[cfg(feature = "agent")]
+impl crate::Middleware for RelaysTheWholeRequest {
+    async fn call(&self, req: Request, _: impl crate::middleware::Next) -> crate::response::Response {
+        let (parts, body) = req.into_parts();
+        let mut asked = Request::builder().method(parts.method).uri(parts.uri);
+        for (name, value) in &parts.headers {
+            asked = asked.header(name, value);
+        }
+        self.0.clone().oneshot(asked.body(body).unwrap()).await.unwrap()
+    }
+}
+
+/// A tool's answer from an endpoint whose [`Tools::auth`] found its caller is that caller's, as an
+/// answer that reads a [`Caller`] is (a shared copy would also answer a request the check turns
+/// away): behind a staged middleware that marks every answer for a CDN, the tool's result (naming
+/// its caller here) and its own `isError` refusal go out `private, no-cache` with none of the
+/// caching headers a CDN reads first, and so they do when another Corten app's staged middleware
+/// relays the endpoint's answer inline. The same tool on an endpoint without `auth`, for anyone,
+/// and the endpoint's list of its tools keep what the middleware wrote (the controls).
+///
+/// [`Tools::auth`]: crate::agent::Tools::auth
+#[cfg(feature = "agent")]
+#[tokio::test]
+async fn an_mcp_tool_s_answer_for_the_caller_its_check_found_is_not_shared() {
+    use crate::agent::{ToolError, Tools};
+    let checked = Tools::new("test", "1.0")
+        .auth(|headers| {
+            let token = headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok());
+            token.and_then(|token| token.strip_prefix("Bearer ")).map(str::to_owned).ok_or(ToolError::Unauthorized)
+        })
+        .read_tool("whoami", "Says who asks", |caller: String, item: McpItem| async move {
+            if item.id == "locked" {
+                return Err(ToolError::Forbidden("that item is locked".into()));
+            }
+            Ok(McpFound { id: format!("{caller}:{}", item.id) })
+        });
+    let open = Tools::new("test", "1.0").read_tool("whoami", "Says who asks", |(), item: McpItem| async move {
+        if item.id == "locked" {
+            return Err(ToolError::Forbidden("that item is locked".into()));
+        }
+        Ok(McpFound { id: format!("anyone:{}", item.id) })
+    });
+    let cdn = || CdnRecaches(Some("public, max-age=60"));
+    let checked_app =
+        App::new(Routes::new()).api::<McpAt>(|api| api.route::<McpAt>(checked.clone().route())).middleware(cdn()).router();
+    let open_app = App::new(Routes::new()).api::<McpAt>(|api| api.route::<McpAt>(open.route())).middleware(cdn()).router();
+    // The endpoint with no middleware of its own, asked inline by another app's.
+    let inner = App::new(Routes::new()).api::<McpAt>(|api| api.route::<McpAt>(checked.route())).router();
+    let relaying = App::new(Routes::new())
+        .api::<McpAt>(|api| api.route::<McpAt>(crate::Methods::writes(crate::router::post(|| async { "home" }))))
+        .middleware((cdn(), RelaysTheWholeRequest(inner)))
+        .router();
+    let call = |id: &str| {
+        format!(r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"whoami","arguments":{{"id":"{id}"}}}}}}"#)
+    };
+    let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.to_string();
+    let asked = &[("content-type", "application/json"), ("authorization", "Bearer ann")][..];
+    let mut wrong = Vec::new();
+    // What each is, the app, the message, what its result must say, and whether it is the caller's.
+    for (item, router, message, says, personal) in [
+        ("the tool's answer", &checked_app, call("7"), Some("ann:7"), true),
+        ("the tool's own refusal", &checked_app, call("locked"), None, true),
+        ("the tool's answer relayed inline", &relaying, call("7"), Some("ann:7"), true),
+        ("the tool's own refusal relayed inline", &relaying, call("locked"), None, true),
+        ("the tools' list", &checked_app, list.clone(), None, false),
+        ("an open endpoint's answer", &open_app, call("7"), Some("anyone:7"), false),
+        ("an open endpoint's tool's refusal", &open_app, call("locked"), None, false),
+    ] {
+        let (status, headers, body) = sent_by_ann(router, "POST", "/mcp", asked, message.as_bytes()).await;
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+        let answered = match says {
+            Some(id) => body["result"]["structuredContent"]["id"] == id,
+            None if message == list => body["result"]["tools"].is_array(),
+            None => body["result"]["isError"] == true,
+        };
+        if status != StatusCode::OK || !answered {
+            wrong.push(format!("{item}: {status}, {body}"));
+            continue;
+        }
+        if personal {
+            wrong.extend(kept_from_cdns(&headers, "private, no-cache").into_iter().map(|what| format!("{item}: {what}")));
+        } else {
+            for name in CDN_OVERRIDES {
+                if headers.get(name).is_none_or(|value| value != "public, max-age=60") {
+                    wrong.push(format!("{item}: for anyone, and it lost {name}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// A body that fails as the handler reads it ([`crate::extract::pieces_up_to`], here over its
+/// limit), passed on with `?`, is the request's refusal: behind a staged middleware that marks every
+/// answer for a CDN, the failure goes out `private, no-cache` with none of the caching headers a CDN
+/// reads first. A `BodyError` or `UploadError` the handler builds itself is the same, by its type:
+/// building one opts in to a refusal's caching, which can only keep an answer from a shared cache,
+/// never give it to one. The handler's own failure (`Error::status`) keeps what the middleware
+/// wrote (the control).
+#[tokio::test]
+async fn a_body_error_is_the_request_s_refusal_whoever_made_it() {
+    let read = |request: Request| async move {
+        match request.headers().get("x-made").and_then(|value| value.to_str().ok()) {
+            Some("body") => Err(Error::from(crate::extract::BodyError::Broken("the app's own".into()))),
+            Some("upload") => Err(Error::from(crate::UploadError::Fields("the app's own check".into()))),
+            Some("own") => Err(Error::status(StatusCode::UNPROCESSABLE_ENTITY)),
+            _ => {
+                let mut pieces = crate::extract::pieces_up_to(request.into_body(), 4);
+                while pieces.chunk().await?.is_some() {}
+                Ok::<_, Error>("read")
+            }
+        }
+    };
+    let router = App::new(Routes::new())
+        .api::<ApiItems>(|items| items.route::<ApiItem>(crate::Methods::writes(crate::router::post(read))))
+        .middleware(CdnRecaches(Some("public, max-age=60")))
+        .router();
+    let mut wrong = Vec::new();
+    for (item, made, status, corten) in [
+        ("read over its limit", None, StatusCode::PAYLOAD_TOO_LARGE, true),
+        ("a BodyError the handler made", Some("body"), StatusCode::BAD_REQUEST, true),
+        ("an UploadError the handler made", Some("upload"), StatusCode::UNPROCESSABLE_ENTITY, true),
+        ("the handler's own failure", Some("own"), StatusCode::UNPROCESSABLE_ENTITY, false),
+    ] {
+        let asked: Vec<(&'static str, &'static str)> = made.map(|made| ("x-made", made)).into_iter().collect();
+        let (got, headers, body) = sent_by_ann(&router, "POST", "/api/items/7", &asked, b"more than four bytes").await;
+        if got != status {
+            wrong.push(format!("{item}: {got} (want {status}): {body}"));
+            continue;
+        }
+        if corten {
+            wrong.extend(kept_from_cdns(&headers, "private, no-cache").into_iter().map(|what| format!("{item}: {what}")));
+        } else {
+            for name in CDN_OVERRIDES {
+                if headers.get(name).is_none_or(|value| value != "public, max-age=60") {
+                    wrong.push(format!("{item}: the handler's own, and it lost {name}"));
                 }
             }
         }

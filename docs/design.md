@@ -2522,15 +2522,29 @@ rules something out.
     build's diagnostic there), whatever that page was, a
     refusal sent at another status with `Error::with_status`, a rejection an extractor made that a
     handler met as a value and passes on with `?` (not a `FormRejection` the app made itself,
-    round 15), an MCP endpoint's own JSON-RPC errors and the results it makes in a tool's place,
+    round 15; a `BodyError` or `UploadError` is the request's refusal whoever built it, an opt-in its
+    docs state, as both are exhaustive public enums with public variants and a mark of who built a
+    value would be a field in every variant, a breaking change, while the type alone only ever takes
+    a CDN's lifetime off an answer, never gives one to it, round 16), an MCP endpoint's own JSON-RPC
+    errors and the results it makes in a tool's place,
     the empty answer sent in place of a body that failed as it was read to tag or compress it
-    (`cache::unread`, which also settles it `no-store`, round 15), and what an error page's own
-    extractor answers in its place) carries a private mark in its
+    (`cache::unread`, which also settles it `no-store`, round 15, and marks it a `NoStore` answer,
+    so an app that relays it inline and rewrites its header still sends it `private, no-store`,
+    round 16), and what an error page's own extractor answers in its place) carries a private mark in its
     extensions (`cache::Unshared`), put there by the code that made it, and the cache rule decides
     from the final answer alone on every exit, success or failure (`cache::settle`). The mark goes
     wherever the answer goes: out of a task the handler spawned, from before the request came in,
     from another app whose answer a middleware relays inline, under any status a middleware gives
-    it, in place or by moving the answer's parts. The error page drawn in place of an answer copies
+    it, in place or by moving the answer's parts. An answer the cache rule finds to be one visitor's
+    for a reason its headers do not show (it read a caller, has the request's nonce, is a `Cache`
+    answer to a request with credentials, or is a tool's answer from an MCP endpoint whose
+    `Tools::auth` found its caller) carries a second mark (`cache::Personal`), so another app that
+    relays it inline, as it is or changed in place, settles it as personal too, and a middleware
+    there cannot give it a CDN's lifetime, though that app's own request read no caller; an answer
+    that middleware makes in its place is its own, and one nothing made personal is not marked.
+    Round 8 left that relay outside the issue; round 15's review found it, and the mark closes it
+    in process (round 16). Over HTTP an answer carries only its headers, and no mark crosses that
+    boundary. The error page drawn in place of an answer copies
     its marks onto the page (`cache::Marks`), `NoStore` included; a failure Corten sends in place of
     an answer it could not send as it was (a debug build's error, a page whose layout reads could
     not be filled or that could not be read to be kept) is marked whatever that answer was and keeps
@@ -2913,7 +2927,10 @@ rules something out.
     round's head marks and settles as Corten's, at `2dc94faf2` against `14126d2a8` the same way: a call whose arguments do not fit the
     tool, the `isError` result Corten makes in its place, 766 more (33,976.7 against 33,210.7), and
     a call to a tool the endpoint does not have, Corten's JSON-RPC error, 771 more (31,769.4 against
-    30,998.2); 2026-11-23, the same plain page at
+    30,998.2). These are instructions in process, not cycles: the quiet-host cycle run declared for this
+    change (the plain and kept pages, the router's and Corten's failures, the catalog's item page and
+    JSON) has no MCP workload and has not been run at this head, so these counts are the MCP
+    endpoint's only evidence and its cycles under load are outstanding; 2026-11-23, the same plain page at
     `ee2d8f7f0` (round 14's head) against main `a01dd5109`, which it merged (three rounds
     alternating the two builds, every run within 1.2 of the others): 104 more (16,383.6 against
     16,279.6); 2026-11-23, the same at

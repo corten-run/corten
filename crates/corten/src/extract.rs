@@ -563,6 +563,12 @@ enum End {
 }
 
 /// Why [`Pieces::chunk`] stopped. `?` turns it into an [`Error`] with its status.
+///
+/// That `Error` is Corten's refusal of the request, never shared, wherever the handler answers it:
+/// a body is the request's, and its failure can say who sent it. A value the handler builds itself
+/// is treated the same way: building one opts in to a refusal's caching, as a `Refused` does. A
+/// failure of the handler's own is an `Error` of its own (`Error::status`), which keeps its usual
+/// caching.
 #[derive(Debug)]
 pub enum BodyError {
     /// The body is over the limit (413). It was read past, so a client still sending reads the

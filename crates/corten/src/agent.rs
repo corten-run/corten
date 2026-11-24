@@ -531,6 +531,8 @@ pub struct Tools<A = ()> {
     name: String,
     version: String,
     auth: Auth<A>,
+    /// [`Tools::auth`] was set: a tool's answer is for the caller it found, never shared.
+    checked: bool,
     tools: Arc<BTreeMap<String, Tool<A>>>,
     authorization: Option<Arc<Authorization>>,
     challenge: Arc<OnceLock<Protected>>,
@@ -544,6 +546,7 @@ impl<A> Clone for Tools<A> {
             name: self.name.clone(),
             version: self.version.clone(),
             auth: self.auth.clone(),
+            checked: self.checked,
             tools: self.tools.clone(),
             authorization: self.authorization.clone(),
             challenge: self.challenge.clone(),
@@ -561,6 +564,7 @@ impl Tools<()> {
             name: name.into(),
             version: version.into(),
             auth: Arc::new(|_| Ok(())),
+            checked: false,
             tools: Arc::default(),
             authorization: None,
             challenge: Arc::default(),
@@ -569,7 +573,9 @@ impl Tools<()> {
 
     /// Checks every tool call before it runs (with an [`Authorization`], every request to the
     /// endpoint): `Err(ToolError::Unauthorized)` answers 401, and `Ok(caller)` is passed to the
-    /// tool. It runs once per request. Set it before adding tools.
+    /// tool. It runs once per request. Set it before adding tools. A tool's answer is then that
+    /// caller's, as an answer that reads a [`crate::Caller`] is: never shared, whatever a middleware
+    /// writes on it.
     pub fn auth<A, F>(self, auth: F) -> Tools<A>
     where
         F: Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync + 'static,
@@ -579,6 +585,7 @@ impl Tools<()> {
             name: self.name,
             version: self.version,
             auth: Arc::new(auth),
+            checked: true,
             tools: Arc::default(),
             authorization: self.authorization,
             challenge: self.challenge,
@@ -771,12 +778,17 @@ impl<A: Send + 'static> Tools<A> {
             return rpc_error(id, StatusCode::OK, -32600, "invalid request".into());
         }
         let params = message.get("params").cloned().unwrap_or(Value::Null);
+        // A tool's answer to a caller `Tools::auth` found is that caller's: never shared, though it
+        // goes out untyped and the request's `Authorization` alone does not make it private. A
+        // shared copy would also answer a request the check would have turned away.
+        let for_caller = self.checked;
         let result = match method {
             "tools/call" => match self.call(&headers, caller, params).await {
                 Err(CallError::Refused(error)) => return self.refused(id, error, &headers),
                 Err(CallError::Rpc(code, message)) => return rpc_error(id, StatusCode::OK, code, message),
                 // A result the endpoint made in the tool's place: Corten's, as its errors are.
                 Err(CallError::Failed(result)) => return crate::cache::unshared(reply_raw(&id, &result)),
+                Ok(result) if for_caller => return crate::cache::personal(reply_raw(&id, &result)),
                 Ok(result) => return reply_raw(&id, &result),
             },
             "initialize" => {
