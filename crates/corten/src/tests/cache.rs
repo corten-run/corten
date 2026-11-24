@@ -3169,16 +3169,17 @@ async fn a_kept_page_given_for_a_panic_or_a_passed_deadline_has_no_cdn_caching_h
 }
 
 /// The copy given for a panic has none of the headers for the connection its answer carried
-/// (`Connection` and what it names, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`
-/// and a proxy's, RFC 9110 section 7.6.1): given outside the middleware that would remove them,
-/// a `Connection` naming `Cache-Control` would have the next proxy remove the `private, no-store`.
-/// Nor has it an `Expires`, which a cache that does not read `Cache-Control` would keep it by. The
-/// page given fresh carries them, so the copy held them.
+/// (`Connection` and what it names, where it names only the connection's own, `Keep-Alive`, `TE`,
+/// `Trailer`, `Transfer-Encoding`, `Upgrade`, `Proxy-Connection`, `Proxy-Authenticate` and
+/// `Proxy-Authentication-Info`, RFC 9110 sections 7.6.1 and 11.7): given outside the middleware
+/// that would remove them. Nor has it an `Expires`, which a cache that does not read
+/// `Cache-Control` would keep it by. The page given fresh carries them, so the copy held them.
 #[tokio::test(start_paused = true)]
 async fn a_kept_page_given_for_a_panic_has_no_header_for_its_connection_or_expires() {
-    const HOPS: [&[(&str, &str)]; 9] = [
-        &[("connection", "cache-control")],
-        &[("connection", "close, x-shard"), ("x-shard", "7")],
+    const HOPS: [&[(&str, &str)]; 11] = [
+        &[("connection", "close, Keep-Alive"), ("keep-alive", "timeout=5")],
+        &[("connection", " TE ,proxy-authenticate"), ("te", "trailers"), ("proxy-authenticate", "Basic")],
+        &[("connection", "upgrade"), ("connection", "trailer, proxy-authentication-info"), ("upgrade", "websocket")],
         &[("keep-alive", "timeout=5")],
         &[("te", "trailers")],
         &[("trailer", "expires")],
@@ -3186,6 +3187,7 @@ async fn a_kept_page_given_for_a_panic_has_no_header_for_its_connection_or_expir
         &[("upgrade", "websocket")],
         &[("proxy-connection", "keep-alive")],
         &[("proxy-authenticate", "Basic")],
+        &[("proxy-authentication-info", "nextnonce=\"a\"")],
     ];
     const EXPIRES: &[(&str, &str)] = &[("expires", "Wed, 01 Jan 2098 00:00:00 GMT")];
     for extra in HOPS.into_iter().chain([EXPIRES]) {
@@ -3206,21 +3208,28 @@ async fn a_kept_page_given_for_a_panic_has_no_header_for_its_connection_or_expir
     }
 }
 
-/// A copy whose `Connection` names a header that says what its body is or how it is read (its
-/// `Content-Disposition`, its `Content-Type`, any case, in a list or on a second line, a
-/// `Location`, a `Vary`) is not given for a panic or a passed deadline: removed as the connection's,
-/// it would send the same bytes as another answer (the download inline, the page with no type), so
-/// the request has the failure's own answer. The page given fresh carries the header, so the copy
-/// held it.
+/// A copy whose `Connection` names any header that is not the connection's own is not given for a
+/// panic or a passed deadline, whether or not the header says what the body is: removed as the
+/// connection's, its `Content-Disposition` would send the download inline, its `Content-Type` the
+/// page with no type, its `Cache-Control` would take the `private, no-store` from the next proxy,
+/// its `Cross-Origin-Resource-Policy` would let another site embed it, and nothing tells a name of
+/// the app's own (`x-shard`) or one no proxy defines (`Proxy-Status`) is safe to remove. Any case,
+/// in a list beside `close` or on a second line. The request has the failure's own answer. The page
+/// given fresh carries the header, so the copy held it.
 #[tokio::test(start_paused = true)]
-async fn a_kept_page_whose_connection_names_what_its_body_is_is_not_given_for_a_panic_or_deadline() {
-    const NAMED: [&[(&str, &str)]; 6] = [
+async fn a_kept_page_whose_connection_names_a_header_not_the_connection_s_is_not_given_for_a_panic_or_deadline() {
+    const NAMED: [&[(&str, &str)]; 11] = [
         &[("connection", "Content-Disposition"), ("content-disposition", "attachment; filename=\"page.html\"")],
         &[("connection", "close, CONTENT-TYPE")],
         &[("connection", "close"), ("connection", " content-encoding ")],
         &[("connection", "content-length")],
         &[("connection", "location")],
         &[("connection", "vary")],
+        &[("connection", "cache-control")],
+        &[("connection", "close, x-shard"), ("x-shard", "7")],
+        &[("connection", "keep-alive, Cross-Origin-Resource-Policy"), ("cross-origin-resource-policy", "same-origin")],
+        &[("connection", "x-anything"), ("x-anything", "1")],
+        &[("connection", "proxy-status"), ("proxy-status", "edge; error=connection_refused")],
     ];
     for extra in NAMED {
         let (runs, reads) = (Runs::default(), std::sync::Arc::default());
@@ -3248,14 +3257,15 @@ async fn a_kept_page_whose_connection_names_what_its_body_is_is_not_given_for_a_
 }
 
 /// The same over HTTP/1, as a client reads it: the copy given for a panic past the lifetime of a
-/// page whose answer named `Cache-Control` as its connection's own goes out `private, no-store`
-/// with no `Connection` that names it, so no proxy removes it by that name.
+/// page whose answer named `Proxy-Authenticate`, a header of the connection's own, in its
+/// `Connection` goes out `private, no-store` without that header or a `Connection` that names it.
 #[tokio::test]
-async fn over_http1_the_copy_for_a_panic_does_not_name_its_policy_for_the_connection() {
+async fn over_http1_the_copy_for_a_panic_has_no_header_for_its_connection() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (runs, reads) = (Runs::default(), std::sync::Arc::default());
     let windows = |page: Public<Exact>| page.stale_if_error(Duration::from_secs(60));
-    let app = App::new(Routes::from(exact_routes_with(&runs, &reads, windows, &[("connection", "cache-control")])));
+    let hop = &[("connection", "proxy-authenticate"), ("proxy-authenticate", "Basic")];
+    let app = App::new(Routes::from(exact_routes_with(&runs, &reads, windows, hop)));
     let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
     let addr = listeners[0].local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -3276,21 +3286,25 @@ async fn over_http1_the_copy_for_a_panic_does_not_name_its_policy_for_the_connec
         let answer = String::from_utf8_lossy(&answer).to_ascii_lowercase();
         answer.split("\r\n\r\n").next().unwrap().to_owned()
     };
-    head().await;
-    // Kept, at whatever age a slow host gives it (or made again, past its lifetime there): the
-    // clock is real time, as this runtime's is not paused.
+    let age = |head: &str| head.lines().find_map(|line| line.strip_prefix("age: ")).and_then(|age| age.parse::<u64>().ok());
+    let first = head().await;
+    // Kept: the second request is given the copy (it has an `Age`) and runs no handler. The page
+    // lasts one second of real time, as this runtime's clock is not paused, so a host that took
+    // that long over the first request fails here, before the panic, rather than at the copy.
     let second = head().await;
+    assert!(first.starts_with("http/1.1 200") && age(&first).is_none(), "made: {first}");
+    assert!(second.starts_with("http/1.1 200") && age(&second).is_some(), "given the kept copy: {second}");
+    assert!(second.contains("\r\nproxy-authenticate: basic"), "the copy holds its header: {second}");
+    assert_eq!(runs.count(), 1, "the second request ran no handler: {second}");
     // Past its lifetime, on the clock the store counts by, so the copy's age is at least a second.
     tokio::time::sleep(Duration::from_millis(1100)).await;
     reads.lock().unwrap().push_back(Read::HandlerPanics);
-    let before = runs.count();
     let panicked = head().await;
-    let age = panicked.lines().find_map(|line| line.strip_prefix("age: ")).and_then(|age| age.parse::<u64>().ok());
-    assert!(panicked.starts_with("http/1.1 200") && age.is_some_and(|age| age >= 1), "the copy: {panicked}");
+    assert!(panicked.starts_with("http/1.1 200") && age(&panicked).is_some_and(|age| age >= 1), "the copy: {panicked}");
     assert!(panicked.contains("\r\ncache-control: private, no-store"), "{panicked}");
-    assert!(!panicked.lines().any(|line| line.starts_with("connection:") && line.contains("cache-control")), "{panicked}");
-    assert!(second.starts_with("http/1.1 200"), "{second}");
-    assert_eq!(runs.count(), before + 1, "the handler ran once, and panicked");
+    assert!(!panicked.contains("\r\nproxy-authenticate:"), "{panicked}");
+    assert!(!panicked.lines().any(|line| line.starts_with("connection:") && line.contains("proxy-authenticate")), "{panicked}");
+    assert_eq!(runs.count(), 2, "the handler ran again, and panicked");
     stop.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), server).await.expect("the server stops within 10 s").unwrap().unwrap();
 }

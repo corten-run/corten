@@ -1626,13 +1626,14 @@ answer a middleware does not see. It goes out `private, no-store`, with every he
 read first removed (any `*-cache-control`, a name your deployment chose too, `Surrogate-Control`,
 `Edge-Control`, `X-Accel-Expires`) and its `Expires`, so no cache after the app keeps or shares
 it, whatever the handler's answer said. It also goes without the headers for its connection an
-answer of your own type set (`Connection` and the headers it names, `Keep-Alive`, `TE`, `Trailer`,
-`Transfer-Encoding`, `Upgrade`, a `Proxy-*`), which a middleware may have removed too: a
-`Connection` naming `Cache-Control` would have the next proxy remove the `private, no-store`. Where
-that `Connection` names a header that says what the body is or how it is read (any `Content-*`,
-`Location`, `Vary`, `X-Content-Type-Options`), the kept page is not sent at all, since without it
-the same bytes are another answer (a download shown inline, a page with no type): the request gets
-the panic's `500` or the deadline's `503`. A `500`, `502`, `503` or `504` the handler
+answer of your own type set (`Connection`, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`,
+`Upgrade`, `Proxy-Connection`, `Proxy-Authenticate`, `Proxy-Authentication-Info`), which a
+middleware may have removed too. Where that `Connection` names any other header (`Cache-Control`,
+which the next proxy would then remove from the `private, no-store`, a `Content-Disposition`, a
+`Cross-Origin-Resource-Policy`, a header of your own), the kept page is not sent at all, since a
+proxy would remove that header and nothing tells Corten it is safe to lose (a download shown
+inline, a page another site may embed): the request gets the panic's `500` or the deadline's
+`503`. A `500`, `502`, `503` or `504` the handler
 returns goes back through the middleware, and the kept page sent in its place leaves with what
 the middleware makes of it. Nor does the page sent for a panic or a deadline get any other
 change your middleware makes after `next` (a redaction, a header every answer must carry), so a

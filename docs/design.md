@@ -7776,16 +7776,21 @@ rules something out.
     unstaged answer that sets a cookie follows and `Public::header` checks: any `*cache-control`, a
     deployment's own name too, and the others Corten names) and its `Expires`, which a cache that
     does not read `Cache-Control` keeps by, rather than with the handler's `public` and windows.
-    It also goes without the headers for its connection (`Connection` and those it names,
-    `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, a `Proxy-*`, RFC 9110 section
-    7.6.1), which an answer type of the app's own may set though `Public::header` may not, and a
-    middleware may have removed: a `Connection` naming `Cache-Control` would have the next proxy
-    remove the `private, no-store`. A copy whose `Connection` names a header that says what its
-    body is or how it is read (any `Content-*`, `Location`, `Vary`, `X-Content-Type-Options`;
-    none may be a connection's own, RFC 9110 section 7.6.1, but such an answer is not refused) is
-    not given at all: removed, the header would send the same bytes as another answer (a download
-    inline, a page with no type for the document policy to see), so the request has the panic's
-    `500` or the deadline's `503`; checked only as that copy is given, not on a hit or a miss.
+    It also goes without the headers for its connection, which an answer type of the app's own may
+    set though `Public::header` may not, and a middleware may have removed: `Connection`, the
+    fields RFC 9110 section 7.6.1 has a proxy remove whether named or not (`Proxy-Connection`,
+    `Keep-Alive`, `TE`, `Transfer-Encoding`, `Upgrade`), `Trailer` (hop-by-hop in RFC 2616, and a
+    body read whole has no trailer section), and the two proxy fields that apply only to the next
+    client (`Proxy-Authenticate` and `Proxy-Authentication-Info`, RFC 9110 section 11.7; not
+    `Proxy-Authorization`, a request's, nor `Proxy-Status`, RFC 9209, which passes every proxy).
+    The copy is given only where every name its `Connection` lists is one of those or the `close`
+    option: a `Connection` that names any other header (its `Cache-Control`, which the next proxy
+    would remove from the `private, no-store`, a `Content-Disposition` that makes it a download, a
+    `Cross-Origin-Resource-Policy` that keeps another site from embedding it, a name of the app's
+    own) has the request take the panic's `500` or the deadline's `503`, since nothing tells the
+    framework that header is safe to remove; checked only as that copy is given, not on a hit or
+    a miss. An app whose answers name a hop-by-hop field of its own loses the copy for a panic or a
+    deadline on those routes, not the copy for a returned failure.
     The same copy skips the middleware's other
     changes after `next` too (a redaction, a header every answer needs), so the guide tells a
     route that needs one to leave `stale-if-error` off, which is off unless its answer sets it.
@@ -7839,7 +7844,13 @@ rules something out.
     with one, a check of each name in the pass that counts the head, which cost the miss that keeps
     a page about 125 to 140 more instructions under callgrind in each of the three forms tried (a
     match in that pass, a match by the first byte, a function of its own), where removing the
-    headers from the copy given for a panic or a deadline costs only that failure. For bounding refreshes: a cap of their own, a second limit to
+    headers from the copy given for a panic or a deadline costs only that failure. For a
+    `Connection` that names another header: removing what it names, which gave the copy without a
+    `Content-Disposition` (the sixth review) or a `Cross-Origin-Resource-Policy` (the seventh); and
+    a list of the headers too meaningful to remove (any `Content-*`, `Location`, `Vary`,
+    `X-Content-Type-Options`), which each review found one more for, where the fields a connection
+    may own are a short list the RFCs close; and refusing to keep such an answer at all, the
+    refusal above, which costs every miss that keeps a page its 125 to 140 instructions. For bounding refreshes: a cap of their own, a second limit to
     choose where the copies kept already follow the store's bound; letting a refresh's count go as
     its copy goes, before its task has ended, which let copies turned out and kept again start
     more refreshes than copies (the fourth review found it); and a mark for each URL, which holds

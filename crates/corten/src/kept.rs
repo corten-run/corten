@@ -1542,18 +1542,19 @@ impl Held {
 /// [`crate::cache::read_before_cache_control`]) and its `Expires`, which a cache that does not
 /// read `Cache-Control` keeps by, not with the handler's `public` and windows, so no cache after
 /// the app keeps or shares it; and without its headers for the connection, which the middleware
-/// may have removed too, so a `Connection` naming `Cache-Control` does not have the next proxy
-/// remove the `private, no-store` ([`drop_connection_headers`]). Not given where its
-/// `Connection` names a header that says what its body is or how it is read
-/// ([`says_what_the_body_is`]), which removed would send the same bytes as something else (a
-/// download inline, a page with no type): the request has the failure's own answer.
+/// may have removed too ([`drop_connection_headers`]). Given only where every name its
+/// `Connection` lines list is the connection's own ([`for_the_connection`]): a `Connection` that
+/// names any other header (its `Cache-Control`, which the next proxy would remove from the
+/// `private, no-store`, a `Content-Disposition` that makes it a download, a
+/// `Cross-Origin-Resource-Policy`, a name of the app's own) has the request take the failure's
+/// own answer, since nothing here can tell that header is safe to remove.
 pub(crate) fn held(signal: &crate::Signal) -> Option<Response> {
     let copy = signal.take::<HeldCopy>()?;
     // Read of the copy's own lines before it is given, so one not given leaves no mark on the
     // request (the language it was kept for).
     if copy.0.upgrade().is_some_and(|entry| {
         connection_names(entry.head.iter().filter(|(name, _)| name == header::CONNECTION).map(|(_, line)| line))
-            .any(|name| says_what_the_body_is(name.as_str()))
+            .any(|name| !for_the_connection(name.as_str()))
     }) {
         return None;
     }
@@ -1567,17 +1568,13 @@ pub(crate) fn held(signal: &crate::Signal) -> Option<Response> {
 }
 
 /// Removes the headers for the connection an answer is sent on, which a proxy removes (RFC 9110
-/// section 7.6.1): those `Connection` names, then `Connection`, `Keep-Alive`, `TE`, `Trailer`,
-/// `Transfer-Encoding`, `Upgrade` and a proxy's own (`Proxy-*`). For the copy given outside the
-/// middleware ([`held`]) alone: a copy given any other way leaves through the middleware, as its
-/// handler's answer would.
+/// section 7.6.1): those `Connection` names (each the connection's own, as [`held`] gives no
+/// copy otherwise), then every field of the connection's own ([`connection_field`]). For the copy
+/// given outside the middleware ([`held`]) alone: a copy given any other way leaves through the
+/// middleware, as its handler's answer would.
 fn drop_connection_headers(headers: &mut HeaderMap) {
     let named: Vec<header::HeaderName> = connection_names(headers.get_all(header::CONNECTION).iter()).collect();
-    let hop = |name: &str| {
-        matches!(name, "connection" | "keep-alive" | "te" | "trailer" | "transfer-encoding" | "upgrade")
-            || name.starts_with("proxy-")
-    };
-    let own: Vec<header::HeaderName> = headers.keys().filter(|name| hop(name.as_str())).cloned().collect();
+    let own: Vec<header::HeaderName> = headers.keys().filter(|name| connection_field(name.as_str())).cloned().collect();
     for name in named.into_iter().chain(own) {
         headers.remove(name);
     }
@@ -1590,17 +1587,35 @@ fn connection_names<'a>(lines: impl Iterator<Item = &'a HeaderValue> + 'a) -> im
         .filter_map(|name| header::HeaderName::from_bytes(name.trim_ascii()).ok())
 }
 
-/// Whether the header `name` (lowercase) says what an answer's body is or how it is read, so that
-/// the same bytes sent without it are another answer: what RFC 9110 calls the representation's
-/// metadata and its content's (any `Content-*`: its type, coding, language, location and range,
-/// section 8 and 14.4, a `Content-Disposition` that makes it a download, RFC 6266, and a
-/// `Content-Security-Policy` that holds what it may run; its `Content-Length` too, though the
-/// server writes that again from the whole body, as one rule for the family), the `Location` a redirect is followed
-/// to (section 10.2.2), the `Vary` it was chosen by (section 12.5.5) and `X-Content-Type-Options`,
-/// which keeps a browser from reading it as another type. None of them may be a connection's own
-/// (section 7.6.1), but an answer type of the app's can name one, and a proxy would remove it.
-fn says_what_the_body_is(name: &str) -> bool {
-    name.starts_with("content-") || matches!(name, "location" | "vary" | "x-content-type-options")
+/// Whether `name` (lowercase), listed by a `Connection` line, is the connection's own: its
+/// `close` option (RFC 9112 section 9.6), which names no header, or a field of the connection's
+/// own ([`connection_field`]). Any other name is a header the next proxy would remove though
+/// it may say what the body is or how a browser treats it, so [`held`] gives no copy.
+fn for_the_connection(name: &str) -> bool {
+    name == "close" || connection_field(name)
+}
+
+/// Whether the header `name` (lowercase) is for the connection an answer is sent on alone, so
+/// that one sent without it is the same answer: `Connection` and the fields RFC 9110 section
+/// 7.6.1 says a proxy removes whether named or not (`Proxy-Connection`, `Keep-Alive`, `TE`,
+/// `Transfer-Encoding`, `Upgrade`); `Trailer`, which RFC 2616 section 13.5.1 named hop-by-hop
+/// and which a kept body, read whole, has no trailer section for; and the two proxy fields RFC
+/// 9110 says apply only to the next client (`Proxy-Authenticate`, section 11.7.1, and
+/// `Proxy-Authentication-Info`, 11.7.3). Not every `Proxy-*`: `Proxy-Authorization` is a
+/// request's (11.7.2), and `Proxy-Status` (RFC 9209) is meant to pass every proxy.
+fn connection_field(name: &str) -> bool {
+    matches!(
+        name,
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authentication-info"
+            | "proxy-connection"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
 }
 
 /// The answer for a body of a size it gave that could not be read: not a page to send as it is.
