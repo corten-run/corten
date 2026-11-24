@@ -136,11 +136,11 @@ impl<C: Future> Future for Keeps<C> {
     // connection fewer than two of whose requests have waited: 13 instructions (callgrind,
     // keep-alive requests over TCP). The connection is polled in one place, so its poll is still
     // compiled into its caller, and [`Polling`] owns nothing to drop and reads what it lent from
-    // the thread, so putting the thread back is compiled in here too. Polled in two places by a
-    // guard that owned a timer, a poll cost 64. A connection that has made its timer lends it to
-    // the thread and takes it back in every poll besides, whether the request it is serving
-    // waits or not: a request that does not wait costs about 25 instructions more on such a
-    // connection than on one that has made none (callgrind, one single-threaded runtime).
+    // the thread, so putting the thread back is compiled in here too. One that has made its
+    // timer lends it and takes it back in every poll, whatever it is serving: a request that
+    // does not wait then costs about 25 instructions more, and while the timer is set (from its
+    // third request to wait until the timer fires) about 185 more again, tokio working out a
+    // timeout each time the thread parks (`docs/design.md#choice-deadline-timer`, cost 1).
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<C::Output> {
         let this = self.project();
         // A connection that has made no timer tells the thread only how many of its deadlines
