@@ -103,6 +103,7 @@ function fixture(t, mode = "success") {
   const h = harness(t), output = [], workers = [];
   t.after(() => { if (traceFailure) throw traceFailure; });
   const repo = path.join(h.temp, "captured"), trace = path.join(h.temp, "boundaries.jsonl"), hosts = path.join(h.temp, "provider.json");
+  const refusalLog = path.join(h.temp, "refusals.jsonl");
   fs.mkdirSync(repo); fs.writeFileSync(trace, "");
   fs.mkdirSync(path.join(repo, "bench/workloads"), { recursive: true });
   // The operator's local bench install (npm --prefix bench ci), which native replay and the
@@ -149,6 +150,20 @@ const synthetic = (${syntheticDependencies.toString()})({
   bootstrapMarker: syntheticMarker, bootstrapReadScript: syntheticRead, bootstrapWorkspaceScript, controlRegistration,
   EventEmitter, PassThrough, Writable, registration: ${JSON.stringify(registration)} });\n`;
     }
+    if (file === "bench/workloads/fleet-worker.mjs") {
+      // The worker passes only closed fields to its parent, never a refusal's message. Record
+      // the message chain beside the trace so a test can tell which gate refused.
+      const before = "} catch (error) {\n  const diagnostic = providerFailure?.(error);";
+      assert.equal(source.split(before).length, 2, "review worker refusal seam");
+      source = source.replace(before, "} catch (error) {\n  syntheticRefusal(error);\n  const diagnostic = providerFailure?.(error);") + `
+import { appendFileSync as syntheticAppend } from 'node:fs';
+function syntheticRefusal(error) {
+  const messages = [];
+  for (let cause = error; cause && messages.length < 8; cause = cause.cause) messages.push(String(cause.message));
+  syntheticAppend(${JSON.stringify(refusalLog)}, JSON.stringify(messages) + "\\n");
+}
+`;
+    }
     fs.writeFileSync(target, source);
     return { path: file, url: pathToFileURL(target).href, source, sha256: digest(source) };
   });
@@ -179,7 +194,9 @@ const synthetic = (${syntheticDependencies.toString()})({
     assert.equal(await fleetMain([...args, "--detach", "--print-approval"], deps), 3);
     return [...args, "--detach", "--approve-reviewed-merged-ready", output.at(-1).approvalSha256];
   }
-  return { h, output, workers, saved, events, prepare, prepareArgs, deps, trace, hosts };
+  // Each worker refusal's message and its causes, in order.
+  const refusals = () => fs.existsSync(refusalLog) ? readTrace(refusalLog, { finished: true }) : [];
+  return { h, output, workers, saved, events, refusals, prepare, prepareArgs, deps, trace, hosts };
 }
 
 test("captured production composition ignores arbitrary hints, binds POST identity and propagates remote options", { timeout: 30000 }, async (t) => {
@@ -1406,8 +1423,11 @@ for (const listed of [true, false]) {
 // Review round 6, finding 3. Only the selected group's earlier attempts were rechecked at the
 // final gate: a contradiction of json-api's settled attempt recorded after the other group's
 // census (here during the account read that opens its create) still let it record create intent and POST.
-for (const late of [true, false]) {
-  test(`another group's create ${late ? "is refused when" : "proceeds when no"} contradiction of an earlier provider-errored attempt is recorded after its census`, { timeout: 60000 }, async (t) => {
+// Review round 7, finding 1: a create-recheck or launch lock taken in that attempt at the same
+// point also still let it POST; the gate saw only its operation lock.
+const postedRefusal = /an earlier provider-errored create on this account changed, took custody or was contradicted before this create/;
+for (const late of ["provider-create-reappeared", "create-recheck.lock", ".groups-launch.lock", null]) {
+  test(`another group's create ${late ? `is refused when ${late} is written in` : "proceeds beside"} an earlier provider-errored attempt after its census`, { timeout: 60000 }, async (t) => {
     const a = await lateCreateAttempt(t);
     assert.equal(await a.child(), 1, "the errored action and absence settle the attempt");
     fs.unlinkSync(a.locks.outer); // The documented custody step for the outer continuation lock.
@@ -1415,16 +1435,27 @@ for (const late of [true, false]) {
     const args = (round) => [round, "--continuation-root", a.p.h.base, "--group", other];
     assert.equal(await fleetMain([...args("r20"), "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context], a.p.deps), 3);
     assert.equal(await fleetMain([...args("r20"), "--detach", "--print-approval"], a.p.deps), 3);
-    const approval = a.p.output.at(-1).approvalSha256, witness = path.join(a.local, "provider-create-reappeared");
-    if (late) fs.writeFileSync(a.p.hosts + ".late-lock", witness);
+    const approval = a.p.output.at(-1).approvalSha256;
+    const marker = late && path.join(late === ".groups-launch.lock" ? a.stateRoot : a.local, late);
+    if (late) fs.writeFileSync(a.p.hosts + ".late-lock", marker);
     const code = await fleetMain([...args("r20"), "--detach", "--approve-reviewed-merged-ready", approval], a.p.deps).catch((error) => error);
     if (late) {
-      assert.ok(fs.existsSync(witness), "the marker was written during the create's account read");
+      assert.ok(fs.existsSync(marker), "the marker was written during the create's account read");
       assert.notEqual(code, 3);
       assert.deepEqual(a.posts(), [], "no POST from the other group");
       const state = path.join(a.p.h.base, other, other, "groups-r20", "state.json");
       if (fs.existsSync(state)) assert.equal(JSON.parse(fs.readFileSync(state)).createIntentAt, undefined, "no create intent");
-    } else assert.equal(a.posts().length, 1, "the other group creates its own host");
+      // Refused by the cross-group final gate, not by an unrelated failure.
+      assert.deepEqual(a.p.output.at(-1).groups.map(({ group, outcome, controllerStage }) => [group, outcome, controllerStage]),
+        [[other, "error", "controller-launch"]]);
+      const refusals = a.p.refusals();
+      assert.equal(refusals.length, 1, JSON.stringify(refusals));
+      assert.match(refusals[0][0], postedRefusal);
+      if (late !== "provider-create-reappeared") assert.match(refusals[0][1], /provider-errored create still holds custody/);
+    } else {
+      assert.equal(a.posts().length, 1, "the other group creates its own host");
+      assert.deepEqual(a.p.refusals(), []);
+    }
     assert.equal(a.provider.deletes, 0);
   });
 }
