@@ -292,13 +292,20 @@ passed, no failures, a clean tree at the plan's commit) and parts that did not r
    the phase began (after its first 200, before warmup or between phases), an upstream error
    answer, or a phase in which no request succeeded still fails the run.
 2. Hash summary before/after the read-only reporter. Save its generated report as
-   results/rN/report.md and exact SHA as commit.txt. Preserve raw logs/checks/image provenance.
-   Collection keeps the result folder outside Git in the round-control evidence directory.
-   Import that folder into a new bench/marketplace/results/rN only after validation, without
-   overwriting an existing folder. Stage and verify any interrupted import separately before
-   promotion; never change the archived source. Keep the original hash-verified archive outside
-   Git, with a checksum receipt in the committed results folder. Do not publish credentials or
-   local control state. Pre-measurement failures may have only run.log/exit-code in evidence.
+   results/rN/report.md and exact SHA as commit.txt. Collection keeps the whole validated result
+   folder (raw logs, checks, image provenance and summary.json) outside Git in the round-control
+   evidence directory, as the original hash-verified archive; never change it. After validation,
+   commit only the evidence into a new bench/marketplace/results/rN, without overwriting an
+   existing folder: report.md, commit.txt, and provenance recording the archive's SHA-256 and a
+   locator a maintainer has approved and published it at (a checksum alone checks a copy but does
+   not say where one is). Commit summary.json only when it is within the bench size limit
+   ([Benchmark results](../../CONTRIBUTING.md#benchmark-results), 256 KiB); otherwise record its
+   SHA-256 in the provenance and leave it in the archive. Raw receipts stay in the archive. Stage
+   and verify any interrupted import separately before promotion. Before a replay or a comparison
+   that reads a summary or raw receipt not in Git, fetch the archive from its recorded locator and
+   verify its SHA-256 (and the summary's, where recorded) against the committed provenance;
+   refuse on a mismatch or a missing locator. Do not publish credentials or local control state.
+   Pre-measurement failures may have only run.log/exit-code in evidence.
 3. Fetch origin, create bench/rN from origin/main carrying only the untracked result folder.
    Commit results first and docs second. Push only bench/rN. Never overwrite another change.
 4. The first round that validates is the first v2 baseline, no r16/c1 delta. r17 ran under
