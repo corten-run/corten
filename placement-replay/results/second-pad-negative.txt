@@ -1,0 +1,29 @@
+== base, a first pad of 15120 bytes and a second pad of 16 where the rule takes 48, so .data is elsewhere than the rule says
+replay.mjs: .data begins 48 bytes further into a 64-byte line than in the unpadded link, not 16
+refused
+== base, a first pad of 15120 bytes and a second pad of 48 that the ordering file names, so it is not last
+replay.mjs: the last input section of .text is /usr/local/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_bui
+replay.mjs: input section 0 differs: /usr/lib/gcc/x86_64-linux-gnu/14/../../../x86_64-linux-gnu/Scrt1.o:(.text) (34, 16) against /w/pads2/pad2-48.o:(.text.corten_layout_pad2) (48, 16)
+replay.mjs: 3442 input sections before the first aligned beyond 16 bytes moved by other than the pad
+replay.mjs: .data begins 0 bytes further into a 64-byte line than in the unpadded link, not 16
+refused
+== base, a first pad of 15120 bytes and no second pad, checked as one with a second pad of 48
+replay.mjs: the last input section of .text is /usr/local/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_bui
+replay.mjs: .text has 3442 input sections unpadded and 3441 besides the pads in the placement
+replay.mjs: 3442 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== head, a first pad of 15120 bytes and a second pad of 16 where the rule takes 64, so .data is elsewhere than the rule says
+replay.mjs: .data begins 32 bytes further into a 64-byte line than in the unpadded link, not 16
+refused
+== head, a first pad of 15120 bytes and a second pad of 64 that the ordering file names, so it is not last
+replay.mjs: the last input section of .text is /usr/local/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_bui
+replay.mjs: input section 0 differs: /usr/lib/gcc/x86_64-linux-gnu/14/../../../x86_64-linux-gnu/Scrt1.o:(.text) (34, 16) against /w/pads2/pad2-64.o:(.text.corten_layout_pad2) (64, 16)
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+replay.mjs: .data begins 0 bytes further into a 64-byte line than in the unpadded link, not 16
+refused
+== head, a first pad of 15120 bytes and no second pad, checked as one with a second pad of 64
+replay.mjs: the last input section of .text is /usr/local/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_bui
+replay.mjs: .text has 3483 input sections unpadded and 3482 besides the pads in the placement
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+replay.mjs: .data begins 0 bytes further into a 64-byte line than in the unpadded link, not 16
+refused

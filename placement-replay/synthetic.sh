@@ -9,7 +9,8 @@
 # told of; a second pad that is not last; a function after the first section aligned beyond 16
 # bytes whose symbol names an own crate; and a function of an own crate in .init. The places
 # these maps give the sections after .text are synth.mjs's assumption, so --data-further is
-# tested on real links: all of them by last-pad.sh, and the two kept here at the end.
+# tested on real links: all of them by last-pad.sh and second-pad.sh, and the six kept here
+# at the end, four of them with the second pad the rule asks.
 set -eu
 S=$1; R=$2; W=$3; OWN=$4
 mkdir -p $W
@@ -54,4 +55,16 @@ gunzip -c $R/head-p320-l8.map.gz >$W/real-l8.map
 pass "the real link with a first pad of 320 and a second of 48, .data where the unpadded link has it" $W/head.map $W/real-l48.map 320 --own $OWN --last-pad 48 --data-further 0
 pass "the real link with a first pad of 320 and a second of 8, .data 16 bytes further" $W/head.map $W/real-l8.map 320 --own $OWN --last-pad 8 --data-further 16
 t "that link with .data declared 32 bytes further" $W/head.map $W/real-l8.map 320 --own $OWN --last-pad 8 --data-further 32
+# Four real links with the second pad the rule asks are kept (second-pad.sh made them): each
+# side with first pads of 15120 and 25824 bytes, 16 and 32 mod 64. The rule: .data begins the
+# first pad's size mod 64 further into a line than in the side's unpadded link.
+for f in base-p15120-l48 base-p25824-l48 head-p15120-l64 head-p25824-l16; do
+    side=${f%%-*}; p=${f#*-p}; p=${p%-l*}; n=${f##*-l}
+    gunzip -c $R/$f.map.gz >$W/rule.map
+    pass "the real link of the $side with a first pad of $p and a second of $n, .data where the rule says" $W/$side.map $W/rule.map $p --own $OWN --last-pad $n --data-further rule
+done
+t "the real link of the head with a first pad of 320 and a second of 8, which the rule does not take" $W/head.map $W/real-l8.map 320 --own $OWN --last-pad 8 --data-further rule
+pass "the real link of the head with a first pad of 320 and a second of 48, which it does" $W/head.map $W/real-l48.map 320 --own $OWN --last-pad 48 --data-further rule
+node $S/synth.mjs $W/base.map $W/base-p320-l48.map 320 --last-pad 48 >/dev/null
+pass "base, a pad of 320 bytes and a second pad of 48 last (a written map: its .text only)" $W/base.map $W/base-p320-l48.map 320 --own $OWN --last-pad 48
 echo SYNTHETIC-DONE

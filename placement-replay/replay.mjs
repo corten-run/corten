@@ -1,7 +1,7 @@
 // replay.mjs: checks a padded placement against its side's unpadded link by LLD's own rule,
 // from the two links' maps (LLD's -Map), or prints what an unpadded link holds:
 //   node replay.mjs <map of the unpadded link A> <map of the padded link B> <pad bytes> [--own <crate>,<crate>...]
-//        [--last-pad <bytes> [--data-further <bytes>]] [--pad-section <name>] [--last-pad-section <name>]
+//        [--last-pad <bytes> [--data-further <bytes>|rule]] [--pad-section <name>] [--last-pad-section <name>]
 //   node replay.mjs --facts <map of the unpadded link A> [--own <crate>,<crate>...]
 // LLD lays the input sections of an output section in order, each at the first multiple of its
 // own alignment at or after the end of the one before it. The checks, on .text:
@@ -23,7 +23,10 @@
 //      other output section that holds code (.init, .fini, the .plt sections, one named .text.*
 //      or one that holds an input section named .text*) holds one;
 //   7. with --data-further, .data begins that many bytes further into a 64-byte line in B than
-//      in A (0 for a second pad that leaves the data's place as the unpadded link has it).
+//      in A (0 for a second pad that leaves the data's place as the unpadded link has it); with
+//      --data-further rule, the first pad's size mod 64, the plan's rule for a second pad: the
+//      data then takes the place in a line that the first pad alone gives it on a side with no
+//      section aligned beyond STEP bytes.
 // A function is one of a crate's by its symbol alone: its section's mangled name holds the
 // crate's name as an identifier (its length before it), or a symbol's printed name holds it as a
 // path. The input file is not asked: under thin LTO it names a code unit of the program.
@@ -41,13 +44,14 @@ const own = (opt("--own") ?? "").split(",").filter(Boolean);
 const padName = opt("--pad-section") ?? ".text.corten_layout_pad";
 const lastName = opt("--last-pad-section") ?? ".text.corten_layout_pad2";
 const lastArg = opt("--last-pad"), furtherArg = opt("--data-further");
-const lastPad = lastArg === undefined ? null : Number(lastArg), further = furtherArg === undefined ? null : Number(furtherArg);
+const lastPad = lastArg === undefined ? null : Number(lastArg);
 const factsOnly = argv[0] === "--facts";
 if (factsOnly) argv.shift();
 const [mapA, mapB, padArg] = argv;
 const pad = Number(padArg), STEP = 16, LIMIT = 64, LINE = 64;
+const further = furtherArg === undefined ? null : furtherArg === "rule" ? pad % LINE : Number(furtherArg);
 if (!mapA || (!factsOnly && (!mapB || !Number.isInteger(pad))) || (lastPad !== null && !Number.isInteger(lastPad)) || (further !== null && (lastPad === null || !Number.isInteger(further))))
-  throw new Error("usage: node replay.mjs <map A> <map B> <pad bytes> [--own a,b] [--last-pad <bytes> [--data-further <bytes>]] | node replay.mjs --facts <map A> [--own a,b]");
+  throw new Error("usage: node replay.mjs <map A> <map B> <pad bytes> [--own a,b] [--last-pad <bytes> [--data-further <bytes>|rule]] | node replay.mjs --facts <map A> [--own a,b]");
 
 const read = (file) => {
   const out = [];

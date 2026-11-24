@@ -65,4 +65,19 @@ passed
 == that link with .data declared 32 bytes further
 replay.mjs: .data begins 16 bytes further into a 64-byte line than in the unpadded link, not 32
 refused
+== the real link of the base with a first pad of 15120 and a second of 48, .data where the rule says
+passed
+== the real link of the base with a first pad of 25824 and a second of 48, .data where the rule says
+passed
+== the real link of the head with a first pad of 15120 and a second of 64, .data where the rule says
+passed
+== the real link of the head with a first pad of 25824 and a second of 16, .data where the rule says
+passed
+== the real link of the head with a first pad of 320 and a second of 8, which the rule does not take
+replay.mjs: .data begins 16 bytes further into a 64-byte line than in the unpadded link, not 0
+refused
+== the real link of the head with a first pad of 320 and a second of 48, which it does
+passed
+== base, a pad of 320 bytes and a second pad of 48 last (a written map: its .text only)
+passed
 SYNTHETIC-DONE

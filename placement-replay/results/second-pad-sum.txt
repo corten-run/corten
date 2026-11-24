@@ -1,0 +1,4 @@
+base: 60 placements; by first pad mod 64: 0: 16 placements, second pad 48; 16: 16 placements, second pad 48; 32: 15 placements, second pad 48; 48: 13 placements, second pad 48
+base: the second pad begins 10 bytes after the code before it; over 240 links tried, .data moved by the second pad's size plus 16 (240 links), mod 64
+head: 30 placements; by first pad mod 64: 0: 8 placements, second pad 48; 16: 8 placements, second pad 64; 32: 7 placements, second pad 16; 48: 7 placements, second pad 32
+head: the second pad begins 10 bytes after the code before it; over 120 links tried, .data moved by the second pad's size plus 16 (120 links), mod 64

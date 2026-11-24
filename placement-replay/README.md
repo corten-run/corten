@@ -5,7 +5,29 @@ placement plan's fifth point): how a placement run checks a build that links cod
 16 bytes. Read and run on 2026-11-24. Nothing here counted a cycle: these are layouts, read from
 recorded files and from links run again, and placement medians read from earlier runs' reports.
 
-This commit's three ancestors hold earlier versions of these files. What this one changes:
+This commit's four ancestors hold earlier versions of these files. What this one changes:
+
+1. The rule it stands behind: a second pad in every placement of both sides, sized so that
+   `.data` begins further into a 64-byte line than in the side's unpadded link by the first
+   pad's size mod 64. `second-pad.sh` is new and links every placement of the kit's plan
+   that way; `replay.mjs` takes `--data-further rule` for that place; `relink-two.mjs` can
+   link without the map, to compare the two binaries.
+2. The measurement of the data's place that the commit before this one described is no
+   longer asked by the rule. `measure-sim.mjs` and what it printed stay as the record of what
+   that measurement would have read by chance.
+3. Two sentences of this file that the files here did not support are corrected: `.init` and
+   `.fini` do not always move as the data does with a second pad, and the simulation's
+   standard deviations are those of the seven A/As design Choice 72 records, not of every
+   A/A read.
+4. The kit was built a fourth time for this, with the first three builds' binaries byte for
+   byte (`results/binaries-4.sha256` is `results/binaries.sha256` again), and its 92 links
+   run again with their maps, each map the third build's byte for byte
+   (`results/maps-4.sha256` against `results/maps.sha256`). The files under
+   `results/replay/`, `results/facts-*.json`, `results/totals.txt`, `results/negative.txt`,
+   `results/build.out`, `results/replay-all.out`, `results/last-pad*` and
+   `results/maps.sha256` are the third build's, as the commit before this one left them.
+
+What the commit before this one changed, kept here:
 
 1. `replay.mjs` decides whose a function is by its symbol alone, no longer by its input file;
    refuses a side with a function of a crate named as its own in another output section that
@@ -13,15 +35,10 @@ This commit's three ancestors hold earlier versions of these files. What this on
    (`--last-pad <bytes>`, with `--data-further <bytes>` for where `.data` must begin).
 2. `negative.sh` refuses an own function after the first section aligned beyond 16 bytes by
    its symbol, and one in `.init`.
-3. `synth.mjs` and `synthetic.sh` are new: placements written by LLD's rule from the two
-   unpadded maps kept here, so the checks run with node alone.
-4. `relink-two.mjs` and `last-pad.sh` are new: real links of the head with a second pad.
-5. `measure-sim.mjs` is new: what the measurement of the data's place reads by chance.
-6. The kit was built a third time for this, with the first two builds' binaries byte for byte
-   (`results/binaries.sha256` is `results/rebuild-layout/sha256.txt` again), and every link
-   and check run again: everything under `results/replay/`, `results/facts-*.json`,
-   `results/totals.txt`, `results/negative.txt`, `results/build.out`, `results/replay-all.out`
-   and `results/maps.sha256` (now 117 maps) is this run's.
+3. `synth.mjs` and `synthetic.sh`: placements written by LLD's rule from the two unpadded
+   maps kept here, so the checks run with node alone.
+4. `relink-two.mjs` and `last-pad.sh`: real links of the head with a second pad.
+5. `measure-sim.mjs`: what a measurement of the data's place would read by chance.
 
 Not here: the 90 placements' maps, 319 MB. The two unpadded links' maps and two of the links
 with a second pad are kept, and `results/maps.sha256` has the SHA-256 of every map made.
@@ -142,8 +159,10 @@ Where `.data` then begins, with a first pad of 320 bytes, against the unpadded l
 pad of 48, 56 or 112 bytes leaves it at its place in a 64-byte line (moved by 64 bytes); one of
 8, 64, 72 or 128 puts it 16 bytes further; 16, 24 or 80, 32 further; 32, 40 or 96, 48 further.
 So the place does not follow the pad's size alone: the sections between `.text` and `.data`
-round it. `.init`, `.fini` and `.plt` move as the data does (`.plt` from 0 to 16, 32 and 48),
-so a second pad moves them too. With sizes 48, 8, 16 and 32 and a first pad at each place in a
+round it. `.plt` moves as the data does (from 0 to 16, 32 and 48). `.init` and `.fini` are
+moved too, but not always as far: with second pads of 16, 32 and 48 bytes they moved 8 bytes
+less than the data did (with 16, `.init` went from 24 to 48 where `.data` went from 32 to 0),
+and with 8 as far. With sizes 48, 8, 16 and 32 and a first pad at each place in a
 line (320, 15120, 25824 and 40624 bytes), all sixteen links have `.data` where the size put it
 with the first pad of 320, since on this head a first pad moves the end of `.text` by a
 multiple of 64. `results/last-pad-negative.txt`: `replay.mjs` refuses a placement with a
@@ -153,6 +172,49 @@ checked as one with, and `.data` declared 32 bytes further where it is 16.
 `--data-further` is read against the unpadded link. On a side whose largest alignment is 32
 bytes a first pad alone can move the data by 32, which these links do not show.
 
+## A second pad in every placement of both sides
+
+The rule: a placement with a first pad of p bytes has a second pad last in `.text`, sized so
+that `.data` begins p mod 64 bytes further into a 64-byte line than in its side's unpadded
+link, which is where a first pad alone puts it on a side with no section aligned beyond 16
+bytes. `second-pad.sh` (`results/second-pad.txt`, one file a placement under
+`results/second-pad/`) does that for every placement of the kit's plan on the fourth build:
+the base with each of its 60 pads and the head with each of its 30. It links each placement
+with second pads of 16, 32, 48 and 64 bytes (360 links), reads from each link's map how far
+`.data` moved, keeps the size that puts it where the rule says, checks that link with
+`replay.mjs --last-pad <size> --data-further rule`, and links it once more without the map
+(90 links), byte-identical each time. The 450 links and their checks took 646 seconds in the
+container. No cycle was counted.
+
+What it found (`results/second-pad-sum.txt`, by `second-pad-sum.mjs`): every placement has a
+size among the four. In all 360 links the second pad begins 10 bytes after the end of the
+code before it, and `.data` moved by the second pad's size plus 16 bytes beyond what the
+first pad alone does: both sides' `.text` ends 6 bytes past a multiple of 16, and `.init`
+(23 bytes, aligned to 4), `.fini` (9, aligned to 4) and `.plt` (aligned to 16) lie between
+it and the data. So the base, whose first pad already moves the data by its own size, takes
+a second pad of 48 bytes in all 60 placements (16, 16, 15 and 13 of them with first pads of
+0, 16, 32 and 48 bytes mod 64), and the head takes 48, 64, 16 and 32 bytes for first pads of
+0, 16, 32 and 48 mod 64 (8, 8, 7 and 7 placements). The 90 binaries have 90 SHA-256s
+(`results/second-pad.sha256`; their maps' are in `results/second-pad-maps.sha256`), and
+four of the maps are kept: `results/base-p15120-l48.map.gz`, `base-p25824-l48.map.gz`,
+`head-p15120-l64.map.gz` and `head-p25824-l16.map.gz`.
+
+The sizes were found by trying, not worked out. The arithmetic that gives the same answer
+here: a second pad of s bytes aligned to 16 begins at the end of `.text` rounded up to 16,
+and each section after it begins at the first multiple of its alignment after the one
+before, so with these three sections the data moves by s + 16 for s a multiple of 16. A
+`.text` that ended elsewhere in its 16 bytes, or other sections between, would give another
+constant, which is why the rule states the place and the kit asks the linker.
+
+`second-pad-negative.sh` (`results/second-pad-negative.txt`) shows `replay.mjs` refusing, on
+real links of each side with a first pad of 15,120 bytes: a second pad of 16 bytes where the
+rule takes 48 (base) or 64 (head), so that `.data` is elsewhere; the rule's second pad
+named in the ordering file after the first, which LLD then lays second in `.text` and not
+last; and the placement with the first pad alone. These six were run after the 90: the
+script as first run had them inline, and its first case, the base with the size that suits a
+first pad of 320, was no negative, since the base takes one size at every first pad. It
+passed, as it should have, and the case was replaced by the one above.
+
 ## Without the kit
 
 `synthetic.sh` (`results/synthetic.txt`) runs `replay.mjs` on maps `synth.mjs` writes from the
@@ -160,22 +222,28 @@ two unpadded maps by LLD's rule, with node alone: it passes a placement of each 
 first pads and of the head with a second pad last, and refuses the wrong pad, the other
 build, a second pad it is not told of, the wrong second pad size, a missing second pad, a
 second pad that is not last, an own function after the first section aligned beyond 16 bytes
-by its symbol, and an own function in `.init`. It ends on the two real links with a second
-pad that are kept (`results/head-p320-l48.map.gz` and `head-p320-l8.map.gz`), where `.data`
-begins included. `results/synth-compare.txt`: for four first pads on each side and four second
+by its symbol, and an own function in `.init`. It ends on the six real links with a second
+pad that are kept, where `.data` begins included: the two of `last-pad.sh`
+(`results/head-p320-l48.map.gz` and `head-p320-l8.map.gz`) and the four of `second-pad.sh`
+above, each checked with `--data-further rule`, which also refuses the link with a second pad
+of 8 bytes behind a first pad of 320. In all it passes 21 and refuses 10. `results/synth-compare.txt`: for four first pads on each side and four second
 pads on the head, every line of `.text` that `synth.mjs` writes is the real link's map's, so
 the synthetic maps are what LLD made. What `synth.mjs` writes for the sections after `.text`
 is an assumption and is not compared.
 
-## What the measurement of the data's place reads by chance
+## What a measurement of the data's place would read by chance
 
+The rule no longer asks this measurement (design Choice 72, Not chosen); this is its record.
 `measure-sim.mjs` (`results/measure-sim-null.txt`, `results/measure-sim-effect.txt`) draws the
-three comparisons of the measurement the fifth point asks for, on the model design Choice 72
-uses for an A/A: K normal placement medians of one standard deviation, 200,000 seeded draws.
+three comparisons of the measurement the fifth point asked for, the head against itself with
+a second pad on both builds, on the model design Choice 72 uses for an A/A: K normal
+placement medians of one standard deviation, 200,000 seeded draws.
 "Held" is every comparison's bound under +1% in both readings; "shown" is not held with at
 least j of K medians on one side of zero in one comparison, j the smallest count whose
 binomial tail is at most 5%/6 (22 of 30, 40 of 60, 63 of 100); "not made" is the rest. With no
-effect, at the standard deviations the seven A/As read so far had (0.96% to 2.02%): at K = 30
+effect, at the standard deviations of the seven A/As design Choice 72 records (0.96% to
+2.02%; the two A/As of #1971's run, which `phase.mjs` reads below, are not among them): at
+K = 30
 not made in 1.4% to 88.2% and shown in 0.3% to 4.7%; at K = 60 not made in 0.0% to 40.8%
 (under 4% up to 1.48%, 8.1% at 1.6%, 17.4% at 1.75%) and shown in 0.0% to 3.3%; at K = 100
 not made in 0.0% to 6.4% and shown in 0.0% to 1.3%. With one place costing 1% at K = 60: held
