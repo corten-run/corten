@@ -7541,18 +7541,26 @@ rules something out.
     in a full store or count toward a route's run of answers not kept, since neither could make
     it kept. One given a kept answer counts as a `GET` given one does (the copy read, so it is not
     the first to give way, and a route of bodies kept asking), since the `HEAD` is spared the
-    handler as the `GET` is. A route's handler for `HEAD` alone is never given the page its `GET`
-    handler made. Not chosen: keeping a `HEAD`'s answer, which would spare a second run where a
-    `HEAD` comes before any `GET`, at the price above. Under callgrind (the request-cost harness,
-    `ROUTER_TARGET=kept ROUTER_PUBLIC=page`, 1,200 requests less 200, three runs each, every run
-    of a build within 1 instruction a request), a kept `HEAD` took 18,655 to 18,656
-    instructions a request on `585df756e` against 22,013 to 22,014 for the handler's on main's
-    `56432f2fc`, 15.3% fewer; a kept `GET` took 14,440 to 14,441 against 14,431 to 14,432, 9
-    more (0.06%). The 4,215 a kept `HEAD` takes beyond a kept `GET` are its tag, which a `HEAD`
-    is always given ([Limit 21](#limit-etag)) and such a `GET` is not, and the length the router
-    writes; the handler's `HEAD` paid both. That fixture's page is small and reads nothing, so
-    what a `HEAD` saves grows with what the handler reads and renders. Cycles under load were not
-    measured.
+    handler as the `GET` is. Which `HEAD` that is the router decides as it chooses the handler,
+    on the path it matched (`MatchedPath`): one it gives the handler of the route's `GET` (or the
+    route's `any` handler, which then answers the `GET` too). A route's handler for `HEAD` alone
+    is never given the page its `GET` handler made, nor is another method's handler for a request
+    a middleware made a `HEAD` after the router chose that handler. Not chosen: keeping a
+    `HEAD`'s answer, which would spare a second run where a `HEAD` comes before any `GET`, at the
+    price above; and marking such a `HEAD` with an extension of its own, which took 505 more
+    instructions a kept `HEAD` and 10 to 13 fewer a kept `GET` than the mark on the matched path
+    (callgrind, as below, `727be6a7e`). Under callgrind (the request-cost harness,
+    `ROUTER_TARGET=kept ROUTER_PUBLIC=page`, `ROUTER_METHOD=GET` and `HEAD`, 1,200 requests less
+    200, three runs each, every run of a build within 1.2 instructions a request), a kept `HEAD`
+    took 18,671.0 to 18,671.2 instructions a request on `3f3cf3eb0` against 22,014.0 to
+    22,014.1 for the handler's on main's `56432f2fc` with the same harness, 15.2% fewer (every
+    `HEAD` on `3f3cf3eb0` was given the kept page, an `Age`, and none on `56432f2fc`); a kept
+    `GET` took 14,452.0 to 14,452.1 against 14,431.0 to 14,432.2, 20 more (0.14%). A kept
+    `HEAD` takes 4,219 more than a kept `GET` in that fixture, a total of every stage and of the
+    harness, which reads and checks the two answers' bodies differently; what it is made of was
+    not measured by stage. That fixture's page is small and its handler reads nothing, so what a
+    `HEAD` spares a handler that reads a database, a file or another service is not measured.
+    Cycles under load were not measured.
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
     give to anyone is the rule checked when the app compiles, that a `Public` handler takes only
@@ -8675,7 +8683,7 @@ rules something out.
     against the sentence that a placement run declared after a single-build miss does not
     clear it.
 
-    Last checked: 2026-11-24 for a kept `HEAD`, `585df756e` against `56432f2fc` with the
+    Last checked: 2026-11-24 for a kept `HEAD`, `3f3cf3eb0` against `56432f2fc` with the
     former's request-cost harness, under callgrind (valgrind 3.24.0, glibc's allocator) with
     rustc 1.100.0 in a Debian 13 container; 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
     against `14126d2a8` on the Xeon Platinum 8280 with jemalloc 5.3.0, rustc 1.100.0 and Linux

@@ -1563,13 +1563,16 @@ counted from when the request it was made for reached the handler, so a browser 
 the lifetime from when the page was made.
 
 A `HEAD` that would be given a kept page as a `GET` is given it too, in the handler's place: the
-same status and headers, its `Content-Length` the kept body's (in the coding asked for), no body,
-and a `304` for the page's tag. So a link checker or a preview that sends `HEAD` before its `GET`
-no longer runs the handler and renders a page it does not read. A `HEAD` nothing kept stands for
-is its handler's, and what the handler makes for it is not kept: it is told the request is a
-`HEAD` (it may take `Method`, and the layout starts none of its reads for one), so its page may
-not be the `GET`'s. A route with a handler for `HEAD` of its own has that handler answer every
-`HEAD`.
+same status and headers, but for an `ETag` a `HEAD` is always given where such a `GET` may not be
+([design Limit 21](../design.md#limit-etag)), its `Content-Length` the kept body's (in the coding
+asked for), no body, and a `304` for the page's tag. So a link checker or a preview that sends
+`HEAD` does not run the handler and render a page it does not read, once a `GET` for the same URL
+(and host, and language where the page reads one) has been answered and kept. A `HEAD` nothing
+kept stands for, the first for a URL among them, is its handler's, and what the handler makes for
+it is not kept: it is told the request is a `HEAD` (it may take `Method`, and the layout starts
+none of its reads for one), so its page may not be the `GET`'s. A route with a handler for `HEAD`
+of its own has that handler answer every `HEAD`, and a request your middleware makes a `HEAD` is
+answered by the handler the router chose for the method it came with.
 
 A kept page stands where the handler does, after [your own middleware](#your-own-middleware). Every
 stage runs for every request: a middleware that refuses, counts or stamps a header still does, and
