@@ -24,6 +24,7 @@ import { ioError } from "./test-fixtures/host-durable-writer-control.mjs";
 import * as actualHost from "./host-observation.mjs";
 import * as controlAdmission from "./control-admission.mjs";
 import { guardianSource } from "../cloud-control-runtime.mjs";
+import { fixtureGitEnv } from "../../../scripts/fixture-git.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
@@ -34,7 +35,7 @@ let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTi
 let liveOutput, compilerScratch;
 let offlineTest, auditClock, offlinePrep;
 const hourNs = 3600n * 1000000000n;
-const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
+const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true, env: fixtureGitEnv() });
 const sourceStatus = (cwd) => sourceGit(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all");
 mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
   beginControlWindow(binding) {

@@ -191,7 +191,8 @@ jobs:
         if: contains(env.PARTS, ' npm-check ')
         run: |
           npm run check
-          npm run check:workloads
+          # The runner image has Python 3, so the workload checks that need it run here and fail without it.
+          CORTEN_REQUIRE_PYTHON=1 npm run check:workloads
           npm run check:groups:host
           node --test bench/load-tool.test.mjs bench/fullstack/load-tool.test.mjs
           mapfile -t marketplace_tests < <(find bench/marketplace -maxdepth 1 -name '*.test.mjs' ! -name check.test.mjs -print | sort)

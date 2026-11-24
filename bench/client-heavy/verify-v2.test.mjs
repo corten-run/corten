@@ -15,14 +15,56 @@ import { vendorConfiguration } from "./build-replay.mjs";
 import { admitSaved } from "./admission.mjs";
 import { hostFixture } from "./host-fixture.mjs";
 import { evaluateLatestStable, latestStableSources } from "../workloads/latest-stable.mjs";
-import { replayCandidatePolicy, replayCandidateDisposition, replayProducerSchema } from "./verify-v2.mjs";
+import { replayCandidatePolicy, replayCandidateDisposition, replayProducerSchema, replaySolidCompiler } from "./verify-v2.mjs";
+import { solidCompilerFiles, solidManifestFiles, solidRuntimeFiles, solidRuntimePrefix } from "./compiler.mjs";
 
-const currentCommit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), apps = selectedApps("client-heavy");
+const solid1Commit = "6f1bbf0553ec3b60c884bf5855fe8786ca25f1c2", apps = selectedApps("client-heavy");
 const producerRoot = "/producer", outputPath = "bench/client-heavy/work/unit";
+
+test("Solid 2 replay requires the exact compiler, package manifests and bundled browser runtime", () => {
+  const target = "linux-x64-gnu", files = solidCompilerFiles(target, "linux");
+  const receipt = { version: "2.0.2", target, files };
+  const dependencies = new Map(Object.entries(files).map(([path, sha256]) => [path, { sha256 }]));
+  const manifests = Object.entries(solidManifestFiles(target));
+  for (const [path, sha256] of manifests) if (sha256 !== null) dependencies.set(path, { sha256 });
+  const inputs = new Map(Object.entries(solidRuntimeFiles).map(([path, sha256]) => [solidRuntimePrefix + path, { sha256 }]));
+  const check = (value = receipt, deps = dependencies, build = inputs) => replaySolidCompiler(value, "linux", deps, build);
+  assert.doesNotThrow(() => check());
+  assert.throws(() => check(null), /missing-solid-compiler-receipt/);
+  assert.throws(() => check({ ...receipt, version: "2.0.1" }), /solid-compiler-differs-from-locked-install/);
+  assert.throws(() => check({ ...receipt, target: "win32-x64-msvc" }), /unreviewed-solid-compiler-target/);
+  for (const path of Object.keys(files)) {
+    const missing = new Map(dependencies); missing.delete(path);
+    assert.throws(() => check(receipt, missing), /solid-compiler-differs-from-locked-install/);
+  }
+  for (const [path, sha256] of manifests) {
+    const changed = new Map(dependencies).set(path, { sha256: "0".repeat(64) });
+    assert.throws(() => check(receipt, changed), /missing-or-modified-solid-package-manifest/);
+    if (sha256 === null) continue;
+    changed.delete(path);
+    assert.throws(() => check(receipt, changed), /missing-or-modified-solid-package-manifest/);
+  }
+  const nested = "@solidjs/signals/dist/prod/package.json";
+  assert.equal(solidManifestFiles(target)[nested], null);
+  assert.throws(() => check(receipt, new Map(dependencies).set(nested.toUpperCase(), { sha256: "0".repeat(64) })),
+    /missing-or-modified-solid-package-manifest/);
+  // Leave both top-level entries intact when changing an imported module.
+  for (const path of ["solid-js/dist/solid.js", "solid-js/dist/internal.js", "@solidjs/signals/dist/prod/core/graph.js"]) {
+    const changed = new Map(inputs), input = solidRuntimePrefix + path;
+    assert.ok(changed.has(input));
+    changed.set(input, { sha256: "0".repeat(64) });
+    assert.throws(() => check(receipt, dependencies, changed), /missing-or-modified-solid-runtime-build-input/);
+  }
+  const published = "@solidjs/signals/dist/prod/index.js";
+  const normal = solidRuntimePrefix + published, shadow = solidRuntimePrefix + "solid-js/node_modules/" + published;
+  const missing = new Map(inputs); missing.delete(normal);
+  for (const changed of [missing, new Map(missing).set(shadow, inputs.get(normal)), new Map(inputs).set(shadow, inputs.get(normal))])
+    assert.throws(() => check(receipt, dependencies, changed), /missing-or-modified-solid-runtime-build-input/);
+});
 // Completely synthetic source/build/browser receipts. Their successful intrinsic
 // replay MUST NOT authenticate them or create a real review receipt.
 async function fixture(t, version = 2) {
-  const commit = version >= 3 ? currentCommit : "e006be831cd69e423bfd3e159362b54746597b96";
+  const commit = version >= 3 ? solid1Commit : "e006be831cd69e423bfd3e159362b54746597b96";
   const folder = await mkdtemp(join(tmpdir(), "client-v2-unit-")), e = new Evidence(process.cwd(), folder);
   t.after(async () => { const r = relative(tmpdir(), folder); assert.ok(r && !isAbsolute(r) && !r.startsWith("..")); await rm(folder, { recursive: true, force: true }); });
   const write = async (p, b) => { await mkdir(dirname(join(folder, p)), { recursive: true }); await writeFile(join(folder, p), b); };
@@ -244,7 +286,8 @@ for (const [name, mutate] of [
   ["attempted Solid build", (f) => { f.paths.push("native/solid/failure.log"); }],
   ["unsupported peer without observation", (f) => { f.cells.react = structuredClone(f.cells.solid); }],
 ]) test(`v3 production replay gates refuse ${name}`, async () => {
-  const source = new Map(await Promise.all(Object.values(latestStableSources).map(async (path) => [path, await readFile(new URL(`../../${path}`, import.meta.url))])));
+  const source = new Map(Object.values(latestStableSources).map((path) => [path, execFileSync("git", ["show", `${solid1Commit}:${path}`],
+    { cwd: new URL("../../", import.meta.url) })]));
   const latestStable = evaluateLatestStable({ group: "client-heavy", ...Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) => [key, source.get(path)])) });
   assert.equal(latestStable.valid, true);
   const reason = latestStable.candidates.find((r) => r.app === "solid").reason;

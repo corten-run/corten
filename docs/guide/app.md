@@ -1054,7 +1054,8 @@ before it (a route that says `unstaged` goes through none;
 
 Corten's stages hold the request once and hand it to the first middleware, or straight to the
 handler when there is none. The outer stages keep only what they need to finish the response.
-They read the incoming request's mode, credentials and cache validators before middleware. Those
+They read the incoming request's mode, credentials and cache validators before middleware (under
+an API they do not read the mode: nothing there depends on it). Those
 decisions and the error page's saved request are not changed by middleware edits. A `Req` taken
 by middleware or the handler reads the headers there, including edits by an earlier extractor.
 For an API or data request there is no HTML error snapshot: a session cookie can settle the cache

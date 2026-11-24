@@ -1,5 +1,5 @@
 // Builds every app into out/<app>/: index.html and one minified app.js (esbuild; Solid's JSX
-// through babel-preset-solid, Svelte and Vue through their own compilers). Prints each app's
+// through the legacy DOM transform, Svelte and Vue through their own compilers). Prints each app's
 // JavaScript size.
 import { build } from "esbuild";
 import { transformAsync } from "@babel/core";
@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const js = join(here, "..", "..", "crates", "corten", "js");
 const out = join(here, "out");
+const solidLegacy = { "solid-js": "solid-js-legacy" };
 
 /** @param {{ generate: "dom" | "ssr", hydratable?: boolean }} options */
 const solidJsx = (options) => ({
@@ -19,7 +20,14 @@ const solidJsx = (options) => ({
   setup(b) {
     b.onLoad({ filter: /\.jsx$/ }, async (args) => {
       const source = readFileSync(args.path, "utf8");
-      const result = await transformAsync(source, { filename: args.path, cwd: here, presets: [["babel-preset-solid", options]] });
+      // The exact options from babel-preset-solid 1.9.19, without its Solid 1
+      // peer on the install shared with the dedicated Solid 2 candidate.
+      const solid1Options = {
+        moduleName: "solid-js/web", generate: "dom", contextToCustomElements: true, wrapConditionals: true,
+        builtIns: ["For", "Show", "Switch", "Match", "Suspense", "SuspenseList", "Portal", "Index", "Dynamic", "ErrorBoundary"],
+        ...options,
+      };
+      const result = await transformAsync(source, { filename: args.path, cwd: here, plugins: [["babel-plugin-jsx-dom-expressions", solid1Options]] });
       return { contents: result.code, loader: "js" };
     });
   },
@@ -87,19 +95,57 @@ const cortenPage = (title, main, module) => `<!doctype html>
 <body>${main}</body></html>
 `;
 
+function serverBuildOptions(entry, plugins = [], jsxImportSource = "remix/component") {
+  const outfile = join(out, "_server", entry.replace(/[\\/]/g, "_") + ".mjs");
+  const define = { "process.env.NODE_ENV": '"production"', ...vueFlags };
+  return { entryPoints: [join(here, entry)], bundle: true, format: "esm", platform: "node", conditions: ["production"], outfile, plugins, jsx: "automatic", jsxImportSource, define,
+    ...(entry.startsWith("apps/solid/") ? { alias: solidLegacy } : {}),
+    // A CommonJS package (react-dom/server) bundled into ESM still requires Node's built-ins.
+    banner: { js: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);' }, nodePaths: [join(here, "node_modules")], logLevel: "error" };
+}
+function clientBuildOptions(app, dir) {
+  return {
+    entryPoints: [join(here, app.entry)],
+    bundle: true, format: "esm", minify: process.env.MINIFY !== "0", target: "es2022", legalComments: "none", write: false,
+    outfile: join(dir, "app.js"),
+    // As Vite builds for production: packages' "production" exports, not runtime dev checks.
+    conditions: ["browser", "production"],
+    alias: { "corten/state": join(here, "apps", "shared", "state.js"), "corten/solid": join(here, "apps", "solid-h", "solid.js"),
+      ...(["solid", "solid-h", "solid-ssr", "dashboard-solid"].includes(app.name) ? solidLegacy : {}) },
+    jsx: "automatic", jsxImportSource: app.jsxImportSource ?? "remix/component",
+    define: { "process.env.NODE_ENV": '"production"', ...vueFlags },
+    plugins: app.plugins ?? [],
+    nodePaths: [join(here, "node_modules")],
+  };
+}
+const legacySolidServer = ["apps/solid/server.jsx", [solidJsx({ generate: "ssr", hydratable: true })]];
+const legacySolidHydrate = { name: "solid-ssr", entry: "apps/solid/hydrate.jsx", plugins: [solidJsx({ generate: "dom", hydratable: true })] };
+const legacySolidHandwritten = { name: "solid-h", entry: "apps/solid-h/app.js" };
+if (process.argv[2] === "--check-legacy-solid") {
+  // Compile the existing entries with the production options, without running
+  // Cargo, rendering pages or writing to the historical builder's out tree.
+  const inputs = {};
+  for (const [name, options] of [
+    ["server", serverBuildOptions(...legacySolidServer)],
+    ...[legacySolidHydrate, legacySolidHandwritten].map((app) => [app.name, clientBuildOptions(app, join(out, app.name))]),
+  ]) {
+    const { metafile } = await build({ ...options, absWorkingDir: here, write: false, metafile: true });
+    inputs[name] = Object.keys(metafile.inputs).sort();
+  }
+  writeFileSync(1, JSON.stringify(inputs) + "\n");
+  process.exit(0);
+}
+
 // The rows the server renders on the server-rendered pages, with the apps' own generator.
 const { label, nextId } = await import("./apps/shared/labels.js");
 const market = await import("./apps/shared/market.js");
 const initial = Array.from({ length: 1000 }, () => ({ id: nextId(), label: label() }));
 
 /** Bundles a server entry for Node and returns its render(initial). */
-async function server(entry, plugins = [], jsxImportSource = "remix/component") {
-  const outfile = join(out, "_server", entry.replace(/[\\/]/g, "_") + ".mjs");
-  const define = { "process.env.NODE_ENV": '"production"', ...vueFlags };
-  await build({ entryPoints: [join(here, entry)], bundle: true, format: "esm", platform: "node", conditions: ["production"], outfile, plugins, jsx: "automatic", jsxImportSource, define,
-    // A CommonJS package (react-dom/server) bundled into ESM still requires Node's built-ins.
-    banner: { js: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);' }, nodePaths: [join(here, "node_modules")], logLevel: "error" });
-  return (await import(pathToFileURL(outfile).href)).render;
+async function server(...args) {
+  const options = serverBuildOptions(...args);
+  await build(options);
+  return (await import(pathToFileURL(options.outfile).href)).render;
 }
 // The view apps' pages come from Rust: html! renders them and #[component(view)] generates the
 // Row class they import as corten/views (gen/, a crate outside the workspace).
@@ -109,7 +155,7 @@ writeFileSync(join(gen, "rows.json"), JSON.stringify(initial));
 execFileSync("cargo", ["run", "-q", "--release", "--manifest-path", join(here, "gen", "Cargo.toml"), "--bin", "corten-bench-gen", "--", join(gen, "rows.json"), join(gen, "view")], { stdio: "inherit" });
 const viewPage = (name) => readFileSync(join(gen, "view", `${name}-main.html`), "utf8");
 
-const solidPage = await (await server("apps/solid/server.jsx", [solidJsx({ generate: "ssr", hydratable: true })]))(initial);
+const solidPage = await (await server(...legacySolidServer))(initial);
 const remixPage = await (await server("apps/remix/server.tsx"))(initial);
 const reactPage = await (await server("apps/react/server.jsx", [], "react"))(initial);
 const sveltePage = await (await server("apps/svelte/server.js", [svelte("server")]))(initial);
@@ -121,7 +167,7 @@ const apps = [
   // Corten's runtime runs these: the handlers are the Rust components' scripts (gen/src/*.js).
   { name: "view", module: "bench", main: viewPage("view") },
   { name: "solid", entry: "apps/solid/app.jsx", main: "", plugins: [solidJsx({ generate: "dom" })] },
-  { name: "solid-h", entry: "apps/solid-h/app.js", main: "" },
+  { ...legacySolidHandwritten, main: "" },
   { name: "remix", entry: "apps/remix/app.tsx", main: "" },
   { name: "react", entry: "apps/react/app.jsx", main: "", jsxImportSource: "react" },
   { name: "svelte", entry: "apps/svelte/app.js", main: "", plugins: [svelte("client")] },
@@ -130,7 +176,7 @@ const apps = [
   { name: "vanilla-ssr", entry: "apps/vanilla/app.js", main: body(false, initial) },
   { name: "state-ssr", entry: "apps/state/app.js", main: body(true, initial) },
   { name: "view-ssr", module: "bench", main: viewPage("view-ssr") },
-  { name: "solid-ssr", entry: "apps/solid/hydrate.jsx", main: solidPage.html + data(initial), head: solidPage.head, plugins: [solidJsx({ generate: "dom", hydratable: true })] },
+  { ...legacySolidHydrate, main: solidPage.html + data(initial), head: solidPage.head },
   { name: "remix-ssr", entry: "apps/remix/hydrate.tsx", main: remixPage.html },
   // The rows' data goes in the head: these frameworks hydrate everything inside <main>.
   { name: "react-ssr", entry: "apps/react/hydrate.jsx", main: reactPage.html, head: data(initial), jsxImportSource: "react" },
@@ -177,18 +223,7 @@ for (const app of apps) {
     console.log(`${app.name.padEnd(8)} ${String(sizes[app.name].raw).padStart(7)} B  ${String(sizes[app.name].gzip).padStart(6)} B gzip  ${String(sizes[app.name].brotli).padStart(6)} B br (runtime + views + ${app.module}.js)`);
     continue;
   }
-  const result = await build({
-    entryPoints: [join(here, app.entry)],
-    bundle: true, format: "esm", minify: process.env.MINIFY !== "0", target: "es2022", legalComments: "none", write: false,
-    outfile: join(dir, "app.js"),
-    // As Vite builds for production: packages' "production" exports, not runtime dev checks.
-    conditions: ["browser", "production"],
-    alias: { "corten/state": join(here, "apps", "shared", "state.js"), "corten/solid": join(here, "apps", "solid-h", "solid.js") },
-    jsx: "automatic", jsxImportSource: app.jsxImportSource ?? "remix/component",
-    define: { "process.env.NODE_ENV": '"production"', ...vueFlags },
-    plugins: app.plugins ?? [],
-    nodePaths: [join(here, "node_modules")],
-  });
+  const result = await build(clientBuildOptions(app, dir));
   const code = result.outputFiles[0].contents;
   writeFileSync(join(dir, "app.js"), code);
   writeFileSync(join(dir, "index.html"), page(app.name, app.main, app.head, app.main.includes("data-on=") ? "click" : ""));

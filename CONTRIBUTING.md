@@ -122,7 +122,15 @@ The portable core selection excludes only `host-lifetime-linux.test.mjs` and
 uses `scripts/benchmark-kernel-ci.sh` with fresh delegated systemd test units and
 one owned, digest-pinned Docker fixture. It exercises real process accounting and
 cancellation, matched Docker PID/cgroup observations and a private-PID-namespace
-negative. Any skipped or cancelled native control fails the job. A static coverage
+negative. Any skipped or cancelled native control fails the job. Before the driver,
+the hosted job adds Google's Docker Hub cache to the runner daemon's registry mirrors
+(`scripts/ci-docker-hub-mirror.sh`), after any it already lists, and reloads Docker without
+restarting it. The daemon tries its mirrors before falling back to Docker Hub, so a pull the
+cache serves does not count against Docker Hub's anonymous limit; a miss still goes to Docker
+Hub. The image keeps its Hub reference and digest. If Docker does not list the cache within a
+minute, the step fails the job; the runner is discarded, so nothing is rolled back. The step
+refuses to run outside a GitHub-hosted runner; never run it on your own machine. The driver
+never edits a Docker configuration. A static coverage
 check rejects any other omitted core test file. Browser CI runs every
 portable saved-verifier test, excluding only the optional historical `retained real w28`
 capture test. Native production-image and Docker collector controls are also separate;
