@@ -264,6 +264,21 @@ test("the executable Signals runtime cannot resolve from a nested install", () =
   }), "lockfile:@solidjs/signals:ambiguous-resolution");
 });
 
+for (const [target, selector, value] of [
+  ["linux-x64-gnu", "os", ["win32"]],
+  ["linux-x64-gnu", "cpu", ["arm64"]],
+  ["linux-x64-gnu", "libc", ["musl"]],
+  ["linux-x64-gnu", "libc", undefined],
+  ["darwin-arm64", "libc", ["glibc"]],
+]) test(`the Solid compiler ${target} binding requires its published ${selector} selector (${value ?? "omitted"})`, () => {
+  const name = `@solidjs/compiler-${target}`;
+  invalid(mutateCandidate("lockfile", ({ packages }) => {
+    const pkg = packages[`node_modules/${name}`];
+    if (value === undefined) delete pkg[selector];
+    else pkg[selector] = value;
+  }), `lockfile:${name}:unreviewed-solid-compiler-binding`);
+});
+
 for (const [name, key, edit] of [
   ["invented latest", "policy", (p) => { const r = p.observations.packages["solid-js"]; const body = JSON.parse(r.raw); body.version = "3.0.0"; r.raw = JSON.stringify(body); }],
   ["missing raw primary bytes", "policy", (p) => { delete p.observations.packages.react.raw; }],

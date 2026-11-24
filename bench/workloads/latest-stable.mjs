@@ -253,11 +253,13 @@ function evaluateCandidates(input) {
       : { [`@remix-run/test@${remixTestVersion}`]: { esbuild: privateEsbuild.version } };
     need(canonical(manifest.overrides) === canonical(overrides), "manifest:unreviewed-overrides");
     for (const kind of ["dependencies", "devDependencies", "optionalDependencies"]) need(canonical(manifest[kind] ?? {}) === canonical(lock.packages[""][kind] ?? {}), `lockfile:root-${kind}-mismatch`);
-    if (solid2) for (const [name, integrity] of Object.entries(solidCompilerArchives)) {
+    if (solid2) for (const [name, archive] of Object.entries(solidCompilerArchives)) {
       const path = `node_modules/${name}`, pkg = lock.packages[path];
       need(pkg?.version === solidCompilerVersion && pkg.optional === true && !pkg.link
         && pkg.resolved === `https://registry.npmjs.org/${name}/-/${name.split("/")[1]}-${solidCompilerVersion}.tgz`
-        && pkg.integrity === integrity && !dependencyKinds.some((kind) => Object.keys(pkg[kind] ?? {}).length)
+        && pkg.integrity === archive.integrity && !dependencyKinds.some((kind) => Object.keys(pkg[kind] ?? {}).length)
+        && ["os", "cpu", "libc"].every((key) => Object.hasOwn(pkg, key) === Object.hasOwn(archive, key)
+          && canonical(pkg[key]) === canonical(archive[key]))
         && Object.keys(lock.packages).filter((key) => key === path || key.endsWith("/" + path)).length === 1,
       `lockfile:${name}:unreviewed-solid-compiler-binding`);
     }

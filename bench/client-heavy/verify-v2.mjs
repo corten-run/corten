@@ -6,7 +6,7 @@ import { selectedApps, definition } from "../workloads/registry.mjs";
 import { options, sourceRoots, buildOptions, documentMarkup, summarizeActions } from "./contract.mjs";
 import { snapshot, committed } from "./verify.mjs";
 import { need, keys, finite, digest, span, diagnostic, closure, replayV2 } from "./replay-v2.mjs";
-import { depInputs, compilerSourcePath, compilerWorkingDirectory, cargoMetadata, solidCompilerFiles, solidCompilerVersion, matchesSolidRuntime } from "./compiler.mjs";
+import { depInputs, compilerSourcePath, compilerWorkingDirectory, cargoMetadata, solidCompilerFiles, solidCompilerVersion, solidManifestFiles, matchesSolidRuntime } from "./compiler.mjs";
 import { npmClosure, compilerGraph, vendorConfiguration } from "./build-replay.mjs";
 import { installLayout } from "./install-layout.mjs";
 import { executableBytes, launchOptions } from "./launch.mjs";
@@ -58,6 +58,10 @@ export function replaySolidCompiler(receipt, platform, browserDependencies, inpu
   need(receipt.version === solidCompilerVersion && same(expected, receipt.files)
     && Object.entries(expected).every(([path, sha256]) => browserDependencies.get(path)?.sha256 === sha256),
   "solid-compiler-differs-from-locked-install");
+  const manifestPaths = new Set([...browserDependencies.keys()].filter((path) => /\/package\.json$/i.test(path)).map((path) => path.toLowerCase()));
+  need(Object.entries(solidManifestFiles(receipt.target)).every(([path, sha256]) =>
+    sha256 === null ? !manifestPaths.has(path) : browserDependencies.get(path)?.sha256 === sha256),
+    "missing-or-modified-solid-package-manifest");
   need(matchesSolidRuntime(inputs), "missing-or-modified-solid-runtime-build-input");
 }
 

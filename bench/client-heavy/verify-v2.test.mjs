@@ -16,25 +16,38 @@ import { admitSaved } from "./admission.mjs";
 import { hostFixture } from "./host-fixture.mjs";
 import { evaluateLatestStable, latestStableSources } from "../workloads/latest-stable.mjs";
 import { replayCandidatePolicy, replayCandidateDisposition, replayProducerSchema, replaySolidCompiler } from "./verify-v2.mjs";
-import { solidCompilerFiles, solidRuntimeFiles, solidRuntimePrefix } from "./compiler.mjs";
+import { solidCompilerFiles, solidManifestFiles, solidRuntimeFiles, solidRuntimePrefix } from "./compiler.mjs";
 
 const solid1Commit = "6f1bbf0553ec3b60c884bf5855fe8786ca25f1c2", apps = selectedApps("client-heavy");
 const producerRoot = "/producer", outputPath = "bench/client-heavy/work/unit";
 
-test("Solid 2 replay requires the exact public compiler, native binding and bundled browser runtime", () => {
+test("Solid 2 replay requires the exact compiler, package manifests and bundled browser runtime", () => {
   const target = "linux-x64-gnu", files = solidCompilerFiles(target, "linux");
   const receipt = { version: "2.0.2", target, files };
   const dependencies = new Map(Object.entries(files).map(([path, sha256]) => [path, { sha256 }]));
+  const manifests = Object.entries(solidManifestFiles(target));
+  for (const [path, sha256] of manifests) if (sha256 !== null) dependencies.set(path, { sha256 });
   const inputs = new Map(Object.entries(solidRuntimeFiles).map(([path, sha256]) => [solidRuntimePrefix + path, { sha256 }]));
   const check = (value = receipt, deps = dependencies, build = inputs) => replaySolidCompiler(value, "linux", deps, build);
   assert.doesNotThrow(() => check());
   assert.throws(() => check(null), /missing-solid-compiler-receipt/);
   assert.throws(() => check({ ...receipt, version: "2.0.1" }), /solid-compiler-differs-from-locked-install/);
   assert.throws(() => check({ ...receipt, target: "win32-x64-msvc" }), /unreviewed-solid-compiler-target/);
-  for (const path of dependencies.keys()) {
+  for (const path of Object.keys(files)) {
     const missing = new Map(dependencies); missing.delete(path);
     assert.throws(() => check(receipt, missing), /solid-compiler-differs-from-locked-install/);
   }
+  for (const [path, sha256] of manifests) {
+    const changed = new Map(dependencies).set(path, { sha256: "0".repeat(64) });
+    assert.throws(() => check(receipt, changed), /missing-or-modified-solid-package-manifest/);
+    if (sha256 === null) continue;
+    changed.delete(path);
+    assert.throws(() => check(receipt, changed), /missing-or-modified-solid-package-manifest/);
+  }
+  const nested = "@solidjs/signals/dist/prod/package.json";
+  assert.equal(solidManifestFiles(target)[nested], null);
+  assert.throws(() => check(receipt, new Map(dependencies).set(nested.toUpperCase(), { sha256: "0".repeat(64) })),
+    /missing-or-modified-solid-package-manifest/);
   // Leave both top-level entries intact when changing an imported module.
   for (const path of ["solid-js/dist/solid.js", "solid-js/dist/internal.js", "@solidjs/signals/dist/prod/core/graph.js"]) {
     const changed = new Map(inputs), input = solidRuntimePrefix + path;

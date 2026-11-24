@@ -7,9 +7,23 @@ import { createRequire } from "node:module";
 import { basename, dirname, join, relative, resolve, sep, isAbsolute, posix, win32 } from "node:path";
 
 export const solidCompilerVersion = "2.0.2";
-const entry = "@solidjs/compiler/index.js";
+const compilerPackage = "@solidjs/compiler";
+const entry = `${compilerPackage}/index.js`;
 const entrySha256 = "5322fd7863ab1e4805583f912b7092d949f5a93ed66bdb974ec803bea9582c7d";
-// Archive SRI and unpacked addon SHA-256 from the official npm releases.
+// SHA-256 of package.json extracted from the integrity-verified npm archives.
+// esbuild doesn't include these resolution and tree-shaking inputs in its metafile.
+const manifests = {
+  "solid-js/package.json": "ee6f273347dc03c8c123466f95ebef5d2209de03cd37ec04a6c750dd7e257007",
+  "@solidjs/web/package.json": "200868dcac3e780cea1217ab01d9021ce2770243e5fc00ac7b33f42814bb6314",
+  "@solidjs/signals/package.json": "4afcd48f070580c22095c8eb03f3540e039e56aed71f1648afd6053483cf0bf9",
+  [`${compilerPackage}/package.json`]: "6f8dff50c2941aed6a68191b3e2e5dd2ee345b5d51cd6e0c302851090f65f1e4",
+  "@solidjs/compiler-darwin-arm64/package.json": "65312dd639df1ff03b168cb1e3058ebf88b50ca4a4744aae5ab74db4c0a87e64",
+  "@solidjs/compiler-darwin-x64/package.json": "801baa283e897637c2c85ee5bd8307f36762dea7d1dcbb55030d1ef19a429307",
+  "@solidjs/compiler-linux-arm64-gnu/package.json": "7949973e8e010a18edf548c4485311fc1612209566d348515ddb86d7ef959989",
+  "@solidjs/compiler-linux-x64-gnu/package.json": "ee341240aa19c93f449859fcacb880724d1531b4f51652939b5739cabb462045",
+  "@solidjs/compiler-win32-x64-msvc/package.json": "33a45798d96500b10c44de8ccdbbfc54cc03bbae8f1727e0da5b430b70197926",
+};
+// Archive SRI (base64 SHA-512) and unpacked addon SHA-256.
 const bindings = {
   "darwin-arm64": ["ctgEtzj0R5JDUiyo1wNcSgAyjO2XqNXvyPx6UolK1WK6qStR5KIHz3uIIG68aKrFhnOLTUiwS3hjd4yZWolBpA==", "4ff25630c753554a1f300d3d9ae04f607d15711e9c66e130939aaabe670e3b28"],
   "darwin-x64": ["iTcLdvzEFF3jfDwnmdpax4q1eVd6Jth0u59BzA++p345feNXFSJvzS/bGE5UrGMe9NsLFFV1IEHkZyEpbSOovw==", "70906741f3cf7d389a92ea411bdbd30ee9faa9a3e72e7d4f3fdc6508d1e0cdfe"],
@@ -18,7 +32,12 @@ const bindings = {
   "win32-x64-msvc": ["5q6RRWRI9y685wzBcteezVifcVz/di9hCEKqruZrBo60qbne13Orl6FOwP8LK4Exls+Ws98UNvznFuz0NhLQTg==", "63136c12a13f2af80e49295d2b72d174b63e8478ae51a2849466710496a46c84"],
 };
 export const solidCompilerArchives = Object.freeze(Object.fromEntries(Object.entries(bindings)
-  .map(([suffix, [integrity]]) => [`@solidjs/compiler-${suffix}`, `sha512-${integrity}`])));
+  .map(([target, [integrity]]) => {
+    // Confirmed against the unpacked manifests: only the GNU bindings have libc.
+    const [os, cpu, abi] = target.split("-");
+    return [`${compilerPackage}-${target}`, { integrity: `sha512-${integrity}`,
+      os: [os], cpu: [cpu], ...(abi === "gnu" ? { libc: ["glibc"] } : {}) }];
+  })));
 // The dedicated adapter's esbuild production input inventory, hashed from the
 // verified npm archives of solid-js, @solidjs/web and @solidjs/signals (2.0.3).
 export const solidRuntimeFiles = Object.freeze({
@@ -80,12 +99,30 @@ export function matchesSolidRuntime(inputs) {
 }
 export function solidCompilerFiles(target, platform) {
   assert.ok(Object.hasOwn(bindings, target) && target.startsWith(platform + "-"), "unreviewed-solid-compiler-target");
-  return { [entry]: entrySha256, [`@solidjs/compiler-${target}/compiler.${target}.node`]: bindings[target][1] };
+  return { [entry]: entrySha256, [`${compilerPackage}-${target}/compiler.${target}.node`]: bindings[target][1] };
+}
+export function solidManifestFiles(target) {
+  const roots = ["solid-js", "@solidjs/web", "@solidjs/signals", compilerPackage, `${compilerPackage}-${target}`];
+  const files = Object.fromEntries(roots.map((name) => {
+    const path = `${name}/package.json`;
+    assert.ok(Object.hasOwn(manifests, path), "unreviewed-solid-package-manifest");
+    return [path, manifests[path]];
+  }));
+  // The archives have no nested manifests along these module paths. A nearer
+  // package.json can override sideEffects without changing any metafile input.
+  for (const file of Object.keys(solidRuntimeFiles)) {
+    for (let dir = posix.dirname(file); !Object.hasOwn(manifests, `${dir}/package.json`); dir = posix.dirname(dir)) {
+      assert.notEqual(dir, ".", "unreviewed-solid-runtime-package");
+      files[`${dir}/package.json`] = null;
+    }
+  }
+  return files;
 }
 
 export function verifySolidFiles(files, hashFor) {
   for (const [path, expected] of Object.entries(files)) {
-    assert.equal(hashFor(path), expected, `missing or modified Solid 2 input ${path}; run npm --prefix bench/browser ci`);
+    const problem = expected === null ? "unpublished Solid 2 manifest" : "missing or modified Solid 2 input";
+    assert.equal(hashFor(path), expected, `${problem} ${path}; run npm --prefix bench/browser ci`);
   }
 }
 
@@ -96,7 +133,7 @@ export function solidCompiler(browserPackage) {
   const files = solidCompilerFiles(target, platform);
   const modules = join(dirname(browserPackage), "node_modules");
   const fullEntry = join(modules, entry), binding = Object.keys(files)[1], fullBinding = join(modules, binding);
-  verifySolidFiles(files, (path) => {
+  verifySolidFiles({ ...solidManifestFiles(target), ...files }, (path) => {
     const absolute = join(modules, path);
     return existsSync(absolute) ? createHash("sha256").update(readFileSync(absolute)).digest("hex") : null;
   });

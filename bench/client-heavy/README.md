@@ -109,7 +109,10 @@ refuses fallback or overrides, and verifies the complete Solid 2 runtime input
 set that esbuild uses against hashes from the three published runtime archives.
 That includes `solid-js/internal` and the imported Signals modules. Offline
 replay checks the same identities and file set against the browser dependency
-snapshot and build receipt. This clears the Solid input
+snapshot and build receipt. Build and replay also pin the package manifests
+that select compiler and runtime code or control tree shaking, and reject
+unpublished nested manifests along the runtime paths. The lock must retain the
+published native add-on platform selectors. This clears the Solid input
 gate, not parity: the same browser asset and operation assertions, keyed DOM
 checks, readiness, timing boundaries and cleanup still apply before comparison.
 No old disposition or performance number changes.

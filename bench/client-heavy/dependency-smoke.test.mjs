@@ -1,8 +1,9 @@
 // Compatibility only: use the production JS builds and oracle, not a timed run.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import test from "node:test";
@@ -30,6 +31,24 @@ test("official Solid 2 compiler bundles the real adapter from the shared browser
   assert.equal(matchesSolidRuntime(inputs), false);
   assert.match(outputFiles[0].text, /clientMount/);
   assert.match(outputFiles[0].text, /clientDetach/);
+});
+
+test("official Solid 2 compiler rejects a Signals sideEffects-only change before the production build", (t) => {
+  const manifest = join(root, "bench/browser/node_modules/@solidjs/signals/package.json");
+  const originalRead = fs.readFileSync, data = JSON.parse(originalRead(manifest));
+  assert.equal(data.sideEffects, false);
+  const changed = Buffer.from(JSON.stringify({ ...data, sideEffects: true }));
+  // Change only what the production preflight reads, not the shared npm tree.
+  const read = t.mock.method(fs, "readFileSync", (path, ...rest) =>
+    path === manifest ? changed : originalRead(path, ...rest));
+  try {
+    syncBuiltinESMExports();
+    assert.throws(() => solidBuildPlugin(buildOptions("solid", root).entryPoints[0]),
+      /missing or modified Solid 2 input @solidjs\/signals\/package\.json/);
+  } finally {
+    read.mock.restore();
+    syncBuiltinESMExports();
+  }
 });
 
 test("legacy Solid 1 production builder compiles SSR, hydration and handwritten entries without writing them", { timeout: 15000 }, () => {
