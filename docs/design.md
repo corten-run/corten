@@ -7530,8 +7530,9 @@ rules something out.
 
     A `HEAD` that such a `GET` would be given a kept answer for is given it too
     ([#1797 A `HEAD` for a kept page runs the handler](https://github.com/corten-run/corten/issues/1797)):
-    the same status and headers, its `Content-Length` the kept body's in the coding asked for, and
-    no body, which the router drops after every stage as it drops a handler's (RFC 9110 section
+    the same status and headers (save that an otherwise taggable `HEAD` gets an `ETag` where an
+    unconditional `GET` asking for no coding would not, [Limit 21](#limit-etag)), its
+    `Content-Length` the kept body's in the coding asked for, and no body, which the router drops after every stage as it drops a handler's (RFC 9110 section
     9.3.2: a `HEAD` is its `GET` without content). Before, the handler ran and rendered a page
     whose body was then dropped. A `HEAD` nothing kept stands for is its handler's, and what it
     makes is not kept: a handler is told the request is a `HEAD` (it may take `Method`, one of the

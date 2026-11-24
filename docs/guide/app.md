@@ -1563,8 +1563,8 @@ counted from when the request it was made for reached the handler, so a browser 
 the lifetime from when the page was made.
 
 A `HEAD` that would be given a kept page as a `GET` is given it too, in the handler's place: the
-same status and headers, but for an `ETag` a `HEAD` is always given where such a `GET` may not be
-([design Limit 21](../design.md#limit-etag)), its `Content-Length` the kept body's (in the coding
+same status and headers, except that an otherwise taggable `HEAD` gets an `ETag` where an
+unconditional `GET` asking for no coding would not ([design Limit 21](../design.md#limit-etag)), its `Content-Length` the kept body's (in the coding
 asked for), no body, and a `304` for the page's tag. So a link checker or a preview that sends
 `HEAD` does not run the handler and render a page it does not read, once a `GET` for the same URL
 (and host, and language where the page reads one) has been answered and kept. A `HEAD` nothing
