@@ -109,24 +109,27 @@ export async function generatedFormViews(browser) {
 
 export async function formFailures(page, failWatch, openFeeds) {
   // A submit the network fails: the form stays, and the page hears about it. The press runs in
-  // the page and the wait for the error is bounded, so a press that never submits fails the check
-  // in 6 s rather than waiting on the stall watchdog (#2014).
-  const failed = page.evaluate(
-    () =>
-      new Promise((resolve) => {
-        const stop = new AbortController();
-        const late = setTimeout(() => (stop.abort(), resolve(null)), 6000);
-        document.addEventListener(
-          "corten:error",
-          (e) => (clearTimeout(late), stop.abort(), resolve([/** @type {CustomEvent} */ (e).detail.status, e.cancelable])),
-          { signal: stop.signal },
-        );
-      }),
-  );
+  // the page, in the same task that starts listening for the form's own error and its six seconds,
+  // so a press that never submits fails the check in 6 s from the press rather than waiting on the
+  // stall watchdog, and another form's error does not count (#2014).
   failWatch.value = true;
   const messageBefore = await page.textContent("#watch-message");
-  await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#watch-form button")).click());
-  const failedWith = JSON.stringify(await failed);
+  const failedWith = JSON.stringify(
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
+          const stop = new AbortController();
+          const late = setTimeout(() => (stop.abort(), resolve(null)), 6000);
+          form.addEventListener(
+            "corten:error",
+            (e) => (clearTimeout(late), stop.abort(), resolve([/** @type {CustomEvent} */ (e).detail.status, e.cancelable])),
+            { signal: stop.signal },
+          );
+          /** @type {HTMLButtonElement} */ (form.querySelector("button")).click();
+        }),
+    ),
+  );
   // A press that sent nothing leaves the failure armed for the next post: disarm it.
   failWatch.value = false;
   check("a submit the network fails dispatches corten:error with status 0, cancelable", failedWith === "[0,true]", failedWith);

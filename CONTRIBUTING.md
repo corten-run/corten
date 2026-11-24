@@ -344,8 +344,9 @@ on `<main>` or a `<div>` beside it. The CI logs do not show whether that is what
 The cases still wait for their output condition, then check the busy mark sampled while the
 answer was held, the exact sends and the renewed submit key. The first request is captured
 before editing its fields, and an error a case waits for is its form's own, for six seconds at
-most; file output is polled on a timer, independent of animation frames. Neither the six-second
-outcome bound nor the window for detecting forbidden sends is extended.
+most from its press, which is made in the page task that starts the wait; file output is polled
+on a timer, independent of animation frames. Neither the six-second outcome bound nor the window
+for detecting forbidden sends is extended.
 
 The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
 same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a
