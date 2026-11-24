@@ -19,7 +19,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::{port_arg, port_number};
+use crate::option;
 
 /// Directories that never trigger a rebuild.
 const IGNORED: &[&str] = &["target", ".git", "node_modules", ".idea", ".vscode"];
@@ -29,7 +29,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if !root.join("Cargo.toml").is_file() {
         return Err("run corten dev in the app's directory (where Cargo.toml is)".into());
     }
-    let port = port(args, std::env::var("PORT").ok())?;
+    let port =
+        option(args, "--port")?.map(str::to_string).or_else(|| std::env::var("PORT").ok()).unwrap_or_else(|| "3000".into());
     let mut server: Option<Child> = None;
     let mut roots = vec![root.clone()];
     let mut seen = snapshot(&roots);
@@ -96,25 +97,6 @@ pub fn run(args: &[String]) -> Result<(), String> {
             }
         }
     }
-}
-
-/// The port the app is given in `PORT`: the one `--port` names, read as `corten build` reads its
-/// own (the value after it or after `=`, a port number, once), or else the `PORT` of the
-/// environment as it is written, or 3000. `dev` refuses no other argument.
-fn port(args: &[String], environment: Option<String>) -> Result<String, String> {
-    let mut named = None;
-    let mut args = args.iter();
-    while let Some(arg) = args.next() {
-        let Some(joined) = port_arg(arg) else { continue };
-        let value = match joined.or_else(|| args.next().map(String::as_str).filter(|value| !value.starts_with('-'))) {
-            Some(value) => value,
-            None => return Err("--port needs a value".into()),
-        };
-        if named.replace(port_number(value)?).is_some() {
-            return Err("--port is given more than once".into());
-        }
-    }
-    Ok(named.map(|port| port.to_string()).or(environment).unwrap_or_else(|| "3000".into()))
 }
 
 /// Starts the app's copy in dev mode; it writes its static directory to `assets_list`.
@@ -302,30 +284,6 @@ fn walk(dir: &Path, files: &mut BTreeMap<PathBuf, SystemTime>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_port_is_the_one_named_as_build_reads_it_or_else_the_environments() {
-        let port = |args: &[&str], environment: Option<&str>| {
-            super::port(&args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(), environment.map(str::to_string))
-        };
-        assert_eq!(port(&["--port", "4000"], None), Ok("4000".into()));
-        assert_eq!(port(&["--watch", "--port=4000"], None), Ok("4000".into()));
-        // The environment's is the app's to read, as it is written; an argument comes before it.
-        assert_eq!(port(&[], Some("8080")), Ok("8080".into()));
-        assert_eq!(port(&[], Some("http")), Ok("http".into()));
-        assert_eq!(port(&["--port", "4000"], Some("8080")), Ok("4000".into()));
-        assert_eq!(port(&[], None), Ok("3000".into()));
-        // What is no port number is refused in build's words, not left for the app to refuse.
-        let says =
-            |value: &str| Err(format!("--port takes the number of the port the app binds, from 1 to 65535; not {value:?}"));
-        assert_eq!(port(&["--port", "http"], None), says("http"));
-        assert_eq!(port(&["--port=0"], Some("8080")), says("0"));
-        // A value that reads as a flag is a missing one (`--port --help` is help, in main.rs).
-        for missing in [&["--port"][..], &["--port", "--help"], &["--port", "-1"]] {
-            assert_eq!(port(missing, None), Err("--port needs a value".into()), "{missing:?}");
-        }
-        assert_eq!(port(&["--port", "4000", "--port=4000"], None), Err("--port is given more than once".into()));
-    }
 
     #[test]
     fn reads_the_executable_from_cargo_json() {

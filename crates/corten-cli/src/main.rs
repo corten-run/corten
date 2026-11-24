@@ -190,9 +190,9 @@ fn asks_help(command: &str, args: &[String]) -> bool {
     if command == "build" {
         return build_asks_help(args);
     }
-    // `dev`'s `--port` takes a port number (dev.rs, `port`), which no spelling of help is.
     let takes_value: &[&str] = match command {
         "new" => &["--name", "--corten-path"],
+        "dev" => &["--port"],
         _ => &[],
     };
     let mut args = args.iter();
@@ -470,9 +470,7 @@ mod tests {
         assert!(asks_help("new", &args(&["app", "--name", "shop", "-h"])));
         assert!(!asks_help("new", &args(&["app", "--corten-path", "--help"])));
         assert!(!asks_help("new", &args(&["app", "--name", "-h"])));
-        // A port number is never a spelling of help, so help after `--port` asks for it.
-        assert!(asks_help("dev", &args(&["--port", "--help"])));
-        assert!(asks_help("dev", &args(&["--port=4000", "-h"])));
+        assert!(!asks_help("dev", &args(&["--port", "--help"])));
         // `--` ends no command's options, so it ends no scan for help either.
         assert!(asks_help("new", &args(&["app", "--", "--help"])));
         // An option names a value only for the command that has it, and a `--` it takes is a value.

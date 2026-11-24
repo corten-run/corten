@@ -46,8 +46,7 @@ fn every_command_prints_its_usage_without_running() {
 
 #[test]
 fn help_is_also_recognized_alongside_command_flags() {
-    // `dev --port --help` among them: a port number is never help, so that is not `--port`'s value.
-    for args in [["check", "--no-script-types", "--help"], ["ui", "add", "-h"], ["dev", "--port", "--help"]] {
+    for args in [["check", "--no-script-types", "--help"], ["ui", "add", "-h"]] {
         let out = Command::new(env!("CARGO_BIN_EXE_corten")).args(args).output().unwrap();
         assert!(out.status.success());
         assert!(String::from_utf8(out.stdout).unwrap().starts_with("Usage:\n"));
