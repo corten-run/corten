@@ -2332,7 +2332,7 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
    archive is published instead. The history is not
    rewritten, so their blobs stay in it and a clone still downloads them once (Git's pack was 41.7
    MiB); a checkout has 142 files of results (5.7 MB) instead of 11,150 (22.1 MB), and a new round
-   adds one archive instead of a thousand files.
+   packs its raw output into one archive instead of a thousand files.
 4. The rounds packed before raw output left the tree (r15, r16, `cost-under-load` and the
    `ab-jemalloc` rounds) keep their `raw.tar.xz` where it is, listed in `scripts/bench-size.allow`:
    their paths are cited, and removing them would shrink no clone, since history keeps every blob.
