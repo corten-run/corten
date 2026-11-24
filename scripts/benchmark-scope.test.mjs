@@ -271,6 +271,7 @@ test("Evidence covers every real source-custody root and its descendants", () =>
 
 test("native kernel controls run for fixture and tooling inputs, not portable source custody alone", () => {
   for (const path of ["bench/workloads/isolated/bootstrap.mjs", "scripts/benchmark-kernel-ci.sh",
+    "scripts/ci-docker-hub-mirror.sh", "scripts/ci-docker-hub-mirror.mjs",
     ".github/workflows/benchmark-evidence.yml", "package-lock.json"]) {
     assert.equal(selectKernel([path]), true, path);
   }
