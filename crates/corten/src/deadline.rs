@@ -19,6 +19,7 @@ use crate::watch::Watch;
 use std::{
     cell::Cell,
     future::Future,
+    mem::ManuallyDrop,
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     task::{Context, Poll},
@@ -97,16 +98,21 @@ impl Slot {
 }
 
 thread_local! {
-    /// What the connection whose request is being polled on this thread lends it.
-    static LENT: Cell<Lends> = const { Cell::new(Lends { by: 0, watch: None }) };
+    /// What polls the request being polled on this thread: the address its waker wakes, which is
+    /// the connection's task's for a deadline that task polls itself. 0 where no request is.
+    static BY: Cell<usize> = const { Cell::new(0) };
+    /// The watch of the connection whose request is being polled on this thread. The thread never
+    /// drops it, so reading it costs a request no check of whether the thread is ending: a watch
+    /// is here only during a poll, and [`Lent`] takes it back when the poll ends.
+    static LENT: Cell<ManuallyDrop<Option<Arc<Watch>>>> = const { Cell::new(ManuallyDrop::new(None)) };
 }
 
 /// A connection's watch, for a request's answer to lend to the thread while it polls the
-/// request, and what polled it then: the address its waker wakes, which is the connection's
-/// task's for a deadline that task polls itself.
-#[derive(Default)]
+/// request.
 pub(crate) struct Lends {
+    /// While the watch is lent, what the thread had before.
     by: usize,
+    /// The watch; while it is lent, what the thread had before.
     watch: Option<Arc<Watch>>,
 }
 
@@ -126,8 +132,8 @@ impl Lends {
     #[inline]
     pub(crate) fn lend(&mut self, cx: &Context<'_>) -> Option<Lent<'_>> {
         self.watch.as_ref()?;
-        self.by = cx.waker().data().addr();
-        swap(self);
+        self.by = BY.replace(cx.waker().data().addr());
+        swap(&mut self.watch);
         Some(Lent(self))
     }
 }
@@ -138,14 +144,16 @@ pub(crate) struct Lent<'a>(&'a mut Lends);
 impl Drop for Lent<'_> {
     #[inline]
     fn drop(&mut self) {
-        swap(self.0);
+        BY.set(self.0.by);
+        swap(&mut self.0.watch);
     }
 }
 
-/// Swaps what the thread is lent and `lends`. Not where the thread is ending.
+/// Swaps the watch the thread is lent and `watch`.
 #[inline(always)]
-fn swap(lends: &mut Lends) {
-    let _ = LENT.try_with(|thread| thread.swap(Cell::from_mut(lends)));
+fn swap(watch: &mut Option<Arc<Watch>>) {
+    let lent = LENT.replace(ManuallyDrop::new(watch.take()));
+    *watch = ManuallyDrop::into_inner(lent);
 }
 
 /// A connection's timer while a deadline has it, and the connection's watch, where the timer goes
@@ -164,14 +172,13 @@ impl Kept {
     /// now: the one the connection has, or a new one for it. `None` where no connection lends
     /// its watch, or something else polls the deadline inside that connection's poll.
     fn new(limit: Duration, cx: &Context<'_>) -> Option<Kept> {
-        let of = LENT
-            .try_with(|thread| {
-                let lent = thread.take();
-                let of = if lent.by == cx.waker().data().addr() { lent.watch.clone() } else { None };
-                thread.set(lent);
-                of
-            })
-            .ok()??;
+        if BY.get() != cx.waker().data().addr() {
+            return None;
+        }
+        let lent = LENT.replace(ManuallyDrop::new(None));
+        let of: Option<Arc<Watch>> = (*lent).clone();
+        LENT.set(lent);
+        let of = of?;
         let timer = match of.kept.take() {
             Some(mut timer) => {
                 timer.0.as_mut().reset(after(limit));
