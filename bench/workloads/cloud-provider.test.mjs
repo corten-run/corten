@@ -623,7 +623,9 @@ test("ignored metadata cannot qualify a wrong, failed or unbound action", async 
     const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) {
       calls.push({ method, path }); return method === "POST" ? response : action;
     } });
-    await assert.rejects(run(create, 1000), (error) => error.providerDiagnostic?.code === "create-action-response");
+    // Only the exact action bound to the POST droplet can report a provider-errored create.
+    const code = isDeepStrictEqual(action.value.action, { ...createAction().value.action, status: "errored" }) ? "create-action-errored" : "create-action-response";
+    await assert.rejects(run(create, 1000), (error) => error.providerDiagnostic?.code === code);
     assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }, { method: "GET", path: "/v2/actions/7515" }]);
   }
 });
@@ -655,7 +657,8 @@ test("first action failures after accepted POST stop without retry or leaking pr
       } else {
         await assert.rejects(run(create, 1000), (error) => {
           assert.equal(error.message, "provider control failed; preserve state/evidence/host");
-          assert.equal(error.providerDiagnostic?.code, response === null ? "create-action-request" : "create-action-response");
+          assert.equal(error.providerDiagnostic?.code, response === null ? "create-action-request"
+            : isDeepStrictEqual(response.value.action, { ...action, status: "errored" }) ? "create-action-errored" : "create-action-response");
           assert.equal(error.controlUncertain === true, response === null);
           assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(credential)); return true;
         });
