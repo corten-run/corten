@@ -2540,15 +2540,16 @@ rules something out.
     wherever the answer goes: out of a task the handler spawned, from before the request came in,
     from another app whose answer a middleware relays inline, under any status a middleware gives
     it, in place or by moving the answer's parts. An answer the cache rule finds to be one visitor's
-    for a reason its headers do not show (it read a caller, has the request's nonce, is a `Cache`
-    answer to a request with credentials, or is a tool's answer from an MCP endpoint whose
-    `Tools::auth` found its caller) carries a second mark (`cache::Personal`), so another app that
-    relays it inline, as it is or changed in place, settles it as personal too, and a middleware
-    there cannot give it a CDN's lifetime, though that app's own request read no caller; an answer
-    that middleware makes in its place is its own, and one nothing made personal is not marked.
-    Round 8 left that relay outside the issue; round 15's review found it, and the mark closes it
-    in process (round 16). Over HTTP an answer carries only its headers, and no mark crosses that
-    boundary. The error page drawn in place of an answer copies
+    (it sets a cookie, read a caller, has the request's nonce, is a `Cache` answer to a request with
+    credentials, or is a tool's answer from an MCP endpoint whose `Tools::auth` found its caller, or
+    with `Tools::authorization` too any answer that check let through) carries a second mark
+    (`cache::Personal`), so another app that relays it inline, as it is or changed in place (its
+    cookie taken off included), settles it as personal too, and a middleware there cannot give it a
+    CDN's lifetime, though that app's own request read no caller; an answer that middleware makes
+    in its place is its own, and one nothing made personal is not marked. Round 8 left that relay
+    outside the issue; round 15's review found it, and the mark closes it in process (round 16;
+    round 17 for the cookie and the endpoint-wide check). Over HTTP an answer carries only its
+    headers, and no mark crosses that boundary. The error page drawn in place of an answer copies
     its marks onto the page (`cache::Marks`), `NoStore` included; a failure Corten sends in place of
     an answer it could not send as it was (a debug build's error, a page whose layout reads could
     not be filled or that could not be read to be kept) is marked whatever that answer was and keeps

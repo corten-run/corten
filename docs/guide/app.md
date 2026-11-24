@@ -1455,10 +1455,12 @@ the next: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
 `Vercel-CDN-Cache-Control`, `Surrogate-Control`, Akamai's `Edge-Control` and nginx's
 `X-Accel-Expires`. Such an answer read a caller, sets a cookie, has the request's nonce or draws a
 submit key, or is a `Public` answer to a request with credentials, or is a tool's answer from an
-MCP endpoint whose `Tools::auth` found its caller. The answer carries that with it: another app
+MCP endpoint whose `Tools::auth` found its caller (with `Tools::authorization` too, any answer
+that check let through, the list of tools included). The answer carries that with it: another app
 of Corten's whose staged middleware asks it for an answer inline and relays it (as it is, or
-changed in place) sends it the same way, though that app's own request read no caller, while an
-answer that middleware makes in its place, or a relayed answer nothing made personal, keeps what
+changed in place, its cookie taken off included) sends it the same way, though that app's own
+request read no caller, while an answer that middleware makes in its place, or a relayed answer
+nothing made personal, keeps what
 it writes. An answer relayed over HTTP carries only its headers. A `no-store` on it goes out
 `private, no-store`: some CDNs ignore a bare `no-store`, and none keeps a `private` answer. A
 `NoStore` answer, a `Public` one the third row sends as the browser's alone, a refused write's

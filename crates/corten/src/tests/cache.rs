@@ -2007,6 +2007,98 @@ async fn another_app_s_personal_answer_relayed_inline_is_still_not_shared() {
     assert!(wrong.is_empty(), "another app's personal answer relayed inline, open to a CDN: {wrong:#?}");
 }
 
+/// Staged middleware that takes every `Set-Cookie` off the answer it is given, keeping the rest of
+/// it in place, or with `x-fresh` sends a new answer in its place with the same status, headers
+/// (but the cookie) and body.
+struct TakesTheCookieOff;
+
+impl crate::Middleware for TakesTheCookieOff {
+    async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        let fresh = req.headers().contains_key("x-fresh");
+        let mut res = next.run(req).await;
+        res.headers_mut().remove(header::SET_COOKIE);
+        if !fresh {
+            return res;
+        }
+        let (parts, body) = res.into_parts();
+        let body = body.collect().await.unwrap().to_bytes();
+        let mut made = crate::response::Response::new(Body::from(body));
+        *made.status_mut() = parts.status;
+        *made.headers_mut() = parts.headers;
+        made
+    }
+}
+
+/// Another Corten app's answer that sets a cookie is that visitor's, and stays so when a staged
+/// middleware of the app that relays it inline takes the cookie off and keeps the rest in place:
+/// with no `Cache-Control` of its own, with one the handler wrote, and with a `Cache` mark, it goes
+/// out `private` whatever the outer middleware made of its `Cache-Control` (`private, no-store`
+/// where it named `no-store`), with none of the caching headers a CDN reads first, and with the
+/// same body. The same body sent in a fresh answer in its place, and another app's answer that set
+/// no cookie relayed the same way, keep what the middleware wrote (the controls).
+#[tokio::test]
+async fn another_app_s_answer_that_sets_a_cookie_stays_personal_without_it() {
+    let minute = Duration::from_secs(60);
+    let other = App::new(Routes::from(
+        Table::new()
+            .route("/cookie", get(|| async { ([(header::SET_COOKIE, "session=ann")], "ann's") }))
+            .route(
+                "/cookie-said",
+                get(|| async { ([(header::CACHE_CONTROL, "public, max-age=60"), (header::SET_COOKIE, "session=ann")], "ann's") }),
+            )
+            .route("/cookie-typed", get(move || async move { (Cache::public(minute), [(header::SET_COOKIE, "session=ann")], "ann's") }))
+            .route("/plain", get(|| async { "ann's" })),
+    ))
+    .router();
+    let home = || get(|| async { "home" });
+    let routes =
+        || Table::new().route("/cookie", home()).route("/cookie-said", home()).route("/cookie-typed", home()).route("/plain", home());
+    // Without a `Cookie`, so that nothing but the answer's own cookie makes it personal.
+    let asked = |router: &Router, uri: &'static str, fresh: bool| {
+        let mut req = Request::get(uri);
+        if fresh {
+            req = req.header("x-fresh", "1");
+        }
+        let router = router.clone();
+        async move {
+            let (parts, body) = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap().into_parts();
+            (parts.status, parts.headers, String::from_utf8_lossy(&body.collect().await.unwrap().to_bytes()).into_owned())
+        }
+    };
+    let mut wrong = Vec::new();
+    for (cache, sent) in
+        [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
+    {
+        let router =
+            App::new(Routes::from(routes())).middleware((CdnRecaches(cache), TakesTheCookieOff, RelaysAnotherApp(other.clone()))).router();
+        for (uri, fresh, personal) in [
+            ("/cookie", false, true),
+            ("/cookie-said", false, true),
+            ("/cookie-typed", false, true),
+            ("/cookie", true, false),
+            ("/cookie-said", true, false),
+            ("/cookie-typed", true, false),
+            ("/plain", false, false),
+        ] {
+            let (status, headers, body) = asked(&router, uri, fresh).await;
+            if status != StatusCode::OK || body != "ann's" || headers.contains_key(header::SET_COOKIE) {
+                wrong.push(format!("{uri} fresh {fresh}, {cache:?}: {status} {body:?} {headers:?}"));
+                continue;
+            }
+            if personal {
+                wrong.extend(kept_from_cdns(&headers, sent).into_iter().map(|what| format!("{uri}, {cache:?}: {what}")));
+            } else {
+                for name in CDN_OVERRIDES {
+                    if headers.get(name).is_none_or(|value| value != "public, max-age=60") {
+                        wrong.push(format!("{uri} fresh {fresh}, {cache:?}: nothing made it personal, and it lost {name}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "another app's cookie-setting answer relayed inline without its cookie, open to a CDN: {wrong:#?}");
+}
+
 /// Staged middleware that answers with a typed refusal turned into a `200`, made before the request's
 /// stages ran (when the app was built, held here) or, with `x-spawned`, on another thread.
 struct AnswersAMadeRefusal(std::sync::Mutex<Vec<crate::response::Response>>);
@@ -6966,25 +7058,34 @@ impl crate::Middleware for RelaysTheWholeRequest {
 /// away): behind a staged middleware that marks every answer for a CDN, the tool's result (naming
 /// its caller here) and its own `isError` refusal go out `private, no-cache` with none of the
 /// caching headers a CDN reads first, and so they do when another Corten app's staged middleware
-/// relays the endpoint's answer inline. The same tool on an endpoint without `auth`, for anyone,
-/// and the endpoint's list of its tools keep what the middleware wrote (the controls).
+/// relays the endpoint's answer inline. With a [`Tools::authorization`] too, the check runs on every
+/// request, and every answer it lets through is that caller's in the same way: the list of tools,
+/// `initialize` and `ping`, as they are and relayed inline. The same tool on an endpoint without
+/// `auth`, for anyone, and the list of tools of an endpoint whose `auth` checks tool calls alone
+/// keep what the middleware wrote (the controls).
 ///
 /// [`Tools::auth`]: crate::agent::Tools::auth
+/// [`Tools::authorization`]: crate::agent::Tools::authorization
 #[cfg(feature = "agent")]
 #[tokio::test]
 async fn an_mcp_tool_s_answer_for_the_caller_its_check_found_is_not_shared() {
-    use crate::agent::{ToolError, Tools};
-    let checked = Tools::new("test", "1.0")
-        .auth(|headers| {
-            let token = headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok());
-            token.and_then(|token| token.strip_prefix("Bearer ")).map(str::to_owned).ok_or(ToolError::Unauthorized)
-        })
-        .read_tool("whoami", "Says who asks", |caller: String, item: McpItem| async move {
-            if item.id == "locked" {
-                return Err(ToolError::Forbidden("that item is locked".into()));
-            }
-            Ok(McpFound { id: format!("{caller}:{}", item.id) })
-        });
+    use crate::agent::{Authorization, ToolError, Tools};
+    let bearer = |headers: &http::HeaderMap| {
+        let token = headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok());
+        token.and_then(|token| token.strip_prefix("Bearer ")).map(str::to_owned).ok_or(ToolError::Unauthorized)
+    };
+    let whoami = |caller: String, item: McpItem| async move {
+        if item.id == "locked" {
+            return Err(ToolError::Forbidden("that item is locked".into()));
+        }
+        Ok(McpFound { id: format!("{caller}:{}", item.id) })
+    };
+    let checked = Tools::new("test", "1.0").auth(bearer).read_tool("whoami", "Says who asks", whoami);
+    // Every request checked, not only a tool call.
+    let protected = Tools::new("test", "1.0")
+        .authorization(Authorization::new::<McpAt>("https://cards.example", "https://auth.example"))
+        .auth(bearer)
+        .read_tool("whoami", "Says who asks", whoami);
     let open = Tools::new("test", "1.0").read_tool("whoami", "Says who asks", |(), item: McpItem| async move {
         if item.id == "locked" {
             return Err(ToolError::Forbidden("that item is locked".into()));
@@ -6994,26 +7095,40 @@ async fn an_mcp_tool_s_answer_for_the_caller_its_check_found_is_not_shared() {
     let cdn = || CdnRecaches(Some("public, max-age=60"));
     let checked_app =
         App::new(Routes::new()).api::<McpAt>(|api| api.route::<McpAt>(checked.clone().route())).middleware(cdn()).router();
+    let protected_app =
+        App::new(Routes::new()).api::<McpAt>(|api| api.route::<McpAt>(protected.clone().route())).middleware(cdn()).router();
     let open_app = App::new(Routes::new()).api::<McpAt>(|api| api.route::<McpAt>(open.route())).middleware(cdn()).router();
     // The endpoint with no middleware of its own, asked inline by another app's.
-    let inner = App::new(Routes::new()).api::<McpAt>(|api| api.route::<McpAt>(checked.route())).router();
-    let relaying = App::new(Routes::new())
-        .api::<McpAt>(|api| api.route::<McpAt>(crate::Methods::writes(crate::router::post(|| async { "home" }))))
-        .middleware((cdn(), RelaysTheWholeRequest(inner)))
-        .router();
+    let relaying = |inner: Router| {
+        App::new(Routes::new())
+            .api::<McpAt>(|api| api.route::<McpAt>(crate::Methods::writes(crate::router::post(|| async { "home" }))))
+            .middleware((cdn(), RelaysTheWholeRequest(inner)))
+            .router()
+    };
+    let relaying_checked = relaying(App::new(Routes::new()).api::<McpAt>(|api| api.route::<McpAt>(checked.route())).router());
+    let relaying_protected = relaying(App::new(Routes::new()).api::<McpAt>(|api| api.route::<McpAt>(protected.route())).router());
     let call = |id: &str| {
         format!(r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"whoami","arguments":{{"id":"{id}"}}}}}}"#)
     };
     let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.to_string();
+    let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#.to_string();
+    let ping = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#.to_string();
     let asked = &[("content-type", "application/json"), ("authorization", "Bearer ann")][..];
     let mut wrong = Vec::new();
     // What each is, the app, the message, what its result must say, and whether it is the caller's.
     for (item, router, message, says, personal) in [
         ("the tool's answer", &checked_app, call("7"), Some("ann:7"), true),
         ("the tool's own refusal", &checked_app, call("locked"), None, true),
-        ("the tool's answer relayed inline", &relaying, call("7"), Some("ann:7"), true),
-        ("the tool's own refusal relayed inline", &relaying, call("locked"), None, true),
-        ("the tools' list", &checked_app, list.clone(), None, false),
+        ("the tool's answer relayed inline", &relaying_checked, call("7"), Some("ann:7"), true),
+        ("the tool's own refusal relayed inline", &relaying_checked, call("locked"), None, true),
+        ("a protected endpoint's tool's answer", &protected_app, call("7"), Some("ann:7"), true),
+        ("a protected endpoint's list", &protected_app, list.clone(), None, true),
+        ("a protected endpoint's initialize", &protected_app, initialize.clone(), None, true),
+        ("a protected endpoint's ping", &protected_app, ping.clone(), None, true),
+        ("a protected endpoint's list relayed inline", &relaying_protected, list.clone(), None, true),
+        ("a protected endpoint's initialize relayed inline", &relaying_protected, initialize.clone(), None, true),
+        ("the tools' list where only calls are checked", &checked_app, list.clone(), None, false),
+        ("initialize where only calls are checked", &checked_app, initialize.clone(), None, false),
         ("an open endpoint's answer", &open_app, call("7"), Some("anyone:7"), false),
         ("an open endpoint's tool's refusal", &open_app, call("locked"), None, false),
     ] {
@@ -7022,6 +7137,8 @@ async fn an_mcp_tool_s_answer_for_the_caller_its_check_found_is_not_shared() {
         let answered = match says {
             Some(id) => body["result"]["structuredContent"]["id"] == id,
             None if message == list => body["result"]["tools"].is_array(),
+            None if message == initialize => body["result"]["protocolVersion"] == "2025-06-18",
+            None if message == ping => body["result"] == serde_json::json!({}),
             None => body["result"]["isError"] == true,
         };
         if status != StatusCode::OK || !answered {

@@ -413,10 +413,11 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
             // lookup. A marked one whose header a middleware took out is settled below as one that
             // says `private, no-cache`.
             if typed.is_none() {
-                if !drew_key && (seen.nonce || caller || sets_cookie(res.headers())) {
+                let personal = seen.nonce || seen.caller || sets_cookie(res.headers());
+                if !drew_key && (personal || marked) {
                     drop_cdn_caching(res.headers_mut());
                 }
-                if !marked && (seen.nonce || seen.caller) {
+                if !marked && personal {
                     res.extensions_mut().insert(Personal);
                 }
                 return;
@@ -445,9 +446,10 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         }
     }
     let plain = lines == 1 && !quoted && text;
+    let cookie = !seen.nonce && sets_cookie(res.headers());
     let bug = if seen.nonce {
         Some("its HTML has this request's CSP nonce (req.nonce() in the layout, or a handler that takes Nonce)")
-    } else if sets_cookie(res.headers()) {
+    } else if cookie {
         Some("it sets a cookie")
     } else if drew_key {
         // The mark that keeps its tag off and the app from keeping it: each visitor needs a key
@@ -459,9 +461,9 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     // The answer is this visitor's, whoever set its header.
     let asked_by = typed.is_some_and(|typed| seen.credentials && !typed.named);
     let personal = bug.is_some() || caller || asked_by;
-    // What makes it personal that the answer itself does not show goes on it as a mark, for an app
-    // that relays it inline (a cookie it sets and a key it drew are on it already).
-    if !marked && (seen.nonce || seen.caller || asked_by) {
+    // What makes it personal goes on it as a mark, for an app that relays it inline: a middleware
+    // there may take its cookie off and keep the rest (a key it drew is marked already).
+    if !marked && (seen.nonce || cookie || seen.caller || asked_by) {
         res.extensions_mut().insert(Personal);
     }
     // `NoStore`, whatever a middleware made of its header since.
@@ -544,21 +546,22 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     }
 }
 
-/// The mark of an answer [`settle`] found to be one visitor's for a reason its headers do not show:
-/// it read a caller, has this request's nonce, or is a [`Cache`] answer to a request with
-/// credentials ([`Seen`]); or the MCP endpoint made it for a caller its check found
-/// ([`personal`]). A cookie it sets and a submit key it drew ([`Unrepeatable`]) are on the answer
-/// already. Put on as the answer is settled, it stays on the answer as [`Unshared`] does: another
-/// Corten app whose staged middleware relays it inline, as it is or changed in place, settles it
-/// as personal too ([`settle`]), though that app's own request read no caller, so a middleware
-/// there cannot give it a CDN's lifetime. An answer made in its place is its own, and an answer
-/// nothing made personal is not marked. Only in process: an app that relays it over HTTP sees its
-/// headers alone.
+/// The mark of an answer [`settle`] found to be one visitor's: it sets a cookie, read a caller,
+/// has this request's nonce, or is a [`Cache`] answer to a request with credentials ([`Seen`]); or
+/// the MCP endpoint made it for a caller its check found (`personal`). A submit key it drew is
+/// marked already ([`Unrepeatable`]). Put on as the answer is settled, it stays on the answer as
+/// [`Unshared`] does: another Corten app whose staged middleware relays it inline, as it is or
+/// changed in place (its cookie taken off included), settles it as personal too ([`settle`]),
+/// though that app's own request read no caller, so a middleware there cannot give it a CDN's
+/// lifetime. An answer made in its place is its own, and an answer nothing made personal is not
+/// marked. Only in process: an app that relays it over HTTP sees its headers alone.
 #[derive(Clone, Copy)]
 pub(crate) struct Personal;
 
-/// `res`, made for one caller (the MCP endpoint's answer to a caller its check found), marked
-/// [`Personal`]: settled as one visitor's here and by an app that relays it inline.
+/// `res`, made for one caller (the MCP endpoint's answer to a caller its check found, or any answer
+/// its endpoint-wide check let through), marked [`Personal`]: settled as one visitor's here and by
+/// an app that relays it inline.
+#[cfg(feature = "agent")]
 pub(crate) fn personal(mut res: Response) -> Response {
     res.extensions_mut().insert(Personal);
     res

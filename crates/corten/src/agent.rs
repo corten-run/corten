@@ -575,7 +575,8 @@ impl Tools<()> {
     /// endpoint): `Err(ToolError::Unauthorized)` answers 401, and `Ok(caller)` is passed to the
     /// tool. It runs once per request. Set it before adding tools. A tool's answer is then that
     /// caller's, as an answer that reads a [`crate::Caller`] is: never shared, whatever a middleware
-    /// writes on it.
+    /// writes on it; with an [`Authorization`], so is every answer the check lets through (the
+    /// list of tools, `initialize`).
     pub fn auth<A, F>(self, auth: F) -> Tools<A>
     where
         F: Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync + 'static,
@@ -770,9 +771,14 @@ impl<A: Send + 'static> Tools<A> {
             }
         }
         let method = message.get("method").and_then(Value::as_str).unwrap_or("");
+        // Behind the endpoint-wide check (an `Authorization` with `Tools::auth`), every answer it
+        // let through is the caller's, the list of tools and `initialize` included: a shared copy
+        // would answer a request the check would have turned away.
+        let gated = self.checked && caller.is_some();
+        let answer = |res: Response| if gated { crate::cache::personal(res) } else { res };
         let Some(id) = id else {
             // A notification (`notifications/initialized`) or a response: nothing to answer.
-            return StatusCode::ACCEPTED.into_response();
+            return answer(StatusCode::ACCEPTED.into_response());
         };
         if message.get("jsonrpc") != Some(&json!("2.0")) || method.is_empty() {
             return rpc_error(id, StatusCode::OK, -32600, "invalid request".into());
@@ -804,7 +810,7 @@ impl<A: Send + 'static> Tools<A> {
             "tools/list" => json!({ "tools": self.list() }),
             _ => return rpc_error(id, StatusCode::OK, -32601, format!("method not found: {method}")),
         };
-        reply(id, Ok(result))
+        answer(reply(id, Ok(result)))
     }
 
     /// A request [`Tools::auth`] turned away, before any tool ran: 401 or 403 with the challenge
