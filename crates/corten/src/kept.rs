@@ -1788,14 +1788,14 @@ mod tests {
                         headers.append(sent[at].0.clone(), HeaderValue::from_bytes(line).unwrap());
                     }
                 }
-                let page = Sent::read(&headers, Shape::Page).map(|sent| (sent.host, sent.language, sent.data));
+                let page = Sent::read::<false>(&headers, Shape::Page).map(|sent| (sent.host, sent.language, sent.data));
                 assert_eq!(page, by_name(&headers, Shape::Page), "{headers:?}");
                 match page {
                     Some(_) => kept += 1,
                     None => left += 1,
                 }
                 // A whole body is kept for a data client too, apart, and for no one a page is not.
-                let body = Sent::read(&headers, Shape::Body).map(|sent| (sent.host, sent.language, sent.data));
+                let body = Sent::read::<false>(&headers, Shape::Body).map(|sent| (sent.host, sent.language, sent.data));
                 assert_eq!(body, by_name(&headers, Shape::Body), "{headers:?}");
                 assert!(page.is_none() || body == page, "{headers:?}");
                 apart += usize::from(matches!(body, Some((_, _, true))));
