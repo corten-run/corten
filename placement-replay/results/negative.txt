@@ -26,7 +26,11 @@ refused
 replay.mjs: 1 symbols of .text are not the unpadded link's, in its order, as far from their section's start
 replay.mjs: 1 symbols before the first section aligned beyond 16 bytes moved by other than the pad
 refused
-== the head read with compiler_builtins named as one of its own crates
-replay.mjs: 2 input sections from the first one aligned beyond 16 bytes on hold a function of corten or corten_feed or corten_protocol or corten_ui or probe or compiler_builtins: libcompiler_builtins.rlib(compiler_builtins.compiler_builtins
+== a function after the first section aligned beyond 16 bytes whose symbol names an own crate
+replay.mjs: 1 input sections from the first one aligned beyond 16 bytes on hold a function of corten or corten_feed or corten_protocol or corten_ui or probe: liblibdeflate_sys.rlib(utils.o):(.text.libdeflate_aligned_free)
 refused
-exit 0
+== a function of an own crate in .init
+replay.mjs: 1 input sections outside .text hold a function of corten or corten_feed or corten_protocol or corten_ui or probe: .init: crti.o:(.init)
+refused
+== the head read with compiler_builtins named as an own crate
+passed: the symbol decides, and its two functions after that section do not name it

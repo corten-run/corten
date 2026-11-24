@@ -1,0 +1,24 @@
+synth.mjs: 3483 input sections of .text written after a pad of 320 bytes; .text grew by 320
+synth.mjs: against the real placement's map, 7041 lines of .text written and 7041 read, 0 that differ
+synth.mjs: 3442 input sections of .text written after a pad of 320 bytes; .text grew by 320
+synth.mjs: against the real placement's map, 6959 lines of .text written and 6959 read, 0 that differ
+synth.mjs: 3483 input sections of .text written after a pad of 15120 bytes; .text grew by 15104
+synth.mjs: against the real placement's map, 7041 lines of .text written and 7041 read, 0 that differ
+synth.mjs: 3442 input sections of .text written after a pad of 15120 bytes; .text grew by 15120
+synth.mjs: against the real placement's map, 6959 lines of .text written and 6959 read, 0 that differ
+synth.mjs: 3483 input sections of .text written after a pad of 25824 bytes; .text grew by 25792
+synth.mjs: against the real placement's map, 7041 lines of .text written and 7041 read, 0 that differ
+synth.mjs: 3442 input sections of .text written after a pad of 25824 bytes; .text grew by 25824
+synth.mjs: against the real placement's map, 6959 lines of .text written and 6959 read, 0 that differ
+synth.mjs: 3483 input sections of .text written after a pad of 40624 bytes; .text grew by 40640
+synth.mjs: against the real placement's map, 7041 lines of .text written and 7041 read, 0 that differ
+synth.mjs: 3442 input sections of .text written after a pad of 40624 bytes; .text grew by 40624
+synth.mjs: against the real placement's map, 6959 lines of .text written and 6959 read, 0 that differ
+synth.mjs: 3483 input sections of .text written after a pad of 15120 bytes and before a second pad of 48; .text grew by 15162
+synth.mjs: against the real placement's map, 7043 lines of .text written and 7043 read, 0 that differ
+synth.mjs: 3483 input sections of .text written after a pad of 15120 bytes and before a second pad of 8; .text grew by 15122
+synth.mjs: against the real placement's map, 7043 lines of .text written and 7043 read, 0 that differ
+synth.mjs: 3483 input sections of .text written after a pad of 15120 bytes and before a second pad of 16; .text grew by 15130
+synth.mjs: against the real placement's map, 7043 lines of .text written and 7043 read, 0 that differ
+synth.mjs: 3483 input sections of .text written after a pad of 15120 bytes and before a second pad of 32; .text grew by 15146
+synth.mjs: against the real placement's map, 7043 lines of .text written and 7043 read, 0 that differ

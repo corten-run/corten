@@ -1,0 +1,15 @@
+== a placement with a second pad, checked as one without
+replay.mjs: .text has 3483 input sections unpadded and 3484 besides the pad in the placement
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== the wrong second pad size (48 for 64)
+replay.mjs: the last input section of .text is /w/pads2/pad2-64.o:(.text.corten_layout_pad2), 64 bytes, not a second pad of 48
+refused
+== a placement without a second pad, checked as one with
+replay.mjs: the last input section of .text is /usr/local/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_bui
+replay.mjs: .text has 3483 input sections unpadded and 3482 besides the pads in the placement
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== the data declared 32 bytes further where the second pad puts it 16
+replay.mjs: .data begins 16 bytes further into a 64-byte line than in the unpadded link, not 32
+refused

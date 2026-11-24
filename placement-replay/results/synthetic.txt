@@ -1,0 +1,68 @@
+== base, a pad of 320 bytes
+passed
+== head, a pad of 320 bytes
+passed
+== head, a pad of 320 bytes and a second pad of 64 last
+passed
+== base, a pad of 15120 bytes
+passed
+== head, a pad of 15120 bytes
+passed
+== head, a pad of 15120 bytes and a second pad of 64 last
+passed
+== base, a pad of 25824 bytes
+passed
+== head, a pad of 25824 bytes
+passed
+== head, a pad of 25824 bytes and a second pad of 64 last
+passed
+== base, a pad of 40624 bytes
+passed
+== head, a pad of 40624 bytes
+passed
+== head, a pad of 40624 bytes and a second pad of 64 last
+passed
+== the wrong pad size (15136 for 15120)
+replay.mjs: the first input section of .text is /m/1971/pads/pad-15120.o:(.text.corten_layout_pad), 15120 bytes at 0x15d5c0
+replay.mjs: 3443 input sections are not where the unpadded layout replayed with the pad puts them
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+replay.mjs: 3515 symbols before the first section aligned beyond 16 bytes moved by other than the pad
+refused
+== the base's unpadded link against the head's placement
+replay.mjs: .text has 3442 input sections unpadded and 3483 besides the pad in the placement
+replay.mjs: .text begins elsewhere in the placement
+replay.mjs: 3442 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== a placement with a second pad, checked as one without
+replay.mjs: .text has 3483 input sections unpadded and 3484 besides the pad in the placement
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== the wrong second pad size (48 for 64)
+replay.mjs: the last input section of .text is /m/1971/pads/pad2-64.o:(.text.corten_layout_pad2), 64 bytes, not a second pad of 48
+refused
+== a placement without a second pad, checked as one with
+replay.mjs: the last input section of .text is /usr/local/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_bui
+replay.mjs: .text has 3483 input sections unpadded and 3482 besides the pads in the placement
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== a second pad laid before the last section and not after it
+replay.mjs: the last input section of .text is /usr/local/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_bui
+replay.mjs: input section 3482 differs: /usr/local/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_builtins.7
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== a function after the first section aligned beyond 16 bytes whose symbol names an own crate
+replay.mjs: 1 input sections from the first one aligned beyond 16 bytes on hold a function of corten or corten_feed or corten_protocol or corten_ui or probe: liblibdeflate_sys.rlib(utils.o):(.text.libdeflate_aligned_free)
+refused
+== a function of an own crate in .init
+replay.mjs: 1 input sections outside .text hold a function of corten or corten_feed or corten_protocol or corten_ui or probe: .init: crti.o:(.init)
+refused
+== the head read with compiler_builtins named as an own crate, whose two functions after that section do not name it
+passed
+== the real link with a first pad of 320 and a second of 48, .data where the unpadded link has it
+passed
+== the real link with a first pad of 320 and a second of 8, .data 16 bytes further
+passed
+== that link with .data declared 32 bytes further
+replay.mjs: .data begins 16 bytes further into a 64-byte line than in the unpadded link, not 32
+refused
+SYNTHETIC-DONE

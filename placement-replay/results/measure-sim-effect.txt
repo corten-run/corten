@@ -1,0 +1,14 @@
+K 60 sd 1.17 effect 0.5: ranks 37 and 40 (tails 4.62% and 0.67%); one comparison not resolved 0.0%; held 82.6%, shown 14.9%, not made 2.5%
+K 60 sd 1.17 effect 1: ranks 37 and 40 (tails 4.62% and 0.67%); one comparison not resolved 0.0%; held 4.7%, shown 95.1%, not made 0.2%
+K 60 sd 1.17 effect 1.5: ranks 37 and 40 (tails 4.62% and 0.67%); one comparison not resolved 0.0%; held 0.0%, shown 100.0%, not made 0.0%
+K 60 sd 1.17 effect 2: ranks 37 and 40 (tails 4.62% and 0.67%); one comparison not resolved 0.0%; held 0.0%, shown 100.0%, not made 0.0%
+K 60 sd 1.48 effect 0.5: ranks 37 and 40 (tails 4.62% and 0.67%); one comparison not resolved 1.5%; held 63.3%, shown 21.8%, not made 15.0%
+K 60 sd 1.48 effect 1: ranks 37 and 40 (tails 4.62% and 0.67%); one comparison not resolved 1.5%; held 4.6%, shown 91.7%, not made 3.7%
+K 60 sd 1.48 effect 1.5: ranks 37 and 40 (tails 4.62% and 0.67%); one comparison not resolved 1.5%; held 0.0%, shown 100.0%, not made 0.0%
+K 60 sd 1.48 effect 2: ranks 37 and 40 (tails 4.62% and 0.67%); one comparison not resolved 1.5%; held 0.0%, shown 100.0%, not made 0.0%
+K 60 sd 1.97 effect 0.5: ranks 37 and 40 (tails 4.62% and 0.67%); one comparison not resolved 15.2%; held 32.2%, shown 18.6%, not made 49.1%
+K 60 sd 1.97 effect 1: ranks 37 and 40 (tails 4.62% and 0.67%); one comparison not resolved 15.2%; held 3.4%, shown 73.2%, not made 23.4%
+K 60 sd 1.97 effect 1.5: ranks 37 and 40 (tails 4.62% and 0.67%); one comparison not resolved 15.2%; held 0.0%, shown 98.3%, not made 1.6%
+K 60 sd 1.97 effect 2: ranks 37 and 40 (tails 4.62% and 0.67%); one comparison not resolved 15.2%; held 0.0%, shown 100.0%, not made 0.0%
+K 100 sd 1.97 effect 1: ranks 59 and 63 (tails 4.43% and 0.60%); one comparison not resolved 2.0%; held 4.3%, shown 90.9%, not made 4.8%
+K 100 sd 1.97 effect 2: ranks 59 and 63 (tails 4.43% and 0.60%); one comparison not resolved 2.0%; held 0.0%, shown 100.0%, not made 0.0%
