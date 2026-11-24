@@ -425,3 +425,29 @@ test("PR and multi-commit push diffs see inputs beyond the hosted path-filter li
     assert.equal(selectKernel(paths), true);
   }
 });
+
+// The benchmark gates run on the framework CI's Node line and the release workflow's artifact
+// pin, so moving either is one edit and a literal Node or tag cannot drift back in.
+test("Catalog and Benchmark Evidence take Node from .node-version and upload-artifact from release.yml's pin", () => {
+  const stepsOf = (name) => Object.values(parse(readFileSync(new URL(`.github/workflows/${name}`, root), "utf8")).jobs)
+    .flatMap((job) => job.steps ?? []);
+  const pins = new Set(stepsOf("release.yml").map((step) => step.uses).filter((uses) => uses?.startsWith("actions/upload-artifact@")));
+  assert.equal(pins.size, 1);
+  const [pin] = pins;
+  assert.match(pin, /^actions\/upload-artifact@[0-9a-f]{40}$/);
+  let uploads = 0;
+  for (const name of ["catalog.yml", "benchmark-evidence.yml"]) {
+    const steps = stepsOf(name);
+    const node = steps.filter((step) => step.uses?.startsWith("actions/setup-node@"));
+    assert.ok(node.length > 0, name);
+    for (const step of node) {
+      assert.equal(step.with["node-version-file"], ".node-version", name);
+      assert.equal(step.with["node-version"], undefined, name);
+    }
+    for (const step of steps.filter((step) => step.uses?.startsWith("actions/upload-artifact@"))) {
+      assert.equal(step.uses, pin, name);
+      uploads++;
+    }
+  }
+  assert.ok(uploads > 0);
+});

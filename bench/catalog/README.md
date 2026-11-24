@@ -283,7 +283,8 @@ ready-to-run replacement for catalog or the historical marketplace suite.
 
 ## Running it
 
-From the repository root, with Node 24, Docker and Playwright Chromium installed:
+From the repository root, with the Node version in [`.node-version`](../../.node-version) (the
+one the hosted Catalog checks use), Docker and Playwright Chromium installed:
 
 ```sh
 npm ci

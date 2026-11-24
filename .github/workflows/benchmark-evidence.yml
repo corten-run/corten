@@ -35,7 +35,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
       - id: scope
         env:
           PUSH_BEFORE: ${{ github.event.before }}
@@ -59,7 +59,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 26
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -103,7 +103,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
-          node-version: 26
+          node-version-file: .node-version
       - name: Exercise dedicated SSH ingress bootstrap with simulated APT contention
         run: node --test --test-name-pattern='SSH ingress' bench/workloads/cloud-bootstrap-execution.test.mjs
       - name: Exercise dedicated SSH ingress in private Linux namespaces

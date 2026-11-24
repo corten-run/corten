@@ -34,7 +34,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
       - id: scope
         env:
           PUSH_BEFORE: ${{ github.event.before }}
@@ -49,7 +49,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
       - run: npm ci --no-audit --no-fund
       # Native replay's binding parser loads the classic TypeScript compiler (bench/package.json).
       - run: npm --prefix bench ci --no-audit --no-fund
@@ -77,7 +77,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
       - run: npm ci --no-audit --no-fund
       - run: node bench/catalog/fixtures.mjs
       - run: node bench/marketplace/fixtures.mjs
@@ -227,7 +227,7 @@ jobs:
         run: |
           node bench/fullstack/apps/gin/check-production.mjs cb-catalog-gin bench/fullstack/apps/gin/production-results
           node bench/fullstack/apps/gin/check-alerts.mjs gin cb-catalog-gin matched
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: catalog-contract-${{ matrix.app }}
@@ -251,7 +251,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
       - run: npm ci --no-audit --no-fund
       # Native replay's binding parser loads the classic TypeScript compiler (bench/package.json).
       - run: npm --prefix bench ci --no-audit --no-fund
@@ -266,7 +266,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
       - run: npm ci --no-audit --no-fund
       - name: Test reflection-disabled native record sources
         run: >-
@@ -278,7 +278,7 @@ jobs:
         run: docker build -t catalog-json-aot bench/fullstack/apps/aspnet-aot
       - name: Verify both complete payloads and sources on the native executable
         run: node bench/fullstack/apps/aspnet-aot/tests/check-native.mjs catalog-json-aot
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: catalog-json-aot-evidence
