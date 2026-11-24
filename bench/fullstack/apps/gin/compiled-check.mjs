@@ -82,6 +82,22 @@ export function checkLabels(labels) {
   return labels;
 }
 
+// Whether a `docker run` argument sets a label: `--label` or `--label-file` with or without
+// `=VALUE`, or a single-dash cluster reaching `l` before any value-taking shorthand (`-l`,
+// `-l=K=V`, `-lK=V`, `-dl`). An unknown shorthand letter is treated as one that takes no value,
+// so a cluster is refused rather than missed; a letter that takes a value (`-e`, `-v`, ...) ends
+// it, as in Docker's flag parser.
+const valueShorthands = 'acehmpuvw';
+function labelOption(arg) {
+  if (/^--label(-file)?(=|$)/.test(arg)) return true;
+  if (!/^-[^-]/.test(arg)) return false;
+  for (const letter of arg.slice(1)) {
+    if (letter === 'l') return true;
+    if (valueShorthands.includes(letter) || letter === '=') return false;
+  }
+  return false;
+}
+
 export function ownedContainers({ docker, runId, labels = [], window = reconcileWindow, wait = sleep, now = () => performance.now() }) {
   checkLabels(labels);
   assert.match(runId, /^[\w.-]{1,64}$/, 'runId is a short label value');
@@ -123,12 +139,15 @@ export function ownedContainers({ docker, runId, labels = [], window = reconcile
   };
   return {
     record,
-    // `docker run -d` with the ownership labels; `args` are its options and image. Returns the ID.
-    run(args, name) {
-      assert.ok(!args.some(arg => arg === '--label' || arg === '-l' || /^--label=/.test(arg)), 'labels go through the labels option');
+    // `docker run -d` with the ownership labels, then `options`, then `image` as the last
+    // argument. No option may set a label in any spelling. Returns the ID.
+    run(options, image, name) {
+      assert.ok(Array.isArray(options) && options.every(option => typeof option === 'string'), 'options are separate strings');
+      assert.ok(!options.some(labelOption), 'labels go through the labels option');
+      assert.ok(typeof image === 'string' && /^[\w][\w.:/@-]*$/.test(image), 'the image is an image reference');
       const label = `${attemptKey}=${runId}-${++attempts}`;
       let id;
-      try { id = docker(['run', '-d', '--name', name, ...labels.flatMap(value => ['--label', value]), '--label', owner, '--label', label, ...args]); } catch (error) {
+      try { id = docker(['run', '-d', '--name', name, ...labels.flatMap(value => ['--label', value]), '--label', owner, '--label', label, ...options, image]); } catch (error) {
         if (error?.sent !== false) record.unacknowledged.push({ name, label });
         throw error;
       }
@@ -247,7 +266,8 @@ function stepName(step) {
 // An error's allowlisted class and code; never its message, which can carry Docker's stderr.
 export function classify(error) {
   let errorClass = 'unknown', code = 'none';
-  try { if (errorNames.includes(error?.name)) errorClass = error.name; } catch { /* Keep 'unknown'. */ }
+  // Read once: a getter could return an allowlisted name to the check and other text after it.
+  try { const name = error?.name; if (errorNames.includes(name)) errorClass = name; } catch { /* Keep 'unknown'. */ }
   try {
     const value = error?.code;
     if (value !== undefined && value !== null) code = cleanupCodes.includes(value) ? value : 'other';

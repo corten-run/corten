@@ -682,27 +682,45 @@ const within = (promise, milliseconds, message) => {
     .finally(() => clearTimeout(timer));
 };
 
+// Adds to `pids` each of `roles` whose PID file now holds a valid PID.
+async function readPublished(base, roles, pids) {
+  for (const role of roles) {
+    if (role in pids) continue;
+    try {
+      const pid = Number(await readFile(`${base}.${role}.pid`, 'utf8'));
+      if (Number.isInteger(pid) && pid > 0) pids[role] = pid;
+    } catch { /* Not yet. */ }
+  }
+  return pids;
+}
+
 // The PIDs the attempt's fixture processes published, once all of `roles` have (the handshake).
-async function published(base, roles, milliseconds) {
+// Each PID is recorded in `pids` as it appears, so a handshake that misses its deadline still
+// leaves the processes that did publish for the teardown to wait on.
+async function published(base, roles, milliseconds, pids = {}) {
   const deadline = Date.now() + milliseconds;
   for (;;) {
-    const pids = {};
-    for (const role of roles) {
-      try { pids[role] = Number(await readFile(`${base}.${role}.pid`, 'utf8')); } catch { /* Not yet. */ }
-    }
-    if (roles.every(role => Number.isInteger(pids[role]) && pids[role] > 0)) return pids;
-    if (Date.now() > deadline) throw new Error(`fixture processes did not publish their PIDs: ${roles.filter(role => !pids[role]).join(', ')}`);
+    await readPublished(base, roles, pids);
+    if (roles.every(role => role in pids)) return pids;
+    if (Date.now() > deadline) throw new Error(`fixture processes did not publish their PIDs: ${roles.filter(role => !(role in pids)).join(', ')}`);
     await pause(25);
   }
 }
 
-// The fixture's own teardown: the stop file every fixture process watches, then each published
-// process's exit, awaited under its own bound. Returns the PIDs still running at the bound.
-async function stopFixture(base, pids, milliseconds = 3000) {
+// The fixture's own teardown: the stop file every fixture process watches, then each process's
+// exit, awaited under its own bound. The PID files are reread throughout, so a process that
+// publishes after a missed handshake is waited on too; the bound ends the wait for one that never
+// publishes. Returns every PID seen, those still running at the bound, and roles never published.
+async function stopFixture(base, roles, milliseconds = 3000, pids = {}) {
   await writeFile(`${base}.stop`, '');
   const deadline = Date.now() + milliseconds;
-  while (pids.some(alive) && Date.now() < deadline) await pause(50);
-  return pids.filter(alive);
+  for (;;) {
+    await readPublished(base, roles, pids);
+    const waiting = roles.some(role => !(role in pids)) || Object.values(pids).some(alive);
+    if (!waiting || Date.now() >= deadline) break;
+    await pause(50);
+  }
+  return { checked: pids, survivors: Object.values(pids).filter(alive), unpublished: roles.filter(role => !(role in pids)) };
 }
 
 test('the Docker events reader kills a subprocess that ignores SIGTERM and settles, and its process exits', { timeout: 60_000 }, async () => {
@@ -729,9 +747,10 @@ try { await readDockerEvents({ since: 0, until: 1, command: process.execPath, pr
       runner.stdout.on('data', chunk => { out += chunk; });
       // 'close' rather than 'exit', so the reader's final output has been read before it is parsed.
       const closed = new Promise(resolve => runner.once('close', (code, signal) => resolve({ code, signal })));
-      let pids = {}, failure;
+      const pids = {};
+      let failure;
       try {
-        pids = await published(base, roles, limit);
+        await published(base, roles, limit, pids);
         if (forced) runner.kill('SIGKILL');
         const { code, signal } = await within(closed, limit + 4000, `${name}: the reader's process did not exit`);
         const exited = Date.now() - started;
@@ -754,16 +773,61 @@ try { await readDockerEvents({ since: 0, until: 1, command: process.execPath, pr
         if (runner.exitCode === null && runner.signalCode === null) runner.kill('SIGKILL');
         try { await within(closed, 5000, `${name}: the reader's process did not exit after SIGKILL`); } catch (error) { failure ??= error; }
       }
-      // Whatever happened above, every fixture process this attempt published exits through the
-      // fixture's own teardown within its bound.
-      const survivors = await stopFixture(base, Object.values(pids));
+      // Whatever happened above, including a handshake that published only some PIDs, every
+      // fixture process this attempt started exits through the fixture's own teardown within its
+      // bound, and the stop file stays until then.
+      const { survivors, unpublished } = await stopFixture(base, roles, 3000, pids);
       if (failure) throw failure;
       assert.deepEqual(survivors, [], `${name}: fixture processes still running after teardown`);
+      assert.deepEqual(unpublished, [], `${name}: fixture processes never published their PIDs`);
     }
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
 });
+
+// A fixture process that starts late: after `delay` ms it publishes its PID as `role` as its first
+// act, as the stand-ins above do, then exits once the stop file appears (or after 20 s overall).
+const lateScript = `import { existsSync, renameSync, writeFileSync } from 'node:fs';
+const [base, role, delay] = process.argv.slice(2);
+setTimeout(() => process.exit(0), 20_000);
+setTimeout(() => {
+  writeFileSync(base + '.' + role + '.pid.tmp', String(process.pid));
+  renameSync(base + '.' + role + '.pid.tmp', base + '.' + role + '.pid');
+  setInterval(() => { if (existsSync(base + '.stop')) process.exit(0); }, 25);
+}, Number(delay));
+`;
+
+test('a partial handshake keeps what was published, and teardown waits for every fixture process', { timeout: 30_000 }, async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'fake-docker-'));
+  const children = [], base = join(folder, 'partial');
+  try {
+    const script = join(folder, 'late.mjs');
+    await writeFile(script, lateScript);
+    // The docker stand-in publishes at once; the holder publishes only after the handshake's deadline.
+    for (const [role, delay] of [['docker', 0], ['holder', 900]]) {
+      const child = spawn(process.execPath, [script, base, role, String(delay)], { stdio: 'ignore' });
+      children.push(new Promise(resolve => child.once('exit', resolve)));
+    }
+    const pids = {};
+    await assert.rejects(published(base, ['docker', 'holder'], 300, pids), /did not publish their PIDs: holder$/);
+    assert.ok(pids.docker > 0, 'the PID published before the deadline is kept');
+    assert.equal(pids.holder, undefined);
+    const { checked, survivors, unpublished } = await stopFixture(base, ['docker', 'holder']);
+    assert.deepEqual(Object.keys(checked).sort(), ['docker', 'holder'], 'teardown rereads the PID files');
+    assert.equal(checked.docker, pids.docker);
+    assert.deepEqual(unpublished, []);
+    assert.deepEqual(survivors, []);
+    assert.equal(alive(checked.docker), false);
+    assert.equal(alive(checked.holder), false);
+  } finally {
+    // Whatever failed above, the stop file ends every fixture process before the folder goes.
+    await writeFile(`${base}.stop`, '');
+    await within(Promise.all(children), 5000, 'fixture processes did not exit');
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
 // A child whose stdout pipe fails; the child itself never closes or emits an error on its own.
 function brokenPipeChild(signals) {
   const child = new EventEmitter();

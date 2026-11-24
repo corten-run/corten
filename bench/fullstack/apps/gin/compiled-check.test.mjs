@@ -245,17 +245,54 @@ test('caller labels in the owner namespace are refused before any Docker command
   }
   const daemon = fakeDaemon();
   const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1', labels: ['agent.owner=codex', `${ownerKey}-other=x`] });
-  assert.throws(() => owned.run(['--label', `${ownerKey}=other`, 'image'], 'n'), /labels go through the labels option/);
+  assert.throws(() => owned.run(['--label', `${ownerKey}=other`], 'image', 'n'), /labels go through the labels option/);
   assert.deepEqual(daemon.calls, []);
-  const id = owned.run(['image'], 'compiled-alerts-test');
+  const id = owned.run([], 'image', 'compiled-alerts-test');
   assert.deepEqual(daemon.containers.get(id).labels, { 'agent.owner': 'codex', [`${ownerKey}-other`]: 'x', [ownerKey]: 'run-1', [attemptKey]: 'run-1-1' });
+});
+
+test('every spelling of a label option, and an image that is not one, is refused before any Docker command', () => {
+  const daemon = fakeDaemon();
+  const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1' });
+  for (const option of ['--label', `--label=${ownerKey}=other`, '--label=', '-l', `-l=${ownerKey}=other`, `-l${ownerKey}=other`,
+    '--label-file', '--label-file=labels.txt', '-dl', `-dl${ownerKey}=other`, `-tdl=${ownerKey}=other`]) {
+    assert.throws(() => owned.run([option, `${ownerKey}=other`], 'image', 'n'), /labels go through the labels option/, option);
+  }
+  for (const image of ['', '-limage', '--label=x', 'two words', undefined]) {
+    assert.throws(() => owned.run([], image, 'n'), /an image reference/, String(image));
+  }
+  assert.throws(() => owned.run('--cpus 1', 'image', 'n'), /options are separate strings/);
+  assert.deepEqual(daemon.calls, [], 'no Docker command');
+  // Ordinary options, including value-taking shorthands whose inline value contains an l, are kept
+  // in order, and the image is the last argument.
+  const options = ['--cpus', '1', '-m512m', '-eLEVEL=low', '-e', 'label=plain', '-p', '127.0.0.1::8080', '-v', '/tmp/l:/fixtures:ro', '--rm=false'];
+  const id = owned.run(options, 'registry.local/app:1@sha256:' + 'a'.repeat(64), 'compiled-alerts-test');
+  const [args] = daemon.calls;
+  assert.deepEqual(args.slice(-options.length - 1), [...options, 'registry.local/app:1@sha256:' + 'a'.repeat(64)]);
+  assert.deepEqual(daemon.containers.get(id).labels, { [ownerKey]: 'run-1', [attemptKey]: 'run-1-1' });
+});
+
+test('an error class is read once, so a getter that changes cannot pass the allowlist and print other text', async t => {
+  const id = 'b'.repeat(64);
+  const changing = () => {
+    let reads = 0;
+    return { get name() { return ++reads === 1 ? 'Error' : `Evil\n${id} host-canary`; }, code: 'EBUSY' };
+  };
+  await assert.rejects(cleanUp({ failed: false }, [['fixtures.rm', () => { throw changing(); }]]),
+    error => error instanceof CleanupError && error.message === 'cleanup failed: step=fixtures.rm class=Error code=EBUSY');
+  const lines = [];
+  t.mock.method(console, 'error', line => lines.push(line));
+  await cleanUp({ failed: true }, [['fixtures.rm', () => { throw changing(); }]]);
+  reportCleanupFailure(changing(), 'browser.close');
+  assert.deepEqual(lines, ['cleanup also failed after the check failed: step=fixtures.rm class=Error code=EBUSY',
+    'cleanup also failed after the check failed: step=browser.close class=Error code=EBUSY']);
 });
 
 test('a name collision never inspects or removes the container that holds the name', async () => {
   const daemon = fakeDaemon(), clock = fakeClock();
   const foreign = daemon.add('compiled-alerts-gin-fixture', { 'agent.owner': 'someone-else' }, 'f'.repeat(64));
   const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1', window: 1000, ...clock });
-  assert.throws(() => owned.run(['image'], 'compiled-alerts-gin-fixture'), error => error.code === 'ERR_DOCKER_EXIT' && error.status === 125);
+  assert.throws(() => owned.run([], 'image', 'compiled-alerts-gin-fixture'), error => error.code === 'ERR_DOCKER_EXIT' && error.status === 125);
   const record = await owned.teardown();
   assert.equal(record.complete, false, 'an unacknowledged create is reported, not assumed absent');
   assert.equal(record.unacknowledged[0].outcome, 'unconfirmed');
@@ -268,7 +305,7 @@ test('a name collision never inspects or removes the container that holds the na
 test('a name reused after removal is never removed by name, and an ID that lost its owner label is refused', async () => {
   const daemon = fakeDaemon();
   const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1' });
-  const id = owned.run(['image'], 'compiled-alerts-gin-fixture');
+  const id = owned.run([], 'image', 'compiled-alerts-gin-fixture');
   // Someone else removes it and starts a container under the same name.
   daemon.containers.delete(id);
   const foreign = daemon.add('compiled-alerts-gin-fixture', {}, 'e'.repeat(64));
@@ -282,7 +319,7 @@ test('a name reused after removal is never removed by name, and an ID that lost 
   // An ID whose owner label is not this run's is never removed, and teardown says so.
   const other = fakeDaemon();
   const second = ownedContainers({ docker: other.docker, runId: 'run-2' });
-  const relabelled = second.run(['image'], 'n');
+  const relabelled = second.run([], 'image', 'n');
   other.containers.get(relabelled).labels[ownerKey] = 'someone-else';
   assert.throws(() => second.inspect(relabelled), /refusing unowned container/);
   assert.throws(() => second.remove(relabelled), /refusing unowned container/);
@@ -295,7 +332,7 @@ test('a name reused after removal is never removed by name, and an ID that lost 
 test('a run that failed after the daemon made its container is found by its attempt label and removed by ID', async () => {
   const daemon = fakeDaemon({ runFails: 'after-create' }), clock = fakeClock();
   const owned = ownedContainers({ docker: daemon.docker, runId: 'run-1', window: 1000, ...clock });
-  assert.throws(() => owned.run(['image'], 'n'), error => error.code === 'ERR_DOCKER_EXIT');
+  assert.throws(() => owned.run([], 'image', 'n'), error => error.code === 'ERR_DOCKER_EXIT');
   const record = await owned.teardown();
   assert.equal(record.complete, true);
   assert.equal(record.unacknowledged[0].outcome, 'removed');

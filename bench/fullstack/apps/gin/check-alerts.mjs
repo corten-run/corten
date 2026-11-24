@@ -72,7 +72,7 @@ export async function checkAlerts({ app, image, profile = 'defaults', focus = 'a
         '-p', '127.0.0.1::8080', '-v', `${folder}:/fixtures:ro`,
         '-e', 'ITEM_SOURCE=fixture', '-e', 'FIXTURE_PATH=/fixtures/items.json', '-e', 'CATALOG_SOURCE=fixture',
         '-e', `MARKETPLACE_SOURCE=${source}`, '-e', 'MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json',
-        '-e', `API_BASE=http://host.docker.internal:${upstream.address().port}`, image], `${runId}-${app}-${source}`);
+        '-e', `API_BASE=http://host.docker.internal:${upstream.address().port}`], image, `${runId}-${app}-${source}`);
       const base = containerBase(byId, id);
       const pageURL = `${base}/marketplace/en-US/item_1`;
       await assert.doesNotReject(async () => {
