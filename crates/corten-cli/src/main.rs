@@ -43,9 +43,11 @@ Usage:
                    the app at work: build an instrumented copy under target/corten-profile,
                    start it on a free port, run <command> with that port in PORT to send it
                    requests like the ones the app will serve, stop the copy, and build
-                   target/release with the profile it wrote. Needs the toolchain's
-                   llvm-profdata (rustup component add llvm-tools) and a Unix system. A
-                   failed step leaves target/release as it was.
+                   target/release with the profile it wrote. With PORT set, that port is
+                   used in place of a free one: the port of an app that binds its own and
+                   does not read PORT (PORT=8080 corten build --profile-from ..). Needs
+                   the toolchain's llvm-profdata (rustup component add llvm-tools) and a
+                   Unix system. A failed step leaves target/release as it was.
   corten fmt [--check] [path ..]
                    cargo fmt, then lay out the markup inside html! (rustfmt leaves macro
                    bodies alone), so it fixes what corten check reports. With paths, only

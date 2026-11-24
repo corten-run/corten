@@ -7351,13 +7351,22 @@ rules something out.
     but send: `corten build` starts the copy on a free port it gives the command in `PORT`,
     waits for it to listen, and stops it with `SIGTERM` when the command ends, so that the copy
     writes its profile. The copy is started without `HOST`, so it listens on this machine
-    only, where the build and the command look for it. Starting, waiting and stopping are where a script goes wrong without a
+    only, where the build and the command look for it. The port is the one the environment's
+    `PORT` names when it names one, and a free one otherwise. So an app that binds a port of
+    its own and never reads `PORT`, which `serve_on` and `serve_wrapped` let it be, is profiled
+    by naming that port in the variable an app and `corten dev` already read a port from, with
+    no argument of the option's own. A given port that something already listens on is refused,
+    before the first build and again before the copy starts, since that listener would answer
+    the wait and the command in the copy's place; a port the build picks is one nothing
+    listened on when it was picked. The build waits on that one port, and an app's other
+    listeners are its command's to wait for. Starting, waiting and stopping are where a script goes wrong without a
     word (a copy killed, not waited for, or left running writes no profile or a stale one), so
     they are in the command once and not in each app's script. The instrumented copy has a
     target directory of its own, so `target/release` never holds a binary that writes a
     profile, and a step that fails leaves the last release standing. What can be told is wrong
     without building is refused before the first build: a toolchain without `llvm-profdata`, a
-    system that cannot ask the copy to stop, a command that is not there, another profiled
+    system that cannot ask the copy to stop, a command that is not there, a `PORT` that is no
+    port number or that something listens on, another profiled
     build in the same target directory, and a Cargo configuration that may set flags the profile's flag, which has to
     go in the environment, would replace. A command that fails,
     a copy that exits early or does not listen, a profile not written, and a package that
@@ -7384,7 +7393,15 @@ rules something out.
     configuration as Cargo does to keep its flags, which takes a TOML parser the command does
     not have; an `llvm-profdata` found on the `PATH`, which may read another LLVM's format;
     and every argument after a `--` passed to Cargo, which lets one that moves the binary or
-    its messages through to steps that read both.
+    its messages through to steps that read both. For an app with a port of its own, not
+    chosen: a `--port` argument, as `corten dev` has, which is a second way to say what `PORT`
+    says and the first argument of `corten build` that is neither Cargo's nor the command's;
+    an argument that skips the wait and leaves it to the command, which gives up the one check
+    that it is the copy that answers and puts a wait in every such app's script; finding the
+    sockets the copy listens on under `/proc`, which Linux alone has, and which says nothing of
+    which of several the command is for; sockets the build binds and hands the copy
+    (`LISTEN_FDS`), which the app would have to be written to take; and the guide saying an app
+    must listen on `PORT`, which refuses an app the library lets be written.
 
     Stands on: measured (the catalog app built by the option took 30,730 fewer cycles a request
     than its ordinary build on the catalog page at the median of 10 alternated rounds, 21% of
@@ -7396,20 +7413,25 @@ rules something out.
     component's `llvm-profdata`; Cargo reads rustflags from the environment or from its
     configuration and never both, and builds a crate again, one from the registry included,
     when the file `-Cprofile-use` names is replaced; a process that returns from `main` or
-    calls `exit` writes its profile and one that a signal ends does not); reasoned (a
+    calls `exit` writes its profile and one that a signal ends does not; a connection to a
+    port is accepted as soon as a socket listens there, whichever process holds it); reasoned (a
     separate target directory is the only place an instrumented build cannot be mistaken for
     the release; a refusal before the first build costs nothing, where a dropped linker flag
-    or a missing tool found after it costs a build); bet (an app has, or will write, a command
+    or a missing tool found after it costs a build; a connection cannot tell the copy from
+    another listener on the port, so a given port is one nothing listens on before the copy
+    starts); bet (an app has, or will write, a command
     that reaches the routes its readers do, which the build cannot check: a command that sent
     the copy nothing leaves a profile of the app starting and stopping; and the app listens on
-    `PORT` as `corten dev` already asks of it); value (fast and proven fast, with mistakes
+    `PORT`, as `corten dev` already asks of it, or on a TCP port its author can name there); value (fast and proven fast, with mistakes
     failing early and one way to build a release, and the option kept off every app that does
     not ask for it, README Values).
 
     Revisit when: Cargo can add a flag to the ones its configuration sets, or builds with a
     profile itself, so the refusal or the steps go; the standard library can ask a child
     process to stop, or an app on Windows needs the option; an app's release needs a Cargo
-    argument not on the list (a cross build, a custom profile); or an app measures a profile from its own command
+    argument not on the list (a cross build, a custom profile); an app needs the option whose
+    only listener is not a TCP port (a Unix socket), or whose command cannot tell when its other
+    listeners are ready; or an app measures a profile from its own command
     gaining nothing over the ordinary build.
 
     Last checked: 2026-11-19, the rounds above at `b032155e2` (the earlier ones on the sources
@@ -7426,7 +7448,12 @@ rules something out.
     a profiled build of a two-binary package given `--no-default-features --features=given -p
     --locked --bin` and an empty `-F` on Cargo 1.100.0, selecting a workspace member that is not
     the default one: each build was given exactly them, as written and in order (a `cargo` on
-    the `PATH` recorded each argument), and the test fails when the release build is not.
+    the `PATH` recorded each argument), and the test fails when the release build is not;
+    2026-11-24, the port, by the command's tests on rustc and Cargo 1.100.0 on Linux: a program
+    that binds a port of its own and never reads `PORT` was profiled with `PORT` naming that
+    port, a `PORT` that is no port number and one a listener held were refused with nothing
+    built, and one a listener took while the copy was being built was refused before the copy
+    or the command ran.
 
 69. <a id="choice-profile-image"></a>**The starter's image is built with a profile when its build is given the
     app's script, by the same command.** `docker build --build-arg PROFILE_FROM=train.sh` has

@@ -384,7 +384,30 @@ and the app's own relative paths are from there:
 `corten build -p shop --profile-from sh shop/train.sh`. The copy gets the environment
 `corten build` was given, less
 `HOST` so that it listens on this machine only, on a port nothing else has, and runs the command
-once the copy accepts a connection. When the command ends it stops the copy with `SIGTERM` and waits for it: the copy
+once the copy accepts a connection there.
+
+That port is one the build picks, unless `PORT` is set where `corten build` runs: then it is
+that port. The copy is started with it, the build waits for a connection to be accepted on it,
+and the command gets the same `PORT`. So an app that binds a port of its own and never reads
+`PORT` (`corten::serve_on` or `serve_wrapped` with listeners it bound itself,
+[Your own listeners](app.md#your-own-listeners)) is profiled by naming the port it binds:
+
+```sh
+PORT=8443 corten build --profile-from sh train.sh
+```
+
+The wait is a TCP connection and nothing more, so the port may be one that serves HTTPS. It is
+for that one port: an app with several listeners names one of them, and its script, which knows
+the others, waits for each before it sends to it (`curl --retry 10 --retry-connrefused` on the
+first request). A `PORT` that is not a port number is refused before anything is built, and so is one
+something already listens on (a `corten dev` in another terminal), which would answer the wait
+and the command in the copy's place; the build looks again before it starts the copy, minutes
+later. Without `PORT`, an app that binds its own port never listens on the one the build
+picked, and the build stops after a minute saying so, with the line above. An app whose only
+listener is not a TCP port (a Unix socket) has no port to name, and is profiled with the steps
+by hand (below).
+
+When the command ends the build stops the copy with `SIGTERM` and waits for it: the copy
 writes its profile as it exits, which a Corten app does on `SIGTERM` (Shutdown, in
 [The app](app.md#the-app)), and a copy that is killed writes none. A command that fails stops
 the build, and so does a copy that exits early, does not listen within a minute, is still
@@ -647,7 +670,9 @@ is the ordinary one: Docker 29.9.3 built it without a word about the argument.
 
 The two builds are two lines of one `RUN`. A Cargo argument the app's release needs
 (`--features`, `--bin`) goes on both, before `--profile-from` on the second: on one alone,
-the image with a profile is built with other features than the image without.
+the image with a profile is built with other features than the image without. An app that
+binds a port of its own names it on the second, as `PORT=8443` before `corten build`
+([A profile-guided build](#a-profile-guided-build)); not tried in an image build.
 
 What the argument asks of the app and its build, which the ordinary build does not:
 

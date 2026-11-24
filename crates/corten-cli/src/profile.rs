@@ -7,9 +7,14 @@
 //! `target/corten-profile`, so `target/release` never holds a binary that writes a profile, and
 //! a step that fails leaves the last release as it was. What can be told is wrong without
 //! building (no `llvm-profdata`, flags the profile's would replace, a system that cannot ask the
-//! app to stop, a command that is not there, another profiled build in the same target
-//! directory) is refused before the first step. What only the build tells (a package with two
-//! binaries) is refused after the instrumented build.
+//! app to stop, a command that is not there, a `PORT` that is no port or that something already
+//! listens on, another profiled build in the same target directory) is refused before the first
+//! step. What only the build tells (a package with two binaries) is refused after the
+//! instrumented build.
+//!
+//! The copy is looked for on one port, which the command is given in `PORT`: the one the
+//! environment's `PORT` names, or a free one. An app that binds a port of its own, and never
+//! reads `PORT`, is profiled by naming that port there.
 
 use std::{
     ffi::{OsStr, OsString},
@@ -45,6 +50,10 @@ pub fn run(command: &[String], cargo: &[String]) -> Result<(), String> {
         return Err("run corten build in the app's directory (where Cargo.toml is)".into());
     }
     there(&command[0], std::env::var_os("PATH"))?;
+    let given = given_port(std::env::var_os("PORT"))?;
+    if let Some(port) = given {
+        nothing_listens_on(port)?;
+    }
     let profdata = profdata(&root)?;
     let flags = base_flags(std::env::var_os("CARGO_ENCODED_RUSTFLAGS"), std::env::var_os("RUSTFLAGS"), || {
         Ok(set_elsewhere(&root, std::env::vars_os().map(|(name, _)| name), cargo_home()?))
@@ -77,10 +86,15 @@ pub fn run(command: &[String], cargo: &[String]) -> Result<(), String> {
     emptied(&runs)?;
 
     let shown = command.join(" ");
-    let port = free_port()?;
+    let port = match given {
+        // Looked at again: the build above took minutes, and what began to listen there since
+        // would be taken for the copy.
+        Some(port) => nothing_listens_on(port).map(|()| port).map_err(unchanged)?,
+        None => free_port()?,
+    };
     step(&format!("the instrumented app on port {port}, while {shown} runs"));
     let mut running = Running::start(&app, port, &root, &taken)?;
-    running.listens(port).map_err(unchanged)?;
+    running.listens(port, given.is_some(), STARTS_WITHIN).map_err(unchanged)?;
     let status = Command::new(&command[0])
         .args(&command[1..])
         .env("PORT", port.to_string())
@@ -203,8 +217,43 @@ fn emptied(dir: &Path) -> Result<(), String> {
     }
 }
 
-/// A port nothing listens on, for the instrumented app: the app's usual one may be taken by a
-/// `corten dev` in another terminal, which would then answer the command in the app's place.
+/// The port the environment's `PORT` names, if it names one: where the copy is looked for and
+/// the command is sent. An app that listens on a port of its own choosing (`corten::serve_on`
+/// with listeners it bound) never reads `PORT`, so the build is told that port the way the app
+/// would be. Without `PORT` the build picks a port ([`free_port`]). A value that is no port is
+/// refused, as an app that reads it refuses it (`corten::listeners`), and so is 0, which names
+/// no port to look on.
+fn given_port(port: Option<OsString>) -> Result<Option<u16>, String> {
+    let Some(port) = port else { return Ok(None) };
+    match port.to_str().and_then(|port| port.parse::<u16>().ok()) {
+        Some(port) if port != 0 => Ok(Some(port)),
+        _ => Err(format!(
+            "--profile-from starts the instrumented app with the PORT it is given and waits for it to listen there, and PORT is {port:?}, not a port number. Unset it and the build picks a free port"
+        )),
+    }
+}
+
+/// Refuses a given port that something already listens on (the app's usual one may be taken by
+/// a `corten dev` in another terminal): it would accept the connection that waits for the copy,
+/// and answer the command in the copy's place.
+fn nothing_listens_on(port: u16) -> Result<(), String> {
+    if accepts(port) {
+        Err(format!(
+            "something already listens on port {port}, the PORT this build was given, and would answer the command in the instrumented app's place. Stop it, or unset PORT and the build picks a free port"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Whether a connection to `port` is accepted on either loopback address.
+fn accepts(port: u16) -> bool {
+    [SocketAddr::from((Ipv4Addr::LOCALHOST, port)), SocketAddr::from((Ipv6Addr::LOCALHOST, port))]
+        .iter()
+        .any(|address| TcpStream::connect_timeout(address, Duration::from_millis(200)).is_ok())
+}
+
+/// A port nothing listens on, for the instrumented app, when the environment names none.
 /// A Corten app listens on both loopback addresses, so the port is free on both.
 fn free_port() -> Result<u16, String> {
     for _ in 0..16 {
@@ -242,21 +291,30 @@ impl Running {
             .map_err(|e| format!("could not start {}: {e}", app.display()))
     }
 
-    /// Waits until the app accepts a connection on `port`.
-    fn listens(&mut self, port: u16) -> Result<(), String> {
-        let addresses = [SocketAddr::from((Ipv4Addr::LOCALHOST, port)), SocketAddr::from((Ipv6Addr::LOCALHOST, port))];
+    /// Waits until the app accepts a connection on `port`, for `within` at most. A port the
+    /// build picked (not `given`) is one only an app that reads `PORT` listens on, so an app
+    /// that never did is told how to name its own.
+    fn listens(&mut self, port: u16, given: bool, within: Duration) -> Result<(), String> {
         let start = Instant::now();
         loop {
             if let Some(status) = self.0.try_wait().map_err(|e| e.to_string())? {
                 return Err(format!("the instrumented app exited before it listened ({status})"));
             }
-            if addresses.iter().any(|address| TcpStream::connect_timeout(address, Duration::from_millis(200)).is_ok()) {
+            if accepts(port) {
                 return Ok(());
             }
-            if start.elapsed() > STARTS_WITHIN {
+            if start.elapsed() > within {
+                let (whose, own) = if given {
+                    ("the PORT this build was given", "")
+                } else {
+                    (
+                        "the PORT it was started with",
+                        ". An app that listens on a port of its own choosing is profiled with that port in PORT: PORT=8080 corten build --profile-from <command>",
+                    )
+                };
                 return Err(format!(
-                    "the instrumented app did not listen on port {port}, the PORT it was started with, within {} seconds",
-                    STARTS_WITHIN.as_secs()
+                    "the instrumented app did not listen on port {port}, {whose}, within {} seconds{own}",
+                    within.as_secs()
                 ));
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -451,13 +509,59 @@ fn profiles(dir: &Path) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{base_flags, may_set_rustflags, set_elsewhere, the_one_binary, with};
     #[cfg(unix)]
-    use super::{emptied, there};
+    use super::{Running, emptied, there};
+    use super::{base_flags, given_port, may_set_rustflags, nothing_listens_on, set_elsewhere, the_one_binary, with};
     use std::{
         ffi::OsString,
+        net::{Ipv4Addr, TcpListener},
         path::{Path, PathBuf},
     };
+
+    #[test]
+    fn the_environments_port_is_where_the_copy_is_looked_for_and_no_port_is_refused() {
+        assert_eq!(given_port(None), Ok(None));
+        assert_eq!(given_port(Some("8080".into())), Ok(Some(8080)));
+        assert_eq!(given_port(Some("65535".into())), Ok(Some(65535)));
+        // What an app that reads PORT would not start with, and 0, which names no port.
+        for no_port in ["", "0", "http", "65536", " 8080", "-1"] {
+            let refused = given_port(Some(no_port.into())).unwrap_err();
+            assert!(refused.contains(&format!("PORT is {no_port:?}, not a port number")), "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_given_port_something_listens_on_is_refused() {
+        let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = held.local_addr().unwrap().port();
+        // A listener that has accepted nothing takes the connection all the same.
+        let refused = nothing_listens_on(port).unwrap_err();
+        assert!(refused.starts_with(&format!("something already listens on port {port}, the PORT this build was given")));
+        drop(held);
+        assert_eq!(nothing_listens_on(port), Ok(()));
+    }
+
+    /// An app that never listens where it is looked for: on a port the build picked it is told
+    /// how to name its own, and on one the build was given it is not told what it already did.
+    #[test]
+    #[cfg(unix)]
+    fn an_app_that_does_not_listen_on_the_port_is_told_how_to_name_its_own() {
+        let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port();
+        let app = || Running(std::process::Command::new("sleep").arg("30").spawn().unwrap());
+        let within = std::time::Duration::from_secs(1);
+        let picked = app().listens(port, false, within).unwrap_err();
+        assert_eq!(
+            picked,
+            format!(
+                "the instrumented app did not listen on port {port}, the PORT it was started with, within 1 seconds. An app that listens on a port of its own choosing is profiled with that port in PORT: PORT=8080 corten build --profile-from <command>"
+            )
+        );
+        let given = app().listens(port, true, within).unwrap_err();
+        assert_eq!(
+            given,
+            format!("the instrumented app did not listen on port {port}, the PORT this build was given, within 1 seconds")
+        );
+    }
 
     #[test]
     fn the_builds_keep_the_environments_flags_and_add_theirs_last() {
