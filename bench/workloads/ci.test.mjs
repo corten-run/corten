@@ -223,20 +223,22 @@ function mirrorStep() {
   stub("systemctl", `[[ "$*" == "reload docker" ]] || exit 3
 [[ -e $state/reloadfail ]] && exit 1
 exit 0`);
-  stub("docker", `if [[ -e $state/stuck ]]; then trap '' TERM; sleep 30; fi
+  // Each process a stand-in leaves running records its PID in state/pids.
+  stub("docker", `if [[ -e $state/stuck ]]; then trap '' TERM; sleep 30 & echo $! >> "$state/pids"; wait $!; fi
+if [[ -e $state/straggler ]]; then (trap '' TERM; exec sleep 30) & echo $! >> "$state/pids"; fi
 [[ "$*" == *RegistryConfig.Mirrors* ]] && cat "$state/listed"; exit 0`);
   const stalledNode = stub("stalled-node", "trap '' TERM; sleep 30");
   const script = fileURLToPath(new URL("scripts/ci-docker-hub-mirror.sh", root));
   const flag = (name, on) => on ? writeFileSync(join(state, name), "") : rmSync(join(state, name), { force: true });
   /**
    * @param {string} config
-   * @param {{ listed?: string, reloadFail?: boolean, stuck?: boolean, node?: string, deadline?: number, umask?: string,
-   *   hosted?: Record<string, string> }} [options]
+   * @param {{ listed?: string, reloadFail?: boolean, stuck?: boolean, straggler?: boolean, node?: string, deadline?: number,
+   *   umask?: string, hosted?: Record<string, string> }} [options]
    */
   const run = (config, options = {}) => {
     writeFileSync(join(state, "listed"), options.listed ?? "https://mirror.gcr.io/\n");
-    flag("reloadfail", options.reloadFail); flag("stuck", options.stuck);
-    writeFileSync(log, "");
+    flag("reloadfail", options.reloadFail); flag("stuck", options.stuck); flag("straggler", options.straggler);
+    writeFileSync(log, ""); writeFileSync(join(state, "pids"), "");
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, CI_DOCKER_MIRROR_DEADLINE: String(options.deadline ?? 2) };
     delete env.RUNNER_ENVIRONMENT; delete env.CI;
     Object.assign(env, options.hosted ?? { RUNNER_ENVIRONMENT: "github-hosted", CI: "true" });
@@ -245,7 +247,8 @@ exit 0`);
       options.node ?? process.execPath, config], { encoding: "utf8", timeout: 60000, env });
     assert.equal(result.error, undefined);
     return { status: result.status, stderr: result.stderr, stdout: result.stdout, seconds: (performance.now() - started) / 1000,
-      calls: readFileSync(log, "utf8").split("\n").filter(Boolean) };
+      calls: readFileSync(log, "utf8").split("\n").filter(Boolean),
+      pids: readFileSync(join(state, "pids"), "utf8").split("\n").filter(Boolean).map(Number) };
   };
   const cleanup = () => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true }); };
   return { folder, run, cleanup, stalledNode };
@@ -256,6 +259,18 @@ const root0 = process.getuid?.() === 0;
 const info = "docker info --format {{range .RegistryConfig.Mirrors}}{{println .}}{{end}}";
 // The deadline, the 2 s kill grace and process start-up on a busy test host.
 const bound = (deadline) => deadline + 2 + 1.5;
+/** Whether each process has exited (a zombie waiting for its reaper counts), waiting up to a second for a KILL to land. */
+const exited = (pids) => {
+  const gone = (pid) => {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      return stat[stat.lastIndexOf(")") + 2] === "Z";
+    } catch { return true; }
+  };
+  const until = performance.now() + 1000;
+  while (!pids.every(gone) && performance.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  return pids.every(gone);
+};
 
 test("Docker Hub cache step reloads Docker once for a change, never restarts it, and checks Docker lists the mirror", linuxShell, () => {
   const { folder, run, cleanup } = mirrorStep();
@@ -303,6 +318,8 @@ test("Docker Hub cache step gives up at its deadline on a Docker client or helpe
     assert.notEqual(stuck.status, 0);
     assert.match(stuck.stderr, /within 3 s/);
     assert.ok(stuck.seconds >= 2.5 && stuck.seconds < bound(3), `took ${stuck.seconds} s`);
+    assert.equal(stuck.pids.length, 1);
+    assert.ok(exited(stuck.pids), "the client's TERM-ignoring child does not outlive the step");
     const config = join(folder, "stalled.json");
     const stalled = run(config, { node: stalledNode, deadline: 2 });
     assert.notEqual(stalled.status, 0);
@@ -311,6 +328,17 @@ test("Docker Hub cache step gives up at its deadline on a Docker client or helpe
     assert.equal(stalled.calls.length, 1, "nothing reloads or queries Docker after a stalled write");
     assert.ok(stalled.calls[0].startsWith("stalled-node ") && stalled.calls[0].endsWith(` ${config}`), stalled.calls[0]);
     assert.ok(!existsSync(config), "the stalled write published nothing");
+  } finally { cleanup(); }
+});
+
+test("Docker Hub cache step kills what a Docker client leaves running, so the client's output ends when it exits", linuxShell, () => {
+  const { folder, run, cleanup } = mirrorStep();
+  try {
+    const left = run(join(folder, "daemon.json"), { straggler: true });
+    assert.equal(left.status, 0, left.stderr);
+    assert.ok(left.seconds < bound(2), `took ${left.seconds} s`);
+    assert.equal(left.pids.length, 1);
+    assert.ok(exited(left.pids), "the TERM-ignoring process the client left behind is gone");
   } finally { cleanup(); }
 });
 
