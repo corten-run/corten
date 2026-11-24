@@ -5,7 +5,7 @@
 #![cfg(unix)]
 
 use std::{
-    net::{Ipv4Addr, TcpListener, TcpStream},
+    net::{Ipv4Addr, Ipv6Addr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     sync::atomic::{AtomicU16, Ordering},
@@ -369,6 +369,80 @@ fn a_listener_that_outlives_the_copy_on_the_named_port_stops_the_build() {
     assert!(said.contains(&says) && said.contains("target/release is as it was"), "{said}");
     assert!(!fixture.profile().exists() && !fixture.release().exists(), "a profile was merged or a release built");
     drop(held);
+}
+
+/// The same program may leave before the copy does: it takes the named port once the copy has
+/// started, answers the wait, and closes while the command runs. Nothing listens there once the
+/// copy has exited, so the build looks when the command has ended and the copy still runs: a
+/// copy that listens on the port it was named accepts then, and this one, still starting, does
+/// not. The build stops there, not with a release built from the profile the copy leaves.
+#[test]
+fn a_named_port_nothing_accepts_on_when_the_command_has_ended_stops_the_build() {
+    let fixture = Fixture::new("port-left");
+    let port = unused_port();
+    // The command notes its port and runs until the listener has left (20 seconds at most).
+    let waits = "echo \"$PORT\" > port.txt; n=0; until [ -f left.txt ] || [ $n -ge 400 ]; do sleep 0.05; n=$((n+1)); done";
+    let mut build = fixture.build(&["--port", &port.to_string(), "--profile-from", "sh", "-c", waits]);
+    build.env("FIXTURE_BINDS_ONCE_STOPPED", "1").stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut build = build.spawn().unwrap();
+    let mut until = |file: &str| {
+        while !fixture.0.join(file).exists() {
+            assert!(build.try_wait().unwrap().is_none(), "the build ended before there was a {file}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    // The copy has started, which is after the build's last look at the port.
+    until("pid.txt");
+    let held = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
+    // The listener answered the wait: the command runs. It closes, in a child another test is
+    // starting too, before the command is let end.
+    until("port.txt");
+    drop(held);
+    while TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_ok() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::fs::write(fixture.0.join("left.txt"), "").unwrap();
+    let output = build.wait_with_output().unwrap();
+    let said = text(&output);
+    assert!(!fixture.app_runs(), "the instrumented app was left running");
+    assert!(!output.status.success(), "{said}");
+    let says = format!("nothing accepted a connection on port {port}, the one --port named, when the command had ended");
+    assert!(said.contains(&says) && said.contains("target/release is as it was"), "{said}");
+    assert!(!fixture.profile().exists() && !fixture.release().exists(), "a profile was merged or a release built");
+}
+
+/// Two sockets listen on one port at the two loopback addresses, so a copy bound to
+/// `127.0.0.1` serves beside another program's listener on `[::1]`. The build cannot tell that
+/// the command never reached that listener (one that asks `localhost` may have), so the look
+/// after the copy stops the build for it, though the copy answered the wait and wrote its profile.
+#[test]
+fn a_listener_on_the_other_loopback_address_beside_the_copy_stops_the_build() {
+    let fixture = Fixture::new("port-beside");
+    let port = unused_port();
+    // The command notes its port and runs until the other listener is there (20 seconds at most).
+    let waits = "echo \"$PORT\" > port.txt; n=0; until [ -f beside.txt ] || [ $n -ge 400 ]; do sleep 0.05; n=$((n+1)); done";
+    let mut build = fixture.build(&["--port", &port.to_string(), "--profile-from", "sh", "-c", waits]);
+    let mut build = build.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    // The command runs: the copy, bound to 127.0.0.1, answered the wait, after the build's last
+    // look at the port before the copy.
+    while !fixture.0.join("port.txt").exists() {
+        assert!(build.try_wait().unwrap().is_none(), "the build ended before its command ran");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let beside = TcpListener::bind((Ipv6Addr::LOCALHOST, port));
+    std::fs::write(fixture.0.join("beside.txt"), "").unwrap();
+    let output = build.wait_with_output().unwrap();
+    let said = text(&output);
+    let Ok(beside) = beside else {
+        eprintln!("no listener could be bound on [::1]: a listener beside the copy was not tested");
+        return;
+    };
+    assert!(!fixture.app_runs(), "the instrumented app was left running");
+    assert!(!output.status.success(), "{said}");
+    let says = format!("something listens on port {port}, the one --port named, now that the instrumented app has exited");
+    assert!(said.contains(&says) && said.contains("target/release is as it was"), "{said}");
+    assert!(!fixture.profile().exists() && !fixture.release().exists(), "a profile was merged or a release built");
+    drop(beside);
 }
 
 #[test]

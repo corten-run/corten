@@ -105,6 +105,12 @@ pub fn run(command: &[String], cargo: &[String], port: Option<u16>) -> Result<()
         .current_dir(&root)
         .status()
         .map_err(|e| format!("could not run {}: {e}; target/release is as it was", command[0]));
+    // A named port is looked at once more while the copy still runs: the wait could not tell
+    // whose socket accepted, and a copy that listens there accepts now as well.
+    let accepting = match port {
+        Port::Named(named) => accepts(named),
+        Port::Picked(_) => true,
+    };
     // Whatever the command did, the app is stopped before its result is read.
     let stopped = running.stop();
     let status = status?;
@@ -115,6 +121,9 @@ pub fn run(command: &[String], cargo: &[String], port: Option<u16>) -> Result<()
     }
     stopped.map_err(unchanged)?;
     if let Port::Named(named) = port {
+        if !accepting {
+            return Err(unchanged(not_accepting(named)));
+        }
         nothing_listens_after(named).map_err(unchanged)?;
     }
     let files = profiles(&taken);
@@ -275,22 +284,38 @@ impl fmt::Display for Port {
 fn nothing_listens_on(port: u16) -> Result<(), String> {
     if accepts(port) {
         Err(format!(
-            "something already listens on port {port}, the one --port named, and would answer the wait and the command in the instrumented app's place: the app itself (under corten dev, or run another way), or a copy that a cancelled corten build left running. Stop it and build again"
+            "something already listens on port {port}, the one --port named, and would answer the wait and the command in the instrumented app's place. {WHOSE}"
         ))
     } else {
         Ok(())
     }
 }
 
-/// Refuses a port `--port` named that something listens on once the copy has exited. The wait
-/// could not tell whose socket accepted, and this one is not the copy's: a program that took
-/// the port between the build's last look and the copy's own bind answered the wait and the
-/// command, while a copy still starting had not yet failed to bind. (Or it began to listen in
-/// the moment since the copy left, which a look cannot tell from that.)
+/// Whose a listener on the named port may be, which the build cannot tell, and what to do about
+/// each: both refusals that find one end with it.
+const WHOSE: &str = "If it is this app (under corten dev, or run another way) or a copy that a cancelled corten build left running, stop it and build again; if it is the copy of a corten build that is running in another target directory, let that build end first; if it is neither, --port names a port that is not this app's";
+
+/// What a named port that nothing accepts on is told, when the command has ended and the copy
+/// still runs: a copy that listens there would accept. Either it never bound the port, and what
+/// answered the wait was a program that took the port between the build's last look and the
+/// copy's own bind and has left since, or it has stopped accepting (its queue of connections it
+/// has not accepted is full), which a look cannot tell from that.
+fn not_accepting(port: u16) -> String {
+    format!(
+        "nothing accepted a connection on port {port}, the one --port named, when the command had ended and the instrumented app was still running: either the app never listened there, and what answered the wait and may have answered the command has left, or the app has stopped accepting connections. The profile may be of an app that served nothing"
+    )
+}
+
+/// Refuses a port `--port` named that something listens on once the copy has exited: it is not
+/// the copy. It may have taken the port between the build's last look and the copy's own bind,
+/// and answered the wait and the command while a copy still starting had not yet failed to
+/// bind; it may hold the other loopback address of the port beside a copy that served, where a
+/// command that asks `localhost` may have reached it; or it began to listen since the copy
+/// left. A look cannot tell these apart.
 fn nothing_listens_after(port: u16) -> Result<(), String> {
     if accepts(port) {
         Err(format!(
-            "something listens on port {port}, the one --port named, now that the instrumented app has exited: it is not the app, and may have answered the wait and the command in the app's place, which leaves a profile of an app that served nothing. Stop it and build again"
+            "something listens on port {port}, the one --port named, now that the instrumented app has exited: it is not the copy the build started, and may have answered the command in its place. {WHOSE}"
         ))
     } else {
         Ok(())
@@ -637,7 +662,7 @@ mod tests {
         assert_eq!(
             nothing_listens_on(port),
             Err(format!(
-                "something already listens on port {port}, the one --port named, and would answer the wait and the command in the instrumented app's place: the app itself (under corten dev, or run another way), or a copy that a cancelled corten build left running. Stop it and build again"
+                "something already listens on port {port}, the one --port named, and would answer the wait and the command in the instrumented app's place. If it is this app (under corten dev, or run another way) or a copy that a cancelled corten build left running, stop it and build again; if it is the copy of a corten build that is running in another target directory, let that build end first; if it is neither, --port names a port that is not this app's"
             ))
         );
         drop(held);
@@ -651,7 +676,10 @@ mod tests {
     fn a_listener_on_the_ipv6_loopback_address_alone_is_seen() {
         // Nothing holds the port on 127.0.0.1. A system without IPv6 has no such listener to see.
         let port = unused_port();
-        let Ok(held) = TcpListener::bind((Ipv6Addr::LOCALHOST, port)) else { return };
+        let Ok(held) = TcpListener::bind((Ipv6Addr::LOCALHOST, port)) else {
+            eprintln!("no listener could be bound on [::1]: that the look sees one there was not tested");
+            return;
+        };
         assert!(accepts(port));
         assert!(nothing_listens_on(port).is_err());
         drop(held);
@@ -728,7 +756,12 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn a_connection_that_met_itself_is_not_a_listener() {
-        let Ok(range) = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range") else { return };
+        let Ok(range) = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range") else {
+            eprintln!(
+                "the range of local ports could not be read: that a connection which met itself is no listener was not tested"
+            );
+            return;
+        };
         let ends: Vec<u16> = range.split_whitespace().filter_map(|end| end.parse().ok()).collect();
         let [low, high] = ends[..] else { panic!("the range of local ports: {range:?}") };
         // An even port in the middle of the range that nothing listens on. It is looked at to
@@ -748,7 +781,7 @@ mod tests {
             }
         }
         // A system that gives out its ports another way: nothing was shown on it.
-        eprintln!("no connection to {address} met itself in 400,000 looks");
+        eprintln!("no connection to {address} met itself in 400,000 looks: that one which did is no listener was not tested");
     }
 
     #[test]
