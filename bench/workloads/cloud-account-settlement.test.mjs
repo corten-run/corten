@@ -353,8 +353,11 @@ test("composed unknown/unclosed/cancel/deadline/mutation failures retain exclusi
     const custody = locks.map((path) => readFileSync(path));
     const collect = ["r21", "--state-dir", h.base, "--collect"];
     if (["action", "post"].includes(mode)) {
-      // The unbound create is refused before collect can try the operation lock.
-      await assert.rejects(approved(collect), { controllerStage: "controller-collect", message: /monitor not registered; preserve pending reservation/ });
+      // The unbound create is refused before collect can try the operation lock. A pending
+      // action keeps the POST's IDs for a later recheck, which refuses a live launch owner.
+      assert.deepEqual(saved.createPending, mode === "action" ? { dropletId: "123", actionId: "456" } : undefined);
+      await assert.rejects(approved(collect), { controllerStage: "controller-collect", message: mode === "action"
+        ? /original launch owner is still live or uncertain; preserve reservation/ : /monitor not registered; preserve pending reservation/ });
       await assert.rejects(approved(args), { controllerStage: "controller-launch", code: "EEXIST" });
     } else await assert.rejects(approved(collect), { controllerStage: "controller-collect", code: "EEXIST" });
     assert.ok(workers.slice(2).every((w) => w.child === undefined));
