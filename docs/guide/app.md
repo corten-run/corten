@@ -1580,8 +1580,9 @@ may read another header (a device, a country) and still not tell who asks, so a 
 handler takes one is made for every request, and an extractor has no way to say otherwise. A
 value the URL alone gives (a page number, a filter) is read with `Params` instead, as a query
 field of the page's route, plain or a type of the app's own that implements
-`corten::route::FromQuery` for a rule over the whole query
-([Requests and forms](requests-and-forms.md)), or from `Uri` in the handler, and the page is kept. The request must show nothing
+`corten::route::FromQuery` for a rule over the fields it declares
+([Requests and forms](requests-and-forms.md)), or from `Uri` in the handler, and the page stays
+eligible to be kept under the rest of the rules below. The request must show nothing
 else a page could differ by, and the answer nothing made for one request:
 
 | | Kept and given again | The handler answers |

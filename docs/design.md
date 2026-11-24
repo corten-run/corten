@@ -7768,7 +7768,7 @@ rules something out.
     honoring a request's `no-cache`; a way for an extractor of the app's own to say it reads only
     the URL ([#1799 A page whose handler takes an extractor of the app's own is never kept](https://github.com/corten-run/corten/issues/1799)),
     a second way to read what a route's query fields (a `FromQuery` type for a rule over the
-    whole query) and `Uri` already read, and the page they give is kept; removing a written path's pages by a search of the store or
+    fields it declares) and `Uri` already read, with which a page stays eligible to be kept; removing a written path's pages by a search of the store or
     a second index by path, which a write would pay for under the store's lock; a sweep that
     removes pages as their lifetimes end, since a page that no longer stands is replaced when it
     is next asked for and goes when room is made; and, left for changes of their own, a call
