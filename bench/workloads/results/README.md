@@ -7,7 +7,7 @@ The [group definitions](../README.md) describe the features each comparison requ
 
 | Group | Measured commit | Date (UTC) | Result |
 |---|---|---|---|
-| Lean catalog page | [30b39d455](https://github.com/corten-run/corten/commit/30b39d455ad4c9840e1a4206cbd716f519448f1a) | 2026-11-21 | [Throughput, CPU, memory, latency and pass ranges](r24/catalog-page/report.md). Five of seven passed every phase. |
+| Lean catalog page | [30b39d455](https://github.com/corten-run/corten/commit/30b39d455ad4c9840e1a4206cbd716f519448f1a) | 2026-11-21 | [Throughput, CPU, memory, latency, cold start and pass ranges](r24/catalog-page/report.md). Five of seven passed every phase. |
 | JSON API | | | No verified result yet |
 | Localized marketplace | | | No verified result yet |
 | Mixed production | | | No verified result yet |

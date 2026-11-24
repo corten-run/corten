@@ -87,9 +87,43 @@ Observed load/request outcomes, not root-cause diagnoses. Successful req/s exclu
 | gin | api-page | sat64 | 3 / 0 / 3 | 4,166.82 [3,795.26, 4,246.12] | 4,166.82 [3,795.26, 4,246.12] | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] |
 | gin | api-page | sat256 | 3 / 0 / 3 | 4,018.70 [3,907.84, 4,038.61] | 4,018.70 [3,907.84, 4,038.61] | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] |
 
+## Cold start and memory
+
+Each cell is the median [minimum, maximum] of three saved passes. Cold start
+is Docker-host wall time from container start to the first complete HTTP 200
+for the page, polled at 10 ms before readiness or warmup. It excludes image
+build, pull, and container creation. Memory is the highest sampled app-container
+memory in each timed pass, not memory at startup or a kernel high-water mark.
+Express and FastAPI remain ineligible for ranking. Memory observed in passes
+with timeouts is shown and marked beside the affected phase.
+
+### In-memory fixture
+
+| Framework | Cold start (ms) | Peak MiB at 150 req/s | Peak MiB at 64 users | Peak MiB at 256 users |
+|---|---:|---:|---:|---:|
+| corten | 211 [202, 221] | 7.63 [7.38, 7.64] | 9.62 [9.35, 9.89] | 11.86 [11.61, 11.88] |
+| aspnet | 903 [856, 912] | 63.67 [63.51, 63.96] | 68.42 [67.25, 68.53] | 72.25 [68.76, 72.41] |
+| express | 473 [454, 478] | 63.74 [61.36, 64.43] | 66.88 [64.71, 69.28] | 68.98 [67.83, 71.23] |
+| fastapi | 1644 [1595, 1761] | 71.48 [71.23, 71.54] | 72.19 [72.10, 72.61] | 73.52 [73.09, 73.77] (3/3 passes had timeouts) |
+| axum-maud | 220 [204, 223] | 10.70 [10.70, 10.95] | 12.56 [12.29, 12.57] | 15.80 [15.52, 16.02] |
+| drogon | 286 [280, 289] | 7.97 [7.94, 7.97] | 9.74 [9.74, 9.74] | 11.43 [11.42, 11.48] |
+| gin | 231 [225, 232] | 18.66 [18.63, 18.86] | 15.12 [15.09, 15.29] | 24.38 [24.37, 24.43] |
+
+### HTTP-backed data
+
+| Framework | Cold start (ms) | Peak MiB at 150 req/s | Peak MiB at 64 users | Peak MiB at 256 users |
+|---|---:|---:|---:|---:|
+| corten | 214 [207, 214] | 7.31 [7.29, 7.53] | 9.73 [9.57, 10.75] | 28.53 [27.64, 30.16] |
+| aspnet | 913 [892, 955] | 62.94 [61.10, 63.05] | 67.95 [66.79, 68.73] | 88.37 [88.03, 88.68] |
+| express | 489 [474, 493] | 73.21 [67.01, 75.36] | 78.22 [74.34, 80.30] | 90.43 [85.85, 93.23] (2/3 passes had timeouts) |
+| fastapi | 1724 [1682, 1770] | 59.73 [59.73, 59.97] | 60.00 [60.00, 60.29] | 67.05 [67.05, 67.70] (3/3 passes had timeouts) |
+| axum-maud | 202 [189, 207] | 10.33 [10.30, 10.64] | 13.95 [13.80, 14.45] | 31.12 [30.40, 35.25] |
+| drogon | 229 [226, 284] | 6.95 [6.94, 6.98] | 9.15 [8.71, 9.16] | 15.35 [14.25, 15.41] |
+| gin | 207 [199, 219] | 14.67 [14.59, 14.82] | 13.15 [12.91, 13.15] | 29.21 [29.10, 29.43] |
+
 ## Corten efficiency
 
-Median and [minimum, maximum] across available passes. Memory is each pass's peak under load; p95 is the median of per-pass p95s, not a pooled percentile.
+Median and [minimum, maximum] across available passes. Memory is each pass's peak sample under load; p95 is the median of per-pass p95s, not a pooled percentile.
 
 | Source / response | Attempted requests/CPU-second | Peak MiB | Sampled CPU % | p95 ms | Successful req/s range |
 |---|---:|---:|---:|---:|---:|
