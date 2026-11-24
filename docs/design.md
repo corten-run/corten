@@ -2679,7 +2679,18 @@ rules something out.
     `Authorization`, and went from 35,796.1 (35,794.0 to 35,797.9) to 35,650.6 (35,647.5 to
     35,654.7) median instructions per request; since `91e193bce` a request under an API no
     longer has `corten` and `Accept` looked up by the stages, two of those six by reading the
-    code, and the six were not counted again); value
+    code, and the six were not counted again; an `Accept-Encoding` line that is one of three is
+    compared whole and not parsed, and with a browser's headers a mounted API's `GET`, a short
+    text and a 12 KB page cost 1,791, 1,752 and 2,009 fewer instructions at `66fa66c49` than at
+    its base with the first of the three lines, and 993, 954 and 1,212 fewer with curl's
+    `deflate, gzip, br, zstd`, which is not one of them, callgrind over a socket, three runs a
+    case); platform (the three lines are the ones Playwright 1.65.1's Chromium 159, Firefox 159
+    and WebKit 27.2 sent on Linux, over HTTP and HTTPS: `gzip, deflate, br, zstd`,
+    `gzip, deflate, br` and `gzip, deflate`; Playwright's WebKit on Windows sends
+    `deflate, gzip, br` ([Choice 32](#choice-stream-coding)), which is not in the list and is
+    parsed as before; Safari was not tried); bet (the line reaches the app as the browser sent
+    it; behind a proxy that rewrites `Accept-Encoding` the list matches nothing and a request
+    pays its three comparisons before the parse, which was not checked behind one); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
@@ -2724,10 +2735,18 @@ rules something out.
     it too, with no change to the stages, and so does a change that shrinks a future by that
     much, which only lowers the measurement. Measure both profiles again before moving a
     measurement.
+    Read the three `Accept-Encoding` lines the compression stage compares whole again when a
+    browser Playwright runs sends another line (the list then takes it, and drops one no
+    browser sends), or when requests are found to reach apps with the line rewritten more often
+    than not.
 
     Last checked: 2026-11-23, the stages' reads of a request under an API, read in the code at
     `91e193bce` (which stopped looking up the mode's two headers there; the lookup counts above
-    were not taken again); 2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
+    were not taken again); 2026-11-23, each engine's `Accept-Encoding` over HTTP and HTTPS, by
+    Playwright 1.65.1 on Linux (tag `evidence/stage-header-checks-2002`), and 2026-11-24, the
+    instruction counts with a listed line and with curl's (tags
+    `evidence/stage-header-checks-2002` and `evidence/stage-header-checks-2002-review`);
+    2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
     main: the stage future grew from 2,632 to 3,008 bytes in a debug build and from 2,176 to
     2,280 in a release one, holding the page snapshot that sharing the staged header reads keeps
     before dispatch, not the request again (the stage owns one request slot, and dispatch takes
@@ -2903,7 +2922,7 @@ rules something out.
     The watchlist smoke holds the fix: an event that decodes to 52,395 bytes with nothing after it
     must be dispatched within 5 s in each engine (Chromium and Firefox get zstd there, WebKit
     gzip), and a build whose streams are brotli fails it in Playwright's WebKit on Windows; CI's
-    Linux WebKit takes no brotli, so there the rule is held by the negotiation tests and the smoke's
+    Linux WebKit asks for no brotli over the plain HTTP its smoke uses, so there the rule is held by the negotiation tests and the smoke's
     HTTP checks, which ask for each coding themselves.
     So a client that accepts zstd gets zstd 1 as before, any other that accepts gzip gets gzip 3
     (sync-flushed, its window kept), and one that accepts only brotli gets the stream as it is, even
@@ -2926,8 +2945,9 @@ rules something out.
     redraw's saved bytes are why streams are compressed).
 
     Stands on: platform (Playwright's WebKit on Windows holds back a flushed brotli event of more
-    than 16 KiB and sends `deflate, gzip, br`, no zstd; its Linux build, which CI's smoke runs,
-    takes no brotli at all, so the smoke there cannot see the holdback and the rule is held by
+    than 16 KiB and sends `deflate, gzip, br`, no zstd; its Linux build, which CI's smoke runs
+    over plain HTTP, sends `gzip, deflate` there, so the smoke cannot see the holdback, and
+    sends `gzip, deflate, br` over HTTPS, where a flushed brotli event was not tried; the rule is held by
     `compress.rs`'s tests and [`tests/bodies.rs`](../crates/corten/src/tests/bodies.rs); the 16 KiB edge matches libcurl's write size, the
     Windows build's network stack, which suggests the holdback is that stack's, not measured;
     Chromium and Firefox send zstd, which arrives at once there; no WebKit that accepts zstd was
@@ -2966,7 +2986,9 @@ rules something out.
     18 ms); 2026-11-09, the whole smoke against a server built from `0b9a134c` in that Linux image
     (one run, all passed; Chromium and Firefox got zstd, WebKit gzip, the large event in 7 to
     17 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
-    test's thread (352,232 bytes, the same).
+    test's thread (352,232 bytes, the same); 2026-11-23, each engine's `Accept-Encoding` on
+    Linux over HTTP and HTTPS, by Playwright 1.65.1 (Chromium 159, Firefox 159, WebKit 27.2;
+    tag `evidence/stage-header-checks-2002`, `browser-lines/`).
 
 33. <a id="choice-state-derives"></a>**An app's shared state derives `Clone` and `FromRef`, two
     derives that each say one thing, not a state attribute that writes both.** `Clone` says the
@@ -9023,7 +9045,7 @@ rules something out.
     and is a separate question. Base and head with one pad are not one layout: they hold different
     code, so the same pad is the same offset applied to each side's own default layout, which is
     what a pull request's two builds are, and the A/A's two lists of sizes give its two sides
-    placement differences of the same kind. Each run so far also reads an unpadded build (main's,
+    placement differences of the same kind. The first two runs each also read an unpadded build (main's,
     then the change's base's) against eight of its padded ones, the same eight sizes both times, a
     diagnostic of where the build that ships sits among them.
 
@@ -9149,6 +9171,24 @@ rules something out.
     spread recorded from it; and the logins for a line of status while it ran, about once a
     minute for its first 70 minutes and every five after.
 
+    A third run,
+    [#2002 Compare the header lines most requests carry before searching or parsing them](https://github.com/corten-run/corten/pull/2002)'s
+    on 2026-11-23 and 24 (base `6f1bbf055`, head `66fa66c49`; three c-8s, a Xeon Platinum 8280
+    each, one workload a host; a probe with a page and a mounted API, which is not the first
+    two runs' program; jemalloc with `background_thread:true,tcache_max:524288`), was the first
+    at K = 60, with R = 8, and the first to read a declared reduction. Its three A/As resolved:
+    bounds +0.28% and +0.24% on a 6 KB page with no header of its own, +0.27% and +0.23% on
+    that page with a browser's headers, and +0.57% and +0.11% on a mounted API's `GET`, their
+    placement medians' standard deviations 0.96%, 1.07% and 2.02%. The change read -0.97%
+    (bound -0.73%), -1.66% (-1.36%) and -4.16% (-3.94%), and the 1% reduction its plan declared
+    for the third alone was established, that A/A's lower bounds -0.11% and -0.56%. All 360
+    placements ran, each function moved by exactly its pad, and no start had a counter under
+    100%. It read no unpadded build, so it adds nothing to what
+    [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
+    asks. The API host's A/A spread about as `old`'s 30 medians did and resolved at 60: one
+    run, which does not test the model above. The kit, the plan and the results are under the
+    tag `evidence/stage-header-checks-2002`.
+
     Not chosen: a seeded shuffle of the function order (LLD's `--shuffle-sections`, this Choice's
     first version), since in that plan's container dry run seed 1 on main moved all 3,404
     functions to a new order and kept 5 of 3,335 pairs of neighbours next to each other (as the
@@ -9189,7 +9229,8 @@ rules something out.
     `evidence/ee7b0b41`, its A/As on main rather than the change's base, its answers compared after
     its kit's normalization, which this Choice accepts for that receipt alone; and the second
     above, tags `evidence/ca2af2ab` and `evidence/0c0c599c`, the first under the rule as written,
-    one of its two A/As resolved); platform (LLD
+    one of its two A/As resolved; and the third above, tag `evidence/stage-header-checks-2002`,
+    its three A/As at 60 placements resolved); platform (LLD
     places the sections of the symbols an ordering file names
     first in their output section and the rest in their default order, rustc 1.100.0 puts each
     function in its own `.text` section, aligns them to 16 bytes and links through LLD 23 on Linux
@@ -9258,7 +9299,9 @@ rules something out.
     8280, its plan under the tag `evidence/ca2af2ab` and its results under `evidence/0c0c599c`),
     and where its placement medians get their spread and the share of draws in which an A/A of
     each size does not resolve, worked out the same day from those results at `c448780e0`, the
-    scripts and what they print under the tag `evidence/c448780e`.
+    scripts and what they print under the tag `evidence/c448780e`; 2026-11-24, the third run on
+    three c-8s (base `6f1bbf055`, head `66fa66c49`, rustc 1.100.0 with LLD 23.1.5, Linux
+    6.12.117, a Xeon Platinum 8280 each, tag `evidence/stage-header-checks-2002`).
 
 ## Rules
 
