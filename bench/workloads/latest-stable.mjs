@@ -122,6 +122,12 @@ const reviewedSolid2 = Object.freeze({
   observedAt: "2026-11-23T23:28:47.230Z",
 });
 const solid2Roots = Object.freeze(["@solidjs/compiler", "@solidjs/web", "esbuild", "solid-js"]);
+// Transitive executable runtime of the Solid 2 adapter, not a new latest target.
+const solidSignals = {
+  version: "2.0.3",
+  resolved: "https://registry.npmjs.org/@solidjs/signals/-/signals-2.0.3.tgz",
+  integrity: "sha512-M6+kiJflqSvJRHRcmdsdIXpPLPkQrY817zWKKfxZ3z3ZRE5eEtddtWPrDXY4IM1Wz3zAqG+3Fx/HQIkAtpRwnA==",
+};
 // Exact primary response identities, not eligible verdicts. Below we also parse
 // their bytes and recompute targets, dependency paths and native-consumer scope.
 const reviewedRegistry = Object.freeze({
@@ -294,7 +300,7 @@ function evaluateCandidates(input) {
         need(pkg && !pkg.link && typeof pkg.version === "string" && semver.valid(pkg.version) !== null, `lockfile:${name}:invalid-or-linked-package`);
         // Reject even unused shadows, except the private build tool npm resolves
         // for @remix-run/test's independently observed esbuild dependency.
-        if (roots[app].includes(name) || Object.hasOwn(observations, name)) {
+        if (roots[app].includes(name) || Object.hasOwn(observations, name) || usesSolid2 && name === "@solidjs/signals") {
           need(Object.keys(lock.packages).filter((key) => key !== remixTestEsbuild
             && (key === `node_modules/${name}` || key.endsWith(`/node_modules/${name}`))).length === 1,
             `lockfile:${name}:ambiguous-resolution`);
@@ -309,6 +315,12 @@ function evaluateCandidates(input) {
           const observed = observations[name];
           need(observed?.version === pkg.version && pkg.resolved === observed.dist.tarball
             && pkg.integrity === observed.dist.integrity, `lockfile:${name}:unreviewed-solid-2-archive`);
+        }
+        if (usesSolid2 && name === "@solidjs/signals") {
+          need(path === "node_modules/@solidjs/signals"
+            && Object.entries(solidSignals).every(([key, value]) => pkg[key] === value)
+            && !dependencyKinds.some((kind) => Object.keys(pkg[kind] ?? {}).length),
+          "lockfile:@solidjs/signals:unreviewed-solid-2-archive");
         }
         closure.set(path, { path, package: name, version: pkg.version });
         for (const [kind, edges] of [["dependency", pkg.dependencies], ["optional", pkg.optionalDependencies], ["peer", pkg.peerDependencies]]) {

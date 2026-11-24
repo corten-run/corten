@@ -19,10 +19,65 @@ const bindings = {
 };
 export const solidCompilerArchives = Object.freeze(Object.fromEntries(Object.entries(bindings)
   .map(([suffix, [integrity]]) => [`@solidjs/compiler-${suffix}`, `sha512-${integrity}`])));
+// The dedicated adapter's esbuild production input inventory, hashed from the
+// verified npm archives of solid-js, @solidjs/web and @solidjs/signals (2.0.3).
 export const solidRuntimeFiles = Object.freeze({
-  "solid-js/dist/solid.js": "fcd146daf705027d03924cdd55cb9039d57a1c1f83d1609b655f4d2cd03f5ddb",
+  "@solidjs/signals/dist/prod/affects-marks.js": "4ee8c0b65924fc6dd763604cb9a3d605cd29209a44872c18254251975802cf77",
+  "@solidjs/signals/dist/prod/affects.js": "f09b02cebab84af0639bc0dc9764b1e1a9a488f7aeae5feb81c70e0a40324808",
+  "@solidjs/signals/dist/prod/boundaries.js": "666db709edf8c965a3e94ea89279ed3184a93d2296a624c5a8fcc5cac7a33758",
+  "@solidjs/signals/dist/prod/core/action.js": "5fc17e6365cf6df9ded4182bed89c4b657190a6233c4cb676eb941542b8ba208",
+  "@solidjs/signals/dist/prod/core/async.js": "4098ab800e3b13429e28f12077558d9591ff26c793a5972c84019752d42cd1b7",
+  "@solidjs/signals/dist/prod/core/attribution-hooks.js": "4cd5ff261587479501967d9e51edfb3fb975973a581a5905b46ab3d9f0dd1149",
+  "@solidjs/signals/dist/prod/core/constants.js": "28424557e81e46511fb5896808bafdc84ff5d7ffa6cd99a37b1082f78fa6af91",
+  "@solidjs/signals/dist/prod/core/context.js": "966b4f6f56b294d0f22ed9893f935934600ebd749122e9696b8b01de0279b988",
+  "@solidjs/signals/dist/prod/core/copies.js": "4d661dc0a656d3a716f16517187ef920806381dd6fb4644af5835ead8e7a8829",
+  "@solidjs/signals/dist/prod/core/core.js": "9fb276d3f4c31fd72aea9540c37f3c2ba35393a7b721349cc581aea802c348ba",
+  "@solidjs/signals/dist/prod/core/dev.js": "0bb6aaaafa1575988b9d35772ba5fd9c21bf19fb86f3c52d4d2b8f533a4d3dc3",
+  "@solidjs/signals/dist/prod/core/effect.js": "10c0e9f19da94ad10ec9cc1f21a60150a3b56e8e92969f7561776a8d3e409456",
+  "@solidjs/signals/dist/prod/core/error-hooks.js": "a75d38035570fc4f6e95dcb936f65aae5611e99b8c6b4cb5ae508af850e7b238",
+  "@solidjs/signals/dist/prod/core/error.js": "ca7862a93512664562cc5995f3a52b221e66067c7d8b720fac8ff4405b266f44",
+  "@solidjs/signals/dist/prod/core/external.js": "9a319ccc828ed81d0b8a85292abeaa6f561297c050612a673d9fb9e958ca985a",
+  "@solidjs/signals/dist/prod/core/graph.js": "f9dd770967c7cc76c57a71dc7e9c6dc52e2d4b1d64c75d39b9189147d1c7c890",
+  "@solidjs/signals/dist/prod/core/guesses.js": "d6c019dca163825c9f40921996a1ced17f59290132c4eeaab72b9a40dd4ba2b3",
+  "@solidjs/signals/dist/prod/core/heap.js": "bd58398eafa5ec737bbf0abe46ade55c8aec7b0af8c34e44999bb6411070d628",
+  "@solidjs/signals/dist/prod/core/identities.js": "9aa009af39ebcb038203bf37b55235a84f3160eb1312c04501c45ec161eae7b6",
+  "@solidjs/signals/dist/prod/core/invariants.js": "7bdaa332c1eee52cd5c8a7f3f7f9e19bfcb99673af176ed38923adc6c85c53dd",
+  "@solidjs/signals/dist/prod/core/lanes.js": "872d4e794e6f5de448d451a3d4941ec621b9202786013bbe6d22c776b8b681d7",
+  "@solidjs/signals/dist/prod/core/owner.js": "472ee9da117fa936a62d644ad11c447b83c3a1d815522f7351db46ff095bbdf1",
+  "@solidjs/signals/dist/prod/core/scheduler.js": "7d527697d2f24c517c0b1d170a764b38b9ab8b2e748946f91287d6d69fe30552",
+  "@solidjs/signals/dist/prod/core/truth.js": "639c466d6145a39c0563f6a89a7ba8bab43046642e3e483ded89e017717572f4",
+  "@solidjs/signals/dist/prod/core/verdict.js": "4b6d5d0fcf9dd2b3bf0589b10f6c22c12594fd530ea684e904de1e6c73078d83",
+  "@solidjs/signals/dist/prod/deferred.js": "7b1ea9a70e232121b48576697a44d3559d0160f118347ce5a64f1c36d303f363",
+  "@solidjs/signals/dist/prod/flatten.js": "906a0a68ebb9fe3dac2275fe150e65d24bf6f8b8a08442652a1589626cf7b5fc",
+  "@solidjs/signals/dist/prod/from.js": "0f2cd7d9ee2ba779d09c6f0447e0378cbb5ba8dc85d9d677bdb5a2d90cdb3e4e",
+  "@solidjs/signals/dist/prod/index.js": "71fabd6fde4b6d0cbdbb270f8404d02275c78eb84ee1f25e847d10255526eaa3",
+  "@solidjs/signals/dist/prod/map.js": "61ea410f7ca02361dc16a84e7213cfe79ce3e72b4afeb38daa50e3c453bb7692",
+  "@solidjs/signals/dist/prod/reveal.js": "25877cb8397de93c3ce3302db7cd44bc572970529c8eb2549e6f1ba9144786f1",
+  "@solidjs/signals/dist/prod/signals.js": "6d295a888c52041163af9807ee4259984aff1cecc0dd5dc18cb5bb98a319645b",
+  "@solidjs/signals/dist/prod/store/affects.js": "59d3b03ebc0a27eaf92c2895a37e233d93e36f18695ddc07aa62f79e859f2e24",
+  "@solidjs/signals/dist/prod/store/edges.js": "2e7631292bc1202b228d59eeab72b6dd70db8b5e5ad87cc4f6027df0a2251abe",
+  "@solidjs/signals/dist/prod/store/hooks.js": "f3785a1bb572aaa574a5b2d5da3af693a4ad2c7fde311e62d8f723861c2fd029",
+  "@solidjs/signals/dist/prod/store/index.js": "105a8f1fb83853560f5f5d171f437faa49c7f671fcaea37715ea15d2a5bb8754",
+  "@solidjs/signals/dist/prod/store/optimistic.js": "e208486b526965d903f0557e95814753467447a4162e22088a40845542fc4c0e",
+  "@solidjs/signals/dist/prod/store/projection.js": "2666d3fddc9c6f546e5126aee8b9b6c7000d9701ce8127c88a19d7bdfe49dc1f",
+  "@solidjs/signals/dist/prod/store/reconcile.js": "e284cb32385a6381a2736fc7286a8460c895f61fd7ab7851b422f3737f6272b6",
+  "@solidjs/signals/dist/prod/store/store.js": "15c7ced616ace579e7d07e87a5d1ffa42faecbaf5511ef4b1c33698f55297dd6",
+  "@solidjs/signals/dist/prod/store/storePath.js": "f192c128b981602139ebfc8c0ec6bdd1e82ba52edfa0fbfb82f38dcafc56e597",
+  "@solidjs/signals/dist/prod/store/target.js": "a23d05e3864bb954044abc343293e981b984c6fe8f5e19e1f97314a196737c3f",
+  "@solidjs/signals/dist/prod/store/types.js": "5dd4904e3768ecb88ec38e0be19fc1fddaa3cee10c2f26b7f1f96d05e2c00cf2",
+  "@solidjs/signals/dist/prod/store/utils.js": "555ff19a2909c3f36b14d1d3e13eb9564c572db0a825571ed3ab688d115fb477",
   "@solidjs/web/dist/web.js": "27af0627f915a0e0e1bed7aca90a0ab6d750ba78824419e34509021f7eb98dca",
+  "solid-js/dist/internal.js": "8814561b49fc1d19207a74b0a04059da0aea02a731b3dbd5c6dcf9b810cfab2a",
+  "solid-js/dist/solid.js": "fcd146daf705027d03924cdd55cb9039d57a1c1f83d1609b655f4d2cd03f5ddb",
 });
+export const solidRuntimePrefix = "bench/browser/node_modules/";
+export function matchesSolidRuntime(inputs) {
+  const runtime = [...inputs].filter(([path]) => path !== "bench/client-heavy/apps/solid.jsx"
+    && path !== "bench/client-heavy/apps/input.js");
+  return runtime.length === Object.keys(solidRuntimeFiles).length && runtime.every(([path, ref]) =>
+    path.startsWith(solidRuntimePrefix) && Object.hasOwn(solidRuntimeFiles, path.slice(solidRuntimePrefix.length))
+    && solidRuntimeFiles[path.slice(solidRuntimePrefix.length)] === ref.sha256);
+}
 export function solidCompilerFiles(target, platform) {
   assert.ok(Object.hasOwn(bindings, target) && target.startsWith(platform + "-"), "unreviewed-solid-compiler-target");
   return { [entry]: entrySha256, [`@solidjs/compiler-${target}/compiler.${target}.node`]: bindings[target][1] };
@@ -41,7 +96,7 @@ export function solidCompiler(browserPackage) {
   const files = solidCompilerFiles(target, platform);
   const modules = join(dirname(browserPackage), "node_modules");
   const fullEntry = join(modules, entry), binding = Object.keys(files)[1], fullBinding = join(modules, binding);
-  verifySolidFiles({ ...files, ...solidRuntimeFiles }, (path) => {
+  verifySolidFiles(files, (path) => {
     const absolute = join(modules, path);
     return existsSync(absolute) ? createHash("sha256").update(readFileSync(absolute)).digest("hex") : null;
   });

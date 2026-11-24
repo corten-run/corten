@@ -6,7 +6,7 @@ import { selectedApps, definition } from "../workloads/registry.mjs";
 import { options, sourceRoots, buildOptions, documentMarkup, summarizeActions } from "./contract.mjs";
 import { snapshot, committed } from "./verify.mjs";
 import { need, keys, finite, digest, span, diagnostic, closure, replayV2 } from "./replay-v2.mjs";
-import { depInputs, compilerSourcePath, compilerWorkingDirectory, cargoMetadata, solidCompilerFiles, solidCompilerVersion, solidRuntimeFiles } from "./compiler.mjs";
+import { depInputs, compilerSourcePath, compilerWorkingDirectory, cargoMetadata, solidCompilerFiles, solidCompilerVersion, matchesSolidRuntime } from "./compiler.mjs";
 import { npmClosure, compilerGraph, vendorConfiguration } from "./build-replay.mjs";
 import { installLayout } from "./install-layout.mjs";
 import { executableBytes, launchOptions } from "./launch.mjs";
@@ -58,8 +58,7 @@ export function replaySolidCompiler(receipt, platform, browserDependencies, inpu
   need(receipt.version === solidCompilerVersion && same(expected, receipt.files)
     && Object.entries(expected).every(([path, sha256]) => browserDependencies.get(path)?.sha256 === sha256),
   "solid-compiler-differs-from-locked-install");
-  need(Object.entries(solidRuntimeFiles).every(([path, sha256]) => inputs.get(`bench/browser/node_modules/${path}`)?.sha256 === sha256),
-    "missing-or-modified-solid-runtime-build-input");
+  need(matchesSolidRuntime(inputs), "missing-or-modified-solid-runtime-build-input");
 }
 
 // Reconstruct the command's single-context timeline in scheduled order, not

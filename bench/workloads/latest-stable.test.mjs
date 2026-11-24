@@ -222,7 +222,10 @@ test("production builder recomputes candidate-specific latest targets without in
     assert.equal(row.dependencies.some((d) => d.package === "@babel/core" || d.package === "solid-js-legacy"), false);
     assert.equal(row.status, "satisfied");
   }
-  assert.equal(result.candidates.find((r) => r.app === "solid").reason, null);
+  const solid = result.candidates.find((r) => r.app === "solid");
+  assert.equal(solid.reason, null);
+  assert.ok(solid.dependencies.some((d) => d.path === "node_modules/@solidjs/signals" && d.version === "2.0.3"));
+  assert.equal(solid.targets.includes("@solidjs/signals"), false);
   assert.equal(result.groupComparisonEligible, false);
   const { packages } = result.observation;
   for (const [name, version] of Object.entries({ "@babel/core": "8.1.3", "@babel/parser": "8.1.3", "solid-js": "2.0.3",
@@ -242,6 +245,23 @@ test("production builder recomputes candidate-specific latest targets without in
     const evaluated = evaluateLatestStable({ ...input, group }); assert.equal(evaluated.valid, true);
     assert.equal(evaluated.status, group === "client-heavy" ? "blocked" : "not-applicable");
   }
+});
+
+for (const [field, value] of [
+  ["resolved", "https://example.test/signals.tgz"],
+  ["integrity", "sha512-other"],
+  ["version", "2.0.4"],
+  ["dependencies", { "solid-js": "^2.0.3" }],
+]) test(`the executable Signals runtime requires published ${field} with the other Solid runtime archives unchanged`, () => {
+  invalid(mutateCandidate("lockfile", ({ packages }) => {
+    packages["node_modules/@solidjs/signals"][field] = value;
+  }), "lockfile:@solidjs/signals:unreviewed-solid-2-archive");
+});
+
+test("the executable Signals runtime cannot resolve from a nested install", () => {
+  invalid(mutateCandidate("lockfile", ({ packages }) => {
+    packages["node_modules/solid-js/node_modules/@solidjs/signals"] = structuredClone(packages["node_modules/@solidjs/signals"]);
+  }), "lockfile:@solidjs/signals:ambiguous-resolution");
 });
 
 for (const [name, key, edit] of [

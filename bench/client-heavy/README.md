@@ -103,11 +103,13 @@ builder alone uses the `solid-js-legacy` alias (Solid 1.9.19), Babel 7.29.13
 and the DOM plugin with the old preset's options.
 
 The policy checks the exact published archive entries and compiler dependency and
-runtime peer declarations. The build additionally checks the installed compiler
-entry and the reviewed native binding's bytes, refuses a fallback or compiler
-override, and requires the two reviewed Solid 2 browser runtime entries in the
-esbuild input ledger. Offline replay checks those same identities against the
-browser dependency snapshot and build receipt. This clears the Solid input
+runtime peer declarations, including the transitive `@solidjs/signals` 2.0.3
+archive. The build checks the installed compiler entry and native binding,
+refuses fallback or overrides, and verifies the complete Solid 2 runtime input
+set that esbuild uses against hashes from the three published runtime archives.
+That includes `solid-js/internal` and the imported Signals modules. Offline
+replay checks the same identities and file set against the browser dependency
+snapshot and build receipt. This clears the Solid input
 gate, not parity: the same browser asset and operation assertions, keyed DOM
 checks, readiness, timing boundaries and cleanup still apply before comparison.
 No old disposition or performance number changes.

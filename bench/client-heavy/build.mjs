@@ -4,7 +4,7 @@ import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selectedApps } from "../workloads/registry.mjs";
 import { Evidence, sha256, json, clock } from "./evidence.mjs";
-import { collectCompiler, withCompilerTarget, solidCompiler, solidCompilerVersion, solidRuntimeFiles, verifySolidFiles } from "./compiler.mjs";
+import { collectCompiler, withCompilerTarget, solidCompiler, solidCompilerVersion, solidRuntimeFiles, solidRuntimePrefix, matchesSolidRuntime } from "./compiler.mjs";
 import { buildOptions as fixedBuildOptions, documentMarkup } from "./contract.mjs";
 export { vendorConfiguration } from "./build-replay.mjs";
 import { vendorConfiguration } from "./build-replay.mjs";
@@ -27,6 +27,17 @@ export function solidBuildPlugin(entry) {
     b.onLoad({ filter: /\.jsx$/ }, ({ path }) => {
       if (path !== entry) return;
       return { contents: compiler.transform(readFileSync(path, "utf8"), path), loader: "js" };
+    });
+    b.onLoad({ filter: /\.js$/, namespace: "file" }, ({ path }) => {
+      const source = relative(root, path).replaceAll("\\", "/");
+      if (!source.startsWith(solidRuntimePrefix)) return;
+      const runtime = source.slice(solidRuntimePrefix.length);
+      if (!Object.hasOwn(solidRuntimeFiles, runtime)) return;
+      // Hand esbuild exactly the bytes we hash, rather than reopening them later.
+      const contents = readFileSync(path);
+      if (sha256(contents) !== solidRuntimeFiles[runtime])
+        throw new Error(`modified Solid 2 runtime input ${runtime}; run npm --prefix bench/browser ci`);
+      return { contents, loader: "js", resolveDir: dirname(path) };
     });
   } };
   return { plugin, receipt: { version: solidCompilerVersion, target: compiler.target, files: compiler.files } };
@@ -125,10 +136,8 @@ export async function buildApps(workload, directory, cargo = "cargo", evidence =
       writeFileSync(join(dir, "build-options.json"), json(optionsForReceipt));
       const result = await build(buildOptions);
       const inputs = Object.keys(result.metafile.inputs).sort().map((path) => ({ path: relative(root, resolve(root, path)).replaceAll("\\", "/"), sha256: sha256(readFileSync(resolve(root, path))) }));
-      if (solid) {
-        const inputHashes = new Map(inputs.map(({ path, sha256 }) => [path, sha256]));
-        verifySolidFiles(solidRuntimeFiles, (path) => inputHashes.get(`bench/browser/node_modules/${path}`));
-      }
+      if (solid && !matchesSolidRuntime(new Map(inputs.map((input) => [input.path, input]))))
+        throw new Error("missing or modified Solid 2 runtime inputs; run npm --prefix bench/browser ci");
       writeFileSync(join(dir, "metafile.json"), json(result.metafile));
       const code = result.outputFiles[0].text + "\n" + footer;
       const bundle = app === "corten" ? "client.js" : "app.js";

@@ -1,5 +1,6 @@
 // Compatibility only: use the production JS builds and oracle, not a timed run.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -7,7 +8,7 @@ import { isAbsolute, join, relative } from "node:path";
 import test from "node:test";
 import { buildApps, root, solidBuildPlugin } from "./build.mjs";
 import { options, buildOptions } from "./contract.mjs";
-import { solidCompiler, solidRuntimeFiles } from "./compiler.mjs";
+import { solidCompiler, matchesSolidRuntime, solidRuntimeFiles, solidRuntimePrefix } from "./compiler.mjs";
 import { Evidence, sha256 } from "./evidence.mjs";
 import { launchBrowser } from "./launch.mjs";
 import { journey, serve } from "./run.mjs";
@@ -19,14 +20,33 @@ test("official Solid 2 compiler bundles the real adapter from the shared browser
   const { plugin, receipt } = solidBuildPlugin(options.entryPoints[0]);
   assert.equal(receipt.version, "2.0.2");
   const { metafile, outputFiles } = await build({ ...options, plugins: [plugin] });
-  for (const [path, sha] of Object.entries(solidRuntimeFiles)) {
-    const input = `bench/browser/node_modules/${path}`;
-    assert.ok(metafile.inputs[input]);
-    assert.equal(sha256(await readFile(join(root, input))), sha);
-  }
-  assert.ok(Object.keys(metafile.inputs).every((path) => !path.includes("solid-js-legacy")));
+  const inputs = new Map(await Promise.all(Object.keys(metafile.inputs).map(async (path) =>
+    [path, { sha256: sha256(await readFile(join(root, path))) }])));
+  assert.ok(matchesSolidRuntime(inputs), "actual esbuild inputs must match the published runtime closure");
+  const imported = "@solidjs/signals/dist/prod/core/graph.js", path = solidRuntimePrefix + imported;
+  assert.equal(inputs.get(path)?.sha256, solidRuntimeFiles[imported]);
+  const changed = Buffer.concat([await readFile(join(root, path)), Buffer.from("\n// changed imported bytes\n")]);
+  inputs.set(path, { sha256: sha256(changed) });
+  assert.equal(matchesSolidRuntime(inputs), false);
   assert.match(outputFiles[0].text, /clientMount/);
   assert.match(outputFiles[0].text, /clientDetach/);
+});
+
+test("legacy Solid 1 production builder compiles SSR, hydration and handwritten entries without writing them", { timeout: 15000 }, () => {
+  const output = execFileSync(process.execPath, ["bench/browser/build.mjs", "--check-legacy-solid"], {
+    cwd: root, timeout: 10000, encoding: "utf8",
+  });
+  const inputs = JSON.parse(output), legacy = "node_modules/solid-js-legacy/";
+  assert.deepEqual(Object.keys(inputs), ["server", "solid-ssr", "solid-h"]);
+  for (const [name, entry, expected] of [
+    ["server", "apps/solid/server.jsx", ["dist/server.js", "web/dist/server.js"]],
+    ["solid-ssr", "apps/solid/hydrate.jsx", ["dist/solid.js", "web/dist/web.js"]],
+    ["solid-h", "apps/solid-h/app.js", ["dist/solid.js", "h/dist/h.js", "store/dist/store.js", "web/dist/web.js"]],
+  ]) {
+    assert.ok(inputs[name].includes(entry), name);
+    for (const path of expected) assert.ok(inputs[name].includes(legacy + path), `${name}: ${path}`);
+    assert.ok(inputs[name].filter((path) => path.includes("node_modules/")).every((path) => path.startsWith(legacy)), name);
+  }
 });
 
 test("official Solid 2 compiler rejects malformed JSX and does not fall back to another install", () => {

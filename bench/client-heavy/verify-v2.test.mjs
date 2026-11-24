@@ -16,7 +16,7 @@ import { admitSaved } from "./admission.mjs";
 import { hostFixture } from "./host-fixture.mjs";
 import { evaluateLatestStable, latestStableSources } from "../workloads/latest-stable.mjs";
 import { replayCandidatePolicy, replayCandidateDisposition, replayProducerSchema, replaySolidCompiler } from "./verify-v2.mjs";
-import { solidCompilerFiles, solidRuntimeFiles } from "./compiler.mjs";
+import { solidCompilerFiles, solidRuntimeFiles, solidRuntimePrefix } from "./compiler.mjs";
 
 const solid1Commit = "6f1bbf0553ec3b60c884bf5855fe8786ca25f1c2", apps = selectedApps("client-heavy");
 const producerRoot = "/producer", outputPath = "bench/client-heavy/work/unit";
@@ -25,7 +25,7 @@ test("Solid 2 replay requires the exact public compiler, native binding and bund
   const target = "linux-x64-gnu", files = solidCompilerFiles(target, "linux");
   const receipt = { version: "2.0.2", target, files };
   const dependencies = new Map(Object.entries(files).map(([path, sha256]) => [path, { sha256 }]));
-  const inputs = new Map(Object.entries(solidRuntimeFiles).map(([path, sha256]) => [`bench/browser/node_modules/${path}`, { sha256 }]));
+  const inputs = new Map(Object.entries(solidRuntimeFiles).map(([path, sha256]) => [solidRuntimePrefix + path, { sha256 }]));
   const check = (value = receipt, deps = dependencies, build = inputs) => replaySolidCompiler(value, "linux", deps, build);
   assert.doesNotThrow(() => check());
   assert.throws(() => check(null), /missing-solid-compiler-receipt/);
@@ -35,10 +35,18 @@ test("Solid 2 replay requires the exact public compiler, native binding and bund
     const missing = new Map(dependencies); missing.delete(path);
     assert.throws(() => check(receipt, missing), /solid-compiler-differs-from-locked-install/);
   }
-  const shadow = new Map(inputs);
-  const runtime = "bench/browser/node_modules/solid-js/dist/solid.js";
-  shadow.set(runtime, { sha256: "0".repeat(64) });
-  assert.throws(() => check(receipt, dependencies, shadow), /missing-or-modified-solid-runtime-build-input/);
+  // Leave both top-level entries intact when changing an imported module.
+  for (const path of ["solid-js/dist/solid.js", "solid-js/dist/internal.js", "@solidjs/signals/dist/prod/core/graph.js"]) {
+    const changed = new Map(inputs), input = solidRuntimePrefix + path;
+    assert.ok(changed.has(input));
+    changed.set(input, { sha256: "0".repeat(64) });
+    assert.throws(() => check(receipt, dependencies, changed), /missing-or-modified-solid-runtime-build-input/);
+  }
+  const published = "@solidjs/signals/dist/prod/index.js";
+  const normal = solidRuntimePrefix + published, shadow = solidRuntimePrefix + "solid-js/node_modules/" + published;
+  const missing = new Map(inputs); missing.delete(normal);
+  for (const changed of [missing, new Map(missing).set(shadow, inputs.get(normal)), new Map(inputs).set(shadow, inputs.get(normal))])
+    assert.throws(() => check(receipt, dependencies, changed), /missing-or-modified-solid-runtime-build-input/);
 });
 // Completely synthetic source/build/browser receipts. Their successful intrinsic
 // replay MUST NOT authenticate them or create a real review receipt.
