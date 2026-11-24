@@ -772,7 +772,8 @@ test("catalog negative replay binds retained tool images to the checkout of its 
   const earlier = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
   f.summary.tools.upstream.image = earlier; f.put("tools.json", f.summary.tools);
   assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), (e) => e.message.includes(
-    `retained upstream image ${earlier} is not this checkout's pin ${upstreamImage}; verify from a checkout of the measured commit ${f.commit}`));
+    `retained upstream image is not this checkout's pin ${upstreamImage}; verify from a checkout of the measured commit ${f.commit}`)
+    && !e.message.includes(earlier));
 });
 
 const boundaryFile = "fixture/corten/checker.json";

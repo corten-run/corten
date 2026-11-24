@@ -123,7 +123,8 @@ test("saved evidence replays from a checkout of its measured commit, never again
   }
   assert.ok(rewritten >= 3, "summary, upstream and CPU sidecar receipts carry the image");
   assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
-    && e.message.includes(`retained image ${earlier} is not this checkout's pin ${nodeImage}; validate from a checkout of the measured commit ${commit}`));
+    && e.message.includes(`retained image is not this checkout's pin ${nodeImage}; validate from a checkout of the measured commit ${commit}`)
+    && !e.message.includes(earlier));
 });
 
 test("native replay admits the producer's decimal sum overshoot, not an inconsistent mean", async (t) => {

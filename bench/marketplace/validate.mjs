@@ -54,7 +54,7 @@ export function validateSaved({ folder, round, commit }) {
 function replay({ folder, round, commit }) {
   roundIdentity(round); assert.match(commit, /^[a-f0-9]{40}$/);
   // Image pins are this checkout's, so saved evidence replays from a checkout of its measured commit.
-  const pinned = (image, pin) => assert.equal(image, pin, `retained image ${image} is not this checkout's pin ${pin}; validate from a checkout of the measured commit ${commit}`);
+  const pinned = (image, pin) => assert.ok(image === pin, `retained image is not this checkout's pin ${pin}; validate from a checkout of the measured commit ${commit}`);
   const files = savedFiles(folder), s = files.json("summary.json");
   assert.equal(s.round, round, "wrong saved round"); assert.equal(s.commit, commit, "wrong saved commit");
   assert.ok([v5Schema, resultSchema].includes(s.schema), "saved replay requires a native raw result format");
