@@ -2046,13 +2046,17 @@ async fn another_app_s_answer_that_sets_a_cookie_stays_personal_without_it() {
                 "/cookie-said",
                 get(|| async { ([(header::CACHE_CONTROL, "public, max-age=60"), (header::SET_COOKIE, "session=ann")], "ann's") }),
             )
-            .route("/cookie-typed", get(move || async move { (Cache::public(minute), [(header::SET_COOKIE, "session=ann")], "ann's") }))
+            .route(
+                "/cookie-typed",
+                get(move || async move { (Cache::public(minute), [(header::SET_COOKIE, "session=ann")], "ann's") }),
+            )
             .route("/plain", get(|| async { "ann's" })),
     ))
     .router();
     let home = || get(|| async { "home" });
-    let routes =
-        || Table::new().route("/cookie", home()).route("/cookie-said", home()).route("/cookie-typed", home()).route("/plain", home());
+    let routes = || {
+        Table::new().route("/cookie", home()).route("/cookie-said", home()).route("/cookie-typed", home()).route("/plain", home())
+    };
     // Without a `Cookie`, so that nothing but the answer's own cookie makes it personal.
     let asked = |router: &Router, uri: &'static str, fresh: bool| {
         let mut req = Request::get(uri);
@@ -2069,8 +2073,9 @@ async fn another_app_s_answer_that_sets_a_cookie_stays_personal_without_it() {
     for (cache, sent) in
         [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
     {
-        let router =
-            App::new(Routes::from(routes())).middleware((CdnRecaches(cache), TakesTheCookieOff, RelaysAnotherApp(other.clone()))).router();
+        let router = App::new(Routes::from(routes()))
+            .middleware((CdnRecaches(cache), TakesTheCookieOff, RelaysAnotherApp(other.clone())))
+            .router();
         for (uri, fresh, personal) in [
             ("/cookie", false, true),
             ("/cookie-said", false, true),
