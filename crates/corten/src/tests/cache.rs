@@ -3231,11 +3231,13 @@ async fn over_http1_the_copy_for_a_panic_does_not_name_its_policy_for_the_connec
     };
     head().await;
     let second = head().await;
-    // Past its lifetime, on the clock the store counts by.
+    // Past its lifetime, on the clock the store counts by: real time, as this runtime's clock is
+    // not paused, so the copy's age is at least a second, more on a slow host.
     tokio::time::sleep(Duration::from_millis(1100)).await;
     reads.lock().unwrap().push_back(Read::HandlerPanics);
     let panicked = head().await;
-    assert!(panicked.starts_with("http/1.1 200") && panicked.contains("\r\nage: 1"), "the copy: {panicked}");
+    let age = panicked.lines().find_map(|line| line.strip_prefix("age: ")).and_then(|age| age.parse::<u64>().ok());
+    assert!(panicked.starts_with("http/1.1 200") && age.is_some_and(|age| age >= 1), "the copy: {panicked}");
     assert!(panicked.contains("\r\ncache-control: private, no-store"), "{panicked}");
     assert!(!panicked.lines().any(|line| line.starts_with("connection:") && line.contains("cache-control")), "{panicked}");
     assert!(second.starts_with("http/1.1 200") && second.contains("\r\nage: 0"), "kept: {second}");
