@@ -382,9 +382,9 @@ it builds has to run on this machine.
 `-p` at a workspace's root, that is the root, not the member's directory, so the command's path
 and the app's own relative paths are from there:
 `corten build -p shop --profile-from sh shop/train.sh`. The copy gets the environment
-`corten build` was given, less
-`HOST` so that a copy that reads it listens on this machine only, on a port nothing else has, and runs the command
-once the copy accepts a connection there.
+`corten build` was given, less `HOST`, so that a copy that reads it listens on this machine
+only. The build gives the copy a port, and runs the command once a connection to that port is
+accepted.
 
 That port is a free one the build picks and gives the copy in `PORT`, whatever `PORT` holds
 where `corten build` runs: that one is the app's, set for running it, and is not read. An app
@@ -401,7 +401,14 @@ The copy is then looked for on that port, and it and the command are given it in
 number from 1 to 65535, when it is given twice or without `--profile-from`, and when something
 already listens on the port (the app itself under `corten dev`, or a copy that a cancelled
 build left running), which would answer the wait and the command in the copy's place. The
-build looks again before it starts the copy, minutes later. Without `--port`, an app that binds
+build looks again before it starts the copy, minutes later. A look is a connection, and a
+listener answers one only while its queue of connections it has not accepted has room: one
+that has stopped accepting, with that queue full, passes both looks as a free port, and the
+build then stops after the instrumented build, when the copy cannot bind. A second build in the
+same target directory is refused for the build that is running, which is looked for before the
+port, so it is not told to stop that build's copy; one in another target directory that names
+the same port is told that something listens there, which may be the other build's copy.
+Without `--port`, an app that binds
 its own port stops the build after a minute, with a line that names the option.
 
 The wait is a TCP connection to `127.0.0.1` or `[::1]` at that port and nothing more. So the
@@ -413,8 +420,17 @@ of them, and its script, which knows the others, waits for each before it sends 
 (`curl --retry 10 --retry-connrefused` on the first request). And the wait cannot tell whose
 socket accepted: a copy that has exited is not taken for it, but a program that takes the port
 in the moment between the build's last look and the copy's own bind is, and the command's
-requests then go to that program. A copy that exits when it cannot bind fails the build
-afterwards, as one that exited while the command ran.
+requests then go to that program. The copy cannot bind the port then. A copy that has exited
+by the time the command ends fails the build, as one that exited while the command ran. One
+that is still starting when the command ends is stopped like any other, and may exit with a
+profile of having served nothing, so with `--port` the build looks at the port once more after
+the copy has exited: what listens there then is not the copy, and the build stops, saying so.
+One timing is left. Another program takes the named port in that moment and answers the wait
+and the command, the copy fails to bind only after the command has ended, and that program has
+stopped listening by the time the copy has exited. The build then succeeds, and the release is
+built from a profile of a copy that served nothing. The look after the copy can also stop a
+build it should not: a program that begins to listen on the port in the moment after the copy
+left it (a supervisor starting the app again) is taken for one that was there before.
 
 An app's own listeners bind the addresses the app chooses, with `HOST` or without: one that
 binds every address (`0.0.0.0:8443`) can be reached from the network while the build runs, and
@@ -686,7 +702,12 @@ The two builds are two lines of one `RUN`. A Cargo argument the app's release ne
 (`--features`, `--bin`) goes on both, before `--profile-from` on the second: on one alone,
 the image with a profile is built with other features than the image without. An app that
 binds a port of its own names it on the second, with `--port 8443` before `--profile-from`
-([A profile-guided build](#a-profile-guided-build)); not tried in an image build.
+([A profile-guided build](#a-profile-guided-build)). The `corten` the Dockerfile installs has
+to be a release that has `--port`, which came after `--profile-from`. A `corten` with
+`--profile-from` alone passes the Dockerfile's check of the command (below) and then refuses
+the second build before it builds the app, naming `--port` as an argument `corten build` does
+not take; the fix is to move the version on the Dockerfile's install line to a release that
+has `--port`. Not tried in an image build: no release has either option yet.
 
 What the argument asks of the app and its build, which the ordinary build does not:
 
