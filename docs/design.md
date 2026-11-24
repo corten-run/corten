@@ -7519,7 +7519,7 @@ rules something out.
     held, was told of the build that is running, and a listener that took the named port once
     the copy had started, the copy still starting when its command ended, answered the wait
     and the command and stopped the build at the look after the copy had exited, where the
-    same build without that look ended with its release built, the tests in three runs and
+    same build without that look ended with its release built, the tests in five runs and
     the build without the look in one; by a throwaway
     test, a standard-library listener that accepted nothing answered 129 looks and not the
     130th, which then read the port as free, in each of two runs).
