@@ -98,34 +98,44 @@ export async function styles(browser, errors, swaps, noSwaps) {
     check("a patch sent while another's area stylesheet is loading waits for that load", /^5px( 5px)*, 1 link$/.test(drawn), drawn);
     await raced.close();
   }
-  // A navigation into an area while a patch's load of the area's stylesheet is in flight waits for
-  // that load too, rather than take the link the patch put in the head for a loaded stylesheet:
-  // the news area's Load more patch, sent on the home page, then a link to the news. A probe with
-  // the news area's class, outside <main>, shows whether its rules applied when the page swapped.
-  // The patch's request for the stylesheet is held until the runtime has read the navigation's
-  // answer, so the navigation meets that load still out however slowly each step comes (#2014).
-  // The runtime reads the answer with `text()` and looks up its stylesheets in the same task, and
-  // the page notes the read a task later, so the lookup has been made once the note is there. The
-  // page must not swap while the stylesheet is held, and the browser must request it only once:
-  // the navigation shares the patch's load. Every step before the release is bounded, and the
-  // stylesheet is released however they end.
-  if (swaps) {
+  // A navigation into an area while a patch's load of the area's stylesheet is in flight shares
+  // that load, rather than take the link the patch put in the head for a loaded stylesheet: the
+  // news area's Load more patch, sent on the home page, then a link to the news. The patch's
+  // request for its one stylesheet is held until the runtime has read the navigation's answer, so
+  // the navigation meets that load still out however slowly each step comes (#2014). The runtime
+  // reads the answer with `text()` and looks up its stylesheets in the same task, and the page
+  // notes the read a task later, so the lookup has been made once the note is there. The page
+  // must not swap while the stylesheet is held, nor the browser request it again.
+  // Then the load succeeds, and a probe with the news area's class, outside <main>, shows its rules
+  // applied when the page swapped; or it fails, and the navigation loads the page in full, as one
+  // whose own stylesheet fails does. A navigation that took the patch's link for a loaded
+  // stylesheet swaps the page in unstyled instead. Unlike the probe's border, that outcome does not
+  // depend on whether the page's handler modules, which also hold the swap, come before or after
+  // the stylesheet. Every step before the release is bounded, and the stylesheet is released
+  // however they end.
+  /** @param {boolean} fails */
+  const sharedLoad = async (fails) => {
     const entered = await browser.newPage();
     entered.on("pageerror", (e) => errors.push(`navigation during a patch's load: ${e.message}`));
     await entered.goto(base);
-    /** The section stylesheets the page requested. @type {string[]} */
-    const sheets = [];
+    /** The stylesheet the patch links, by its URL. */
+    let sheet = "";
+    /** The page's requests for it: all of them, and those before the release. */
+    let requested = 0;
+    let requestedHeld = 0;
     let asked = () => {};
     const patchAsked = new Promise((resolve) => (asked = () => resolve(undefined)));
     let release = () => {};
     const held = new Promise((resolve) => (release = () => resolve(undefined)));
-    await entered.route("**/sections/**", async (route) => {
-      sheets.push(new URL(route.request().url()).pathname);
+    /** Holds the first request for the patch's stylesheet; a page loaded in full asks again. @param {import("@playwright/test").Route} route */
+    const hold = async (route) => {
+      requested += 1;
+      if (requested > 1) return route.continue().catch(() => {});
       asked();
       await held;
       // The page may have closed by the time a failed case releases it.
-      await route.continue().catch(() => {});
-    });
+      await (fails ? route.abort("internetdisconnected") : route.continue()).catch(() => {});
+    };
     /** What kept the case from holding the stylesheet until the navigation's answer was read. */
     let stuck = "";
     /** The probe's border if the page swapped while the stylesheet was held. @type {string | null} */
@@ -135,36 +145,49 @@ export async function styles(browser, errors, swaps, noSwaps) {
         15_000,
         "the patch's load or the navigation's read took over 15 s",
         (async () => {
+          sheet = await entered.evaluate(async () => {
+            const answer = await fetch("/news?shown=3", { headers: { corten: "action" } }).then((r) => r.text());
+            /** @type {any} */ (window).__answer = answer;
+            const parsed = document.createElement("template");
+            parsed.innerHTML = __html(answer);
+            const links = Array.from(parsed.content.querySelectorAll("link[data-corten-style]"), (link) => new URL(link.getAttribute("href") ?? "", location.href).href);
+            return links.length === 1 ? links[0] : `${links.length} stylesheets`;
+          });
+          if (!sheet.startsWith("http")) throw new Error(`the patch links ${sheet}`);
+          await entered.route((url) => url.href === sheet, hold);
           await entered.evaluate(async () => {
-          const { patch } = await import("corten");
-          const answer = await fetch("/news?shown=3", { headers: { corten: "action" } }).then((r) => r.text());
-          // The elements the patch replaces, outside <main> so the swap leaves them.
-          const stories = document.createElement("ul");
-          stories.id = "stories";
-          const more = document.createElement("form");
-          more.id = "load-more";
-          const probe = document.createElement("p");
-          probe.className = "disclaimer__note";
-          document.body.append(stories, more, probe);
-          const at = /** @type {any} */ (window);
-          at.__entered = null;
-          new MutationObserver((_, observer) => {
-            if (document.querySelector("main h1")?.textContent !== "Market news") return;
-            at.__entered = getComputedStyle(probe).borderInlineStartWidth;
-            observer.disconnect();
-          }).observe(document.body, { childList: true, subtree: true });
-          // Not awaited: the navigation starts while this patch's stylesheet is still loading.
-          patch(__html(answer)).catch(() => {});
+            const { patch } = await import("corten");
+            // The elements the patch replaces, outside <main> so the swap leaves them.
+            const stories = document.createElement("ul");
+            stories.id = "stories";
+            const more = document.createElement("form");
+            more.id = "load-more";
+            const probe = document.createElement("p");
+            probe.className = "disclaimer__note";
+            document.body.append(stories, more, probe);
+            const at = /** @type {any} */ (window);
+            // Gone if the page loads in full.
+            at.__sameDocument = true;
+            at.__entered = null;
+            new MutationObserver((_, observer) => {
+              if (document.querySelector("main h1")?.textContent !== "Market news") return;
+              at.__entered = getComputedStyle(probe).borderInlineStartWidth;
+              observer.disconnect();
+            }).observe(document.body, { childList: true, subtree: true });
+            // Not awaited: the navigation starts while this patch's stylesheet is still loading.
+            patch(__html(at.__answer)).catch(() => {});
           });
           await patchAsked;
           await entered.evaluate(() => {
             const at = /** @type {any} */ (window);
             at.__read = false;
             const text = Response.prototype.text;
+            const news = new URL("/news", location.href).href;
+            at.__restoreText = () => (Response.prototype.text = text);
             Response.prototype.text = function () {
               const read = text.call(this);
-              if (new URL(this.url).pathname === "/news") {
-                Response.prototype.text = text;
+              if (this.url === news) {
+                at.__restoreText();
                 read.then(() => setTimeout(() => (at.__read = true)), () => {});
               }
               return read;
@@ -174,6 +197,7 @@ export async function styles(browser, errors, swaps, noSwaps) {
           // Polled on a timer: a loaded browser may not be delivering animation frames.
           await entered.waitForFunction(() => (/** @type {any} */ (window)).__read, undefined, { timeout: 10_000, polling: 50 });
           early = await entered.evaluate(() => (/** @type {any} */ (window)).__entered);
+          requestedHeld = requested;
         })(),
       );
     } catch (error) {
@@ -181,15 +205,55 @@ export async function styles(browser, errors, swaps, noSwaps) {
     } finally {
       release();
     }
-    const border = await entered
-      .waitForFunction(() => (/** @type {any} */ (window)).__entered, undefined, { timeout: 5000, polling: 50 })
-      .then((got) => got.jsonValue(), () => "not swapped");
-    const marked = await entered.evaluate(() => document.head.querySelectorAll('link[data-corten-style][href*="/sections/news"]').length);
-    check(
-      "a navigation into an area while a patch is loading its stylesheet waits for that load",
-      !stuck && early === null && border === "4px" && marked === 1 && sheets.length === 1,
-      `${stuck ? `${stuck}; ` : ""}${early === null ? "" : `swapped while held: ${early}; `}${border}, ${marked} link; requested: ${sheets.join(" ") || "none"}`,
-    );
+    if (stuck) await within(5000, "", entered.evaluate(() => (/** @type {any} */ (window)).__restoreText?.())).catch(() => {});
+    const whileHeld = `${stuck ? `${stuck}; ` : ""}${early === null ? "" : `swapped while held: ${early}; `}requested ${requestedHeld} times while held`;
+    if (!fails) {
+      const border = await entered
+        .waitForFunction(() => (/** @type {any} */ (window)).__entered, undefined, { timeout: 5000, polling: 50 })
+        .then((got) => got.jsonValue(), () => "not swapped");
+      const marked = await entered.evaluate(
+        (sheet) => Array.from(document.head.querySelectorAll("link[data-corten-style]")).filter((link) => /** @type {HTMLLinkElement} */ (link).href === sheet).length,
+        sheet,
+      );
+      check(
+        "a navigation into an area while a patch is loading its stylesheet waits for that load",
+        !stuck && early === null && requestedHeld === 1 && border === "4px" && marked === 1 && requested === 1,
+        `${whileHeld}, ${requested} in all; ${border}, ${marked} link`,
+      );
+    } else {
+      // Where the page ended: swapped into this document, or this document replaced by a full load.
+      let after = "neither swapped nor loaded in full within 10 s";
+      for (const until = Date.now() + 10_000; Date.now() < until; ) {
+        const now = await within(
+          2000,
+          "",
+          entered.evaluate(() =>
+            document.readyState === "complete" && location.pathname === "/news" && document.querySelector("main h1")?.textContent === "Market news"
+              ? /** @type {any} */ (window).__sameDocument
+                ? "swapped"
+                : "loaded in full"
+              : "",
+          ),
+        ).catch(() => "");
+        if (now) {
+          after = now;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      check(
+        "a navigation into an area while a patch's load of its stylesheet fails loads the page in full",
+        !stuck && early === null && requestedHeld === 1 && after === "loaded in full",
+        `${whileHeld}; ${after}`,
+      );
+    }
     await entered.close();
-  } else skip("a navigation into an area while a patch is loading its stylesheet waits for that load", noSwaps);
+  };
+  if (swaps) {
+    await sharedLoad(false);
+    await sharedLoad(true);
+  } else {
+    skip("a navigation into an area while a patch is loading its stylesheet waits for that load", noSwaps);
+    skip("a navigation into an area while a patch's load of its stylesheet fails loads the page in full", noSwaps);
+  }
 }

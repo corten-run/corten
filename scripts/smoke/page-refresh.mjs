@@ -172,12 +172,14 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         await held;
         await route.fallback().catch(() => {});
       };
-      await page.route("**/alerts?saved=*", slow);
       let cancelled = 0;
       const onFailed = (/** @type {import("@playwright/test").Request} */ r) => void (r.url().includes("/alerts?saved=") && cancelled++);
-      page.on("requestfailed", onFailed);
-      const from = reads.length;
+      let from = reads.length;
+      // Armed inside the guard: a read the route holds is let go however the steps end.
       try {
+        await page.route("**/alerts?saved=*", slow);
+        page.on("requestfailed", onFailed);
+        from = reads.length;
         for (let waited = 0; reads.length === from && waited < 5000; waited += 50) await page.waitForTimeout(50);
         await page.evaluate(() => {
           const to = new URL(location.href);
@@ -186,8 +188,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         });
       } finally {
         replaced();
+        await page.unroute("**/alerts?saved=*", slow);
       }
-      await page.unroute("**/alerts?saved=*", slow);
       await savedSoon();
       page.off("requestfailed", onFailed);
       if (waiting)

@@ -79,16 +79,23 @@ export async function busyForms(page) {
   // another page keeps its button marked until that page is in, and then clears it, a button in
   // the header (outside what the page swaps) included (#1063).
   // A's answer is held until B is pressed and the marks are read, so B meets it still out however
-  // slowly the presses come, and both presses run in the page (#2014).
+  // slowly the presses come, and both presses run in the page (#2014). The route logs each post
+  // as it comes and each answer as it goes, so B is seen to go only after A's answer and to be
+  // drawn: a runtime that dropped B and cleared its mark with A's would leave `wrote a`.
   /** @type {() => void} */
   let answerWriteA = () => {};
   /** @type {Promise<unknown>} */
   let heldWriteA = Promise.resolve();
+  /** @type {string[]} */
+  const writeLog = [];
   await page.route("**/busy-write*", async (route) => {
     const by = new URLSearchParams(route.request().postData() ?? "").get("by");
+    writeLog.push(`post ${by}`);
     if (by === "a") await heldWriteA;
     if (by === "go") await new Promise((resolve) => setTimeout(resolve, 600));
     const headers = by === "go" ? { "corten-location": "/" } : { "content-type": "text/html; charset=utf-8", "corten-patch": "1" };
+    // Logged before it goes, so a post it lets out comes after it in the log.
+    writeLog.push(`answer ${by}`);
     await route.fulfill({ headers, body: by === "go" ? "" : `<p id="busy-w-said">wrote ${by}</p>` }).catch(() => {});
   });
   await page.evaluate(() => {
@@ -111,18 +118,26 @@ export async function busyForms(page) {
   const writeMarks = () => page.evaluate(() => ["busy-w", "busy-wa", "busy-wb"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join());
   heldWriteA = new Promise((resolve) => (answerWriteA = () => resolve(undefined)));
   let whileWrite = "";
+  /** The route's log when B was pressed, A's answer still held. */
+  let loggedWhileHeld = "";
   try {
     await page.evaluate(() => document.getElementById("busy-wa")?.click());
     whileWrite = await clickAndMarks("busy-wb", ["busy-w", "busy-wa", "busy-wb"]);
+    loggedWhileHeld = writeLog.join();
   } finally {
     answerWriteA();
   }
-  await page.waitForFunction(() => document.querySelector("#busy-w-said")?.textContent === "wrote b" && !document.querySelector("#busy-w[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+  // Polled on a timer: a loaded browser may not be delivering animation frames.
+  await page
+    .waitForFunction(() => document.querySelector("#busy-w-said")?.textContent === "wrote b" && !document.querySelector("#busy-w[aria-busy]"), null, { timeout: 5000, polling: 50 })
+    .catch(() => {});
   const afterWrites = await writeMarks();
+  const wrote = await page.evaluate(() => document.querySelector("#busy-w-said")?.textContent ?? null);
+  const logged = writeLog.join();
   check(
     "a button pressed while a write is on its way is marked beside it and sends after its answer",
-    whileWrite === "true,true,true" && afterWrites === "-,-,-",
-    `${whileWrite} | ${afterWrites}`,
+    whileWrite === "true,true,true" && !loggedWhileHeld.includes("post b") && logged === "post a,answer a,post b,answer b" && wrote === "wrote b" && afterWrites === "-,-,-",
+    `${whileWrite} | ${afterWrites}; ${wrote}; route: ${logged} (${loggedWhileHeld || "nothing"} when B was pressed)`,
   );
   const redirectName = "a write that sends the browser to another page keeps its button busy until that page is in";
   return { redirectName };

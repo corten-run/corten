@@ -103,14 +103,18 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
   // still out: the check is of the queue and not of two sends, however slow the press.
   /** @type {Promise<void>} */
   let queuePressed = Promise.resolve();
+  // A case that reads the form between its two answers holds the second until it has.
+  /** @type {Promise<void>} */
+  let queueSecondHeld = Promise.resolve();
   await page.route("**/queue*", async (route) => {
     const request = route.request();
     const fields = fieldsOf(request);
-    queueSent.push(`${request.method()} ${fields.get("n")}${fields.has("submit") ? ` ${fields.get("submit")}` : ""}${fields.has("b") ? ` ${fields.get("b")}` : ""}`);
+    const sent = queueSent.push(`${request.method()} ${fields.get("n")}${fields.has("submit") ? ` ${fields.get("submit")}` : ""}${fields.has("b") ? ` ${fields.get("b")}` : ""}`);
     const answer = queueAnswer;
     // The first of two reads answers last, so a read that was not aborted would draw over the newer.
     const late = request.method() === "GET" && fields.get("n") === "1";
     await queuePressed;
+    if (sent === 2) await queueSecondHeld;
     await new Promise((resolve) => setTimeout(resolve, late ? 1200 : 400));
     const body = answer.body.replace("{n}", fields.get("n") ?? "");
     await route
@@ -378,7 +382,9 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
   // form under it: the waiting submit goes with what the user typed, and its own 205 then resets
   // the form. The second press is the form's other button, so the values differ only by the button
   // and nothing is typed between the presses: only the waiting submit keeps the first 205 from
-  // resetting the form.
+  // resetting the form. The second answer is held until the form has been read with the waiting
+  // submit out, so a reset by the first 205 after that submit's values were taken is seen too, and
+  // the reset seen at the end is the second 205's.
   {
     queueSent = [];
     queueAnswered = 0;
@@ -395,12 +401,28 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
       document.addEventListener("corten:error", (e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status), { signal: w.__queueCase.signal });
     }, `<form id="queue" method="post" action="/queue" data-patch><input name="n" value="1">${keyField}<button name="b" value="save">Save</button><button name="b" value="other">Other</button></form>`);
     await page.fill("#queue-box [name=n]", "5");
+    /** @type {() => void} */
+    let answerOther = () => {};
+    /** The field once the waiting submit is out and before its answer, or why it was not read. */
+    let whileOther = "";
     try {
-      queuePressed = new Promise((resolve) => (pressed = resolve));
-      await pressFor("#queue-box button[value=save]", queueSends("b", "save"));
-      await press("#queue-box button[value=other]");
+      queueSecondHeld = new Promise((resolve) => (answerOther = () => resolve(undefined)));
+      // Armed before the first answer can go, which lets the waiting submit out.
+      const otherSent = page.waitForRequest(queueSends("b", "other"), { timeout: 6000 }).then(
+        () => true,
+        () => false,
+      );
+      try {
+        queuePressed = new Promise((resolve) => (pressed = resolve));
+        await pressFor("#queue-box button[value=save]", queueSends("b", "save"));
+        await press("#queue-box button[value=other]");
+      } finally {
+        pressed();
+      }
+      whileOther = (await otherSent) ? ((await queueFields()).n ?? "no field") : "the other submit was not sent within 6 s";
     } finally {
-      pressed();
+      answerOther();
+      queueSecondHeld = Promise.resolve();
     }
     const until = Date.now() + 6000;
     while (!(queueAnswered === 2 && (await page.getAttribute("#queue-box form", "aria-busy")) === null) && Date.now() < until) await page.waitForTimeout(50);
@@ -421,8 +443,9 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
         (two ?? "").endsWith(" other") &&
         !(two ?? "").includes(zero) &&
         error === null &&
+        whileOther === "5" &&
         after.n === "1",
-      `${queueSent.join()}; error: ${error}; left ${JSON.stringify(after)}`,
+      `${queueSent.join()}; error: ${error}; n while the other was out: ${whileOther}; left ${JSON.stringify(after)}`,
     );
   }
   queuePressed = Promise.resolve();
