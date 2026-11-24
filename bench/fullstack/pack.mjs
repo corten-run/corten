@@ -1,6 +1,10 @@
 // Packs a round's raw output into results/<round>/raw.tar.xz, beside the summaries the README is
-// written from, so a round adds one archive to Git rather than a file for every run.
-// Usage: node bench/fullstack/pack.mjs <round> (droplet.mjs runs it once a finished round is here)
+// written from. The archive is not committed (bench/fullstack/.gitignore): a maintainer publishes
+// it outside the tree, and the round's raw.txt records where it can be fetched and its SHA-256
+// (CONTRIBUTING.md, Benchmark results). Run from the command line, this prints that SHA-256; it does
+// not publish the archive or write raw.txt. The archives of rounds committed before stay in the tree.
+// Usage: node bench/fullstack/pack.mjs <round> (droplet.mjs packs a finished round once it is
+// here; run this then to print the archive's SHA-256)
 //
 // Kept as files: the summaries and the round's log (KEPT below). Packed: everything else in the
 // round's folder (each app's k6, CPU and startup files, every count). The archive is listed back and
@@ -8,7 +12,8 @@
 // summarize.mjs reads a packed round from its archive; `tar -xJf results/<round>/raw.tar.xz -C
 // results/<round>` brings the files back for a look at one run.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, existsSync, mkdtempSync, openSync, readSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -123,10 +128,31 @@ export const pack = (dir, tar = (args) => spawnSync("tar", args, { encoding: "ut
   return files.length;
 };
 
+/**
+ * The SHA-256 of the file at `path`, in hex, read a MiB at a time so an archive of any size needs no
+ * more memory than that. @param {string} path
+ */
+export const sha256File = (path) => {
+  const hash = createHash("sha256");
+  const chunk = Buffer.alloc(1024 * 1024);
+  const fd = openSync(path, "r");
+  try {
+    for (let n; (n = readSync(fd, chunk, 0, chunk.length, null)) > 0;) hash.update(chunk.subarray(0, n));
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
+};
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const round = process.argv[2];
   if (!round || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(round)) throw new Error("usage: node bench/fullstack/pack.mjs <round>");
   const dir = join(import.meta.dirname, "results", round);
   const n = pack(dir);
   console.log(n === 0 ? `${round}: nothing to pack` : `${round}: ${n} files in ${join(dir, ARCHIVE)}`);
+  const archive = join(dir, ARCHIVE);
+  if (existsSync(archive)) {
+    const sha256 = sha256File(archive);
+    console.log(`${ARCHIVE}: ${statSync(archive).size} bytes, SHA-256 ${sha256}; record where it is published and this SHA-256 in ${join(dir, "raw.txt")}`);
+  }
 }

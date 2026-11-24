@@ -2344,9 +2344,15 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
 1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
    from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`,
    `docker-rebuild.json`, `rust-analyzer.json`, `bytes.json`, `cold-start.json`,
-   `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and, in
-   a round committed before this, `raw.txt` (below). Its raw output
-   (each app's k6, CPU and startup files, every count) is one archive beside them, `raw.tar.xz`.
+   `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and
+   `raw.txt` (below). Its raw output (each app's k6, CPU and startup files, every count) is one
+   archive beside them, `raw.tar.xz`, which Git ignores (`bench/fullstack/.gitignore`). Only
+   the packed archive is ignored: the loose raw files of a round not yet packed are not, so pack a
+   round before committing its summaries. A maintainer publishes the archive where it will be kept,
+   and the round's `raw.txt` records where it can be fetched and its SHA-256
+   ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)).
+   `node bench/fullstack/pack.mjs <round>` prints the archive's size and SHA-256; it does not
+   publish the archive or write `raw.txt`.
    `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by
    hand and summarized, `node bench/fullstack/pack.mjs <round>` does. It lists the archive back
    and removes a file only when the listing has it. r14's raw output was 1,156 files and 1.64 MB,
@@ -2357,9 +2363,21 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
    the files back for a look at one run.
 3. The rounds committed before this (r1 to r14 and the side rounds) had their raw output removed
    from the tree. Each one's `raw.txt` names the commit that still has it and the command that
-   brings it back; remove it when a round brought back is packed again. The history is not
+   brings it back; when a round brought back is packed again, its `raw.txt` records where the
+   new archive can be fetched and its SHA-256 instead. The history is not
    rewritten, so their blobs stay in it and a clone still downloads them once (Git's pack was 41.7
    MiB); a checkout has 142 files of results (5.7 MB) instead of 11,150 (22.1 MB), and a new round
-   adds one archive instead of a thousand files.
-4. The raw output stays in the repository, not in a CI artifact (kept for 90 days at most) or a
-   release download, so the runs behind every table stay with the commit that reports them.
+   packs its raw output into one archive instead of a thousand files.
+4. The rounds packed before raw output left the tree (r15, r16, `cost-under-load` and the
+   `ab-jemalloc` rounds) keep their `raw.tar.xz` where it is, listed in `scripts/bench-size.allow`:
+   their paths are cited, and removing them at the tip would shrink no full clone, since their
+   blobs stay reachable in history. A new round's archive is not committed, because a normal full
+   clone fetches every version of a committed file still reachable in history; `npm run check` fails on a file under `bench/` with an archive suffix that the
+   base's list does not have, in any commit of the pull request, and the list only shrinks
+   ([#1719 Benchmark runs commit raw output and archives under bench/, so every clone grows with every run](https://github.com/corten-run/corten/issues/1719)).
+   A kept file is held to 256 KiB the same way: r16's log and summary, over it, are listed, and a
+   new round's over it fails the check until it is made smaller or its detail moves to the archive.
+   A dependency lock file is source input, not output: the size limit skips one at a path listed
+   in `LOCKS` in `scripts/bench-size.mjs` beside its manifest (Laravel's `composer.lock` with
+   `composer.json`, Nuxt's `package-lock.json` with `package.json`); a new one over the limit
+   is added there, for review.
