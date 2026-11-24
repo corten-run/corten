@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { remoteFiles, reservation, supervisorBootstrap, upstreamImages } from "./cloud-contract.mjs";
+import { remoteFiles as uploadedFiles } from "./cloud-remote.mjs";
 
 const state = reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" });
 test("bootstrap prepares upstream stable Git and proves required immutable-query flags before clone", () => {
@@ -35,21 +37,33 @@ test("bootstrap prepares the actual client dependency roots and Node 26 before t
   assert.ok(job.includes('node -e \'if (process.versions.node.split(".")[0] !== "26") process.exit(1)\''));
 });
 
+// Saved reservations without the Debian 13 marker regenerate the bytes they uploaded. These are the
+// production wrapper's outputs for two unmarked shapes at be1192a7b, the commit before the marker.
+const uploadedBefore = [
+  [{}, { "job.sh": "fc62ed21c097fc20dc31ad78d9ab5443a3d22e7dcfa488e585891f8fcdc4a87f" }],
+  [{ benchPackage: true, gitSource: true }, { "job.sh": "3424e7b180d59a488d39ee0d630df04036f1951de5eb30d63c6032336ad8770f" }],
+];
+const uploadedPack = "7c7f461a02557b1670385ab0f0c0632ca7f8e2738797a3d7c77673b8218be041";
+const uploadedUnit = "a711ea9c145f36721052581abb489ca389a54c55f601e902aa7351d821d0fc8a";
 test("a new reservation pulls the native Debian 13 upstream image; a saved one keeps its Debian 12 bytes", () => {
-  const legacy = remoteFiles({ ...state, benchPackage: true, gitSource: true });
-  const marked = remoteFiles({ ...state, benchPackage: true, gitSource: true, trixieUpstream: true });
+  const saved = reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" }, "2026-11-01T00:00:00.000Z");
+  const sha256 = (text) => createHash("sha256").update(text).digest("hex");
   const native = readFileSync(new URL("../fullstack-browser/run.mjs", import.meta.url), "utf8");
   const image = native.match(/node:26\.[0-9.]+-[a-z]+-slim@sha256:[a-f0-9]{64}/)?.[0];
   assert.equal(image, upstreamImages.trixie, "native browser runner uses the Debian 13 image");
-  const pull = (name) => `\ntimeout 900 docker pull ${name}\n`;
-  assert.ok(marked["job.sh"].includes(pull(image)), "fresh host prepares the current native upstream image");
-  assert.ok(!marked["job.sh"].includes(upstreamImages.bookworm));
-  assert.ok(legacy["job.sh"].includes(pull(upstreamImages.bookworm)) && !legacy["job.sh"].includes(upstreamImages.trixie));
-  // Only that one line differs, and the packer and unit are the same bytes.
-  assert.equal(marked["job.sh"], legacy["job.sh"].replace(pull(upstreamImages.bookworm), pull(upstreamImages.trixie)));
-  for (const file of ["pack.sh", state.unit]) assert.equal(marked[file], legacy[file]);
+  for (const [markers, before] of uploadedBefore) {
+    const legacy = uploadedFiles({ ...saved, ...markers }), marked = uploadedFiles({ ...saved, ...markers, trixieUpstream: true });
+    assert.deepEqual(Object.fromEntries(Object.entries(legacy).map(([name, text]) => [name, sha256(text)])),
+      { ...before, "pack.sh": uploadedPack, [saved.unit]: uploadedUnit }, "an unmarked reservation regenerates its uploaded bytes");
+    // Marked, only the Docker pull line differs; the packer and unit are the same bytes.
+    const was = legacy["job.sh"].split("\n"), is = marked["job.sh"].split("\n");
+    const changed = was.flatMap((line, index) => line === is[index] ? [] : [[line, is[index]]]);
+    assert.equal(is.length, was.length);
+    assert.deepEqual(changed, [[`timeout 900 docker pull ${upstreamImages.bookworm}`, `timeout 900 docker pull ${image}`]]);
+    for (const file of ["pack.sh", saved.unit]) assert.equal(marked[file], legacy[file]);
+  }
   for (const trixieUpstream of [false, null, "true", 1])
-    assert.throws(() => remoteFiles({ ...state, trixieUpstream }), /Debian 13 upstream image marker/);
+    assert.throws(() => uploadedFiles({ ...saved, trixieUpstream }), /Debian 13 upstream image marker/);
 });
 
 test("owned service delegates accounting and establishes its supervisor before provisioning", () => {
