@@ -641,29 +641,19 @@ establish a general ranking.
       5. Code aligned beyond 16 bytes. C code a dependency compiles can put input sections aligned
          to 32 or 64 bytes in `.text`, and LLD moves one only by a multiple of its alignment: a pad
          then moves neither every function by its size nor the data after `.text` within a 64-byte
-         line ([design Choice 72](docs/design.md#choice-placement-runs)). A pull request has one
-         plan for its placement run: later heads keep it and restate only what this point names. For
-         each side the plan states three facts from LLD's map (`-Wl,-Map`) of the unpadded link:
-         each input section of `.text` aligned beyond 16 bytes, with its alignment; the first of
-         them; and every function from it on, by symbol and object file (the side's list). A plan
-         whose sides have no such section says so in one line, and this point asks nothing more of
-         it. A plan with one on either side also lists this repository's crates and the measured
-         program's, and the rest holds for both sides, in the change comparison and the A/A.
+         line ([design Choice 72](docs/design.md#choice-placement-runs)). The run records three
+         facts from LLD's map (`-Wl,-Map`) of each build's unpadded link, before that build's first
+         turn that counts cycles, and the pull request reports them with the run: each input section
+         of `.text` aligned beyond 16 bytes, with its alignment; the first of them; and every
+         function from it on, by symbol and object file (the side's list). Where either side has
+         such a section, the rest of this point holds for both sides, in the change comparison and
+         the A/A.
 
-         The run records the three facts from each build before that build's first turn that counts
-         cycles. Two statements of them are equal when they name the same sections with the same
-         alignments and the same functions by symbol and object file, paths and build hashes left
-         out. Where a build's are not the ones stated, as on a later head, the pull request's
-         description restates them before that turn, and a build with such a turn before then gives
-         no bound. A plan that said its sides had no such section, and whose later build has one,
-         states the facts and lists the crates then. The list of crates may gain a crate on a later
-         head and never loses one. Nothing else in the plan is restated.
-
-         Every placement of both sides has a second pad: a function nothing calls that the ordering
-         file does not name, laid last in `.text`. The plan states its rule and no sizes: `.data`'s
-         offset in a 64-byte line is the unpadded link's plus the first pad's size, mod 64. The run
-         links each placement with second pads of 16, 32, 48 and 64 bytes and keeps the smallest
-         whose map shows `.data` there.
+         Every placement of both sides has a second pad: a function nothing calls, aligned to 16
+         bytes, that the ordering file does not name and the link line gives last, so that it is
+         laid last in `.text`. One rule sizes it: `.data`'s offset in a 64-byte line is the unpadded
+         link's plus the first pad's size, mod 64. The run links each placement with second pads of
+         16, 32, 48 and 64 bytes and keeps the smallest whose map shows `.data` there.
 
          Each measured binary is linked with the map, as is the unpadded link the first point
          compares with the build's own binary, and each placement's map is checked against that
@@ -675,18 +665,21 @@ establish a general ranking.
          links, as far from its start; and `.data` is where the rule says. The first point's other
          checks stand, with both pads among a placement's functions and the first pad first.
 
-         A side has no reading across placements for any workload, and a workload that needs one is
-         not decided, which does not pass, in three cases: an input section of its `.text` is
-         aligned beyond 64 bytes; a function whose symbol names a listed crate lies at or after the
-         first section aligned beyond 16 bytes, or outside `.text`; or none of the four sizes puts a
-         placement's `.data` where the rule says. One workload has none where its request runs a
-         function on a side's list that the pull request changes, adds or removes, unless the plan
-         gave, before the first turn that counts cycles on a placement of any head of the pull
-         request, a reason its review accepts why that function's fixed place in a line does not
-         bear on that workload's reading (where its placement runs predate this point, in the one
-         plan declared under it: that Choice). A reason refused or late leaves the workload with no
-         reading across placements under the plan; what a single build decides is unchanged. A plan
-         may not build the C code with other flags to be read under the first point alone.
+         A side has no reading across placements for any workload, and a workload the plan reads
+         across placements is then not decided, which does not pass, in three cases: an input
+         section of its `.text` is aligned beyond 64 bytes; a function whose symbol names a crate of
+         this repository's workspace or of the measured program lies at or after the first section
+         aligned beyond 16 bytes, or outside `.text`; or none of the four sizes puts a placement's
+         `.data` where the rule says. A workload has no reading across placements where its request
+         runs a listed function that the pull request changes, or one that is on one side's list and
+         not on the other's, unless the function is in a section aligned beyond 16 bytes that no
+         section before it exceeds in alignment, or is laid after such a section of its own library
+         (the archive its object file is in) with only that library's code between. For any other
+         such function the workload keeps its reading only if the plan gave, before the first turn
+         that counts cycles on a placement of any head of the pull request, a reason its review
+         accepts why the function's fixed place in a line does not bear on that workload's reading.
+         What a single build decides is unchanged. A plan may not build the C code with other flags
+         to be read under the first point alone.
 
       The margin stays +1% with no floor: the workload meets it when the change's bound across
       placements is under +1% and its A/A resolves. A placement that fails a check above, or has
