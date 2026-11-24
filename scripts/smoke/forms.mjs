@@ -1,5 +1,5 @@
 import http from "node:http";
-import { base, shadowing, engine, skip, check, steps, pollFor } from "./helpers.mjs";
+import { base, shadowing, engine, skip, check, steps, pollFor, cleanUp } from "./helpers.mjs";
 
 /**
  * A named control must not turn a runtime walk into form -> control -> form. The timeout
@@ -111,7 +111,8 @@ export async function formFailures(page, failWatch, openFeeds) {
   // A submit the network fails: the form stays, and the page hears about it. The press runs in
   // the page, in the same task that starts listening for the form's own error and its six seconds,
   // so a press that never submits fails the check in 6 s from the press rather than waiting on the
-  // stall watchdog, and another form's error does not count (#2014).
+  // stall watchdog, and another form's error does not count (#2014). The handler checks the time
+  // itself: an error heard after the six seconds fails the check even if the timer has not run.
   const messageBefore = await page.textContent("#watch-message");
   /** @type {string} */
   let failedWith;
@@ -125,10 +126,16 @@ export async function formFailures(page, failWatch, openFeeds) {
           new Promise((resolve) => {
             const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
             const stop = new AbortController();
+            const from = performance.now();
             const late = setTimeout(() => (stop.abort(), resolve(null)), 6000);
             form.addEventListener(
               "corten:error",
-              (e) => (clearTimeout(late), stop.abort(), resolve([/** @type {CustomEvent} */ (e).detail.status, e.cancelable])),
+              (e) => {
+                clearTimeout(late);
+                stop.abort();
+                const after = performance.now() - from;
+                resolve(after <= 6000 ? [/** @type {CustomEvent} */ (e).detail.status, e.cancelable] : `heard after ${Math.round(after)} ms`);
+              },
               { signal: stop.signal },
             );
             /** @type {HTMLButtonElement} */ (form.querySelector("button")).click();
@@ -572,14 +579,18 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
         res.write(patch ? '<p id="watch-message">' : "<p>Watching", () => res.socket?.destroy());
       });
     });
-    await new Promise((resolve) => cutServer.listen(0, "127.0.0.1", () => resolve(undefined)));
-    const cutPort = /** @type {import("node:net").AddressInfo} */ (cutServer.address()).port;
-    await page.route("**/watch-cut*", (route) => route.continue({ url: `http://127.0.0.1:${cutPort}${new URL(route.request().url()).pathname}` }));
     const cutLogged = errors.length;
     /** @type {string[]} */
     const cutSeen = [];
-    // The route and the server go however the case ends.
+    // The server, the route and the form go however the case ends, set up in full or not, and each
+    // goes even when removing another fails.
     try {
+      await new Promise((resolve, reject) => {
+        cutServer.once("error", reject);
+        cutServer.listen(0, "127.0.0.1", () => resolve(undefined));
+      });
+      const cutPort = /** @type {import("node:net").AddressInfo} */ (cutServer.address()).port;
+      await page.route("**/watch-cut*", (route) => route.continue({ url: `http://127.0.0.1:${cutPort}${new URL(route.request().url()).pathname}` }));
       // A form whose failure does not come within 6 s of its press stops the case.
       for (const action of ["/watch-cut", "/watch-cut-plain"]) {
         await page.evaluate(
@@ -605,8 +616,11 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
         if (cutStatus === null) break;
       }
     } finally {
-      await page.unroute("**/watch-cut*");
-      cutServer.close();
+      await cleanUp(
+        () => page.unroute("**/watch-cut*"),
+        () => cutServer.close(),
+        () => page.evaluate(() => document.querySelector("#cut")?.remove()),
+      );
     }
     check(cutName, cutSeen.length === 2 && cutSeen.every((seen) => seen.endsWith("status 0, key kept")), cutSeen.join("; "));
     // The browser logs the answer it could not read.
@@ -659,8 +673,8 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
       // The handler's module loads when the copies join the page; it runs from then on.
       await p.waitForFunction(() => "readKeyLoaded" in window, null, { timeout: 5000 });
     };
-    await page.route("**/scripts/read-key.js", readKey);
-    await page.route("**/count-row", (route) => {
+    /** @param {import("playwright").Route} route */
+    const countRow = (route) => {
       const body = new URLSearchParams(route.request().postData() ?? "");
       const key = body.get("submit") ?? "";
       const row = body.get("row") ?? "";
@@ -676,7 +690,7 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
         headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" },
         body: `<p id="count-row-${row}-said">${fresh ? "Counted." : "Already counted."}</p>`,
       });
-    });
+    };
     const logged = errors.length;
     const names = ["each copy of a template's form gets a submit key of its own when first sent, kept for its retry", "an on:submit handler that reads a template copy's form sees the key it sends"];
     /** Why the case stopped, if it did: a failure, answer or post that did not come in time. */
@@ -694,8 +708,11 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
     const keyOf = (row) => page.inputValue(`#count-row-${row} [name=submit]`);
     /** @param {string} row */
     const saidBy = (row) => pollFor(5000, () => page.evaluate((row) => document.getElementById(`count-row-${row}-said`)?.textContent || undefined, row));
-    // The routes, the copies and the failure's listener go however the case ends.
+    // The routes, the copies and the failure's listener go however the case ends, set up in full or
+    // not, and each goes even when removing another fails.
     try {
+      await page.route("**/scripts/read-key.js", readKey);
+      await page.route("**/count-row", countRow);
       await copies(page, ["a", "b"]);
       const failed = await formError("#count-row-a");
       try {
@@ -718,9 +735,11 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
         }
       }
     } finally {
-      await page.unroute("**/count-row");
-      await page.unroute("**/scripts/read-key.js");
-      await page.evaluate(() => (document.getElementById("count-rows")?.remove(), document.getElementById("count-row-list")?.remove()));
+      await cleanUp(
+        () => page.unroute("**/count-row", countRow),
+        () => page.unroute("**/scripts/read-key.js", readKey),
+        () => page.evaluate(() => (document.getElementById("count-rows")?.remove(), document.getElementById("count-row-list")?.remove())),
+      );
     }
     // The browser logs the 502.
     errors.splice(logged, errors.length, ...errors.slice(logged).filter((e) => !/502|Bad Gateway/i.test(e)));
@@ -729,9 +748,11 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
     /** @type {string | null} */
     let readPlain = null;
     if (!stopped) {
-      const plainPage = await (await browser.newContext()).newPage();
-      // Closed however the case ends, which takes its routes with it.
+      const plainContext = await browser.newContext();
+      // Closed however the case ends, a page that could not be opened included, which takes its
+      // routes with it.
       try {
+        const plainPage = await plainContext.newPage();
         plainPage.on("console", (m) => {
           const text = m.type() === "error" ? m.text() : "";
           if (text && !bug(text) && !cut.test(text)) errors.push(`plain post: ${text}`);
@@ -750,7 +771,7 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
         if (!(await pollFor(5000, async () => plainSent.length > 0 && new URL(plainPage.url()).pathname === "/count-row"))) stopped = "the plain copy's post did not land within 5 s";
         else readPlain = await plainPage.evaluate(() => sessionStorage.getItem("read-key")).catch(() => null);
       } finally {
-        await plainPage.context().close();
+        await plainContext.close();
       }
     }
     const [plainKey = "(none)"] = plainSent;

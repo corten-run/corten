@@ -422,11 +422,13 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
       let whileOther = "";
       // The waiting submit is heard from before the presses, so it is not missed, but its six seconds
       // start only once the presses are made, as the first answer is let go: the first press's own
-      // wait and the second press do not use them up.
-      /** @type {(sent: boolean) => void} */
+      // wait and the second press do not use them up. When it was heard decides, not which of it and
+      // the timer is handled first: one heard after the six seconds fails the case.
+      /** @type {(at: number) => void} */
       let heardOther = () => {};
+      /** @type {Promise<number>} */
       const otherHeard = new Promise((resolve) => (heardOther = resolve));
-      const onOther = (/** @type {import("@playwright/test").Request} */ r) => void (queueSends("b", "other")(r) && heardOther(true));
+      const onOther = (/** @type {import("@playwright/test").Request} */ r) => void (queueSends("b", "other")(r) && heardOther(performance.now()));
       page.on("request", onOther);
       try {
         queueSecondHeld = new Promise((resolve) => (answerOther = () => resolve(undefined)));
@@ -438,7 +440,8 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
           await press("#queue-box button[value=other]");
           /** @type {ReturnType<typeof setTimeout> | undefined} */
           let timer;
-          otherSent = Promise.race([otherHeard, new Promise((resolve) => (timer = setTimeout(() => resolve(false), 6000)))]).finally(() => clearTimeout(timer));
+          const from = performance.now();
+          otherSent = Promise.race([otherHeard.then((at) => at - from <= 6000), new Promise((resolve) => (timer = setTimeout(() => resolve(false), 6000)))]).finally(() => clearTimeout(timer));
         } finally {
           pressed();
         }

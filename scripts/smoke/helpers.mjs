@@ -125,7 +125,10 @@ const within = (ms, what, work) => {
  */
 const steps = (ms, what) => {
   const until = performance.now() + ms;
+  /** Why the work stopped, never empty once it has: an error without a message stops it too. */
   let over = "";
+  /** @param {unknown} why */
+  const stop = (why) => (over ||= (why instanceof Error ? why.message.split("\n")[0] : String(why ?? "")) || `${what}: a step failed`);
   /** Whether the work has stopped, marking it stopped once the time is up. */
   const stopped = () => {
     if (!over && performance.now() >= until) over = what;
@@ -139,7 +142,7 @@ const steps = (ms, what) => {
     try {
       value = await within(until - performance.now(), what, work());
     } catch (error) {
-      over ||= error instanceof Error ? error.message.split("\n")[0] : String(error);
+      stop(error);
       throw error;
     }
     if (stopped()) throw new Error(over);
@@ -152,7 +155,7 @@ const steps = (ms, what) => {
     },
     /** Stops the work, for `why`, and throws it. @param {string} why @returns {never} */
     end(why) {
-      over ||= why;
+      stop(why);
       throw new Error(over);
     },
     step,
@@ -180,6 +183,24 @@ const pollFor = (ms, probe) =>
   steps(ms, `nothing within ${ms} ms`)
     .poll(probe)
     .catch(() => null);
+
+/**
+ * Runs each of a case's cleanup steps in turn, the later ones even when one before them rejects,
+ * then rejects with the first rejection, if there was one.
+ * @param {...(() => unknown)} undo
+ */
+const cleanUp = async (...undo) => {
+  /** @type {unknown[]} */
+  const failed = [];
+  for (const step of undo) {
+    try {
+      await step();
+    } catch (error) {
+      failed.push(error);
+    }
+  }
+  if (failed.length) throw failed[0];
+};
 
 /** What `watchBusy` saw, once the mark has gone. @param {import("@playwright/test").Page} page */
 const busyEnded = (page) =>
@@ -348,4 +369,4 @@ export async function runSmoke(run) {
   process.exit(failures.length ? 1 : 0);
 }
 
-export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, steps, pollFor };
+export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, steps, pollFor, cleanUp };
