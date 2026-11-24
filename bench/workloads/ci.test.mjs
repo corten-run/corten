@@ -108,6 +108,42 @@ test("native driver generates the actual churn invocation under the same no-skip
     assert.ok(driver.includes(`${line} "$work/$suite.tap"`));
 });
 
+test("kernel driver takes a pinned image refused by Docker Hub from its mirror by the same digest, and nothing else (#1499)", {
+  skip: process.platform !== "linux" && "requires the Linux driver shell",
+}, () => {
+  const driver = readFileSync(new URL("scripts/benchmark-kernel-ci.sh", root), "utf8");
+  const start = driver.indexOf("pull_pinned() {"), end = driver.indexOf("\n}\n", start);
+  assert.ok(start >= 0 && end > start);
+  const fn = driver.slice(start, end + 3);
+  assert.ok(driver.slice(end).startsWith("\n}\npull_pinned\n"), "the driver must call pull_pinned right after defining it");
+  const digest = "sha256:" + "a".repeat(64);
+  const run = (image, refuse) => {
+    const script = `set -euo pipefail
+docker() { printf 'docker %s\\n' "$*" >&2; case "$2" in ${refuse}) return 1 ;; esac; }
+image='${image}'
+${fn}
+pull_pinned
+printf 'image=%s\\n' "$image"`;
+    const result = spawnSync("/bin/bash", ["-c", script], { encoding: "utf8", timeout: 10000, maxBuffer: 1024 ** 2 });
+    assert.equal(result.error, undefined);
+    return { status: result.status, image: /image=(.*)/.exec(result.stdout)?.[1], calls: result.stderr.split("\n").filter((l) => l.startsWith("docker ")) };
+  };
+  const pinned = `node:26.13.1-bookworm-slim@${digest}`;
+  assert.deepEqual(run(pinned, "none"), { status: 0, image: pinned, calls: [`docker pull ${pinned}`] });
+  assert.deepEqual(run(pinned, `'${pinned}'`), { status: 0, image: `mirror.gcr.io/library/node@${digest}`,
+    calls: [`docker pull ${pinned}`, `docker pull mirror.gcr.io/library/node@${digest}`] });
+  assert.deepEqual(run(`acme/tool:1@${digest}`, `'acme/tool:1@${digest}'`).image, `mirror.gcr.io/acme/tool@${digest}`);
+  const both = run(pinned, "*");
+  assert.notEqual(both.status, 0, "a refused mirror pull fails the driver");
+  assert.equal(both.calls.length, 2);
+  for (const unpinned of ["node:26.13.1-bookworm-slim", "registry.example/node@" + digest, "localhost/node@" + digest,
+    "ghcr.io/acme/tool@" + digest, `node@sha256:${"a".repeat(63)}`]) {
+    const result = run(unpinned, "none");
+    assert.notEqual(result.status, 0, unpinned);
+    assert.deepEqual(result.calls, [], `${unpinned} must not be pulled from anywhere`);
+  }
+});
+
 test("kernel preflight accepts systemd's degraded exit without accepting other host states", {
   skip: process.platform !== "linux" && "requires the Linux driver shell, not a native resource fixture",
 }, () => {

@@ -17,7 +17,23 @@ case "$system_state:$system_status" in
 esac
 docker info >/dev/null
 image=$("$node" --input-type=module -e 'import {nodeImage} from "./bench/json-api/contract.mjs"; console.log(nodeImage)')
-docker pull "$image"
+# Docker Hub limits anonymous pulls per address, and a shared runner can be over it before this
+# job starts (#1499). The image is pinned by digest, so when Hub refuses, the same bytes come from
+# Google's mirror of Docker Hub: Docker checks the digest on pull, and the run uses that mirror
+# reference (still by digest) instead of a retag. Any other image or a failed mirror pull fails.
+pull_pinned() {
+  local namespace name digest
+  # A Docker Hub name: an optional namespace without a dot (a dot or localhost names a registry).
+  [[ "$image" =~ ^(([a-z0-9_-]+)/)?([a-z0-9._-]+)(:[A-Za-z0-9._-]+)?@(sha256:[a-f0-9]{64})$ ]] || return 1
+  namespace=${BASH_REMATCH[2]:-library} name=${BASH_REMATCH[3]} digest=${BASH_REMATCH[5]}
+  test "$namespace" != localhost || return 1
+  if docker pull "$image"; then return 0; fi
+  name="$namespace/$name"
+  image="mirror.gcr.io/$name@$digest"
+  printf 'Docker Hub refused the pull; taking %s\n' "$image"
+  docker pull "$image"
+}
+pull_pinned
 nonce=$("$node" --input-type=module -e 'import {randomBytes} from "node:crypto"; console.log(randomBytes(8).toString("hex"))')
 task="corten-evidence-kernel-$nonce"
 work=$(mktemp -d)
