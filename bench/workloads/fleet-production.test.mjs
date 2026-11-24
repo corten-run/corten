@@ -842,7 +842,8 @@ test("continuation retries past a create that errored after its launch deadline 
     fs.writeFileSync(launchLock, "SYNTHETIC"); fs.writeFileSync(operationLock, "SYNTHETIC");
     throw Object.assign(new Error("PRIVATE_MESSAGE"), { controlUncertain: true, providerDiagnostic: { code: "create-action-pending" } });
   };
-  await assert.rejects(fleetMain([...args("r19"), "--detach", "--approve-reviewed-merged-ready", approval], p.deps), { controlUncertain: true });
+  assert.equal(await fleetMain([...args("r19"), "--detach", "--approve-reviewed-merged-ready", approval], p.deps), 2);
+  assert.deepEqual(p.output.at(-1).groups.map(({ outcome, uncertain }) => [outcome, uncertain]), [["error", true]]);
   delete p.deps.main;
   // The uncertain launch keeps the outer continuation lock. Its release stays the
   // operator's documented custody step; the group recheck never touches it.
