@@ -324,8 +324,9 @@ impl Policy {
     /// A name the app answers to (`shop.example`; `.shop.example` for it and every subdomain).
     /// By default a request is answered only when its `Host` is `localhost` (or a name under
     /// it), an IP address or missing; any other gets `421 Misdirected Request` before routing.
-    /// (A `Host` that is no host at all, or an HTTP/1.1 request the server read with none or
-    /// with two, is not one HTTP allows, and gets `400 Bad Request` whatever names the app has.)
+    /// (A request with two `Host` lines or one that is no host at all, or an HTTP/1.1 request
+    /// the server read with none, is not one HTTP allows, and gets `400 Bad Request` whatever
+    /// names the app has.)
     /// Otherwise a page on a name someone else controls could point that name at this machine
     /// (DNS rebinding) and use every route as if it were the app's own origin, the same-origin
     /// check included, which matters most for an app on loopback, where "only this machine can
@@ -1719,14 +1720,22 @@ fn host_lines(headers: &HeaderMap) -> (Option<&HeaderValue>, bool) {
 /// and `hosts` is the names the app answers to, or `None` when it answers to any.
 ///
 /// What RFC 9112 3.2 has a server answer `400`: more than one `Host` line, a `Host` that is not
-/// a host and maybe a port, and an HTTP/1.1 message with no `Host` line. What section 3 says a
-/// server should answer `400`, an invalid request-line, is refused in two forms only, the two a
-/// request is seen to arrive in: a request-target with a byte outside ASCII, which RFC 3986
-/// has in no URI and the parse lets through when it is UTF-8, and `*` with a method other than
-/// `OPTIONS` (3.2.4). Other bytes no URI holds (a `|`, a `%` before no hex) are answered as
+/// a host and maybe a port, and an HTTP/1.1 message with no `Host` line. What the same section
+/// says a server should answer `400` or a redirect, an invalid request-line, is refused in two
+/// forms only: a request-target with a byte outside ASCII, which RFC 3986 has in no URI and the
+/// parse lets through when it is UTF-8, and `*` with a method other than `OPTIONS`, the only
+/// one 3.2.4 gives it to. Other bytes no URI holds (a `|`, a `%` before no hex) are answered as
 /// before. The `Host` is read once for these and for the names, so a request the app answers
 /// costs the scan of its target and a look at whether any name has two lines.
+#[inline]
 fn asked<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bool), hosts: Option<&[String]>) -> Asked {
+    match read(req, lines, hosts) {
+        Asked::Malformed => malformed(req),
+        asked => asked,
+    }
+}
+
+fn read<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bool), hosts: Option<&[String]>) -> Asked {
     let uri = req.uri();
     if let Some(target) = uri.path_and_query() {
         let target = target.as_str();
@@ -1745,10 +1754,29 @@ fn asked<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bo
     }
 }
 
+/// Logs the first request of the process refused as one HTTP does not allow: a health check
+/// written by hand, or a proxy that sends a second `Host`, is the client most likely to send
+/// one, and its `400`s take the app out of service with nothing else to say why.
+#[cold]
+fn malformed(req: &Request) -> Asked {
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        let hosts: Vec<_> =
+            req.headers().get_all(header::HOST).iter().map(|host| String::from_utf8_lossy(host.as_bytes())).collect();
+        tracing::warn!(
+            "corten: refused {} {:?} with Host {hosts:?} (400): HTTP asks for one Host line that is a host and maybe a port (none in HTTP/1.0) and a request-target in ASCII",
+            req.method(),
+            req.uri().to_string()
+        );
+    }
+    Asked::Malformed
+}
+
 /// On a request Corten's server read off a connection as an HTTP/1.1 message with no `Host`
 /// line ([`mark_unnamed`]). A layer of the app's that maps the request's body or moves it to
-/// another task keeps it; a test's request, and one a server of the app's own hands the router,
-/// never has it.
+/// another task keeps it; one that builds a request of its own and leaves the extensions behind
+/// loses it, as it does the connection's values the server put there. A test's request, and one
+/// a server of the app's own hands the router, never has it.
 #[derive(Clone, Copy)]
 pub(crate) struct Unnamed;
 
@@ -1775,28 +1803,21 @@ fn mark_if_unnamed(req: &mut Request) {
 /// A request with no `Host` line: HTTP/1.0's is for the app, and so is one Corten's server did
 /// not read off a connection (a test's, which has no host to name; one from a server of the
 /// app's own, which answers for what it read). An HTTP/1.1 message the server read is not one
-/// HTTP allows, and carries its mark ([`Unnamed`]). The first is logged: a health check written
-/// by hand is the client most likely to send one, and its `400`s take the app out of service.
+/// HTTP allows, and carries its mark ([`Unnamed`]).
 #[cold]
 fn unnamed(req: &Request) -> Asked {
-    if req.extensions().get::<Unnamed>().is_none() {
-        return Asked::Here;
+    match req.extensions().get::<Unnamed>() {
+        Some(Unnamed) => Asked::Malformed,
+        None => Asked::Here,
     }
-    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        tracing::warn!(
-            "corten: refused an HTTP/1.1 request to {} with no Host line (400): a client, or a health check, sends one or asks as HTTP/1.0",
-            req.uri().path()
-        );
-    }
-    Asked::Malformed
 }
 
 /// A request whose target names its host (`GET http://shop.example/ HTTP/1.1`, or `CONNECT`'s
 /// `shop.example:443`): the target's is the host asked for, whatever `Host` says (RFC 9112
 /// 3.2.2), but the message still needs its one `Host` line, with a host in it (3.2). `target` is
-/// the whole authority, so one with a user in it, or a port that is no number, is no host
-/// either (RFC 9110 4.2.4).
+/// the whole authority, and one with a user in it, or a port that is no number, is refused as
+/// the same bytes in `Host` are: RFC 9110 4.2.4 says a recipient should treat a user there as
+/// an error, which is less than 3.2 says of `Host`.
 #[cold]
 fn targeted(target: &str, host: Option<&HeaderValue>, req: &Request, hosts: Option<&[String]>) -> Asked {
     let line = match host {
@@ -1816,8 +1837,9 @@ fn targeted(target: &str, host: Option<&HeaderValue>, req: &Request, hosts: Opti
 /// 3.2.2's host. That grammar allows a name of no bytes, and RFC 9112 3.3 lets a server put its
 /// own default name in its place; Corten has none to put there, and an `http` URI with an empty
 /// host is one a recipient rejects (RFC 9110 4.2.1), so here a `Host` of no bytes is malformed
-/// too, by choice and not by 3.2. An address in brackets is IPv6, with no zone: 3986's
-/// `IPvFuture` has no version defined, and its text asks for an error.
+/// too, by choice and not by 3.2. An address in brackets is IPv6: 3986's `IPvFuture` has no
+/// version defined, and its text asks for an error; a zone (`[fe80::1%25eth0]`) is not in its
+/// grammar since RFC 9844 took back RFC 6874, which had put it there.
 ///
 /// A name the app answers to as it is written (`localhost`, an IPv4 address, a name in
 /// `names`) is a `reg-name` since what it matched is one, so what is read byte by byte is only
