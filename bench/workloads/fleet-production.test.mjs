@@ -1,7 +1,7 @@
 // Offline composition acceptance: real snapshot Worker -> productionMain -> controller.
 // Only credential consumption and external Git/HTTPS/SSH/SCP responses are fake.
 import assert from "node:assert/strict";
-import { execFileSync, fork } from "node:child_process";
+import { execFileSync, fork, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
@@ -845,6 +845,9 @@ test("continuation retries past a create that errored after its launch deadline 
   assert.equal(await fleetMain([...args("r19"), "--detach", "--approve-reviewed-merged-ready", approval], p.deps), 2);
   assert.deepEqual(p.output.at(-1).groups.map(({ outcome, uncertain }) => [outcome, uncertain]), [["error", true]]);
   delete p.deps.main;
+  // The launch process has since exited: its retained batch lock names a dead owner.
+  const batch = path.join(slot, ".fleet-operation.lock"), dead = spawnSync(process.execPath, ["-e", ""]).pid;
+  fs.writeFileSync(batch, `${JSON.stringify({ ...JSON.parse(fs.readFileSync(batch)), pid: dead })}\n`);
   // The uncertain launch keeps the outer continuation lock. Its release stays the
   // operator's documented custody step; the group recheck never touches it.
   const outer = path.join(p.h.base, continuationLock);
