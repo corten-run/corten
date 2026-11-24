@@ -111,12 +111,38 @@ test("native driver generates the actual churn invocation under the same no-skip
     assert.ok(driver.includes(`${line} "$work/$suite.tap"`));
 });
 
+test("the Docker Hub cache helper refuses to write a config outside a GitHub-hosted runner (#1499)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "corten-mirror-guard-"));
+  try {
+    const config = join(dir, "daemon.json");
+    const cli = fileURLToPath(new URL("scripts/ci-docker-hub-mirror.mjs", root));
+    for (const env of [{}, { RUNNER_ENVIRONMENT: "self-hosted", CI: "true" }, { RUNNER_ENVIRONMENT: "github-hosted" }]) {
+      const result = spawnSync(process.execPath, [cli, config], { encoding: "utf8", env: { PATH: process.env.PATH, ...env } });
+      assert.notEqual(result.status, 0, JSON.stringify(env));
+      assert.match(result.stderr, /refusing to change Docker's configuration outside a GitHub-hosted runner/);
+      assert.equal(existsSync(config), false, JSON.stringify(env));
+    }
+    const hosted = spawnSync(process.execPath, [cli, config], { encoding: "utf8",
+      env: { PATH: process.env.PATH, RUNNER_ENVIRONMENT: "github-hosted", CI: "true" } });
+    assert.equal(hosted.status, 0, hosted.stderr);
+    assert.equal(hosted.stdout, "changed\n");
+    assert.deepEqual(JSON.parse(readFileSync(config, "utf8"))["registry-mirrors"], [mirror]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("kernel job points the runner's Docker at Docker Hub's cache before the driver pulls, and the driver pulls Hub's reference (#1499)", () => {
   const steps = workflow.jobs.kernel.steps;
   const at = steps.findIndex((s) => s.run?.includes("scripts/ci-docker-hub-mirror.sh"));
   const driver = steps.findIndex((s) => s.run?.includes("scripts/benchmark-kernel-ci.sh"));
   assert.ok(at >= 0 && driver > at, "the mirror step must run before the kernel driver");
-  assert.equal(steps[at].run, 'sudo /bin/bash scripts/ci-docker-hub-mirror.sh "$(command -v node)"');
+  // sudo's env_reset drops RUNNER_ENVIRONMENT and CI, which the script's guard requires, so the
+  // step passes exactly those two and nothing else (not sudo -E).
+  assert.equal(
+    steps[at].run,
+    'sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" CI="$CI" /bin/bash scripts/ci-docker-hub-mirror.sh "$(command -v node)"',
+  );
   assert.equal(steps[at].if, undefined);
   assert.equal(steps[at]["continue-on-error"], undefined);
   const script = readFileSync(new URL("scripts/benchmark-kernel-ci.sh", root), "utf8");

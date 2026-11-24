@@ -98,5 +98,9 @@ export function addMirror(path) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [path, ...rest] = process.argv.slice(2);
   if (!path || rest.length > 0) throw new Error("usage: node scripts/ci-docker-hub-mirror.mjs <daemon.json>");
+  // The same check as the shell script's: a safeguard against running it by accident, not proof of
+  // where it runs, since the caller sets the environment.
+  if (process.env.RUNNER_ENVIRONMENT !== "github-hosted" || process.env.CI !== "true")
+    throw new Error("refusing to change Docker's configuration outside a GitHub-hosted runner (RUNNER_ENVIRONMENT=github-hosted and CI=true)");
   console.log(addMirror(path) ? "changed" : "unchanged");
 }

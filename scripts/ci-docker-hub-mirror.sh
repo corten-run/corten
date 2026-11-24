@@ -3,6 +3,8 @@
 # a developer machine or a self-hosted runner: it refuses unless RUNNER_ENVIRONMENT is
 # github-hosted and CI is true, which GitHub sets on its hosted runners. The runner is thrown away
 # after the job, so nothing is rolled back; a failed step fails the job.
+# The workflow runs it under sudo, which resets the environment, so it passes those two variables
+# on by name.
 #
 # Adds Google's Docker Hub cache to the daemon's registry mirrors, which it tries before falling
 # back to Docker Hub (#1499); Docker Hub has refused the kernel job's pull with toomanyrequests.

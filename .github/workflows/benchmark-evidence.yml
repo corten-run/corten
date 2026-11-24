@@ -119,6 +119,7 @@ jobs:
       # script runs only on this disposable hosted runner and fails the job if Docker does not
       # list the cache within a minute; it rolls nothing back.
       - name: Add Google's Docker Hub cache to Docker's registry mirrors
-        run: sudo /bin/bash scripts/ci-docker-hub-mirror.sh "$(command -v node)"
+        # sudo resets the environment, so the two variables the script's guard reads are passed on.
+        run: sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" CI="$CI" /bin/bash scripts/ci-docker-hub-mirror.sh "$(command -v node)"
       - name: Exercise actual delegated process and Docker participant boundaries
         run: sudo /bin/bash scripts/benchmark-kernel-ci.sh "$(command -v node)" "$PWD"
