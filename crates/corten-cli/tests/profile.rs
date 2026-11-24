@@ -5,9 +5,10 @@
 #![cfg(unix)]
 
 use std::{
-    net::{Ipv4Addr, TcpListener},
+    net::{Ipv4Addr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
+    sync::atomic::{AtomicU16, Ordering},
 };
 
 /// A program that listens on `PORT` (at `HOST`, when that is set), works while it waits, and
@@ -80,12 +81,10 @@ impl Fixture {
     /// and none of the flags of whoever runs the tests: an empty `RUSTFLAGS` has Cargo read
     /// none from a configuration file either. Dep-info files name paths relative to the
     /// program's directory, whatever base a configuration file sets. Cargo says what it
-    /// compiles, in plain text, which a test reads. Nor the `PORT` of whoever runs the tests:
-    /// the build picks a port unless a test gives it one.
+    /// compiles, in plain text, which a test reads.
     fn build(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_corten"));
         command.arg("build").args(args).current_dir(&self.0).env("CARGO_TARGET_DIR", self.0.join("target"));
-        command.env_remove("PORT");
         command.env_remove("CARGO_ENCODED_RUSTFLAGS").env("RUSTFLAGS", "").env("CARGO_BUILD_DEP_INFO_BASEDIR", &self.0);
         command.env("CARGO_TERM_QUIET", "false").env("CARGO_TERM_COLOR", "never");
         command
@@ -121,9 +120,23 @@ impl Drop for Fixture {
 /// `--profile-from` and a command that leaves the port it was given in `port.txt`.
 const NOTES_ITS_PORT: [&str; 4] = ["--profile-from", "sh", "-c", "echo \"$PORT\" > port.txt"];
 
-/// A port nothing listened on a moment ago.
+/// A port nothing listens on, from below the range the system gives out by itself (Linux's
+/// begins at 32768, the registered one at 49152), so that no listener or connection of another
+/// test is given it before the program a test builds binds it. Each call gives another. The
+/// listener that showed the port was free stays open for a moment in a child that another test
+/// is starting (it holds a copy of every descriptor until it runs its program), so the port is
+/// given once nothing accepts there.
 fn unused_port() -> u16 {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port()
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    loop {
+        let port = 20_000 + (std::process::id() % 5_000) as u16 * 2 + NEXT.fetch_add(1, Ordering::Relaxed);
+        if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok() {
+            while TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_ok() {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            return port;
+        }
+    }
 }
 
 fn text(output: &Output) -> String {
@@ -198,17 +211,20 @@ fn the_release_is_built_with_the_profile_the_app_wrote_while_the_command_ran() {
 }
 
 /// An app that binds a port of its own and never reads `PORT` (`corten::serve_on` with its own
-/// listeners) is profiled when the build is given that port: the copy is looked for there, and
-/// the command is sent there. Left to pick a port, the build would wait a minute on one the
-/// app never opens.
+/// listeners) is profiled when `--port` names that port: the copy is looked for there, and the
+/// command is sent there. Left to pick a port, the build would wait a minute on one the app
+/// never opens.
 #[test]
 fn an_app_that_binds_a_port_of_its_own_is_profiled_when_port_names_it() {
     let fixture = Fixture::new("own-port");
     let port = unused_port().to_string();
-    let output = fixture.build(&NOTES_ITS_PORT).env("PORT", &port).env("FIXTURE_LISTENS_ON", &port).output().unwrap();
+    let args = [&["--port", &port][..], &NOTES_ITS_PORT].concat();
+    // A `PORT` the shell holds is not where this app listens either.
+    let output = fixture.build(&args).env("PORT", "1").env("FIXTURE_LISTENS_ON", &port).output().unwrap();
     let said = text(&output);
     assert!(output.status.success(), "{said}");
-    assert!(said.contains(&format!("the instrumented app on port {port}, while")), "{said}");
+    // The line says the port was named, which only the build's own record of who chose it can.
+    assert!(said.contains(&format!("the instrumented app on port {port}, which --port named, while")), "{said}");
     assert_eq!(std::fs::read_to_string(fixture.0.join("port.txt")).unwrap().trim(), port, "the command's PORT");
     assert!(!fixture.app_runs(), "the instrumented app was left running");
     assert!(said.contains("of the 1 profile file(s) the app wrote"), "{said}");
@@ -217,27 +233,67 @@ fn an_app_that_binds_a_port_of_its_own_is_profiled_when_port_names_it() {
         names_as_input(&built_from, &fixture.0, &fixture.profile()),
         "the release was not built from the profile: {built_from}"
     );
-    // An app that reads PORT is started on the same one, not on a port the build picked.
-    let again = fixture.build(&NOTES_ITS_PORT).env("PORT", &port).output().unwrap();
+    // The other spelling, among Cargo's arguments, and an app that reads PORT: it is started
+    // on the port that was named, not on one the build picked.
+    let joined = format!("--port={port}");
+    let again = fixture.build(&[&["--locked", &joined][..], &NOTES_ITS_PORT].concat()).output().unwrap();
     assert!(again.status.success(), "{}", text(&again));
     assert_eq!(std::fs::read_to_string(fixture.0.join("port.txt")).unwrap().trim(), port);
 }
 
-/// A `PORT` that is no port, or one something already listens on (which would answer the
-/// command in the copy's place), is refused before anything is built.
+/// Without `--port` the build picks a free port whatever the environment's `PORT` is: that one
+/// is the app's, set for running it, and here something listens on it, as the app under
+/// `corten dev` would. The build neither refuses it nor uses it.
+#[test]
+fn a_port_in_the_environment_is_not_where_the_copy_is_looked_for() {
+    let fixture = Fixture::new("ambient-port");
+    let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let taken = held.local_addr().unwrap().port().to_string();
+    let output = fixture.build(&NOTES_ITS_PORT).env("PORT", &taken).output().unwrap();
+    let said = text(&output);
+    assert!(output.status.success(), "{said}");
+    let port = std::fs::read_to_string(fixture.0.join("port.txt")).unwrap();
+    assert!(port.trim() != taken && port.trim().parse::<u16>().is_ok_and(|port| port != 0), "PORT was {port:?}, not a free port");
+    assert!(said.contains(&format!("the instrumented app on port {}, while", port.trim())), "{said}");
+    assert!(said.contains("of the 1 profile file(s) the app wrote"), "{said}");
+    // Nor is one that names no port read at all.
+    let output = fixture.build(&NOTES_ITS_PORT).env("PORT", "http").output().unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    drop(held);
+}
+
+/// A `--port` that is no port number, is given twice or without a profile, or names a port
+/// something already listens on (which would answer the command in the copy's place), is
+/// refused before anything is built.
 #[test]
 fn a_port_that_is_no_port_or_is_taken_is_refused_before_building() {
     let fixture = Fixture::new("port");
-    for no_port in ["", "0", "http", "65536"] {
-        let output = fixture.build(&NOTES_ITS_PORT).env("PORT", no_port).output().unwrap();
-        assert!(!output.status.success(), "PORT={no_port:?}");
-        assert!(text(&output).contains(&format!("PORT is {no_port:?}, not a port number")), "{}", text(&output));
+    for no_port in ["", "0", "http", "65536", "+8443"] {
+        let joined = format!("--port={no_port}");
+        for port in [&["--port", no_port][..], &[joined.as_str()]] {
+            let output = fixture.build(&[port, &NOTES_ITS_PORT].concat()).output().unwrap();
+            assert!(!output.status.success(), "{port:?}");
+            let says = format!("--port takes the number of the port the app binds, from 1 to 65535; not {no_port:?}");
+            assert!(text(&output).contains(&says), "{port:?}: {}", text(&output));
+        }
+    }
+    for (args, says) in [
+        (&["--port", "--profile-from", "true"][..], "--port needs a value"),
+        (&["--port", "8443", "--port", "8444", "--profile-from", "true"], "--port is given more than once"),
+        (&["--port", "8443"], "--port 8443 names the port a profiled build looks for the app on, and there is no --profile-from"),
+        (&["--locked", "--port=8443"], "there is no --profile-from"),
+    ] {
+        let output = fixture.build(args).output().unwrap();
+        assert!(!output.status.success(), "{args:?}");
+        assert!(text(&output).contains(says), "{args:?}: {}", text(&output));
     }
     let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = held.local_addr().unwrap().port();
-    let output = fixture.build(&NOTES_ITS_PORT).env("PORT", port.to_string()).output().unwrap();
+    let port = held.local_addr().unwrap().port().to_string();
+    let output = fixture.build(&[&["--port", &port][..], &NOTES_ITS_PORT].concat()).output().unwrap();
     assert!(!output.status.success());
-    assert!(text(&output).contains(&format!("something already listens on port {port}")), "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains(&format!("something already listens on port {port}, the one --port named")), "{said}");
+    assert!(said.contains("a copy that a cancelled corten build left running"), "{said}");
     assert!(!fixture.0.join("target").exists(), "something was built before the refusal");
     drop(held);
 }
@@ -259,8 +315,8 @@ fn a_port_taken_while_the_copy_was_built_is_refused_before_the_copy_starts() {
 "#;
     std::fs::write(fixture.0.join("build.rs"), waits).unwrap();
     let port = unused_port();
-    let mut build = fixture.build(&NOTES_ITS_PORT);
-    build.env("PORT", port.to_string()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut build = fixture.build(&[&["--port", &port.to_string()][..], &NOTES_ITS_PORT].concat());
+    build.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut build = build.spawn().unwrap();
     while !fixture.0.join("building.txt").exists() {
         assert!(build.try_wait().unwrap().is_none(), "the build ended before it built the copy");

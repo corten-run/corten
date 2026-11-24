@@ -383,29 +383,43 @@ it builds has to run on this machine.
 and the app's own relative paths are from there:
 `corten build -p shop --profile-from sh shop/train.sh`. The copy gets the environment
 `corten build` was given, less
-`HOST` so that it listens on this machine only, on a port nothing else has, and runs the command
+`HOST` so that a copy that reads it listens on this machine only, on a port nothing else has, and runs the command
 once the copy accepts a connection there.
 
-That port is one the build picks, unless `PORT` is set where `corten build` runs: then it is
-that port. The copy is started with it, the build waits for a connection to be accepted on it,
-and the command gets the same `PORT`. So an app that binds a port of its own and never reads
-`PORT` (`corten::serve_on` or `serve_wrapped` with listeners it bound itself,
-[Your own listeners](app.md#your-own-listeners)) is profiled by naming the port it binds:
+That port is a free one the build picks and gives the copy in `PORT`, whatever `PORT` holds
+where `corten build` runs: that one is the app's, set for running it, and is not read. An app
+that binds a port of its own and never reads `PORT` (`corten::serve_on` or `serve_wrapped` with
+listeners it bound itself, [Your own listeners](app.md#your-own-listeners)) never listens on a
+port the build picked, so the build is told the app's with `--port`, before `--profile-from`:
 
 ```sh
-PORT=8443 corten build --profile-from sh train.sh
+corten build --port 8443 --profile-from sh train.sh
 ```
 
-The wait is a TCP connection and nothing more, so the port may be one that serves HTTPS. It is
-for that one port: an app with several listeners names one of them, and its script, which knows
-the others, waits for each before it sends to it (`curl --retry 10 --retry-connrefused` on the
-first request). A `PORT` that is not a port number is refused before anything is built, and so is one
-something already listens on (a `corten dev` in another terminal), which would answer the wait
-and the command in the copy's place; the build looks again before it starts the copy, minutes
-later. Without `PORT`, an app that binds its own port never listens on the one the build
-picked, and the build stops after a minute saying so, with the line above. An app whose only
-listener is not a TCP port (a Unix socket) has no port to name, and is profiled with the steps
-by hand (below).
+The copy is then looked for on that port, and it and the command are given it in `PORT`
+(`--port=8443` is the same). `--port` is refused before anything is built when it is not a
+number from 1 to 65535, when it is given twice or without `--profile-from`, and when something
+already listens on the port (the app itself under `corten dev`, or a copy that a cancelled
+build left running), which would answer the wait and the command in the copy's place. The
+build looks again before it starts the copy, minutes later. Without `--port`, an app that binds
+its own port stops the build after a minute, with a line that names the option.
+
+The wait is a TCP connection to `127.0.0.1` or `[::1]` at that port and nothing more. So the
+port may be one that serves HTTPS, and the script then asks over `https://`, where the sample
+above asks over `http://`. The app has to bind the port on a loopback address or on every
+address: bound to another address alone it is not found, and the build stops after a minute
+saying where it looked. The wait is for that one port: an app with several listeners names one
+of them, and its script, which knows the others, waits for each before it sends to it
+(`curl --retry 10 --retry-connrefused` on the first request). And the wait cannot tell whose
+socket accepted: a copy that has exited is not taken for it, but a program that takes the port
+in the moment between the build's last look and the copy's own bind is, and the command's
+requests then go to that program. A copy that exits when it cannot bind fails the build
+afterwards, as one that exited while the command ran.
+
+An app's own listeners bind the addresses the app chooses, with `HOST` or without: one that
+binds every address (`0.0.0.0:8443`) can be reached from the network while the build runs, and
+a request from outside would enter the profile. An app whose only listener is not a TCP port (a
+Unix socket) has no port to name, and is profiled with the steps by hand (below).
 
 When the command ends the build stops the copy with `SIGTERM` and waits for it: the copy
 writes its profile as it exits, which a Corten app does on `SIGTERM` (Shutdown, in
@@ -671,7 +685,7 @@ is the ordinary one: Docker 29.9.3 built it without a word about the argument.
 The two builds are two lines of one `RUN`. A Cargo argument the app's release needs
 (`--features`, `--bin`) goes on both, before `--profile-from` on the second: on one alone,
 the image with a profile is built with other features than the image without. An app that
-binds a port of its own names it on the second, as `PORT=8443` before `corten build`
+binds a port of its own names it on the second, with `--port 8443` before `--profile-from`
 ([A profile-guided build](#a-profile-guided-build)); not tried in an image build.
 
 What the argument asks of the app and its build, which the ordinary build does not:
