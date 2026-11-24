@@ -151,17 +151,46 @@ test("provider-errored create with verified account and exact absence is a termi
   assert.deepEqual(h.saved(), state);
 });
 
-test("a changed receipt or reappearing allocation cannot be collected as terminal", async (t) => {
+test("a changed receipt cannot be collected as terminal", async (t) => {
   const { h, task } = erroredLaunch(t);
   await assert.rejects(task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
-  h.hosts([{ ...h.host(), id: 123 }]);
-  await assert.rejects(h.task().collect(), /no longer verified absent/);
-  h.hosts([]);
   const path = join(h.local, "provider-create-errored.json");
   const bytes = readFileSync(path, "utf8"); const { writeFileSync } = await import("node:fs");
   writeFileSync(path, bytes.replace('"measurements": 0', '"measurements": 1'));
   await assert.rejects(h.task().collect(), /receipt changed/);
   assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+});
+
+// Review round 3, finding 1. The previous controller refused this collect but kept the
+// receipt acceptable, so the reservation resolved again once the droplet was not seen.
+test("a recorded failure whose posted droplet is seen again is contradicted for good, by exact GET or census", async (t) => {
+  const seen = {
+    // The exact GET returns the posted ID, renamed and untagged.
+    "exact-get": (h) => [{ ...h.host(), name: "renamed-by-someone", tags: [] }],
+    // The exact GET is 404, but the census lists a droplet with this create's run tag.
+    inventory: (h) => [{ ...h.host(), id: 999, name: "other" }],
+  };
+  for (const [via, hosts] of Object.entries(seen)) {
+    const { h, task } = erroredLaunch(t);
+    await assert.rejects(task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
+    const receipt = readFileSync(join(h.local, "provider-create-errored.json")), before = h.saved();
+    h.hosts(hosts(h));
+    await assert.rejects(h.task().collect(), /observed again/, via);
+    const after = h.saved();
+    assert.deepEqual(after.createErrored, { ...before.createErrored, reappeared: { at: after.createErrored.reappeared.at, via,
+      dropletId: via === "exact-get" ? "123" : "999" } });
+    assert.equal(after.status, "creating"); assert.equal(after.id, undefined);
+    assert.ok(readFileSync(join(h.local, "provider-create-errored.json")).equals(receipt), "the receipt is kept as evidence");
+    assert.ok(!existsSync(join(h.local, "operation.lock")), "the refusal is recorded state, not retained custody");
+    // Gone again: the record still refuses before any provider read, and blocks a later round.
+    h.hosts([]);
+    const calls = h.calls.length;
+    await assert.rejects(h.task().collect(), /observed again/); assert.equal(h.calls.length, calls);
+    const next = harness(t, { stateRoot: h.base, round: "r22" });
+    await assert.rejects(next.launch().launch(), /observed again/); assert.equal(next.creates, 0);
+    assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+    assert.ok(!h.calls.some(([binary, ...args]) => binary === "ssh" || binary === "scp" || binary === "doctl" && args[2] === "delete"));
+  }
 });
 
 const foreign = (h) => ({ status: 0, stdout: JSON.stringify({ uuid: "synthetic-foreign-user", droplet_limit: 20 }), stderr: "" });
@@ -317,7 +346,14 @@ const lateNegatives = {
   "the action is another action": (h, o) => { o.action = actionRow({ id: 457 }); },
   "the action is not a create": (h, o) => { o.action = actionRow({ type: "rebuild" }); },
   "the action read fails": (h, o) => { o.actionError = new Error("synthetic action read failure"); },
-  "the exact GET still returns the allocation": (h) => { h.hosts([h.host()]); },
+  // Review round 3, finding 2: the exact posted droplet binds only when positively owned.
+  "the exact GET returns the posted ID under another name": (h) => { h.hosts([{ ...h.host(), name: "corten-bench-groups-r21-renamed" }]); },
+  "the exact GET returns the posted ID without its run tag": (h) => { h.hosts([{ ...h.host(), tags: ["corten-bench", "corten-bench-groups"] }]); },
+  "the exact GET returns the posted ID in another region": (h) => { h.hosts([{ ...h.host(), region: { slug: "nyc1" } }]); },
+  "the exact GET returns the posted ID with no public address": (h) => { h.hosts([{ ...h.host(), networks: { v4: [] } }]); },
+  "the exact GET is 404 but the census lists the posted ID": (h, o) => { h.hosts([h.host()]);
+    o.get = () => ({ status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } }); },
+  "the exact GET returns another ID": (h, o) => { o.get = () => ({ status: 0, stdout: JSON.stringify([{ ...h.host(), id: 999 }]), stderr: "" }); },
   "the exact GET is not 404": (h, o) => { o.get = () => ({ status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 503 } }); },
   "the inventory lists the name": (h) => { h.hosts([{ ...h.host(), id: 999, tags: [] }]); },
   "the inventory lists the ownership tag": (h) => { h.hosts([{ ...h.host(), id: 999, name: "corten-bench-groups-r21-ffffffffffffffff" }]); },
@@ -585,10 +621,36 @@ test("a completed create of its exact allocation is bound, and a fresh pinned co
   assert.equal(retired.retirement.kind, "unused"); assert.ok(retired.destroyedAt); assert.equal(h.deletes, 1); assert.equal(h.creates, 1);
 });
 
+// Review round 3, finding 2. The previous controller refused every collect here, before
+// binding, so the existing allocation could never reach unused retirement.
+test("a late errored action whose exact posted droplet is still present and owned is bound alone, then retired as unused", async (t) => {
+  const { h, o, task } = lateLaunch(t, { flags: { missingUnit: true } });
+  await assert.rejects(task.launch(), { controlUncertain: true });
+  release(h);
+  h.hosts([h.host()]); // The errored action's droplet still exists under its saved name, tags and placement.
+  const before = h.calls.length;
+  assert.equal(await o.collect(), 3);
+  assert.deepEqual(o.after(before), ["account", "action", "account", "account", "get", "account"], "no census and no further read after the exact GET");
+  const state = h.saved();
+  assert.equal(state.status, "preparing"); assert.equal(state.id, "123"); assert.equal(state.ip, "192.0.2.10");
+  assert.deepEqual(state.createPending, { dropletId: "123", actionId: "456" }); assert.equal(state.createErrored, undefined);
+  assert.ok(!existsSync(join(h.local, "provider-create-errored.json")));
+  assert.ok(!existsSync(join(h.local, "operation.lock"))); assert.equal(h.deletes, 0);
+  assert.ok(!h.calls.some(([binary]) => binary === "ssh" || binary === "scp"));
+  // The existing fresh unused-retirement proofs then apply, as for an in-deadline bind.
+  await assert.rejects(o.collect(), /approved pinned observation/); assert.equal(h.deletes, 0);
+  assert.equal(await h.pinnedUnused({ run: o.run }).collect(), 1);
+  const retired = h.saved();
+  assert.equal(retired.retirement.kind, "unused"); assert.ok(retired.destroyedAt); assert.equal(h.deletes, 1); assert.equal(h.creates, 1);
+});
+
 // Review round 2, finding 4. Each collection owns one provider; after close every call
 // fails as uncertain, as production's close contract does. The previous controller
-// reused the closed provider and kept a new operation lock without a DELETE.
-test("an unmonitored completed allocation is bound by one collection and retired by a fresh one with its own provider", async (t) => {
+// reused the closed provider and kept a new operation lock without a DELETE. This
+// synthetic reservation has its monitor removed only to reach the ordinary unused path
+// without the pinned approval; no launch writes that shape. A real unmonitored
+// reservation is an offline handoff, covered in fleet-production.test.mjs.
+test("the bind of a completed allocation is its own checkpoint, and the next collection retires it with its own provider", async (t) => {
   const { h, o, task } = lateLaunch(t, { flags: { missingUnit: true } });
   await assert.rejects(task.launch(), { controlUncertain: true });
   release(h);
