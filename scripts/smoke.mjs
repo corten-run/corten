@@ -33,7 +33,7 @@ await runSmoke(async (browser) => {
   await namedFormNavigation(browser);
   await generatedFormViews(browser);
   await patchParsing(browser);
-  const { page, errors, swaps, noSwaps, live, feedSources, signsIn, failWatch, openFeeds, holdWatch, bug, cut, delayWatch, abandoned, openStreams, located, navRequests } = await openWatchlist(browser);
+  const { page, errors, swaps, noSwaps, live, feedSources, signsIn, failWatch, openFeeds, holdWatch, bug, cut, abandoned, openStreams, located, navRequests } = await openWatchlist(browser);
   await handlerEncoding(page);
   await patchFixtures(page, browser);
   await handlerArguments(browser);
@@ -48,9 +48,9 @@ await runSmoke(async (browser) => {
   await trustedTypes(page, browser);
   await formFailures(page, failWatch, openFeeds);
   const { zero } = await submitKeys(page, holdWatch, failWatch, errors, browser, bug, cut);
-  await submitQueue(delayWatch, page, abandoned, errors, zero);
+  await submitQueue(holdWatch, page, abandoned, errors, zero);
   const { redirectName } = await busyForms(page);
-  const { sectors, styleLinks, noteBorder } = await sectionNavigation(feedSources, page, redirectName, openFeeds, delayWatch, abandoned, openStreams, swaps);
+  const { sectors, styleLinks, noteBorder } = await sectionNavigation(feedSources, page, redirectName, openFeeds, holdWatch, abandoned, openStreams, swaps);
   await scroll(swaps, page, errors, browser, noSwaps);
   await appendPatches(browser, swaps, noSwaps);
   await redirects(browser, bug, page, live, sectors, swaps, styleLinks, noteBorder, noSwaps);

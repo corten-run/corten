@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, readlinkSync, statSync } from "node:fs";
 import os from "node:os";
+import { groupNames } from "../registry.mjs";
 import { readApparatus, verifyApparatus } from "./control-stream.mjs";
 
 const udevCgroup = "0::/system.slice/systemd-udevd.service/udev\n";
@@ -161,7 +162,7 @@ const isUdevDaemon = (p) => p && !p.kernelThread && p.comm === "systemd-udevd" &
 
 export function udevSettlePolicy(group, phase) {
   if (group === "json-api" && phase === "prepare") return "preparation";
-  if (group === "localized-marketplace" && phase === "timing") return "post-terminal";
+  if (phase === "timing" && groupNames.includes(group)) return "post-terminal";
   return null;
 }
 
