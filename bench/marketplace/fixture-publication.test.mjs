@@ -65,7 +65,7 @@ test("real non-root Gin and Rails users read published fixtures through read-onl
     assert.equal(result.status, 0, `${args.slice(0, 3).join(" ")}: ${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`);
     return result.stdout.trim();
   };
-  const nodeImage = process.env.FIXTURE_PUBLICATION_NODE_IMAGE ?? "node:24-bookworm";
+  const nodeImage = process.env.FIXTURE_PUBLICATION_NODE_IMAGE ?? "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067";
   const images = ["cb-marketplace-gin", "cb-marketplace-rails"].map((tag) => JSON.parse(docker(["image", "inspect", tag]))[0]);
   assert.equal(images[0].Config.User, "nobody"); assert.equal(images[1].Config.User, "1000:1000");
   const tool = JSON.parse(docker(["image", "inspect", nodeImage]))[0].Id;
