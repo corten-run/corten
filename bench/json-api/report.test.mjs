@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { reader, writer } from "./artifacts.mjs";
-import { descriptor, sha256 } from "./contract.mjs";
+import { descriptor, k6Image, nodeImage, sha256 } from "./contract.mjs";
 import { inspectJson, renderJson } from "./report.mjs";
 import { result, failedResult } from "./test-fixtures.mjs";
 
@@ -151,6 +151,23 @@ test("wrong/dirty/changed commit, image, tools or CPU configuration are never co
     (s) => { delete s.tools.k6; }, (s) => { s.measurement.cpus.app.quota = 2; },
     (s) => { s.measurement.encoding = "gzip"; }, (s) => { s.finishedAt = "invalid"; },
   ]) { const s = copy(); change(s); assert.equal(inspect(s).baseline, false); }
+});
+
+test("a tool image that is not this checkout's pin names the pin and a valid measured commit, never the saved text", () => {
+  const configuration = (s) => inspect(s).warnings.filter((w) => w.startsWith("configuration:"));
+  const s = copy(); s.tools.node.image = "saved-image\nINJECTED";
+  const named = configuration(s);
+  assert.ok(named.some((w) => w.includes(`not this checkout's pin ${nodeImage}`) && w.includes(`the measured commit ${s.commit}`)), named.join("\n"));
+  assert.ok(named.every((w) => !w.includes("INJECTED")));
+  const bad = copy(); bad.tools.k6.image = "saved-image"; bad.commit = "not-a-commit\nINJECTED";
+  const unnamed = configuration(bad);
+  assert.ok(unnamed.some((w) => w.includes(`not this checkout's pin ${k6Image}`) && w.includes("its measured commit")), unnamed.join("\n"));
+  assert.ok(unnamed.every((w) => !w.includes("INJECTED") && !w.includes("saved-image")));
+  for (const commit of [["a".repeat(40)], { toString: null }]) {
+    const odd = copy(); odd.tools.node.image = "saved-image"; odd.commit = commit;
+    const warnings = configuration(odd);
+    assert.ok(warnings.some((w) => w.includes(`not this checkout's pin ${nodeImage}`) && w.includes("its measured commit")), warnings.join("\n"));
+  }
 });
 
 test("missing/corrupted/extra fixed and efficiency aggregates or individual runs cannot be trusted", () => {
