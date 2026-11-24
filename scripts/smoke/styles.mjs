@@ -1,50 +1,4 @@
-import { base, skip, check } from "./helpers.mjs";
-
-/**
- * Settles as `work` does, or rejects with `what` once `ms` have passed. `work` is left to end on
- * its own (closing its page ends it); a rejection it brings later is already handled here.
- * @template T @param {number} ms @param {string} what @param {Promise<T>} work @returns {Promise<T>}
- */
-const within = (ms, what, work) => {
-  /** @type {ReturnType<typeof setTimeout> | undefined} */
-  let timer;
-  const late = new Promise((_, reject) => (timer = setTimeout(() => reject(new Error(what)), ms)));
-  return /** @type {Promise<T>} */ (Promise.race([work, late])).finally(() => clearTimeout(timer));
-};
-
-/**
- * Page work that stops for good: each step has what is left of `ms`, and once a step fails or runs
- * out of it (or `end` is called, or the time is up), no step starts. A step that ran out of time
- * is left to end on its own, as `within` leaves it.
- * @param {number} ms @param {string} what
- */
-const steps = (ms, what) => {
-  const until = performance.now() + ms;
-  let over = "";
-  return {
-    /** Why the work stopped, or "" while it goes on. */
-    get over() {
-      return over;
-    },
-    /** Stops the work, for `why`, and throws it. @param {string} why @returns {never} */
-    end(why) {
-      over ||= why;
-      throw new Error(over);
-    },
-    /** @template T @param {() => Promise<T>} work @returns {Promise<T>} */
-    async step(work) {
-      const left = until - performance.now();
-      if (!over && left <= 0) over = what;
-      if (over) throw new Error(over);
-      try {
-        return await within(left, what, work());
-      } catch (error) {
-        over ||= error instanceof Error ? error.message.split("\n")[0] : String(error);
-        throw error;
-      }
-    },
-  };
-};
+import { base, skip, check, steps } from "./helpers.mjs";
 
 export async function styles(browser, errors, swaps, noSwaps) {
   // A data-patch form on a page outside an area whose handler is in it (Area::components): the
@@ -146,9 +100,9 @@ export async function styles(browser, errors, swaps, noSwaps) {
   // stylesheet swaps the page in unstyled instead. Unlike the probe's border, that outcome does not
   // depend on whether the page's handler modules, which also hold the swap, come before or after
   // the stylesheet. The steps before the release share 15 s, and each arm after it 10 s; a step
-  // that fails or runs out of that time fails the case, and no page work starts after it. The
-  // stylesheet is released however the steps before it end, and the page is closed however the
-  // case ends.
+  // that fails, runs out of that time or settles after it fails the case, and no page work starts
+  // after it. A handle a wait returns is read in a step of its own. The stylesheet is released
+  // however the steps before it end, and the page is closed however the case ends.
   /** @param {boolean} fails */
   const sharedLoad = async (fails) => {
     const name = fails
@@ -256,9 +210,8 @@ export async function styles(browser, errors, swaps, noSwaps) {
       if (!fails) {
         let seen = "";
         try {
-          const border = await after.step(() =>
-            entered.waitForFunction(() => (/** @type {any} */ (window)).__entered, undefined, { timeout: 10_000, polling: 50 }).then((got) => got.jsonValue()),
-          );
+          const drawn = await after.step(() => entered.waitForFunction(() => (/** @type {any} */ (window)).__entered, undefined, { timeout: 10_000, polling: 50 }));
+          const border = await after.step(() => drawn.jsonValue());
           const marked = await after.step(() =>
             entered.evaluate(
               (sheet) => Array.from(document.head.querySelectorAll("link[data-corten-style]")).filter((link) => /** @type {HTMLLinkElement} */ (link).href === sheet).length,
@@ -279,20 +232,19 @@ export async function styles(browser, errors, swaps, noSwaps) {
         // load (the wait goes on across that load).
         let ended = "";
         try {
-          ended = await after.step(() =>
-            entered
-              .waitForFunction(
-                () =>
-                  document.readyState === "complete" && location.pathname === "/news" && document.querySelector("main h1")?.textContent === "Market news"
-                    ? /** @type {any} */ (window).__sameDocument
-                      ? "swapped"
-                      : "loaded in full"
-                    : "",
-                undefined,
-                { timeout: 10_000, polling: 50 },
-              )
-              .then((got) => got.jsonValue()),
+          const settled = await after.step(() =>
+            entered.waitForFunction(
+              () =>
+                document.readyState === "complete" && location.pathname === "/news" && document.querySelector("main h1")?.textContent === "Market news"
+                  ? /** @type {any} */ (window).__sameDocument
+                    ? "swapped"
+                    : "loaded in full"
+                  : "",
+              undefined,
+              { timeout: 10_000, polling: 50 },
+            ),
           );
+          ended = await after.step(() => settled.jsonValue());
         } catch {
           ended = after.over;
         }
