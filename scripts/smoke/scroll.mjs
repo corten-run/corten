@@ -1,4 +1,4 @@
-import { base, swapped, engine, skip, check } from "./helpers.mjs";
+import { base, swapped, engine, skip, check, pollFor } from "./helpers.mjs";
 
 export async function scroll(swaps, page, errors, browser, noSwaps) {
   // A filter applied on change (data-keep-place): the page changes under the user, who stays
@@ -301,30 +301,57 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
       // A navigation the user starts before the write's page comes reads the whole page, so what
       // the write changed in the layout is drawn there too. The write's page is held until that
       // navigation's request is out, so the navigation starts first however slowly it comes (#2014).
+      // The case requires the write's request, then the navigation's request, read whole, and the
+      // Stocks page drawn in the same document, each within 5 s (a result after them failing). A
+      // case without one fails and does no more work on its page: the next case starts from the
+      // News page it left, gone back to by its history entry.
       {
+        const name = "a navigation started before a write's page comes reads the whole page";
         /** @type {string[]} */
         const asked = [];
         const stocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/";
         const onStocks = (/** @type {import("@playwright/test").Request} */ r) => stocks(r) && asked.push(swapped(r) ? r.headers()["corten"] : "whole");
         let release = () => {};
         slow = new Promise((resolve) => (release = () => resolve(undefined)));
+        /** Where the case stopped, if it did. */
+        let stopped = "";
+        /** @type {import("@playwright/test").Request | null} */
+        let navigated = null;
+        /** The News page's history entry, which the next case starts from. */
+        const left = await page.evaluate(() => navigation.currentEntry.key);
+        // The listener and the hold go however the case ends.
+        page.on("request", onStocks);
         try {
-          await page.evaluate(() => scrollTo(0, 0));
-          await Promise.all([page.waitForRequest((r) => news(new URL(r.url())) && !swapped(r), { timeout: 5000 }), thank()]);
-          page.on("request", onStocks);
-          await Promise.all([
-            page.waitForRequest(stocks, { timeout: 5000 }).catch(() => {}),
-            page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/"]')).click()),
-          ]);
+          try {
+            await page.evaluate(() => scrollTo(0, 0));
+            const [wrote] = await Promise.all([page.waitForRequest((r) => news(new URL(r.url())) && !swapped(r), { timeout: 5000 }).then(() => true, () => false), thank()]);
+            if (!wrote) stopped = "no request for the write's page within 5 s";
+            else {
+              asked.length = 0;
+              [navigated] = await Promise.all([
+                page.waitForRequest(stocks, { timeout: 5000 }).catch(() => null),
+                page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/"]')).click()),
+              ]);
+              if (!navigated) stopped = "no request for the Stocks page within 5 s";
+              else if (swapped(navigated) || asked[0] !== "whole") stopped = `the Stocks page asked for as ${asked.join() || "nothing"}, not whole`;
+            }
+          } finally {
+            slow = null;
+            release();
+          }
+          if (!stopped && !(await pollFor(5000, () => page.evaluate(() => document.title === "Stocks | Watchlist" && (/** @type {any} */ (window)).__marker === 1))))
+            stopped = "the Stocks page not drawn in the same document within 5 s";
         } finally {
-          slow = null;
-          release();
+          page.off("request", onStocks);
         }
-        await page.waitForFunction(() => document.title === "Stocks | Watchlist", null, { timeout: 5000 }).catch(() => {});
-        page.off("request", onStocks);
-        check("a navigation started before a write's page comes reads the whole page", asked[0] === "whole" && (await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1)), asked.join());
-        await page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click());
-        await page.waitForFunction(() => document.title === "News | Watchlist" && document.getElementById("briefing"), null, { timeout: 5000 });
+        check(name, !stopped, stopped || `asked ${asked.join()}`);
+        if (stopped) {
+          await page.evaluate((key) => navigation.traverseTo(key).finished.catch(() => {}), left).catch(() => {});
+          await page.waitForFunction(() => document.title === "News | Watchlist" && document.getElementById("briefing"), null, { timeout: 5000 }).catch(() => {});
+        } else {
+          await page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click());
+          await page.waitForFunction(() => document.title === "News | Watchlist" && document.getElementById("briefing"), null, { timeout: 5000 });
+        }
       }
       // More elements around <main>, or another attribute on an element around it: the page loads in
       // full, as the server draws it.
