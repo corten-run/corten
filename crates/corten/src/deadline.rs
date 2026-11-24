@@ -1,16 +1,21 @@
 //! The timer a request's deadline waits on ([`crate::App::deadline`]). A request whose handler
 //! waits needs one, and on tokio's multi-threaded runtime a timer made and a timer dropped each
 //! take the one lock of the runtime's timer wheel, where the threads serving such requests
-//! queue. So a connection [`crate::serve`] accepted keeps one timer for its requests: each
-//! deadline moves it later (`Sleep::reset`, which takes no lock while the timer is still set and
-//! the new time is not earlier) and gives it back still set.
+//! queue. So a connection [`crate::serve`] accepted keeps one timer for its requests once two of
+//! them have waited: each deadline after those moves it later (`Sleep::reset`, which takes no
+//! lock while the timer is still set and the new time is not earlier) and gives it back still
+//! set.
 //!
 //! The connection's task owns the timer ([`Keeps`]): it makes it in its own poll, so the timer is
 //! of the runtime that polls the connection, and the timer is dropped with the connection. A
 //! thread has it only while it polls that connection ([`TIMER`]), which is where a request's
-//! deadline finds it. A deadline that finds none (the connection's first to wait, a second one in
-//! the same request, a request polled anywhere else: a router served another way, a call a layer
-//! moved to another task) makes its own timer and drops it, as every deadline did.
+//! deadline finds it. A deadline that finds none (the connection's first two to wait, a second
+//! one in the same request, a request polled anywhere else: a router served another way, a call
+//! a layer moved to another task) makes its own timer and drops it, as every deadline did.
+//!
+//! The connection makes its timer at its second request to wait, not its first, so that one
+//! whose only request waits (a proxy that opens a connection for each request) makes none: a
+//! timer no later request used cost that request more than any other the change touches.
 
 use std::{
     cell::Cell,
@@ -24,10 +29,12 @@ use tokio::time::{Instant, Sleep};
 
 /// No connection is being polled on the thread.
 const NOWHERE: u64 = 0;
-/// A connection that has made no timer is being polled.
+/// A connection none of whose deadlines has waited is being polled.
 const UNNAMED: u64 = 1;
-/// The same, and a deadline has waited during this poll: the connection makes its timer.
-const ASKED: u64 = 2;
+/// A connection one of whose deadlines has waited, in an earlier poll, is being polled.
+const WAITED: u64 = 2;
+/// Either of those, and a deadline has waited during this poll.
+const ASKED: u64 = 3;
 /// The number of the next connection to make a timer.
 static NAMES: AtomicU64 = AtomicU64::new(ASKED + 1);
 
@@ -70,8 +77,9 @@ pin_project_lite::pin_project! {
 
 /// What a connection has for its requests' deadlines.
 struct Mine {
-    /// [`UNNAMED`] until a deadline of the connection's has waited, then the connection's own
-    /// number, so a timer goes back only to the connection that made it.
+    /// [`UNNAMED`] until a deadline of the connection's has waited, [`WAITED`] until a second
+    /// has, in a later poll, then the connection's own number, so a timer goes back only to the
+    /// connection that made it.
     id: u64,
     /// The timer, made once: `None` before, while a deadline has it across polls, and for good
     /// if that deadline was dropped somewhere else. While the connection is polled, what the
@@ -124,35 +132,45 @@ fn swap(place: &mut Option<Held>) {
 impl<C: Future> Future for Keeps<C> {
     type Output = C::Output;
 
-    // Written for what a poll costs a connection whose handlers never wait: 13 instructions
-    // (callgrind, keep-alive requests over TCP). The connection is polled in one place, so its
-    // poll is still compiled into its caller, and [`Polling`] owns nothing to drop and reads
-    // what it lent from the thread, so putting the thread back is compiled in here too. Polled
-    // in two places by a guard that owned a timer, a poll cost 64.
+    // Written for what a poll costs a connection that has made no timer, which is every
+    // connection fewer than two of whose requests have waited: 13 instructions (callgrind,
+    // keep-alive requests over TCP). The connection is polled in one place, so its poll is still
+    // compiled into its caller, and [`Polling`] owns nothing to drop and reads what it lent from
+    // the thread, so putting the thread back is compiled in here too. Polled in two places by a
+    // guard that owned a timer, a poll cost 64. A connection that has made its timer lends it to
+    // the thread and takes it back in every poll besides, whether the request it is serving
+    // waits or not: a request that does not wait costs about 25 instructions more on such a
+    // connection than on one that has made none (callgrind, one single-threaded runtime).
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<C::Output> {
         let this = self.project();
-        // A connection no deadline of whose has waited tells the thread only that.
+        // A connection that has made no timer tells the thread only how many of its deadlines
+        // have waited, none or one.
         let polling = Polling { by: BY.replace(this.mine.id), mine: this.mine };
-        if polling.mine.id != UNNAMED {
+        if polling.mine.id > ASKED {
             swap(&mut polling.mine.timer);
         }
         let polled = this.conn.poll(cx);
         if BY.get() == ASKED && polled.is_pending() {
-            *polling.mine = made();
+            *polling.mine = asked(polling.mine.id);
         }
         polled
     }
 }
 
-/// A connection's number and its timer, not yet set: made in the connection's own poll, so the
-/// timer is of the runtime that polls the connection, whatever its handler had entered when its
-/// deadline asked. A deadline asks only once it has made a timer of its own ([`Timer::poll`]), so
-/// where there is no clock to make one on, the handler's catch has the panic, as it always had.
-/// That leaves a handler that made its timer on a runtime it had entered, on a connection whose
-/// own runtime has no clock: the connection then has its number and no timer, and its deadlines
-/// go on making their own.
+/// What a connection with no timer has after a poll in which a deadline of its waited. The first
+/// such poll leaves it [`WAITED`] and no timer: a connection whose only request waits makes none.
+/// The second gives it its number and its timer, not yet set: made in the connection's own poll,
+/// so the timer is of the runtime that polls the connection, whatever its handler had entered
+/// when its deadline asked. A deadline asks only once it has made a timer of its own
+/// ([`Timer::poll`]), so where there is no clock to make one on, the handler's catch has the
+/// panic, as it always had. That leaves a handler that made its timer on a runtime it had
+/// entered, on a connection whose own runtime has no clock: the connection then has its number
+/// and no timer, and its deadlines go on making their own.
 #[cold]
-fn made() -> Mine {
+fn asked(id: u64) -> Mine {
+    if id == UNNAMED {
+        return Mine { id: WAITED, timer: None };
+    }
     let timer = std::panic::catch_unwind(|| Box::pin(tokio::time::sleep(Duration::MAX))).ok().map(Held);
     #[cfg(test)]
     LIVE.with(|live| live.set(live.get() + isize::from(timer.is_some())));
@@ -174,14 +192,14 @@ pub(crate) struct Kept {
 
 impl Kept {
     /// The timer of the connection being polled, set to fire `limit` from now. `None` where no
-    /// connection is being polled, or its timer is not there: not made yet, or another deadline
-    /// has it.
+    /// connection is being polled, or its timer is not there: not made yet, another deadline has
+    /// it, or the thread is ending and its place for one is gone.
     fn take(limit: Duration) -> Option<Kept> {
         let of = BY.get();
         if of <= ASKED {
             return None;
         }
-        let mut timer = TIMER.take()?;
+        let mut timer = TIMER.try_with(Cell::take).ok()??;
         timer.0.as_mut().reset(after(limit));
         #[cfg(test)]
         TAKEN.with(|taken| taken.set(taken.get() + 1));
@@ -189,11 +207,12 @@ impl Kept {
     }
 }
 
-/// Tells the connection being polled, if it has made no timer, that a deadline of its has waited:
-/// it makes its timer when this poll of it ends, for its next deadline.
+/// Tells the connection being polled, if it has made no timer, that a deadline of its has waited
+/// and made its own: at the second poll that ends so, the connection makes its timer, for its
+/// next deadline.
 #[inline]
 fn ask() {
-    if BY.get() == UNNAMED {
+    if matches!(BY.get(), UNNAMED | WAITED) {
         BY.set(ASKED);
     }
 }
