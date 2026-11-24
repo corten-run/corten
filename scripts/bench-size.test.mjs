@@ -40,35 +40,49 @@ test("a new file over 256 KiB under bench/ is refused", () => {
   ]);
 });
 
-test("a lock file over 256 KiB beside its manifest is source input and needs no listing; elsewhere, or an archive named like one, it is refused", () => {
-  const manifests = { "composer.lock": "composer.json", "package-lock.json": "package.json", "npm-shrinkwrap.json": "package.json", "Cargo.lock": "Cargo.toml",
-    "yarn.lock": "package.json", "pnpm-lock.yaml": "package.json", "bun.lock": "package.json", "bun.lockb": "package.json", "Gemfile.lock": "Gemfile",
-    "mix.lock": "mix.exs", "poetry.lock": "pyproject.toml", "uv.lock": "pyproject.toml", "Pipfile.lock": "Pipfile", "go.sum": "go.mod",
-    "gradle.lockfile": "build.gradle.kts", "packages.lock.json": "App.csproj" };
-  for (const [name, manifest] of Object.entries(manifests)) {
-    const lock = { path: `bench/fullstack/apps/x/${name}`, blob: blob("7"), size: 900 * 1024 };
-    const beside = { path: `bench/fullstack/apps/x/${manifest}`, blob: blob("8"), size: 100 };
-    assert.equal(reason(lock, new Set([name, manifest])), null, name);
-    assert.deepEqual(check([lock, beside], ""), [], name);
-    assert.match(reason(lock, new Set([name])) ?? "", /over the 256 KiB limit \(a lock file is exempt only beside its manifest/, `${name} alone`);
-    assert.equal(check([lock, { ...beside, path: `bench/fullstack/apps/${manifest}` }], "").length, 1, `${name} with its manifest in another directory`);
+const live = "bench/live/apps/laravel";
+const notLock = (/** @type {string} */ path) =>
+  `${path}: 256.0 KiB (262145 bytes), over the 256 KiB limit (a lock file over the limit passes only at a path in LOCKS in scripts/bench-size.mjs, beside its manifest: add its path there, for review), not in ${LIST}`;
+
+test("a lock file over 256 KiB at a path in LOCKS beside its manifest needs no listing; any other is refused and told to add its path to LOCKS", () => {
+  assert.deepEqual([...size.LOCKS], [
+    ["bench/fullstack/apps/laravel/composer.lock", "composer.json"],
+    ["bench/fullstack/apps/nuxt/package-lock.json", "package.json"],
+    ["bench/live/apps/laravel/composer.lock", "composer.json"],
+  ]);
+  for (const [path, manifest] of size.LOCKS) {
+    const dir = path.slice(0, path.lastIndexOf("/"));
+    const name = path.slice(dir.length + 1);
+    const lock = { path, blob: blob("7"), size: 900 * 1024 };
+    const beside = { path: `${dir}/${manifest}`, blob: blob("8"), size: 100 };
+    assert.equal(reason(lock, new Set([name, manifest])), null, path);
+    assert.deepEqual(check([lock, beside], ""), [], path);
+    // A dependency update: another blob at the same path passes with no edit to LOCKS.
+    assert.deepEqual(check([{ ...lock, blob: blob("9"), size: 1200 * 1024 }, beside], ""), [], `${path} at a new blob`);
+    assert.match(reason(lock, new Set([name])) ?? "", new RegExp(`over the 256 KiB limit \\(a lock file in LOCKS is exempt only as a regular file beside its manifest, ${manifest.replace(".", "\\.")}\\)$`), `${path} alone`);
+    assert.equal(check([lock, { ...beside, path: `bench/${manifest}` }], "").length, 1, `${path} with its manifest in another directory`);
   }
-  // A result that happens to be named like a lock file is output, not input.
-  const result = { path: "bench/review-results/Cargo.lock", blob: blob("7"), size: LIMIT + 1 };
-  assert.deepEqual(check([result], ""), [`bench/review-results/Cargo.lock: 256.0 KiB (262145 bytes), over the 256 KiB limit (a lock file is exempt only beside its manifest, Cargo.toml), not in ${LIST}`]);
-  assert.match(reason({ path: "bench/x/notcomposer.lock", blob: blob("7"), size: 900 * 1024 }, new Set(["composer.json"])) ?? "", /over the 256 KiB limit$/, "only the exact name is a lock file");
-  assert.match(reason({ path: "bench/x/package-lock.json.gz", blob: blob("7"), size: 20 }, new Set(["package.json"])) ?? "", /archive/);
-  assert.deepEqual(check([{ path: "bench/x/composer.lock", blob: blob("7"), size: 900 * 1024 }, { path: "bench/x/composer.json", blob: blob("8"), size: 9 }], `${blob("7")} bench/x/composer.lock`),
-    [`${LIST}: bench/x/composer.lock is no longer an archive or over 256 KiB; remove its line`], "a listed lock file is a stale line");
+  // A lock file's name and its manifest's beside it, at a path not in LOCKS, prove nothing.
+  for (const [name, manifest] of [["Cargo.lock", "Cargo.toml"], ["composer.lock", "composer.json"], ["package-lock.json", "package.json"], ["go.sum", "go.mod"]]) {
+    const path = `bench/fullstack/apps/new/${name}`;
+    assert.deepEqual(check([{ path, blob: blob("7"), size: LIMIT + 1 }, { path: `bench/fullstack/apps/new/${manifest}`, blob: blob("8"), size: 9 }], ""), [notLock(path)], name);
+  }
+  assert.deepEqual(check([{ path: `${live}/sub/composer.lock`, blob: blob("7"), size: LIMIT + 1 }, { path: `${live}/sub/composer.json`, blob: blob("8"), size: 9 }], ""), [notLock(`${live}/sub/composer.lock`)], "a listed name in another directory");
+  assert.match(reason({ path: "bench/x/notcomposer.lock", blob: blob("7"), size: 900 * 1024 }, new Set(["composer.json"])) ?? "", /over the 256 KiB limit$/, "only a lock file's exact name gets the hint");
+  assert.match(reason({ path: `${live}/composer.lock.gz`, blob: blob("7"), size: 20 }, new Set(["composer.json"])) ?? "", /archive/);
+  assert.deepEqual(check([{ path: `${live}/composer.lock`, blob: blob("7"), size: 900 * 1024 }, { path: `${live}/composer.json`, blob: blob("8"), size: 9 }], `${blob("7")} ${live}/composer.lock`),
+    [`${LIST}: ${live}/composer.lock is no longer an archive or over 256 KiB; remove its line`], "a listed lock file is a stale line");
 });
 
-test("the three lock files over 256 KiB in this repository are exempt beside their manifests", () => {
+test("each lock file in LOCKS is in this repository, over 256 KiB, and exempt beside its manifest", () => {
   const root = fileURLToPath(new URL("..", import.meta.url));
   const entries = tracked(root, "HEAD");
-  const locks = ["bench/fullstack/apps/laravel/composer.lock", "bench/fullstack/apps/nuxt/package-lock.json", "bench/live/apps/laravel/composer.lock"];
-  for (const path of locks) assert.ok((entries.find((e) => e.path === path)?.size ?? 0) > LIMIT, path);
+  for (const [path, manifest] of size.LOCKS) {
+    assert.ok((entries.find((e) => e.path === path)?.size ?? 0) > LIMIT, `${path} is over the limit; when a lock no longer is, remove it from LOCKS`);
+    assert.ok(entries.some((e) => e.path === `${path.slice(0, path.lastIndexOf("/"))}/${manifest}`), `${path}'s manifest`);
+  }
   const problems = check(entries, "");
-  assert.deepEqual(problems.filter((p) => locks.some((path) => p.startsWith(`${path}:`))), []);
+  assert.deepEqual(problems.filter((p) => [...size.LOCKS.keys()].some((path) => p.startsWith(`${path}:`))), []);
   assert.ok(problems.length > 0, "the archives are still found without the list");
 });
 
@@ -297,16 +311,24 @@ test("the base is --base, then CORTEN_BENCH_SIZE_BASE, then a merge commit's fir
   assert.match(problems[1], /^bench\/r1\/late\.gz: an archive or compressed file \(\.gz\), at blob /);
 });
 
-test("a lock file over 256 KiB a pull request adds passes beside its manifest and is refused without it", () => {
+test("a lock file over 256 KiB a pull request adds or updates at a path in LOCKS passes beside its manifest; without it, or at another path, it is refused", () => {
   const { d, base } = history();
-  const lock = Buffer.alloc(LIMIT + 1, 97);
-  const app = commit(d, { "bench/app/Cargo.lock": lock, "bench/app/Cargo.toml": "[package]\n" });
-  assert.deepEqual(size.run(d, { head: app, base, env }).problems, []);
-  const result = commit(d, { "bench/review-results/Cargo.lock": Buffer.alloc(LIMIT + 2, 97) });
-  const removed = commit(d, { "bench/review-results/Cargo.lock": null });
-  const { problems } = size.run(d, { head: removed, base, env });
+  const added = commit(d, { [`${live}/composer.lock`]: Buffer.alloc(LIMIT + 1, 97), [`${live}/composer.json`]: "{}\n" });
+  const bumped = commit(d, { [`${live}/composer.lock`]: Buffer.alloc(LIMIT + 9, 98) }, "dependency update");
+  assert.ok(added);
+  assert.deepEqual(size.run(d, { head: bumped, base, env }).problems, [], "a new blob at a listed path");
+  const alone = commit(d, { [`${live}/composer.json`]: null }, "manifest removed");
+  const atTip = size.run(d, { head: alone, base, env }).problems;
+  assert.equal(atTip.length, 2, atTip.join("\n"));
+  assert.equal(atTip[0], `${live}/composer.lock: 256.0 KiB (262153 bytes), over the 256 KiB limit (a lock file in LOCKS is exempt only as a regular file beside its manifest, composer.json), not in ${LIST}`);
+  assert.match(atTip[1], new RegExp(`^${live}/composer\\.lock: .*, at blob [0-9a-f]+ from commit ${alone}, `));
+
+  const { d: d2, base: base2 } = history();
+  const result = commit(d2, { "bench/review-results/Cargo.lock": Buffer.alloc(LIMIT + 2, 97), "bench/review-results/Cargo.toml": "[package]\n" });
+  const removed = commit(d2, { "bench/review-results/Cargo.lock": null });
+  const { problems } = size.run(d2, { head: removed, base: base2, env });
   assert.equal(problems.length, 1, problems.join("\n"));
-  assert.match(problems[0], new RegExp(`^bench/review-results/Cargo\\.lock: 256\\.0 KiB \\(262146 bytes\\), over the 256 KiB limit \\(a lock file is exempt only beside its manifest, Cargo\\.toml\\), at blob [0-9a-f]+ from commit ${result}, `));
+  assert.match(problems[0], new RegExp(`^bench/review-results/Cargo\\.lock: 256\\.0 KiB \\(262146 bytes\\), over the 256 KiB limit \\(a lock file over the limit passes only at a path in LOCKS in scripts/bench-size\\.mjs, beside its manifest: add its path there, for review\\), at blob [0-9a-f]+ from commit ${result}, `));
 });
 
 /** A row of `git mktree -z`'s input. @param {string} mode @param {string} object @param {Buffer | string} name */
@@ -358,10 +380,11 @@ test("paths are read as bytes: two that are not UTF-8 are distinct, and a contro
   ]);
 });
 
-/** A commit on `parent` whose bench/ is `base`'s r1/ and app/ with `rows` (`git mktree -z` rows), and `base`'s scripts/. @param {string} d @param {string} parent @param {string} base @param {Buffer[]} rows */
+/** A commit on `parent` whose bench/ is `base`'s r1/ and live/apps/laravel/ with `rows` (`git mktree -z` rows), and `base`'s scripts/. @param {string} d @param {string} parent @param {string} base @param {Buffer[]} rows */
 function appCommit(d, parent, base, rows) {
-  const app = gitIn(d, ["mktree", "-z"], Buffer.concat(rows));
-  const bench = gitIn(d, ["mktree", "-z"], Buffer.concat([row("040000", id(d, `${base}:bench/r1`), "r1"), row("040000", app, "app")]));
+  const tree = (/** @type {string} */ name, /** @type {string} */ inner) => gitIn(d, ["mktree", "-z"], row("040000", inner, name));
+  const liveTree = tree("apps", tree("laravel", gitIn(d, ["mktree", "-z"], Buffer.concat(rows))));
+  const bench = gitIn(d, ["mktree", "-z"], Buffer.concat([row("040000", liveTree, "live"), row("040000", id(d, `${base}:bench/r1`), "r1")]));
   const root = gitIn(d, ["mktree", "-z"], Buffer.concat([row("040000", bench, "bench"), row("040000", id(d, `${base}:scripts`), "scripts")]));
   return gitIn(d, ["commit-tree", root, "-p", parent, "-m", "app"], "");
 }
@@ -369,24 +392,24 @@ function appCommit(d, parent, base, rows) {
 test("a lock file's manifest is a regular file: a directory, a submodule or a symbolic link named like one does not exempt it, at the tip or in history", () => {
   const { d, base } = history();
   const hash = (/** @type {Buffer | string} */ content) => gitIn(d, ["hash-object", "-w", "--stdin"], content);
-  const lock = row("100644", hash(Buffer.alloc(LIMIT + 1, 97)), "Cargo.lock");
+  const lock = row("100644", hash(Buffer.alloc(LIMIT + 1, 97)), "composer.lock");
   const kinds = {
-    directory: row("040000", gitIn(d, ["mktree", "-z"], row("100644", hash("[package]\n"), "x")), "Cargo.toml"),
-    submodule: row("160000", base, "Cargo.toml"),
-    "symbolic link": row("120000", hash("../r1/summary.json"), "Cargo.toml"),
+    directory: row("040000", gitIn(d, ["mktree", "-z"], row("100644", hash("{}\n"), "x")), "composer.json"),
+    submodule: row("160000", base, "composer.json"),
+    "symbolic link": row("120000", hash("../../../r1/summary.json"), "composer.json"),
   };
   for (const [kind, manifest] of Object.entries(kinds)) {
     const tip = appCommit(d, base, base, [lock, manifest]);
     const atTip = size.run(d, { head: tip, base, env }).problems;
-    assert.ok(atTip.includes(`bench/app/Cargo.lock: 256.0 KiB (262145 bytes), over the 256 KiB limit (a lock file is exempt only beside its manifest, Cargo.toml), not in ${LIST}`), `${kind} at the tip:\n${atTip.join("\n")}`);
+    assert.ok(atTip.includes(`${live}/composer.lock: 256.0 KiB (262145 bytes), over the 256 KiB limit (a lock file in LOCKS is exempt only as a regular file beside its manifest, composer.json), not in ${LIST}`), `${kind} at the tip:\n${atTip.join("\n")}`);
     // The lock deleted in the next commit: only history has it.
     const deleted = appCommit(d, tip, base, [manifest]);
     const inHistory = size.run(d, { head: deleted, base, env }).problems;
     assert.equal(inHistory.length, 1, `${kind} in history:\n${inHistory.join("\n")}`);
-    assert.match(inHistory[0], new RegExp(`^bench/app/Cargo\\.lock: 256\\.0 KiB \\(262145 bytes\\), over the 256 KiB limit \\(a lock file is exempt only beside its manifest, Cargo\\.toml\\), at blob [0-9a-f]+ from commit ${tip}, `), kind);
+    assert.match(inHistory[0], new RegExp(`^${live}/composer\\.lock: 256\\.0 KiB \\(262145 bytes\\), over the 256 KiB limit \\(a lock file in LOCKS is exempt only as a regular file beside its manifest, composer\\.json\\), at blob [0-9a-f]+ from commit ${tip}, `), kind);
   }
   for (const mode of ["100644", "100755"]) {
-    const tip = appCommit(d, base, base, [lock, row(mode, hash("[package]\n"), "Cargo.toml")]);
+    const tip = appCommit(d, base, base, [lock, row(mode, hash("{}\n"), "composer.json")]);
     assert.deepEqual(size.run(d, { head: tip, base, env }).problems, [], `a manifest of mode ${mode}`);
   }
 });
@@ -395,22 +418,22 @@ test("a lock file over 256 KiB is checked in every commit that has it: its manif
   const lock = Buffer.alloc(LIMIT + 1, 97);
   {
     const { d, base } = history();
-    commit(d, { "bench/app/Cargo.lock": lock, "bench/app/Cargo.toml": "[package]\n" });
-    const removed = commit(d, { "bench/app/Cargo.toml": null }, "manifest removed");
-    const restored = commit(d, { "bench/app/Cargo.toml": "[package]\n" }, "manifest restored");
+    commit(d, { [`${live}/composer.lock`]: lock, [`${live}/composer.json`]: "{}\n" });
+    const removed = commit(d, { [`${live}/composer.json`]: null }, "manifest removed");
+    const restored = commit(d, { [`${live}/composer.json`]: "{}\n" }, "manifest restored");
     const { problems } = size.run(d, { head: restored, base, env });
     assert.equal(problems.length, 1, problems.join("\n"));
-    assert.match(problems[0], new RegExp(`^bench/app/Cargo\\.lock: .*exempt only beside its manifest, Cargo\\.toml\\), at blob [0-9a-f]+ from commit ${removed}, `));
+    assert.match(problems[0], new RegExp(`^${live}/composer\\.lock: .*exempt only as a regular file beside its manifest, composer\\.json\\), at blob [0-9a-f]+ from commit ${removed}, `));
   }
   {
     const { d, base } = history();
-    commit(d, { "bench/app/Cargo.lock": lock, "bench/app/Cargo.toml": "[package]\n" });
-    commit(d, { "bench/app/Cargo.lock": null, "bench/app/Cargo.toml": null }, "both removed");
-    const alone = commit(d, { "bench/app/Cargo.lock": lock }, "lock back alone");
-    const gone = commit(d, { "bench/app/Cargo.lock": null }, "lock removed");
+    commit(d, { [`${live}/composer.lock`]: lock, [`${live}/composer.json`]: "{}\n" });
+    commit(d, { [`${live}/composer.lock`]: null, [`${live}/composer.json`]: null }, "both removed");
+    const alone = commit(d, { [`${live}/composer.lock`]: lock }, "lock back alone");
+    const gone = commit(d, { [`${live}/composer.lock`]: null }, "lock removed");
     const { problems } = size.run(d, { head: gone, base, env });
     assert.equal(problems.length, 1, problems.join("\n"));
-    assert.match(problems[0], new RegExp(`^bench/app/Cargo\\.lock: .*, at blob [0-9a-f]+ from commit ${alone}, `));
+    assert.match(problems[0], new RegExp(`^${live}/composer\\.lock: .*, at blob [0-9a-f]+ from commit ${alone}, `));
   }
 });
 
@@ -450,4 +473,15 @@ test("a shallow clone fails, even with both ends of the range fetched, saying to
   git(shallow, ["fetch", "-q", "--depth", "1", "origin", "refs/tags/before:refs/tags/before"]);
   assert.equal(id(shallow, "before"), base, "the base is in the clone");
   assert.throws(() => size.run(shallow, { head: "HEAD", base, env }), /shallow.*git fetch --unshallow/);
+});
+test("a file named like a lock beside a file named like its manifest, at a path not in LOCKS, is held to the limit at the tip and in history", () => {
+  const { d, base } = history();
+  const fake = Buffer.alloc(LIMIT + 1, 97);
+  const tip = commit(d, { "bench/results/fake/Cargo.lock": fake, "bench/results/fake/Cargo.toml": "not even TOML" }, "fake pair");
+  const atTip = size.run(d, { head: tip, base, env }).problems;
+  assert.ok(atTip.some((p) => p.startsWith("bench/results/fake/Cargo.lock: 256.0 KiB (262145 bytes), over the 256 KiB limit") && p.endsWith(`not in ${LIST}`)), atTip.join("\n"));
+  const deleted = commit(d, { "bench/results/fake/Cargo.lock": null }, "fake lock deleted");
+  const inHistory = size.run(d, { head: deleted, base, env }).problems;
+  assert.equal(inHistory.length, 1, inHistory.join("\n"));
+  assert.match(inHistory[0], new RegExp(`^bench/results/fake/Cargo\\.lock: 256\\.0 KiB \\(262145 bytes\\), over the 256 KiB limit.*, at blob [0-9a-f]+ from commit ${tip}, `));
 });

@@ -1,6 +1,6 @@
 // Keeps benchmark raw data out of the tree (https://github.com/corten-run/corten/issues/1719).
-// Every version of a committed file stays in every clone, even after a later commit deletes it, so
-// a file under bench/ whose name ends in one of ARCHIVE's suffixes, or that is larger than 256 KiB
+// A full clone fetches every version of a committed file still reachable in history, even after a
+// later commit deletes it, so a file under bench/ whose name ends in one of ARCHIVE's suffixes, or that is larger than 256 KiB
 // (LIMIT), fails unless scripts/bench-size.allow lists its path with its exact blob ID. The name
 // is matched, not the contents: a small archive under another name is not found. The list holds
 // the files that were in the tree when this check came, which stay because their paths are cited
@@ -18,18 +18,24 @@
 //    clone whatever the tip holds.
 // 3. The tip's tree: a listed file that changed fails, and a line whose file is gone, or is now
 //    small and not an archive, fails as stale.
-// A dependency lock file an app builds from (LOCKS) is source input, not output, so the size limit
-// does not apply to it when it and its manifest are regular files in the same directory of the
-// same commit (not a directory, submodule or symbolic link of that name). History holds it to that
-// in every commit between the base and the tip that changes a lock file or a manifest in its
-// directory, so a manifest removed and later restored, or a lock deleted and added back alone,
-// fails. An archive still fails. A path under bench/ that is not valid UTF-8, has a control character (a newline or
+// A dependency lock file an app builds from is source input, not output, so the size limit does
+// not apply to one whose path LOCKS (below) lists, when it and the manifest LOCKS names are
+// regular files in the same directory of the same commit (not a directory, submodule or symbolic
+// link of that name). Its blob may change (a dependency update) without an edit here. Any other
+// lock file over the limit fails until its path is added to LOCKS, in this script, where review
+// sees it: a name and a file beside it prove neither that it is a lock nor that anything builds
+// from it. History holds a listed lock to its manifest in every commit between the base and the
+// tip that changes either, so a manifest removed and later restored, or a lock deleted and added
+// back alone, fails. An archive still fails. A path under bench/ that is not valid UTF-8, has a control character (a newline or
 // a tab among them) or has a name starting or ending with a space fails as unsupported, shown as a
 // JSON string. The rule for benchmark authors is in CONTRIBUTING.md (Benchmark results).
 //
 // The base is --base <revision>, else CORTEN_BENCH_SIZE_BASE, else the first parent when the tip is
 // a merge commit, else the merge base of the tip and origin/main. An all-zero base, GitHub's before
-// for a push that creates a branch or tag, means the merge base with origin/main. CI gives the base
+// for a push that creates a branch or tag, means the merge base with origin/main as it is when the
+// check runs: a rerun after main has moved can check a different range, and a commit already on
+// main brings no history (a push that creates main itself brings none). Such a check reads the tip
+// and what is not yet on main, not the range the push brought. CI gives the base
 // from its event (.github/workflows/ci.yml): a pull request's merge commit's first parent, and a
 // push's before, since a push to main has moved origin/main to the tip and its merge base would be
 // the tip itself. In GitHub Actions a missing base fails rather than fall back. When none resolves
@@ -45,24 +51,19 @@ export const LIMIT = 256 * 1024;
 /** An archive or a compressed file, by the end of its name. */
 export const ARCHIVE = /\.(?:tar|tgz|gz|xz|zst|bz2|zip|7z)$/i;
 /**
- * Each dependency lock file the size limit skips, by name, with the manifests one of which must be
- * in the same directory of the same commit: source input, not benchmark output, and rewritten by
- * every dependency update. A file of that name with no manifest beside it is held to the limit.
- * @type {ReadonlyMap<string, readonly (string | RegExp)[]>}
+ * The dependency lock files allowed over the size limit, by path, each with the name of the
+ * manifest that must be a regular file beside it in the same commit: source input an app builds
+ * from, rewritten by every dependency update, so a new blob at a listed path needs no edit here. A
+ * new lock over the limit is added here, in review; nothing else grants the exemption.
+ * @type {ReadonlyMap<string, string>}
  */
 export const LOCKS = new Map([
-  ["Cargo.lock", ["Cargo.toml"]],
-  ...["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "bun.lockb"].map((name) => /** @type {const} */ ([name, ["package.json"]])),
-  ["composer.lock", ["composer.json"]],
-  ["Gemfile.lock", ["Gemfile"]],
-  ["mix.lock", ["mix.exs"]],
-  ["poetry.lock", ["pyproject.toml"]],
-  ["uv.lock", ["pyproject.toml"]],
-  ["Pipfile.lock", ["Pipfile"]],
-  ["go.sum", ["go.mod"]],
-  ["gradle.lockfile", ["build.gradle", "build.gradle.kts"]],
-  ["packages.lock.json", [/\.csproj$/]],
+  ["bench/fullstack/apps/laravel/composer.lock", "composer.json"],
+  ["bench/fullstack/apps/nuxt/package-lock.json", "package.json"],
+  ["bench/live/apps/laravel/composer.lock", "composer.json"],
 ]);
+/** A dependency lock file's name, only to say how one not in LOCKS may pass: the name grants nothing. */
+const LOCK_NAME = /^(?:Cargo\.lock|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|composer\.lock|Gemfile\.lock|mix\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|go\.sum|gradle\.lockfile|packages\.lock\.json)$/;
 /** The grandfather list, as a path from the repository's root. */
 export const LIST = "scripts/bench-size.allow";
 /** The environment variable that names the base when --base does not. */
@@ -89,9 +90,9 @@ export function regular(entry) {
   return entry.mode === undefined || entry.mode === "100644" || entry.mode === "100755";
 }
 
-/** Whether a file's name is a lock file's or one of its manifests'. @param {string} name */
-export function pairName(name) {
-  return LOCKS.has(name) || [...LOCKS.values()].some((manifests) => manifests.some((m) => (typeof m === "string" ? m === name : m.test(name))));
+/** Whether a path is a lock file in LOCKS or the manifest beside one. @param {string} path */
+export function pairPath(path) {
+  return LOCKS.has(path) || [...LOCKS].some(([lock, manifest]) => `${split(lock)[0]}/${manifest}` === path);
 }
 
 /**
@@ -246,13 +247,12 @@ function split(path) {
 }
 
 /**
- * Whether `path` is a lock file with one of its manifests among `siblings`, the names in its
- * directory in the same commit. @param {string} path @param {ReadonlySet<string> | undefined} siblings
+ * Whether `path` is a lock file in LOCKS with its manifest among `siblings`, the names of the
+ * regular files in its directory in the same commit. @param {string} path @param {ReadonlySet<string> | undefined} siblings
  */
 export function exemptLock(path, siblings) {
-  const manifests = LOCKS.get(split(path)[1]);
-  if (!manifests || !siblings) return false;
-  return manifests.some((m) => (typeof m === "string" ? siblings.has(m) : [...siblings].some((name) => m.test(name))));
+  const manifest = LOCKS.get(path);
+  return manifest !== undefined && siblings !== undefined && siblings.has(manifest);
 }
 
 /**
@@ -265,8 +265,10 @@ export function reason(entry, siblings) {
   if (archive) return `an archive or compressed file (${archive[0]})`;
   if (entry.size <= LIMIT || (regular(entry) && exemptLock(entry.path, siblings))) return null;
   const over = `${(entry.size / 1024).toFixed(1)} KiB (${entry.size} bytes), over the ${LIMIT / 1024} KiB limit`;
-  const manifests = LOCKS.get(split(entry.path)[1]);
-  return manifests ? `${over} (a lock file is exempt only beside its manifest, ${manifests.map(String).join(" or ")})` : over;
+  const manifest = LOCKS.get(entry.path);
+  if (manifest !== undefined) return `${over} (a lock file in LOCKS is exempt only as a regular file beside its manifest, ${manifest})`;
+  if (LOCK_NAME.test(split(entry.path)[1])) return `${over} (a lock file over the limit passes only at a path in LOCKS in scripts/bench-size.mjs, beside its manifest: add its path there, for review)`;
+  return over;
 }
 
 /**
@@ -391,8 +393,8 @@ export function grandfathered(text, baseText, baseEntries, base) {
 /**
  * What a commit in `base`..`head` brings under bench/ (merges against each parent): `changes`, each
  * blob it adds or changes, once for each path and blob, with the earliest commit that has it and its
- * size; and `pairs`, each commit and directory where a lock file or a manifest was added, changed,
- * deleted or changed mode, in commit order, so the pairing is checked in every commit it changes.
+ * size; and `pairs`, each commit and directory where a lock file in LOCKS or its manifest was
+ * added, changed, deleted or changed mode, in commit order, so the pairing is checked in every commit it changes.
  * @param {string} root @param {string} base @param {string} head @param {NodeJS.ProcessEnv} [env]
  * @returns {{ changes: Change[], pairs: { commit: string, dir: string }[] }}
  */
@@ -419,8 +421,10 @@ export function history(root, base, head, env = process.env) {
     if (!pathBytes.subarray(0, 6).equals(Buffer.from("bench/"))) continue;
     const path = decodePath(pathBytes);
     if (!path.unsupported) {
-      const [dir, name] = split(path.path);
-      if (pairName(name)) pairs.set(`${commit}\0${dir}`, { commit, dir });
+      if (pairPath(path.path)) {
+        const dir = split(path.path)[0];
+        pairs.set(`${commit}\0${dir}`, { commit, dir });
+      }
     }
     // A deletion has no new blob, and a submodule is a commit, not a file of this repository.
     if (status === "D" || mode === "160000" || /^0+$/.test(blob)) continue;
@@ -441,9 +445,9 @@ export function history(root, base, head, env = process.env) {
   return { changes: found.map((c) => ({ ...c, size: /** @type {number} */ (sizes.get(c.blob)) })), pairs: [...pairs.values()] };
 }
 
-/** Whether a lock file's exemption decides `entry`: a lock file's name, over the limit and not an archive. @param {Entry} entry */
+/** Whether a lock file's exemption decides `entry`: a path in LOCKS, over the limit and not an archive. @param {Entry} entry */
 function lockSized(entry) {
-  return LOCKS.has(split(entry.path)[1]) && entry.size > LIMIT && !ARCHIVE.test(entry.path);
+  return LOCKS.has(entry.path) && entry.size > LIMIT && !ARCHIVE.test(entry.path);
 }
 
 /**

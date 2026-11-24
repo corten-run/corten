@@ -2345,5 +2345,7 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
    ([#1719 Benchmark runs commit raw output and archives under bench/, so every clone grows with every run](https://github.com/corten-run/corten/issues/1719)).
    A kept file is held to 256 KiB the same way: r16's log and summary, over it, are listed, and a
    new round's over it fails the check until it is made smaller or its detail moves to the archive.
-   A dependency lock file beside its manifest (`composer.lock` with `composer.json`) is source
-   input, not output, and the size limit skips it.
+   A dependency lock file is source input, not output: the size limit skips one at a path listed
+   in `LOCKS` in `scripts/bench-size.mjs` beside its manifest (Laravel's `composer.lock` with
+   `composer.json`, Nuxt's `package-lock.json` with `package.json`); a new one over the limit
+   is added there, for review.

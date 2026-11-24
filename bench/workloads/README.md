@@ -262,7 +262,9 @@ archive is kept and publishes it there, and the provenance records where it can 
 SHA-256 (`archiveSha256`); the digest alone is not a locator
 ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)). `npm run check` fails on a file
 under `bench/` with an archive suffix or over 256 KiB, in any commit of the pull request, unless
-the base's `scripts/bench-size.allow` lists it at that path and blob.
+the base's `scripts/bench-size.allow` lists it at that path and blob, or it is a dependency lock
+file at a path `LOCKS` in `scripts/bench-size.mjs` lists, beside its manifest; the
+[contributor guide](../../CONTRIBUTING.md#benchmark-results) has the full rule.
 
 Corten-only rendering/allocation/default-cost and TCP diagnostics remain separate from
 competitive rankings. The distributed listings-feed run and failover test remain separate,

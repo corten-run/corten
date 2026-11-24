@@ -355,8 +355,8 @@ The failover benchmark is `node examples/listings-feed/bench/run.mjs`; see its h
 
 ## Benchmark results
 
-Every version of a committed file stays in every clone, even after a later commit deletes it, so a
-benchmark commits its evidence, not its raw data. Committed evidence is the report, the summary and
+A normal full clone fetches every version of a committed file still reachable in history, even
+after a later commit deletes it, so a benchmark commits its evidence, not its raw data. Committed evidence is the report, the summary and
 the provenance: small enough to diff and review. Raw data (per-request logs, traces, captures, a
 round's archive) stays outside the tree. A maintainer chooses where it is kept and publishes it
 there, and the committed provenance records a locator it can be fetched from and its SHA-256. A
@@ -386,21 +386,26 @@ merges. It does not publish, fetch or verify an archive.
 3. Every commit the pull request brings is checked, not only its last one, since a merge commit
    keeps them all: a file added in one commit and deleted or shrunk in the next still fails, and
    the problem names the commit.
-4. A dependency lock file larger than 256 KiB is source input, not output, and passes when it and
-   its manifest are regular files in the same directory of the same commit (a directory, submodule
-   or symbolic link named like the manifest does not count), and in every commit the pull request
-   brings that changes either of them there: `Cargo.lock` with `Cargo.toml`;
-   `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml` or `bun.lock`
-   with `package.json`; `composer.lock` with `composer.json`; and the like for Ruby, Elixir,
-   Python, Go, Gradle and NuGet (`LOCKS` in the script). Without its manifest it is held to the
-   limit, and a lock file's name with an archive suffix (`package-lock.json.gz`) still fails.
+4. A dependency lock file larger than 256 KiB is source input, not output. It passes only at a
+   path listed in `LOCKS` in `scripts/bench-size.mjs` (today the Fullstack Laravel and Nuxt locks
+   and the Live Laravel lock), and only when it and the manifest `LOCKS` names are regular files
+   in the same directory of the same commit (a directory, submodule or symbolic link named like the
+   manifest does not count), in every commit the pull request brings that changes either of them.
+   A listed lock may change blob, as a dependency update does, without an edit to `LOCKS`. Any
+   other lock file over the limit fails until its path is added to `LOCKS` in the script, where
+   review sees it: a file named like a lock beside one named like its manifest proves neither that
+   it is a lock nor that an app builds from it.
 5. A path under `bench/` that is not valid UTF-8, has a control character (a newline or a tab
    among them) or has a name starting or ending with white space fails as unsupported.
 
 The base is the commit the change merges into: `--base <revision>`, else `CORTEN_BENCH_SIZE_BASE`,
 else the first parent when the checked commit is a merge commit, else the merge base with
-`origin/main`. An all-zero base, which GitHub gives a push that creates a branch or tag, means the
-merge base with `origin/main`. CI gives the base from its event rather than let the script guess:
+`origin/main`. An all-zero base, which GitHub gives a push that creates a branch or tag (a release
+tag's first push among them), means the merge base with `origin/main` as it is when the check
+runs. That is not a replay of the range the push brought: a rerun after `main` advances can check
+a different range, a tag on a commit already on `main` checks its tree with no history, and a push
+that creates `main` itself has none. A release needs green CI on the exact commit before it is
+tagged ([RELEASING.md](RELEASING.md)), which is its history check; the tag's check is in addition. CI gives the base from its event rather than let the script guess:
 a pull request's merge commit's first parent, and a push's `before` (after a push to `main`,
 `origin/main` is the pushed commit, so its merge base would check nothing). In GitHub Actions the
 check fails without one, and so does the CI step for an event it has no base for. A shallow clone
