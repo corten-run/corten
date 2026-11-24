@@ -324,6 +324,8 @@ impl Policy {
     /// A name the app answers to (`shop.example`; `.shop.example` for it and every subdomain).
     /// By default a request is answered only when its `Host` is `localhost` (or a name under
     /// it), an IP address or missing; any other gets `421 Misdirected Request` before routing.
+    /// (A `Host` that is no host at all, or an HTTP/1.1 request the server read with none or
+    /// with two, is not one HTTP allows, and gets `400 Bad Request` whatever names the app has.)
     /// Otherwise a page on a name someone else controls could point that name at this machine
     /// (DNS rebinding) and use every route as if it were the app's own origin, the same-origin
     /// check included, which matters most for an app on loopback, where "only this machine can
@@ -349,16 +351,17 @@ impl Policy {
 
     /// Answers whatever `Host` a request names, for an app whose names are not known in advance
     /// (one served under each customer's own domain) and that checks them itself. See
-    /// [`Policy::host`] for what this gives up.
+    /// [`Policy::host`] for what this gives up. A request HTTP does not allow is still a `400`.
     pub fn any_host(mut self) -> Self {
         self.hosts = None;
         self
     }
 
-    /// True when the app answers to the request's host: `localhost` or a name under it, an IP
-    /// address, a name given to [`Policy::host`], or no host at all (HTTP/1.0; a test's request).
-    pub(crate) fn answers<'a>(&self, uri: &http::Uri, host: impl FnOnce() -> Option<&'a HeaderValue>) -> bool {
-        self.hosts.as_deref().is_none_or(|hosts| named(uri, host, hosts))
+    /// What the request's target and `Host` say of it ([`Asked`]): one HTTP does not allow, one
+    /// for another host, or one for the app, whose hosts are `localhost` or a name under it, an
+    /// IP address, a name given to [`Policy::host`], or none at all (HTTP/1.0; a test's request).
+    pub(crate) fn asked(&self, req: &Request, origin: &mut Origin<'_>) -> Asked {
+        asked(req, || origin.host_lines(), self.hosts.as_deref())
     }
 
     /// The same check apart from the policy, for the routes that say `unstaged`.
@@ -1580,6 +1583,13 @@ impl<'a> Origin<'a> {
         *self.host.get_or_insert_with(|| self.headers.get(header::HOST))
     }
 
+    /// [`host_lines`], with the line kept for [`Origin::host`].
+    fn host_lines(&mut self) -> (Option<&'a HeaderValue>, bool) {
+        let (host, more) = host_lines(self.headers);
+        self.host = Some(host);
+        (host, more)
+    }
+
     fn checks(method: &Method) -> bool {
         !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
     }
@@ -1658,34 +1668,187 @@ pub(crate) fn loopback(at: &str) -> bool {
         || std::str::from_utf8(host).ok().and_then(|h| h.parse::<std::net::Ipv4Addr>().ok()).is_some_and(|ip| ip.is_loopback())
 }
 
-/// True when `host` (a `Host` header: a name or an address, and maybe a port) is `localhost` or a
-/// name under it, an IP address, or one of `names` (`.name`: it and its subdomains).
-fn answers(host: &[u8], names: &[String]) -> bool {
+/// What a request's target and `Host` say of it, before anything of the app runs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Asked {
+    /// For a host the app answers to, or for none it has to name.
+    Here,
+    /// For a host that is not the app's: `421`.
+    Elsewhere,
+    /// Not a request HTTP allows: `400`.
+    Malformed,
+}
+
+impl Asked {
+    /// The answer to a request that goes no further, with a few words for a person who reads it.
+    ///
+    /// The `400` leaves the connection open, as the `421` does and as RFC 9112 lets it: the
+    /// server read the message's head and knows where its body ends, so the next request on the
+    /// connection is read as it would be after any other answer (9.3). The sections that have a
+    /// server close after a `400` are those where the message's length is in doubt (6.1, 6.3),
+    /// and hyper answers those itself.
+    #[inline]
+    pub(crate) fn refusal(self) -> Option<Response> {
+        match self {
+            Asked::Here => None,
+            Asked::Elsewhere => Some((StatusCode::MISDIRECTED_REQUEST, "Misdirected request.").into_response()),
+            Asked::Malformed => Some((StatusCode::BAD_REQUEST, "Bad request.").into_response()),
+        }
+    }
+}
+
+/// A request's `Host` line, and whether it has another. Most requests have one line to a name,
+/// which the map's two counts say without a look at any of them.
+#[inline]
+fn host_lines(headers: &HeaderMap) -> (Option<&HeaderValue>, bool) {
+    if headers.len() == headers.keys_len() {
+        return (headers.get(header::HOST), false);
+    }
+    let mut lines = headers.get_all(header::HOST).iter();
+    let host = lines.next();
+    (host, lines.next().is_some())
+}
+
+/// What `req` asks for ([`Asked`]): `lines` gives its `Host` line and whether it has another,
+/// and `hosts` is the names the app answers to, or `None` when it answers to any.
+///
+/// Not one HTTP allows, each a `400` in RFC 9112: a request-target with a byte outside ASCII,
+/// or `*` with a method other than `OPTIONS` (3 and 3.2.4: an invalid request-line; RFC 3986 has
+/// no such byte in a URI); more than one `Host` line, or a `Host` that is not a host and maybe a
+/// port (3.2); and an HTTP/1.1 message with no `Host` line (3.2). The `Host` is read once for
+/// these and for the names, so a request the app answers costs the second look at its lines and
+/// the scan of its target.
+fn asked<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bool), hosts: Option<&[String]>) -> Asked {
+    let uri = req.uri();
+    if let Some(target) = uri.path_and_query() {
+        let target = target.as_str();
+        if !target.is_ascii() || (target == "*" && req.method() != Method::OPTIONS) {
+            return Asked::Malformed;
+        }
+    }
+    let (host, more) = lines();
+    if more {
+        return Asked::Malformed;
+    }
+    match (uri.host(), host) {
+        (None, Some(host)) => named(host.as_bytes(), hosts),
+        (None, None) => unnamed(req),
+        (Some(target), host) => targeted(target, host, req, hosts),
+    }
+}
+
+/// A request with no `Host` line: HTTP/1.0's is for the app, and so is one Corten's server did
+/// not read off a connection (a test's, which has no host to name; one from a server of the
+/// app's own, which answers for what it read). An HTTP/1.1 message the server read is not one
+/// HTTP allows, and its body says it is one ([`crate::body::Body::arrived`]).
+#[cold]
+fn unnamed(req: &Request) -> Asked {
+    if req.version() == http::Version::HTTP_11 && req.body().arrived() {
+        Asked::Malformed
+    } else {
+        Asked::Here
+    }
+}
+
+/// A request whose target names its host (`GET http://shop.example/ HTTP/1.1`, or `CONNECT`'s
+/// `shop.example:443`): the target's is the host asked for, whatever `Host` says (RFC 9112
+/// 3.2.2), but the message still needs its one `Host` line, with a host in it (3.2).
+#[cold]
+fn targeted(target: &str, host: Option<&HeaderValue>, req: &Request, hosts: Option<&[String]>) -> Asked {
+    let line = match host {
+        Some(host) => named(host.as_bytes(), None),
+        None => unnamed(req),
+    };
+    match line {
+        Asked::Here => named(target.as_bytes(), hosts),
+        refused => refused,
+    }
+}
+
+/// What `host` names (a `Host` header, or a target's host: a name or an address, and maybe a
+/// port): [`Asked::Here`] for `localhost` or a name under it, an IP address, or one of `names`
+/// (`.name`: it and its subdomains), and for any host when there are no names to hold it to;
+/// [`Asked::Malformed`] when it is not RFC 9110 7.2's `uri-host [ ":" port ]`, with RFC 3986
+/// 3.2.2's host. That grammar allows a name of no bytes, but an `http` URI with an empty host is
+/// one a recipient must reject (RFC 9110 4.2.1), so here it is malformed too. An address in
+/// brackets is IPv6: 3986's `IPvFuture` has no version defined, and its text asks for an error.
+///
+/// A name the app answers to as it is written (`localhost`, an IPv4 address, a name in
+/// `names`) is a `reg-name` since what it matched is one, so only a name that matched by its end
+/// or not at all is read byte by byte, and a refused one is logged.
+fn named(host: &[u8], names: Option<&[String]>) -> Asked {
     // `[::1]:3000`: an IPv6 address is always in brackets.
     if host.first() == Some(&b'[') {
-        return true;
+        return if ip_literal(host) { Asked::Here } else { Asked::Malformed };
     }
     let name = match host.iter().rposition(|&b| b == b':') {
         Some(colon) if host[colon + 1..].iter().all(u8::is_ascii_digit) => &host[..colon],
-        Some(_) => return false,
+        Some(_) => return Asked::Malformed,
         None => host,
     };
-    let name = name.strip_suffix(b".").unwrap_or(name);
-    if name.eq_ignore_ascii_case(b"localhost") || ends_with(name, b".localhost") {
-        return true;
+    let Some(names) = names else {
+        return if reg_name(name) { Asked::Here } else { Asked::Malformed };
+    };
+    let bare = name.strip_suffix(b".").unwrap_or(name);
+    if bare.eq_ignore_ascii_case(b"localhost") {
+        return Asked::Here;
     }
     // An IPv4 address: digits and dots, which no DNS name a browser resolves is.
-    if !name.is_empty() && name.iter().all(|&b| b.is_ascii_digit() || b == b'.') {
-        return std::str::from_utf8(name).is_ok_and(|n| n.parse::<std::net::Ipv4Addr>().is_ok());
+    if !bare.is_empty() && bare.iter().all(|&b| b.is_ascii_digit() || b == b'.') {
+        if std::str::from_utf8(bare).is_ok_and(|n| n.parse::<std::net::Ipv4Addr>().is_ok()) {
+            return Asked::Here;
+        }
+        refused_host(host);
+        return Asked::Elsewhere;
     }
-    names.iter().any(|allowed| match allowed.strip_prefix('.') {
-        Some(domain) => name.eq_ignore_ascii_case(domain.as_bytes()) || ends_with(name, allowed.as_bytes()),
-        None => name.eq_ignore_ascii_case(allowed.as_bytes()),
-    })
+    let mut under = ends_with(bare, b".localhost");
+    for allowed in names {
+        match allowed.strip_prefix('.') {
+            Some(domain) if bare.eq_ignore_ascii_case(domain.as_bytes()) => return Asked::Here,
+            Some(_) => under |= ends_with(bare, allowed.as_bytes()),
+            None if bare.eq_ignore_ascii_case(allowed.as_bytes()) => return Asked::Here,
+            None => {}
+        }
+    }
+    if !reg_name(name) {
+        Asked::Malformed
+    } else if under {
+        Asked::Here
+    } else {
+        refused_host(host);
+        Asked::Elsewhere
+    }
 }
 
 fn ends_with(name: &[u8], suffix: &[u8]) -> bool {
     name.len() > suffix.len() && name[name.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+}
+
+/// Whether `name` is a `reg-name` (RFC 3986 3.2.2) of at least one byte: unreserved characters,
+/// sub-delimiters and percent-encoded bytes. No colon, so a second one in a `Host` is not a port's.
+fn reg_name(name: &[u8]) -> bool {
+    let mut rest = name;
+    !name.is_empty()
+        && loop {
+            rest = match rest {
+                [] => break true,
+                [b'%', high, low, rest @ ..] if high.is_ascii_hexdigit() && low.is_ascii_hexdigit() => rest,
+                [byte, rest @ ..] if byte.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=".contains(byte) => rest,
+                _ => break false,
+            };
+        }
+}
+
+/// Whether `host`, which starts with `[`, is an IPv6 address in brackets and maybe a port
+/// (`[::1]`, `[::1]:3000`).
+fn ip_literal(host: &[u8]) -> bool {
+    let Some(end) = host.iter().position(|&b| b == b']') else { return false };
+    let port = match &host[end + 1..] {
+        [] => true,
+        [b':', port @ ..] => port.iter().all(u8::is_ascii_digit),
+        _ => false,
+    };
+    port && std::str::from_utf8(&host[1..end]).is_ok_and(|address| address.parse::<std::net::Ipv6Addr>().is_ok())
 }
 
 /// Logs the first refused host of the process: a deployed app that has not listed its name
@@ -1701,37 +1864,15 @@ fn refused_host(host: &[u8]) {
     }
 }
 
-/// [`Policy::answers`], held apart from the policy: the names the app answers to, or `None` when
+/// [`Policy::asked`], held apart from the policy: the names the app answers to, or `None` when
 /// it answers to any.
 #[derive(Clone)]
 pub(crate) struct HostCheck(Option<Arc<[String]>>);
 
 impl HostCheck {
-    pub(crate) fn answers(&self, req: &Request) -> bool {
-        self.0.as_deref().is_none_or(|hosts| named(req.uri(), || req.headers().get(header::HOST), hosts))
+    pub(crate) fn asked(&self, req: &Request) -> Asked {
+        asked(req, || host_lines(req.headers()), self.0.as_deref())
     }
-}
-
-/// Whether the request's host is one of `hosts` (or a name `answers` lets through), or it names
-/// none; a refusal is logged.
-fn named<'h>(uri: &http::Uri, host: impl FnOnce() -> Option<&'h HeaderValue>, hosts: &[String]) -> bool {
-    let host = match uri.host() {
-        Some(host) => host.as_bytes(),
-        None => match host() {
-            Some(host) => host.as_bytes(),
-            None => return true,
-        },
-    };
-    let named = answers(host, hosts);
-    if !named {
-        refused_host(host);
-    }
-    named
-}
-
-/// The answer to a request for a host the app does not answer to.
-pub(crate) fn misdirected() -> Response {
-    (StatusCode::MISDIRECTED_REQUEST, "Misdirected request.").into_response()
 }
 
 /// The `form-action` sources of the app's policy and of each area's that adds to it (innermost
@@ -2232,6 +2373,7 @@ mod tests {
         for host in [
             "localhost",
             "localhost:3000",
+            "localhost:",
             "LocalHost.",
             "app.localhost:8080",
             "127.0.0.1",
@@ -2239,13 +2381,18 @@ mod tests {
             "10.0.0.7:8080",
             "[::1]:3000",
             "[::1]",
+            "[::ffff:10.0.0.7]:",
+            "[2001:DB8::7]:443",
             "shop.example",
             "Shop.Example:443",
             "corp.example",
             "admin.corp.example",
         ] {
-            assert!(answers(host.as_bytes(), &names), "{host}");
+            assert_eq!(named(host.as_bytes(), Some(&names)), Asked::Here, "{host}");
+            assert_eq!(named(host.as_bytes(), None), Asked::Here, "{host}, in an app that answers to any host");
         }
+        // Hosts as HTTP writes them that are not the app's: a `reg-name` may hold more than a
+        // DNS name does (RFC 3986 3.2.2), a comma among it.
         for host in [
             "rebound.attacker.example:3917",
             "localhost.attacker.example",
@@ -2255,22 +2402,123 @@ mod tests {
             "www.shop.example",
             "shop.example.attacker.example",
             "xcorp.example",
+            "my_service:8080",
+            "a.example,b.example",
+            "caf%C3%A9.example",
+            ".",
+        ] {
+            assert_eq!(named(host.as_bytes(), Some(&names)), Asked::Elsewhere, "{host}");
+            assert_eq!(named(host.as_bytes(), None), Asked::Here, "{host}, in an app that answers to any host");
+        }
+        // Not a host and maybe a port, whatever names the app has, its own inside them too.
+        for host in [
+            "",
+            ":3000",
             "localhost:3000:1",
             "localhost:abc",
-            "",
+            "localhost:3000/path",
+            "localhost/path",
+            "user@localhost",
+            "user@127.0.0.1:8080",
+            "127.0.0.1:8080, other.example.com",
+            "shop.example, other.example",
+            "shop.example other.example",
+            "shop.example?x",
+            "shop.example#x",
+            "http://shop.example",
+            "x%zz.corp.example",
+            "x%4.corp.example",
+            "x y.corp.example",
+            "user@app.localhost",
+            "caf\u{e9}.example",
+            "[::1",
+            "[::1]x",
+            "[::1]:80a",
+            "[]",
+            "[localhost]",
+            "[127.0.0.1]",
+            "[v1.x]",
+            "[fe80::1%25eth0]",
+            "::1",
         ] {
-            assert!(!answers(host.as_bytes(), &names), "{host}");
+            assert_eq!(named(host.as_bytes(), Some(&names)), Asked::Malformed, "{host}");
+            assert_eq!(named(host.as_bytes(), None), Asked::Malformed, "{host}, in an app that answers to any host");
         }
     }
 
+    /// What a request asks for where no connection brought it (a test's, as these are): its
+    /// target's host before its `Host`'s, one valid `Host` line at most, and none at all for
+    /// HTTP/1.0 and HTTP/1.1 alike. `tests::security` sends the same over a connection, where
+    /// an HTTP/1.1 request with no `Host` is refused.
     #[test]
-    fn the_host_check_only_reads_the_header_as_a_fallback() {
-        let absolute = "http://localhost/".parse().unwrap();
-        let relative = "/".parse().unwrap();
-        assert!(Policy::new().answers(&absolute, || panic!("the URI supplies the host")));
-        assert!(Policy::new().any_host().answers(&relative, || panic!("host checking is disabled")));
-        let header = HeaderValue::from_static("localhost");
-        assert!(Policy::new().answers(&relative, || Some(&header)));
+    fn a_request_is_read_for_its_target_and_its_host_lines() {
+        let policy = Policy::new();
+        let any = Policy::new().any_host();
+        let asked = |policy: &Policy, method: &str, target: &str, hosts: &[&str]| {
+            let mut req = http::Request::builder().method(method).uri(target);
+            for host in hosts {
+                req = req.header("host", *host);
+            }
+            let req = req.body(crate::http::Body::empty()).unwrap();
+            let lane = policy.host_check().asked(&req);
+            assert_eq!(
+                policy.asked(&req, &mut Origin::new(req.headers())),
+                lane,
+                "{method} {target} {hosts:?}: a route outside the stages"
+            );
+            lane
+        };
+        for policy in [&policy, &any] {
+            assert_eq!(asked(policy, "GET", "/", &[]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "/", &["localhost"]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "/", &["localhost", "localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "/", &["localhost", "other.example"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "/", &["localhost/"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "/caf\u{e9}", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "/?q=caf\u{e9}", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "/caf%C3%A9?q=caf%C3%A9", &["localhost"]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "*", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "POST", "*", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "OPTIONS", "*", &["localhost"]), Asked::Here);
+            // The target's host is the one asked for; `Host` is only held to being one.
+            assert_eq!(asked(policy, "GET", "http://localhost/", &[]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "http://localhost:3000/", &["other.example"]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "http://[::1]:3000/", &["localhost"]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "http://localhost/", &["a, b"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "http://localhost/", &["localhost", "localhost"]), Asked::Malformed);
+        }
+        assert_eq!(asked(&policy, "GET", "/", &["other.example"]), Asked::Elsewhere);
+        assert_eq!(asked(&any, "GET", "/", &["other.example"]), Asked::Here);
+        assert_eq!(asked(&policy, "GET", "http://other.example/", &["localhost"]), Asked::Elsewhere);
+        assert_eq!(asked(&any, "GET", "http://other.example/", &["localhost"]), Asked::Here);
+        assert_eq!(asked(&policy, "CONNECT", "other.example:443", &["other.example:443"]), Asked::Elsewhere);
+        let old = http::Request::builder().version(http::Version::HTTP_10).uri("/").body(crate::http::Body::empty()).unwrap();
+        assert_eq!(policy.host_check().asked(&old), Asked::Here);
+        // With the body the server gives a request it read off a connection, an HTTP/1.1
+        // request needs its `Host`, and HTTP/1.0's still does not.
+        for (version, target, asks) in [
+            (http::Version::HTTP_11, "/", Asked::Malformed),
+            (http::Version::HTTP_11, "http://localhost/", Asked::Malformed),
+            (http::Version::HTTP_10, "/", Asked::Here),
+            (http::Version::HTTP_10, "http://localhost/", Asked::Here),
+        ] {
+            let body = crate::http::Body::arriving(http_body_util::Empty::<bytes::Bytes>::new());
+            let read = http::Request::builder().version(version).uri(target).body(body).unwrap();
+            assert_eq!(policy.host_check().asked(&read), asks, "{version:?} {target}");
+            assert_eq!(any.asked(&read, &mut Origin::new(read.headers())), asks, "{version:?} {target}");
+        }
+        // Another name with two lines does not make `Host` one with two, and hides no second.
+        let twice = |hosts: &[&str]| {
+            let mut req = http::Request::builder().uri("/").header("accept", "text/html").header("accept", "*/*");
+            for host in hosts {
+                req = req.header("host", *host);
+            }
+            policy.host_check().asked(&req.header("cookie", "a=b").body(crate::http::Body::empty()).unwrap())
+        };
+        assert_eq!(twice(&["localhost"]), Asked::Here);
+        assert_eq!(twice(&["other.example"]), Asked::Elsewhere);
+        assert_eq!(twice(&["localhost", "localhost"]), Asked::Malformed);
+        assert_eq!(twice(&[]), Asked::Here);
     }
 
     #[test]

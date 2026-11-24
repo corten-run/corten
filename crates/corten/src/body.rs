@@ -29,6 +29,11 @@ trait Piece: http_body::Body<Data = Bytes, Error = BoxError> + Send + 'static {
     fn whole(self: Pin<&mut Self>) -> Option<Bytes> {
         None
     }
+
+    /// Whether it is a request's body as Corten's server read it off a connection.
+    fn arrived(&self) -> bool {
+        false
+    }
 }
 
 /// The whole body, sent as one piece.
@@ -73,7 +78,25 @@ impl Body {
         if let Some(own) = (&mut body as &mut dyn std::any::Any).downcast_mut::<Option<Body>>() {
             return own.take().expect("taken once");
         }
-        Body(Some(Box::pin(Boxing { body: body.expect("taken once") })))
+        Body(Some(Box::pin(Boxing { body: body.expect("taken once"), arrived: false })))
+    }
+
+    /// The body of a request Corten's server read off a connection ([`crate::serve`]), which
+    /// [`Body::arrived`] then says of it. It is boxed whether or not the request has one.
+    pub(crate) fn arriving<B>(body: B) -> Self
+    where
+        B: http_body::Body<Data = Bytes> + Send + 'static,
+        B::Error: Into<BoxError>,
+    {
+        Body(Some(Box::pin(Boxing { body, arrived: true })))
+    }
+
+    /// Whether this is the body Corten's server gave a request it read off a connection, which
+    /// says the request is an HTTP message held to HTTP's rules for one. A test's request has
+    /// another, and so has one a server of the app's own read, or one whose body a layer of the
+    /// app's replaced.
+    pub(crate) fn arrived(&self) -> bool {
+        self.0.as_ref().is_some_and(|body| body.arrived())
     }
 
     /// A body with nothing in it.
@@ -182,6 +205,8 @@ pin_project_lite::pin_project! {
     struct Boxing<B> {
         #[pin]
         body: B,
+        // Set by `Body::arriving`.
+        arrived: bool,
     }
 }
 
@@ -212,6 +237,9 @@ where
     B: http_body::Body<Data = Bytes> + Send + 'static,
     B::Error: Into<BoxError>,
 {
+    fn arrived(&self) -> bool {
+        self.arrived
+    }
 }
 
 pin_project_lite::pin_project! {

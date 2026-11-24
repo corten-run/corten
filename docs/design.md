@@ -6593,7 +6593,7 @@ rules something out.
     closing the connection, is logged as that `500`, and a `101` as itself. A response future
     dropped before it is ready writes nothing; a ready response's line is not changed by a later
     disconnect. It sees the host check's
-    `421`, cross-site refusals, error-page replacements, conditional `304`s, compression and
+    `421` and `400`, cross-site refusals, error-page replacements, conditional `304`s, compression and
     app layers. It never polls a body to count it, so a live stream is logged when its answer
     is ready, not at a close it may never reach; a body HTTP gives no content (a `204`, a `304`,
     a `1xx`, a `2xx` to `CONNECT`) counts zero. The existing subscriber still owns formatting,

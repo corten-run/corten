@@ -10,7 +10,7 @@ not remove that requirement.
 | Concern | Default | Override |
 |---|---|---|
 | Address | `HOST` (both loopback addresses, `127.0.0.1` and `[::1]`, so `localhost` answers at once however it resolves), `PORT` (`3000`) | environment; `corten::serve_on(listeners, app)` for listeners of your own (a Unix socket) with the same shutdown, `corten::serve_wrapped(listeners, move \|tcp\| acceptor.accept(tcp), app)` for HTTPS ([below](#your-own-listeners)) |
-| Names it answers to | `localhost`, IP addresses; any other `Host` gets `421` ([below](#host-names)) | `HOSTS=shop.example,.shop.example` in the environment, or `Policy::host("shop.example")` |
+| Names it answers to | `localhost`, IP addresses; any other `Host` gets `421`, and a missing, repeated or malformed one `400` ([below](#host-names)) | `HOSTS=shop.example,.shop.example` in the environment, or `Policy::host("shop.example")` |
 | The document | none: each page brings its own, the app's layout component with the page in it (`req.page(html! { <Layout ..>..</Layout> })`); `corten new` writes the layout | the layout is the app's code ([views](views.md#the-document)) |
 | Routes | a `#[corten::routes]` module: each route names its handlers, and `router()` is what `App::new` takes; every handler is checked when the crate compiles, there and in `Area::route` and `Api::route` (Corten's `get`, `post`, ...), so no route reaches the app unchecked | |
 | What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; on `Shared`, `#[derive(Clone, FromRef)]`: `Clone` lets each route have a copy and a handler take the whole state, and `FromRef` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out; [design Choice 33](../design.md#choice-state-derives)) |
@@ -264,6 +264,25 @@ included, since the browser treats the rebound page as same-origin. On loopback,
 machine can reach the app, that is the access model it would break, so the check is the default
 rather than a setting to remember.
 
+The same check answers `400 Bad Request` to a request HTTP does not allow
+([RFC 9112](https://www.rfc-editor.org/rfc/rfc9112#section-3.2), 3 and 3.2), whatever names the
+app has and with `Policy::any_host()` too, and nothing of the app runs for it either:
+
+1. an HTTP/1.1 request with no `Host` line, or a request with more than one, the same value or
+   not;
+2. a `Host` that is not a host and maybe a port: one with a user (`user@shop.example`), a path
+   (`shop.example/x`), nothing in it, or a list (`shop.example, other.example`);
+3. a request-target with a byte outside ASCII (a browser percent-encodes those, as in
+   `/caf%C3%A9`, which is answered as before), or `*` with a method other than `OPTIONS`.
+
+The connection stays open after it, as after the `421`: the server read the whole request, so
+the next one on the connection is answered. A request with no `Host` is still answered when it
+is HTTP/1.0, and when Corten's server did not read it off a connection: a test's `app().test()`,
+or a `Router` another library's server calls as a tower `Service`, which answers for the requests
+it reads (every other case above is a `400` there too). The server knows its own request by the
+body it gave it, so a tower layer around the app that replaces a request's body takes that one
+check away.
+
 A deployed app lists the names it is served under, where the deploy sets `HOST` and `PORT`:
 
 ```sh
@@ -272,7 +291,8 @@ HOSTS=shop.example,.shop.example   # the domain, and (leading dot) every subdoma
 
 or in code, `App::policy(Policy::new().host("shop.example"))`. Behind a proxy that rewrites
 `Host`, it is the name the proxy sends. A health check that calls the app by an IP address, or
-by `localhost`, is answered as before. The first refused name is logged, so a deploy that forgot
+by `localhost`, is answered as before, when it sends a `Host` line or speaks HTTP/1.0: a check
+written by hand as `GET /health/live HTTP/1.1` with no `Host` is the `400` above. The first refused name is logged, so a deploy that forgot
 its name says why it answers 421. An app served under names it cannot list in advance (each
 customer's own domain) says `Policy::any_host()` (`HOSTS=*`) and checks them itself. The check
 compares one header with a short list.
@@ -1161,7 +1181,8 @@ routes module, the app's, an area's or an API's; the probes a load balancer send
 `/health/live` and `/health/ready`. It goes through none of the stages above: no same-origin
 check, signal or deadline, no middleware (the app's, its area's or its API's), no error page,
 security headers, `Cache-Control`, tag, compression or allowed origins. What it keeps adds no
-stage: the host check every request meets (a name the app does not answer to gets `421`),
+stage: the host check every request meets (a name the app does not answer to gets `421`, and a
+request HTTP does not allow `400`),
 `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` on its answer (below),
 a panic answered `500`, and, under an API's prefix, the API's JSON for a failure. Its handler's
 answer is otherwise sent as it made it, a raw `Response` too, and every other route keeps every
@@ -1992,7 +2013,7 @@ Under the prefix:
    endpoint's JSON-RPC errors, as `examples/card-market`'s `/mcp` answers them): it returns a
    `ToJson` value, so a key check in `Identify` and the API's unknown URLs, wrong methods,
    methods no route has (501), deadline and refusals all answer as its clients parse them. A `421` for a host the app does
-   not answer is not the API's (no route ran), and a URL outside the prefix is the pages' 404.
+   not answer, or the `400` for a request HTTP does not allow ([Host names](#host-names)), is not the API's (no route ran), and a URL outside the prefix is the pages' 404.
 5. `Api::allow_origin` lets one site's pages call these routes from the browser: Corten answers
    its CORS preflight, adds `Access-Control-Allow-Origin` and lets its writes through. The
    pages keep refusing that site's writes. The site authenticates with a token: a write from it
