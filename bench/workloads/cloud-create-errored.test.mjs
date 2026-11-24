@@ -2,13 +2,13 @@
 // failed. No provider, droplet or SSH process runs here.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { isDeepStrictEqual } from "node:util";
 import { createProviderEngine as providerTransport } from "./cloud-engine-test-fixture.mjs";
 import { context, harness, syntheticProviderRequest } from "./cloud-fixtures.mjs";
-import { digest } from "./cloud-local.mjs";
+import { digest, durable } from "./cloud-local.mjs";
 import { createErroredBytes, createErroredRecord } from "./cloud-retirement.mjs";
 import { publicError } from "./droplet.mjs";
 
@@ -95,8 +95,8 @@ const providerCalls = (h) => h.calls.filter(([binary]) => binary === "doctl").ma
 
 // Wrap the synthetic controller transport. The fake create still checks that
 // intent is durable before dispatch; the provider then fails it and holds hosts.
-function erroredLaunch(t, { result = errored(), hosts = [], get, account, settle } = {}) {
-  const h = harness(t); let created = false, accounts = 0;
+function erroredLaunch(t, { result = errored(), hosts = [], get, account, settle, flags = {} } = {}) {
+  const h = harness(t, flags); let created = false, accounts = 0;
   const run = (binary, args, ...rest) => {
     if (binary === "doctl" && args[2] === "create") {
       h.run(binary, args, ...rest); created = true; h.hosts(typeof hosts === "function" ? hosts(h) : hosts); return result;
@@ -676,4 +676,187 @@ test("the bind of a completed allocation is its own checkpoint, and the next col
   assert.equal(h.deletes, 1); assert.equal(h.creates, 1);
   assert.ok(!existsSync(join(h.local, "operation.lock")));
   assert.deepEqual(providers.map(({ closed }) => closed), [1, 1], "each collection closed its own provider once");
+});
+
+// Review round 4, finding 1. The previous launch fenced only names and tags in a root with
+// an earlier provider-errored round: it saved create intent and sent a create while its
+// census still listed that round's posted droplet 123 under another name.
+test("a later launch in the same root sends no create while its census lists an earlier provider-errored create's posted ID", async (t) => {
+  for (const row of [{ name: "renamed-by-someone", tags: [] }, { name: "other", tags: ["unrelated"], region: { slug: "nyc1" } }]) {
+    const { h, task } = erroredLaunch(t);
+    await assert.rejects(task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
+    const next = harness(t, { stateRoot: h.base, round: "r22", hostId: "999", createReturnedId: 999, active: true });
+    next.hosts([{ ...h.host(), ...row }]);
+    await assert.rejects(next.launch().launch(), /posted droplet is listed/);
+    assert.equal(next.creates, 0); assert.ok(!providerCalls(next).includes("create"));
+    const saved = next.saved();
+    assert.equal(saved.createIntentAt, undefined); assert.notEqual(saved.status, "creating");
+  }
+  // A failure recorded on another provider account cannot be fenced by this census.
+  const { h, task } = erroredLaunch(t);
+  await assert.rejects(task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
+  const receipt = join(h.local, "provider-create-errored.json"), observedAt = JSON.parse(readFileSync(receipt)).observedAt;
+  h.change((s) => {
+    s.provider.accountId = "user:synthetic-other-account";
+    const bytes = createErroredBytes(createErroredRecord(s, s.createErrored, 0, observedAt));
+    writeFileSync(receipt, bytes); s.createErrored.evidenceSha256 = digest(bytes);
+  });
+  const foreignRoot = harness(t, { stateRoot: h.base, round: "r22", hostId: "999", createReturnedId: 999, active: true });
+  await assert.rejects(foreignRoot.launch().launch(), /another provider account/); assert.equal(foreignRoot.creates, 0);
+  // With the ID absent the same root launches.
+  const clean = erroredLaunch(t);
+  await assert.rejects(clean.task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
+  const later = harness(t, { stateRoot: clean.h.base, round: "r22", hostId: "999", createReturnedId: 999, active: true });
+  later.hosts([{ ...clean.h.host(), id: 555, name: "unrelated", tags: [] }]);
+  await later.launch().launch(); assert.equal(later.creates, 1);
+});
+
+// Review round 4, finding 2. A contradiction whose state publication did not complete.
+const eio = () => Object.assign(new Error("synthetic EIO"), { code: "EIO" });
+const reappearedStage = (h) => readdirSync(h.local).filter((name) => /^state\.json\.create-reappeared-[a-f0-9]{32}\.tmp$/.test(name));
+test("a stage left by an interrupted contradiction publication keeps the receipt from resolving", async (t) => {
+  const { h, run, task } = erroredLaunch(t);
+  await assert.rejects(task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
+  // The previous controller left this exact shape after a failed rename and released its lock.
+  writeFileSync(join(h.local, `state.json.create-reappeared-${"ab".repeat(16)}.tmp`), "{\"partial");
+  const before = h.saved();
+  await assert.rejects(h.task({ run }).collect(), /observed again/);
+  assert.equal(h.creates, 1); assert.equal(h.deletes, 0); assert.equal(h.saved().createErrored.evidenceSha256, before.createErrored.evidenceSha256);
+  const next = harness(t, { stateRoot: h.base, round: "r22" });
+  await assert.rejects(next.launch().launch(), /observed again/); assert.equal(next.creates, 0);
+});
+
+test("a contradiction whose publication fails keeps the operation lock, and the receipt never resolves after the custody step", async (t) => {
+  for (const failure of ["rename", "stage write", "every write"]) {
+    const { h, run, task } = erroredLaunch(t);
+    await assert.rejects(task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
+    const original = readFileSync(h.statePath);
+    h.hosts([{ ...h.host(), name: "renamed-by-someone", tags: [] }]);
+    const createReappearedIo = {
+      durable(path, bytes) {
+        const stage = path.includes("state.json.create-reappeared-");
+        if (failure === "every write" || failure === "stage write" && stage) throw eio();
+        return durable(path, bytes);
+      },
+      rename() { throw eio(); },
+    };
+    await assert.rejects(h.task({ run, createReappearedIo }).collect(), (error) => {
+      assert.equal(error.controllerStage, "create-contradiction-unpublished", failure);
+      assert.match(publicError(error), /provider-create-reappeared/); return true;
+    });
+    assert.ok(readFileSync(h.statePath).equals(original), `${failure}: the old state is not replaced`);
+    assert.ok(existsSync(join(h.local, "operation.lock")), `${failure}: custody is kept`);
+    assert.equal(existsSync(join(h.local, "provider-create-reappeared")), failure !== "every write");
+    let calls = h.calls.length;
+    await assert.rejects(h.task({ run }).collect(), /still holds custody/); assert.equal(h.calls.length, calls);
+    // The custody step for that lock. When nothing was written, it records the witness first.
+    if (failure === "every write") writeFileSync(join(h.local, "provider-create-reappeared"), "");
+    unlinkSync(join(h.local, "operation.lock"));
+    h.hosts([]);
+    await assert.rejects(h.task({ run }).collect(), /observed again/, failure);
+    assert.equal(h.saved().createErrored.evidenceSha256, JSON.parse(original).createErrored.evidenceSha256);
+    const next = harness(t, { stateRoot: h.base, round: "r22" });
+    await assert.rejects(next.launch().launch(), /observed again/); assert.equal(next.creates, 0);
+    assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+  }
+});
+
+// Review round 4, finding 3. A contradicted receipt beside an exact, positively owned
+// droplet had no route: every collect refused and the pinned path could not admit it.
+const contradictionRoutes = {
+  "a published receipt whose droplet reappears": async (t) => {
+    const { h, run, task } = erroredLaunch(t, { flags: { missingUnit: true } });
+    await assert.rejects(task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
+    h.hosts([h.host()]);
+    return { h, run };
+  },
+  "a recorded contradiction whose droplet later shows its saved ownership": async (t) => {
+    const { h, run, task } = erroredLaunch(t, { flags: { missingUnit: true } });
+    await assert.rejects(task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
+    h.hosts([{ ...h.host(), name: "renamed-by-someone", tags: [] }]);
+    await assert.rejects(h.task({ run }).collect(), /observed again/);
+    assert.equal(h.saved().createErrored.reappeared.via, "exact-get");
+    h.hosts([h.host()]);
+    return { h, run };
+  },
+  "an unpublished receipt beside a late errored action whose droplet is present": async (t) => {
+    const { h, o, task } = lateLaunch(t, { flags: { missingUnit: true } });
+    await assert.rejects(task.launch(), { controlUncertain: true });
+    release(h);
+    const state = h.saved();
+    writeFileSync(join(h.local, "provider-create-errored.json"), createErroredBytes(createErroredRecord(state, state.createPending, 0, "2026-11-20T00:00:00.000Z")));
+    h.hosts([h.host()]);
+    return { h, run: o.run };
+  },
+  "an unpublished receipt beside a late completed action": async (t) => {
+    const { h, o, task } = lateLaunch(t, { flags: { missingUnit: true } });
+    await assert.rejects(task.launch(), { controlUncertain: true });
+    release(h);
+    const state = h.saved();
+    writeFileSync(join(h.local, "provider-create-errored.json"), createErroredBytes(createErroredRecord(state, state.createPending, 0, "2026-11-20T00:00:00.000Z")));
+    o.action = actionRow({ status: "completed" }); h.hosts([h.host()]);
+    return { h, run: o.run };
+  },
+};
+for (const [name, setup] of Object.entries(contradictionRoutes)) {
+  test(`${name} binds only that exact owned droplet, keeps the evidence, and retires only by the pinned unused route`, async (t) => {
+    const { h, run } = await setup(t);
+    const receipt = readFileSync(join(h.local, "provider-create-errored.json"));
+    assert.equal(await h.task({ run }).collect(), 3);
+    const bound = h.saved();
+    assert.equal(bound.status, "preparing"); assert.equal(bound.id, "123"); assert.equal(bound.ip, "192.0.2.10");
+    assert.equal(bound.createErrored, undefined);
+    assert.deepEqual({ dropletId: bound.createContradicted.dropletId, actionId: bound.createContradicted.actionId, evidenceSha256: bound.createContradicted.evidenceSha256 },
+      { dropletId: "123", actionId: "456", evidenceSha256: digest(receipt) });
+    assert.equal(bound.createContradicted.reappeared.dropletId, "123");
+    assert.ok(readFileSync(join(h.local, "provider-create-errored.json")).equals(receipt), "the receipt is kept as evidence");
+    assert.ok(existsSync(join(h.local, "provider-create-reappeared")), "the contradiction witness is kept");
+    assert.ok(!existsSync(join(h.local, "operation.lock")));
+    assert.ok(!h.calls.some(([binary, ...args]) => binary === "ssh" || binary === "scp" || binary === "doctl" && args[2] === "delete"));
+    // The receipt is never accepted again: a later round still waits for this reservation.
+    const next = harness(t, { stateRoot: h.base, round: "r22" });
+    await assert.rejects(next.launch().launch(), /unresolved reservation/); assert.equal(next.creates, 0);
+    await assert.rejects(h.task({ run }).collect(), /approved pinned observation/); assert.equal(h.deletes, 0);
+    assert.equal(await h.pinnedUnused({ run }).collect(), 1);
+    const retired = h.saved();
+    assert.equal(retired.retirement.kind, "unused"); assert.ok(retired.destroyedAt); assert.deepEqual(retired.createContradicted, bound.createContradicted);
+    assert.equal(h.deletes, 1); assert.equal(h.creates, 1);
+    assert.equal(h.calls.filter(([binary, ...args]) => binary === "ssh" && args.at(-1).includes("benchmark-unused-host/v1")).length, 1);
+  });
+}
+
+test("a contradicted receipt binds nothing that is not exactly and positively owned", async (t) => {
+  const cases = {
+    absent: () => [],
+    renamed: (h) => [{ ...h.host(), name: "renamed-by-someone", tags: [] }],
+    "another region": (h) => [{ ...h.host(), region: { slug: "nyc1" } }],
+    "no public address": (h) => [{ ...h.host(), networks: { v4: [] } }],
+    "two public addresses": (h) => [{ ...h.host(), networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }, { type: "public", ip_address: "192.0.2.11" }] } }],
+    "another ID with its name and tags": (h) => [{ ...h.host(), id: 999 }],
+  };
+  for (const [name, hosts] of Object.entries(cases)) {
+    const { h, run, task } = erroredLaunch(t);
+    await assert.rejects(task.launch(), { providerDiagnostic: { code: "create-errored-absent" } });
+    writeFileSync(join(h.local, "provider-create-reappeared"), "");
+    h.hosts(hosts(h));
+    const before = h.calls.length;
+    await assert.rejects(h.task({ run }).collect(), (error) => {
+      assert.match(error.message, /observed again/, name); assert.equal(error.controllerStage, "create-errored-contradicted", name);
+      assert.match(publicError(error), /--unused-bootstrap-known-hosts/); return true;
+    });
+    const state = h.saved();
+    assert.equal(state.id, undefined, name); assert.equal(state.status, "creating"); assert.equal(state.createContradicted, undefined);
+    // Only the exact GET of the posted ID, never a census.
+    assert.deepEqual(h.calls.slice(before).map(([, ...args]) => args[0] === "account" ? "account" : args[2]), ["account", "get", "account"], name);
+    assert.equal(h.deletes, 0); assert.equal(h.creates, 1);
+    assert.ok(!h.calls.some(([binary]) => binary === "ssh" || binary === "scp"));
+  }
+});
+
+// Review round 4, finding 4. The CLI prints only allowlisted stages; the route must be one.
+test("the public error names the supported route for an offline never-started or contradicted reservation", () => {
+  for (const stage of ["offline-never-started", "create-errored-contradicted"])
+    assert.match(publicError({ controllerStage: stage }), /--collect --unused-bootstrap-known-hosts/, stage);
+  assert.match(publicError({ controllerStage: "create-contradiction-unpublished" }), /provider-create-reappeared/);
+  assert.doesNotMatch(publicError(new Error("--collect --unused-bootstrap-known-hosts")), /unused-bootstrap/);
 });

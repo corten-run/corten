@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
-import { digest, fileHash, treeHash } from "./cloud-local.mjs";
+import { digest, durable, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetCli, fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { providerTransport } from "./cloud-provider.mjs";
@@ -26,7 +26,7 @@ import { continuationAdmission, continuationLock, inspectContinuation } from "./
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
-import { controller } from "./droplet.mjs";
+import { controller, publicError } from "./droplet.mjs";
 
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
 const checkout = fs.realpathSync(".");
@@ -994,7 +994,7 @@ async function lateCreateAttempt(t, { offline = false } = {}) {
 // Review round 3, finding 1. The previous controller refused the witnessing collect but
 // left the receipt acceptable, and the successor's census fenced only setup-recovery IDs:
 // its real worker sent a POST with droplet 123 still in the inventory.
-for (const change of ["witnessed before approval", "witnessed with a stale approval", "renamed posted droplet in the census"]) {
+for (const change of ["witnessed before approval", "witnessed with a stale approval", "renamed posted droplet in the census", "witnessed with a failed publication and a stale approval"]) {
   test(`a continuation successor sends no create when its earlier provider-errored attempt's droplet is ${change}`, { timeout: 60000 }, async (t) => {
     const a = await lateCreateAttempt(t);
     assert.equal(await a.child(), 1, "the errored action and absence settle the attempt");
@@ -1007,7 +1007,18 @@ for (const change of ["witnessed before approval", "witnessed with a stale appro
     assert.deepEqual(a.p.output.at(-1).subject.continuation.createFailures.map(({ dropletId, accountId: account }) => [dropletId, account]), [["123", accountId]]);
     const renamed = { ...a.owned(), name: "renamed-by-someone", tags: [] };
     if (change === "renamed posted droplet in the census") fs.writeFileSync(a.p.hosts, JSON.stringify([renamed]));
-    else {
+    else if (change === "witnessed with a failed publication and a stale approval") {
+      // Review round 4, finding 2: the contradiction's state rename fails. Custody stays
+      // with that collect; after the custody step the gone droplet does not revive the receipt.
+      a.provider.droplets = [renamed];
+      const createReappearedIo = { durable, rename() { throw Object.assign(new Error("synthetic EIO"), { code: "EIO" }); } };
+      await assert.rejects(a.child({}, { createReappearedIo }), { controllerStage: "create-contradiction-unpublished" });
+      const lock = path.join(a.stateRoot, "groups-r19", "operation.lock");
+      assert.ok(fs.existsSync(lock)); assert.equal(JSON.parse(fs.readFileSync(a.statePath)).createErrored.reappeared, undefined);
+      fs.unlinkSync(lock); // The custody step for that collect.
+      a.provider.droplets = [];
+      await assert.rejects(a.child(), /observed again/);
+    } else {
       // The old attempt's collect sees ID 123 again and refuses; the droplet is gone again afterwards.
       a.provider.droplets = [renamed];
       await assert.rejects(a.child(), /observed again/);
@@ -1044,8 +1055,13 @@ for (const action of ["completed", "errored"]) {
     const bound = JSON.parse(fs.readFileSync(a.statePath));
     assert.equal(bound.status, "preparing"); assert.equal(bound.id, "123"); assert.deepEqual(bound.control.ledger, []);
     assert.ok(!a.provider.reads.includes("ssh") && !a.provider.reads.includes("delete"));
-    // Regular collection keeps the offline handoff gate and names the approved route.
-    await assert.rejects(a.child(), /offline handoff never started: .*--unused-bootstrap-known-hosts/);
+    // Regular collection keeps the offline handoff gate and names the approved route, also
+    // through the CLI formatter, which prints only allowlisted stages (review round 4, finding 4).
+    await assert.rejects(a.child(), (error) => {
+      assert.match(error.message, /offline handoff never started: .*--unused-bootstrap-known-hosts/);
+      assert.equal(error.controllerStage, "offline-never-started");
+      assert.match(publicError(error), /--collect --unused-bootstrap-known-hosts/); return true;
+    });
     const key = path.join(a.p.h.temp, "operator-verified-host-key"), keyBytes = "synthetic operator-verified host key\n";
     fs.writeFileSync(key, keyBytes);
     const gitRun = (binary, argv, timeout = 60000, allowFail) => {
@@ -1357,3 +1373,29 @@ test("refused authenticated peer capture preserves the host without uploading or
   assert.equal(request.invocation.requestSha256, digest(capture.options.input));
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
 });
+
+// Review round 4, finding 5 (benchmark lane). Only the selected group's earlier
+// provider-errored attempts were fenced: another group's launch sent a POST with
+// json-api's posted droplet 123 still in the census, renamed and untagged.
+for (const listed of [true, false]) {
+  test(`another group's launch ${listed ? "sends no create while" : "proceeds when"} an earlier provider-errored attempt's posted ID is ${listed ? "listed, renamed and untagged" : "absent"}`, { timeout: 60000 }, async (t) => {
+    const a = await lateCreateAttempt(t);
+    assert.equal(await a.child(), 1, "the errored action and absence settle the attempt");
+    fs.unlinkSync(a.locks.outer); // The documented custody step for the outer continuation lock.
+    const other = groupNames.find((group) => group !== a.group);
+    const args = (round) => [round, "--continuation-root", a.p.h.base, "--group", other];
+    assert.equal(await fleetMain([...args("r20"), "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context], a.p.deps), 3);
+    assert.equal(await fleetMain([...args("r20"), "--detach", "--print-approval"], a.p.deps), 3);
+    const approval = a.p.output.at(-1).approvalSha256;
+    assert.deepEqual(a.p.output.at(-1).subject.continuation.postedCreates, [{ accountId, dropletId: "123" }]);
+    if (listed) fs.writeFileSync(a.p.hosts, JSON.stringify([{ ...a.owned(), name: "renamed-by-someone", tags: [] }]));
+    const code = await fleetMain([...args("r20"), "--detach", "--approve-reviewed-merged-ready", approval], a.p.deps).catch((error) => error);
+    if (listed) {
+      assert.notEqual(code, 3);
+      assert.deepEqual(a.posts(), [], "no POST from the other group");
+      const state = path.join(a.p.h.base, other, other, "groups-r20", "state.json");
+      if (fs.existsSync(state)) assert.equal(JSON.parse(fs.readFileSync(state)).createIntentAt, undefined, "no create intent");
+    } else assert.equal(a.posts().length, 1, "the other group creates its own host");
+    assert.equal(a.provider.deletes, 0);
+  });
+}
