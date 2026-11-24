@@ -154,9 +154,9 @@ test("catalog CI takes Chromium from Playwright's image, not the runner's apt mi
     PLAYWRIGHT_WITH_DOCKER: [...imageBase, ...dockerBoundary, ...forward("CATALOG_DOCKER_TESTS", "RUNNER_ENVIRONMENT"), "$image"],
   });
   assert.deepEqual(after("harness", harness.at, (step) => step.run?.includes("check:marketplace"), "Marketplace oracle"),
-    { run: "$PLAYWRIGHT npm run check:marketplace" });
+    { run: "${PLAYWRIGHT:?} npm run check:marketplace" });
   assert.deepEqual(after("harness", harness.at, (step) => step.run?.includes("bench/catalog/*.test.mjs"), "catalog tests"),
-    { run: "$PLAYWRIGHT_WITH_DOCKER node --test bench/catalog/*.test.mjs", env: { CATALOG_DOCKER_TESTS: "1" } });
+    { run: "${PLAYWRIGHT_WITH_DOCKER:?} node --test bench/catalog/*.test.mjs", env: { CATALOG_DOCKER_TESTS: "1" } });
 
   // Parity: every Chromium-launching check, with the matrix cells it runs for and its exact command.
   const parity = imageStep("parity");
@@ -168,12 +168,12 @@ test("catalog CI takes Chromium from Playwright's image, not the runner's apt mi
   });
   const browserChecks = [
     { name: "Test native compiled alert forms and independent readback", if: compiled,
-      run: "$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}" },
+      run: "${PLAYWRIGHT_WITH_DOCKER:?} node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}" },
     { name: "Qualify the matched Drogon marketplace image with both sources", if: "matrix.app == 'drogon'",
-      run: "$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/drogon/tests/marketplace-matched.mjs cb-marketplace-drogon bench/marketplace/results/w1/drogon-matched" },
+      run: "${PLAYWRIGHT_WITH_DOCKER:?} node bench/fullstack/apps/drogon/tests/marketplace-matched.mjs cb-marketplace-drogon bench/marketplace/results/w1/drogon-matched" },
     { name: "Test native Gin production boundaries and matched forms", if: "matrix.app == 'gin'",
       run: "node bench/fullstack/apps/gin/check-production.mjs cb-catalog-gin bench/fullstack/apps/gin/production-results\n"
-        + "$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/gin/check-alerts.mjs gin cb-catalog-gin matched\n" },
+        + "${PLAYWRIGHT_WITH_DOCKER:?} node bench/fullstack/apps/gin/check-alerts.mjs gin cb-catalog-gin matched\n" },
   ];
   for (const expected of browserChecks) {
     const step = after("parity", parity.at, (candidate) => candidate.name === expected.name, expected.name);
@@ -181,8 +181,32 @@ test("catalog CI takes Chromium from Playwright's image, not the runner's apt mi
   }
 });
 
+// A browser check names its image command as ${NAME:?}: when the image step did not set it, the
+// step fails under GitHub's bash -e instead of running the check on the runner with no image.
+test("a browser check whose image command is unset fails instead of running on the runner", {
+  skip: process.platform === "win32" && "runs the step's command in bash",
+}, () => {
+  const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
+  const oracle = workflow.jobs.harness.steps.find((step) => step.run?.includes("check:marketplace")).run;
+  const run = (env) => spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", oracle.replace("npm run check:marketplace", "true ran")],
+    { encoding: "utf8", timeout: 20000, env });
+  const { PLAYWRIGHT, ...unset } = process.env;
+  const missing = run(unset);
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /PLAYWRIGHT/);
+  const empty = run({ ...unset, PLAYWRIGHT: "" });
+  assert.notEqual(empty.status, 0);
+  const set = run({ ...unset, PLAYWRIGHT: "echo image" });
+  assert.equal(set.status, 0, set.stderr);
+  assert.equal(set.stdout, "image true ran\n");
+});
+
+// The probe runs in bash with GNU timeout's -k. Hosted CI (Ubuntu) always runs it; a local host
+// without both skips it, with the reason.
+const probeHost = process.platform !== "win32"
+  && spawnSync("timeout", ["-k", "1", "5", "true"], { stdio: "ignore" }).status === 0;
 test("the image step's Node probe reports a failed, empty or stalled docker run without failing the step", {
-  skip: process.platform === "win32" && "runs the probe in bash with a stand-in docker",
+  skip: !probeHost && !process.env.GITHUB_ACTIONS && "runs the probe in bash with GNU timeout -k and a stand-in docker",
 }, (t) => {
   const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
   const probe = probeLines(workflow.jobs.harness.steps.find((step) => step.name === "Playwright's image").run);

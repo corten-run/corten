@@ -295,10 +295,13 @@ node --test bench/catalog/check.test.mjs
 node bench/catalog/run.mjs c1 --build --check-only
 ```
 
-The hosted Catalog checks' runner steps use the exact Node in `.node-version`. Their browser
-checks run in Playwright's image for the `@playwright/test` version in `package.json`, with the
-Node 26 that image installs by major version, which can differ in patch; the image step prints both
-versions in its log, or warns that the image's version is unavailable when its bounded probe fails.
+The hosted Catalog checks' runner steps use the exact Node in `.node-version`. The harness's and
+the Gin, Drogon, Topcoat and Leptos cells' browser checks run in Playwright's image for the
+`@playwright/test` version in `package.json`, with the Node 26 that image installs by major
+version, which can differ in patch; their image step prints both versions in its log, or warns that
+the image's version is unavailable when its bounded probe fails. The Nuxt cell launches that image
+itself and does not print its Node. `runner.test.mjs` runs that probe in bash with GNU `timeout -k`;
+a local host without them skips that one test, and hosted CI always runs it.
 
 The generator explicitly gives only its public synthetic `fixtures/catalog.json` mode 0644
 and its `fixtures/` directory mode 0755, including when regenerating under umask 0077.
