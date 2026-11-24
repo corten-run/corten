@@ -135,7 +135,6 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
     queueRefused = [];
     /** @type {() => void} */
     let pressed = () => {};
-    queuePressed = new Promise((resolve) => (pressed = resolve));
     await page.evaluate((form) => {
       document.getElementById("queue-box")?.remove();
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}<p id="queue-out"></p></div>`));
@@ -154,6 +153,7 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
     let busy = null;
     let presses = 0;
     try {
+      queuePressed = new Promise((resolve) => (pressed = resolve));
       await countSubmits("#queue-box form");
       await pressFor("#queue-box button", queueSends("n", "1"));
       await page.fill("#queue-box [name=n]", "2");
@@ -312,7 +312,6 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
     queueAnswer = { status: 205, body: "" };
     /** @type {() => void} */
     let pressed = () => {};
-    queuePressed = new Promise((resolve) => (pressed = resolve));
     await page.evaluate((form) => {
       document.getElementById("queue-box")?.remove();
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}</div>`));
@@ -326,6 +325,7 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
     if (change === "file") await pickQueueFile("first");
     // The answer is held until the case has changed the form, and released however it ends.
     try {
+      queuePressed = new Promise((resolve) => (pressed = resolve));
       await pressFor("#queue-box button", queueSends("n", "5"));
       if (change === "edited") await page.fill("#queue-box [name=n]", "6");
       if (change === "added") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input name="extra">')));
@@ -385,7 +385,6 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
     queueAnswer = { status: 205, body: "" };
     /** @type {() => void} */
     let pressed = () => {};
-    queuePressed = new Promise((resolve) => (pressed = resolve));
     await page.evaluate((form) => {
       document.getElementById("queue-box")?.remove();
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}</div>`));
@@ -397,6 +396,7 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
     }, `<form id="queue" method="post" action="/queue" data-patch><input name="n" value="1">${keyField}<button name="b" value="save">Save</button><button name="b" value="other">Other</button></form>`);
     await page.fill("#queue-box [name=n]", "5");
     try {
+      queuePressed = new Promise((resolve) => (pressed = resolve));
       await pressFor("#queue-box button[value=save]", queueSends("b", "save"));
       await press("#queue-box button[value=other]");
     } finally {
@@ -463,7 +463,6 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
     fileSends = 0;
     /** @type {() => void} */
     let pressed = () => {};
-    filePressed = new Promise((resolve) => (pressed = resolve));
     await page.evaluate(() => {
       document.getElementById("queue-file-box")?.remove();
       document
@@ -479,6 +478,7 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
     let busy = null;
     let presses = 0;
     try {
+      filePressed = new Promise((resolve) => (pressed = resolve));
       await countSubmits("#queue-file");
       await pressFor("#queue-file button", (r) => new URL(r.url()).pathname === "/queue-file" && r.method() === "POST");
       if (second) await pickFile(second);

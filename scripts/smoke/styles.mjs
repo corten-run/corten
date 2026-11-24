@@ -1,5 +1,17 @@
 import { base, skip, check } from "./helpers.mjs";
 
+/**
+ * Settles as `work` does, or rejects with `what` once `ms` have passed. `work` is left to end on
+ * its own (closing its page ends it); a rejection it brings later is already handled here.
+ * @template T @param {number} ms @param {string} what @param {Promise<T>} work @returns {Promise<T>}
+ */
+const within = (ms, what, work) => {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const late = new Promise((_, reject) => (timer = setTimeout(() => reject(new Error(what)), ms)));
+  return /** @type {Promise<T>} */ (Promise.race([work, late])).finally(() => clearTimeout(timer));
+};
+
 export async function styles(browser, errors, swaps, noSwaps) {
   // A data-patch form on a page outside an area whose handler is in it (Area::components): the
   // patch links the area's stylesheet, which the runtime loads before it puts the patch in place,
@@ -90,22 +102,40 @@ export async function styles(browser, errors, swaps, noSwaps) {
   // that load too, rather than take the link the patch put in the head for a loaded stylesheet:
   // the news area's Load more patch, sent on the home page, then a link to the news. A probe with
   // the news area's class, outside <main>, shows whether its rules applied when the page swapped.
-  // The stylesheet is held until the navigation's request is out, so the navigation starts while
-  // it loads however slowly the click comes (#2014).
+  // The patch's request for the stylesheet is held until the runtime has read the navigation's
+  // answer, so the navigation meets that load still out however slowly each step comes (#2014).
+  // The runtime reads the answer with `text()` and looks up its stylesheets in the same task, and
+  // the page notes the read a task later, so the lookup has been made once the note is there. The
+  // page must not swap while the stylesheet is held, and the browser must request it only once:
+  // the navigation shares the patch's load. Every step before the release is bounded, and the
+  // stylesheet is released however they end.
   if (swaps) {
     const entered = await browser.newPage();
     entered.on("pageerror", (e) => errors.push(`navigation during a patch's load: ${e.message}`));
     await entered.goto(base);
+    /** The section stylesheets the page requested. @type {string[]} */
+    const sheets = [];
+    let asked = () => {};
+    const patchAsked = new Promise((resolve) => (asked = () => resolve(undefined)));
     let release = () => {};
     const held = new Promise((resolve) => (release = () => resolve(undefined)));
     await entered.route("**/sections/**", async (route) => {
+      sheets.push(new URL(route.request().url()).pathname);
+      asked();
       await held;
-      await route.continue();
+      // The page may have closed by the time a failed case releases it.
+      await route.continue().catch(() => {});
     });
+    /** What kept the case from holding the stylesheet until the navigation's answer was read. */
+    let stuck = "";
+    /** The probe's border if the page swapped while the stylesheet was held. @type {string | null} */
+    let early = null;
     try {
-      await Promise.all([
-        entered.waitForRequest((r) => new URL(r.url()).pathname.includes("/sections/"), { timeout: 5000 }).catch(() => {}),
-        entered.evaluate(async () => {
+      await within(
+        15_000,
+        "the patch's load or the navigation's read took over 15 s",
+        (async () => {
+          await entered.evaluate(async () => {
           const { patch } = await import("corten");
           const answer = await fetch("/news?shown=3", { headers: { corten: "action" } }).then((r) => r.text());
           // The elements the patch replaces, outside <main> so the swap leaves them.
@@ -125,20 +155,41 @@ export async function styles(browser, errors, swaps, noSwaps) {
           }).observe(document.body, { childList: true, subtree: true });
           // Not awaited: the navigation starts while this patch's stylesheet is still loading.
           patch(__html(answer)).catch(() => {});
-        }),
-      ]);
-      await Promise.all([
-        entered.waitForRequest((r) => new URL(r.url()).pathname === "/news" && r.headers()["corten"] === "nav", { timeout: 5000 }).catch(() => {}),
-        entered.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click()),
-      ]);
+          });
+          await patchAsked;
+          await entered.evaluate(() => {
+            const at = /** @type {any} */ (window);
+            at.__read = false;
+            const text = Response.prototype.text;
+            Response.prototype.text = function () {
+              const read = text.call(this);
+              if (new URL(this.url).pathname === "/news") {
+                Response.prototype.text = text;
+                read.then(() => setTimeout(() => (at.__read = true)), () => {});
+              }
+              return read;
+            };
+            /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click();
+          });
+          // Polled on a timer: a loaded browser may not be delivering animation frames.
+          await entered.waitForFunction(() => (/** @type {any} */ (window)).__read, undefined, { timeout: 10_000, polling: 50 });
+          early = await entered.evaluate(() => (/** @type {any} */ (window)).__entered);
+        })(),
+      );
+    } catch (error) {
+      stuck = error instanceof Error ? error.message.split("\n")[0] : String(error);
     } finally {
       release();
     }
     const border = await entered
-      .waitForFunction(() => (/** @type {any} */ (window)).__entered, undefined, { timeout: 5000 })
+      .waitForFunction(() => (/** @type {any} */ (window)).__entered, undefined, { timeout: 5000, polling: 50 })
       .then((got) => got.jsonValue(), () => "not swapped");
     const marked = await entered.evaluate(() => document.head.querySelectorAll('link[data-corten-style][href*="/sections/news"]').length);
-    check("a navigation into an area while a patch is loading its stylesheet waits for that load", border === "4px" && marked === 1, `${border}, ${marked} link`);
+    check(
+      "a navigation into an area while a patch is loading its stylesheet waits for that load",
+      !stuck && early === null && border === "4px" && marked === 1 && sheets.length === 1,
+      `${stuck ? `${stuck}; ` : ""}${early === null ? "" : `swapped while held: ${early}; `}${border}, ${marked} link; requested: ${sheets.join(" ") || "none"}`,
+    );
     await entered.close();
   } else skip("a navigation into an area while a patch is loading its stylesheet waits for that load", noSwaps);
 }

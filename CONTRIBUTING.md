@@ -308,8 +308,10 @@ the old values or that the second press met it still pending. A press that must 
 still on its way holds that request's answer until the case has made it, never for a fixed time,
 and the cases count their submits, so a press meant to send nothing is seen to have been made.
 The other checks that act while a request is out (a busy mark, a navigation before a write's
-page, a script's `replaceState` during a read, a navigation during a stylesheet's load) hold it
-the same way.
+page, a script's `replaceState` during a read) hold it the same way. The check of a navigation
+during a patch's stylesheet load holds that stylesheet until the runtime has read the
+navigation's answer, then requires that the page did not swap while it was held and that the
+browser requested it once.
 The watch form's other presses (watching and unwatching a stock, the submit the network fails
 and the formaction button) are made in the page too, as a loaded Firefox's click on them can miss.
 The two Firefox failures in

@@ -369,7 +369,8 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
   // same way, and the user sends it again. The failed write is held until the newer press is
   // made, so that press meets it still out (a fixed delay let a loaded browser press after the
   // failure, #1149), and both presses run in the page, so the first is sent before the test
-  // picks another stock.
+  // picks another stock. The form's submits are counted, so the newer press, which sends nothing,
+  // is seen to have been made.
   let afterFailure = 0;
   /** @param {import("@playwright/test").Request} r */
   const isWrite = (r) => r.method() === "POST" && r.url().endsWith("/watch");
@@ -382,7 +383,15 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
   failWatch.value = true;
   const pressWatch = () => page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#watch-form button")).click());
   let watchWasSent = false;
+  let watchPresses = 0;
   try {
+    await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__failedPresses = 0;
+      w.__failedPressCount = new AbortController();
+      // Capturing on the window, so the submit is heard before any listener of the page's.
+      window.addEventListener("submit", (e) => e.target === document.getElementById("watch-form") && (w.__failedPresses += 1), { capture: true, signal: w.__failedPressCount.signal });
+    });
     // The wait is joined with the press, so neither can fail unheard.
     [watchWasSent] = await Promise.all([page.waitForRequest(isWrite, { timeout: 5000 }).then(() => true, () => false), pressWatch()]);
     // Another stock the form still offers, so the newer submit differs from the one it waits for.
@@ -392,6 +401,11 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
     check("the form offers another stock to send", other !== undefined);
     if (other) await page.selectOption("select[name=id]", other);
     await pressWatch();
+    watchPresses = await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__failedPressCount.abort();
+      return /** @type {number} */ (w.__failedPresses);
+    });
   } finally {
     holdWatch.value = null;
     failWatch.value = false;
@@ -402,8 +416,8 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
   page.off("request", onRetry);
   check(
     "a submit that waited for a write the network failed is not sent",
-    watchWasSent && watchFailed === 0 && afterFailure === 1,
-    `posts: ${afterFailure}${watchWasSent ? "" : ", the first not sent in 5 s"}; error: ${watchFailed}`,
+    watchWasSent && watchPresses === 2 && watchFailed === 0 && afterFailure === 1,
+    `presses: ${watchPresses}; posts: ${afterFailure}${watchWasSent ? "" : ", the first not sent in 5 s"}; error: ${watchFailed}`,
   );
 
   // A submit key (SubmitKey::field) is sent again until the submission has an answer, then renewed
