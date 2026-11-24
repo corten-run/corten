@@ -317,16 +317,22 @@ document the server draws for the write's receipt, with its status line and its 
 tag put in place as the server draws them while the write has not landed, so the page comes in
 waiting whether or not the store had the write by the time the test asked for that document; a
 fixture that draws no page for the write fails the check rather than skipping it. The page is
-loaded after a blank one and its reads of itself are recorded from the start of that document.
-Its first read is held from before the load, so the read held is the first however soon it comes,
-and it must be at the receipt's address. The check requires that read to fail while it is still
-held (not once it is let go), every later read made at its address with only `shown` changed,
-one of them answered with success, `Saved.` drawn in the same document, and the page left at that
-address. A wait for a request that a held answer lets out starts when that answer is let go. The
-check of a navigation started before a write's page comes requires the write's request, the
-navigation's request read whole and the Stocks page drawn in the same document, five seconds
-each; without one it fails and does no more work on its page, and the next check starts from the
-News page it left. The check that navigating away abandons a held write requires that write to
+loaded after a blank one, and the runtime's reads of a page are recorded from the start of that
+document whatever their address. Its first read of the alerts page is held from before the load,
+so the read held is the first however soon it comes, and it must be the document's first read, at
+the receipt's address. The check requires the navigation reading it to be still on its way when
+the script replaces the address, the replaceState to cancel that navigation, and the held read to
+fail after the replaceState while it is still held (not before it, and not once it is let go); then
+every later read made at its address with only `shown` changed, one of them answered with success,
+`Saved.` drawn in the same document, and the page left at that address. A wait for a request that
+a held answer lets out starts when that answer is let go. The check of a navigation started before
+a write's page comes requires the write's request, the navigation's request read whole and the
+Stocks page drawn in the same document (its title and its watch form in `<main>`), five seconds
+each; each press shares its five seconds with the wait for the request it sends, so a press that
+stalls fails the check too. Without one it fails and does no more work on its page, and the next
+check starts from the News page it left, gone back to within ten seconds; a page that does not get
+back stops the smoke, after the check's hold, listeners and the News page's route are removed.
+The check that navigating away abandons a held write requires that write to
 fail while it is still held, within five seconds of the page's leaving. The check of a navigation
 during a patch's stylesheet load holds the one stylesheet the patch links until the runtime has
 read the navigation's answer, and requires that
@@ -355,15 +361,20 @@ The cases still wait for their output condition, then check the busy mark sample
 answer was held, the exact sends and the renewed submit key. The first request is captured
 before editing its fields. An error a case waits for is its form's own. The check of a submit the
 network fails presses its button in the page task that starts listening for the error and its
-six-second timer, so its six seconds start at the press. The other checks that wait for a form's
+six-second timer, so its six seconds start at the press, and its handler fails an error heard
+after them even if the timer has not run yet. The other checks that wait for a form's
 error (the submit that waited for a failed write, the submit keys, the template copies and the
 cut connections) listen from before the press but start their six seconds once the press has
 returned, or, for the held failure, once its answer is let go; a case whose error does not come
 in that time fails and stops, without making its retry. Output is polled on a timer, independent
-of animation frames, and output that comes only after its bound fails the check. Each of these
-checks reads its outcome, then removes the listeners, routes and holds it installed however it
-ends, a press that throws or a wait that times out included. Neither the six-second outcome bound
-nor the window for detecting forbidden sends is extended.
+of animation frames, and output that comes only after its bound fails the check. The 205 check's
+waiting submit counts by when its request was seen, so one seen after its six seconds fails the
+check whichever of it and the timer is handled first. Each of these checks reads its outcome,
+then removes the listeners, routes and holds it installed however it ends, a press that throws or a
+wait that times out included. The cut-connection and template-copy checks set up inside that guard
+too, so a setup step that fails part way is undone, and each of their removals runs even when
+another fails. Neither the six-second outcome bound nor the window for detecting forbidden sends is
+extended.
 
 The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
 same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a
