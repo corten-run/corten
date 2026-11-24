@@ -5,20 +5,25 @@
 #![cfg(unix)]
 
 use std::{
+    io::Write,
     net::{Ipv4Addr, Ipv6Addr, TcpListener, TcpStream},
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
     sync::atomic::{AtomicU16, Ordering},
 };
 
 /// A program that listens on `PORT` (at `HOST`, when that is set), works while it waits, and
 /// returns from `main` on SIGTERM, as a Corten app does. It writes its process id to `pid.txt`
-/// and, as it leaves, `stopped.txt`. Four variables change it:
+/// and, as it leaves, `stopped.txt`, and answers each connection with `the copy`. Six variables
+/// change it:
 /// `FIXTURE_EXITS_AT_ONCE` (it never listens), `FIXTURE_QUITS_WITHOUT_A_PROFILE` (on SIGTERM
 /// it leaves without running what writes a profile, as a killed app does),
 /// `FIXTURE_LISTENS_ON` (a port of its own, as an app that binds its own listeners has: it then
-/// never reads `PORT`) and `FIXTURE_BINDS_ONCE_STOPPED` (it is still starting when it is asked
-/// to stop, and binds its port only then).
+/// never reads `PORT`), `FIXTURE_BINDS_ONCE_STOPPED` (it is still starting when it is asked
+/// to stop, and binds its port only then), `FIXTURE_BINDS_ONCE_TOLD` (it is still starting
+/// until there is a `bind.txt`, and binds its port then) and `FIXTURE_ASKS` (it is no app but a
+/// command's one request: it connects to the address the variable holds and leaves what it was
+/// answered in `answer.txt`).
 const MAIN: &str = r#"use std::sync::atomic::{AtomicBool, Ordering};
 
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -37,6 +42,13 @@ fn work(n: u64) -> u64 {
 }
 
 fn main() {
+    if let Ok(address) = std::env::var("FIXTURE_ASKS") {
+        let mut answer = String::new();
+        let mut asked = std::net::TcpStream::connect(address).unwrap();
+        std::io::Read::read_to_string(&mut asked, &mut answer).unwrap();
+        std::fs::write("answer.txt", answer).unwrap();
+        return;
+    }
     std::fs::write("pid.txt", std::process::id().to_string()).unwrap();
     if std::env::var_os("FIXTURE_EXITS_AT_ONCE").is_some() {
         std::process::exit(7);
@@ -45,13 +57,19 @@ fn main() {
     while std::env::var_os("FIXTURE_BINDS_ONCE_STOPPED").is_some() && !STOP.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
+    let told = || std::path::Path::new("bind.txt").exists() || STOP.load(Ordering::SeqCst);
+    while std::env::var_os("FIXTURE_BINDS_ONCE_TOLD").is_some() && !told() {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
     let port = std::env::var("FIXTURE_LISTENS_ON").unwrap_or_else(|_| std::env::var("PORT").expect("PORT"));
     let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let listener = std::net::TcpListener::bind(format!("{host}:{port}")).unwrap();
     listener.set_nonblocking(true).unwrap();
     let mut sum = 0u64;
     while !STOP.load(Ordering::SeqCst) {
-        let _ = listener.accept();
+        if let Ok((mut asked, _)) = listener.accept() {
+            let _ = std::io::Write::write_all(&mut asked, b"the copy");
+        }
         sum = (0..1000).fold(sum, |sum, n| sum.wrapping_add(work(n)));
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
@@ -407,7 +425,7 @@ fn a_named_port_nothing_accepts_on_when_the_command_has_ended_stops_the_build() 
     assert!(!fixture.app_runs(), "the instrumented app was left running");
     assert!(!output.status.success(), "{said}");
     let says = format!("nothing accepted a connection on port {port}, the one --port named, when the command had ended");
-    assert!(said.contains(&says) && said.contains("target/release is as it was"), "{said}");
+    assert!(said.contains(&says) && said.contains(": build again; target/release is as it was"), "{said}");
     assert!(!fixture.profile().exists() && !fixture.release().exists(), "a profile was merged or a release built");
 }
 
@@ -441,8 +459,121 @@ fn a_listener_on_the_other_loopback_address_beside_the_copy_stops_the_build() {
     assert!(!output.status.success(), "{said}");
     let says = format!("something listens on port {port}, the one --port named, now that the instrumented app has exited");
     assert!(said.contains(&says) && said.contains("target/release is as it was"), "{said}");
+    // The copy bound this port and served, so the refusal does not say the port is not the app's.
+    assert!(said.contains("if it is neither, another program holds this port on this machine"), "{said}");
     assert!(!fixture.profile().exists() && !fixture.release().exists(), "a profile was merged or a release built");
     drop(beside);
+}
+
+/// What a program that is not the copy answers a connection with, where the copy (the
+/// fixture's program) answers `the copy`.
+const ANOTHER: &str = "another program";
+
+/// A command that notes its port, makes one request once there is an `ask.txt`, to `address`
+/// at the port it was given, and then runs until there is an `end.txt` (each wait 20 seconds at
+/// most). The request is the instrumented program run with `FIXTURE_ASKS`, which leaves what
+/// answered it in `answer.txt`, so a test needs no client that a system may lack.
+fn asks_once(address: &str) -> String {
+    let until = |file: &str| format!("n=0; until [ -f {file} ] || [ $n -ge 400 ]; do sleep 0.05; n=$((n+1)); done");
+    let asks = format!("FIXTURE_ASKS=\"{address}:$PORT\" target/corten-profile/target/release/profiled || exit 1");
+    format!("echo \"$PORT\" > port.txt; {}; {asks}; {}", until("ask.txt"), until("end.txt"))
+}
+
+/// Has `other` answer each connection it is sent (the build's looks, the command's request)
+/// with [`ANOTHER`], until the command has left its answer in `answer.txt`.
+fn answers_the_command(other: &TcpListener, fixture: &Fixture, build: &mut Child) {
+    other.set_nonblocking(true).unwrap();
+    while !fixture.0.join("answer.txt").exists() {
+        assert!(build.try_wait().unwrap().is_none(), "the build ended before its command was answered");
+        if let Ok((mut asked, _)) = other.accept() {
+            let _ = asked.write_all(ANOTHER.as_bytes());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+/// A gap that the Choice states (docs/design.md#choice-profile-build), recorded here and not
+/// wanted: this test is to change when the gap is closed. No look shows that the copy is what
+/// answered the command. A program takes the named port once the copy has started, answers the
+/// wait and the command's one request, and leaves while the command runs; the copy, still
+/// starting, binds the port before the command ends. The copy accepts the look at the
+/// command's end, nothing listens once it has exited, and the build succeeds: its release is
+/// built from the profile of a copy the command never reached.
+#[test]
+fn a_build_succeeds_though_a_program_that_left_before_the_copy_bound_answered_the_command() {
+    let fixture = Fixture::new("port-answered-then-bound");
+    let port = unused_port();
+    std::fs::write(fixture.0.join("ask.txt"), "").unwrap();
+    let mut build = fixture.build(&["--port", &port.to_string(), "--profile-from", "sh", "-c", &asks_once("127.0.0.1")]);
+    build.env("FIXTURE_BINDS_ONCE_TOLD", "1").stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut build = build.spawn().unwrap();
+    // The copy has started, which is after the build's last look at the port.
+    while !fixture.0.join("pid.txt").exists() {
+        assert!(build.try_wait().unwrap().is_none(), "the build ended before it started the copy");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let other = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
+    answers_the_command(&other, &fixture, &mut build);
+    // It leaves (in a child another test is starting too), and only then does the copy bind.
+    drop(other);
+    while TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_ok() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::fs::write(fixture.0.join("bind.txt"), "").unwrap();
+    while TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err() {
+        assert!(build.try_wait().unwrap().is_none(), "the build ended before the copy bound its port");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::fs::write(fixture.0.join("end.txt"), "").unwrap();
+    let output = build.wait_with_output().unwrap();
+    let said = text(&output);
+    assert_eq!(std::fs::read_to_string(fixture.0.join("answer.txt")).unwrap(), ANOTHER, "what answered the command: {said}");
+    assert!(!fixture.app_runs(), "the instrumented app was left running");
+    // The gap: a build that could tell would stop here, with no release built.
+    assert!(output.status.success(), "{said}");
+    assert!(said.contains("with a profile of the app under") && fixture.release().is_file(), "{said}");
+}
+
+/// A second gap that the Choice states (docs/design.md#choice-profile-build), recorded here and
+/// not wanted: this test is to change when the gap is closed. A program listens on `[::1]` at
+/// the named port beside a copy bound to `127.0.0.1`, answers the command's one request, which
+/// asks `[::1]` (as a command that asks `localhost` may), and leaves while the command runs. It
+/// needs no race with the copy's start. The copy accepts the look at the command's end, nothing
+/// listens once it has exited, and the build succeeds: its release is built from the profile of
+/// a copy the command never reached.
+#[test]
+fn a_build_succeeds_though_a_program_on_the_other_loopback_address_that_left_answered_the_command() {
+    let fixture = Fixture::new("port-answered-beside");
+    let port = unused_port();
+    let mut build = fixture.build(&["--port", &port.to_string(), "--profile-from", "sh", "-c", &asks_once("[::1]")]);
+    let mut build = build.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    // The command runs: the copy, bound to 127.0.0.1, answered the wait, after the build's last
+    // look at the port before the copy.
+    while !fixture.0.join("port.txt").exists() {
+        assert!(build.try_wait().unwrap().is_none(), "the build ended before its command ran");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let other = TcpListener::bind((Ipv6Addr::LOCALHOST, port));
+    std::fs::write(fixture.0.join("ask.txt"), "").unwrap();
+    let Ok(other) = other else {
+        // The command's request finds nothing at [::1] and fails, which ends the build.
+        let _ = build.wait_with_output();
+        eprintln!("no listener could be bound on [::1]: a command answered there beside the copy was not tested");
+        return;
+    };
+    answers_the_command(&other, &fixture, &mut build);
+    drop(other);
+    while TcpStream::connect((Ipv6Addr::LOCALHOST, port)).is_ok() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::fs::write(fixture.0.join("end.txt"), "").unwrap();
+    let output = build.wait_with_output().unwrap();
+    let said = text(&output);
+    assert_eq!(std::fs::read_to_string(fixture.0.join("answer.txt")).unwrap(), ANOTHER, "what answered the command: {said}");
+    assert!(!fixture.app_runs(), "the instrumented app was left running");
+    // The gap: a build that could tell would stop here, with no release built.
+    assert!(output.status.success(), "{said}");
+    assert!(said.contains("with a profile of the app under") && fixture.release().is_file(), "{said}");
 }
 
 #[test]

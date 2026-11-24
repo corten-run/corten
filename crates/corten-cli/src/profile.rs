@@ -106,7 +106,8 @@ pub fn run(command: &[String], cargo: &[String], port: Option<u16>) -> Result<()
         .status()
         .map_err(|e| format!("could not run {}: {e}; target/release is as it was", command[0]));
     // A named port is looked at once more while the copy still runs: the wait could not tell
-    // whose socket accepted, and a copy that listens there accepts now as well.
+    // whose socket accepted, and a copy that listens there accepts now as well. What accepts
+    // now need not be the copy, nor what answered the command: no look shows that.
     let accepting = match port {
         Port::Named(named) => accepts(named),
         Port::Picked(_) => true,
@@ -292,8 +293,9 @@ fn nothing_listens_on(port: u16) -> Result<(), String> {
 }
 
 /// Whose a listener on the named port may be, which the build cannot tell, and what to do about
-/// each: both refusals that find one end with it.
-const WHOSE: &str = "If it is this app (under corten dev, or run another way) or a copy that a cancelled corten build left running, stop it and build again; if it is the copy of a corten build that is running in another target directory, let that build end first; if it is neither, --port names a port that is not this app's";
+/// each: both refusals that find one end with it. It does not say the port is not the app's:
+/// another program may hold the app's own port on this machine, or its other loopback address.
+const WHOSE: &str = "If it is this app (under corten dev, or run another way) or a copy that a cancelled corten build left running, stop it and build again; if it is the copy of a corten build that is running in another target directory, let that build end first; if it is neither, another program holds this port on this machine: stop it, or build where the port is free, and check that --port names the port the app binds";
 
 /// What a named port that nothing accepts on is told, when the command has ended and the copy
 /// still runs: a copy that listens there would accept. Either it never bound the port, and what
@@ -302,7 +304,7 @@ const WHOSE: &str = "If it is this app (under corten dev, or run another way) or
 /// has not accepted is full), which a look cannot tell from that.
 fn not_accepting(port: u16) -> String {
     format!(
-        "nothing accepted a connection on port {port}, the one --port named, when the command had ended and the instrumented app was still running: either the app never listened there, and what answered the wait and may have answered the command has left, or the app has stopped accepting connections. The profile may be of an app that served nothing"
+        "nothing accepted a connection on port {port}, the one --port named, when the command had ended and the instrumented app was still running: either the app never listened there, and what answered the wait and may have answered the command has left, or the app has stopped accepting connections. The profile may be of an app that served nothing: build again"
     )
 }
 
@@ -662,7 +664,7 @@ mod tests {
         assert_eq!(
             nothing_listens_on(port),
             Err(format!(
-                "something already listens on port {port}, the one --port named, and would answer the wait and the command in the instrumented app's place. If it is this app (under corten dev, or run another way) or a copy that a cancelled corten build left running, stop it and build again; if it is the copy of a corten build that is running in another target directory, let that build end first; if it is neither, --port names a port that is not this app's"
+                "something already listens on port {port}, the one --port named, and would answer the wait and the command in the instrumented app's place. If it is this app (under corten dev, or run another way) or a copy that a cancelled corten build left running, stop it and build again; if it is the copy of a corten build that is running in another target directory, let that build end first; if it is neither, another program holds this port on this machine: stop it, or build where the port is free, and check that --port names the port the app binds"
             ))
         );
         drop(held);
