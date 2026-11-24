@@ -91,8 +91,9 @@ Observed load/request outcomes, not root-cause diagnoses. Successful req/s exclu
 
 Each cell is the median [minimum, maximum] of three saved passes. Cold start
 is Docker-host wall time from container start to the first complete HTTP 200
-for the page, polled at 10 ms before readiness or warmup. It excludes image
-build, pull, and container creation. Memory is the highest sampled app-container
+for the page, with a 10 ms delay after each unsuccessful attempt. This probe
+runs before readiness or warmup and excludes image build, pull, and container
+creation. Memory is the highest sampled app-container
 memory in each timed pass, not memory at startup or a kernel high-water mark.
 Express and FastAPI remain ineligible for ranking. Memory observed in passes
 with timeouts is shown and marked beside the affected phase.
