@@ -1,0 +1,171 @@
+# DONE fmt t-v1 rc=0
+    Checking corten-run v0.2.0 (/src/crates/corten)
+   Compiling corten-cli v0.2.0 (/src/crates/corten-cli)
+   Compiling corten-site v0.1.0 (/src/examples/corten-site)
+    Checking corten-ui v0.2.0 (/src/crates/corten-ui)
+    Checking corten-cluster v0.2.0 (/src/crates/corten-cluster)
+    Checking seller-desk v0.1.0 (/src/examples/seller-desk)
+    Checking watchlist v0.1.0 (/src/examples/watchlist)
+    Checking card-market v0.1.0 (/src/examples/card-market)
+    Checking ui-gallery v0.1.0 (/src/examples/ui-gallery)
+    Checking auction-room v0.1.0 (/src/examples/auction-room)
+    Checking deck-builder v0.1.0 (/src/examples/deck-builder)
+    Checking listings-feed v0.1.0 (/src/examples/listings-feed)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.87s
+# DONE clippy t-v1 rc=0
+test types::tests::json_schema_exports_both_handler_types_with_the_same_name ... ok
+test types::tests::same_named_handler_types_are_refused_in_either_order ... ok
+test types::tests::same_printed_types_and_generic_instances_get_separate_definitions ... ok
+test types::tests::sync_rewrites_a_stale_file_and_fails_then_passes ... ok
+test types::tests::typed_events_declare_their_classes ... ok
+test types::tests::views_declare_the_app_s_classes_and_not_the_runtime_s ... ok
+test upgrade::tests::the_accept_key_is_the_rfcs ... ok
+test view::tests::a_document_renders_each_part_and_a_swap_skips_the_layout ... ok
+test view::tests::a_document_that_is_one_component_owns_what_its_props_borrow ... ok
+test view::tests::a_layout_element_marked_page_is_sent_with_a_navigation ... ok
+test view::tests::a_page_s_head_tags_are_marked_at_the_top_level_and_raw_text_is_left_alone ... ok
+test view::tests::a_returned_view_lends_to_its_calls ... ok
+test view::tests::a_returned_view_owns_its_props_views ... ok
+test view::tests::a_spread_of_pairs_skips_data_vars ... ok
+test view::tests::a_spread_of_pairs_skips_the_wiring_corten_prints ... ok
+test view::tests::a_view_lent_to_a_call_borrows_what_it_uses ... ok
+test view::tests::a_view_lent_to_a_prop_borrows_what_it_uses ... ok
+test view::tests::a_view_renders_once - should panic ... ok
+test view::tests::a_view_that_is_one_component_owns_what_its_props_borrow ... ok
+test view::tests::attributes_spread ... ok
+test view::tests::attributes_take_text_numbers_bools_options_and_display ... ok
+test view::tests::components_take_props_children_and_paths ... ok
+test view::tests::control_flow_is_rust ... ok
+test view::tests::display_is_the_fallback_and_raw_is_not_escaped ... ok
+test tests::server::a_connection_is_held_only_as_long_and_as_many_as_the_app_allows ... ok
+test view::tests::escaping_matches_the_one_byte_at_a_time_rule ... ok
+test view::tests::floats_render_as_display_writes_them ... ok
+test view::tests::integers_render_as_display_writes_them ... ok
+test view::tests::patterns_with_braces_are_patterns ... ok
+test view::tests::text_and_expressions_are_escaped_and_static_markup_is_kept ... ok
+test view::tests::tuples_print_their_parts ... ok
+test view::tests::views_nest_and_render_lazily ... ok
+test view::tests::views_own_and_move_what_they_capture ... ok
+test view::tests::void_elements_doctype_fragments_and_raw_text ... ok
+test watch::tests::a_call_that_goes_through_does_not_take_the_wake_of_another_tasks_write ... ok
+test watch::tests::a_call_that_goes_through_leaves_its_own_tasks_waiting_write_to_be_woken ... ok
+test watch::tests::a_call_that_goes_through_wakes_the_waiting_task_once_and_is_not_woken_back ... ok
+test tests::server::shutdown_tells_the_tasks_and_waits_for_them ... ok
+test tests::server::a_step_before_http_is_counted_and_timed_as_the_connection ... ok
+test watch::tests::a_wake_that_finds_a_waiting_call_wakes_it_and_is_not_counted ... ok
+test watch::tests::a_flush_after_a_write_the_send_timeout_failed_does_not_give_the_next_write_a_new_timeout ... ok
+test watch::tests::a_write_a_flush_or_a_close_that_waits_fails_after_the_send_timeout ... ok
+test tests::logging::an_app_logs_a_slow_prefetch_and_not_a_slow_click ... ok
+test watch::tests::a_write_that_waits_with_the_budget_spent_still_fails_after_the_send_timeout ... ok
+test watch::tests::an_expiry_whose_wake_comes_while_a_call_has_taken_writer_still_wakes_the_task ... ok
+test watch::tests::an_expiry_whose_wake_finds_writer_empty_and_ends_after_the_call_still_wakes_the_task ... ok
+test tests::server::shutdown_closes_connections_still_answering_once_the_grace_and_deadline_have_passed ... ok
+test watch::tests::flushes_that_go_through_while_a_write_waits_do_not_hold_it_past_the_send_timeout ... ok
+test watch::tests::flushes_that_go_through_while_a_close_waits_do_not_hold_it_past_the_send_timeout ... ok
+test watch::tests::a_connection_expires_only_while_idle_and_a_head_in_time_wins ... ok
+test tests::server::shutdown_holds_a_connection_whose_requests_waited_to_its_requests_deadline ... ok
+test tests::server::finished_work_releases_what_it_holds_when_the_handler_is_dropped ... ok
+test watch::tests::a_write_that_waits_after_a_flush_went_through_and_the_connection_sat_idle_gets_its_own_send_timeout ... ok
+test view::tests::floats_match_display_across_their_range ... ok
+test watch::tests::a_write_that_waits_after_an_expired_flush_went_through_gets_its_own_send_timeout ... ok
+test tests::server::shutdown_holds_a_connection_to_its_own_requests_deadline ... ok
+test tests::server::every_request_of_a_connection_has_its_own_deadline ... ok
+test tests::server::a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does_not ... ok
+test tests::server::a_connections_timer_is_made_once_and_dropped_with_the_connection ... ok
+test form::bounds::tests::every_cent_reads_as_on_its_step ... ok
+test tests::server::a_thread_that_serves_one_runtime_after_another_holds_each_to_the_deadline ... ok
+test tests::server::a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_timeout ... ok
+test tests::server::an_answer_waits_for_its_client_only_as_long_as_the_app_allows ... ok
+
+failures:
+
+---- tests::server::a_connection_polled_inside_anothers_poll_keeps_its_own_timer stdout ----
+
+thread 'tests::server::a_connection_polled_inside_anothers_poll_keeps_its_own_timer' (1841) panicked at crates/corten/src/tests/server.rs:2440:9:
+assertion `left == right` failed
+  left: 1
+ right: 2
+
+
+failures:
+    tests::server::a_connection_polled_inside_anothers_poll_keeps_its_own_timer
+
+test result: FAILED. 1037 passed; 1 failed; 30 ignored; 0 measured; 0 filtered out; finished in 11.70s
+
+error: test failed, to rerun pass `-p corten-run --lib`
+# DONE lib t-v1 rc=101
+   Compiling corten-run v0.2.0 (/src/crates/corten)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.16s
+     Running unittests src/lib.rs (/target/debug/build/corten-run/03072fc088ecfe1b/out/corten-03072fc088ecfe1b)
+
+running 43 tests
+test tests::server::a_deadline_waits_on_its_connections_timer_from_the_second_that_waits ... ok
+test tests::server::a_connection_polled_inside_anothers_poll_keeps_its_own_timer ... FAILED
+test tests::server::a_connect_answered_with_success_has_no_body ... ok
+test tests::server::a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts ... ok
+test tests::server::a_panic_in_finished_work_is_the_handlers ... ok
+test tests::server::a_connect_answered_with_a_length_is_sent_without_it ... ok
+test tests::server::a_connect_answered_chunked_is_sent_without_transfer_encoding ... ok
+test tests::server::a_server_dropped_without_a_shutdown_closes_its_connections ... ok
+test tests::server::a_taken_ipv6_loopback_port_is_an_error ... ok
+test tests::server::a_switched_connection_stops_counting_when_its_route_drops_the_socket ... ok
+test tests::server::a_tcp_connection_is_accepted_with_nagle_off ... ok
+test tests::server::a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit ... ok
+test tests::server::a_timer_whose_deadline_is_dropped_away_from_its_connection_is_dropped ... ok
+test tests::server::a_wrong_websocket_version_keeps_its_headers_in_an_apis_error_shape ... ok
+test tests::server::a_task_past_the_grace_is_ended_and_one_that_panics_ends_alone ... ok
+test tests::server::an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites ... ok
+test tests::server::an_upgrade_without_a_switchable_connection_is_a_400_without_upgrade ... ok
+test tests::server::a_switched_connection_after_a_step_counts_against_max_connections ... ok
+test tests::server::a_switched_connection_counts_against_max_connections_until_it_closes ... ok
+test tests::server::how_late_a_deadlines_answer_is ... ignored
+test tests::server::a_switched_connection_is_held_to_the_send_timeout ... ok
+test tests::server::a_body_that_stalls_after_requests_that_waited_is_the_clients_408_at_its_own_deadline ... ok
+test tests::server::a_request_head_is_held_only_as_large_as_the_app_allows ... ok
+test tests::server::shutdown_tells_the_tasks_and_waits_for_them ... ok
+test tests::server::the_client_ip_is_the_peer_or_what_a_trusted_proxy_forwards ... ok
+test tests::server::what_a_request_over_tcp_costs ... ignored
+test tests::server::without_a_connection_there_is_no_client_ip ... ok
+test tests::server::without_a_host_the_app_listens_on_both_loopback_addresses ... ok
+test tests::server::a_runtime_that_ends_drops_its_connections_timers ... ok
+test tests::server::a_request_served_on_another_runtime_inside_a_handler_has_its_deadline ... ok
+test tests::server::shutdown_closes_connections_still_answering_once_the_grace_and_deadline_have_passed ... ok
+test tests::server::shutdown_holds_a_connection_whose_requests_waited_to_its_requests_deadline ... ok
+test tests::server::a_request_still_arriving_at_shutdown_has_its_own_deadline ... ok
+test tests::server::a_step_before_http_is_counted_and_timed_as_the_connection ... ok
+test tests::server::a_connection_is_held_only_as_long_and_as_many_as_the_app_allows ... ok
+test tests::server::finished_work_releases_what_it_holds_when_the_handler_is_dropped ... ok
+test tests::server::shutdown_holds_a_connection_to_its_own_requests_deadline ... ok
+test tests::server::every_request_of_a_connection_has_its_own_deadline ... ok
+test tests::server::a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does_not ... ok
+test tests::server::a_connections_timer_is_made_once_and_dropped_with_the_connection ... ok
+test tests::server::a_thread_that_serves_one_runtime_after_another_holds_each_to_the_deadline ... ok
+test tests::server::a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_timeout ... ok
+test tests::server::an_answer_waits_for_its_client_only_as_long_as_the_app_allows ... ok
+
+failures:
+
+---- tests::server::a_connection_polled_inside_anothers_poll_keeps_its_own_timer stdout ----
+
+thread 'tests::server::a_connection_polled_inside_anothers_poll_keeps_its_own_timer' (307) panicked at crates/corten/src/tests/server.rs:2440:9:
+assertion `left == right` failed
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::server::a_connection_polled_inside_anothers_poll_keeps_its_own_timer
+
+test result: FAILED. 40 passed; 1 failed; 2 ignored; 0 measured; 1025 filtered out; finished in 10.11s
+
+error: test failed, to rerun pass `-p corten-run --lib`
+# DONE lib t-v1 rc=101
+   Compiling serde_path_to_error v0.1.20
+past the deadline: least 870.842µs, median 2.069103ms, most 2.79683ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1012 filtered out; finished in 10.93s
+# DONE late t-base rc=0
+   Compiling serde_path_to_error v0.1.20
+past the deadline: least 922.635µs, median 2.064855ms, most 2.861736ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1017 filtered out; finished in 10.93s
+# DONE late t-v1 rc=0

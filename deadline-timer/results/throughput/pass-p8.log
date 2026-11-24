@@ -1,0 +1,34 @@
+# p8 15:55:28 load 26.70 order: final3:final3 base:base
+p8.r1	final3	async-staged	1	446802	71.58ms	131.80ms	47.74	4xx=0 5xx=0 rc=0 mem=850.4MiB
+p8.r1	base	async-staged	1	378019	84.56ms	161.90ms	58.13	4xx=0 5xx=0 rc=0 mem=771.6MiB
+p8.r1	final3	baseline	1	793458	5.19ms	12.20ms	30.38	4xx=0 5xx=0 rc=0 mem=55.52MiB
+p8.r1	final3	json-comp	1	185559	22.07ms	56.80ms	130.68	4xx=0 5xx=0 rc=35282 mem=114.5MiB
+p8.r1	final3	async	1	541127	59.00ms	98.20ms	40.43	4xx=0 5xx=0 rc=0 mem=397.5MiB
+p8.r1	base	baseline	1	782679	5.26ms	12.30ms	30.79	4xx=0 5xx=0 rc=0 mem=59.37MiB
+p8.r1	base	json-comp	1	183669	22.28ms	56.70ms	131.84	4xx=0 5xx=0 rc=34786 mem=120.8MiB
+p8.r1	base	async	1	544368	59.06ms	97.70ms	43.68	4xx=0 5xx=0 rc=0 mem=404.5MiB
+p8.r1	final3	spool	1	438397	9.38ms	14.50ms	54.35	4xx=0 5xx=0 rc=0 mem=106.5MiB
+p8.r1	base	spool	1	429908	9.56ms	15.10ms	54.81	4xx=0 5xx=0 rc=0 mem=114.2MiB
+p8.r2	final3	async-staged	1	451267	70.74ms	131.00ms	47.39	4xx=0 5xx=0 rc=0 mem=820.6MiB
+p8.r2	base	async-staged	1	382107	83.45ms	160.90ms	57.39	4xx=0 5xx=0 rc=0 mem=810.5MiB
+p8.r2	final3	baseline	1	793118	5.19ms	12.20ms	30.31	4xx=0 5xx=0 rc=0 mem=60.75MiB
+p8.r2	final3	json-comp	1	183434	22.32ms	56.40ms	132.24	4xx=0 5xx=0 rc=34802 mem=120.7MiB
+p8.r2	final3	async	1	542398	58.97ms	98.40ms	40.21	4xx=0 5xx=0 rc=0 mem=373.8MiB
+p8.r2	base	baseline	1	796701	5.16ms	12.40ms	29.96	4xx=0 5xx=0 rc=0 mem=56.02MiB
+p8.r2	base	json-comp	1	185521	22.08ms	56.20ms	130.98	4xx=0 5xx=0 rc=35325 mem=112.8MiB
+p8.r2	base	async	1	544415	58.77ms	98.30ms	40.24	4xx=0 5xx=0 rc=0 mem=390.9MiB
+p8.r2	final3	spool	1	440900	9.32ms	14.40ms	53.90	4xx=0 5xx=0 rc=0 mem=106.7MiB
+p8.r2	base	spool	1	437633	9.39ms	14.60ms	54.17	4xx=0 5xx=0 rc=0 mem=106.1MiB
+p8.r3	final3	async-staged	1	447429	72.74ms	130.50ms	52.14	4xx=0 5xx=0 rc=0 mem=796.2MiB
+p8.r3	base	async-staged	1	381443	83.76ms	160.60ms	57.27	4xx=0 5xx=0 rc=0 mem=821.4MiB
+p8.r3	final3	baseline	1	801048	5.14ms	12.20ms	30.01	4xx=0 5xx=0 rc=0 mem=58.91MiB
+p8.r3	final3	json-comp	1	185807	22.02ms	57.10ms	130.51	4xx=0 5xx=0 rc=35256 mem=112.6MiB
+p8.r3	final3	async	1	537487	59.50ms	98.80ms	40.59	4xx=0 5xx=0 rc=0 mem=374.1MiB
+p8.r3	base	baseline	1	782085	5.26ms	12.40ms	30.75	4xx=0 5xx=0 rc=0 mem=59.92MiB
+p8.r3	base	json-comp	1	184765	22.18ms	57.20ms	131.63	4xx=0 5xx=0 rc=35201 mem=111.3MiB
+p8.r3	base	async	1	539410	59.17ms	98.50ms	40.33	4xx=0 5xx=0 rc=0 mem=389.6MiB
+p8.r3	final3	spool	1	435522	9.44ms	14.80ms	54.62	4xx=0 5xx=0 rc=0 mem=106MiB
+p8.r3	base	spool	1	431424	9.53ms	14.90ms	54.94	4xx=0 5xx=0 rc=0 mem=97.67MiB
+p8.long	final3	async-staged40	1	439502	73.14ms	133.60ms	46.86	4xx=0 5xx=0 rc=0 mem=870.8MiB
+p8.long	base	async-staged40	1	368321	87.22ms	163.00ms	56.99	4xx=0 5xx=0 rc=0 mem=781.5MiB
+# p8 DONE 16:02:45

@@ -1,0 +1,2 @@
+case              median     least      most  runs
+sdelay1            35508     35499     35515  35499 35508 35515

@@ -1,0 +1,21 @@
+== get
+total a 41240  b 41328
+    +378        0      378  ???:<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Connection>> as core::f
+    -378      378        0  ???:<core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Con
+     +44    20620    20664  PROGRAM TOTALS
+     +44        0       44  ???:<core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyper
+     -31      372      341  ???:corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closure#0}::{closure#1}>::{closure#0}
+     +20        0       20  ???:<corten::deadline::Polling as core::ops::drop::Drop>::drop
+     +16        0       16  ???:core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+     +15        0       15  ???:core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+     -14       14        0  ???:core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::
+      -2     1269     1267  ./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:__memcpy_avx_unaligned_erms
+      -1      447      446  ???:tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+== delay1
+total a 36485  b 36735
+    +499        0      499  ???:<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Connection>> as core::f
+    -499      499        0  ???:<core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Con
+    +125    18243    18368  PROGRAM TOTALS
+     +88        0       88  ???:<core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyper
+     +40        0       40  ???:<corten::deadline::Polling as core::ops::drop::Drop>::drop
+DIAG-DONE

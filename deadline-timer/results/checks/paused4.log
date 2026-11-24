@@ -1,0 +1,24 @@
+== p-main
+test tests::server::scratch_paused_clock_across_requests ... paused clock at 40ms after request 1
+paused clock at 80ms after request 2
+paused clock at 120ms after request 3
+paused clock at 120ms after the connection sat idle 200 ms
+paused clock at 160ms after request 4
+test tests::server::scratch_paused_clock_between_requests ... paused clock moved 0ns while the connection sat idle 200 ms
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1063 filtered out; finished in 0.41s
+== p-head
+test tests::server::scratch_paused_clock_across_requests ... paused clock at 40ms after request 1
+paused clock at 80ms after request 2
+paused clock at 120ms after request 3
+paused clock at 380ms after the connection sat idle 200 ms
+paused clock at 420ms after request 4
+test tests::server::scratch_paused_clock_between_requests ... paused clock moved 260ms while the connection sat idle 200 ms
+test tests::server::scratch_paused_clock_with_a_bare_timer ... bare: clock at 300ms after 100 ms with a timer set 300 ms off in another task
+test tests::server::scratch_paused_clock_with_the_timer_counted ... counted: clock at 40ms after request 1, timers kept 1
+counted: clock at 80ms after request 2, timers kept 1
+counted: clock at 120ms after request 3, timers kept 1
+counted: clock at 380ms after idle round 1
+counted: clock at 380ms after idle round 2
+counted: clock at 380ms after idle round 3
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1069 filtered out; finished in 0.82s
+PAUSED4-DONE

@@ -1,0 +1,9 @@
+test tests::server::scratch_paused_clock_with_a_bare_timer ... bare: clock at 300ms after 100 ms with a timer set 300 ms off in another task
+test tests::server::scratch_paused_clock_with_the_timer_counted ... counted: clock at 40ms after request 1, timers kept 1
+counted: clock at 80ms after request 2, timers kept 1
+counted: clock at 120ms after request 3, timers kept 1
+counted: clock at 380ms after idle round 1
+counted: clock at 380ms after idle round 2
+counted: clock at 380ms after idle round 3
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1071 filtered out; finished in 0.41s
+PAUSED3-DONE

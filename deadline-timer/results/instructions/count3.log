@@ -1,0 +1,21 @@
+Compiling hyper v1.13.0 Compiling tokio v1.54.1 
+== default final 15:04:21
+case              median     least      most  runs
+get                20616     20614     20618  20618 20616 20614
+sdelay0            19001     19000     19005  19000 19005 19001
+sdelay1            24968     24968     24976  24968 24968 24976
+delay1             18280     18278     18281  18281 18280 18278
+pipeline           12207     12207     12208  12207 12208 12207
+== percore-by-hand final 15:05:09
+case              median     least      most  runs
+get                20013     20013     20013  20013 20013 20013
+sdelay0            18399     18398     18399  18399 18399 18398
+sdelay1            23720     23713     23720  23713 23720 23720
+delay1             17057     17054     17057  17057 17054 17057
+pipeline           11631     11631     11632  11631 11632 11631
+== default, a connection for each request: final 15:05:55
+case              median     least      most  runs
+get                33238     33232     33249  33249 33232 33238
+sdelay1            38650     38643     38660  38660 38650 38643
+COUNT-DONE
+# DONE count3 final

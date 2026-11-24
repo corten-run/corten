@@ -1,0 +1,7 @@
+past the deadline: least 935.916µs, median 2.075982ms, most 3.449968ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1018 filtered out; finished in 10.94s
+# DONE late t-v1 rc=0
+past the deadline: least 968.869µs, median 2.028566ms, most 3.135042ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1012 filtered out; finished in 10.93s
+# DONE late t-base rc=0
+LATE6-DONE

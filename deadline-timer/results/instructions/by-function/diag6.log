@@ -1,0 +1,9 @@
+docker: invalid reference format: repository name (library/ARENA_MODE=default) must be lowercase
+
+Run 'docker run --help' for more information
+DIAG5-DONE
+docker: invalid reference format: repository name (library/ARENA_MODE=default) must be lowercase
+
+Run 'docker run --help' for more information
+DIAG5-DONE
+RUN6-DONE

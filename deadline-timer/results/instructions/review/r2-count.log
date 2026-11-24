@@ -1,0 +1,137 @@
+main: version = "1.12.0" version = "1.54.1"  9ec12399a0e5e15f
+built: version = "1.12.0" version = "1.54.1"  8d53dc5b2c10ada0
+two: version = "1.12.0" version = "1.54.1"  99399fc02fd78857
+== percore-by-hand main round 1 16:39:04
+case              median     least      most  runs
+get                19982     19981     19982  19982 19982 19981
+sdelay0            18366     18365     18367  18365 18367 18366
+sdelay1            23816     23809     23876  23876 23816 23809
+delay1             16973     16968     16976  16968 16973 16976
+pipeline           11590     11577     11590  11577 11590 11590
+== percore-by-hand, a connection for each request: main round 1 16:39:46
+case              median     least      most  runs
+get                31148     31141     31150  31141 31148 31150
+sdelay1            34993     34956     35073  34993 35073 34956
+== percore-by-hand built round 1 16:40:07
+case              median     least      most  runs
+get                19988     19988     19989  19988 19989 19988
+sdelay0            18374     18373     18374  18374 18374 18373
+sdelay1            23705     23691     23709  23709 23705 23691
+delay1             17008     17007     17009  17008 17007 17009
+pipeline           11605     11594     11606  11606 11605 11594
+== percore-by-hand, a connection for each request: built round 1 16:40:49
+case              median     least      most  runs
+get                31205     31192     31210  31210 31205 31192
+sdelay1            35394     35319     35497  35497 35319 35394
+== percore-by-hand two round 1 16:41:10
+case              median     least      most  runs
+get                19988     19988     19988  19988 19988 19988
+sdelay0            18374     18374     18374  18374 18374 18374
+sdelay1            23684     23680     23699  23680 23684 23699
+delay1             17008     17007     17011  17008 17007 17011
+pipeline           11606     11605     11606  11606 11605 11606
+== percore-by-hand, a connection for each request: two round 1 16:41:52
+case              median     least      most  runs
+get                31196     31193     31206  31206 31196 31193
+sdelay1            35118     34890     35123  35118 35123 34890
+== percore-by-hand two round 2 16:42:13
+case              median     least      most  runs
+get                19988     19988     19989  19988 19988 19989
+sdelay0            18374     18373     18374  18373 18374 18374
+sdelay1            23731     23681     23746  23746 23681 23731
+delay1             17008     17006     17013  17008 17006 17013
+pipeline           11606     11605     11606  11606 11605 11606
+== percore-by-hand, a connection for each request: two round 2 16:42:55
+case              median     least      most  runs
+get                31205     31203     31210  31203 31210 31205
+sdelay1            35144     35113     35193  35113 35144 35193
+== percore-by-hand built round 2 16:43:16
+case              median     least      most  runs
+get                19988     19987     19988  19987 19988 19988
+sdelay0            18374     18374     18375  18374 18375 18374
+sdelay1            23705     23678     23705  23705 23705 23678
+delay1             17006     17000     17011  17000 17011 17006
+pipeline           11606     11594     11608  11606 11608 11594
+== percore-by-hand, a connection for each request: built round 2 16:43:59
+case              median     least      most  runs
+get                31199     31198     31203  31198 31199 31203
+sdelay1            35474     35413     35485  35413 35485 35474
+== percore-by-hand main round 2 16:44:19
+case              median     least      most  runs
+get                19981     19981     19982  19981 19981 19982
+sdelay0            18367     18365     18367  18367 18367 18365
+sdelay1            23812     23811     23860  23811 23812 23860
+delay1             16980     16977     16983  16983 16980 16977
+pipeline           11589     11588     11590  11589 11590 11588
+== percore-by-hand, a connection for each request: main round 2 16:45:01
+case              median     least      most  runs
+get                31166     31142     31194  31142 31166 31194
+sdelay1            35003     34862     35120  34862 35120 35003
+== default main round 1 16:45:22
+case              median     least      most  runs
+get                20587     20587     20590  20587 20587 20590
+sdelay0            18975     18974     18977  18975 18974 18977
+sdelay1            25105     25099     25109  25109 25099 25105
+delay1             18203     18193     18203  18193 18203 18203
+pipeline           12166     12164     12167  12167 12166 12164
+== default, a connection for each request: main round 1 16:46:05
+case              median     least      most  runs
+get                33119     33027     34149  34149 33027 33119
+sdelay1            38085     37886     38473  38473 38085 37886
+== default built round 1 16:46:27
+case              median     least      most  runs
+get                20591     20589     20594  20589 20594 20591
+sdelay0            18980     18979     18981  18981 18979 18980
+sdelay1            24925     24915     24936  24915 24936 24925
+delay1             18231     18228     18235  18231 18235 18228
+pipeline           12183     12182     12184  12183 12182 12184
+== default, a connection for each request: built round 1 16:47:10
+case              median     least      most  runs
+get                33226     33204     33242  33226 33204 33242
+sdelay1            38329     38316     38356  38329 38316 38356
+== default two round 1 16:47:32
+case              median     least      most  runs
+get                20592     20591     20592  20592 20592 20591
+sdelay0            18977     18975     18978  18978 18977 18975
+sdelay1            24932     24919     24970  24932 24970 24919
+delay1             18231     18229     18236  18229 18236 18231
+pipeline           12186     12183     12187  12187 12186 12183
+== default, a connection for each request: two round 1 16:48:15
+case              median     least      most  runs
+get                33260     33224     33279  33279 33260 33224
+sdelay1            38429     38378     38605  38605 38378 38429
+== default two round 2 16:48:36
+case              median     least      most  runs
+get                20592     20590     20596  20590 20596 20592
+sdelay0            18979     18978     18979  18979 18978 18979
+sdelay1            24928     24922     24938  24922 24928 24938
+delay1             18235     18227     18240  18240 18235 18227
+pipeline           12181     12180     12200  12180 12200 12181
+== default, a connection for each request: two round 2 16:49:20
+case              median     least      most  runs
+get                33253     33235     33636  33235 33636 33253
+sdelay1            38448     38445     38490  38448 38490 38445
+== default built round 2 16:49:42
+case              median     least      most  runs
+get                20629     20598     20632  20629 20632 20598
+sdelay0            18980     18979     18980  18980 18979 18980
+sdelay1            24936     24925     24977  24977 24925 24936
+delay1             18239     18239     18278  18239 18278 18239
+pipeline           12184     12183     12188  12183 12188 12184
+== default, a connection for each request: built round 2 16:50:26
+case              median     least      most  runs
+get                33207     33200     33220  33207 33220 33200
+sdelay1            38897     38488     38927  38897 38488 38927
+== default main round 2 16:50:48
+case              median     least      most  runs
+get                20592     20590     20592  20592 20592 20590
+sdelay0            18990     18973     19004  18973 18990 19004
+sdelay1            25055     25046     25101  25101 25055 25046
+delay1             18191     18184     18204  18204 18191 18184
+pipeline           12168     12166     12184  12168 12184 12166
+== default, a connection for each request: main round 2 16:51:36
+case              median     least      most  runs
+get                32723     32602     33152  32723 32602 33152
+sdelay1            38347     38317     38488  38317 38488 38347
+COUNT-DONE
+# R2-COUNT-DONE

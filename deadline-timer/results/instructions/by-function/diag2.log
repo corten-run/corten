@@ -1,0 +1,52 @@
+== get
+total a 41212  b 41231
+    +380        0      380  ???:<core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyper
+    -378      378        0  ???:<core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Con
+     -31      372      341  ???:corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closure#0}::{closure#1}>::{closure#0}
+     +20        0       20  ???:core::ptr::drop_glue::<corten::deadline::Polling>
+     +16        0       16  ???:core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+     +15        0       15  ???:core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+     -14       14        0  ???:core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::
+      +9    20606    20616  PROGRAM TOTALS
+== delay1
+total a 36465  b 36580
+    +502        0      502  ???:<core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyper
+    -499      499        0  ???:<core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Con
+     +58    18232    18290  PROGRAM TOTALS
+     +40        0       40  ???:core::ptr::drop_glue::<corten::deadline::Polling>
+      +9     1026     1035  ???:tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+== sdelay1
+total a 50183  b 49874
+    +512        0      512  ???:<core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyper
+    -499      499        0  ???:<core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Con
+    -154    25091    24937  PROGRAM TOTALS
+    -112      224      112  ???:<tokio::runtime::time::handle::Handle>::reregister
+     +86        0       86  ???:<tokio::time::sleep::Sleep>::reset
+     +83        0       83  ???:<corten::deadline::Timer>::poll
+     -80      334      254  ???:<tokio::time::sleep::Sleep as core::future::future::Future>::poll
+     -78      135       57  ???:<tokio::runtime::time::entry::TimerEntry as core::ops::drop::Drop>::drop
+     +72      502      574  ???:<tokio::runtime::time::Driver>::park_internal
+     -62      124       62  ???:tokio::time::sleep::sleep
+     +60        0       60  ???:core::ptr::drop_glue::<corten::deadline::Polling>
+     -53       53        0  ???:<tokio::runtime::time::wheel::Wheel>::remove
+     -49       49        0  ???:corten::page::waited_until::<http::response::Response<corten::body::Body>>
+     -40      485      445  ???:corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closure#0}::{closure#1}>::{closure#0}
+     +40      587      627  ???:<tokio::runtime::time::handle::Handle>::process_at_time
+     -39       79       40  ???:core::ptr::drop_glue::<core::option::Option<tokio::runtime::Timer>>
+     +37      402      439  ???:<std::sys::pal::unix::time::Timespec>::sub_timespec
+     +35        0       35  ???:core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+     -32       64       32  ???:<tokio::runtime::scheduler::Handle>::current
+     -27      191      164  ./nptl/./nptl/cancellation.c:__internal_syscall_cancel
+     -27       54       27  ???:<mio::sys::unix::waker::Waker>::wake
+     +16      277      293  ???:<std::sys::pal::unix::time::Timespec>::now
+     +16        0       16  ???:core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+     +15        0       15  ???:core::ptr::drop_glue::<corten::deadline::Timer>
+     -14       99       85  ./nptl/../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:__syscall_cancel_arch
+     -14       14        0  ???:core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::
+     +14      236      250  ???:<tokio::runtime::io::driver::Driver>::turn
+     +10      173      183  ./time/../sysdeps/unix/sysv/linux/clock_gettime.c:clock_gettime@@GLIBC_2.17
+      -9       64       55  ./nptl/./nptl/cancellation.c:__syscall_cancel
+      -9       18        9  ./io/../sysdeps/unix/sysv/linux/write.c:write
+      -6     1034     1028  ???:tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+      +3      111      114  ???:<tokio::sync::task::atomic_waker::AtomicWaker>::register_by_ref
+DIAG2-DONE conn2

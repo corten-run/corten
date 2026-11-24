@@ -1,0 +1,79 @@
+v3 applied
+Compiling hyper v1.13.0 Compiling tokio v1.54.1 
+Compiling hyper v1.13.0 Compiling tokio v1.54.1 
+Compiling hyper v1.13.0 Compiling tokio v1.54.1 
+Compiling hyper v1.13.0 Compiling tokio v1.54.1 
+== default base 14:23:45
+case              median     least      most  runs
+get                20607     20607     20610  20607 20607 20610
+sdelay0            18995     18994     18998  18995 18994 18998
+sdelay1            25076     25076     25083  25083 25076 25076
+delay1             18228     18226     18230  18228 18226 18230
+pipeline           12186     12185     12187  12185 12187 12186
+== default conn 14:24:32
+case              median     least      most  runs
+get                20655     20653     20659  20655 20659 20653
+sdelay0            19041     19040     19043  19041 19040 19043
+sdelay1            25021     25017     25032  25021 25032 25017
+delay1             18368     18356     18369  18369 18368 18356
+pipeline           12247     12243     12248  12248 12247 12243
+== default thread 14:25:20
+case              median     least      most  runs
+get                20599     20597     20601  20601 20599 20597
+sdelay0            18984     18982     18985  18982 18985 18984
+sdelay1            25061     25059     25068  25068 25059 25061
+delay1             18235     18227     18243  18227 18243 18235
+pipeline           12181     12179     12184  12179 12184 12181
+== default sweep 14:26:10
+case              median     least      most  runs
+get                20633     20633     20634  20633 20633 20634
+sdelay0            19021     19019     19021  19021 19021 19019
+sdelay1            24428     24420     24434  24420 24428 24434
+delay1             18311     18308     18324  18324 18311 18308
+pipeline           12225     12224     12228  12224 12228 12225
+== percore-by-hand base 14:26:57
+case              median     least      most  runs
+get                19999     19999     20000  20000 19999 19999
+sdelay0            18386     18385     18387  18386 18385 18387
+sdelay1            23845     23816     23849  23849 23816 23845
+delay1             17009     17009     17010  17009 17009 17010
+pipeline           11609     11608     11610  11608 11609 11610
+== percore-by-hand conn 14:27:44
+case              median     least      most  runs
+get                20052     20052     20054  20052 20054 20052
+sdelay0            18439     18438     18440  18438 18439 18440
+sdelay1            23776     23772     23776  23776 23776 23772
+delay1             17138     17134     17140  17134 17140 17138
+pipeline           11671     11658     11671  11671 11671 11658
+== percore-by-hand thread 14:28:31
+case              median     least      most  runs
+get                19994     19993     19994  19994 19994 19993
+sdelay0            18379     18379     18380  18379 18380 18379
+sdelay1            23817     23809     23821  23817 23809 23821
+delay1             17006     17005     17009  17005 17006 17009
+pipeline           11607     11607     11608  11607 11607 11608
+== percore-by-hand sweep 14:29:18
+case              median     least      most  runs
+get                20031     20030     20031  20031 20030 20031
+sdelay0            18415     18415     18416  18415 18415 18416
+sdelay1            23185     23184     23197  23197 23185 23184
+delay1             17088     17080     17124  17088 17124 17080
+pipeline           11647     11634     11648  11648 11634 11647
+== default, a connection for each request: base 14:30:04
+case              median     least      most  runs
+get                33200     33148     33207  33207 33200 33148
+sdelay1            37845     37658     38383  38383 37658 37845
+== default, a connection for each request: conn 14:30:28
+case              median     least      most  runs
+get                33606     33271     33896  33896 33606 33271
+sdelay1            38777     38730     38790  38777 38730 38790
+== default, a connection for each request: thread 14:30:51
+case              median     least      most  runs
+get                33267     33125     34193  33267 34193 33125
+sdelay1            37890     37822     38705  38705 37822 37890
+== default, a connection for each request: sweep 14:31:15
+case              median     least      most  runs
+get                33892     33629     34069  33629 34069 33892
+sdelay1            37899     37433     38004  37433 37899 38004
+COUNT-DONE
+# DONE count

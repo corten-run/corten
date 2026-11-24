@@ -1,0 +1,2 @@
+case              median     least      most  runs
+sdelay1            35053     35045     35061  35053 35061 35045

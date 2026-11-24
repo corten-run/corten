@@ -1,0 +1,177 @@
+######## tokio 1.44.0
+== wheels and their locks (runtime/time/mod.rs)
+80:/// The implementation maintains six wheels arranged in a set of levels. As the
+86:/// The wheels are:
+102:/// [paper]: http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
+117:    /// Sharded Timer wheels.
+118:    wheels: RwLock<ShardedWheel>,
+120:    /// Number of entries in the sharded timer wheels.
+121:    wheels_len: u32,
+136:/// Wrapper around the sharded timer wheels.
+137:struct ShardedWheel(Box<[Mutex<wheel::Wheel>]>);
+146:    pub(crate) fn new(park: IoStack, clock: &Clock, shards: u32) -> (Driver, Handle) {
+147:        assert!(shards > 0);
+150:        let wheels: Vec<_> = (0..shards)
+158:                wheels: RwLock::new(ShardedWheel(wheels.into_boxed_slice())),
+159:                wheels_len: shards,
+201:            let mut wheels_lock = rt_handle.time().inner.wheels.write();
+202:            let expiration_time = wheels_lock
+303:        let shards = self.inner.get_shard_size();
+304:        let start = crate::runtime::context::thread_rng_n(shards);
+309:        let shards = self.inner.get_shard_size();
+311:        let expiration_time = (start..shards + start)
+312:            .filter_map(|i| self.process_at_sharded_time(i, now))
+318:    // Returns the next wakeup time of this shard.
+319:    pub(self) fn process_at_sharded_time(&self, id: u32, mut now: u64) -> Option<u64> {
+321:        let mut wheels_lock = self.inner.wheels.read();
+322:        let mut lock = wheels_lock.lock_sharded_wheel(id);
+344:                    drop(wheels_lock);
+348:                    wheels_lock = self.inner.wheels.read();
+349:                    lock = wheels_lock.lock_sharded_wheel(id);
+355:        drop(wheels_lock);
+373:            let wheels_lock = self.inner.wheels.read();
+374:            let mut lock = wheels_lock.lock_sharded_wheel(entry.as_ref().shard_id());
+397:            let wheels_lock = self.inner.wheels.read();
+399:            let mut lock = wheels_lock.lock_sharded_wheel(entry.as_ref().shard_id());
+464:    // Gets the number of shards.
+465:    fn get_shard_size(&self) -> u32 {
+466:        self.wheels_len
+479:    /// Locks the driver's sharded wheel structure.
+480:    pub(super) fn lock_sharded_wheel(
+482:        shard_id: u32,
+484:        let index = shard_id % (self.0.len() as u32);
+== which shard an entry takes
+runtime/time/entry.rs:333:    shard_id: u32,
+runtime/time/entry.rs:374:    pub(super) fn new(shard_id: u32) -> Self {
+runtime/time/entry.rs:376:            shard_id,
+runtime/time/entry.rs:447:    pub(super) fn shard_id(&self) -> u32 {
+runtime/time/entry.rs:448:        self.shard_id
+runtime/time/entry.rs:497:            let shard_size = self.driver.driver().time().inner.get_shard_size();
+runtime/time/entry.rs:498:            let shard_id = generate_shard_id(shard_size);
+runtime/time/entry.rs:500:                *self.inner.get() = Some(TimerShared::new(shard_id));
+runtime/time/entry.rs:661:    fn generate_shard_id(shard_size: u32) -> u32 {
+runtime/time/entry.rs:675:    fn generate_shard_id(shard_size: u32) -> u32 {
+runtime/time/mod.rs:303:        let shards = self.inner.get_shard_size();
+runtime/time/mod.rs:309:        let shards = self.inner.get_shard_size();
+runtime/time/mod.rs:374:            let mut lock = wheels_lock.lock_sharded_wheel(entry.as_ref().shard_id());
+runtime/time/mod.rs:399:            let mut lock = wheels_lock.lock_sharded_wheel(entry.as_ref().shard_id());
+runtime/time/mod.rs:465:    fn get_shard_size(&self) -> u32 {
+runtime/time/mod.rs:482:        shard_id: u32,
+runtime/time/mod.rs:484:        let index = shard_id % (self.0.len() as u32);
+== reregister
+    pub(self) unsafe fn reregister(
+        &self,
+        unpark: &IoHandle,
+        new_tick: u64,
+        entry: NonNull<TimerShared>,
+    ) {
+        let waker = unsafe {
+            let wheels_lock = self.inner.wheels.read();
+
+            let mut lock = wheels_lock.lock_sharded_wheel(entry.as_ref().shard_id());
+
+            if unsafe { entry.as_ref().might_be_registered() } {
+                lock.remove(entry);
+            }
+
+            let entry = entry.as_ref().handle();
+
+            if self.is_shutdown() {
+                unsafe { entry.fire(Err(crate::time::error::Error::shutdown())) }
+            } else {
+                entry.set_expiration(new_tick);
+
+                match unsafe { lock.insert(entry) } {
+                    Ok(when) => {
+                        if self
+                            .inner
+                            .next_wake
+                            .load()
+                            .map(|next_wake| when < next_wake.get())
+                            .unwrap_or(true)
+                        {
+                            unpark.unpark();
+                        }
+
+                        None
+                    }
+                    Err((entry, crate::time::error::InsertError::Elapsed)) => unsafe {
+                        entry.fire(Ok(()))
+                    },
+                }
+            }
+
+        };
+
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+== safe_delay
+######## tokio 1.54.1
+== wheels and their locks (runtime/time/mod.rs)
+63:/// The implementation maintains six wheels arranged in a set of levels. As the
+69:/// The wheels are:
+85:/// [paper]: http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
+98:        state: Mutex<InnerState>,
+469:    pub(super) fn lock(&self) -> crate::loom::sync::MutexGuard<'_, InnerState> {
+== which shard an entry takes
+== reregister
+    pub(self) unsafe fn reregister(
+        &self,
+        unpark: &IoHandle,
+        new_tick: u64,
+        entry: NonNull<TimerShared>,
+    ) {
+        let waker = unsafe {
+            let mut lock = self.inner.lock();
+
+            if unsafe { entry.as_ref().might_be_registered() } {
+                lock.wheel.remove(entry);
+            }
+
+            let entry = entry.as_ref().handle();
+
+            if self.is_shutdown() {
+                unsafe { entry.fire(Err(crate::time::error::Error::shutdown())) }
+            } else {
+                entry.set_expiration(new_tick);
+
+                match unsafe { lock.wheel.insert(entry) } {
+                    Ok(when) => {
+                        if lock
+                            .next_wake
+                            .is_none_or(|next_wake| when < next_wake.get())
+                        {
+                            unpark.unpark();
+                        }
+
+                        None
+                    }
+                    Err((entry, crate::time::error::InsertError::Elapsed)) => unsafe {
+                        entry.fire(Ok(()))
+                    },
+                }
+            }
+
+        };
+
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+== safe_delay
+time/mod.rs:87:fn safe_delay(duration: Duration) -> Duration {
+time/mod.rs-88-    // Roughly 30 years from now.
+time/mod.rs-89-    // 1000 years overflows on macOS, 100 years overflows on FreeBSD.
+time/mod.rs-90-    duration.min(Duration::from_secs(86400 * 365 * 30))
+time/mod.rs-91-}
+time/mod.rs-92-
+time/mod.rs-93-mod clock;
+time/mod.rs-94-pub(crate) use self::clock::Clock;
+time/mod.rs-95-cfg_test_util! {
+time/mod.rs-96-    pub use clock::{advance, pause, resume};
+time/mod.rs-97-}
+time/mod.rs-98-
+time/mod.rs-99-pub mod error;
+TK2-DONE

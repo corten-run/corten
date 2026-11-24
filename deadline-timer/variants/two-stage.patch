@@ -1,0 +1,232 @@
+diff --git a/crates/corten/src/deadline.rs b/crates/corten/src/deadline.rs
+index 0242bd4c0..729e133b1 100644
+--- a/crates/corten/src/deadline.rs
++++ b/crates/corten/src/deadline.rs
+@@ -8,9 +8,11 @@
+ //! The connection's task owns the timer ([`Keeps`]): it makes it in its own poll, so the timer is
+ //! of the runtime that polls the connection, and the timer is dropped with the connection. A
+ //! thread has it only while it polls that connection ([`TIMER`]), which is where a request's
+-//! deadline finds it. A deadline that finds none (the connection's first to wait, a second one in
+-//! the same request, a request polled anywhere else: a router served another way, a call a layer
+-//! moved to another task) makes its own timer and drops it, as every deadline did.
++//! deadline finds it. A deadline that finds none makes its own timer and drops it, as every
++//! deadline did: the connection's first two to wait (it makes its timer once a second request
++//! has waited, so a connection that serves one request makes none), a second one in the same
++//! request, a request polled anywhere else (a router served another way, a call a layer moved to
++//! another task).
+ 
+ use std::{
+     cell::Cell,
+@@ -24,10 +26,12 @@ use tokio::time::{Instant, Sleep};
+ 
+ /// No connection is being polled on the thread.
+ const NOWHERE: u64 = 0;
+-/// A connection that has made no timer is being polled.
++/// A connection none of whose deadlines has waited is being polled.
+ const UNNAMED: u64 = 1;
+-/// The same, and a deadline has waited during this poll: the connection makes its timer.
+-const ASKED: u64 = 2;
++/// A connection one of whose deadlines has waited, in an earlier poll, is being polled.
++const WAITED: u64 = 2;
++/// Either of those, and a deadline has waited during this poll.
++const ASKED: u64 = 3;
+ /// The number of the next connection to make a timer.
+ static NAMES: AtomicU64 = AtomicU64::new(ASKED + 1);
+ 
+@@ -68,8 +72,9 @@ pin_project_lite::pin_project! {
+ 
+ /// What a connection has for its requests' deadlines.
+ struct Mine {
+-    /// [`UNNAMED`] until a deadline of the connection's has waited, then the connection's own
+-    /// number, so a timer goes back only to the connection that made it.
++    /// [`UNNAMED`] until a deadline of the connection's has waited, [`WAITED`] until a second
++    /// request's has, then the connection's own number, so a timer goes back only to the
++    /// connection that made it.
+     id: u64,
+     /// The timer, made once: `None` before, while a deadline has it across polls, and for good
+     /// if that deadline was dropped somewhere else. While the connection is polled, what the
+@@ -128,24 +133,28 @@ impl<C: Future> Future for Keeps<C> {
+     // in two places by a guard that owned a timer, a poll cost 64.
+     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<C::Output> {
+         let this = self.project();
+-        // A connection no deadline of whose has waited tells the thread only that.
++        // A connection that has made no timer tells the thread only that.
+         let polling = Polling { by: BY.replace(this.mine.id), mine: this.mine };
+-        if polling.mine.id != UNNAMED {
++        if polling.mine.id > ASKED {
+             swap(&mut polling.mine.timer);
+         }
+         let polled = this.conn.poll(cx);
+         if BY.get() == ASKED && polled.is_pending() {
+-            *polling.mine = made();
++            *polling.mine = asked(polling.mine.id);
+         }
+         polled
+     }
+ }
+ 
+-/// A connection's number and its timer, not yet set: made in the connection's own poll, so the
+-/// timer is of the runtime that polls the connection, whatever its handler had entered when its
+-/// deadline asked.
++/// What a connection has once a deadline of its has waited during the poll that is ending. The
++/// second request to do so has the connection make its number and its timer, not yet set: here,
++/// in the connection's own poll, so the timer is of the runtime that polls the connection,
++/// whatever its handler had entered when its deadline waited.
+ #[cold]
+-fn made() -> Mine {
++fn asked(id: u64) -> Mine {
++    if id == UNNAMED {
++        return Mine { id: WAITED, timer: None };
++    }
+     #[cfg(test)]
+     LIVE.with(|live| live.set(live.get() + 1));
+     Mine { id: NAMES.fetch_add(1, Relaxed), timer: Some(Held(Box::pin(tokio::time::sleep(Duration::MAX)))) }
+@@ -163,12 +172,12 @@ pub(crate) struct Kept {
+ 
+ impl Kept {
+     /// The timer of the connection being polled, set to fire `limit` from now. `None` where no
+-    /// connection is being polled, or its timer is not there: not made yet (the connection then
+-    /// makes it, for its next deadline), or another deadline has it.
++    /// connection is being polled, or its timer is not there: not made yet (the connection is
++    /// told a deadline has waited), or another deadline has it.
+     fn take(limit: Duration) -> Option<Kept> {
+         let of = BY.get();
+         if of <= ASKED {
+-            if of == UNNAMED {
++            if of != NOWHERE {
+                 BY.set(ASKED);
+             }
+             return None;
+diff --git a/crates/corten/src/tests/server.rs b/crates/corten/src/tests/server.rs
+index caae429c7..e7925b85f 100644
+--- a/crates/corten/src/tests/server.rs
++++ b/crates/corten/src/tests/server.rs
+@@ -2251,10 +2251,11 @@ async fn timers_reach(count: isize) {
+     assert!(reached.await.is_ok(), "{} timers, not {count}", timers());
+ }
+ 
+-/// A connection keeps one timer for its requests' deadlines, made once a handler of its has
+-/// waited, and the timer is dropped with the connection: one whose handlers never wait has none,
+-/// many requests make no more, and connections that close (their client gone between requests or
+-/// while a handler waits, or at shutdown) leave none behind.
++/// A connection keeps one timer for its requests' deadlines, made once a second request's handler
++/// has waited, and the timer is dropped with the connection: one whose handlers never wait, or
++/// that has served one request that did, has none, many requests make no more, and connections
++/// that close (their client gone between requests or while a handler waits, or at shutdown) leave
++/// none behind.
+ #[tokio::test]
+ async fn a_connections_timer_is_made_once_and_dropped_with_the_connection() {
+     use tokio::io::AsyncWriteExt;
+@@ -2277,11 +2278,15 @@ async fn a_connections_timer_is_made_once_and_dropped_with_the_connection() {
+         conns.push(conn);
+     }
+     assert_eq!(timers(), 0, "a connection whose handlers have not waited has none");
+-    for round in 0..4 {
++    for conn in &mut conns {
++        assert_eq!(asked(conn, "GET /wait").await.1, "done");
++    }
++    assert_eq!(timers(), 0, "nor has one that has served one request that waited");
++    for round in 2..6 {
+         for conn in &mut conns {
+             assert_eq!(asked(conn, "GET /wait").await.1, "done");
+         }
+-        assert_eq!(timers(), OPEN as isize, "one a connection after {} requests that waited", round + 1);
++        assert_eq!(timers(), OPEN as isize, "one a connection after {round} requests that waited");
+     }
+     for conn in &mut conns[..4] {
+         late(conn, "GET /never").await;
+@@ -2339,11 +2344,12 @@ fn a_runtime_that_ends_drops_its_connections_timers() {
+     assert_eq!(thread.join().expect("the thread ends"), (8, 0));
+ }
+ 
+-/// A connection's first deadline to wait makes its own timer and has the connection make one;
+-/// each deadline after it waits on that one, a second deadline in the same request on its own,
+-/// and the connection has its timer back, set, when the deadline is dropped.
++/// A connection's first two requests whose deadlines wait make their own timers, and the second
++/// has the connection make one; each deadline after them waits on that one, a second deadline in
++/// the same request on its own, and the connection has its timer back, set, when the deadline is
++/// dropped.
+ #[tokio::test(start_paused = true)]
+-async fn a_deadline_waits_on_its_connections_timer_from_the_second_that_waits() {
++async fn a_deadline_waits_on_its_connections_timer_from_the_third_that_waits() {
+     use crate::deadline::{Keeps, Timer};
+     use std::{future::Future, pin::pin, task::Poll};
+     let limit = Duration::from_secs(30);
+@@ -2359,6 +2365,8 @@ async fn a_deadline_waits_on_its_connections_timer_from_the_second_that_waits()
+         })));
+         let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+         assert!(conn.as_mut().poll(&mut cx).is_pending());
++        assert_eq!((timers(), conn.kept_until()), (0, None), "one request that waited makes none");
++        assert!(conn.as_mut().poll(&mut cx).is_pending());
+         assert_eq!(timers(), 1);
+         assert!(conn.kept_until().is_some_and(|until| until > tokio::time::Instant::now() + limit), "made, not set yet");
+         for _ in 0..3 {
+@@ -2367,22 +2375,29 @@ async fn a_deadline_waits_on_its_connections_timer_from_the_second_that_waits()
+             assert_eq!((timers(), conn.kept_until()), (1, Some(tokio::time::Instant::now() + limit)));
+         }
+     }
+-    assert_eq!(kept, [(false, false), (true, false), (true, false), (true, false)]);
++    assert_eq!(kept, [(false, false), (false, false), (true, false), (true, false), (true, false)]);
+     assert_eq!(timers(), 0, "dropped with the connection");
+ }
+ 
+-/// A connection that is done in the poll its first deadline waited in makes no timer on its way
++/// A connection that is done in the poll where it would make its timer makes none on its way
+ /// out.
+ #[tokio::test(start_paused = true)]
+-async fn a_connection_done_where_its_first_deadline_waited_makes_no_timer() {
++async fn a_connection_done_where_it_would_make_its_timer_makes_none() {
+     use crate::deadline::{Keeps, Timer};
+     use std::{future::Future, pin::pin, task::Poll};
++    let mut polls = 0;
+     let mut conn = pin!(Keeps::new(std::future::poll_fn(|cx| {
+         let mut timer = pin!(Timer::Unset);
+         assert!(timer.as_mut().poll(Duration::from_secs(30), cx).is_pending());
+-        Poll::Ready(timer.is_kept())
++        polls += 1;
++        if polls < 2 {
++            Poll::Pending
++        } else {
++            Poll::Ready(timer.is_kept())
++        }
+     })));
+     let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
++    assert!(conn.as_mut().poll(&mut cx).is_pending());
+     assert_eq!(conn.as_mut().poll(&mut cx), Poll::Ready(false));
+     assert_eq!((timers(), conn.kept_until()), (0, None));
+ }
+@@ -2408,7 +2423,7 @@ async fn a_timer_whose_deadline_is_dropped_away_from_its_connection_is_dropped()
+             Poll::<()>::Pending
+         })));
+         let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+-        for _ in 0..2 {
++        for _ in 0..3 {
+             assert!(conn.as_mut().poll(&mut cx).is_pending());
+         }
+         assert_eq!((timers(), conn.kept_until()), (1, None), "the deadline has it");
+@@ -2419,7 +2434,7 @@ async fn a_timer_whose_deadline_is_dropped_away_from_its_connection_is_dropped()
+         }
+         assert_eq!((timers(), conn.kept_until()), (0, None));
+     }
+-    assert_eq!(kept, [false, true, false, false]);
++    assert_eq!(kept, [false, false, true, false, false]);
+ }
+ 
+ /// A connection polled inside another's poll (a handler that blocks on a runtime of its own that
+@@ -2452,14 +2467,14 @@ async fn a_connection_polled_inside_anothers_poll_keeps_its_own_timer() {
+             Poll::<()>::Pending
+         })));
+         let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+-        for _ in 0..3 {
++        for _ in 0..4 {
+             assert!(outer.as_mut().poll(&mut cx).is_pending());
+         }
+         assert_eq!(outer.kept_until(), Some(tokio::time::Instant::now() + short));
+         assert_eq!(timers(), 2);
+     }
+     assert_eq!(inner.kept_until(), Some(tokio::time::Instant::now() + long));
+-    assert_eq!(kept, [(false, false, false), (true, true, false), (true, true, false)]);
++    assert_eq!(kept, [(false, false, false), (false, false, false), (true, true, false), (true, true, false)]);
+     assert_eq!(timers(), 1, "the inner connection's, still");
+ }
+ 

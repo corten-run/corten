@@ -1,0 +1,207 @@
+diff -ruN a/kit/checks-close.txt b/kit/checks-close.txt
+--- a/kit/checks-close.txt	1969-12-31 18:00:00.000000000 -0600
++++ b/kit/checks-close.txt	2026-11-24 10:51:28.899877400 -0600
+@@ -0,0 +1 @@
++/wait -H 'Accept:' -H 'User-Agent:' -H 'Connection: close'
+diff -ruN a/kit/checks-unstaged.txt b/kit/checks-unstaged.txt
+--- a/kit/checks-unstaged.txt	1969-12-31 18:00:00.000000000 -0600
++++ b/kit/checks-unstaged.txt	2026-11-24 10:15:15.280440600 -0600
+@@ -0,0 +1 @@
++/unstaged -H 'Accept:' -H 'User-Agent:'
+diff -ruN a/kit/checks-verify.txt b/kit/checks-verify.txt
+--- a/kit/checks-verify.txt	2026-11-24 10:13:51.684995600 -0600
++++ b/kit/checks-verify.txt	2026-11-24 10:51:29.252314000 -0600
+@@ -1,3 +1,4 @@
+ /private -H 'Accept:' -H 'User-Agent:'
+-/private -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0' -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' -H 'Accept-Language: en-US,en;q=0.5' -H 'Accept-Encoding: gzip, deflate, br, zstd' -H 'Sec-Fetch-Dest: document' -H 'Sec-Fetch-Mode: navigate' -H 'Sec-Fetch-Site: none'
+-'/api/sum?a=1&b=2' -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0' -H 'Accept: */*' -H 'Accept-Language: en-US,en;q=0.5' -H 'Accept-Encoding: gzip, deflate, br, zstd' -H 'Sec-Fetch-Dest: empty' -H 'Sec-Fetch-Mode: cors' -H 'Sec-Fetch-Site: same-origin'
++/wait -H 'Accept:' -H 'User-Agent:'
++/wait -H 'Accept:' -H 'User-Agent:' -H 'Connection: close'
++/unstaged -H 'Accept:' -H 'User-Agent:'
+diff -ruN a/kit/checks-wait.txt b/kit/checks-wait.txt
+--- a/kit/checks-wait.txt	1969-12-31 18:00:00.000000000 -0600
++++ b/kit/checks-wait.txt	2026-11-24 10:15:15.097734300 -0600
+@@ -0,0 +1 @@
++/wait -H 'Accept:' -H 'User-Agent:'
+diff -ruN a/kit/lua/close.lua b/kit/lua/close.lua
+--- a/kit/lua/close.lua	1969-12-31 18:00:00.000000000 -0600
++++ b/kit/lua/close.lua	2026-11-24 10:51:28.076844600 -0600
+@@ -0,0 +1,9 @@
++-- A GET of the URL on wrk's command line that asks the server to close the connection after its
++-- answer, so wrk opens a connection for each request.
++
++wrk.headers["Connection"] = "close"
++
++done = function(summary, latency, requests)
++    io.write(string.format("RESULT %d %d %d %d %d %d\n", summary.requests, summary.errors.connect,
++        summary.errors.read, summary.errors.write, summary.errors.status, summary.errors.timeout))
++end
+diff -ruN a/kit/plan.env b/kit/plan.env
+--- a/kit/plan.env	2026-11-24 10:15:21.209843700 -0600
++++ b/kit/plan.env	2026-11-24 10:15:43.359062500 -0600
+@@ -7,7 +7,8 @@
+ #                  in the change comparisons the pad of both base and head (base pad p_i against
+ #                  head pad p_i)
+ #   PADS_Q         the pad of base's B side in the A/A comparisons (base pad p_i against base pad q_i)
+-#   WIN_WORKLOAD   the one workload a CPU-cost reduction is declared for
++#   WIN_WORKLOAD   the one workload a CPU-cost reduction is declared for: none in this plan, so
++#                  report.mjs reads no reduction for any workload
+ #   WIN_REDUCTION  its smallest worthwhile reduction, a share of user plus kernel cycles a request
+ # A pad of n bytes is one never-called function of n bytes linked first in .text (build.sh), so
+ # every function after it moves by n and keeps its order.
+@@ -15,5 +16,5 @@
+ R=8
+ PADS_P="320 15120 25824 40624 10304 21008 35808 5552 20288 30992 736 15536 26176 36880 10720 21424 36160 5904 16608 31408 1088 15888 26592 37296 11072 21776 36576 6320 16960 31760 1504 16304 26944 37648 11488 22192 32832 6672 17376 32176 1856 12560 27360 38064 11840 22544 33248 7088 17728 32528 2272 12976 27712 38416 12256 22960 33600 7440 18144 28848"
+ PADS_Q="22848 12160 38336 27648 12880 2192 32464 17680 7008 33184 22496 11808 38000 27312 12528 1840 32064 17280 6592 32768 22096 11408 37584 26896 16224 1440 31712 16928 6256 36528 21808 11120 37248 26560 15872 5184 31376 16592 10000 36176 21408 14816 36896 26208 19632 752 31024 20336 5504 35776 20992 14400 40592 25808 19216 336 30624 19936 5152 35424"
+-WIN_WORKLOAD=api
++WIN_WORKLOAD=none
+ WIN_REDUCTION=0.01
+diff -ruN a/kit/probe/src/main.rs b/kit/probe/src/main.rs
+--- a/kit/probe/src/main.rs	2026-11-24 10:13:51.533030000 -0600
++++ b/kit/probe/src/main.rs	2026-11-24 10:15:07.122355600 -0600
+@@ -6,6 +6,9 @@
+ // Usage: <bin> <port> plain
+ //   GET /private         the record page for one visitor (about 6 KB), not kept
+ //   GET /api/sum?a=1&b=2 a route of a mounted API: typed query values in, a short String out
++//   GET /wait            the record page from a handler that sleeps 1 ms first, so the request's
++//                        deadline waits (added for the deadline timer's run)
++//   GET /unstaged        a route that says `unstaged`, a short str out (added for the same run)
+ // PROBE_ALLOCATOR=jemalloc (or glibc) makes the probe refuse to start unless /proc/self/maps shows
+ // that allocator.
+ use corten::prelude::*;
+@@ -14,6 +17,12 @@
+ mod url {
+     #[route("/private", get = crate::private)]
+     pub struct Plain;
++
++    #[route("/wait", get = crate::wait)]
++    pub struct Wait;
++
++    #[route("/unstaged", get = crate::unstaged, unstaged)]
++    pub struct Unstaged;
+ }
+ 
+ #[corten::routes(api = ApiRoot)]
+@@ -116,6 +125,16 @@
+     req.page(document())
+ }
+ 
++/// The page after a wait of 1 ms: the handler is pending once, so its deadline's timer is in use.
++async fn wait(req: Req) -> HtmlResult {
++    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
++    req.page(document())
++}
++
++async fn unstaged() -> &'static str {
++    "ok"
++}
++
+ async fn sum(Params(at): Params<api::Sum>) -> String {
+     (at.a.unwrap_or(0) + at.b.unwrap_or(0)).to_string()
+ }
+diff -ruN a/kit/report.mjs b/kit/report.mjs
+--- a/kit/report.mjs	2026-11-24 10:14:36.838652400 -0600
++++ b/kit/report.mjs	2026-11-24 10:51:27.232141200 -0600
+@@ -1,5 +1,5 @@
+ // The stage kit's results for one workload in one page: node report.mjs <results dir>
+-// <plain|browser|api> > placements-<workload>.md (also writes placements-<workload>.json beside
++// <plain|wait|close|unstaged> > placements-<workload>.md (also writes placements-<workload>.json beside
+ // it). Kit 1971's report71.mjs without its single-build comparison and its C code diagnostic, and
+ // with the benefit side's reading. It reads the placement directories p01.. of aa-<workload> and
+ // change-<workload> (each placement's counts-<workload>.csv and placement.txt) and reports what
+@@ -71,7 +71,7 @@
+ }
+ 
+ const [, , dir, W] = process.argv;
+-if (!dir || !["plain", "browser", "api"].includes(W)) throw new Error("usage: node report.mjs <results dir> <plain|browser|api>");
++if (!dir || !["plain", "wait", "close", "unstaged"].includes(W)) throw new Error("usage: node report.mjs <results dir> <plain|wait|close|unstaged>");
+ const env = Object.fromEntries(
+   readFileSync(join(dir, "plan.env"), "utf8").split("\n").map((l) => /^([A-Z_]+)=(?:"([^"]*)"|(\S*))$/.exec(l.trim())).filter(Boolean).map((m) => [m[1], m[2] ?? m[3]]),
+ );
+diff -ruN a/kit/run.sh b/kit/run.sh
+--- a/kit/run.sh	2026-11-24 10:13:51.620709400 -0600
++++ b/kit/run.sh	2026-11-24 10:51:11.590122900 -0600
+@@ -1,6 +1,6 @@
+ #!/bin/sh
+ # run.sh <workload>: one host's share of the stage header checks' placement run, after setup.sh,
+-# nothing else run or logged into on the host meanwhile. <workload> is plain, browser or api; each
++# nothing else run or logged into on the host meanwhile. <workload> is plain, wait, close or unstaged; each
+ # host takes one (results/margin.md says which). Start it detached:
+ #   nohup sh /m/stage/run.sh plain >/m/stage/run.out 2>&1 &
+ # and collect /m/stage/results when run.out ends with ALL-DONE. results/margin.md (written before
+@@ -13,10 +13,12 @@
+ # Workloads, all to config `plain`:
+ #   plain     GET /private, no request header of its own: the record page for one visitor,
+ #             about 6 KB, sent as it is                                    (lua/get.lua)
+-#   browser   GET /private with the headers of a Firefox navigation: the page
+-#             compressed with zstd 1 as it is sent                         (lua/get-browser.lua)
+-#   api       GET /api/sum?a=1&b=2 with the headers of a same-origin fetch from Firefox: a
+-#             route of a mounted API answering a short String              (lua/get-api.lua)
++#   wait      GET /wait, no request header of its own: the same page from a handler that
++#             sleeps 1 ms first, so its deadline waits                     (lua/get.lua)
++#   close     GET /wait with `Connection: close`: the same request with a connection for each,
++#             so every connection serves one request whose deadline waits  (lua/close.lua)
++#   unstaged  GET /unstaged, no request header of its own: a route that says `unstaged`,
++#             answering a short str                                        (lua/get.lua)
+ # Every placement of a comparison is one run of run-pair-fresh.sh (kit 1971's, unchanged): every
+ # turn, warm-up included, on a freshly started build pinned to CPU 2, wrk -t2 -c64 for 3 s on
+ # CPUs 4 and 5, this script and perf on CPU 7, the order turned every pair, jemalloc preloaded,
+@@ -37,7 +39,7 @@
+ set -u
+ P=/m/stage; RES=$P/results
+ W=${1:-}
+-case "$W" in plain|browser|api) ;; *) echo "usage: run.sh plain|browser|api"; exit 2 ;; esac
++case "$W" in plain|wait|close|unstaged) ;; *) echo "usage: run.sh plain|wait|close|unstaged"; exit 2 ;; esac
+ for v in PAIRS WARMUP TURN EVENTS CHECKS MASK EXPECT STATUS NOPERF; do
+     eval "set_=\${$v+x}"
+     [ -z "$set_" ] || { echo "run.sh: $v is set in the environment; the plan (plan.env, margin.md) fixes it"; exit 1; }
+@@ -56,8 +58,9 @@
+ COUNTS=cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u
+ case "$W" in
+     plain) path=/private; lua=get.lua ;;
+-    browser) path=/private; lua=get-browser.lua ;;
+-    api) path='/api/sum?a=1&b=2'; lua=get-api.lua ;;
++    wait) path=/wait; lua=get.lua ;;
++    close) path=/wait; lua=close.lua ;;
++    unstaged) path=/unstaged; lua=get.lua ;;
+ esac
+ 
+ pf=$RES/preflight; mkdir -p $pf
+diff -ruN a/kit/verify.sh b/kit/verify.sh
+--- a/kit/verify.sh	2026-11-24 10:13:51.658259000 -0600
++++ b/kit/verify.sh	2026-11-24 10:51:26.223148000 -0600
+@@ -2,8 +2,8 @@
+ # verify.sh <out dir>: every placement build.sh made answers as its side's unpadded binary does,
+ # before anything is recorded (run.sh runs it first). For each bin/<side>-p<pad>, both it and
+ # bin/<side> are started with the probe's `plain` config and run-pair-fresh.sh, with no pair,
+-# compares their answers to the three requests the workloads send (checks-verify.txt: `plain`,
+-# `browser` and `api`, each with its workload's headers): status, every header but Date and the
++# compares their answers to the four requests the workloads send (checks-verify.txt: `plain`,
++# `wait`, `close` and `unstaged`, only `close` with a header of its own): status, every header but Date and the
+ # value of a weak ETag (mask-etag.sed), and the body as received, byte for byte; two answers of
+ # the unpadded binary must agree too. Any difference stops: the placement is not the same program.
+ # The ETag is the one value masked, because a tagged answer's is keyed per process start. Before
+@@ -33,12 +33,12 @@
+     until curl -s -o /dev/null http://127.0.0.1:18083/ </dev/null; do
+         i=$((i + 1)); [ $i -lt 100 ] || { echo "verify: nothing answers on 18083"; kill $pid; exit 1; }; sleep 0.1
+     done
+-    for w in plain browser api; do echo "$w start $s of base: $(etag $w)" >>"$tags"; done
++    for w in plain wait close unstaged; do echo "$w start $s of base: $(etag $w)" >>"$tags"; done
+     kill $pid; wait $pid 2>/dev/null || true
+ done
+ cat "$tags"
+ : >$P/masks/verify.sed
+-for w in plain browser api; do
++for w in plain wait close unstaged; do
+     one=$(sed -n "s/^$w start 1 of base: //p" "$tags"); two=$(sed -n "s/^$w start 2 of base: //p" "$tags")
+     if [ "$one" = none ] && [ "$two" = none ]; then
+         : >$P/masks/$w.sed; echo "$w: no ETag, nothing masked" | tee -a "$tags"
+@@ -54,7 +54,7 @@
+     WARMUP=0 CHECKS=$P/checks-verify.txt MASK=$P/masks/verify.sed \
+         taskset -c 7 sh $P/run-pair-fresh.sh "$d" verify 0 2 4,5 /private $P/lua/get.lua "$J $P/bin/$1 \$PORT plain" "$J $P/bin/$1-p$2 \$PORT plain" >"$d.log" 2>&1 \
+         || { cat "$d.log"; echo "VERIFY FAILED: $1-p$2 against $1"; exit 1; }
+-    echo "$1-p$2: $(cat "$d/answers-verify/verdict.txt") as $1; bodies of $(wc -c <"$d/answers-verify/1-head.body"), $(wc -c <"$d/answers-verify/2-head.body") and $(wc -c <"$d/answers-verify/3-head.body") bytes as received" | tee -a "$out/verdicts.txt"
++    echo "$1-p$2: $(cat "$d/answers-verify/verdict.txt") as $1; bodies of $(wc -c <"$d/answers-verify/1-head.body"), $(wc -c <"$d/answers-verify/2-head.body"), $(wc -c <"$d/answers-verify/3-head.body") and $(wc -c <"$d/answers-verify/4-head.body") bytes as received" | tee -a "$out/verdicts.txt"
+ }
+ for n in $PADS_P $PADS_Q; do one base $n; done
+ for n in $PADS_P; do one head $n; done

@@ -1,0 +1,35 @@
+== sdelay1, a connection for each request
+total a 76913  b 77620
+    +943        0      943  ???:<core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyper
+    -843      843        0  ???:<core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Con
+    +354    38457    38810  PROGRAM TOTALS
+     +67        0       67  ???:<corten::deadline::Timer>::poll
+     +62      124      186  ???:tokio::time::sleep::sleep
+     -49       49        0  ???:corten::page::waited_until::<http::response::Response<corten::body::Body>>
+     -40      485      445  ???:corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closure#0}::{closure#1}>::{closure#0}
+     +38     1012     1049  ???:free
+     +37        0       37  ???:core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util:
+     +35        0       35  ???:corten::deadline::made
+     -33       33        0  ???:core::ptr::drop_glue::<core::pin::PinMacroHelper<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToH
+     +32       96      128  ???:<tokio::runtime::scheduler::Handle>::current
+     -28     1624     1596  ???:tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+     +27      853      880  ???:malloc
+     +26        0       26  ???:core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+     +18        0       18  ???:core::ptr::drop_glue::<core::pin::Pin<alloc::boxed::Box<tokio::time::sleep::Sleep>>>
+     +16      390      406  ???:<std::sys::pal::unix::time::Timespec>::now
+     +16        0       16  ???:core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+     +15        0       15  ???:core::ptr::drop_glue::<corten::deadline::Timer>
+     +15       45       60  ???:<tokio::runtime::scheduler::multi_thread::handle::Handle>::next_remote_task
+     -14       14        0  ???:core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::
+     +14       79       93  ???:core::ptr::drop_glue::<core::option::Option<tokio::runtime::Timer>>
+     +10      244      254  ./time/../sysdeps/unix/sysv/linux/clock_gettime.c:clock_gettime@@GLIBC_2.17
+      +3      746      749  ???:<tokio::sync::notify::NotifiedProject>::poll_notified
+      +2      545      547  ???:<tokio::sync::watch::Receiver<core::option::Option<corten::app::Closing>>>::wait_for::<<core::option::Option<corten::app::Closing>>::is_some>::{closure#0}
+      +2      558      560  ???:corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Result<(tokio::net::tcp::stream::TcpStream, ()), !>>, tokio
+      -2      734      732  ???:<tokio::runtime::time::Driver>::park_internal
+      -2      805      804  ???:<tokio::runtime::time::handle::Handle>::process_at_time
+      -2      531      530  ???:<tokio::runtime::scheduler::multi_thread::worker::Context>::park_internal
+      -2        3        2  ???:0x000000000007f8a0
+      -1      422      421  ???:<tokio::runtime::scheduler::multi_thread::worker::Core>::maintenance
+      -1        6        5  ???:0x0000000000084270
+DIAG5-DONE

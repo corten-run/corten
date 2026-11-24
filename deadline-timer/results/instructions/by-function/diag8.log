@@ -1,0 +1,19 @@
+== get
+total a 41219  b 41223
+    +397        0      397  ???:<core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyper
+    -378      378        0  ???:<core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Con
+     -31      372      341  ???:corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closure#0}::{closure#1}>::{closure#0}
+     +16        0       16  ???:core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+     +15        0       15  ???:core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+     -14       14        0  ???:core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::
+      +2    20609    20612  PROGRAM TOTALS
+== pipeline
+total a 24361  b 24428
+    +397        0      397  ???:<core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyper
+    -378      378        0  ???:<core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Con
+     +34    12180    12214  PROGRAM TOTALS
+      +5      441      446  ???:tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+      +1      121      122  ???:<tokio::runtime::time::handle::Handle>::process_at_time
+      +1      121      122  ???:<tokio::runtime::time::Driver>::park_internal
+      +1      110      111  ???:<tokio::runtime::scheduler::multi_thread::worker::Context>::park_internal
+DIAG2-DONE conn5

@@ -1,0 +1,26 @@
+# p3 15:07:50 load 8.14 order: base:base final:final thread:thread
+p3.r1	base	async-staged	1	376013	84.83ms	163.90ms	57.50	4xx=0 5xx=0 rc=0 mem=757.6MiB
+p3.r1	final	async-staged	1	452165	70.70ms	129.80ms	47.55	4xx=0 5xx=0 rc=0 mem=781MiB
+p3.r1	thread	async-staged	1	445699	71.68ms	133.00ms	48.05	4xx=0 5xx=0 rc=0 mem=838.1MiB
+p3.r1	base	baseline	1	767905	5.35ms	12.50ms	31.36	4xx=0 5xx=0 rc=0 mem=56.15MiB
+p3.r1	base	json-comp	1	183256	22.35ms	57.60ms	132.55	4xx=0 5xx=0 rc=34831 mem=111.3MiB
+p3.r1	base	async	1	533910	59.93ms	99.20ms	40.74	4xx=0 5xx=0 rc=0 mem=365.7MiB
+p3.r1	final	baseline	1	755743	5.45ms	12.80ms	31.84	4xx=0 5xx=0 rc=0 mem=64.7MiB
+p3.r1	final	json-comp	1	184764	22.16ms	56.60ms	131.50	4xx=0 5xx=0 rc=35181 mem=108.3MiB
+p3.r1	final	async	1	534945	59.78ms	98.90ms	40.70	4xx=0 5xx=0 rc=0 mem=379.7MiB
+p3.r1	thread	baseline	1	757502	5.43ms	12.90ms	31.61	4xx=0 5xx=0 rc=0 mem=66.29MiB
+p3.r1	thread	json-comp	1	178895	22.91ms	58.50ms	135.90	4xx=0 5xx=0 rc=33927 mem=113.8MiB
+p3.r1	thread	async	1	531999	60.02ms	99.20ms	40.80	4xx=0 5xx=0 rc=0 mem=383.6MiB
+p3.r1	base	spool	1	32046	36.79ms	103.40ms	409.02	4xx=0 5xx=635751 rc=0 mem=79.34MiB
+p3.r1	final	spool	1	34928	35.86ms	98.90ms	386.31	4xx=0 5xx=635889 rc=0 mem=79.83MiB
+p3.r1	thread	spool	1	33267	36.48ms	100.40ms	402.75	4xx=0 5xx=631611 rc=0 mem=71.34MiB
+p3.r2	base	async-staged	1	369681	86.49ms	165.70ms	59.63	4xx=0 5xx=0 rc=0 mem=771.5MiB
+p3.r2	final	async-staged	1	429035	74.96ms	138.30ms	54.28	4xx=0 5xx=0 rc=0 mem=808.8MiB
+p3.r2	thread	async-staged	1	426287	76.65ms	137.70ms	54.63	4xx=0 5xx=0 rc=0 mem=787.8MiB
+p3.r2	base	baseline	1	753458	5.47ms	13.00ms	31.80	4xx=0 5xx=0 rc=0 mem=65.43MiB
+p3.r2	base	json-comp	1	182141	22.48ms	57.30ms	133.27	4xx=0 5xx=0 rc=34534 mem=120.1MiB
+p3.r2	base	async	1	532877	60.04ms	99.30ms	40.69	4xx=0 5xx=0 rc=0 mem=405MiB
+p3.r2	final	baseline	1	763959	5.39ms	12.80ms	31.27	4xx=0 5xx=0 rc=0 mem=65.37MiB
+p3.r2	final	json-comp	1	180325	22.72ms	59.50ms	134.85	4xx=0 5xx=0 rc=34289 mem=121.3MiB
+p3.r2	final	async	1	532624	60.11ms	99.90ms	43.61	4xx=0 5xx=0 rc=0 mem=372.6MiB
+p3.r2	thread	baseline	1	762010	5.40ms	12.60ms	31.55	4xx=0 5xx=0 rc=0 mem=63.36MiB

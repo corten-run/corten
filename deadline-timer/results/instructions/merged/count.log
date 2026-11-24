@@ -1,0 +1,39 @@
+Compiling hyper v1.12.0 Compiling tokio v1.54.1 
+Compiling hyper v1.12.0 Compiling tokio v1.54.1 
+== default main round 1 16:15:17
+case              median     least      most  runs
+get                20591     20588     20591  20588 20591 20591
+sdelay0            18976     18976     18977  18976 18976 18977
+sdelay1            25054     25052     25106  25052 25106 25054
+delay1             18203     18200     18205  18203 18205 18200
+pipeline           12171     12167     12212  12212 12171 12167
+== default head round 1 16:16:00
+case              median     least      most  runs
+get                20591     20590     20595  20591 20595 20590
+sdelay0            18978     18977     18980  18977 18978 18980
+sdelay1            24924     24919     24924  24924 24924 24919
+delay1             18237     18236     18237  18237 18236 18237
+pipeline           12186     12185     12187  12187 12185 12186
+== default main round 2 16:16:43
+case              median     least      most  runs
+get                20588     20587     20590  20587 20588 20590
+sdelay0            18976     18976     18977  18976 18976 18977
+sdelay1            25045     25039     25055  25055 25045 25039
+delay1             18204     18203     18207  18203 18204 18207
+pipeline           12167     12164     12169  12169 12164 12167
+== default head round 2 16:17:26
+case              median     least      most  runs
+get                20597     20595     20598  20597 20595 20598
+sdelay0            18977     18975     18981  18981 18977 18975
+sdelay1            24966     24914     24979  24979 24966 24914
+delay1             18242     18226     18249  18226 18242 18249
+pipeline           12185     12183     12187  12185 12187 12183
+== default, a connection for each request: main 16:18:09
+case              median     least      most  runs
+get                33188     33162     33196  33196 33188 33162 33196 33174
+sdelay1            37920     37807     38498  38498 38320 37861 37920 37807
+== default, a connection for each request: head 16:18:45
+case              median     least      most  runs
+get                33219     33200     33248  33229 33200 33248 33219 33207
+sdelay1            38333     38239     38725  38725 38664 38239 38333 38285
+COUNT-DONE

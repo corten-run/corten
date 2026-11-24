@@ -1,0 +1,303 @@
+######## tokio 1.44.0
+== pub fn sleep
+pub fn sleep(duration: Duration) -> Sleep {
+    let location = trace::caller_location();
+
+    match Instant::now().checked_add(duration) {
+        Some(deadline) => Sleep::new_timeout(deadline, location),
+        None => Sleep::new_timeout(Instant::far_future(), location),
+    }
+}
+== far_future
+57:    pub(crate) fn far_future() -> Instant {
+58-        // Roughly 30 years from now.
+59-        // API does not provide a way to obtain max `Instant`
+60-        // or convert specific date in the future to instant.
+61-        // 1000 years overflows on macOS, 100 years overflows on FreeBSD.
+62-        Self::now() + Duration::from_secs(86400 * 365 * 30)
+63-    }
+64-
+65-    /// Convert the value into a `std::time::Instant`.
+== Sleep::new_timeout
+    pub(crate) fn new_timeout(
+        deadline: Instant,
+        location: Option<&'static Location<'static>>,
+    ) -> Sleep {
+        use crate::runtime::scheduler;
+        let handle = scheduler::Handle::current();
+        let entry = TimerEntry::new(handle, deadline);
+        let inner = {
+            let handle = scheduler::Handle::current();
+            let clock = handle.driver().clock();
+            let handle = &handle.driver().time();
+            let time_source = handle.time_source();
+            let deadline_tick = time_source.deadline_to_tick(deadline);
+            let duration = deadline_tick.saturating_sub(time_source.now(clock));
+
+                parent: None,
+                "runtime.resource",
+                concrete_type = "Sleep",
+                kind = "timer",
+                loc.file = location.file(),
+                loc.line = location.line(),
+                loc.col = location.column(),
+            );
+
+            let async_op_span = resource_span.in_scope(|| {
+                    target: "runtime::resource::state_update",
+                    duration = duration,
+                    duration.unit = "ms",
+                    duration.op = "override",
+                );
+
+            });
+
+            let async_op_poll_span =
+
+            let ctx = trace::AsyncOpTracingCtx {
+                async_op_span,
+                async_op_poll_span,
+                resource_span,
+            };
+
+            Inner { ctx }
+        };
+
+        let inner = Inner {};
+
+        Sleep { inner, entry }
+    }
+== Sleep::reset_inner
+    fn reset_inner(self: Pin<&mut Self>, deadline: Instant) {
+        let mut me = self.project();
+        me.entry.as_mut().reset(deadline, true);
+
+        #[cfg(all(tokio_unstable, feature = "tracing"))]
+        {
+            let _resource_enter = me.inner.ctx.resource_span.enter();
+            me.inner.ctx.async_op_span =
+                tracing::trace_span!("runtime.resource.async_op", source = "Sleep::reset");
+            let _async_op_enter = me.inner.ctx.async_op_span.enter();
+
+            me.inner.ctx.async_op_poll_span =
+                tracing::trace_span!("runtime.resource.async_op.poll");
+
+            let duration = {
+                let clock = me.entry.clock();
+                let time_source = me.entry.driver().time_source();
+                let now = time_source.now(clock);
+                let deadline_tick = time_source.deadline_to_tick(deadline);
+                deadline_tick.saturating_sub(now)
+            };
+
+            tracing::trace!(
+                target: "runtime::resource::state_update",
+                duration = duration,
+                duration.unit = "ms",
+                duration.op = "override",
+            );
+        }
+    }
+== TimerEntry::new
+    pub(crate) fn new(handle: scheduler::Handle, deadline: Instant) -> Self {
+        // Panic if the time driver is not enabled
+        let _ = handle.driver().time();
+
+        Self {
+            driver: handle,
+            inner: StdUnsafeCell::new(None),
+            deadline,
+            registered: false,
+            _m: std::marker::PhantomPinned,
+        }
+    }
+== TimerEntry::reset
+    pub(crate) fn reset(mut self: Pin<&mut Self>, new_time: Instant, reregister: bool) {
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
+        this.deadline = new_time;
+        this.registered = reregister;
+
+        let tick = self.driver().time_source().deadline_to_tick(new_time);
+
+        if self.inner().extend_expiration(tick).is_ok() {
+            return;
+        }
+
+        if reregister {
+            unsafe {
+                self.driver()
+                    .reregister(&self.driver.driver().io, tick, self.inner().into());
+            }
+        }
+    }
+== extend_expiration
+    fn extend_expiration(&self, new_timestamp: u64) -> Result<(), ()> {
+        let mut prior = self.state.load(Ordering::Relaxed);
+        loop {
+            if new_timestamp < prior || prior >= STATE_MIN_VALUE {
+                return Err(());
+            }
+
+            match self.state.compare_exchange_weak(
+                prior,
+                new_timestamp,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(true_prior) => prior = true_prior,
+            }
+        }
+    }
+    pub(super) fn extend_expiration(&self, t: u64) -> Result<(), ()> {
+        self.state.extend_expiration(t)
+    }
+== TimerEntry::cancel and Drop
+    pub(crate) fn cancel(self: Pin<&mut Self>) {
+        if !self.is_inner_init() {
+            return;
+        }
+        unsafe { self.driver().clear_entry(NonNull::from(self.inner())) };
+    }
+impl Drop for TimerEntry {
+    fn drop(&mut self) {
+        unsafe { Pin::new_unchecked(self) }.as_mut().cancel();
+    }
+}
+== clear_entry
+    pub(self) unsafe fn clear_entry(&self, entry: NonNull<TimerShared>) {
+        unsafe {
+            let wheels_lock = self.inner.wheels.read();
+            let mut lock = wheels_lock.lock_sharded_wheel(entry.as_ref().shard_id());
+
+            if entry.as_ref().might_be_registered() {
+                lock.remove(entry);
+            }
+
+            entry.as_ref().handle().fire(Ok(()));
+        }
+    }
+== Handle::id
+7:421-        /// **Note**: This is an [unstable API][unstable]. The public API of this type
+8:422-        /// may break in 1.x releases. See [the documentation on unstable
+9:423-        /// features][unstable] for details.
+11:425-        /// [unstable]: crate#unstable-features
+13:427:        pub fn id(&self) -> runtime::Id {
+== alt timer
+######## tokio 1.54.1
+== pub fn sleep
+pub fn sleep(duration: Duration) -> Sleep {
+    let deadline = Instant::now() + safe_delay(duration);
+    Sleep::new_timeout(deadline, trace::caller_location())
+}
+== far_future
+== Sleep::new_timeout
+    pub(crate) fn new_timeout(
+        deadline: Instant,
+        location: Option<&'static Location<'static>>,
+    ) -> Sleep {
+        let handle = scheduler::Handle::current();
+        _ = handle.driver().time();
+        let inner = {
+                parent: None,
+                "runtime.resource",
+                concrete_type = "Sleep",
+                kind = "timer",
+                loc.file = location.file(),
+                loc.line = location.line(),
+                loc.col = location.column(),
+            );
+
+                parent: &resource_span,
+                "runtime.resource.async_op",
+                source = "Sleep::new_timeout",
+            );
+
+            let async_op_poll_span =
+
+            let ctx = trace::AsyncOpTracingCtx {
+                async_op_span,
+                async_op_poll_span,
+                resource_span,
+            };
+
+            Inner { ctx }
+        };
+
+        let inner = Inner {};
+
+        Sleep {
+            deadline,
+            driver: handle,
+            inner,
+            timer: None,
+        }
+    }
+== Sleep::reset_inner
+== TimerEntry::new
+    pub(crate) fn new(handle: scheduler::Handle) -> Self {
+        Self {
+            driver: handle,
+            inner: TimerShared::new(),
+        }
+    }
+== TimerEntry::reset
+    pub(crate) fn reset(self: Pin<&mut Self>, deadline: u64) {
+        if self.inner.extend_expiration(deadline).is_ok() {
+            return;
+        }
+
+        unsafe {
+            self.driver()
+                .reregister(&self.driver.driver().io, deadline, (&self.inner).into());
+        }
+    }
+== extend_expiration
+    fn extend_expiration(&self, new_timestamp: u64) -> Result<(), ()> {
+        let mut prior = self.state.load(Ordering::Relaxed);
+        loop {
+            if new_timestamp < prior || prior >= STATE_MIN_VALUE {
+                return Err(());
+            }
+
+            match self.state.compare_exchange_weak(
+                prior,
+                new_timestamp,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(true_prior) => prior = true_prior,
+            }
+        }
+    }
+    pub(super) fn extend_expiration(&self, t: u64) -> Result<(), ()> {
+        self.state.extend_expiration(t)
+    }
+== TimerEntry::cancel and Drop
+    pub(crate) fn cancel(self: Pin<&mut Self>) {
+        unsafe { self.driver().clear_entry(NonNull::from(&self.inner)) };
+    }
+== clear_entry
+    pub(self) unsafe fn clear_entry(&self, entry: NonNull<TimerShared>) {
+        unsafe {
+            let mut lock = self.inner.lock();
+
+            if entry.as_ref().might_be_registered() {
+                lock.wheel.remove(entry);
+            }
+
+            let waker = entry.as_ref().handle().fire(Ok(()));
+            drop(lock);
+            drop(waker);
+        }
+    }
+== Handle::id
+13:483:    pub fn id(&self) -> runtime::Id {
+== alt timer
+435-    /// # #[cfg(not(target_family = "wasm"))]
+445-    #[cfg(all(tokio_unstable, feature = "time", feature = "rt-multi-thread"))]
+446-    #[cfg_attr(
+448-        doc(cfg(all(tokio_unstable, feature = "time", feature = "rt-multi-thread")))
+450:    pub fn enable_alt_timer(&mut self) -> &mut Self {
+TK-DONE

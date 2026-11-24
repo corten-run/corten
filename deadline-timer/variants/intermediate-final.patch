@@ -1,0 +1,841 @@
+diff --git a/crates/corten/src/app.rs b/crates/corten/src/app.rs
+index 7fcda41fb..e344ce899 100644
+--- a/crates/corten/src/app.rs
++++ b/crates/corten/src/app.rs
+@@ -2061,12 +2061,13 @@ where
+             };
+             let service = hyper_util::service::TowerToHyperService::new(data.service(connection));
+             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
+-            let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
++            // With the timer its requests' deadlines wait on, kept from one to the next.
++            let mut conn = std::pin::pin!(crate::deadline::Keeps::new(http.serve_connection(io, service).with_upgrades()));
+             let closing = tokio::select! {
+                 _ = conn.as_mut() => return,
+                 closing = stop.wait_for(Option::is_some) => closing.ok().and_then(|closing| *closing),
+             };
+-            conn.as_mut().graceful_shutdown();
++            conn.as_mut().conn().graceful_shutdown();
+             // The server gone without a shutdown: close now.
+             let Some(closing) = closing else {
+                 let _ = tokio::time::timeout_at(tokio::time::Instant::now(), conn.as_mut()).await;
+diff --git a/crates/corten/src/deadline.rs b/crates/corten/src/deadline.rs
+new file mode 100644
+index 000000000..e64f1c16d
+--- /dev/null
++++ b/crates/corten/src/deadline.rs
+@@ -0,0 +1,231 @@
++//! The timer a request's deadline waits on ([`crate::App::deadline`]). A request whose handler
++//! waits needs one, and on tokio's multi-threaded runtime a timer made and a timer dropped each
++//! take the one lock of the runtime's timer wheel, where the threads serving such requests
++//! queue. So a connection [`crate::serve`] accepted keeps one timer for its requests: each
++//! deadline moves it later (`Sleep::reset`, which takes no lock while the timer is still set and
++//! the new time is not earlier) and gives it back still set.
++//!
++//! The connection's task owns the timer ([`Keeps`]): it makes it in its own poll, so the timer is
++//! of the runtime that polls the connection, and the timer is dropped with the connection. A
++//! thread has it only while it polls that connection ([`TIMER`]), which is where a request's
++//! deadline finds it. A deadline that finds none (the connection's first to wait, a second one in
++//! the same request, a request polled anywhere else: a router served another way, a call a layer
++//! moved to another task) makes its own timer and drops it, as every deadline did.
++
++use std::{
++    cell::Cell,
++    future::Future,
++    pin::Pin,
++    sync::atomic::{AtomicU64, Ordering::Relaxed},
++    task::{Context, Poll},
++    time::Duration,
++};
++use tokio::time::{Instant, Sleep};
++
++/// No connection is being polled on the thread.
++const NOWHERE: u64 = 0;
++/// A connection that has made no timer is being polled.
++const UNNAMED: u64 = 1;
++/// The same, and a deadline has waited during this poll: the connection makes its timer.
++const ASKED: u64 = 2;
++/// The number of the next connection to make a timer.
++static NAMES: AtomicU64 = AtomicU64::new(ASKED + 1);
++
++thread_local! {
++    /// The connection being polled on this thread: its number once it has made a timer, or one
++    /// of the values above.
++    static BY: Cell<u64> = const { Cell::new(NOWHERE) };
++    /// That connection's timer, while the connection has a number and no deadline has the timer.
++    static TIMER: Cell<Option<Held>> = const { Cell::new(None) };
++}
++
++/// A connection's timer.
++struct Held(Pin<Box<Sleep>>);
++
++#[cfg(test)]
++thread_local! {
++    /// How many connections' timers this thread has made, less how many it has dropped: how many
++    /// there are, where one thread does both (a test on a current-thread runtime).
++    pub(crate) static LIVE: Cell<isize> = const { Cell::new(0) };
++}
++
++#[cfg(test)]
++impl Drop for Held {
++    fn drop(&mut self) {
++        let _ = LIVE.try_with(|live| live.set(live.get() - 1));
++    }
++}
++
++pin_project_lite::pin_project! {
++    /// A connection's future with the timer its requests' deadlines wait on, lent to the thread
++    /// while the connection is polled.
++    pub(crate) struct Keeps<C> {
++        #[pin]
++        conn: C,
++        // [`UNNAMED`] until a deadline of the connection's has waited, then the connection's own
++        // number, so a timer goes back only to the connection that made it.
++        id: u64,
++        // The timer, made once: `None` before, while a deadline has it across polls, and for
++        // good if that deadline was dropped somewhere else.
++        timer: Option<Held>,
++    }
++}
++
++impl<C> Keeps<C> {
++    pub(crate) fn new(conn: C) -> Self {
++        Keeps { conn, id: UNNAMED, timer: None }
++    }
++
++    /// The connection itself, for what is not a poll (its graceful shutdown).
++    pub(crate) fn conn(self: Pin<&mut Self>) -> Pin<&mut C> {
++        self.project().conn
++    }
++
++    /// When the timer the connection has is set to fire, for a test.
++    #[cfg(test)]
++    pub(crate) fn kept_until(&self) -> Option<Instant> {
++        self.timer.as_ref().map(|timer| timer.0.deadline())
++    }
++}
++
++/// Puts back what the thread had when the connection's poll ends, also when it panics: a
++/// connection can be polled inside another's poll (a handler that blocks on another runtime).
++struct Polling<'a> {
++    by: u64,
++    /// The connection's place for its timer, where the timer was lent: what the thread had in
++    /// its own place is there meanwhile.
++    lent: Option<&'a mut Option<Held>>,
++}
++
++impl Drop for Polling<'_> {
++    #[inline(always)]
++    fn drop(&mut self) {
++        BY.set(self.by);
++        if let Some(place) = self.lent.take() {
++            swap(place);
++        }
++    }
++}
++
++/// Swaps the thread's timer and the one in `place`.
++#[inline(always)]
++fn swap(place: &mut Option<Held>) {
++    TIMER.with(|thread| thread.swap(Cell::from_mut(place)));
++}
++
++impl<C: Future> Future for Keeps<C> {
++    type Output = C::Output;
++
++    // Written for what a poll costs a connection whose handlers never wait: 24 instructions
++    // (callgrind, keep-alive requests over TCP). The connection is polled in one place, so its
++    // poll is still compiled into its caller, and [`Polling`] owns nothing to drop, so putting
++    // the thread back is compiled in here too; polled in two places by a guard that owned a
++    // timer, a poll cost 64.
++    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<C::Output> {
++        let this = self.project();
++        let mut polling = Polling { by: BY.replace(*this.id), lent: None };
++        let unnamed = if *this.id == UNNAMED {
++            // No deadline of this connection's has waited: all the thread is told is that.
++            Some((this.id, this.timer))
++        } else {
++            swap(this.timer);
++            polling.lent = Some(this.timer);
++            None
++        };
++        let polled = this.conn.poll(cx);
++        if BY.get() == ASKED && polled.is_pending() {
++            if let Some((id, timer)) = unnamed {
++                (*id, *timer) = made();
++            }
++        }
++        polled
++    }
++}
++
++/// A connection's number and its timer, not yet set: made in the connection's own poll, so the
++/// timer is of the runtime that polls the connection, whatever its handler had entered when its
++/// deadline asked.
++#[cold]
++fn made() -> (u64, Option<Held>) {
++    #[cfg(test)]
++    LIVE.with(|live| live.set(live.get() + 1));
++    (NAMES.fetch_add(1, Relaxed), Some(Held(Box::pin(tokio::time::sleep(Duration::MAX)))))
++}
++
++/// A connection's timer while a deadline has it. Dropped where its connection is being polled, it
++/// goes back to the connection still set, and the next deadline moves it later; dropped anywhere
++/// else, the timer is dropped. Its waker stays the last deadline's, so a timer no deadline takes
++/// before it fires wakes that request's task, the connection's, once for nothing.
++pub(crate) struct Kept {
++    of: u64,
++    /// `None` only once it is dropped.
++    timer: Option<Held>,
++}
++
++impl Kept {
++    /// The timer of the connection being polled, set to fire `limit` from now. `None` where no
++    /// connection is being polled, or its timer is not there: not made yet (the connection then
++    /// makes it, for its next deadline), or another deadline has it.
++    fn take(limit: Duration) -> Option<Kept> {
++        let of = BY.get();
++        if of <= ASKED {
++            if of == UNNAMED {
++                BY.set(ASKED);
++            }
++            return None;
++        }
++        let mut timer = TIMER.take()?;
++        timer.0.as_mut().reset(after(limit));
++        Some(Kept { of, timer: Some(timer) })
++    }
++}
++
++impl Drop for Kept {
++    fn drop(&mut self) {
++        // Not where the thread is ending, when what it was lent is gone.
++        if BY.try_with(Cell::get) == Ok(self.of) {
++            let _ = TIMER.try_with(|home| home.set(self.timer.take()));
++        }
++    }
++}
++
++pin_project_lite::pin_project! {
++    /// What a deadline waits on: nothing until its handler waits, then its connection's timer
++    /// where there is one to take, or a timer of its own.
++    #[project = Waiting]
++    pub(crate) enum Timer {
++        Unset,
++        Kept { kept: Kept },
++        Own { #[pin] timer: Sleep },
++    }
++}
++
++impl Timer {
++    /// Whether it has its connection's timer, for a test.
++    #[cfg(test)]
++    pub(crate) fn is_kept(&self) -> bool {
++        matches!(self, Timer::Kept { .. })
++    }
++
++    /// Ready once `limit` has passed since the first call.
++    pub(crate) fn poll(mut self: Pin<&mut Self>, limit: Duration, cx: &mut Context<'_>) -> Poll<()> {
++        if let Waiting::Unset = self.as_mut().project() {
++            let timer = match Kept::take(limit) {
++                Some(kept) => Timer::Kept { kept },
++                None => Timer::Own { timer: tokio::time::sleep(limit) },
++            };
++            self.set(timer);
++        }
++        match self.project() {
++            Waiting::Kept { kept } => kept.timer.as_mut().expect("there until dropped").0.as_mut().poll(cx),
++            Waiting::Own { timer } => timer.poll(cx),
++            Waiting::Unset => unreachable!("set above"),
++        }
++    }
++}
++
++/// `limit` from now, as `tokio::time::sleep` counts it: a time too far to add is 30 years off.
++fn after(limit: Duration) -> Instant {
++    let now = Instant::now();
++    now.checked_add(limit).unwrap_or_else(|| now + Duration::from_secs(86400 * 365 * 30))
++}
+diff --git a/crates/corten/src/lib.rs b/crates/corten/src/lib.rs
+index 979a14725..4d9405a83 100644
+--- a/crates/corten/src/lib.rs
++++ b/crates/corten/src/lib.rs
+@@ -506,6 +506,7 @@ pub mod caller;
+ mod client;
+ #[cfg(feature = "compress")]
+ pub mod compress;
++mod deadline;
+ pub mod extract;
+ pub mod form;
+ mod handler;
+diff --git a/crates/corten/src/page.rs b/crates/corten/src/page.rs
+index 35ca1922a..cb233b5e5 100644
+--- a/crates/corten/src/page.rs
++++ b/crates/corten/src/page.rs
+@@ -3956,12 +3956,13 @@ struct Late(Waited);
+ 
+ /// `fut`'s output, or [`Late`] once it has waited `limit`. The timer starts the first time `fut`
+ /// is not ready, so a handler that answers at once (a page rendered from memory) never registers
+-/// one: about 600 ns a request measured with `tokio::time::timeout`. Each poll of `fut` starts
++/// one: about 600 ns a request measured with `tokio::time::timeout`. It is the connection's where
++/// the connection keeps one ([`crate::deadline`]). Each poll of `fut` starts
+ /// with no wait for the body marked, so the mark read when the timer fires is that poll's.
+ async fn within<F: Future>(limit: std::time::Duration, fut: F) -> Result<F::Output, Late> {
+     use std::{pin::pin, task::Poll};
+     let mut fut = pin!(fut);
+-    let mut timer = pin!(None::<tokio::time::Sleep>);
++    let mut timer = pin!(crate::deadline::Timer::Unset);
+     std::future::poll_fn(|cx| {
+         crate::extract::forget_wait();
+         if let Poll::Ready(out) = fut.as_mut().poll(cx) {
+@@ -3981,7 +3982,7 @@ async fn within_late<S: crate::app::Steps>(
+ ) -> Result<Response, Late> {
+     use std::{future::Future, pin::pin, task::Poll};
+     let mut fut = pin!(Some(next.run(pending.take())));
+-    let mut timer = pin!(None::<tokio::time::Sleep>);
++    let mut timer = pin!(crate::deadline::Timer::Unset);
+     let mut fill: Option<std::pin::Pin<Box<dyn Future<Output = Response> + Send>>> = None;
+     std::future::poll_fn(|cx| {
+         if limit.is_some() {
+@@ -4013,18 +4014,11 @@ async fn within_late<S: crate::app::Steps>(
+ 
+ #[inline]
+ fn waited_until<T>(
+-    mut timer: std::pin::Pin<&mut Option<tokio::time::Sleep>>,
++    timer: std::pin::Pin<&mut crate::deadline::Timer>,
+     limit: std::time::Duration,
+     cx: &mut std::task::Context<'_>,
+ ) -> std::task::Poll<Result<T, Late>> {
+-    use std::task::Poll;
+-    if timer.is_none() {
+-        timer.set(Some(tokio::time::sleep(limit)));
+-    }
+-    match timer.as_pin_mut().map(|timer| timer.poll(cx)) {
+-        Some(Poll::Ready(())) => Poll::Ready(Err(Late(crate::extract::waited()))),
+-        _ => Poll::Pending,
+-    }
++    timer.poll(limit, cx).map(|()| Err(Late(crate::extract::waited())))
+ }
+ 
+ thread_local! {
+diff --git a/crates/corten/src/tests/server.rs b/crates/corten/src/tests/server.rs
+index 8e559cb51..b08debdb2 100644
+--- a/crates/corten/src/tests/server.rs
++++ b/crates/corten/src/tests/server.rs
+@@ -1962,3 +1962,517 @@ async fn a_connect_answered_with_success_has_no_body() {
+     assert_eq!(res.headers()[header::CONTENT_LENGTH], "6");
+     assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "tunnel");
+ }
++
++/// The deadline of the app [`waiting`] makes.
++const LIMIT: Duration = Duration::from_millis(300);
++/// How long after its time a deadline's answer may reach a test's client on a busy machine.
++const SLACK: Duration = Duration::from_millis(900);
++
++/// What [`waiting`]'s handlers tell a test: that one began, and how its request's signal ended.
++#[derive(Debug, PartialEq)]
++enum Told {
++    Began,
++    Ended(crate::Abort),
++}
++
++/// An app whose deadline is [`LIMIT`]: `/quick` answers at once, `/wait` after 40 ms, `/never`
++/// never, `/read` with its body once that has arrived, and `/admin/slow`, in an area whose
++/// deadline is an hour, after twice `LIMIT`. `/wait` and `/never` tell `told` how their request's
++/// signal ended, and `/never` and `/admin/slow` that they began.
++fn waiting(told: tokio::sync::mpsc::UnboundedSender<Told>) -> App {
++    type Tx = tokio::sync::mpsc::UnboundedSender<Told>;
++    fn report(signal: crate::Signal, told: Tx) {
++        tokio::spawn(async move {
++            let _ = told.send(Told::Ended(signal.aborted().await));
++        });
++    }
++    let wait = {
++        let told = told.clone();
++        move |signal: crate::Signal| {
++            report(signal, told.clone());
++            async {
++                tokio::time::sleep(Duration::from_millis(40)).await;
++                "done"
++            }
++        }
++    };
++    let never = {
++        let told = told.clone();
++        move |signal: crate::Signal| {
++            report(signal, told.clone());
++            let _ = told.send(Told::Began);
++            std::future::pending::<&'static str>()
++        }
++    };
++    let slow = move || {
++        let _ = told.send(Told::Began);
++        async {
++            tokio::time::sleep(LIMIT * 2).await;
++            "slow"
++        }
++    };
++    let routes = Table::new()
++        .route("/quick", get(|| async { "quick" }))
++        .route("/wait", get(wait))
++        .route("/never", get(never))
++        .route("/read", crate::router::post(|body: String| async move { body }));
++    App::new(Routes::from(routes))
++        .deadline(LIMIT)
++        .area::<Admin>(|admin| admin.route::<AdminSlow>(crate::Methods::reads(get(slow))).deadline(Duration::from_secs(3600)))
++}
++
++/// A server for `app` on a free port of `127.0.0.1`: its address, what stops it, and its task.
++async fn listening(
++    app: App,
++) -> (std::net::SocketAddr, tokio::sync::oneshot::Sender<()>, tokio::task::JoinHandle<std::io::Result<()>>) {
++    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
++    let addr = listeners[0].local_addr().unwrap();
++    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
++    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
++        let _ = stopped.await;
++    }));
++    (addr, stop, server)
++}
++
++/// Sends a request with no body on a connection and reads its answer: the status, the body, and
++/// how long the answer took from before the request was written.
++async fn asked(stream: &mut tokio::net::TcpStream, line: &str) -> (u16, String, Duration) {
++    use tokio::io::AsyncWriteExt;
++    let began = std::time::Instant::now();
++    stream.write_all(format!("{line} HTTP/1.1\r\nhost: localhost\r\naccept: text/html\r\n\r\n").as_bytes()).await.unwrap();
++    let (head, body) = read_answer(stream).await;
++    (head[9..12].parse().expect("a status"), body, began.elapsed())
++}
++
++/// [`asked`] for a request [`waiting`]'s deadline answers: the 503 with the error page, no
++/// earlier than [`LIMIT`] after the request was written.
++async fn late(stream: &mut tokio::net::TcpStream, line: &str) {
++    let (status, body, took) = asked(stream, line).await;
++    assert_eq!(status, 503, "{line}: {body}");
++    assert!(body.contains("<!DOCTYPE html>"), "{line}: the error page: {body}");
++    assert!(took >= LIMIT && took < LIMIT + SLACK, "{line}: at its own deadline, {LIMIT:?}: {took:?}");
++}
++
++/// Every request of a kept-alive connection has the whole deadline, counted from when its own
++/// handler first waits, whatever the requests before it on the connection did: a handler that
++/// finishes first answers and its signal ends `Responded`; one that does not is answered 503 with
++/// the error page at the deadline and its signal ends `Deadline`; a deadline that fired, a
++/// connection idle for longer than the deadline, and a request to an area with a longer deadline
++/// leave the next request its own.
++#[tokio::test]
++async fn every_request_of_a_connection_has_its_own_deadline() {
++    let (told, mut heard) = tokio::sync::mpsc::unbounded_channel();
++    let (addr, stop, server) = listening(waiting(told)).await;
++    let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
++    async fn done(conn: &mut tokio::net::TcpStream, heard: &mut tokio::sync::mpsc::UnboundedReceiver<Told>) {
++        let (status, body, took) = asked(conn, "GET /wait").await;
++        assert_eq!((status, body.as_str()), (200, "done"));
++        assert!(took < LIMIT, "{took:?}");
++        assert_eq!(heard.recv().await, Some(Told::Ended(crate::Abort::Responded)));
++    }
++    async fn never(conn: &mut tokio::net::TcpStream, heard: &mut tokio::sync::mpsc::UnboundedReceiver<Told>) {
++        late(conn, "GET /never").await;
++        assert_eq!(heard.recv().await, Some(Told::Began));
++        assert_eq!(heard.recv().await, Some(Told::Ended(crate::Abort::Deadline)));
++    }
++    // Handlers that finish first, one after another, and one that does not wait at all.
++    for _ in 0..4 {
++        done(&mut conn, &mut heard).await;
++    }
++    assert_eq!(asked(&mut conn, "GET /quick").await.1, "quick");
++    // The deadline, counted from each request, and a handler that finishes first after it.
++    for _ in 0..3 {
++        never(&mut conn, &mut heard).await;
++        done(&mut conn, &mut heard).await;
++    }
++    // Idle past the deadline an earlier request had: the next handler to wait is not cut short.
++    tokio::time::sleep(LIMIT * 2).await;
++    done(&mut conn, &mut heard).await;
++    never(&mut conn, &mut heard).await;
++    // An area's longer deadline lets its handler wait past the app's, and the app's routes have
++    // the app's again after it.
++    let (status, body, took) = asked(&mut conn, "GET /admin/slow").await;
++    assert_eq!((status, body.as_str()), (200, "slow"));
++    assert!(took >= LIMIT * 2, "{took:?}");
++    assert_eq!(heard.recv().await, Some(Told::Began));
++    never(&mut conn, &mut heard).await;
++    done(&mut conn, &mut heard).await;
++    stop.send(()).unwrap();
++    server.await.unwrap().unwrap();
++}
++
++/// A body that stops arriving is the client's 408 at the deadline on a connection whose earlier
++/// requests waited too, counted from that request, and the connection is closed after it.
++#[tokio::test]
++async fn a_body_that_stalls_after_requests_that_waited_is_the_clients_408_at_its_own_deadline() {
++    use tokio::io::{AsyncReadExt, AsyncWriteExt};
++    let (told, _heard) = tokio::sync::mpsc::unbounded_channel();
++    let (addr, stop, server) = listening(waiting(told)).await;
++    let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
++    for _ in 0..3 {
++        assert_eq!(asked(&mut conn, "GET /wait").await.1, "done");
++    }
++    // A body that arrives whole is answered.
++    conn.write_all(b"POST /read HTTP/1.1\r\nhost: localhost\r\ncontent-length: 5\r\n\r\nwhole").await.unwrap();
++    assert_eq!(read_answer(&mut conn).await.1, "whole");
++    let began = std::time::Instant::now();
++    conn.write_all(b"POST /read HTTP/1.1\r\nhost: localhost\r\ncontent-length: 10\r\n\r\npart").await.unwrap();
++    let (head, _) = read_answer(&mut conn).await;
++    let took = began.elapsed();
++    assert!(head.starts_with("http/1.1 408"), "{head}");
++    assert!(took >= LIMIT && took < LIMIT + SLACK, "at its own deadline: {took:?}");
++    let mut rest = Vec::new();
++    let closed = tokio::time::timeout(Duration::from_secs(5), conn.read_to_end(&mut rest)).await;
++    assert!(closed.is_ok(), "the connection is closed after the 408");
++    stop.send(()).unwrap();
++    server.await.unwrap().unwrap();
++}
++
++/// Shutdown treats a connection whose requests have waited as any other: an idle one closes at
++/// once, one whose handler is past the grace has its request's deadline and is then answered
++/// 503, and one whose request is in an area with an hour's deadline is answered in full.
++#[tokio::test]
++async fn shutdown_holds_a_connection_whose_requests_waited_to_its_requests_deadline() {
++    use tokio::io::{AsyncReadExt, AsyncWriteExt};
++    let (told, mut heard) = tokio::sync::mpsc::unbounded_channel();
++    let (addr, stop, server) = listening(waiting(told).shutdown_grace(Duration::from_millis(20))).await;
++    let mut conns = Vec::new();
++    for _ in 0..3 {
++        let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
++        for _ in 0..3 {
++            assert_eq!(asked(&mut conn, "GET /wait").await.1, "done");
++        }
++        conns.push(conn);
++    }
++    let [mut idle, mut never, mut slow] = <[tokio::net::TcpStream; 3]>::try_from(conns).unwrap();
++    never.write_all(b"GET /never HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
++    slow.write_all(b"GET /admin/slow HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
++    // Both handlers have begun.
++    let mut began = 0;
++    while began < 2 {
++        began += usize::from(heard.recv().await == Some(Told::Began));
++    }
++    let stopped = std::time::Instant::now();
++    stop.send(()).unwrap();
++    let mut rest = Vec::new();
++    idle.read_to_end(&mut rest).await.unwrap();
++    assert!(rest.is_empty() && stopped.elapsed() < LIMIT, "the idle connection closes at once: {:?}", stopped.elapsed());
++    let mut answer = String::new();
++    never.read_to_string(&mut answer).await.unwrap();
++    assert!(answer.starts_with("HTTP/1.1 503"), "past the grace, the request has its deadline: {answer}");
++    assert!(stopped.elapsed() < LIMIT + SLACK, "{:?}", stopped.elapsed());
++    let mut answer = String::new();
++    slow.read_to_string(&mut answer).await.unwrap();
++    assert!(answer.ends_with("slow"), "the area's request is answered in full: {answer}");
++    tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
++}
++
++/// A thread that serves one runtime and then another (a test's, or an app that builds its own)
++/// serves each as if it were the first: nothing a connection of the first runtime kept for its
++/// deadlines is used on the second, also when the first ended with its connections open.
++#[test]
++fn a_thread_that_serves_one_runtime_after_another_holds_each_to_the_deadline() {
++    for round in 0..3 {
++        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
++        let open = runtime.block_on(async {
++            let (told, heard) = tokio::sync::mpsc::unbounded_channel();
++            let (addr, stop, server) = listening(waiting(told)).await;
++            let mut conns = Vec::new();
++            for _ in 0..4 {
++                let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
++                for _ in 0..3 {
++                    assert_eq!(asked(&mut conn, "GET /wait").await.1, "done", "round {round}");
++                }
++                late(&mut conn, "GET /never").await;
++                assert_eq!(asked(&mut conn, "GET /wait").await.1, "done", "round {round}");
++                conns.push(conn);
++            }
++            // One connection is in a request whose handler waits when the runtime ends.
++            use tokio::io::AsyncWriteExt;
++            conns[0].write_all(b"GET /never HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
++            tokio::time::sleep(Duration::from_millis(20)).await;
++            (conns, stop, server, heard)
++        });
++        // The runtime ends with the server running and its connections open.
++        drop(runtime);
++        drop(open);
++    }
++}
++
++/// A handler that serves a request on a runtime of its own (it blocks on one, inside
++/// `block_in_place`) and drops that runtime: the inner request has its deadline every time, on a
++/// connection whose earlier requests did the same, so nothing the connection keeps for its
++/// deadlines belongs to a runtime that is gone.
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn a_request_served_on_another_runtime_inside_a_handler_has_its_deadline() {
++    let (told, _heard) = tokio::sync::mpsc::unbounded_channel();
++    let inner = waiting(told).router();
++    let relay = |path: &'static str| {
++        let inner = inner.clone();
++        get(move || {
++            let inner = inner.clone();
++            async move {
++                tokio::task::block_in_place(move || {
++                    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
++                    let res = runtime.block_on(inner.oneshot(Request::get(path).body(Body::empty()).unwrap())).unwrap();
++                    res.status().as_u16().to_string()
++                })
++            }
++        })
++    };
++    let routes = Table::new().route("/inner/wait", relay("/wait")).route("/inner/never", relay("/never"));
++    let (addr, stop, server) = listening(App::new(Routes::from(routes))).await;
++    let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
++    for round in 0..3 {
++        for _ in 0..3 {
++            assert_eq!(asked(&mut conn, "GET /inner/wait").await.1, "200", "round {round}");
++        }
++        let (status, body, took) = asked(&mut conn, "GET /inner/never").await;
++        assert_eq!((status, body.as_str()), (200, "503"), "round {round}");
++        assert!(took >= LIMIT && took < LIMIT + SLACK, "round {round}: at the inner deadline: {took:?}");
++    }
++    stop.send(()).unwrap();
++    server.await.unwrap().unwrap();
++}
++
++/// How many connections' timers this thread has made and not dropped (`crate::deadline`).
++fn timers() -> isize {
++    crate::deadline::LIVE.get()
++}
++
++/// Waits until this thread's connections have `count` timers, which a closed connection's task
++/// takes a moment to reach.
++async fn timers_reach(count: isize) {
++    let reached = tokio::time::timeout(Duration::from_secs(10), async {
++        while timers() != count {
++            tokio::time::sleep(Duration::from_millis(5)).await;
++        }
++    });
++    assert!(reached.await.is_ok(), "{} timers, not {count}", timers());
++}
++
++/// A connection keeps one timer for its requests' deadlines, made once a handler of its has
++/// waited, and the timer is dropped with the connection: one whose handlers never wait has none,
++/// many requests make no more, and connections that close (their client gone between requests or
++/// while a handler waits, or at shutdown) leave none behind.
++#[tokio::test]
++async fn a_connections_timer_is_made_once_and_dropped_with_the_connection() {
++    use tokio::io::AsyncWriteExt;
++    const OPEN: usize = 40;
++    let routes = Table::new()
++        .route("/quick", get(|| async { "quick" }))
++        .route(
++            "/wait",
++            get(|| async {
++                tokio::time::sleep(Duration::from_millis(2)).await;
++                "done"
++            }),
++        )
++        .route("/never", get(std::future::pending::<&'static str>));
++    let (addr, stop, server) = listening(App::new(Routes::from(routes)).deadline(LIMIT)).await;
++    let mut conns = Vec::new();
++    for _ in 0..OPEN {
++        let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
++        assert_eq!(asked(&mut conn, "GET /quick").await.1, "quick");
++        conns.push(conn);
++    }
++    assert_eq!(timers(), 0, "a connection whose handlers have not waited has none");
++    for round in 0..4 {
++        for conn in &mut conns {
++            assert_eq!(asked(conn, "GET /wait").await.1, "done");
++        }
++        assert_eq!(timers(), OPEN as isize, "one a connection after {} requests that waited", round + 1);
++    }
++    for conn in &mut conns[..4] {
++        late(conn, "GET /never").await;
++        assert_eq!(asked(conn, "GET /wait").await.1, "done");
++    }
++    assert_eq!(timers(), OPEN as isize, "also once a deadline has fired");
++    // Clients that leave between requests.
++    conns.truncate(15);
++    timers_reach(15).await;
++    // Connections that come, wait and go.
++    for _ in 0..300 {
++        let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
++        for _ in 0..2 {
++            assert_eq!(asked(&mut conn, "GET /wait").await.1, "done");
++        }
++    }
++    timers_reach(15).await;
++    // Clients that leave while their handler waits on the connection's timer.
++    for mut conn in conns.drain(..5) {
++        conn.write_all(b"GET /never HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
++        tokio::time::sleep(Duration::from_millis(10)).await;
++    }
++    timers_reach(10).await;
++    // Shutdown closes the rest, idle.
++    stop.send(()).unwrap();
++    server.await.unwrap().unwrap();
++    assert_eq!(timers(), 0);
++}
++
++/// A runtime that ends with connections open drops their timers, and the thread that ran it ends
++/// without a panic.
++#[test]
++fn a_runtime_that_ends_drops_its_connections_timers() {
++    let thread = std::thread::spawn(|| {
++        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
++        let open = runtime.block_on(async {
++            let (told, heard) = tokio::sync::mpsc::unbounded_channel();
++            let (addr, stop, server) = listening(waiting(told)).await;
++            let mut conns = Vec::new();
++            for _ in 0..8 {
++                let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
++                for _ in 0..3 {
++                    assert_eq!(asked(&mut conn, "GET /wait").await.1, "done");
++                }
++                conns.push(conn);
++            }
++            (conns, stop, server, heard)
++        });
++        let before = timers();
++        drop(runtime);
++        let after = timers();
++        drop(open);
++        (before, after)
++    });
++    assert_eq!(thread.join().expect("the thread ends"), (8, 0));
++}
++
++/// A connection's first deadline to wait makes its own timer and has the connection make one;
++/// each deadline after it waits on that one, a second deadline in the same request on its own,
++/// and the connection has its timer back, set, when the deadline is dropped.
++#[tokio::test(start_paused = true)]
++async fn a_deadline_waits_on_its_connections_timer_from_the_second_that_waits() {
++    use crate::deadline::{Keeps, Timer};
++    use std::{future::Future, pin::pin, task::Poll};
++    let limit = Duration::from_secs(30);
++    let mut kept = Vec::new();
++    {
++        let mut conn = pin!(Keeps::new(std::future::poll_fn(|cx| {
++            let mut first = pin!(Timer::Unset);
++            assert!(first.as_mut().poll(limit, cx).is_pending());
++            let mut second = pin!(Timer::Unset);
++            assert!(second.as_mut().poll(limit, cx).is_pending());
++            kept.push((first.is_kept(), second.is_kept()));
++            Poll::<()>::Pending
++        })));
++        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
++        assert!(conn.as_mut().poll(&mut cx).is_pending());
++        assert_eq!(timers(), 1);
++        assert!(conn.kept_until().is_some_and(|until| until > tokio::time::Instant::now() + limit), "made, not set yet");
++        for _ in 0..3 {
++            tokio::time::advance(Duration::from_secs(1)).await;
++            assert!(conn.as_mut().poll(&mut cx).is_pending());
++            assert_eq!((timers(), conn.kept_until()), (1, Some(tokio::time::Instant::now() + limit)));
++        }
++    }
++    assert_eq!(kept, [(false, false), (true, false), (true, false), (true, false)]);
++    assert_eq!(timers(), 0, "dropped with the connection");
++}
++
++/// A deadline dropped anywhere but in its connection's poll drops the timer it had, and the
++/// connection, which makes its timer once, has none from then on: its deadlines make their own.
++#[tokio::test]
++async fn a_timer_whose_deadline_is_dropped_away_from_its_connection_is_dropped() {
++    use crate::deadline::{Keeps, Timer};
++    use std::{future::Future, pin::pin, task::Poll};
++    let limit = Duration::from_secs(30);
++    let away = std::cell::RefCell::new(None);
++    let mut kept = Vec::new();
++    {
++        let mut conn = pin!(Keeps::new(std::future::poll_fn(|cx| {
++            let mut timer = Box::pin(Timer::Unset);
++            assert!(timer.as_mut().poll(limit, cx).is_pending());
++            kept.push(timer.is_kept());
++            if timer.is_kept() {
++                // As a layer that moves its call to another task does.
++                *away.borrow_mut() = Some(timer);
++            }
++            Poll::<()>::Pending
++        })));
++        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
++        for _ in 0..2 {
++            assert!(conn.as_mut().poll(&mut cx).is_pending());
++        }
++        assert_eq!((timers(), conn.kept_until()), (1, None), "the deadline has it");
++        drop(away.borrow_mut().take());
++        assert_eq!(timers(), 0, "dropped, not kept on the thread");
++        for _ in 0..2 {
++            assert!(conn.as_mut().poll(&mut cx).is_pending());
++        }
++        assert_eq!((timers(), conn.kept_until()), (0, None));
++    }
++    assert_eq!(kept, [false, true, false, false]);
++}
++
++/// A connection polled inside another's poll (a handler that blocks on a runtime of its own that
++/// serves one) has its own timer and gives the thread back the outer connection's: each has its
++/// own again afterwards, set by its own deadline.
++#[tokio::test(start_paused = true)]
++async fn a_connection_polled_inside_anothers_poll_keeps_its_own_timer() {
++    use crate::deadline::{Keeps, Timer};
++    use std::{future::Future, pin::pin, task::Poll};
++    let (short, long) = (Duration::from_secs(10), Duration::from_secs(20));
++    let mut kept = Vec::new();
++    let mut inner = pin!(Keeps::new(std::future::poll_fn(|cx| {
++        let mut timer = pin!(Timer::Unset);
++        assert!(timer.as_mut().poll(long, cx).is_pending());
++        Poll::Ready::<bool>(timer.is_kept())
++    })));
++    {
++        let mut outer = pin!(Keeps::new(std::future::poll_fn(|cx| {
++            let mut timer = pin!(Timer::Unset);
++            assert!(timer.as_mut().poll(short, cx).is_pending());
++            let Poll::Ready(inner) = inner.as_mut().poll(cx) else { unreachable!() };
++            // A deadline after the inner connection's poll finds the outer's timer taken, not
++            // the inner's.
++            let mut after = pin!(Timer::Unset);
++            assert!(after.as_mut().poll(long, cx).is_pending());
++            kept.push((timer.is_kept(), inner, after.is_kept()));
++            Poll::<()>::Pending
++        })));
++        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
++        for _ in 0..3 {
++            assert!(outer.as_mut().poll(&mut cx).is_pending());
++        }
++        assert_eq!(outer.kept_until(), Some(tokio::time::Instant::now() + short));
++        assert_eq!(timers(), 2);
++    }
++    assert_eq!(inner.kept_until(), Some(tokio::time::Instant::now() + long));
++    assert_eq!(kept, [(false, false, false), (true, true, false), (true, true, false)]);
++    assert_eq!(timers(), 1, "the inner connection's, still");
++}
++
++/// How late a deadline's answer is, for a comparison of two builds: 200 requests whose handler
++/// never answers, one after another on one kept-alive connection, each answered at the deadline
++/// (50 ms); prints the least, the median and the most its answer took past that. `cargo test
++/// --release -p corten-run --lib -- --ignored --exact --nocapture
++/// tests::server::how_late_a_deadlines_answer_is`.
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++#[ignore]
++async fn how_late_a_deadlines_answer_is() {
++    const EACH: Duration = Duration::from_millis(50);
++    let routes = Table::new()
++        .route(
++            "/wait",
++            get(|| async {
++                tokio::time::sleep(Duration::from_millis(1)).await;
++                "done"
++            }),
++        )
++        .route("/never", get(std::future::pending::<&'static str>));
++    let (addr, stop, server) = listening(App::new(Routes::from(routes)).deadline(EACH)).await;
++    let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
++    let mut past = Vec::new();
++    for _ in 0..200 {
++        asked(&mut conn, "GET /wait").await;
++        let (status, _, took) = asked(&mut conn, "GET /never").await;
++        assert_eq!(status, 503);
++        past.push(took.checked_sub(EACH).expect("not before the deadline"));
++    }
++    past.sort();
++    println!("past the deadline: least {:?}, median {:?}, most {:?}", past[0], past[past.len() / 2], past[past.len() - 1]);
++    stop.send(()).unwrap();
++    server.await.unwrap().unwrap();
++}
