@@ -57,6 +57,33 @@ test("catalog checks include failure reporting regressions and native umask cove
   for (const file of ["check-result.test.mjs", "runner-failure.test.mjs"]) assert.ok(check.split(" ").includes(`bench/catalog/${file}`));
 });
 
+// Chromium and its libraries come from Playwright's image, not from the runner's apt mirror (#2011):
+// every browser check runs through the image's command, set up before it in the same job.
+test("catalog CI takes Chromium from Playwright's image, not the runner's apt mirror", () => {
+  const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    assert.ok(job.steps.every((step) => !/playwright install/.test(step.run ?? "")), name);
+  }
+  const browserChecks = {
+    harness: ["$PLAYWRIGHT npm run check:marketplace", "$PLAYWRIGHT_WITH_DOCKER node --test bench/catalog/*.test.mjs"],
+    parity: ["$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} ",
+      "$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/drogon/tests/marketplace-matched.mjs ",
+      "$PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/gin/check-alerts.mjs gin cb-catalog-gin matched"],
+  };
+  for (const [name, commands] of Object.entries(browserChecks)) {
+    const steps = workflow.jobs[name].steps;
+    const image = steps.findIndex((step) => step.name === "Playwright's image");
+    assert.ok(image >= 0, name);
+    assert.match(steps[image].run, /mcr\.microsoft\.com\/playwright:v\$\(node -p 'require\("@playwright\/test\/package\.json"\)\.version'\)-noble/);
+    for (const command of commands) {
+      const at = steps.findIndex((step) => (step.run ?? "").split("\n").some((line) => line.startsWith(command)));
+      assert.ok(at > image, `${name}: ${command}`);
+    }
+  }
+  const alerts = workflow.jobs.parity.steps.find((step) => step.name === "Test native compiled alert forms and independent readback");
+  assert.equal(workflow.jobs.parity.steps.find((step) => step.name === "Playwright's image").if, alerts.if);
+});
+
 test("an existing catalog results directory is reserved, including a failed or check-only round", () => {
   const round = `c${Date.now()}${process.pid}`;
   const parent = join(here, "results");

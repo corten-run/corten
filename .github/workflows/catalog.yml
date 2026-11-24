@@ -53,13 +53,26 @@ jobs:
       - run: npm ci --no-audit --no-fund
       # Native replay's binding parser loads the classic TypeScript compiler (bench/package.json).
       - run: npm --prefix bench ci --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium
+      # The browser checks run in Playwright's image, which has Chromium and the system libraries it
+      # needs, for the @playwright/test version in package.json. Installing them on the runner
+      # (`npx playwright install --with-deps chromium`) fetched their apt packages from the Ubuntu
+      # mirror on every run; when the mirror slowed it took eight of this job's ten minutes and
+      # cancelled the run (#2011). They run as the checkout's owner, so what they write stays the
+      # runner's. PLAYWRIGHT_WITH_DOCKER adds the runner's Docker CLI and socket and its /tmp, and the
+      # checkout is at its runner path, so a directory a check hands the daemon to mount is the same.
+      - name: Playwright's image
+        run: |
+          image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
+          docker pull "$image"
+          run="docker run --rm --network host --ipc host --user $(id -u):$(id -g) -e HOME=/tmp -v $PWD:$PWD -w $PWD"
+          echo "PLAYWRIGHT=$run $image" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_WITH_DOCKER=$run --group-add $(stat -c %g /var/run/docker.sock) -v /tmp:/tmp -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock -e CATALOG_DOCKER_TESTS -e RUNNER_ENVIRONMENT $image" >> "$GITHUB_ENV"
       - run: node bench/catalog/fixtures.mjs
       - run: node bench/marketplace/fixtures.mjs
-      - run: npm run check:marketplace
+      - run: $PLAYWRIGHT npm run check:marketplace
       - run: node --test bench/fullstack/apps/gin/compiled-check.test.mjs
       - run: node --test bench/fullstack/apps/fastapi/catalog-lean.test.mjs
-      - run: node --test bench/catalog/*.test.mjs
+      - run: $PLAYWRIGHT_WITH_DOCKER node --test bench/catalog/*.test.mjs
         env:
           CATALOG_DOCKER_TESTS: "1"
       - run: node --test bench/fullstack/apps/*/catalog.test.mjs
@@ -214,19 +227,26 @@ jobs:
           -v "$PWD/bench/fullstack/apps/aspnet:/src" -w /src
           mcr.microsoft.com/dotnet/sdk:11.0.100
           dotnet test tests/Marketplace.Tests.csproj -c Release
-      - name: Test native compiled alert forms and independent readback
+      # Chromium for this and the two browser checks after it comes from Playwright's image, as in the
+      # harness job (#2011); each starts its app containers through the runner's Docker.
+      - name: Playwright's image
         if: contains(fromJSON('["gin","drogon","topcoat","leptos"]'), matrix.app)
         run: |
-          npx playwright install --with-deps chromium
-          node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}
+          image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
+          docker pull "$image"
+          run="docker run --rm --network host --ipc host --user $(id -u):$(id -g) -e HOME=/tmp -v $PWD:$PWD -w $PWD"
+          echo "PLAYWRIGHT_WITH_DOCKER=$run --group-add $(stat -c %g /var/run/docker.sock) -v /tmp:/tmp -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock -e RUNNER_ENVIRONMENT $image" >> "$GITHUB_ENV"
+      - name: Test native compiled alert forms and independent readback
+        if: contains(fromJSON('["gin","drogon","topcoat","leptos"]'), matrix.app)
+        run: $PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}
       - name: Qualify the matched Drogon marketplace image with both sources
         if: matrix.app == 'drogon'
-        run: node bench/fullstack/apps/drogon/tests/marketplace-matched.mjs cb-marketplace-drogon bench/marketplace/results/w1/drogon-matched
+        run: $PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/drogon/tests/marketplace-matched.mjs cb-marketplace-drogon bench/marketplace/results/w1/drogon-matched
       - name: Test native Gin production boundaries and matched forms
         if: matrix.app == 'gin'
         run: |
           node bench/fullstack/apps/gin/check-production.mjs cb-catalog-gin bench/fullstack/apps/gin/production-results
-          node bench/fullstack/apps/gin/check-alerts.mjs gin cb-catalog-gin matched
+          $PLAYWRIGHT_WITH_DOCKER node bench/fullstack/apps/gin/check-alerts.mjs gin cb-catalog-gin matched
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
