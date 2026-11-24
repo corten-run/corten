@@ -7723,8 +7723,16 @@ rules something out.
     is kept only when each input of its handler is one of Corten's own whose reading of a page's
     request is known (`Params`, `Form`, `State`, `Req`, `Signal`, `Method`, `Uri`), which is
     also known when the route is made (`Anonymous::KEYED`, whose type an app cannot name, so
-    an extractor of the app's own cannot claim it); a page whose handler takes another is made
-    for every request. What those inputs read of the whole document's `GET` is the key:
+    an extractor of the app's own cannot claim it). Each is keyed only as Corten fills it: the
+    trait that reads a route's path for `Params`, the one part of it given the whole request, is
+    sealed; `Params` and `Form` are keyed only within the bounds of Corten's extractor for them,
+    so one the app could fill with an extractor of its own is not; a `Form` counts only as the
+    handler's last argument, the one place Corten reads it; and an `Option` of one, which
+    Corten never fills, is not keyed
+    ([#1803 A hand-written impl of a doc-hidden route trait can read a header under `Params`](https://github.com/corten-run/corten/issues/1803)).
+    `State` is not yet bound that way, since the rule does not see the router's state type
+    ([#2031 An app can fill `State<T>` with an extractor of its own and read a header under a kept page](https://github.com/corten-run/corten/issues/2031)).
+    A page whose handler takes another is made for every request. What those inputs read of the whole document's `GET` is the key:
     the `Host`, the path and the query, and the `Accept-Language` when the page's `Vary` names
     it (`App::messages`, or a locale negotiated from it, named in `Vary` once the handler's answer is finished and before it is kept, however late the read). The header is compared as it was
     sent, as a CDN compares it ([Choice 22](#choice-locale-in-url)), with at most eight copies
@@ -7953,12 +7961,14 @@ rules something out.
     set on the ones it refuses, each of which left a page stale in a case a review found; off unless asked for, which leaves the cost on every app that already said its
     pages are public; a page for one visitor kept by caller, where a mistake in the key shows
     one user's page to another ([architecture](architecture.md#what-belongs-in-the-framework));
-    honoring a request's `no-cache`; removing a written path's pages by a search of the store or
+    honoring a request's `no-cache`; a way for an extractor of the app's own to say it reads only
+    the URL ([#1799 A page whose handler takes an extractor of the app's own is never kept](https://github.com/corten-run/corten/issues/1799)),
+    a second way to read what a route's query fields (a `FromQuery` type for a rule over the
+    fields it declares) and `Uri` already read, with which a page stays eligible to be kept; removing a written path's pages by a search of the store or
     a second index by path, which a write would pay for under the store's lock; a sweep that
     removes pages as their lifetimes end, since a page that no longer stands is replaced when it
     is next asked for and goes when room is made; and, left for changes of their own, a call
-    that drops a page for a change no write to its path made, a way for an extractor of the
-    app's own to say it reads only the URL, every `Public` body kept whatever its size
+    that drops a page for a change no write to its path made, every `Public` body kept whatever its size
     (what this first did, for the 3.9% and at the price of the 13.8% below), a least size other than the one the
     compressor starts at (by instruction counts a body asked for with a coding named gains from about 350 bytes, and at 1,024 it gained nothing shown in cycles; no size under 1,024 was run), a way for a route to say its bodies are
     worth keeping (a second way to say what `Public` says, until an app shows the handler it

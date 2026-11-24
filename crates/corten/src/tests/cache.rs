@@ -1755,15 +1755,19 @@ fn a_handler_s_inputs_say_whether_its_page_can_be_kept() {
     {
         <AnonymousInputs as Accepts<Args>>::KEYED
     }
-    assert!(keyed::<()>() && keyed::<(Req,)>() && keyed::<(Option<Req>,)>());
+    assert!(keyed::<()>() && keyed::<(Req,)>());
+    // Corten fills none of its keyed inputs as an `Option`, so an `Option` of one is the app's (#1803).
+    assert!(!keyed::<(Option<Req>,)>() && !keyed::<(Option<crate::Params<caller_url::Catalog>>,)>());
+    // Corten reads a `Form` only as the last argument: one before it is the app's own (#1803).
+    assert!(keyed::<(Req, crate::Form<()>)>() && !keyed::<(crate::Form<()>, Req)>());
     assert!(keyed::<(
         crate::Params<caller_url::Catalog>,
-        crate::Form<()>,
         crate::extract::State<()>,
         crate::Signal,
         http::Method,
         http::Uri,
-        Req
+        Req,
+        crate::Form<()>
     )>());
     assert!(!keyed::<(Req, Device)>() && !keyed::<(Option<Device>,)>(), "an input of the app's own");
     assert!(!keyed::<(crate::Upload<()>, Req)>() && !keyed::<(crate::LiveSince,)>() && !keyed::<(Req, crate::LiveSince)>());
@@ -2014,6 +2018,45 @@ async fn a_kept_page_in_an_area_passes_the_area_s_middleware_and_has_its_policy(
     assert!(first[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("https://pay.example"), "{first:?}");
     let (status, _, _) = fetch(&router, "GET", "/shelf/books", &[("x-flood", "1")]).await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "the area's middleware still answers first");
+}
+
+static FIND_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[crate::routes]
+mod find_url {
+    #[route("/find", get = find_terms)]
+    pub struct Find {
+        #[route(query)]
+        pub terms: crate::tests::url::Terms,
+    }
+}
+
+async fn find_terms(crate::Params(at): crate::Params<find_url::Find>, req: Req) -> Public<HtmlResult> {
+    FIND_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let words = at.terms.0.unwrap_or_default();
+    Public::new(Duration::from_secs(60), req.test_page_for("Find", html! { <p>{words}</p> }))
+}
+
+/// A value the URL alone gives, read through `Params` by a `FromQuery` type of the app's own
+/// (a rule over the whole query, here an older parameter name), keeps its page by the URL it was
+/// asked with, where an extractor of the app's own would not (#1799).
+#[tokio::test]
+async fn a_page_whose_value_a_from_query_type_reads_is_kept_by_its_url() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let router = App::new(find_url::router()).router();
+    for (uri, words, runs, kept) in [
+        ("/find?q=pika", "pika", 1, false),
+        ("/find?q=pika", "pika", 1, true),
+        ("/find?search=pika", "pika", 2, false),
+        ("/find?search=pika", "pika", 2, true),
+        ("/find?q=mew", "mew", 3, false),
+    ] {
+        let (status, headers, body) = fetch(&router, "GET", uri, &[]).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert_eq!(FIND_RUNS.load(Relaxed), runs, "{uri}");
+        assert_eq!(headers.contains_key(header::AGE), kept, "{uri}: {headers:?}");
+        assert!(String::from_utf8_lossy(&body).contains(&format!("<p>{words}</p>")), "{uri}");
+    }
 }
 
 /// An extractor of the app's own that cannot tell who asks, and reads what no kept page's key
