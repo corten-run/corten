@@ -48,4 +48,10 @@ rename $M/head-p15120.map /w/neg-init-b.map _init corten::placed::init
 t "a function of an own crate in .init" /w/neg-init-a.map /w/neg-init-b.map 15120 --own $OWN
 echo "== the head read with compiler_builtins named as an own crate"
 node $S/replay.mjs $M/head.map $M/head-p15120.map 15120 --own $OWN,compiler_builtins >/w/neg.out 2>&1 && echo "passed: the symbol decides, and its two functions after that section do not name it" || { grep '^replay.mjs:' /w/neg.out | cut -c1-240; echo "refused"; }
+# What each listed function is to a reading across placements (replay.mjs --kinds), on these two
+# unpadded links and on layouts written from the head's: kinds.sh, which reads no placement.
+mkdir -p /w/neg-kinds
+cp $M/base.map $M/head.map /w/neg-kinds/
+sh $S/kinds.sh $S $S/results /w/neg-kinds
+rm -rf /w/neg-kinds
 rm -f /w/neg-*

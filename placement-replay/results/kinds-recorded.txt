@@ -1,0 +1,42 @@
+compute_length_counts [liblibdeflate_sys.rlib]: base not listed; head 0 mod 32, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+do_end_block_check [liblibdeflate_sys.rlib]: base not listed; head 0 mod 32, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+calculate_min_match_len [liblibdeflate_sys.rlib]: base not listed; head 0 mod 32, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_set_costs_from_codes [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+heap_sort [liblibdeflate_sys.rlib]: base not listed; head 48 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+sort_symbols.constprop.0 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_precompute_huffman_header [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_compute_true_cost [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_flush_block [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+sort_symbols.constprop.1 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+sort_symbols.constprop.2 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_make_huffman_codes [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_find_min_cost_path [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_compress_fastest [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_optimize_and_flush_block [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_compress_near_optimal [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_compress_greedy [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_compress_lazy [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_compress_lazy2 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+libdeflate_alloc_compressor_ex [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+libdeflate_alloc_compressor [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+libdeflate_deflate_compress [liblibdeflate_sys.rlib]: base not listed; head 48 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+libdeflate_free_compressor [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+libdeflate_get_compression_level [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+libdeflate_deflate_compress_bound [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+libdeflate_gzip_compress [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+libdeflate_gzip_compress_bound [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+crc32_slice8 [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+crc32_x86_pclmulqdq [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+crc32_x86_pclmulqdq_avx [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+crc32_x86_vpclmulqdq_avx2 [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+crc32_x86_vpclmulqdq_avx512_vl256 [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+crc32_x86_vpclmulqdq_avx512_vl512 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+dispatch_crc32 [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+libdeflate_crc32 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+libdeflate_init_x86_cpu_features [liblibdeflate_sys.rlib]: base not listed; head 48 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+libdeflate_aligned_malloc [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+libdeflate_aligned_free [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2 (kind 3 not known: no report); excused; takes the reading: no
+__udivti3 [libcompiler_builtins.rlib]: base not listed; head 32 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+round [libcompiler_builtins.rlib]: base not listed; head 48 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+listed: 0 on the base, 40 on the head, 40 in all; kind 1: 0, kind 2: 40, kind 3: not known, none: 0; excused: 38 (15 by clause 1, 23 by clause 2); not excused: 2 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib])
+{"listedBase":0,"listedHead":40,"kind1":0,"kind2":40,"kind3":null,"none":0,"excused":38,"clause1":15,"clause2":23,"notExcused":["__udivti3 [libcompiler_builtins.rlib]","round [libcompiler_builtins.rlib]"],"taking":null}

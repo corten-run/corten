@@ -5,8 +5,50 @@ placement plan's fifth point): how a placement run checks a build that links cod
 16 bytes. Read and run on 2026-11-24. Nothing here counted a cycle: these are layouts, read from
 recorded files and from links run again, and placement medians read from earlier runs' reports.
 
-This commit's five ancestors hold earlier versions of these files. What this one changes, with
+This commit's six ancestors hold earlier versions of these files. What this one adds, with
 node alone on the files kept here (nothing was built or linked for it):
+
+1. `replay.mjs --kinds <the base's unpadded map> <the head's>` prints, for each function from
+   the first section aligned beyond 16 bytes on (a listed function) of either side, which
+   kind it is to a reading across placements and whether the condition excuses it, as the
+   fifth point words them. Kind 1: on both lists with a section whose size or alignment
+   differs between the two maps (a diff of source, version, flags or compiler can show more
+   code that differs, and no map holds that). Kind 2: not on both lists at one offset modulo
+   the same largest alignment, the largest among `.text`'s input sections up to the
+   function's own. Kind 3: run by the request on one side and not on the other, read from two
+   files of the symbols each side's report shows called (`--ran-base`, `--ran-head`); without
+   them it is printed as not known. The condition, on each side that lists the function: its
+   section is aligned beyond 16 bytes and no input section of `.text` before it exceeds its
+   alignment (clause 1), or it follows such a section of its own archive with only that
+   archive's code between (clause 2). `results/kinds-recorded.txt` is what it prints for the
+   recorded pair: the base lists nothing and the head 40 functions, all of kind 2; 38 are
+   excused, 15 by clause 1 and 23 by clause 2; `__udivti3` and `round` are not, and take the
+   reading of a workload whose request runs one of them. Which functions a request runs no
+   file here says: no report was made for this commit.
+2. `relay.mjs` writes an unpadded link's map with `.text` edited (a section put in, a size or
+   an alignment changed) and laid out again by LLD's rule, so the mode can be run on layouts
+   nobody has linked. With no edit it writes each of the two maps' `.text` as LLD laid it,
+   which `kinds.sh` checks first. It models `.text` alone.
+3. `kinds.sh` holds the written cases, and `synthetic.sh` runs it last
+   (`results/synthetic-5.txt`: 22 passed and 11 refused as before, then 14 cases as
+   expected). The recorded pair. Both sides linking the library, the head with one more of
+   its functions: 48 bytes after its last section aligned to 64 (the two built-ins move by 48
+   and are of kind 2, not excused), 64 bytes there (they keep their offset and are of no
+   kind), and 48 bytes before that section (the four functions between move and are excused;
+   everything from the section on keeps its offset). A function aligned to 32 behind another
+   archive's section aligned to 64, that archive grown by 16 bytes (kind 2, no clause). Sides
+   with sections aligned to 32 alone, one 32 bytes further on (no function of a kind: offsets
+   32 apart are one offset modulo 32). Largest alignments of 32 on the base and 64 on the
+   head (the built-ins of kind 2 and not excused, the library's own excused). Functions from
+   an object in no archive (one in a section aligned to 64 excused by clause 1, one behind
+   it not excused). A second library first linked on the head (its function before its own
+   first aligned section not excused). A listed function whose section grew (kind 1). And
+   three with written reports of what a request runs (kind 3, and which functions then take
+   the reading). `negative.sh` runs `kinds.sh` too, on the two unpadded maps of the kit's
+   build; it was not run for this commit, which built nothing, and those two maps are the two
+   kept here (`results/maps.sha256` has their SHA-256, and the two kept here have it).
+
+What the commit before this one changed, kept here (it built and linked nothing either):
 
 1. Under the rule the second pad is one of four sizes, 16, 32, 48 or 64 bytes, the smallest
    that puts `.data` where the rule says. `replay.mjs --data-further rule` now refuses any
@@ -32,7 +74,7 @@ node alone on the files kept here (nothing was built or linked for it):
 5. One sentence of this file is corrected: `.init` and `.fini` moved 8 bytes less than the
    data with every second pad that is a multiple of 16, 64 included.
 
-What the commit before this one changed, kept here:
+What the commit before that one changed, kept here:
 
 1. The rule it stands behind: a second pad in every placement of both sides, sized so that
    `.data`'s offset in a 64-byte line is the unpadded link's plus the first pad's size, mod
@@ -54,7 +96,7 @@ What the commit before this one changed, kept here:
    `results/build.out`, `results/replay-all.out`, `results/last-pad*` and
    `results/maps.sha256` are the third build's, as the commit before this one left them.
 
-What the commit before that one changed, kept here:
+What the one before that changed, kept here:
 
 1. `replay.mjs` decides whose a function is by its symbol alone, no longer by its input file;
    refuses a side with a function of a crate named as its own in another output section that

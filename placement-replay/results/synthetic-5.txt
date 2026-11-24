@@ -1,0 +1,252 @@
+== base, a pad of 320 bytes
+passed
+== head, a pad of 320 bytes
+passed
+== head, a pad of 320 bytes and a second pad of 64 last
+passed
+== base, a pad of 15120 bytes
+passed
+== head, a pad of 15120 bytes
+passed
+== head, a pad of 15120 bytes and a second pad of 64 last
+passed
+== base, a pad of 25824 bytes
+passed
+== head, a pad of 25824 bytes
+passed
+== head, a pad of 25824 bytes and a second pad of 64 last
+passed
+== base, a pad of 40624 bytes
+passed
+== head, a pad of 40624 bytes
+passed
+== head, a pad of 40624 bytes and a second pad of 64 last
+passed
+== the wrong pad size (15136 for 15120)
+replay.mjs: the first input section of .text is /m/1971/pads/pad-15120.o:(.text.corten_layout_pad), 15120 bytes at 0x15d5c0
+replay.mjs: 3443 input sections are not where the unpadded layout replayed with the pad puts them
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+replay.mjs: 3515 symbols before the first section aligned beyond 16 bytes moved by other than the pad
+refused
+== the base's unpadded link against the head's placement
+replay.mjs: .text has 3442 input sections unpadded and 3483 besides the pad in the placement
+replay.mjs: .text begins elsewhere in the placement
+replay.mjs: 3442 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== a placement with a second pad, checked as one without
+replay.mjs: .text has 3483 input sections unpadded and 3484 besides the pad in the placement
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== the wrong second pad size (48 for 64)
+replay.mjs: the last input section of .text is /m/1971/pads/pad2-64.o:(.text.corten_layout_pad2), 64 bytes, not a second pad of 48
+refused
+== a placement without a second pad, checked as one with
+replay.mjs: the last input section of .text is /usr/local/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_bui
+replay.mjs: .text has 3483 input sections unpadded and 3482 besides the pads in the placement
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== a second pad laid before the last section and not after it
+replay.mjs: the last input section of .text is /usr/local/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_bui
+replay.mjs: input section 3482 differs: /usr/local/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib(compiler_builtins-ea8da5fbd1b77660.compiler_builtins.7
+replay.mjs: 3443 input sections before the first aligned beyond 16 bytes moved by other than the pad
+refused
+== a function after the first section aligned beyond 16 bytes whose symbol names an own crate
+replay.mjs: 1 input sections from the first one aligned beyond 16 bytes on hold a function of corten or corten_feed or corten_protocol or corten_ui or probe: liblibdeflate_sys.rlib(utils.o):(.text.libdeflate_aligned_free)
+refused
+== a function of an own crate in .init
+replay.mjs: 1 input sections outside .text hold a function of corten or corten_feed or corten_protocol or corten_ui or probe: .init: crti.o:(.init)
+refused
+== the head read with compiler_builtins named as an own crate, whose two functions after that section do not name it
+passed
+== the real link with a first pad of 320 and a second of 48, .data where the unpadded link has it
+passed
+== the real link with a first pad of 320 and a second of 8, .data 16 bytes further
+passed
+== that link with .data declared 32 bytes further
+replay.mjs: .data begins 16 bytes further into a 64-byte line than in the unpadded link, not 32
+refused
+== the real link of the base with a first pad of 15120 and a second of 48, .data where the rule says
+passed
+== the real link of the base with a first pad of 25824 and a second of 48, .data where the rule says
+passed
+== the real link of the head with a first pad of 15120 and a second of 64, .data where the rule says
+passed
+== the real link of the head with a first pad of 25824 and a second of 16, .data where the rule says
+passed
+== the real link of the head with a first pad of 320 and a second of 8, which the rule does not take
+replay.mjs: a second pad of 8 bytes is not one of the sizes the rule allows (16, 32, 48, 64)
+replay.mjs: .data begins 16 bytes further into a 64-byte line than in the unpadded link, not 0
+refused
+== the real link of the head with a first pad of 320 and a second of 48, which it does
+passed
+== base, a pad of 320 bytes and a second pad of 48 last (a written map: its .text only)
+passed
+== head, a pad of 320 bytes and a second pad of 48 last, by the rule (a written map)
+passed
+== head, a pad of 320 bytes and a second pad of 112 last, by the rule (a written map)
+replay.mjs: a second pad of 112 bytes is not one of the sizes the rule allows (16, 32, 48, 64)
+refused
+== the three facts of the base
+{"beyond":[],"first":null,"from":{}}
+== the three facts of the head
+{"beyond":[{"section":"liblibdeflate_sys.rlib(deflate_compress.o):(.text.compute_length_counts)","align":32},{"section":"liblibdeflate_sys.rlib(deflate_compress.o):(.text.calculate_min_match_len)","align":32},{"section":"liblibdeflate_sys.rlib(deflate_compress.o):(.text.deflate_set_costs_from_codes)","align":64},{"section":"liblibdeflate_sys.rlib(deflate_compress.o):(.text.sort_symbols.constprop.0)","align":64},{"section":"liblibdeflate_sys.rlib(deflate_compress.o):(.text.deflate_precompute_huffman_header)","align":64},{"section":"liblibdeflate_sys.rlib(deflate_compress.o):(.text.deflate_flush
+== the head's unpadded link and its placement with a pad of 320 bytes state the same three facts
+the same line, 3352 bytes
+== relay.mjs with no edit writes each unpadded link's .text as LLD laid it
+as expected
+== the recorded pair: the base lists nothing, the head 40, all of kind 2; libdeflate's 38 excused, the two built-ins not
+__udivti3 [libcompiler_builtins.rlib]: base not listed; head 32 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+round [libcompiler_builtins.rlib]: base not listed; head 48 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+listed: 0 on the base, 40 on the head, 40 in all; kind 1: 0, kind 2: 40, kind 3: not known, none: 0; excused: 38 (15 by clause 1, 23 by clause 2); not excused: 2 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib])
+as expected
+== one more library function of 48 bytes after the library's last section aligned to 64: what follows moves by 48, the built-ins with it
+__udivti3 [libcompiler_builtins.rlib]: base 32 mod 64, no clause; head 16 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+round [libcompiler_builtins.rlib]: base 48 mod 64, no clause; head 32 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+listed: 40 on the base, 41 on the head, 41 in all; kind 1: 0, kind 2: 8, kind 3: not known, none: 33; excused: 39 (15 by clause 1, 24 by clause 2); not excused: 2 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib])
+as expected
+== the same function of 64 bytes: what follows keeps its offset, and the built-ins are of no kind
+__udivti3 [libcompiler_builtins.rlib]: base 32 mod 64, no clause; head 32 mod 64, no clause; kind none (kind 3 not known: no report); not excused; takes the reading: no
+round [libcompiler_builtins.rlib]: base 48 mod 64, no clause; head 48 mod 64, no clause; kind none (kind 3 not known: no report); not excused; takes the reading: no
+listed: 40 on the base, 41 on the head, 41 in all; kind 1: 0, kind 2: 1, kind 3: not known, none: 40; excused: 39 (15 by clause 1, 24 by clause 2); not excused: 2 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib])
+as expected
+== one more library function before that section: the four between move and are excused, and everything from the section on keeps its offset
+__udivti3 [libcompiler_builtins.rlib]: base 32 mod 64, no clause; head 32 mod 64, no clause; kind none (kind 3 not known: no report); not excused; takes the reading: no
+round [libcompiler_builtins.rlib]: base 48 mod 64, no clause; head 48 mod 64, no clause; kind none (kind 3 not known: no report); not excused; takes the reading: no
+listed: 40 on the base, 41 on the head, 41 in all; kind 1: 0, kind 2: 5, kind 3: not known, none: 36; excused: 39 (15 by clause 1, 24 by clause 2); not excused: 2 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib])
+as expected
+== a function aligned to 32 behind another archive's section aligned to 64, that archive grown by 16 bytes
+other32 [libother.rlib]: base 32 mod 64, no clause; head 0 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+__udivti3 [libcompiler_builtins.rlib]: base 32 mod 64, no clause; head 0 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+round [libcompiler_builtins.rlib]: base 48 mod 64, no clause; head 16 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+listed: 41 on the base, 42 on the head, 42 in all; kind 1: 0, kind 2: 4, kind 3: not known, none: 38; excused: 39 (15 by clause 1, 24 by clause 2); not excused: 3 (other32 [libother.rlib], __udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib])
+as expected
+== sides with sections aligned to 32 alone, the head's code 32 bytes further on: no function is of a kind
+__udivti3 [libcompiler_builtins.rlib]: base 0 mod 32, no clause; head 0 mod 32, no clause; kind none (kind 3 not known: no report); not excused; takes the reading: no
+round [libcompiler_builtins.rlib]: base 16 mod 32, no clause; head 16 mod 32, no clause; kind none (kind 3 not known: no report); not excused; takes the reading: no
+listed: 40 on the base, 40 on the head, 40 in all; kind 1: 0, kind 2: 0, kind 3: not known, none: 40; excused: 38 (18 by clause 1, 20 by clause 2); not excused: 2 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib])
+as expected
+== largest alignments that differ, 32 on the base and 64 on the head: the built-ins are of kind 2 and not excused, the library's own are excused
+deflate_set_costs_from_codes [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+sort_symbols.constprop.0 [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_precompute_huffman_header [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+sort_symbols.constprop.1 [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+sort_symbols.constprop.2 [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_find_min_cost_path [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_compress_fastest [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_optimize_and_flush_block [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_compress_near_optimal [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_compress_greedy [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_compress_lazy [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+deflate_compress_lazy2 [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+crc32_x86_vpclmulqdq_avx512_vl512 [liblibdeflate_sys.rlib]: base 0 mod 32, clause 1; head 0 mod 64, clause 1; kind 1 and 2 (kind 3 not known: no report); excused; takes the reading: no
+__udivti3 [libcompiler_builtins.rlib]: base 0 mod 32, no clause; head 32 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+round [libcompiler_builtins.rlib]: base 16 mod 32, no clause; head 48 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+listed: 40 on the base, 40 on the head, 40 in all; kind 1: 13, kind 2: 37, kind 3: not known, none: 3; excused: 38 (15 by clause 1, 23 by clause 2); not excused: 2 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib])
+as expected
+== functions from an object in no archive, on the head alone: one in a section aligned to 64 is excused by clause 1, one behind it is not excused
+__udivti3 [libcompiler_builtins.rlib]: base 32 mod 64, no clause; head 16 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+round [libcompiler_builtins.rlib]: base 48 mod 64, no clause; head 32 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+loose16 [loose.o]: base not listed; head 0 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+listed: 40 on the base, 42 on the head, 42 in all; kind 1: 0, kind 2: 4, kind 3: not known, none: 38; excused: 39 (16 by clause 1, 23 by clause 2); not excused: 3 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib], loose16 [loose.o])
+as expected
+== a second library first linked on the head: its function before its first aligned section is not excused, the two from that section on are
+__udivti3 [libcompiler_builtins.rlib]: base 32 mod 64, no clause; head 32 mod 64, no clause; kind none (kind 3 not known: no report); not excused; takes the reading: no
+round [libcompiler_builtins.rlib]: base 48 mod 64, no clause; head 48 mod 64, no clause; kind none (kind 3 not known: no report); not excused; takes the reading: no
+lead16 [libsecond.rlib]: base not listed; head 32 mod 64, no clause; kind 2 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+listed: 40 on the base, 43 on the head, 43 in all; kind 1: 0, kind 2: 3, kind 3: not known, none: 40; excused: 40 (16 by clause 1, 24 by clause 2); not excused: 3 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib], lead16 [libsecond.rlib])
+as expected
+== a listed function whose section is 16 bytes larger on the head: kind 1
+__udivti3 [libcompiler_builtins.rlib]: base 32 mod 64, no clause; head 32 mod 64, no clause; kind none (kind 3 not known: no report); not excused; takes the reading: no
+round [libcompiler_builtins.rlib]: base 48 mod 64, no clause; head 48 mod 64, no clause; kind 1 (kind 3 not known: no report); not excused; takes the reading: if the request runs it
+listed: 40 on the base, 40 on the head, 40 in all; kind 1: 1, kind 2: 0, kind 3: not known, none: 39; excused: 38 (15 by clause 1, 23 by clause 2); not excused: 2 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib])
+as expected
+== both sides link the library alike and the request runs two listed functions on the head alone: both of kind 3, one excused, one taking the reading
+libdeflate_gzip_compress [liblibdeflate_sys.rlib]: base 0 mod 64, clause 2; head 0 mod 64, clause 2; kind 3; excused; run on base no, on head yes; takes the reading: no
+__udivti3 [libcompiler_builtins.rlib]: base 32 mod 64, no clause; head 32 mod 64, no clause; kind none; not excused; run on base no, on head no; takes the reading: no
+round [libcompiler_builtins.rlib]: base 48 mod 64, no clause; head 48 mod 64, no clause; kind 3; not excused; run on base no, on head yes; takes the reading: yes
+listed: 40 on the base, 40 on the head, 40 in all; kind 1: 0, kind 2: 0, kind 3: 2, none: 38; excused: 38 (15 by clause 1, 23 by clause 2); not excused: 2 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib]); taking the reading: 1
+as expected
+== the recorded pair with a report that the request runs two of the library's functions on the head and neither built-in on either side: no function takes the reading
+compute_length_counts [liblibdeflate_sys.rlib]: base not listed; head 0 mod 32, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+do_end_block_check [liblibdeflate_sys.rlib]: base not listed; head 0 mod 32, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+calculate_min_match_len [liblibdeflate_sys.rlib]: base not listed; head 0 mod 32, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_set_costs_from_codes [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+heap_sort [liblibdeflate_sys.rlib]: base not listed; head 48 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+sort_symbols.constprop.0 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_precompute_huffman_header [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_compute_true_cost [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_flush_block [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+sort_symbols.constprop.1 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+sort_symbols.constprop.2 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_make_huffman_codes [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_find_min_cost_path [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_compress_fastest [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_optimize_and_flush_block [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_compress_near_optimal [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_compress_greedy [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_compress_lazy [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_compress_lazy2 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_alloc_compressor_ex [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_alloc_compressor [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_deflate_compress [liblibdeflate_sys.rlib]: base not listed; head 48 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_free_compressor [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_get_compression_level [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_deflate_compress_bound [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_gzip_compress_bound [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+crc32_slice8 [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+crc32_x86_pclmulqdq [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+crc32_x86_pclmulqdq_avx [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+crc32_x86_vpclmulqdq_avx2 [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+crc32_x86_vpclmulqdq_avx512_vl256 [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+crc32_x86_vpclmulqdq_avx512_vl512 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+dispatch_crc32 [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_init_x86_cpu_features [liblibdeflate_sys.rlib]: base not listed; head 48 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_aligned_malloc [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_aligned_free [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+__udivti3 [libcompiler_builtins.rlib]: base not listed; head 32 mod 64, no clause; kind 2; not excused; run on base no, on head no; takes the reading: no, the request does not run it
+round [libcompiler_builtins.rlib]: base not listed; head 48 mod 64, no clause; kind 2; not excused; run on base no, on head no; takes the reading: no, the request does not run it
+listed: 0 on the base, 40 on the head, 40 in all; kind 1: 0, kind 2: 40, kind 3: 2, none: 0; excused: 38 (15 by clause 1, 23 by clause 2); not excused: 2 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib]); taking the reading: 0
+as expected
+== the recorded pair with a report that the head's request runs round: it takes the reading
+compute_length_counts [liblibdeflate_sys.rlib]: base not listed; head 0 mod 32, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+do_end_block_check [liblibdeflate_sys.rlib]: base not listed; head 0 mod 32, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+calculate_min_match_len [liblibdeflate_sys.rlib]: base not listed; head 0 mod 32, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_set_costs_from_codes [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+heap_sort [liblibdeflate_sys.rlib]: base not listed; head 48 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+sort_symbols.constprop.0 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_precompute_huffman_header [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_compute_true_cost [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_flush_block [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+sort_symbols.constprop.1 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+sort_symbols.constprop.2 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_make_huffman_codes [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_find_min_cost_path [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_compress_fastest [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_optimize_and_flush_block [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_compress_near_optimal [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_compress_greedy [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_compress_lazy [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+deflate_compress_lazy2 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_alloc_compressor_ex [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_alloc_compressor [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_deflate_compress [liblibdeflate_sys.rlib]: base not listed; head 48 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_free_compressor [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_get_compression_level [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_deflate_compress_bound [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_gzip_compress_bound [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+crc32_slice8 [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+crc32_x86_pclmulqdq [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+crc32_x86_pclmulqdq_avx [liblibdeflate_sys.rlib]: base not listed; head 32 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+crc32_x86_vpclmulqdq_avx2 [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+crc32_x86_vpclmulqdq_avx512_vl256 [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+crc32_x86_vpclmulqdq_avx512_vl512 [liblibdeflate_sys.rlib]: base not listed; head 0 mod 64, clause 1; kind 2; excused; run on base no, on head no; takes the reading: no
+dispatch_crc32 [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_init_x86_cpu_features [liblibdeflate_sys.rlib]: base not listed; head 48 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_aligned_malloc [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+libdeflate_aligned_free [liblibdeflate_sys.rlib]: base not listed; head 16 mod 64, clause 2; kind 2; excused; run on base no, on head no; takes the reading: no
+__udivti3 [libcompiler_builtins.rlib]: base not listed; head 32 mod 64, no clause; kind 2; not excused; run on base no, on head no; takes the reading: no, the request does not run it
+round [libcompiler_builtins.rlib]: base not listed; head 48 mod 64, no clause; kind 2 and 3; not excused; run on base no, on head yes; takes the reading: yes
+listed: 0 on the base, 40 on the head, 40 in all; kind 1: 0, kind 2: 40, kind 3: 3, none: 0; excused: 38 (15 by clause 1, 23 by clause 2); not excused: 2 (__udivti3 [libcompiler_builtins.rlib], round [libcompiler_builtins.rlib]); taking the reading: 1
+as expected
+KINDS-DONE
+SYNTHETIC-DONE

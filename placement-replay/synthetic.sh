@@ -12,7 +12,8 @@
 # checks that a placement's map, with a pad before them, states the same three. The places
 # these maps give the sections after .text are synth.mjs's assumption, so --data-further is
 # tested on real links: all of them by last-pad.sh and second-pad.sh, and the six kept here
-# at the end, four of them with the second pad the rule asks.
+# at the end, four of them with the second pad the rule asks. Last it runs kinds.sh: the kinds
+# and the excuse of each listed function, on the recorded pair and on written layouts.
 set -eu
 S=$1; R=$2; W=$3; OWN=$4
 mkdir -p $W
@@ -83,4 +84,7 @@ node $S/replay.mjs --stated $W/head.map >$W/stated-a.json
 node $S/replay.mjs --stated $W/head-p320.map >$W/stated-b.json
 echo "== the head's unpadded link and its placement with a pad of 320 bytes state the same three facts"
 if cmp -s $W/stated-a.json $W/stated-b.json; then echo "the same line, $(wc -c <$W/stated-a.json | tr -d " ") bytes"; else echo "DIFFERENT, which is wrong"; exit 1; fi
+# What each listed function is to a reading across placements (replay.mjs --kinds), on the two
+# unpadded links and on layouts relay.mjs writes from the head's: kinds.sh.
+sh $S/kinds.sh $S $R $W
 echo SYNTHETIC-DONE

@@ -41,6 +41,25 @@
 // changes with code before them: each section aligned beyond STEP bytes with its alignment, the
 // first of them, and the functions from it on by input file, names as --facts writes them. Two
 // builds whose three facts are equal print the same line.
+// --kinds reads both sides' unpadded maps and prints, for each function from the first section
+// aligned beyond STEP bytes on (a listed function), which kind it is and whether the condition
+// excuses it:
+//   node replay.mjs --kinds <map of the base's unpadded link> <map of the head's> [--ran-base <file>] [--ran-head <file>]
+//   kind 1: on both lists with a section whose size or alignment differs between the two maps
+//           (code that differs; a diff of source, version, flags or compiler can show more, and
+//           no map holds that);
+//   kind 2: not on both lists at one address modulo the same largest alignment, the largest
+//           among .text's input sections up to the function's own;
+//   kind 3: run by the request on one side and not on the other, read from the two --ran files
+//           (the symbols a side's report shows called, one a line); without both files it is
+//           printed as not known.
+// The condition, on each side that lists the function: its section is aligned beyond STEP bytes
+// and no input section of .text before it exceeds its alignment (clause 1), or it follows such
+// a section of its own archive with only that archive's code between (clause 2; a function in
+// no archive cannot meet it). A function is matched across the sides by symbol and by archive,
+// or by object file where it is in none, names as --facts writes them. A function of a kind
+// that is not excused takes the reading of a workload whose request runs it; with the --ran
+// files the line says whether it does. Exits 0: the mode reports and refuses nothing.
 // Prints what it found and, last, a line of JSON; exits 1 when a check fails.
 import { readFileSync } from "node:fs";
 
@@ -51,14 +70,15 @@ const padName = opt("--pad-section") ?? ".text.corten_layout_pad";
 const lastName = opt("--last-pad-section") ?? ".text.corten_layout_pad2";
 const lastArg = opt("--last-pad"), furtherArg = opt("--data-further");
 const lastPad = lastArg === undefined ? null : Number(lastArg);
-const statedOnly = argv[0] === "--stated";
+const ranBase = opt("--ran-base"), ranHead = opt("--ran-head");
+const statedOnly = argv[0] === "--stated", kindsOnly = argv[0] === "--kinds";
 const factsOnly = argv[0] === "--facts" || statedOnly;
-if (factsOnly) argv.shift();
+if (factsOnly || kindsOnly) argv.shift();
 const [mapA, mapB, padArg] = argv;
 const pad = Number(padArg), STEP = 16, LIMIT = 64, LINE = 64, SIZES = [16, 32, 48, 64];
 const further = furtherArg === undefined ? null : furtherArg === "rule" ? pad % LINE : Number(furtherArg);
-if (!mapA || (!factsOnly && (!mapB || !Number.isInteger(pad))) || (lastPad !== null && !Number.isInteger(lastPad)) || (further !== null && (lastPad === null || !Number.isInteger(further))))
-  throw new Error("usage: node replay.mjs <map A> <map B> <pad bytes> [--own a,b] [--last-pad <bytes> [--data-further <bytes>|rule]] | node replay.mjs --facts <map A> [--own a,b] | node replay.mjs --stated <map A>");
+if (!mapA || (kindsOnly && !mapB) || (!factsOnly && !kindsOnly && (!mapB || !Number.isInteger(pad))) || (lastPad !== null && !Number.isInteger(lastPad)) || (further !== null && (lastPad === null || !Number.isInteger(further))))
+  throw new Error("usage: node replay.mjs <map A> <map B> <pad bytes> [--own a,b] [--last-pad <bytes> [--data-further <bytes>|rule]] | node replay.mjs --facts <map A> [--own a,b] | node replay.mjs --stated <map A> | node replay.mjs --kinds <base map> <head map> [--ran-base <file>] [--ran-head <file>]");
 
 const read = (file) => {
   const out = [];
@@ -85,6 +105,64 @@ const split = (id) => {
 const short = (id) => { const s = split(id); return `${s.file}:(${s.section})`; };
 const fileOf = (id) => split(id).file;
 const ownedBy = (s) => own.find((c) => split(s.id).section.includes(`${c.length}${c}`) || s.symbols.some((y) => new RegExp(`(^|[^A-Za-z0-9_])${c}::`).test(y.name)));
+
+if (kindsOnly) {
+  // A side's list: every function from the first section aligned beyond STEP bytes on, with
+  // what the kinds and the condition read of it.
+  const listed = (file) => {
+    const t = read(file).find((s) => s.name === ".text").inputs;
+    const first = t.findIndex((s) => s.align > STEP);
+    const out = new Map();
+    if (first < 0) return out;
+    const archive = (s) => { const f = fileOf(s.id), p = f.indexOf("("); return p < 0 ? null : f.slice(0, p); };
+    let before = 0;   // the largest alignment among the sections before this one
+    const lead = [];  // clause 1: aligned beyond STEP bytes, and none before it exceeds it
+    t.forEach((s, i) => { lead[i] = s.align > STEP && s.align >= before; before = Math.max(before, s.align); });
+    let largest = 0;
+    t.forEach((s, i) => {
+      largest = Math.max(largest, s.align);
+      if (i < first) return;
+      let clause = lead[i] ? 1 : 0;
+      const a = archive(s);
+      if (!clause && a !== null) for (let k = i - 1; k >= first && archive(t[k]) === a; k--) if (lead[k]) { clause = 2; break; }
+      for (const y of s.symbols) {
+        const key = `${y.name} [${a ?? fileOf(s.id)}]`;
+        if (out.has(key)) throw new Error(`replay.mjs: ${key} is listed twice in ${file}`);
+        out.set(key, { symbol: y.name, at: y.at, size: s.size, align: s.align, largest, clause, archive: a });
+      }
+    });
+    return out;
+  };
+  const names = (file) => (file === undefined ? null : new Set(readFileSync(file, "utf8").split("\n").map((l) => l.trim()).filter(Boolean)));
+  const base = listed(mapA), head = listed(mapB), ran = { base: names(ranBase), head: names(ranHead) };
+  const told = ran.base !== null && ran.head !== null;
+  const rows = [], count = { 1: 0, 2: 0, 3: 0, none: 0, excused: 0, clause1: 0, clause2: 0, takes: 0 };
+  const side = (f) => (f ? `${f.at % f.largest} mod ${f.largest}, ${f.clause ? `clause ${f.clause}` : "no clause"}` : "not listed");
+  for (const key of new Set([...base.keys(), ...head.keys()])) {
+    const b = base.get(key), h = head.get(key), kinds = [];
+    if (b && h && (b.size !== h.size || b.align !== h.align)) kinds.push(1);
+    if (!b || !h || b.largest !== h.largest || b.at % b.largest !== h.at % h.largest) kinds.push(2);
+    const sym = (b ?? h).symbol;
+    const rb = ran.base ? ran.base.has(sym) : null, rh = ran.head ? ran.head.has(sym) : null;
+    if (told && rb !== rh) kinds.push(3);
+    const excused = (!b || b.clause > 0) && (!h || h.clause > 0);
+    const by = Math.max(b ? b.clause : 0, h ? h.clause : 0);
+    // Kinds 1 and 2 take a reading where the request runs the function on a side that lists it;
+    // kind 3 is itself a statement of what the request runs.
+    const runs = told ? (b && rb) || (h && rh) : null;
+    const takes = excused || kinds.length === 0 ? "no" : !told ? "if the request runs it" : kinds.includes(3) || runs ? "yes" : "no, the request does not run it";
+    for (const k of kinds) count[k]++;
+    if (!kinds.length) count.none++;
+    if (excused) { count.excused++; count[`clause${by}`]++; }
+    if (takes === "yes") count.takes++;
+    rows.push({ function: key, base: side(b), head: side(h), kinds, kind3: told ? undefined : "not known", excused, takes });
+    console.log(`${key}: base ${side(b)}; head ${side(h)}; kind ${kinds.length ? kinds.join(" and ") : "none"}${told ? "" : " (kind 3 not known: no report)"}; ${excused ? "excused" : "not excused"}${told ? `; run on base ${rb ? "yes" : "no"}, on head ${rh ? "yes" : "no"}` : ""}; takes the reading: ${takes}`);
+  }
+  const open = rows.filter((r) => !r.excused).map((r) => r.function);
+  console.log(`listed: ${base.size} on the base, ${head.size} on the head, ${rows.length} in all; kind 1: ${count[1]}, kind 2: ${count[2]}, kind 3: ${told ? count[3] : "not known"}, none: ${count.none}; excused: ${count.excused} (${count.clause1} by clause 1, ${count.clause2} by clause 2); not excused: ${open.length}${open.length ? ` (${open.join(", ")})` : ""}${told ? `; taking the reading: ${count.takes}` : ""}`);
+  console.log(JSON.stringify({ listedBase: base.size, listedHead: head.size, kind1: count[1], kind2: count[2], kind3: told ? count[3] : null, none: count.none, excused: count.excused, clause1: count.clause1, clause2: count.clause2, notExcused: open, taking: told ? rows.filter((r) => r.takes === "yes").map((r) => r.function) : null }));
+  process.exit(0);
+}
 
 const A = read(mapA);
 const tA = A.find((s) => s.name === ".text");
