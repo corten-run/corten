@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { commands } from "../bench/json-api/process.mjs";
@@ -135,6 +136,17 @@ test("Mixed Production's archive tests, run under a caller's GIT_DIR, archive th
   nested(t, "../bench/mixed-production/build-context.test.mjs", 3, ["init", "add", "commit", "archive"]);
 });
 
+test("the client-heavy collector's source test, run under a caller's GIT_DIR, reads its own fixture and leaves the caller alone", (t) => {
+  // Evidence.source() runs Git on the environment of the process, so the test must hand it the fixture's.
+  nested(t, "../bench/client-heavy/evidence.test.mjs", 1, ["init", "add", "commit", "rev-parse", "status", "ls-files"],
+    ["^source before/after saves real bytes"]);
+});
+
+test("group continuation's checkout test, run under a caller's GIT_DIR, reads its own fixture and leaves the caller alone", (t) => {
+  // measuredCheckout() runs Git on the environment of the process, as Evidence.source() does.
+  nested(t, "../bench/workloads/group-continuation.test.mjs", 1, ["init", "add", "commit", "worktree", "rev-parse"]);
+});
+
 test("fixtureGitCommands passes other commands through and reports a failed fixture Git as a failure", async (t) => {
   /** @type {unknown[][]} */
   const calls = [];
@@ -147,8 +159,15 @@ test("fixtureGitCommands passes other commands through and reports a failed fixt
   assert.equal(/** @type {unknown[]} */ (calls[0])[2], options);
   interrupted = true; assert.equal(io.interrupted, true);
   io.dispose(); assert.equal(disposed, 1);
-  await io.command("git", ["rev-parse", "HEAD"], options);
-  assert.deepEqual(calls[1], [process.execPath, [fileURLToPath(new URL("./fixture-git.mjs", import.meta.url)), "--", "rev-parse", "HEAD"], options]);
+  // Elsewhere `env` drops the selectors and then replaces itself with Git, so `io` signals and waits on Git itself.
+  const base = { PATH: "/bin", GIT_DIR: "/caller/.git", git_work_tree: "/caller", GIT_CONFIG_KEY_0: "user.name", GIT_TRACE2: "/trace" };
+  await fixtureGitCommands(io, "linux", base).command("git", ["rev-parse", "HEAD"], options);
+  assert.deepEqual(calls[1], ["env", ["-u", "GIT_DIR", "-u", "git_work_tree", "-u", "GIT_CONFIG_KEY_0", "git", "rev-parse", "HEAD"], options]);
+  await fixtureGitCommands(io, "linux", { PATH: "/bin" }).command("git", ["status"], options);
+  assert.deepEqual(calls[2], ["env", ["git", "status"], options]);
+  // Windows has no `env`; taskkill /T /F ends the hop and its Git together.
+  await fixtureGitCommands(io, "win32", base).command("git", ["rev-parse", "HEAD"], options);
+  assert.deepEqual(calls[3], [process.execPath, [fileURLToPath(new URL("./fixture-git.mjs", import.meta.url)), "--", "rev-parse", "HEAD"], options]);
 
   const dir = mkdtempSync(join(tmpdir(), "corten-fixture-git-commands-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -160,6 +179,83 @@ test("fixtureGitCommands passes other commands through and reports a failed fixt
       (/** @type {any} */ error) => error.exit?.code === 1);
   } finally { real.dispose(); }
 });
+
+const cli = fileURLToPath(new URL("./fixture-git.mjs", import.meta.url));
+const posixOnly = { skip: process.platform === "win32" && "POSIX signals; on Windows the runner ends the whole tree with taskkill /T /F" };
+
+/**
+ * A directory holding a `git` stand-in that runs `body` with /bin/sh.
+ * @param {import("node:test").TestContext} t @param {string} body
+ */
+function standIn(t, body) {
+  const dir = mkdtempSync(join(tmpdir(), "corten-fixture-git-stand-in-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "git"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  return dir;
+}
+
+/**
+ * Calls `start` with `dir` first on PATH; the runner spawns synchronously, so its child sees that PATH.
+ * @template T @param {string} dir @param {() => T} start @returns {T}
+ */
+function onPath(dir, start) {
+  const saved = process.env.PATH;
+  process.env.PATH = `${dir}${delimiter}${saved}`;
+  try { return start(); } finally { process.env.PATH = saved; }
+}
+
+/** @param {Promise<unknown>} pending @returns {Promise<any>} */
+const failure = (pending) => pending.then(() => assert.fail("the command must fail"), (error) => error);
+
+test("a fixture Git that ignores TERM and holds its pipes still ends on the runner's deadline and on interruption", posixOnly, async (t) => {
+  // TERM goes to the group at the deadline or interruption and KILL 2 s later while the watched child lives;
+  // the stand-in would hold stdout and stderr for 10 s.
+  const bin = standIn(t, "trap '' TERM INT HUP\necho held\necho held >&2\nsleep 10");
+  const dir = mkdtempSync(join(tmpdir(), "corten-fixture-git-term-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  /** @type {[string, (io: import("./fixture-git.mjs").Commands, options: Record<string, unknown>) => Promise<unknown>][]} */
+  const routes = [
+    ["fixtureGitCommands", (io, options) => fixtureGitCommands(io).command("git", ["status"], options)],
+    ["the fixture-git.mjs hop", (io, options) => io.command(process.execPath, [cli, "--", "status"], options)],
+  ];
+  for (const [route, start] of routes) {
+    const io = commands(dir);
+    try {
+      const began = performance.now();
+      const error = await failure(onPath(bin, () => start(io, { timeout: 500 })));
+      const took = performance.now() - began;
+      assert.equal(error.exit?.expired, true, `${route}: ${error.message}`);
+      assert.ok(took < 4500, `${route}: a 500 ms deadline settled after ${Math.round(took)} ms`);
+    } finally { io.dispose(); }
+
+    const listening = new Set(process.listeners("SIGINT"));
+    const stoppable = commands(dir), interrupt = process.listeners("SIGINT").find((listener) => !listening.has(listener));
+    try {
+      assert.equal(typeof interrupt, "function");
+      const pending = failure(onPath(bin, () => start(stoppable, { timeout: 30000 })));
+      await delay(300);
+      const began = performance.now();
+      /** @type {Function} */ (interrupt)();
+      const error = await pending, took = performance.now() - began;
+      assert.equal(error.exit?.interrupted, true, `${route}: ${error.message}`);
+      assert.ok(took < 4000, `${route}: an interruption settled after ${Math.round(took)} ms`);
+    } finally { stoppable.dispose(); }
+  }
+});
+
+test("a fixture Git ended by a signal is reported with that signal, not as exit 1", posixOnly, async (t) => {
+  const bin = standIn(t, "kill -TERM $$");
+  const dir = mkdtempSync(join(tmpdir(), "corten-fixture-git-signal-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const io = fixtureGitCommands(commands(dir));
+  try {
+    const error = await failure(onPath(bin, () => io.command("git", ["status"])));
+    assert.deepEqual([error.exit?.code, error.exit?.signal], [null, "SIGTERM"]);
+  } finally { io.dispose(); }
+  const hop = onPath(bin, () => spawnSync(process.execPath, [cli, "--", "status"], { cwd: dir, encoding: "utf8", timeout: 30000 }));
+  assert.deepEqual([hop.error, hop.status, hop.signal], [undefined, null, "SIGTERM"]);
+});
+
 test("every variable that chooses a repository or adds config goes, whatever its case, and overrides win", () => {
   const removed = ["GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_PREFIX", "GIT_SHALLOW_FILE",

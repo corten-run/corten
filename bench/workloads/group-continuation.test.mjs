@@ -4,8 +4,12 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { measuredCheckout } from "./group-continuation.mjs";
-import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
+import { measuredCheckout as measured } from "./group-continuation.mjs";
+import { fixtureGitEnv, withFixtureGitEnv } from "../../scripts/fixture-git.mjs";
+
+// measuredCheckout runs Git on the process's environment, so it reads the fixture only without the caller's selectors.
+const measuredCheckout = (/** @type {string} */ root, /** @type {string} */ saved, /** @type {string} */ commit) =>
+  withFixtureGitEnv(() => measured(root, saved, commit));
 
 test("a retained group at X finds its original checkout after the operator checkout advances to Y", (t) => {
   const temp = realpathSync(mkdtempSync(join(tmpdir(), "group-checkouts-"))), repo = join(temp, "repo"), root = join(temp, "results");

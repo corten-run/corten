@@ -11,7 +11,7 @@
 // or system file rather than a repository. A test that means to set one of these passes it in
 // `overrides`.
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -43,6 +43,25 @@ export function fixtureGitEnv(overrides = {}, base = process.env, platform = pro
 }
 
 /**
+ * Runs `run` with the variables that choose a repository taken out of `process.env`, and puts them
+ * back when it returns or, for a promise, settles. For a fixture that hands its repository to code
+ * that runs Git on the environment of the process, such as Evidence.source() in
+ * bench/client-heavy/evidence.mjs; that code is left as it is. The process environment is shared, so
+ * use this only where nothing else runs Git meanwhile, as in a test.
+ * @template T @param {() => T} run @returns {T}
+ */
+export function withFixtureGitEnv(run) {
+  const taken = Object.entries(process.env).filter(([name]) => selectsRepository(name));
+  for (const [name] of taken) delete process.env[name];
+  const restore = () => { for (const [name, value] of taken) process.env[name] = value; };
+  let result;
+  try { result = run(); } catch (error) { restore(); throw error; }
+  if (result instanceof Promise) return /** @type {T} */ (result.finally(restore));
+  restore();
+  return result;
+}
+
+/**
  * @typedef {{ readonly interrupted: boolean, dispose(): void,
  *   command(binary: string, args: string[], options?: Record<string, unknown>): Promise<any> }} Commands
  */
@@ -50,31 +69,49 @@ export function fixtureGitEnv(overrides = {}, base = process.env, platform = pro
 /**
  * `io` (a `commands()` runner from bench/json-api/process.mjs) with its `git` commands run on
  * `fixtureGitEnv()`, for a fixture that hands its repository to code that runs Git through `io`, such
- * as `git archive` in bench/mixed-production/build-context.mjs. Git goes through this file as a child
- * of `io`, so `io` keeps its deadline, interruption and output handling; every other command is
- * passed to `io` unchanged.
+ * as `git archive` in bench/mixed-production/build-context.mjs. Every other command is passed to `io`
+ * unchanged. Outside Windows `io` runs `env -u <selector>... git`, which replaces itself with Git, so
+ * `io` signals, escalates and reports on Git itself. Windows has no `env`, so there `io` runs Git
+ * through this file, whose tree `io` ends with taskkill /T /F.
  * @param {Commands} io
+ * @param {NodeJS.Platform} [platform]
+ * @param {NodeJS.ProcessEnv} [base] the environment `io` passes to its commands
  * @returns {Commands}
  */
-export function fixtureGitCommands(io) {
+export function fixtureGitCommands(io, platform = process.platform, base = process.env) {
+  const git = (/** @type {string[]} */ args) => platform === "win32"
+    ? [process.execPath, [fileURLToPath(import.meta.url), "--", ...args]]
+    : ["env", [...Object.keys(base).filter(selectsRepository).flatMap((name) => ["-u", name]), "git", ...args]];
   return {
     get interrupted() { return io.interrupted; },
     dispose: () => io.dispose(),
-    command: (binary, args, options) => binary === "git"
-      ? io.command(process.execPath, [fileURLToPath(import.meta.url), "--", ...args], options)
-      : io.command(binary, args, options),
+    command: (binary, args, options) => {
+      if (binary !== "git") return io.command(binary, args, options);
+      const [hop, hopArgs] = git(args);
+      return io.command(/** @type {string} */ (hop), /** @type {string[]} */ (hopArgs), options);
+    },
   };
 }
 
 // `node fixture-git.mjs -- <git arguments>`: Git on fixtureGitEnv(), with this process's working
-// directory and streams, exiting with Git's status.
+// directory and streams. INT, TERM and HUP are passed on to Git, and this process stays until Git
+// ends, so a runner that sends KILL only while its child lives still reaches Git; it then exits as
+// Git did, by the same signal or with the same status.
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   if (process.argv[2] !== "--") {
     process.stderr.write("usage: node fixture-git.mjs -- <git arguments>\n");
     process.exitCode = 2;
   } else {
-    const git = spawnSync("git", process.argv.slice(3), { env: fixtureGitEnv(), stdio: "inherit", windowsHide: true });
-    if (git.error) process.stderr.write(`git: ${git.error.message}\n`);
-    process.exitCode = git.status ?? 1;
+    const signals = /** @type {const} */ (["SIGINT", "SIGTERM", "SIGHUP"]);
+    const git = spawn("git", process.argv.slice(3), { env: fixtureGitEnv(), stdio: "inherit", windowsHide: true });
+    const pass = (/** @type {NodeJS.Signals} */ signal) => { if (git.exitCode === null && git.signalCode === null) git.kill(signal); };
+    const stop = () => { for (const signal of signals) process.off(signal, pass); };
+    for (const signal of signals) process.on(signal, pass);
+    git.once("error", (error) => { stop(); process.stderr.write(`git: ${error.message}\n`); process.exitCode = 1; });
+    git.once("exit", (code, signal) => {
+      stop();
+      if (signal) process.kill(process.pid, signal);
+      process.exitCode = code ?? 1;
+    });
   }
 }
