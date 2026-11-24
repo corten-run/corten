@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
-import { fixtureGitEnv } from "./fixture-git.mjs";
+import { commands } from "../bench/json-api/process.mjs";
+import { fixtureGitCommands, fixtureGitEnv } from "./fixture-git.mjs";
 
 /**
  * The ambient environment without any `GIT_*` variable, whatever its case. Setup and the raw controls
@@ -128,6 +129,37 @@ test("benchmark-scope's fixture tests, run under a caller's GIT_DIR, read their 
     ["^PR diff excludes base-only changes", "^a base-side rename scopes", "^a push to main scopes Catalog", "^PR and multi-commit push diffs"]);
 });
 
+test("Mixed Production's archive tests, run under a caller's GIT_DIR, archive their own fixtures and leave the caller alone", (t) => {
+  // extractNativeSource and nativeBuildContext run `git archive` through the commands() runner the
+  // tests give them, so the archive reads the fixture only if that runner's Git drops the selectors too.
+  nested(t, "../bench/mixed-production/build-context.test.mjs", 3, ["init", "add", "commit", "archive"]);
+});
+
+test("fixtureGitCommands passes other commands through and reports a failed fixture Git as a failure", async (t) => {
+  /** @type {unknown[][]} */
+  const calls = [];
+  let disposed = 0, interrupted = false;
+  const io = fixtureGitCommands({ get interrupted() { return interrupted; }, dispose: () => { disposed += 1; },
+    command: async (binary, args, options) => { calls.push([binary, args, options]); return "ok"; } });
+  const options = { timeout: 5000, cleanup: true }, args = ["-xf", "a.tar"];
+  assert.equal(await io.command("tar", args, options), "ok");
+  assert.deepEqual(calls, [["tar", args, options]]);
+  assert.equal(/** @type {unknown[]} */ (calls[0])[2], options);
+  interrupted = true; assert.equal(io.interrupted, true);
+  io.dispose(); assert.equal(disposed, 1);
+  await io.command("git", ["rev-parse", "HEAD"], options);
+  assert.deepEqual(calls[1], [process.execPath, [fileURLToPath(new URL("./fixture-git.mjs", import.meta.url)), "--", "rev-parse", "HEAD"], options]);
+
+  const dir = mkdtempSync(join(tmpdir(), "corten-fixture-git-commands-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const real = fixtureGitCommands(commands(dir));
+  try {
+    await real.command("git", ["init", "-q"]);
+    assert.equal(await real.command("git", ["rev-parse", "--is-inside-work-tree"]), "true");
+    await assert.rejects(real.command("git", ["rev-parse", "--verify", "--quiet", `${"0".repeat(40)}^{commit}`]),
+      (/** @type {any} */ error) => error.exit?.code === 1);
+  } finally { real.dispose(); }
+});
 test("every variable that chooses a repository or adds config goes, whatever its case, and overrides win", () => {
   const removed = ["GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_PREFIX", "GIT_SHALLOW_FILE",

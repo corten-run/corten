@@ -9,9 +9,10 @@ import { executionMountArgs } from "./execution-inputs.mjs";
 import { sourceSnapshot } from "./source-audit.mjs";
 import { commands } from "../json-api/process.mjs";
 import { sha256 } from "./capture.mjs";
-import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
+import { fixtureGitCommands, fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 
-// The same 30 s deadline io.command gave these fixture Git calls.
+// The same 30 s deadline io.command gave these fixture Git calls. The archives below run Git through
+// `io`, which fixtureGitCommands gives the same environment.
 const fixtureGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true,
   stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv(), timeout: 30_000 }).trim();
 
@@ -27,7 +28,7 @@ test("native archive arguments share a fixed tree timestamp without changing Cor
 });
 
 test("fresh Git extraction supplies only the empty mount point under the read-only source bind", async () => {
-  const root = mkdtempSync(join(tmpdir(), "corten-mixed-archive-")), io = commands(root);
+  const root = mkdtempSync(join(tmpdir(), "corten-mixed-archive-")), io = fixtureGitCommands(commands(root));
   try {
     const file = "bench/worker.mjs", body = 'import "playwright";\n';
     mkdirSync(join(root, "bench")); writeFileSync(join(root, file), body);
@@ -62,7 +63,7 @@ test("fresh Git extraction supplies only the empty mount point under the read-on
 });
 
 test("Docker stdin context excludes ignored working-tree inputs and stays bound to the committed archive", async () => {
-  const root = mkdtempSync(join(tmpdir(), "corten-mixed-context-")), io = commands(root);
+  const root = mkdtempSync(join(tmpdir(), "corten-mixed-context-")), io = fixtureGitCommands(commands(root));
   const image = `corten-mixed-context-test-${process.pid}`;
   let built = false;
   try {

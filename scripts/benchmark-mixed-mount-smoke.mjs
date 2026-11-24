@@ -7,14 +7,15 @@ import { commands } from "../bench/json-api/process.mjs";
 import { extractNativeSource } from "../bench/mixed-production/build-context.mjs";
 import { createAttachedParticipant, createExecutionEvidence } from "../bench/mixed-production/execution-evidence.mjs";
 import { executionMountArgs } from "../bench/mixed-production/execution-inputs.mjs";
-import { fixtureGitEnv } from "./fixture-git.mjs";
+import { fixtureGitCommands, fixtureGitEnv } from "./fixture-git.mjs";
 
 const [image, runId, work] = process.argv.slice(2);
 assert.match(image, /@sha256:[a-f0-9]{64}$/);
 assert.match(runId, /^corten-evidence-kernel-[a-f0-9]{16}-mixed-mount$/);
 const repo = join(work, "mixed-mount-repo"), folder = join(work, "mixed-mount-output");
 mkdirSync(repo); mkdirSync(folder);
-const io = commands(repo), docker = (args, options) => io.command("docker", args, options);
+// extractNativeSource archives the fixture with Git through `io`; Docker goes through unchanged.
+const io = fixtureGitCommands(commands(repo)), docker = (args, options) => io.command("docker", args, options);
 const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", timeout: 30000,
   stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() }).trim();
 const worker = `${runId}-corten-fixture-capture`;
