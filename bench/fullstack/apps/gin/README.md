@@ -99,6 +99,17 @@ source. JS and no-JS contexts use their own browser cookie jars for real readbac
 including locale validation, isolation, cross-site rejection and concurrent writes.
 This driver is test code only; no adapter imports it or uses a common alert store.
 
+When a script-enabled page's `goto` fails or its readiness mark never appears, the driver
+writes `compiled-alerts-APP-SOURCE-PROFILE-PID-hydration.json` under
+`bench/catalog/results/c1/` (uploaded with the catalog parity artifact) and rethrows the
+original error. It holds closed categories only: the failing stage, the goto's Chromium
+`net::ERR_*` code (or `other`), the main-frame status, each failed request's code, resource
+type, stage and time from the navigation's start, the driver's own `docker run`/`rm` calls
+and the host's Docker container and network lifecycle events from a minute before the
+navigation to the failure, on the same clock. Chromium aborts requests in flight with `ERR_NETWORK_CHANGED` when the host's
+network interfaces change, so these show whether a container change preceded a failure. No
+URL, page text, console text or container name is kept.
+
 Alert POSTs require one complete upstream JSON document and the requested record
 identity. The native templ response is fully rendered into a buffer before a write;
 a render error cannot commit a session. The commit is not tied to client receipt:

@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
-import { diagnosticLimits, hydrationArtifactPath, observeHydration } from './hydration-diagnostics.mjs';
+import { containerTimeline, diagnosticLimits, failureCode, failureCodes, hydrationArtifactPath, observeHydration,
+  projectDockerEvents } from './hydration-diagnostics.mjs';
 
 class FakePage extends EventEmitter {
   calls = [];
@@ -16,6 +17,7 @@ class FakePage extends EventEmitter {
     resources: [{ resourceKind: 'wasm', initiatorType: 'fetch', duration: 5, transferSize: 123 }] };
   async waitForFunction(...args) {
     this.calls.push(args);
+    this.duringWait?.();
     assert.equal(args.length, 1, 'keep Playwright\'s existing default 30s gate, with no override');
     const ready = runInNewContext(`(${args[0]})()`, { window: { __hydratedAt: this.hydrated } });
     if (!ready) throw this.error;
@@ -31,7 +33,7 @@ function response(page, url, status, navigation = false) {
 function observer(page, overrides = {}) {
   const saved = [], summaries = [];
   const diagnostics = observeHydration(page, { app: 'leptos', source: 'fixture', profile: 'defaults',
-    container: 'compiled-alerts-leptos-fixture-123', artifactPath: 'ignored.json',
+    container: 'compiled-alerts-leptos-fixture-123', artifactPath: 'ignored.json', now: () => 0, wall: () => 1_700_000_000_000,
     write: async (_path, text) => saved.push(text), log: summary => summaries.push(summary), ...overrides });
   return { diagnostics, saved, summaries };
 }
@@ -267,21 +269,27 @@ test('closed diagnostic schema discards all unknown fields and variable browser 
   await assert.rejects(diagnostics.wait(), error => error === page.error);
   const detail = JSON.parse(saved[0]);
   const keys = (object, expected) => assert.deepEqual(Object.keys(object).sort(), expected.sort());
-  keys(detail, ['schema', 'app', 'source', 'profile', 'container', 'navigationIndex', 'navigation', 'errorClass', 'state', 'events', 'dropped']);
+  keys(detail, ['schema', 'app', 'source', 'profile', 'container', 'navigationIndex', 'stage', 'failure', 'navigation', 'errorClass', 'state',
+    'events', 'dropped', 'containers', 'docker']);
   keys(detail.navigation, ['status']);
   keys(detail.state, ['readyState', 'hydratedType', 'hydratedAt', 'marketplace', 'scriptCount', 'resourceCount', 'scripts', 'resources']);
   keys(detail.state.scripts[0], ['resourceKind', 'type', 'external']);
   keys(detail.state.resources[0], ['resourceKind', 'initiatorType', 'duration', 'transferSize']);
   keys(detail.events[0], ['sequence', 'kind', 'level']);
   keys(detail.events[1], ['sequence', 'kind', 'errorClass']);
-  keys(detail.events[2], ['sequence', 'kind', 'resourceKind']);
+  keys(detail.events[2], ['sequence', 'kind', 'resourceKind', 'resourceType', 'failure', 'stage', 'ms']);
   keys(detail.events[3], ['sequence', 'kind', 'resourceKind', 'status']);
-  keys(summaries[0], ['diagnostic', 'app', 'source', 'profile', 'navigationIndex', 'saved', 'events', 'dropped', 'bytes']);
-  assert.equal(detail.schema, 'compiled-alerts-hydration/v2');
+  keys(summaries[0], ['diagnostic', 'app', 'source', 'profile', 'navigationIndex', 'stage', 'failure', 'saved', 'events', 'dropped', 'bytes']);
+  assert.equal(detail.schema, 'compiled-alerts-hydration/v3');
+  assert.equal(detail.stage, 'readiness');
+  assert.equal(detail.failure, null, 'a readiness timeout has no net error code');
+  assert.deepEqual(detail.containers, []);
+  assert.deepEqual(detail.docker, { unavailable: true });
   assert.equal(detail.errorClass, 'TimeoutError');
   assert.deepEqual(detail.events, [
     { sequence: 1, kind: 'console', level: 'other' }, { sequence: 2, kind: 'pageerror', errorClass: 'unknown' },
-    { sequence: 3, kind: 'requestfailed', resourceKind: 'js' }, { sequence: 4, kind: 'response', resourceKind: 'wasm', status: 503 },
+    { sequence: 3, kind: 'requestfailed', resourceKind: 'js', resourceType: 'other', failure: 'other', stage: 'idle', ms: 0 },
+    { sequence: 4, kind: 'response', resourceKind: 'wasm', status: 503 },
   ]);
   assert.deepEqual(detail.state, { readyState: 'unknown', hydratedType: 'unknown', hydratedAt: null, marketplace: false, scriptCount: null, resourceCount: null,
     scripts: [{ resourceKind: 'other', type: 'other', external: false }],
@@ -289,7 +297,7 @@ test('closed diagnostic schema discards all unknown fields and variable browser 
   assert.doesNotMatch(saved[0] + JSON.stringify(summaries), /canary|\.invalid|https?:|<div>/);
 });
 
-test('diagnostics never read console text, error message/stack or request failure payloads', async () => {
+test('diagnostics never read console text or a readiness error\'s message/stack, and reduce request failures to a code', async () => {
   const page = new FakePage();
   const forbidden = () => { assert.fail('arbitrary diagnostic payload was read'); };
   const original = { name: 'TimeoutError' }, pageError = { name: 'RuntimeError' };
@@ -298,13 +306,16 @@ test('diagnostics never read console text, error message/stack or request failur
   const { diagnostics, saved } = observer(page);
   page.emit('console', { type: () => 'error', text: forbidden, args: forbidden, location: forbidden });
   page.emit('pageerror', pageError);
-  page.emit('requestfailed', { url: () => 'https://fixture.invalid/pkg/short-canary/app.wasm', failure: forbidden });
+  page.emit('requestfailed', { url: () => 'https://fixture.invalid/pkg/short-canary/app.wasm', resourceType: () => 'fetch',
+    failure: () => ({ errorText: 'net::ERR_CONNECTION_RESET at https://fixture.invalid/short-canary' }) });
   await assert.rejects(diagnostics.wait(), error => error === original);
   const detail = JSON.parse(saved[0]);
   assert.equal(detail.dropped, 0, 'forbidden getters must not merely be swallowed');
   assert.equal(detail.errorClass, 'TimeoutError');
   assert.deepEqual(detail.events, [{ sequence: 1, kind: 'console', level: 'error' },
-    { sequence: 2, kind: 'pageerror', errorClass: 'RuntimeError' }, { sequence: 3, kind: 'requestfailed', resourceKind: 'wasm' }]);
+    { sequence: 2, kind: 'pageerror', errorClass: 'RuntimeError' },
+    { sequence: 3, kind: 'requestfailed', resourceKind: 'wasm', resourceType: 'fetch', failure: 'ERR_CONNECTION_RESET', stage: 'idle', ms: 0 }]);
+  assert.doesNotMatch(saved[0], /canary|\.invalid/);
 });
 
 test('artifact destination is already collected by the catalog parity workflow', async () => {
@@ -320,8 +331,185 @@ test('artifact destination is already collected by the catalog parity workflow',
 test('checker observes before the original navigations and keeps both hydration gates', async () => {
   const source = await readFile(new URL('./check-alerts.mjs', import.meta.url), 'utf8');
   const attachment = source.indexOf('observeHydration(page,');
-  assert.ok(attachment > 0 && attachment < source.indexOf('await page.goto(pageURL)'));
-  assert.equal(source.match(/await page\.goto\(pageURL\)/g)?.length, 2);
+  const navigate = 'if (javaScriptEnabled) await hydration.goto(() => page.goto(pageURL)); else await page.goto(pageURL);';
+  assert.ok(attachment > 0 && attachment < source.indexOf(navigate));
+  assert.equal(source.split(navigate).length - 1, 2, 'both navigations are observed only when JavaScript is enabled');
+  assert.equal(source.match(/page\.goto\(/g)?.length, 4, 'the same goto, with no retry or added options');
   assert.equal(source.match(/if \(javaScriptEnabled\) await hydration\.wait\(\)/g)?.length, 2);
-  assert.ok(source.includes('hydration?.reset();\n        await page.goto(pageURL)'));
+  assert.ok(source.includes('hydration?.reset();\n        ' + navigate));
+  assert.match(source, /timeline, dockerEvents: readDockerEvents,/);
+  assert.match(source, /const docker = \(\.\.\.args\) => timeline\.record\(args, \(\) => \{/);
+});
+
+const gotoMessage = 'page.goto: net::ERR_NETWORK_CHANGED at http://127.0.0.1:32774/marketplace/en-US/item_1\n'
+  + 'Call log:\n  - navigating to "http://127.0.0.1:32774/marketplace/en-US/item_1", waiting until "load"\n';
+
+test('a failing goto writes the artifact and rethrows the identical error (#1963)', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'hydration-diagnostics-'));
+  try {
+    const artifactPath = join(folder, 'goto.json');
+    const page = new FakePage();
+    const { diagnostics, summaries } = observer(page, { artifactPath, write: undefined });
+    const original = new Error(gotoMessage);
+    let navigations = 0;
+    await assert.rejects(diagnostics.goto(async () => {
+      navigations++;
+      page.emit('requestfailed', { url: () => 'http://127.0.0.1:32774/marketplace/en-US/item_1', resourceType: () => 'document',
+        failure: () => ({ errorText: 'net::ERR_NETWORK_CHANGED' }) });
+      throw original;
+    }), error => error === original);
+    assert.equal(navigations, 1, 'no retry');
+    assert.equal(original.message, gotoMessage, 'the original error is not rewritten');
+    const raw = await readFile(artifactPath, 'utf8'), detail = JSON.parse(raw);
+    assert.equal(detail.stage, 'goto');
+    assert.equal(detail.failure, 'ERR_NETWORK_CHANGED');
+    assert.equal(detail.errorClass, 'Error');
+    assert.equal(detail.navigation, null, 'no main-frame response was observed');
+    assert.deepEqual(detail.events, [{ sequence: 1, kind: 'requestfailed', resourceKind: 'other', resourceType: 'document',
+      failure: 'ERR_NETWORK_CHANGED', stage: 'goto', ms: 0 }]);
+    assert.doesNotMatch(raw, /127\.0\.0\.1|32774|marketplace\/|item_1|navigating|https?:/);
+    assert.equal(summaries.length, 1);
+    assert.equal(summaries[0].stage, 'goto');
+    assert.equal(summaries[0].failure, 'ERR_NETWORK_CHANGED');
+    assert.doesNotMatch(JSON.stringify(summaries), /127\.0\.0\.1|item_1/);
+    assert.equal(page.calls.filter(call => call[0] !== 'snapshot').length, 0, 'no readiness wait after a failed goto');
+    assert.deepEqual(page.eventNames(), []);
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
+
+test('a goto error outside the allowlist, or without a net code, is recorded as other', async () => {
+  for (const message of ['page.goto: net::ERR_SOMETHING_NEW at http://private.invalid/x', 'Navigation failed because page was closed!',
+    'page.goto: Timeout 30000ms exceeded.']) {
+    const page = new FakePage();
+    const { diagnostics, saved } = observer(page);
+    const original = new Error(message);
+    await assert.rejects(diagnostics.goto(async () => { throw original; }), error => error === original);
+    const detail = JSON.parse(saved[0]);
+    assert.equal(detail.failure, 'other');
+    assert.doesNotMatch(saved[0], /SOMETHING_NEW|private\.invalid|closed|Timeout/);
+  }
+  const page = new FakePage();
+  const { diagnostics, saved } = observer(page);
+  const original = { name: 'Error' };
+  Object.defineProperty(original, 'message', { get: () => { throw new Error('broken message'); } });
+  await assert.rejects(diagnostics.goto(async () => { throw original; }), error => error === original);
+  assert.equal(JSON.parse(saved[0]).failure, 'other');
+});
+
+test('a successful goto returns the navigation result and writes nothing', async () => {
+  const page = new FakePage(); page.hydrated = 1;
+  const { diagnostics, saved, summaries } = observer(page);
+  const result = { status: () => 200 };
+  assert.equal(await diagnostics.goto(async () => result), result);
+  await diagnostics.wait();
+  assert.deepEqual(saved, []); assert.deepEqual(summaries, []);
+});
+
+test('request failures are stamped with the stage they happened in (#1496, #1906)', async () => {
+  let clock = 1000;
+  const page = new FakePage();
+  const { diagnostics, saved } = observer(page, { now: () => clock });
+  const script = errorText => ({ url: () => 'http://private.invalid/static/item.js?x=1', resourceType: () => 'script',
+    failure: () => ({ errorText }) });
+  await diagnostics.goto(async () => { clock = 1040; page.emit('requestfailed', script('net::ERR_NETWORK_CHANGED')); });
+  page.duringWait = () => { clock = 1300; page.emit('requestfailed', script('net::ERR_ABORTED')); };
+  await assert.rejects(diagnostics.wait(), error => error === page.error);
+  const detail = JSON.parse(saved[0]);
+  assert.equal(detail.stage, 'readiness');
+  assert.deepEqual(detail.events, [
+    { sequence: 1, kind: 'requestfailed', resourceKind: 'js', resourceType: 'script', failure: 'ERR_NETWORK_CHANGED', stage: 'goto', ms: 40 },
+    { sequence: 2, kind: 'requestfailed', resourceKind: 'js', resourceType: 'script', failure: 'ERR_ABORTED', stage: 'readiness', ms: 300 },
+  ]);
+  assert.doesNotMatch(saved[0], /private\.invalid|static|x=1/);
+});
+
+test('failureCode keeps only allowlisted Chromium net codes', () => {
+  assert.equal(failureCode('net::ERR_NETWORK_CHANGED'), 'ERR_NETWORK_CHANGED');
+  assert.equal(failureCode(gotoMessage), 'ERR_NETWORK_CHANGED');
+  for (const code of failureCodes) assert.equal(failureCode(`net::${code}`), code);
+  for (const text of ['net::ERR_SOMETHING_NEW', 'ERR_ABORTED', 'net::err_aborted', 'failure-canary', '', 'x'.repeat(600) + 'net::ERR_ABORTED'])
+    assert.equal(failureCode(text), 'other', text.slice(0, 40));
+  for (const value of [undefined, null, 1, {}, ['net::ERR_ABORTED']]) assert.equal(failureCode(value), 'other');
+});
+
+test('the container timeline records only the check\'s own runs and removals, bounded', () => {
+  let clock = 0;
+  const timeline = containerTimeline(() => clock);
+  const id = 'a'.repeat(64);
+  assert.equal(timeline.record(['run', '-d', 'image'], () => { clock = 700; return id; }), id);
+  assert.equal(timeline.record(['inspect', 'name'], () => '[]'), '[]');
+  const failure = new Error('rm failed');
+  assert.throws(() => timeline.record(['rm', '-f', '-v', 'name'], () => { clock = 900; throw failure; }), error => error === failure);
+  assert.deepEqual(timeline.entries, [{ op: 'run', start: 0, end: 700, ok: true, id }, { op: 'rm', start: 700, end: 900, ok: false }]);
+  for (let i = 0; i < 40; i++) timeline.record(['rm', String(i)], () => '');
+  assert.equal(timeline.entries.length, diagnosticLimits.containers);
+});
+
+test('docker events keep only type, allowlisted action, time and ownership', () => {
+  const own = 'b'.repeat(64), foreign = 'c'.repeat(64), origin = 1_700_000_000_000;
+  // The shape readDockerEvents' --format writes: type, action, actor ID, a network event's container, time.
+  const line = (type, action, id, ms, container = '') => JSON.stringify([type, action, id, container, (origin + ms) * 1e6]);
+  const text = [
+    line('container', 'start', own, -2500),
+    line('network', 'connect', 'secret-network', -2499, own),
+    line('container', 'exec_start: sh -c echo secret-command', foreign, -100),
+    line('network', 'disconnect', 'secret-network', 150, foreign),
+    line('image', 'pull', 'secret-image', 10),
+    '{ not json', JSON.stringify({ Type: 'container', Action: 'start', secret: 'secret-object' }), '',
+  ].join('\n');
+  const projected = projectDockerEvents(text, origin, new Set([own]));
+  assert.deepEqual(projected, { dropped: 2, events: [
+    { type: 'container', action: 'start', ms: -2500, own: true },
+    { type: 'network', action: 'connect', ms: -2499, own: true },
+    { type: 'container', action: 'other', ms: -100, own: false },
+    { type: 'network', action: 'disconnect', ms: 150, own: false },
+    { type: 'other', action: 'other', ms: 10, own: false },
+  ] });
+  assert.doesNotMatch(JSON.stringify(projected), /secret|b{64}|c{64}/);
+  const many = Array.from({ length: 100 }, (_, i) => line('container', 'die', foreign, i)).join('\n');
+  const bounded = projectDockerEvents(many, origin, new Set());
+  assert.equal(bounded.events.length, diagnosticLimits.dockerEvents);
+  assert.equal(bounded.events.at(-1).ms, 99, 'the latest events are kept');
+  assert.equal(bounded.dropped, 100 - diagnosticLimits.dockerEvents);
+  assert.deepEqual(projectDockerEvents(undefined, origin, new Set()), { unavailable: true });
+});
+
+test('the artifact places own containers and host Docker events on the navigation clock', async () => {
+  let clock = 5000;
+  const timeline = containerTimeline(() => clock);
+  const own = 'd'.repeat(64), origin = 1_700_000_000_000;
+  timeline.record(['run', '-d', 'image'], () => { clock = 5600; return own; });
+  clock = 8000;
+  const page = new FakePage();
+  const queries = [];
+  const { diagnostics, saved } = observer(page, { timeline, now: () => clock, wall: () => origin,
+    dockerEvents: async query => { queries.push(query);
+      return JSON.stringify(['network', 'connect', 'n', own, (origin - 2990) * 1e6]); } });
+  await assert.rejects(diagnostics.goto(async () => { throw new Error(gotoMessage); }));
+  const detail = JSON.parse(saved[0]);
+  assert.deepEqual(detail.containers, [{ op: 'run', startMs: -3000, endMs: -2400, ok: true }]);
+  assert.deepEqual(detail.docker, { events: [{ type: 'network', action: 'connect', ms: -2990, own: true }], dropped: 0 });
+  assert.equal(queries.length, 1);
+  assert.equal(queries[0].since, (origin - diagnosticLimits.dockerWindowMs) / 1000);
+  assert.equal(queries[0].until, origin / 1000);
+  assert.ok(queries[0].signal instanceof AbortSignal);
+  assert.doesNotMatch(saved[0], /d{64}/);
+});
+
+test('a failing or stalled Docker events query cannot mask the original error', { timeout: 10_000 }, async () => {
+  for (const mode of ['reject', 'hang', 'throw']) {
+    const page = new FakePage();
+    let aborted = false;
+    const dockerEvents = mode === 'reject' ? async () => { throw new Error('docker: private detail'); }
+      : mode === 'throw' ? () => { throw new Error('sync failure'); }
+        : ({ signal }) => new Promise(() => { signal.addEventListener('abort', () => { aborted = true; }); });
+    const { diagnostics, saved } = observer(page, { dockerEvents });
+    const original = new Error(gotoMessage);
+    const started = Date.now();
+    await assert.rejects(diagnostics.goto(async () => { throw original; }), error => error === original);
+    assert.ok(Date.now() - started < diagnosticLimits.dockerEventsMs + diagnosticLimits.snapshotMs + diagnosticLimits.writeMs + 1000);
+    assert.deepEqual(JSON.parse(saved[0]).docker, { unavailable: true });
+    assert.doesNotMatch(saved[0], /private detail/);
+    if (mode === 'hang') assert.ok(aborted, 'the query is aborted at its budget');
+  }
 });

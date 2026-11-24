@@ -10,19 +10,22 @@ import { createRequire } from 'node:module';
 import { records as marketplaceRecords } from '../../../marketplace/fixtures.mjs';
 import { records as catalogRecords } from '../../../catalog/fixtures.mjs';
 import { containerBase, startupFailure, writeFixtures } from './compiled-check.mjs';
-import { hydrationArtifactPath, observeHydration } from './hydration-diagnostics.mjs';
+import { containerTimeline, hydrationArtifactPath, observeHydration, readDockerEvents } from './hydration-diagnostics.mjs';
 
 const { chromium } = createRequire(import.meta.url)('@playwright/test');
 
 const [app, image, profile = 'defaults', focus = 'all'] = process.argv.slice(2);
 assert.ok(['gin', 'drogon', 'topcoat', 'leptos'].includes(app) && image && ['defaults', 'matched'].includes(profile), 'usage: node check-alerts.mjs APP IMAGE [defaults|matched] [all|money]');
 assert.ok(['all', 'money'].includes(focus), 'focus must be all or money');
-const docker = (...args) => {
+// The diagnostic artifact places this check's own container starts and removals against
+// the failing navigation; recording them does not change the calls.
+const timeline = containerTimeline();
+const docker = (...args) => timeline.record(args, () => {
   const result = spawnSync('docker', args, { encoding: 'utf8', timeout: 60_000 });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
   return (args[0] === 'logs' ? result.stdout + result.stderr : result.stdout).trim();
-};
+});
 const folder = await mkdtemp(join(tmpdir(), 'compiled-alerts-'));
 const records = marketplaceRecords();
 let fetched = 0;
@@ -136,8 +139,9 @@ try {
         const page = await context.newPage();
         const hydration = javaScriptEnabled ? observeHydration(page, {
           app, source, profile, container: active, artifactPath: hydrationArtifactPath(app, source, profile),
+          timeline, dockerEvents: readDockerEvents,
         }) : undefined;
-        await page.goto(pageURL);
+        if (javaScriptEnabled) await hydration.goto(() => page.goto(pageURL)); else await page.goto(pageURL);
         if (javaScriptEnabled) await hydration.wait();
         const form = page.locator('.marketplace__alert form');
         const email = `native-${javaScriptEnabled}@example.test`;
@@ -160,7 +164,7 @@ try {
         assert.equal(cookie.secure, false); assert.equal(cookie.expires, -1);
         assert.deepEqual(await read(other), [], 'fresh browser context has no alerts');
         hydration?.reset();
-        await page.goto(pageURL);
+        if (javaScriptEnabled) await hydration.goto(() => page.goto(pageURL)); else await page.goto(pageURL);
         if (javaScriptEnabled) await hydration.wait();
         await page.locator('.marketplace__alert [name=email]').fill(email);
         await page.locator('.marketplace__alert [name=target_price]').fill('invalid');
