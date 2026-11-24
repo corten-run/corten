@@ -6803,7 +6803,9 @@ rules something out.
     subscriber read, at `f5f2132aa`; 2026-11-17, hyper 1.12's HTTP/1 server answering a final
     `100` and `103` with an empty `500` over a socket, at `67d888836`; 2026-11-17, a subscriber
     filtering on the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs
-    above, at `65ac1dc47` against `38587c414`.
+    above, at `65ac1dc47` against `38587c414`; 2026-11-24, the line for the host check's `400`
+    and `421`, at a route through the stages and at one that says `unstaged`, by `log::tests` at
+    `b231f99d0` (the costs above were not taken again).
 
 62. <a id="choice-changelog-fragments"></a>**Unreleased changelog entries are per-change
     Markdown bullets.** Pull requests add separate files rather than edit the same list. The
