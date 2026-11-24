@@ -2951,6 +2951,16 @@ rules something out.
     Playwright 1.65.1 on Linux (tag `evidence/stage-header-checks-2002`), and 2026-11-24, the
     instruction counts with a listed line and with curl's (tags
     `evidence/stage-header-checks-2002` and `evidence/stage-header-checks-2002-review`);
+    2026-11-24, at `b3e4ae44e` (round 19's code, which marks an unstaged route's answer that sets a
+    cookie) against main `657c2fae3` and round 18's head `0737e881d`, built with Rust 1.100.0 in
+    another image than round 18's, so against main only these three builds compare (three rounds
+    alternating them, every run within 2.4 of the others): the plain page 124 more than main
+    (15,746.6 against 15,622.6) and the `cookie` page 415 more (18,911.6 against 18,496.6), each as
+    round 18's head, a tool's answer from an endpoint whose `Tools::auth` found its caller 828 more
+    (28,769.4 against 27,941.5) and 52 fewer than round 18's head, all of that in glibc's `memcmp`
+    with no code on that path changed, and the unstaged route 12 more (6,488.2 against 6,476.2), in
+    `unstaged_headers` (+8) and its handler (+4), 1 more than round 18's head. These are
+    instructions in process, not cycles, as below;
     2026-11-24, at `0737e881d` (round 17's code merged with main `657c2fae3`) against that main,
     built with Rust 1.100.0 (three rounds alternating the two builds, every run within 2.1 of the
     others): the plain page 124 more (15,803.7 against 15,679.7), in the header map's lookups (+70)
