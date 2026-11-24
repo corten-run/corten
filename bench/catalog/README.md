@@ -291,7 +291,9 @@ Exit 0 means native evidence replay passed; exit 2 means required
 observations are missing; exit 1 means malformed or contradictory evidence.
 For a gated negative attempt, the retained upstream and checker image references are checked
 against the pins of the checkout that loads `verify.mjs`, so such an attempt measured before a
-pin moved fails from a newer checkout, naming the pin it expected and the measured commit.
+pin moved fails from a newer checkout. The replay error names the pin it expected and the
+measured commit, but `verify.mjs` reports it only as invalid or contradictory evidence
+([#2026](https://github.com/corten-run/corten/issues/2026)).
 Complete and timed evidence does not compare these references with the checkout's pins; replay
 it from a checkout of its measured commit all the same.
 This is not host-isolation or independent source-audit approval. Those remain
