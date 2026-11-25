@@ -545,7 +545,11 @@ test("bound exit one needs new approval, and continuation waits for exact absenc
   assert.equal(treeHash(extract), originalTree);
   assert.deepEqual(readFileSync(join(h.local, "failed-native-reservation.json")), original);
   assert.equal((await report()).groups[0].outcome, "native-failed-retired");
-  assert.equal((await admit()).rows.find(r => r.group === "client-heavy").retryable, true);
+  const retry = await admit();
+  assert.equal(retry.rows.find(r => r.group === "client-heavy").retryable, true);
+  const mixed = await continuationAdmission(continuation, "mixed-production", input);
+  assert.equal(mixed.subject.exitOneRetirements.length, 1);
+  assert.deepEqual(mixed.subject.exitOneRetirements, retry.subject.exitOneRetirements);
   const after = await inspectContinuation(continuation, input);
   assert.ok(after.report.eligibleToRun.includes("client-heavy"));
   assert.equal(after.report.publishableBaseline, false);
