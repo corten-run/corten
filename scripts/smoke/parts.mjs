@@ -81,15 +81,29 @@ export async function partReads(page, browser, swaps, noSwaps) {
     await held.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
     const failed = await placeholder();
     check("a slow part whose read failed links to the page with it read in, in place of its line", failed.failed === "" && failed.busy === null && !failed.line && failed.link, JSON.stringify(failed));
-    // Followed only when shown, so a link that is not fails the checks, not the run.
+    // Followed only when shown, so a link that is not fails the checks, not the run. Pressed in the
+    // page: a loaded Firefox's click can run out of its time before it lands, and then the page never
+    // left (#2035). The page it opens commits within 5 s of the press, and has its list within 5 s
+    // of that.
+    let opened = false;
     if (failed.link) {
-      await held.click("#picks a", { timeout: 3000 }).catch(() => {});
-      await held.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
+      const pressed = await held.evaluate(() => {
+        const link = /** @type {HTMLAnchorElement | null} */ (document.querySelector("#picks a"));
+        link?.click();
+        return !!link;
+      });
+      opened =
+        pressed &&
+        (await held.waitForURL((url) => url.search === "?picks=true", { waitUntil: "commit", timeout: 5000 }).then(
+          () => true,
+          () => false,
+        ));
+      if (opened) await held.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
     }
     check(
       "the page it links to has the slow part read in, with JavaScript too",
-      new URL(held.url()).search === "?picks=true" && (await held.$$("ul#picks li")).length === 2 && (await held.$("template[data-corten-read-now]")) === null,
-      held.url(),
+      opened && new URL(held.url()).search === "?picks=true" && (await held.$$("ul#picks li")).length === 2 && (await held.$("template[data-corten-read-now]")) === null,
+      `${held.url()}${opened ? "" : ", not opened within 5 s of the press"}`,
     );
     await held.unrouteAll({ behavior: "ignoreErrors" });
     await held.context().close();
