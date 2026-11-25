@@ -16,8 +16,9 @@ sh "$spring/transport-proof/run.sh" "$spring" "$evidence"
 Use a new empty evidence directory for each run. The runner refuses a nonempty
 directory before starting either probe and does not remove any existing reports.
 Each Maven run is sent SIGTERM at 270 seconds and killed if it is still running 10 seconds
-later, so with the app's per-request retries (`.mvn/maven.config`) both runs and their
-reports fit hosted CI's 12-minute step. A run stopped before Surefire starts writes no
+later, so with the app's per-request retries (`.mvn/maven.config`) both runs fit hosted CI's
+12-minute step, 9m20s with their kill grace, which leaves a nominal 2m40s for setup and the
+reports, which run outside those limits. A run stopped before Surefire starts writes no
 report, and the proof then fails.
 
 The timed Dockerfile copies only the ordinary `pom.xml`, `.mvn` and `src` and still
