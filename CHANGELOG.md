@@ -483,6 +483,8 @@ builds against.
 
 ### Other changes
 
+- The dedicated Mixed Production benchmark selects Django's Granian ASGI build and checks that the recorded image and runtime command match that selection. Other Django benchmark groups keep their existing deployment. [#1304 Benchmark parity: Django in approved workload groups](https://github.com/corten-run/corten/issues/1304)
+
 - A failed catalog benchmark app start or log collection now saves a receipt (client lifetime, partial log hash, and the owned container's state and events) before cleanup, and a client whose pipes outlive it no longer hangs the runner. [#1487 Catalog parity CI: detached TanStack container start exceeds 30-second command bound](https://github.com/corten-run/corten/issues/1487)
 
 - Grouped benchmark launch preflight checks the official workload's CPU roles
