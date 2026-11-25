@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -680,11 +680,16 @@ for (const [fault, shutdown = "drained"] of [
     assert.equal(state.outcomes[0].outcome, "preserved-uncertain");
     assert.equal(existsSync(join(root, ".host-attempt.json")), true);
     const directory = join(h.directory, "00-client-heavy-timing/command-0-host");
+    const halted = readdirSync(h.directory).find((name) => /^\d+-halted\.json$/.test(name));
+    const savedHalt = readFileSync(join(h.directory, halted), "utf8");
     if (fault === "write") {
       assert.match(outcome.error.message, /storage incomplete/);
       assert.equal(outcome.error.code, "EIO");
       assert.equal(existsSync(join(directory, "terminal.json")), false); assert.equal(f.removed, false);
+      assert.deepEqual(JSON.parse(savedHalt).hostStorageFailure, { operation: "sample-write", code: "EIO" });
+      assert.ok(!savedHalt.includes("PRIVATE_STORAGE_DETAIL"));
     } else {
+      assert.equal(JSON.parse(savedHalt).hostStorageFailure, undefined);
       const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
       if (fault === "continuity") {
         assert.equal(terminal.observerError, null); assert.equal(terminal.observerFailures.count, 0);

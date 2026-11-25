@@ -186,6 +186,22 @@ test("zero progress is not a completed record write", async (t) => {
   assert.equal(f.live.size, 0);
 });
 
+test("record close failure cannot replace the first fsync fault", { timeout: 5000 }, async (t) => {
+  const f = await storageControl(t);
+  let closeFaults = 0;
+  f.before = (step, path) => {
+    if (!isRecord(path)) return;
+    if (step === "sync") throw ioError();
+    if (step === "close" && closeFaults++ === 0) throw Object.assign(new Error("PRIVATE_CLOSE_DETAIL"), { code: "EPERM" });
+  };
+  f.writer.enqueue([record(1)], "sample\n");
+  await assert.rejects(f.writer.finish(), { operation: "process-record-sync", code: "EIO" });
+  await f.writer.settled;
+  assert.equal(closeFaults, 2);
+  assert.equal(f.live.size, 0);
+  assert.equal(fs.readFileSync(join(f.directory, "samples.jsonl"), "utf8"), "");
+});
+
 test("an exact initial record cannot be replaced by different bytes with the same filename", async (t) => {
   const f = await storageControl(t); f.writer.enqueue([record(1)], "sample\n"); await f.writer.drain();
   fs.writeFileSync(join(f.directory, "processes", `${record(1).key}.json`), record(9).value);
@@ -210,18 +226,20 @@ test("queue bytes include the in-flight frame and admission is atomic", async (t
   const f = await storageControl(t), pause = f.pause("write", isSamples);
   f.writer.enqueue([], "x".repeat(storageLimits.queuedBytes)); await pause.entered;
   assert.equal(f.writer.state().queuedBytes, storageLimits.queuedBytes);
-  assert.throws(() => f.writer.enqueue([record(1)], "x")); assert.equal(f.writer.has(record(1).key), false);
+  assert.throws(() => f.writer.enqueue([record(1)], "x"), { limit: "queued-bytes" });
+  assert.equal(f.writer.has(record(1).key), false);
   pause.release(); await assert.rejects(f.writer.finish()); await f.writer.settled;
   assert.equal(f.writer.state().frames, 0); assert.equal(f.live.size, 0);
 });
 
-test("64 admitted frames includes the one in progress", async (t) => {
+test("64 admitted frames includes the one in progress", { timeout: 5000 }, async (t) => {
   const f = await storageControl(t), pause = f.pause("write", isSamples);
   f.writer.enqueue([], "x"); await pause.entered;
   for (let i = 1; i < storageLimits.frames; i++) f.writer.enqueue([], "x");
   assert.equal(f.writer.state().frames, 64);
-  assert.throws(() => f.writer.enqueue([], "x")); pause.release();
-  await assert.rejects(f.writer.finish()); await f.writer.settled;
+  const fault = { operation: "storage-admission", code: "ERR_ASSERTION", limit: "queued-frames" };
+  assert.throws(() => f.writer.enqueue([], "x"), fault); pause.release();
+  await assert.rejects(f.writer.finish(), fault); await f.writer.settled;
   assert.equal(f.writer.state().frames, 0); assert.equal(f.live.size, 0);
 });
 
@@ -229,7 +247,7 @@ test("4096 pending initial records is bounded before any new dedup reservation",
   const f = await storageControl(t), pause = f.pause("open", isRecord);
   f.writer.enqueue(Array.from({ length: storageLimits.records }, (_, i) => record(i)), "sample\n"); await pause.entered;
   assert.equal(f.writer.state().pendingRecords, 4096);
-  assert.throws(() => f.writer.enqueue([record(4096)], "sample\n"));
+  assert.throws(() => f.writer.enqueue([record(4096)], "sample\n"), { limit: "queued-records" });
   assert.equal(f.writer.has(record(4096).key), false); pause.release();
   await assert.rejects(f.writer.finish()); await f.writer.settled;
   assert.equal(f.writer.state().pendingRecords, 0); assert.equal(f.live.size, 0);
@@ -242,7 +260,7 @@ test("the 256MiB lifetime bound counts acknowledged and pending sample bytes", a
   f.writer.enqueue([], chunk.slice(1)); await f.writer.drain();
   assert.equal(f.writer.state().bytes, storageLimits.bytes - 1);
   f.writer.enqueue([], "x"); await f.writer.drain(); assert.equal(f.writer.state().bytes, storageLimits.bytes);
-  assert.throws(() => f.writer.enqueue([], "x"));
+  assert.throws(() => f.writer.enqueue([], "x"), { limit: "total-bytes" });
   await assert.rejects(f.writer.finish()); await f.writer.settled;
   assert.equal(fs.statSync(join(f.directory, "samples.jsonl")).size + Buffer.byteLength(record(1).value), storageLimits.bytes);
   assert.equal(f.live.size, 0);
@@ -283,7 +301,7 @@ test("timeout rejects proof but owns an unfinished fsync until its actual comple
   assert.equal(fs.readFileSync(join(f.directory, "samples.jsonl"), "utf8"), "");
   pause.release(); await f.writer.settled;
   assert.equal(f.live.size, 0); assert.equal(f.writer.state().complete, false);
-  assert.equal(f.writer.state().error.code, "ETIMEDOUT");
+  assert.deepEqual(f.writer.state().error, { operation: "process-record-sync", code: "ETIMEDOUT" });
 });
 
 test("startup timeout retains ownership before an outstanding open returns a FileHandle", async (t) => {

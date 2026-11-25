@@ -15,6 +15,7 @@ import { observeHost, sampleAuditClock, udevSettleCandidates, udevSettleMs, udev
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
 import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
+import { hostStorageFailure } from "./host-durable-writer.mjs";
 import { composePhase } from "./composition.mjs";
 import { prepareMixedAudit, replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { nativeControlPartition, verifyStreamAudit } from "./control-stream.mjs";
@@ -97,7 +98,10 @@ export function createCampaign({ authorize }) {
         blockers: ["campaign halted; no retry or assumed cleanup", error.message] });
     }
     if (expiry) event(c, "offline-audit-expired", expiry);
-    else event(c, "halted", { error: error.message });
+    else {
+      const storage = hostStorageFailure(error);
+      event(c, "halted", { error: error.message, ...(storage ? { hostStorageFailure: storage } : {}) });
+    }
     save(c, "campaign-result.json", { status: status(c), wholeHostTerminal: "parent-must-observe", deletionAuthorized: false });
   }
   async function exclusive(handle, fn) {

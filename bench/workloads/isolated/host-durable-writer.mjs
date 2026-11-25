@@ -10,6 +10,10 @@ export const storageLimits = Object.freeze({ bytes: 256 * 2 ** 20, queuedBytes: 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const same = (a, b) => ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every((key) => a[key] === b[key]);
 const codes = new Set(["ENOENT", "EEXIST", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ETIMEDOUT", "ERR_ASSERTION"]);
+const failures = new WeakMap();
+
+// Only diagnostics created by this writer may be copied into a campaign halt.
+export const hostStorageFailure = (error) => failures.get(error);
 
 /** One FIFO; credits include the in-flight frame until its writes finish. */
 export function hostDurableWriter(directory) {
@@ -19,12 +23,17 @@ export function hostDurableWriter(directory) {
   let file, error, operation = "sample-open", closing = false, finalizing = false, complete = false, active = false, cleanup;
   let bytes = 0, queuedBytes = 0, frames = 0, pendingRecords = 0, samples = 0;
   let tail;
-  function fail(cause, at = operation) {
-    if (!error) error = Object.assign(new Error("host observation storage incomplete"), {
-      code: codes.has(cause?.code) ? cause.code : "unknown", operation: at,
-    });
+  function fail(cause, at = operation, limit) {
+    if (!error) {
+      const code = cause?.code;
+      const diagnostic = Object.freeze({ operation: at, code: codes.has(code) ? code : "unknown", ...(limit ? { limit } : {}) });
+      error = Object.assign(new Error("host observation storage incomplete"), diagnostic);
+      failures.set(error, diagnostic);
+    }
     return error;
   }
+  function timeout(at = active ? operation : "storage-wait") { return fail({ code: "ETIMEDOUT" }, at); }
+  function overLimit(limit) { return fail({ code: "ERR_ASSERTION" }, "storage-admission", limit); }
   function healthy() { if (error) throw error; }
   async function opened(path, flags) {
     const handle = await open(path, flags, 0o600); handles.add(handle); return handle;
@@ -48,6 +57,7 @@ export function hostDurableWriter(directory) {
     if (process.platform === "win32") return;
     const handle = await opened(path, "r");
     try { healthy(); await handle.sync(); healthy(); }
+    catch (cause) { throw fail(cause); }
     finally { await close(handle); }
     await guardDirectory(path);
   }
@@ -64,10 +74,10 @@ export function hostDurableWriter(directory) {
   async function timed(action) {
     active = true;
     const start = performance.now();
-    const timer = setTimeout(() => { fail({ code: "ETIMEDOUT" }, "storage-timeout"); stop(); }, limits.readyMs);
+    const timer = setTimeout(() => { timeout(operation); stop(); }, limits.readyMs);
     try {
       healthy(); await action();
-      if (performance.now() - start > limits.readyMs) fail({ code: "ETIMEDOUT" }, "storage-timeout");
+      if (performance.now() - start > limits.readyMs) timeout(operation);
       healthy();
     } catch (cause) { fail(cause); stop(); }
     finally { clearTimeout(timer); active = false; }
@@ -88,9 +98,9 @@ export function hostDurableWriter(directory) {
     const start = performance.now();
     try {
       await Promise.race([promise, new Promise((_, reject) => {
-        timer = setTimeout(() => { reject(fail({ code: "ETIMEDOUT" }, "storage-timeout")); stop(); }, limits.readyMs);
+        timer = setTimeout(() => { reject(timeout()); stop(); }, limits.readyMs);
       })]);
-      if (performance.now() - start > limits.readyMs) fail({ code: "ETIMEDOUT" }, "storage-timeout");
+      if (performance.now() - start > limits.readyMs) timeout();
       healthy();
     } finally { clearTimeout(timer); }
   }
@@ -106,7 +116,7 @@ export function hostDurableWriter(directory) {
     get error() { return error; },
     get settled() { return cleanup ?? tail; },
     state() { return { bytes, queuedBytes, frames, pendingRecords, samples, openFiles: handles.size, complete,
-      pendingOwnership: active || frames !== 0 || handles.size !== 0, error: error ? { code: error.code, operation: error.operation } : null }; },
+      pendingOwnership: active || frames !== 0 || handles.size !== 0, error: hostStorageFailure(error) ?? null }; },
     enqueue(initial, sample) {
       try {
         healthy(); assert.equal(closing, false); assert.equal(typeof sample, "string");
@@ -117,9 +127,10 @@ export function hostDurableWriter(directory) {
           return { key, value };
         });
         const size = Buffer.byteLength(sample) + entries.reduce((n, entry) => n + Buffer.byteLength(entry.value), 0);
-        assert.ok(bytes + size <= storageLimits.bytes, "host observation byte bound exceeded");
-        assert.ok(queuedBytes + size <= storageLimits.queuedBytes && frames + 1 <= storageLimits.frames
-          && pendingRecords + entries.length <= storageLimits.records, "host observation queue bound exceeded");
+        if (bytes + size > storageLimits.bytes) throw overLimit("total-bytes");
+        if (queuedBytes + size > storageLimits.queuedBytes) throw overLimit("queued-bytes");
+        if (frames + 1 > storageLimits.frames) throw overLimit("queued-frames");
+        if (pendingRecords + entries.length > storageLimits.records) throw overLimit("queued-records");
         bytes += size; queuedBytes += size; frames++; pendingRecords += entries.length;
         for (const { key, value } of entries) records.set(key, digest(value));
         tail = tail.then(() => timed(async () => {
@@ -131,7 +142,8 @@ export function hostDurableWriter(directory) {
               await write(handle, value); await guardFile(handle, path);
               operation = "process-record-sync"; healthy(); await handle.sync(); healthy();
               await guardFile(handle, path);
-            } finally { await close(handle); }
+            } catch (cause) { throw fail(cause); }
+            finally { await close(handle); }
             operation = "process-directory-sync"; await syncDirectory(processes); healthy();
           }
           operation = "sample-write";
@@ -156,7 +168,8 @@ export function hostDurableWriter(directory) {
             const before = await guardFile(handle, path), value = await handle.readFile();
             assert.equal(digest(value), expected, "initial host observation record mutated");
             assert.ok(same(before, await guardFile(handle, path))); healthy();
-          } finally { await close(handle); }
+          } catch (cause) { throw fail(cause); }
+          finally { await close(handle); }
         }
       }));
       try {
