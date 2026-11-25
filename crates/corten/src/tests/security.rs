@@ -1737,6 +1737,9 @@ fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
                 crate::cache::settle(&mut each, seen, "/a/path");
                 assert_eq!(lines_of(one.headers()), lines_of(each.headers()), "{said}");
                 assert_eq!(one.extensions().len(), each.extensions().len(), "{said}: what is left on it");
+                // Room is left for one more line (`Vary`, where the answer is compressed), as the
+                // stages leave it, so the map does not grow again for it.
+                assert!(one.headers().capacity() > one.headers().len(), "{said}: room for one more line");
                 given += 1;
                 true
             };
@@ -1763,6 +1766,30 @@ fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
         }
     }
     assert!(given > 1000 && left > 1000, "{given} given their lines, {left} left to the stages");
+}
+
+/// A document says where its CSP's reports go when its policy has no feature to deny, too. The
+/// line is the document stage's own (`Applied::document`), and the one pass leaves a document to
+/// that stage, so it is held here by what is sent, not by which answers the pass takes: a page, a
+/// handler's document with its type alone, and the same in an area have it; a text and an API's
+/// answer do not.
+#[tokio::test]
+async fn a_document_whose_policy_denies_no_feature_still_says_where_its_reports_go() {
+    let named = "every feature allowed, and a report endpoint";
+    let (_, policy, dev) = lines_policies().into_iter().find(|(name, ..)| *name == named).expect(named);
+    let router = lines_app(policy, dev).router();
+    let asked = [("/", true), ("/a/html", true), ("/walled/html", true), ("/a/text", false), ("/closed/html", false)];
+    for (path, document) in asked {
+        let (status, lines, _) = lines_sent(&router, "GET", path, &[]).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        let of = |asked: &str| -> Vec<String> {
+            let found = lines.iter().filter(|(name, _)| name == asked);
+            found.map(|(_, value)| String::from_utf8_lossy(value).into_owned()).collect()
+        };
+        let ours = if document { vec![r#"csp="https://reports.example/csp""#] } else { Vec::new() };
+        assert_eq!(of("reporting-endpoints"), ours, "{path}");
+        assert!(of("permissions-policy").is_empty(), "{path}: the policy has no feature to deny");
+    }
 }
 
 /// An answer as it leaves the app: its status, its header lines in the order they are sent, and

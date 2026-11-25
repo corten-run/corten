@@ -2506,9 +2506,10 @@ rules something out.
     treat differently (one with a header that is not its type, a request that took its nonce,
     a page with a style block, a document or a worker's script where the policy has a line for
     those). Two tests hold it equal to the stages:
-    `an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert` gives each of 47 kinds
-    of answer, under 11 policies and in four scopes, to the pass and to the stages, compares
-    the lines and their order, and asserts which kinds the pass takes;
+    `an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert` gives each kind of
+    answer it lists, under each policy it lists and in each scope (an API, pages, an area, an
+    API inside the area), to the pass and to the stages, compares the lines and their order,
+    and asserts which kinds the pass takes;
     `an_answer_given_its_scope_s_lines_in_one_pass_is_sent_as_one_each_line_is_inserted_into`
     compares every answer of an app with pages, an area and APIs outside and inside the area,
     through the router, with the same app's answer when a middleware's one more line sends it
