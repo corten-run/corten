@@ -4,24 +4,86 @@
 // steady-report.mjs and report.mjs read what they saved.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { resultSchema, timedProfilesFor } from "./run-contract.mjs";
+import { cpuSettings, resultSchema, timedProfilesFor } from "./run-contract.mjs";
 
-// v2: a cell's reading is withinTolerance/fromSeconds (the onset window's end), cells keep k6's
-// request and iteration totals, a soak keeps its memory clock and instance, and a pass keeps its
-// cleanup record.
-export const convergenceSchema = "marketplace-convergence/v3";
-export const soakSchema = "marketplace-soak/v3";
+// v4: summary.json is an allowlist. Every saved field is defined by the checkout (a fixed code or
+// text), a validated number, or a value that matches a strict pattern (savedText); the readers
+// refuse any other field or value. A cell's failure and a pass's startup are codes from tables in
+// this module, a soak saves the state of its Docker event stream, and Docker's, k6's and the host's
+// own text stays in the raw files beside the summary.
+export const convergenceSchema = "marketplace-convergence/v4";
+export const soakSchema = "marketplace-soak/v4";
 // The targets and sources of the timed profiles: a page in rotating locales and locale-neutral JSON,
 // from memory and from the HTTP upstream.
 export const steadyTargets = Object.freeze(["page", "json"]);
 export const steadySources = Object.freeze(["fixture", "api"]);
 // The users the timed warmup phase runs (run.mjs load(): VUS 32 for warmup).
 export const timedWarmupVus = 32;
-// How a pass starts each app, as run.mjs coldStart starts it before a timed warmup: the app is
-// created, a sidecar polls the target's own path (the JSON item, or the first locale's page) from
-// docker start until its first 200, and the load follows. A pass with another startup is not
-// like-for-like with a timed round (unlikeRound).
-export const timedStartup = "marketplace cold start/v1: created app, sidecar polls the target's path from docker start to its first 200, then the load";
+// How a pass starts each app, by code. The timed one is run.mjs coldStart before a timed warmup:
+// the app is created, a sidecar polls the target's own path (the JSON item, or the first locale's
+// page) from docker start until its first 200, and the load follows. A pass with another startup is
+// not like-for-like with a timed round (unlikeRound); a reader refuses a code not in this table.
+export const startups = Object.freeze({
+  "marketplace-cold-start/v1": "the timed round's cold start (the app created, then started while a sidecar polls the target's path to its first 200)",
+});
+export const timedStartup = "marketplace-cold-start/v1";
+/**
+ * Why a cell or a pass failed, by code: summary.json keeps only the code, a report prints only its
+ * text from this table, and the error itself (which can quote Docker, k6 or a saved file) goes to
+ * the raw errors.log and run.log.
+ */
+export const failureCodes = Object.freeze({
+  interrupted: "the pass was interrupted",
+  checkout: "the checkout was not clean and committed, or moved during the pass",
+  fixture: "the marketplace fixture is missing or stale",
+  admission: "the round given to --admitted-from could not be read, or admitted no selected adapter",
+  image: "an adapter image could not be built or read, or was not built from the measured commit",
+  tools: "the k6 or upstream image could not be read or did not match its pin",
+  host: "the host could not be read",
+  container: "a container or network could not be created, started or inspected",
+  upstream: "the marketplace upstream did not start",
+  "cold-start": "the app did not start as the timed cold start requires",
+  "load-exit": "the k6 load did not finish or exited with an error",
+  "load-evidence": "k6's summary export or engine clock was missing, or its counts did not validate",
+  "failed-requests": "requests failed, so the cell has no reading",
+  "instance-changed": "the app stopped, restarted, was replaced or was OOM-killed during the pass",
+  unsettled: "a cell's containers were not all removed, or a create was not acknowledged, so no further cell was measured",
+  "summary-invalid": "the summary did not validate as a complete pass",
+  error: "another error",
+});
+/**
+ * The patterns a value from Docker, the host or a probe must match to be saved (savedValue), and
+ * that the readers check again. Anything else is saved as null (not recorded) and kept only in the
+ * raw files. The CPU model is limited to letters, digits, single spaces and ( ) . , @ / + -.
+ */
+export const savedText = Object.freeze({
+  cpu: /^(?=.{1,96}$)[A-Za-z0-9().,@/+-]+( [A-Za-z0-9().,@/+-]+)*$/,
+  kernel: /^\d{1,4}\.\d{1,4}[0-9A-Za-z.+_-]{0,64}$/,
+  onlineCpus: /^\d{1,4}(-\d{1,4})?(,\d{1,4}(-\d{1,4})?){0,63}$/,
+  docker: /^\d{1,4}\.\d{1,4}\.\d{1,4}(-[0-9A-Za-z.]{1,32})?$/,
+  node: /^v\d{1,4}\.\d{1,4}\.\d{1,4}$/,
+  platform: /^[a-z0-9]{1,16}$/,
+  k6Version: /^\d{1,4}\.\d{1,4}\.\d{1,4}$/,
+  imageId: /^sha256:[a-f0-9]{64}$/,
+  containerId: /^[a-f0-9]{64}$/,
+  commit: /^[a-f0-9]{40}$/,
+  sha256: /^[a-f0-9]{64}$/,
+  name: /^[a-z0-9][a-z0-9-]{0,40}$/,
+  runId: /^[a-z0-9][a-z0-9-]{0,127}$/,
+  attemptLabel: /^[a-z0-9.]{1,64}=[a-z0-9-]{1,160}$/,
+  label: /^[\w.-]+=[\w.:/-]*$/,
+  round: /^[rw][1-9]\d{0,8}$/,
+  path: /^(?=.{1,240}$)[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/,
+  time: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/,
+});
+const matches = (kind, value) => typeof value === "string" && savedText[kind].test(value) && !(kind === "path" && value.split("/").some((part) => part === "." || part === ".."));
+/** A value from outside the checkout as summary.json may keep it: whitespace normalized, then its pattern, or null. */
+export function savedValue(kind, text) {
+  assert.ok(Object.hasOwn(savedText, kind), "unknown saved value kind");
+  if (typeof text !== "string") return null;
+  const value = text.replace(/\s+/g, " ").trim();
+  return matches(kind, value) ? value : null;
+}
 /**
  * The tolerance reading: a screening reading of a pass's throughput, not a certificate of steady
  * state. It says whether the end of a pass stayed within stated bounds, and from which window; no
@@ -158,6 +220,42 @@ export function parseSteadyArgs(args, inventory, groupApps) {
   options.windows = integer(seconds / options.windowSeconds, kind === "convergence" ? minConvergenceWindows : 2, maxWindows, "windows (minutes * 60 / window)");
   return options;
 }
+/** The options summary.json keeps: parseSteadyArgs's, without the --admitted-from path (admission keeps a checked one). */
+export function savedOptions(o) {
+  return { kind: o.kind, name: o.name, build: o.build, group: o.group ?? null, apps: [...o.apps], minutes: o.minutes, windowSeconds: o.windowSeconds, windows: o.windows,
+    vus: o.vus, rate: o.rate, targets: [...o.targets], sources: [...o.sources], startupTimeout: o.startupTimeout, labels: [...o.labels] };
+}
+/** What each pass says it is, and the clock its windows are on: fixed text a reader requires. */
+export const passScope = Object.freeze({
+  convergence: "marketplace-v2 convergence: one closed-loop pass per adapter, source and target, throughput and latency per window; not a timed round or a comparison",
+  soak: "marketplace-v2 soak: one fixed-rate pass per adapter, source and target, memory at the start and end, p99 per interval and restarts; not a timed round or a comparison",
+});
+export const windowClock = "windows are the k6 engine's clock from the start of the test; a request counts in the window its answer completed in";
+/**
+ * The restart-relevant events in `docker events --format '{{.Action}}|{{.TimeNano}}'` output for a
+ * soak's app, with their time in seconds from `startedMs` (the load container's StartedAt, on the
+ * daemon's clock as the events are). Every row must be an action (lowercase letters and
+ * underscores, optionally followed by ": " and detail, as health_status and exec_start are) and a
+ * time in nanoseconds; one row that is not makes the whole observation unreadable, so this throws
+ * a fixed message with the count and the caller saves the stream as unavailable. Only start,
+ * restart, die, kill and oom are returned, with no detail.
+ */
+export function readEvents(text, startedMs) {
+  assert.ok(typeof text === "string", "docker events returned no text");
+  assert.ok(Number.isFinite(startedMs), "the load container's StartedAt is not a time");
+  const rows = text.split("\n").map((line) => line.replace(/\r$/, "")).filter((line) => line.length > 0);
+  const events = [];
+  let unreadable = 0;
+  for (const row of rows) {
+    const at = row.lastIndexOf("|"), action = row.slice(0, Math.max(at, 0)), nanos = row.slice(at + 1);
+    if (at <= 0 || !/^[a-z_]{1,32}(: .*)?$/.test(action) || !/^[1-9]\d{0,19}$/.test(nanos)) { unreadable++; continue; }
+    const name = action.split(":", 1)[0];
+    if (restartActions.includes(name)) events.push({ action: name, atSeconds: (Number(nanos) / 1e6 - startedMs) / 1000 });
+  }
+  assert.equal(unreadable, 0, `${unreadable} docker events row${unreadable === 1 ? " is" : "s are"} not an action and a time`);
+  return events;
+}
+const restartActions = Object.freeze(["start", "restart", "die", "oom", "kill"]);
 
 const metric = (summary, name) => summary?.metrics?.[name]?.values ?? summary?.metrics?.[name];
 const count = (summary, name) => {
@@ -272,7 +370,7 @@ function windowsEvidence(windows, n, seconds) {
   assert.ok(Array.isArray(windows) && windows.length === n, "a pass keeps every window");
   windows.forEach((w, index) => {
     assert.deepEqual(Object.keys(w).sort(), ["failed", "index", "p95", "p99", "requests", "rps", "seconds", "startSeconds"], `window ${index}: fields`);
-    assert.equal(w.index, index); assert.equal(w.seconds, seconds); assert.equal(w.startSeconds, index * seconds);
+    assert.ok(w.index === index && w.seconds === seconds && w.startSeconds === index * seconds, `window ${index}: its position and length`);
     assert.ok(Number.isSafeInteger(w.requests) && w.requests >= 0 && Number.isSafeInteger(w.failed) && w.failed >= 0 && w.failed <= w.requests, `window ${index}: counts`);
     assert.equal(w.rps, w.requests / seconds, `window ${index}: throughput contradicts its count`);
     if (w.requests) assert.ok(Number.isFinite(w.p95) && w.p95 >= 0 && w.p95 <= w.p99 && Number.isFinite(w.p99), `window ${index}: latency`);
@@ -294,49 +392,125 @@ export function reconcileCell(c) {
   assert.ok(Number.isSafeInteger(c.failedRequests) && c.failedRequests >= inWindows && c.failedRequests - inWindows <= c.tail + c.unrecorded,
     `${cellKey(c)}: k6's aggregate failures are fewer than its windows' or more than its windows' plus the requests outside them`);
 }
+// An object with exactly the named fields (optional ones may be absent). The message names `where`,
+// which callers pass from this module, never a saved key or value.
+function fields(value, required, where, optional = []) {
+  assert.ok(value !== null && typeof value === "object" && !Array.isArray(value), `${where} is not recorded`);
+  const keys = Object.keys(value);
+  assert.ok(required.every((k) => keys.includes(k)) && keys.every((k) => required.includes(k) || optional.includes(k)), `${where} has fields its schema does not save, or lacks one it does`);
+}
+const nullable = (kind, value, message) => assert.ok(value === null || matches(kind, value), message);
+const finite = (value) => typeof value === "number" && Number.isFinite(value);
+const nonNegative = (value) => Number.isSafeInteger(value) && value >= 0;
+// The saved options: parseSteadyArgs's bounds again, so every option a report prints is checked.
+function optionsEvidence(o, kind) {
+  fields(o, ["kind", "name", "build", "group", "apps", "minutes", "windowSeconds", "windows", "vus", "rate", "targets", "sources", "startupTimeout", "labels"], "the pass's options");
+  assert.ok(o.kind === kind && matches("name", o.name) && typeof o.build === "boolean" && (o.group === null || matches("name", o.group)), "the pass's options: kind, name, build or group");
+  for (const key of ["apps", "sources", "targets"]) assert.ok(Array.isArray(o[key]) && o[key].length > 0, `a pass names at least one of its ${key}`);
+  assert.ok(o.apps.every((a) => matches("name", a)) && new Set(o.apps).size === o.apps.length, "the pass's options: adapters");
+  assert.ok(o.targets.every((t) => steadyTargets.includes(t)) && new Set(o.targets).size === o.targets.length && o.sources.every((t) => steadySources.includes(t)) && new Set(o.sources).size === o.sources.length, "the pass's options: sources and targets");
+  const convergence = kind === "convergence";
+  const within = (value, min, max) => Number.isSafeInteger(value) && value >= min && value <= max;
+  assert.ok(convergence ? within(o.minutes, 2, 30) && within(o.windowSeconds, 5, 60) && flattenRule.holdSeconds % o.windowSeconds === 0 : within(o.minutes, 30, 60) && within(o.windowSeconds, 10, 300), "the pass's options: length and window");
+  assert.ok(within(o.windows, convergence ? minConvergenceWindows : 2, maxWindows) && o.windows * o.windowSeconds === o.minutes * 60, "windows contradict the pass length");
+  assert.ok(convergence ? within(o.vus, 1, 1000) && o.rate === null : within(o.rate, 1, 10000) && o.vus === null, "the pass's options: users or rate");
+  assert.ok(within(o.startupTimeout, 1, 600), "the pass's options: startup timeout");
+  assert.ok(Array.isArray(o.labels) && o.labels.every((l) => matches("label", l) && !(l.startsWith(`${ownerLabelKey}=`) || l.startsWith(`${ownerLabelKey}.`))), "the pass's options: labels");
+}
+// The fields both kinds of pass save, each checked: a saved pass holds nothing else.
 function passEvidence(s, schema) {
   assert.equal(s?.schema, schema, `not a ${schema} result`);
-  assert.match(s.name ?? "", /^[a-z0-9][a-z0-9-]{0,40}$/);
-  assert.match(s.commit ?? "", /^[a-f0-9]{40}$/, "a pass records its measured commit");
+  const kind = schema === convergenceSchema ? "convergence" : "soak";
+  assert.ok(matches("name", s.name) && matches("runId", s.runId), "a pass records its name and run");
+  assert.ok(matches("commit", s.commit), "a pass records its measured commit");
   assert.equal(s.finishedCommit, s.commit, "a pass finishes at the commit it started at");
   assert.equal(s.dirty, false, "a pass measures a clean checkout");
   assert.equal(s.complete, true, "an incomplete pass is not evidence");
   assert.deepEqual(s.failures, [], "a pass with a suite failure is not evidence");
   // Cleanup must be confirmed: no failure, nothing left with the owner label, and every create
   // Docker did not acknowledge found and removed (cleanup.json keeps the whole record).
-  assert.deepEqual(s.cleanupFailures, [], "a pass whose cleanup failed is not evidence");
   const k = s.cleanup;
   assert.ok(k?.complete === true && Array.isArray(k.remaining?.containers) && Array.isArray(k.remaining?.networks) && k.remaining.containers.length === 0 && k.remaining.networks.length === 0
     && Array.isArray(k.unacknowledged) && k.unacknowledged.every((a) => a?.outcome === "removed"), "a pass whose cleanup is not confirmed complete is not evidence");
-  assert.ok(typeof s.host?.cpu === "string" && s.host.cpu.length > 0, "a pass records its host CPU");
-  assert.ok(Number.isFinite(Date.parse(s.startedAt)) && Date.parse(s.finishedAt) > Date.parse(s.startedAt), "a pass records its window");
+  assert.ok(k.failures === 0, "a pass whose cleanup failed is not evidence");
+  fields(k, ["complete", "remaining", "created", "removed", "recovered", "failures", "unacknowledged"], "the pass's cleanup");
+  fields(k.remaining, ["containers", "networks"], "the pass's remaining resources");
+  assert.ok([k.created, k.removed, k.recovered].every(nonNegative), "the pass's cleanup counts");
+  for (const a of k.unacknowledged) { fields(a, ["name", "label", "outcome"], "an unacknowledged create"); nullable("runId", a.name, "an unacknowledged create's name"); nullable("attemptLabel", a.label, "an unacknowledged create's label"); }
+  assert.ok(matches("time", s.startedAt) && matches("time", s.finishedAt) && Date.parse(s.finishedAt) >= Date.parse(s.startedAt), "a pass records its window");
+  const host = s.host;
+  fields(host, ["platform", "release", "node", "docker", "kernel", "cpu", "onlineCpus"], "the pass's host");
+  for (const key of Object.keys(host)) nullable(key === "release" ? "kernel" : key, host[key], `the pass's host ${key} is not a value it saves`);
+  assert.ok(Object.hasOwn(startups, s.startup), "a pass records how it started each app, by a known code");
+  assert.equal(s.scope, passScope[kind], "a pass states its scope");
+  // What makes a pass comparable with a timed round (unlikeRound): its image IDs and CPU settings,
+  // the fixture, upstream and k6 images.
   const o = s.options;
-  assert.equal(o.kind, schema === convergenceSchema ? "convergence" : "soak"); assert.equal(o.name, s.name);
-  for (const key of ["apps", "sources", "targets"]) assert.ok(Array.isArray(o[key]) && o[key].length > 0, `a pass names at least one of its ${key}`);
-  assert.equal(o.windows * o.windowSeconds, o.minutes * 60, "windows contradict the pass length");
+  optionsEvidence(o, kind);
+  assert.equal(o.name, s.name, "the pass's options name another pass");
+  const m = s.measurement;
+  fields(m, ["cpus", "appMemoryBytes", "upstreamMemoryBytes", "encoding", "clock", ...(kind === "soak" ? ["memoryClock"] : [])], "the pass's CPU settings and measurement");
+  const pins = cpuRoles.map((role) => m.cpus?.[role]?.cpuset);
+  assert.ok(pins.every((p) => p === null || (typeof p === "string" && /^\d{1,4}(?:-\d{1,4})?(?:,\d{1,4}(?:-\d{1,4})?){0,63}$/.test(p))), "a pass records its CPU settings");
+  let cpus;
+  try { cpus = cpuSettings(Object.fromEntries(cpuRoles.map((role, i) => [`MARKETPLACE_${role.toUpperCase()}_CPUS`, pins[i] ?? undefined]))); } catch { assert.fail("a pass records its CPU settings"); }
+  assert.deepEqual(m.cpus, cpus, "a pass records its CPU settings");
+  assert.ok(Number.isSafeInteger(m.appMemoryBytes) && m.appMemoryBytes > 0 && Number.isSafeInteger(m.upstreamMemoryBytes) && m.upstreamMemoryBytes > 0 && m.encoding === "identity" && m.clock === windowClock, "the pass's measurement");
+  assert.deepEqual(Object.keys(s.images ?? {}).sort(), [...o.apps].sort(), "a pass records the image ID of every adapter it ran");
+  for (const id of Object.values(s.images)) assert.ok(matches("imageId", id), "image IDs are Docker sha256 IDs");
+  assert.ok(matches("sha256", s.fixtureSha256), "a pass records its fixture hash");
+  for (const tool of ["upstream", "k6"]) assert.ok(matches("imageId", s.tools?.[tool]?.imageId), `a pass records its ${tool} image ID`);
+  fields(s.tools, ["k6", "upstream"], "the pass's tools");
+  fields(s.tools.upstream, ["imageId"], "the pass's upstream image");
+  fields(s.tools.k6, ["imageId", "version"], "the pass's k6 image");
+  assert.ok(matches("k6Version", s.tools.k6.version), "a pass records its k6 version");
+  if (s.admission !== null) {
+    const a = s.admission;
+    fields(a, ["round", "commit", "summarySha256", "path", "selected", "admitted"], "the pass's admission");
+    assert.ok(matches("round", a.round) && matches("commit", a.commit) && matches("sha256", a.summarySha256) && (a.path === null || matches("path", a.path))
+      && [a.selected, a.admitted].every((list) => Array.isArray(list) && list.every((x) => matches("name", x))) && o.apps.every((x) => a.selected.includes(x) && a.admitted.includes(x)), "the pass's admission");
+  }
+  fields(s, ["schema", "name", "runId", "options", ...(kind === "convergence" ? ["rule"] : []), "startedAt", "finishedAt", "complete", "failures", "cleanup", "cells", "admission", "startup",
+    "host", "scope", "measurement", "commit", "finishedCommit", "dirty", "fixtureSha256", "images", "tools"], "the pass");
   assert.ok(Array.isArray(s.cells) && s.cells.length === o.apps.length * o.sources.length * o.targets.length, "a pass has one cell per adapter, source and target");
   const expected = o.sources.flatMap((source) => o.apps.flatMap((app) => o.targets.map((target) => `${app} ${source} ${target}`)));
-  assert.deepEqual(s.cells.map(cellKey), expected, "cells are not the pass's adapters, sources and targets in order");
+  assert.deepEqual(s.cells.map((c) => (typeof c?.app === "string" && typeof c.source === "string" && typeof c.target === "string" ? cellKey(c) : null)), expected, "cells are not the pass's adapters, sources and targets in order");
+}
+// A cell that failed keeps its code from failureCodes and nothing it measured.
+function failedCell(c, extra = []) {
+  fields(c, ["app", "source", "target", "failure", ...extra], `${cellKey(c)}: a failed cell`);
+  assert.ok(Object.hasOwn(failureCodes, c.failure), `${cellKey(c)}: a failed cell keeps a known failure code`);
+}
+/**
+ * A reader's refusal, without the values that failed: an assertion this module wrote keeps the
+ * first line of its message (each is one line of fixed text, or names only checked fields and
+ * numbers; Node appends a diff of the compared values below it for some assertions, and that is
+ * dropped); any other error (an assertion message Node generated from the values, a TypeError on a
+ * malformed field) becomes a fixed one. The values themselves are never on the thrown error.
+ */
+function refusing(validate) {
+  return (s) => {
+    try { return validate(s); } catch (error) {
+      throw new Error(error?.code === "ERR_ASSERTION" && error.generatedMessage === false ? String(error.message).split("\n", 1)[0] : "the saved pass is not one this schema reads");
+    }
+  };
+}
+/** A saved pass's JSON, or a fixed refusal: JSON.parse's own message quotes the input. */
+export function parseSaved(text) {
+  try { return JSON.parse(text); } catch { throw new Error("the saved pass is not JSON"); }
 }
 /** Validates a saved convergence pass and recomputes every verdict. Returns it. */
-export function validateConvergence(s) {
+export const validateConvergence = refusing(checkConvergence);
+function checkConvergence(s) {
   passEvidence(s, convergenceSchema);
   assert.deepEqual(s.rule, flattenRule, "a convergence pass applies the stated tolerance reading");
-  assert.ok(Number.isSafeInteger(s.options.vus) && s.options.vus > 0);
-  // What makes a pass comparable with a timed round (unlikeRound): its image IDs and CPU settings.
-  assert.deepEqual(Object.keys(s.images ?? {}).sort(), [...s.options.apps].sort(), "a pass records the image ID of every adapter it ran");
-  for (const id of Object.values(s.images)) assert.match(id, /^sha256:[a-f0-9]{64}$/, "image IDs are Docker sha256 IDs");
-  assert.ok(cpuRoles.every((role) => Number.isFinite(s.measurement?.cpus?.[role]?.quota)), "a pass records its CPU settings");
-  // And the other inputs a timed round records: fixture, upstream and k6 images, kernel, online CPUs, startup.
-  assert.match(s.fixtureSha256 ?? "", /^[a-f0-9]{64}$/, "a pass records its fixture hash");
-  for (const tool of ["upstream", "k6"]) assert.match(s.tools?.[tool]?.imageId ?? "", /^sha256:[a-f0-9]{64}$/, `a pass records its ${tool} image ID`);
-  for (const key of ["kernel", "onlineCpus"]) assert.ok(typeof s.host[key] === "string" && s.host[key].length > 0, `a pass records its host ${key}`);
-  assert.ok(typeof s.startup === "string" && s.startup.length > 0, "a pass records how it started each app");
   for (const c of s.cells) {
     if (c.failure !== undefined) {
-      assert.ok(typeof c.failure === "string" && c.failure.length > 0 && c.windows === undefined && c.verdict === null, `${cellKey(c)}: a failed cell keeps its reason and no verdict`);
+      failedCell(c, ["verdict"]);
+      assert.equal(c.verdict, null, `${cellKey(c)}: a failed cell has no verdict`);
       continue;
     }
+    fields(c, ["app", "source", "target", "windows", "tail", "unrecorded", "requests", "iterations", "latencyMaxMs", "failedRequests", "verdict"], `${cellKey(c)}: a convergence cell`);
     windowsEvidence(c.windows, s.options.windows, s.options.windowSeconds);
     // A failed answer can be faster than a served one: a cell with any failure, in a window or in
     // k6's aggregate (which also counts the graceful stop), has no verdict, so none is saved.
@@ -396,43 +570,64 @@ function soakMemory(memory, seconds, end) {
  * restart is any RestartCount increase, another container ID or StartedAt at the end (a
  * `docker restart` keeps RestartCount), any start, restart, die, kill or OOM event during the soak,
  * or a container not running or OOM-killed at the end. `memory` is null when sampling failed.
+ * `events` is readEvents's list, or null when the event stream could not be read; the stream's
+ * state is saved as eventStream: "unavailable", "clean" (read, and no restart-relevant event) or
+ * "seen" (at least one). With no other sign of a restart, an unavailable stream leaves `restarted`
+ * null (not established) rather than false. Memory and the event stream are independent: either
+ * can be unavailable while the other and the container states are reported.
  */
 export function summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory, before, after, events, rate, droppedIterations, failedRequests }) {
   assert.ok(Array.isArray(windows) && windows.length >= 2, "a soak has at least two intervals");
   const seconds = windows[0].seconds, end = windows.length * seconds;
   for (const c of [before, after]) assert.ok(typeof c?.id === "string" && typeof c.startedAt === "string" && Number.isSafeInteger(c.restartCount) && c.restartCount >= 0 && typeof c.running === "boolean" && typeof c.oomKilled === "boolean", "container state needs id, startedAt, restartCount, running and oomKilled");
   assert.ok(after.restartCount >= before.restartCount, "RestartCount moved backwards");
-  const restartEvents = events.filter((e) => ["start", "restart", "die", "oom", "kill"].includes(e.action)).map((e) => ({ action: e.action, atSeconds: e.atSeconds }));
+  assert.ok(events === null || (Array.isArray(events) && events.every((e) => restartActions.includes(e?.action) && finite(e.atSeconds))), "events are readEvents's list or null");
+  const restartEvents = (events ?? []).map((e) => ({ action: e.action, atSeconds: e.atSeconds }));
+  const eventStream = events === null ? "unavailable" : restartEvents.length ? "seen" : "clean";
   const replaced = after.id !== before.id || after.startedAt !== before.startedAt;
-  const restarted = after.restartCount > before.restartCount || replaced || restartEvents.length > 0 || !after.running || after.oomKilled;
   const p99 = windows.filter((w) => w.p99 !== null).map((w) => w.p99);
   return { windows, tail, unrecorded, requests, iterations, latencyMaxMs, rate: soakArrivals({ rate, seconds: end, requests, droppedIterations }), memory: soakMemory(memory, seconds, end),
     p99: { first: windows[0].p99, last: windows.at(-1).p99, max: p99.length ? Math.max(...p99) : null },
     failed: windows.reduce((sum, w) => sum + w.failed, 0), failedRequests,
-    restarts: { restarted, restartCount: after.restartCount - before.restartCount, replaced, events: restartEvents, runningAtEnd: after.running, oomKilled: after.oomKilled } };
+    restarts: restartClaim({ restartCount: after.restartCount - before.restartCount, replaced, eventStream, events: restartEvents, runningAtEnd: after.running, oomKilled: after.oomKilled }) };
+}
+// The restart claim from its observations: true on any sign of a restart, false only when the
+// event stream was read and showed none, and null (not established) when it could not be read.
+function restartClaim(r) {
+  const seen = r.restartCount > 0 || r.replaced || r.events.length > 0 || !r.runningAtEnd || r.oomKilled;
+  return { restarted: seen ? true : r.eventStream === "unavailable" ? null : false, ...r };
 }
 /** Validates a saved soak, including that its rate, p99, memory and restart claims agree with its own counters. Returns it. */
-export function validateSoak(s) {
+export const validateSoak = refusing(checkSoak);
+function checkSoak(s) {
   passEvidence(s, soakSchema);
-  assert.ok(Number.isSafeInteger(s.options.rate) && s.options.rate > 0);
+  assert.ok(Number.isSafeInteger(s.options.rate) && s.options.rate > 0, "a soak records its rate");
   assert.equal(s.measurement?.memoryClock, soakMemoryClock, "a soak states the clock of its memory samples");
   for (const c of s.cells) {
-    if (c.failure !== undefined) { assert.ok(typeof c.failure === "string" && c.failure.length > 0 && c.windows === undefined, `${cellKey(c)}: a failed cell keeps its reason`); continue; }
+    if (c.failure !== undefined) { failedCell(c); continue; }
+    fields(c, ["app", "source", "target", "windows", "tail", "unrecorded", "requests", "iterations", "latencyMaxMs", "rate", "memory", "p99", "failed", "failedRequests", "restarts"], `${cellKey(c)}: a soak cell`);
     windowsEvidence(c.windows, s.options.windows, s.options.windowSeconds);
     reconcileCell(c);
     const m = c.memory;
     if (m?.unavailable !== undefined) {
-      assert.ok(memoryReasons.test(m.unavailable) && Number.isSafeInteger(m.samples) && m.samples >= 0 && [m.startMiB, m.endMiB, m.growthMiB, m.growthPct].every((x) => x === null), `${cellKey(c)}: unavailable memory`);
+      fields(m, ["samples", "unavailable", "startMiB", "endMiB", "growthMiB", "growthPct"], `${cellKey(c)}: unavailable memory`);
+      assert.ok(typeof m.unavailable === "string" && memoryReasons.test(m.unavailable) && nonNegative(m.samples) && [m.startMiB, m.endMiB, m.growthMiB, m.growthPct].every((x) => x === null), `${cellKey(c)}: unavailable memory`);
     } else {
-      assert.ok(Number.isSafeInteger(m?.samples) && m.samples > 1 && m.startMiB > 0 && m.endMiB > 0 && m.growthMiB === m.endMiB - m.startMiB && m.growthPct === m.growthMiB / m.startMiB * 100, `${cellKey(c)}: memory`);
+      fields(m, ["samples", "startMiB", "endMiB", "growthMiB", "growthPct"], `${cellKey(c)}: memory`);
+      // Numbers before any arithmetic: a string would pass a comparison and break the report.
+      assert.ok(nonNegative(m.samples) && m.samples > 1 && finite(m.startMiB) && m.startMiB > 0 && finite(m.endMiB) && m.endMiB > 0 && finite(m.growthMiB) && finite(m.growthPct)
+        && m.growthMiB === m.endMiB - m.startMiB && m.growthPct === m.growthMiB / m.startMiB * 100, `${cellKey(c)}: memory`);
     }
     const p99 = c.windows.filter((w) => w.p99 !== null).map((w) => w.p99);
     assert.deepEqual(c.p99, { first: c.windows[0].p99, last: c.windows.at(-1).p99, max: p99.length ? Math.max(...p99) : null }, `${cellKey(c)}: p99 contradicts its intervals`);
     assert.equal(c.failed, c.windows.reduce((sum, w) => sum + w.failed, 0), `${cellKey(c)}: failures`);
     const r = c.restarts;
-    assert.ok(Number.isSafeInteger(r?.restartCount) && r.restartCount >= 0 && typeof r.replaced === "boolean" && typeof r.runningAtEnd === "boolean" && typeof r.oomKilled === "boolean"
-      && Array.isArray(r.events) && r.events.every((e) => ["start", "restart", "die", "oom", "kill"].includes(e?.action) && Number.isFinite(e.atSeconds)), `${cellKey(c)}: restarts`);
-    assert.equal(r.restarted, r.restartCount > 0 || r.replaced || r.events.length > 0 || !r.runningAtEnd || r.oomKilled, `${cellKey(c)}: the restart claim contradicts its counters, events and final state`);
+    fields(r, ["restarted", "restartCount", "replaced", "eventStream", "events", "runningAtEnd", "oomKilled"], `${cellKey(c)}: restarts`);
+    assert.ok(nonNegative(r.restartCount) && typeof r.replaced === "boolean" && typeof r.runningAtEnd === "boolean" && typeof r.oomKilled === "boolean" && ["unavailable", "clean", "seen"].includes(r.eventStream)
+      && Array.isArray(r.events) && r.events.every((e) => e !== null && typeof e === "object" && Object.keys(e).sort().join() === "action,atSeconds" && restartActions.includes(e.action) && finite(e.atSeconds)), `${cellKey(c)}: restarts`);
+    assert.ok((r.eventStream === "seen") === (r.events.length > 0), `${cellKey(c)}: the event stream's state contradicts its events`);
+    assert.deepEqual(r, restartClaim({ restartCount: r.restartCount, replaced: r.replaced, eventStream: r.eventStream, events: r.events, runningAtEnd: r.runningAtEnd, oomKilled: r.oomKilled }),
+      `${cellKey(c)}: the restart claim contradicts its counters, events and final state`);
     assert.ok(Number.isSafeInteger(c.rate?.droppedIterations), `${cellKey(c)}: rate`);
     assert.deepEqual(c.rate, soakArrivals({ rate: s.options.rate, seconds: s.options.windows * s.options.windowSeconds, requests: c.requests, droppedIterations: c.rate.droppedIterations }), `${cellKey(c)}: the fixed-rate claim contradicts k6's counts and the schedule`);
   }
@@ -441,7 +636,7 @@ export function validateSoak(s) {
 
 const pct = (x) => `${x * 100}%`;
 /** The tolerance reading in words: its bounds and what it does not detect. */
-export const ruleText = `a screening reading of throughput, not a certificate of steady state. "Within the stated tolerance from the window ending at N s" means that from that window to the end of the pass, at least ${flattenRule.holdSeconds} s, every window's throughput was within ${pct(flattenRule.windowTolerance)} of the median of the last ${flattenRule.holdSeconds} s (the tail), every three-window median within ${pct(flattenRule.tolerance)}, and the least-squares line through those windows changed by at most ${pct(flattenRule.tolerance)} of the tail, and that neither the first nor the second-to-last ${flattenRule.holdSeconds} s ran more than ${pct(flattenRule.tolerance)} above the tail. Oscillation or drift inside those bounds reads as within tolerance; a shift of under ${pct(flattenRule.windowTolerance)} in the last window can go undetected; the onset is resolved to one window and given as that window's end; readings at different window lengths are not comparable. p95 and p99 are kept as evidence and not read.`;
+export const ruleText = `a screening reading of throughput, not a certificate of steady state. "Within the stated tolerance from the window ending at N s" means that from that window to the end of the pass, at least ${flattenRule.holdSeconds} s, every window's throughput was within ${pct(flattenRule.windowTolerance)} of the median of the last ${flattenRule.holdSeconds} s (the tail), every three-window median within ${pct(flattenRule.tolerance)} of it, that window's own throughput within ${pct(flattenRule.tolerance)} of it, and the least-squares line through those windows changed by at most ${pct(flattenRule.tolerance)} of it; and that neither the median of the first ${flattenRule.holdSeconds} s nor the median of the ${flattenRule.holdSeconds} s before the tail was more than ${pct(flattenRule.tolerance)} above the tail median (those two are comparisons between medians, not of each window). Oscillation or drift inside those bounds reads as within tolerance; a shift of under ${pct(flattenRule.windowTolerance)} in the last window can go undetected; the onset is resolved to one window and given as that window's end; readings at different window lengths are not comparable. p95 and p99 are kept as evidence and not read.`;
 /**
  * A reading in words. An end-state reading says literally what was compared, never how the
  * throughput moved: "the last 60 s median is more than 5% above the 60 s before it" is a comparison
@@ -478,16 +673,19 @@ const cpuRoles = ["app", "load", "api"];
  * page warmup rotated locales as the pass does and whose measured adapters' timed warmups had no
  * failed request. A value either side does not record cannot be matched, so it is a difference: an
  * unpinned container's CPU placement is not recorded. A split round ran on several droplets.
+ * Each reason is fixed text naming the input (and, for counts, a validated number): neither side's
+ * values are quoted, since the round's and the pass's are read from saved files.
  */
 export function unlikeRound(round, apps, c) {
   const reasons = [], o = c.options;
+  const side = (value) => (value == null ? "not recorded" : "recorded");
   const same = (what, pass, timed) => {
-    if (pass == null || timed == null) reasons.push(`${what} is not recorded on both sides (pass: ${pass ?? "not recorded"}; round: ${timed ?? "not recorded"})`);
-    else if (pass !== timed) reasons.push(`${what} differs (pass: ${pass}; round: ${timed})`);
+    if (pass == null || timed == null) reasons.push(`${what} is not recorded on both sides (pass: ${side(pass)}; round: ${side(timed)})`);
+    else if (pass !== timed) reasons.push(`${what} differs`);
   };
   if (round.split) reasons.push("this round was split across droplets, each its own host");
-  if (c.commit !== round.commit) reasons.push(`the pass measured commit \`${c.commit}\`, this round \`${round.commit}\``);
-  if ((round.options.group ?? null) !== (o.group ?? null)) reasons.push(`the pass ran ${o.group ? `group ${o.group}` : "no group"}, this round ${round.options.group ? `group ${round.options.group}` : "no group"}, so their images and container settings differ`);
+  if (c.commit !== round.commit) reasons.push("the pass measured another commit than this round");
+  if ((round.options.group ?? null) !== (o.group ?? null)) reasons.push(`the pass ran ${o.group ? "a group" : "no group"} and this round ${round.options.group ? "a group" : "no group"}${o.group && round.options.group ? " (another one)" : ""}, so their images and container settings differ`);
   const images = apps.map((app) => ({ app, round: round.apps?.[app]?.imageId ?? null, pass: c.images?.[app] ?? null }));
   const unrecorded = images.filter((i) => !i.round || !i.pass).map((i) => i.app), differ = images.filter((i) => i.round && i.pass && i.round !== i.pass).map((i) => i.app);
   if (unrecorded.length) reasons.push(`image IDs are not recorded on both sides for ${unrecorded.join(", ")}`);
@@ -508,20 +706,22 @@ export function unlikeRound(round, apps, c) {
   same("the upstream memory limit (bytes)", c.measurement?.upstreamMemoryBytes, round.measurement?.upstreamMemoryBytes);
   same("the response encoding", c.measurement?.encoding, round.measurement?.encoding);
   if (o.vus !== timedWarmupVus) reasons.push(`the pass ran ${o.vus} users, the timed warmup ${timedWarmupVus}`);
-  if (c.startup !== timedStartup) reasons.push(`the pass started each app another way than the timed round's cold start (${c.startup ?? "not recorded"})`);
+  if (c.startup !== timedStartup) reasons.push("the pass started each app another way than the timed round's cold start");
   // window-load.js rotates locales on pages; a round of an earlier schema warmed one locale per profile.
-  const fixedLocales = o.targets.includes("page") && (!round.schema || timedProfilesFor(round.schema).some((p) => p.target === "page" && p.locale !== "rotating"));
-  if (fixedLocales) reasons.push(`this round's page warmup ${round.schema ? `(${round.schema}) used one locale per profile` : "does not record its locale profiles"}, while the pass rotates locales as ${resultSchema} does`);
+  const known = typeof round.schema === "string" && readable(round.schema);
+  const fixedLocales = o.targets.includes("page") && (!known || timedProfilesFor(round.schema).some((p) => p.target === "page" && p.locale !== "rotating"));
+  if (fixedLocales) reasons.push(`this round's page warmup ${known ? "used one locale per profile" : "does not record its locale profiles"}, while the pass rotates locales as ${resultSchema} does`);
   // A timed warmup that itself failed requests is not the served load the pass measured.
   for (const app of apps) {
-    const runs = Object.entries(round.apps?.[app]?.runs ?? {}).flatMap(([profile, list]) => (Array.isArray(list) ? list : []).map((run) => ({ profile, failed: run?.warmup?.failed })));
-    const unknown = runs.filter((run) => !Number.isSafeInteger(run.failed) || run.failed < 0), failed = runs.filter((run) => Number.isSafeInteger(run.failed) && run.failed > 0);
+    const runs = Object.values(round.apps?.[app]?.runs ?? {}).flatMap((list) => (Array.isArray(list) ? list : []).map((run) => run?.warmup?.failed));
+    const unknown = runs.filter((failed) => !nonNegative(failed)).length, failed = runs.filter((n) => nonNegative(n) && n > 0);
     if (!runs.length) reasons.push(`this round records no timed warmup for ${app}`);
-    if (unknown.length) reasons.push(`this round does not record the failed requests of ${app}'s timed warmup (${[...new Set(unknown.map((run) => run.profile))].join(", ")})`);
-    if (failed.length) reasons.push(`this round's timed warmup had failed requests for ${app} (${failed.map((run) => `${run.profile}: ${run.failed}`).join(", ")}), so it is not comparable`);
+    if (unknown) reasons.push(`this round does not record the failed requests of ${app}'s timed warmup in ${unknown} run${unknown === 1 ? "" : "s"}`);
+    if (failed.length) reasons.push(`this round's timed warmup had ${failed.reduce((a, b) => a + b, 0)} failed requests for ${app} in ${failed.length} run${failed.length === 1 ? "" : "s"}, so it is not comparable`);
   }
   return reasons;
 }
+const readable = (schema) => { try { timedProfilesFor(schema); return true; } catch { return false; } };
 /**
  * What the timed reporter says about a convergence pass it was given (#1851): which pass, whether
  * it is like-for-like with the round with every differing or missing input listed, and each
@@ -536,8 +736,10 @@ export function unlikeRound(round, apps, c) {
 export function convergenceLines(round, apps, convergence) {
   const warmup = round.options.warmup;
   assert.ok(convergence != null, "convergenceLines reads a convergence pass");
+  // The round is validated by report.mjs; its adapter names and warmup are printed, so check them here too.
+  assert.ok(Array.isArray(apps) && apps.every((app) => matches("name", app)) && finite(warmup) && warmup >= 0, "convergenceLines reads a validated round's adapters and warmup");
   const c = validateConvergence(convergence), o = c.options;
-  const lines = [`Convergence evidence: pass ${c.name} (${convergenceSchema}, reading ${flattenRule.name}), measured at commit \`${c.commit}\`. Host CPU: ${c.host.cpu}. One ${o.vus}-user closed-loop pass of ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s windows from the start of the load, after ${c.startup === timedStartup ? "the timed round's cold start" : `another startup (${c.startup})`}.`];
+  const lines = [`Convergence evidence: pass ${c.name} (${convergenceSchema}, reading ${flattenRule.name}), measured at commit \`${c.commit}\`. Host CPU: ${c.host.cpu ?? "not recorded"}. One ${o.vus}-user closed-loop pass of ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s windows from the start of the load, after ${startups[c.startup]}.`];
   const reasons = unlikeRound(round, apps, c);
   lines.push(reasons.length ? `The pass is not like-for-like with this round. Differing or missing inputs: ${reasons.join("; ")}.`
     : `The pass is like-for-like with this round on every input compared: commit, group, adapter images, fixture, upstream and k6 images, CPU quota and pinning for each role, host CPU, kernel, online CPUs, startup timeout, memory limits, response encoding, the timed warmup's ${timedWarmupVus} users, the cold start before the load, rotating page locales and a timed warmup with no failed request.`);
@@ -548,7 +750,7 @@ export function convergenceLines(round, apps, convergence) {
     if (!cell) missing.push(`${app} ${source} ${target}`);
     else found.push({ name: `${app} ${source} ${target}`, cell });
   }
-  for (const { name, cell } of found) lines.push(`Reading: ${name}: ${cell.failure !== undefined ? `no reading, the cell failed (${cell.failure.split("\n")[0]})` : verdictText(cell.verdict)}.`);
+  for (const { name, cell } of found) lines.push(`Reading: ${name}: ${cell.failure !== undefined ? `no reading, the cell failed (${failureCodes[cell.failure]})` : verdictText(cell.verdict)}.`);
   if (missing.length) lines.push(`No convergence pass for: ${missing.join(", ")}.`);
   lines.push(`This report does not establish whether this round's ${warmup}s timed warmup was sufficient: the pass is a screening reading of throughput, and a timed warmup is set only by a separate reviewed change from a saved like-for-like pass.`);
   return lines;

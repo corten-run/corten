@@ -354,8 +354,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   assert.ok(args.length === 1 || (args.length === 3 && args[1] === "--convergence"), "usage: node bench/marketplace/report.mjs summary.json [--convergence convergence-summary.json]");
   let convergence = null;
   if (args.length === 3) {
-    const pass = JSON.parse(readFileSync(args[2], "utf8"));
-    const { convergenceLines } = await import("./steady-contract.mjs");
+    const { convergenceLines, parseSaved } = await import("./steady-contract.mjs");
+    const pass = parseSaved(readFileSync(args[2], "utf8"));
     convergence = (round, apps) => convergenceLines(round, apps, pass);
   }
   console.log(report(JSON.parse(readFileSync(args[0], "utf8")), { convergence }));

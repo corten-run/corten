@@ -13,14 +13,19 @@
 // k6: its version is read from a container this pass creates and removes like any other, and each
 // load's engine clock and counters are checked by load-evidence.mjs validateLoadExecution, as a
 // timed round's are, before any window is read.
-// Saved text: summary.json and cleanup.json keep only fixed messages or the first line this runner
-// or its command runner composes. Docker's and k6's own output (stderr, a malformed answer, a JSON
-// parse excerpt) is untrusted and is never quoted there; the full error goes to the raw errors.log.
+// Saved text: summary.json is an allowlist (steady-contract.mjs savedText): every field is defined
+// by the checkout, a validated number, or a value from Docker, k6 or the host that matched its
+// pattern (otherwise null, not recorded). A failure is saved as a code from failureCodes, never its
+// message. Docker's, k6's and the host's own output stays in the raw files beside the summary
+// (host.txt, docker-version.txt, k6.json, images.json, the container receipts) and errors.log; the
+// message of each failure goes to errors.log and run.log. cleanup.json keeps the first line this
+// runner or its command runner composes for each cleanup failure. Before a pass is saved as
+// complete, the same validator a reader runs is run on it, so a complete pass always reads.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { hostname, platform, release } from "node:os";
+import { platform, release } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cpuSettings, imageProvenance, readLoadSummary } from "./run-contract.mjs";
@@ -34,14 +39,22 @@ import { validateMarketplace } from "./records.mjs";
 import { records } from "./fixtures.mjs";
 import { locales } from "./contract.mjs";
 import { ownedResources, reconcileWindow, runClock } from "./alert-probe-run.mjs";
-import { checkFixture, convergenceSchema, flattenPoint, flattenRule, heldThrough, ownerLabelKey, readDropped, readWindows, reconcileCell, soakMemoryClock, soakSchema, summarizeSoak, timedStartup, verdictText } from "./steady-contract.mjs";
+import { checkFixture, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell, savedOptions, savedValue,
+  soakMemoryClock, soakSchema, summarizeSoak, timedStartup, validateConvergence, validateSoak, verdictText, windowClock } from "./steady-contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
 const fixtureDir = join(here, "fixtures");
 const containerId = /^[a-f0-9]{64}$/;
-// The first line of an error, bounded: what a saved record keeps.
+// The first line of an error, bounded: what cleanup.json and run.log keep.
 export const firstLine = (error) => String(error?.message ?? error).split("\n", 1)[0].slice(0, 500);
+// A failure's code (failureCodes): the first one given to the error is kept, so the innermost
+// step that knows what failed names it.
+const coded = (code, error) => {
+  if (error !== null && typeof error === "object" && !Object.hasOwn(failureCodes, error.failureCode)) { try { error.failureCode = code; } catch {} }
+  return error;
+};
+const step = async (code, work) => { try { return await work(); } catch (error) { throw coded(code, error); } };
 // The metrics window-load.js and k6 itself export. A summary with any other name is refused with a
 // count before a validator can quote the name.
 const k6Metrics = new Set(["http_reqs", "http_req_duration", "http_req_duration{expected_response:true}", "http_req_blocked", "http_req_connecting", "http_req_tls_handshaking",
@@ -149,14 +162,15 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   const cpus = cpuSettings(env);
   mkdirSync(dirname(folder), { recursive: true });
   mkdirSync(folder);
-  const summary = { schema: convergence ? convergenceSchema : soakSchema, name: options.name, runId, options, ...(convergence ? { rule: flattenRule } : {}),
-    startedAt: new Date().toISOString(), complete: false, failures: [], cleanupFailures: [], cells: [], admission: null, startup: timedStartup,
-    host: { hostname: hostname(), platform: platform(), release: release() },
-    scope: convergence ? "marketplace-v2 convergence: one closed-loop pass per adapter, source and target, throughput and latency per window; not a timed round or a comparison"
-      : "marketplace-v2 soak: one fixed-rate pass per adapter, source and target, memory at start and end, p99 per interval and restarts; not a timed round or a comparison",
-    measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity",
-      clock: "windows are the k6 engine's clock from the start of the test; a request counts in the window its answer completed in",
-      ...(convergence ? {} : { memoryClock: soakMemoryClock }) } };
+  assert.ok(savedValue("runId", runId) === runId, "a pass's run ID is lowercase letters, digits and dashes");
+  // Every field summary.json may hold, set from the checkout or through savedValue; nothing else is
+  // added to it. The host's name is not kept.
+  const summary = { schema: convergence ? convergenceSchema : soakSchema, name: options.name, runId, options: savedOptions(options), ...(convergence ? { rule: flattenRule } : {}),
+    startedAt: new Date().toISOString(), finishedAt: null, complete: false, failures: [], cleanup: null, cells: [], admission: null, startup: timedStartup,
+    host: { platform: savedValue("platform", platform()), release: savedValue("kernel", release()), node: savedValue("node", process.version), docker: null, kernel: null, cpu: null, onlineCpus: null },
+    scope: passScope[options.kind],
+    measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", clock: windowClock, ...(convergence ? {} : { memoryClock: soakMemoryClock }) },
+    commit: null, finishedCommit: null, dirty: null, fixtureSha256: null, images: {}, tools: null };
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
   const log = (message) => { const line = `${new Date().toISOString()} ${message}`; print(line); appendFileSync(join(folder, "run.log"), `${line}\n`); };
   const retain = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2));
@@ -179,6 +193,14 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   const parsed = (text, what) => {
     try { return JSON.parse(text); } catch (error) { keep(what, `${error.message}\n${String(text).slice(0, 4096)}`); throw new Error(`${what} is not JSON`); }
   };
+  // A failure's code for summary.json; its message goes to errors.log (here) and run.log (the caller).
+  const codeOf = (where, error) => {
+    keep(where, error);
+    return interrupted() ? "interrupted" : Object.hasOwn(failureCodes, error?.failureCode) ? error.failureCode : "error";
+  };
+  // A value from Docker, k6 or the host that must match its saved pattern; otherwise the step fails
+  // with a fixed message (the value itself is in a raw file).
+  const pinned = (kind, value, what) => { const saved = savedValue(kind, value); assert.ok(saved !== null && saved === value, `${what} is not a value a pass saves`); return saved; };
   const callerLabels = options.labels.flatMap((l) => ["--label", l]);
   const owned = ownedResources({ docker: ownDocker, runId, labels: callerLabels, clock, window, owner: ownerLabelKey, describe: firstLine });
   const mount = ["-v", `${join(repo, "bench")}:/bench:ro`];
@@ -231,50 +253,52 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     const name = `${runId}-${cell.app}`;
     let sampler, app, k6;
     try {
-      app = await owned.container(appArgs(name, cell.source, imageId), name);
-      await coldStart(app, name, cell.target, raw, left);
-      assert.equal(left.length, 0, "the cold sidecar was not removed");
-      const before = await owned.inspect(app);
+      app = await step("container", () => owned.container(appArgs(name, cell.source, imageId), name));
+      await step("cold-start", () => coldStart(app, name, cell.target, raw, left));
+      if (left.length) throw coded("unsettled", new Error("the cold sidecar was not removed"));
+      const before = await step("container", () => owned.inspect(app));
       retain(join(raw, "app-container.json"), containerReceipt(before));
       const k6Env = ["-e", `BASE=http://${name}:8080`, "-e", `TARGET=${cell.target}`, ...(cell.target === "page" ? ["-e", "LOCALE=rotating"] : []),
         "-e", `MODE=${convergence ? "closed" : "fixed"}`, "-e", `WINDOWS=${options.windows}`, "-e", `WINDOW_SECONDS=${options.windowSeconds}`,
         ...(convergence ? ["-e", `VUS=${options.vus}`] : ["-e", `RATE=${options.rate}`])];
-      k6 = await owned.container(["--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...k6Env,
-        k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/window-load.js"], `${runId}-k6`);
+      k6 = await step("container", () => owned.container(["--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...k6Env,
+        k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/window-load.js"], `${runId}-k6`));
       const phaseStartMs = clock.now();
       if (!convergence) sampler = memorySampler({ ids: [app], file: join(raw, "stats.log"), seconds: seconds + 120, spawn: spawnStats, now: clock.now, ...statsBounds });
-      await owned.inspect(k6);
+      await step("container", () => owned.inspect(k6));
       // The memory samples' origin, on the same workstation clock as their own stamps (soakMemoryClock).
       const memoryOriginMs = clock.now();
-      await owned.docker(["start", "-a", k6], { timeout: (seconds + 60) * 1000, file: join(raw, "load.log") });
+      await step("load-exit", () => owned.docker(["start", "-a", k6], { timeout: (seconds + 60) * 1000, file: join(raw, "load.log") }));
       let stats, statsError;
       if (sampler) { try { stats = await sampler.stop(); } catch (e) { statsError = e; } }
-      const loadInfo = await owned.inspect(k6);
+      const loadInfo = await step("container", () => owned.inspect(k6));
       retain(join(raw, "load-container.json"), containerReceipt(loadInfo));
-      assert.equal(loadInfo.State.ExitCode, 0, "k6 exited with an error");
-      let k6Summary;
-      try { k6Summary = await retainLoadEvidence(owned.docker, k6, raw, "load"); } catch (error) {
-        keep("retaining the k6 summary export", error); throw new Error("the k6 summary export could not be retained or is not JSON");
-      }
-      // Only names window-load.js and k6 define, before any validator can quote one.
-      knownK6Metrics(k6Summary);
-      // The engine clock must cover the pass inside the container's own run, and every counter's
-      // rate must be its count over that clock, as validate.mjs requires of a timed phase.
-      validateLoadExecution({ load: containerReceipt(loadInfo), summary: k6Summary, clock: parsed(readFileSync(join(raw, "load-clock.json"), "utf8"), "the k6 engine clock export"), start: phaseStartMs, end: clock.now(), seconds });
-      // k6's aggregate: every request, including those answered during the graceful stop.
-      const load = readLoadSummary(k6Summary);
-      const { windows, tail, unrecorded, requests, iterations, latencyMaxMs } = readWindows(k6Summary, options);
-      const after = await owned.inspect(app);
+      if (loadInfo.State.ExitCode !== 0) throw coded("load-exit", new Error("k6 exited with an error"));
+      const evidence = await step("load-evidence", async () => {
+        let k6Summary;
+        try { k6Summary = await retainLoadEvidence(owned.docker, k6, raw, "load"); } catch (error) {
+          keep("retaining the k6 summary export", error); throw new Error("the k6 summary export could not be retained or is not JSON");
+        }
+        // Only names window-load.js and k6 define, before any validator can quote one.
+        knownK6Metrics(k6Summary);
+        // The engine clock must cover the pass inside the container's own run, and every counter's
+        // rate must be its count over that clock, as validate.mjs requires of a timed phase.
+        validateLoadExecution({ load: containerReceipt(loadInfo), summary: k6Summary, clock: parsed(readFileSync(join(raw, "load-clock.json"), "utf8"), "the k6 engine clock export"), start: phaseStartMs, end: clock.now(), seconds });
+        // k6's aggregate: every request, including those answered during the graceful stop.
+        return { k6Summary, load: readLoadSummary(k6Summary), ...readWindows(k6Summary, options) };
+      });
+      const { k6Summary, load, windows, tail, unrecorded, requests, iterations, latencyMaxMs } = evidence;
+      const after = await step("container", () => owned.inspect(app));
       retain(join(raw, "app-container-after.json"), containerReceipt(after));
       if (convergence) {
         // A failed answer can be faster than a served one, so throughput with failures says nothing
         // about warming: a failure anywhere, in a window or in the graceful stop, means no verdict.
-        heldThrough(before, after);
+        await step("instance-changed", () => heldThrough(before, after));
         const inWindows = windows.reduce((sum, w) => sum + w.failed, 0);
-        assert.equal(inWindows, 0, `${inWindows} requests failed in the pass's windows; no verdict`);
-        assert.equal(load.failed, 0, `${load.failed} requests failed in k6's aggregate, which includes the graceful stop; no verdict`);
+        if (inWindows) throw coded("failed-requests", new Error(`${inWindows} requests failed in the pass's windows; no verdict`));
+        if (load.failed) throw coded("failed-requests", new Error(`${load.failed} requests failed in k6's aggregate, which includes the graceful stop; no verdict`));
         Object.assign(cell, { windows, tail, unrecorded, requests, iterations, latencyMaxMs, failedRequests: load.failed });
-        reconcileCell(cell);
+        await step("load-evidence", () => reconcileCell(cell));
         return Object.assign(cell, { verdict: flattenPoint(windows) });
       }
       // A memory sampling failure makes only the memory reading unavailable (summarizeSoak); the
@@ -282,13 +306,19 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       if (statsError) { keep("memory samples", statsError); log(`${cell.app} ${cell.source} ${cell.target}: memory samples failed: ${firstLine(statsError)}`); }
       const startedMs = Date.parse(loadInfo.State.StartedAt);
       const samples = statsError ? null : (stats?.samples?.[app] ?? []).map((s) => ({ atSeconds: (s.t - memoryOriginMs) / 1000, mib: s.mem }));
-      // Docker's event times and StartedAt are both the daemon's clock.
-      const lines = await owned.docker(["events", "--since", String(phaseStartMs / 1000), "--until", String(Date.now() / 1000), "--filter", "type=container", "--filter", `container=${app}`, "--format", "{{.Action}}|{{.TimeNano}}"]);
-      const events = lines.split("\n").filter(Boolean).map((line) => ({ action: line.slice(0, line.lastIndexOf("|")), atSeconds: (Number(line.slice(line.lastIndexOf("|") + 1)) / 1e6 - startedMs) / 1000 }));
+      // Docker's event times and StartedAt are both the daemon's clock. A stream that cannot be read
+      // (the command fails, or any row is not an action and a time) is saved as unavailable, apart
+      // from the memory samples and the container states.
+      let events = null;
+      try {
+        const lines = await owned.docker(["events", "--since", String(phaseStartMs / 1000), "--until", String(Date.now() / 1000), "--filter", "type=container", "--filter", `container=${app}`, "--format", "{{.Action}}|{{.TimeNano}}"]);
+        writeFileSync(join(raw, "events.log"), lines);
+        events = readEvents(lines, startedMs);
+      } catch (e) { keep("docker events", e); log(`${cell.app} ${cell.source} ${cell.target}: Docker's event stream is unavailable: ${firstLine(e)}`); }
       retain(join(raw, "events.json"), events);
-      Object.assign(cell, summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory: samples, before: state(before), after: state(after), events, rate: options.rate,
-        droppedIterations: readDropped(k6Summary), failedRequests: load.failed }));
-      reconcileCell(cell);
+      Object.assign(cell, await step("load-evidence", () => summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory: samples, before: state(before), after: state(after), events, rate: options.rate,
+        droppedIterations: readDropped(k6Summary), failedRequests: load.failed })));
+      await step("load-evidence", () => reconcileCell(cell));
       return cell;
     } finally {
       if (sampler) { try { await sampler.stop(); } catch {} }
@@ -311,40 +341,55 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       probe = await owned.container(["--network", "none", image.Id, "version"], `${runId}-k6-version`);
       output = await owned.attach(probe, 60_000);
     } finally { if (probe) assert.ok(await owned.remove(probe), "the k6 version probe was not removed"); }
-    return k6Provenance(image, output);
+    // The whole provenance, with k6's own version output, is raw; summary.json keeps its image ID
+    // and the version k6Provenance matched against the pin.
+    const provenance = k6Provenance(image, output);
+    retain(join(folder, "k6.json"), provenance);
+    return { imageId: pinned("imageId", provenance.imageId, "the k6 image ID"), version: pinned("k6Version", provenance.version, "the k6 version") };
   }
 
   try {
     save();
-    summary.commit = await git(["rev-parse", "HEAD"]);
-    summary.dirty = (await git(["status", "--porcelain", "--untracked-files=normal"])).length > 0;
-    assert.ok(!summary.dirty, "a convergence or soak pass requires a clean committed checkout");
+    await step("checkout", async () => {
+      summary.commit = pinned("commit", await git(["rev-parse", "HEAD"]), "the measured commit");
+      summary.dirty = (await git(["status", "--porcelain", "--untracked-files=normal"])).length > 0;
+      assert.ok(!summary.dirty, "a convergence or soak pass requires a clean committed checkout");
+    });
     // The fixture every app container mounts, checked as run.mjs checks it before a timed round.
-    summary.fixtureSha256 = fixture();
-    summary.host.docker = await owned.docker(["version", "--format", "{{.Server.Version}}"]);
-    summary.host.node = process.version;
-    let hostText, hostProbe;
-    try {
-      hostProbe = await owned.container(["--network", "none", nodeImage, "sh", "-c", "uname -r; grep -m1 'model name' /proc/cpuinfo; cat /sys/devices/system/cpu/online"], `${runId}-host`);
-      hostText = await owned.attach(hostProbe, 60_000);
-    } finally { if (hostProbe) assert.ok(await owned.remove(hostProbe), "the host probe was not removed"); }
-    writeFileSync(join(folder, "host.txt"), hostText + "\n");
-    const hostLines = hostText.trim().split("\n").map((line) => line.trim());
-    // The kernel the containers run on: run.mjs records the droplet's os.release(), the same kernel.
-    summary.host.kernel = hostLines[0] || null;
-    summary.host.cpu = hostLines.find((line) => line.startsWith("model name"))?.split(":").slice(1).join(":").trim() ?? null;
-    summary.host.onlineCpus = hostLines.at(-1) || null;
-    if (options.admittedFrom) {
+    summary.fixtureSha256 = await step("fixture", () => pinned("sha256", fixture(), "the fixture hash"));
+    await step("host", async () => {
+      // Docker's and the probe's own text is kept raw; summary.json keeps each value only if it
+      // matches its pattern (savedValue), otherwise null: not recorded.
+      const dockerVersion = await owned.docker(["version", "--format", "{{.Server.Version}}"]);
+      writeFileSync(join(folder, "docker-version.txt"), `${dockerVersion}\n`);
+      summary.host.docker = savedValue("docker", dockerVersion);
+      let hostText, hostProbe;
+      try {
+        hostProbe = await owned.container(["--network", "none", nodeImage, "sh", "-c", "uname -r; grep -m1 'model name' /proc/cpuinfo; cat /sys/devices/system/cpu/online"], `${runId}-host`);
+        hostText = await owned.attach(hostProbe, 60_000);
+      } finally { if (hostProbe) assert.ok(await owned.remove(hostProbe), "the host probe was not removed"); }
+      writeFileSync(join(folder, "host.txt"), hostText + "\n");
+      const hostLines = hostText.trim().split("\n").map((line) => line.trim());
+      // The kernel the containers run on: run.mjs records the droplet's os.release(), the same kernel.
+      summary.host.kernel = savedValue("kernel", hostLines[0]);
+      summary.host.cpu = savedValue("cpu", hostLines.find((line) => line.startsWith("model name"))?.split(":").slice(1).join(":"));
+      summary.host.onlineCpus = savedValue("onlineCpus", hostLines.at(-1));
+    });
+    if (options.admittedFrom) await step("admission", () => {
       // Only the adapters a saved timed round admitted: its feature qualification decides, not this pass.
       const bytes = readFileSync(options.admittedFrom);
       const round = validateSummary(JSON.parse(bytes));
       const admittedApps = Object.keys(round.apps).filter((a) => !round.options.group || admitted(round.apps[a]));
-      summary.admission = { round: round.round, commit: round.commit, summarySha256: createHash("sha256").update(bytes).digest("hex"), path: relative(repo, options.admittedFrom).replaceAll("\\", "/"), selected: options.apps, admitted: admittedApps };
+      // The path only when it is inside the checkout and plain; the operator's own paths are not kept.
+      summary.admission = { round: pinned("round", round.round, "the admitting round"), commit: pinned("commit", round.commit, "the admitting round's commit"),
+        summarySha256: createHash("sha256").update(bytes).digest("hex"), path: savedValue("path", relative(repo, options.admittedFrom).replaceAll("\\", "/")),
+        selected: options.apps.map((a) => pinned("name", a, "an adapter")), admitted: admittedApps.map((a) => pinned("name", a, "an admitted adapter")) };
       options.apps = options.apps.filter((a) => admittedApps.includes(a));
+      summary.options.apps = [...options.apps];
       assert.ok(options.apps.length > 0, "no selected adapter was admitted by that round");
-    }
+    });
     const images = {};
-    for (const app of options.apps) {
+    await step("image", async () => { for (const app of options.apps) {
       const image = `cb-marketplace-${options.group ? "production-" : ""}${app}`;
       if (options.build) {
         log(`building ${app}`);
@@ -363,17 +408,21 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     }
     retain(join(folder, "images.json"), images);
     // The image IDs a timed round records too (summary.apps[app].imageId): report.mjs compares them.
-    summary.images = Object.fromEntries(options.apps.map((app) => [app, images[app].id]));
+    // The receipts stay raw in images.json; only an ID of the saved form goes to summary.json.
+    summary.images = Object.fromEntries(options.apps.map((app) => [app, pinned("imageId", images[app].id, "an adapter image ID")]));
+    });
     save();
-    summary.tools = { k6: await k6Tool() };
-    network = await owned.network(`${runId}-net`);
-    const upstreamId = await owned.container(["--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
-      "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, "node", "/bench/marketplace/upstream.mjs"], upstreamName);
-    await owned.start(upstreamId);
-    const upstreamInfo = await owned.inspect(upstreamId);
+    summary.tools = { k6: await step("tools", () => k6Tool()), upstream: null };
+    network = await step("container", () => owned.network(`${runId}-net`));
+    const upstreamInfo = await step("container", async () => {
+      const upstreamId = await owned.container(["--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
+        "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, "node", "/bench/marketplace/upstream.mjs"], upstreamName);
+      await owned.start(upstreamId);
+      return owned.inspect(upstreamId);
+    });
     retain(join(folder, "upstream-container.json"), containerReceipt(upstreamInfo));
-    summary.tools.upstream = { image: nodeImage, imageId: upstreamInfo.Image };
-    await upstreamReady(`${await port(upstreamId)}/health`);
+    summary.tools.upstream = { imageId: await step("tools", () => pinned("imageId", upstreamInfo.Image, "the upstream image ID")) };
+    await step("upstream", async () => upstreamReady(`${await port(upstreamInfo.Id)}/health`));
     save();
     for (const source of options.sources) for (const app of options.apps) for (const target of options.targets) {
       const cell = { app, source, target };
@@ -383,42 +432,55 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       log(`${options.kind} ${app} ${source} ${target}: cold start, then ${options.minutes} min in ${options.windowSeconds}s windows`);
       const left = [], unacknowledged = owned.record.unacknowledged.length;
       try {
-        if (interrupted()) throw new Error("interrupted");
+        if (interrupted()) throw coded("interrupted", new Error("interrupted"));
         await pass(cell, images[app].id, raw, left);
         if (convergence) log(`${app} ${source} ${target}: ${verdictText(cell.verdict)}`);
       } catch (e) {
-        // This cell has no verdict; the pass goes on to the next one if its containers are gone.
+        // This cell has no verdict; the pass goes on to the next one if its containers are gone. The
+        // summary keeps the failure's code; its message is in errors.log and run.log.
         for (const key of Object.keys(cell)) if (!["app", "source", "target"].includes(key)) delete cell[key];
-        keep(`${app} ${source} ${target}`, e);
-        cell.failure = firstLine(e);
+        cell.failure = codeOf(`${app} ${source} ${target}`, e);
         if (convergence) cell.verdict = null;
-        log(`${app} ${source} ${target} FAILED: ${cell.failure}`);
+        log(`${app} ${source} ${target} FAILED (${cell.failure}): ${firstLine(e)}`);
       }
       save();
       const unsettled = [...left.map((id) => `container ${id} was not removed`),
         ...owned.record.unacknowledged.slice(unacknowledged).map((a) => `the create of ${a.name} was not acknowledged`)];
-      if (unsettled.length) throw new Error(`${app} ${source} ${target} did not settle (${unsettled.join("; ")}), so no further cell is measured`);
+      if (unsettled.length) throw coded("unsettled", new Error(`${app} ${source} ${target} did not settle (${unsettled.join("; ")}), so no further cell is measured`));
     }
-    summary.finishedCommit = await git(["rev-parse", "HEAD"]);
-    assert.equal(summary.finishedCommit, summary.commit, "checkout moved during the pass");
-    assert.equal(await git(["status", "--porcelain"]), "", "checkout changed during the pass");
+    await step("checkout", async () => {
+      summary.finishedCommit = savedValue("commit", await git(["rev-parse", "HEAD"]));
+      assert.equal(summary.finishedCommit, summary.commit, "checkout moved during the pass");
+      assert.equal(await git(["status", "--porcelain"]), "", "checkout changed during the pass");
+    });
     summary.complete = !interrupted();
   } catch (e) {
-    keep("suite", e);
-    summary.failures.push({ stage: "suite", error: firstLine(e) });
-    log(`suite FAILED: ${firstLine(e)} (detail in errors.log)`);
+    const code = codeOf("suite", e);
+    summary.failures.push({ stage: "suite", code });
+    log(`suite FAILED (${code}): ${firstLine(e)} (detail in errors.log)`);
   } finally {
     let cleanup;
     try { cleanup = await owned.teardown(); } catch (e) { keep("teardown", e); cleanup = { ...owned.record, complete: false, failures: [...owned.record.failures, { resource: runId, error: firstLine(e) }] }; }
     retain(join(folder, "cleanup.json"), cleanup);
-    summary.cleanupFailures = cleanup.failures;
-    // What a saved reader checks before it counts the pass (steady-contract.mjs passEvidence).
-    summary.cleanup = { complete: cleanup.complete === true, remaining: cleanup.remaining ?? null, created: cleanup.created.length, removed: cleanup.removed.length, recovered: cleanup.recovered.length,
-      unacknowledged: cleanup.unacknowledged.map((a) => ({ name: a.name, label: a.label, outcome: a.outcome ?? "unconfirmed" })) };
+    // What a saved reader checks before it counts the pass (steady-contract.mjs passEvidence): counts,
+    // and the names and labels this pass gave its own creates. cleanup.json keeps the whole record.
+    const ids = (list) => (Array.isArray(list) ? list.filter((id) => containerId.test(id)) : []);
+    summary.cleanup = { complete: cleanup.complete === true, remaining: cleanup.remaining ? { containers: ids(cleanup.remaining.containers), networks: ids(cleanup.remaining.networks) } : null,
+      created: cleanup.created.length, removed: cleanup.removed.length, recovered: cleanup.recovered.length, failures: cleanup.failures.length,
+      unacknowledged: cleanup.unacknowledged.map((a) => ({ name: savedValue("runId", a.name), label: savedValue("attemptLabel", a.label), outcome: ["removed", "not removed"].includes(a.outcome) ? a.outcome : "unconfirmed" })) };
     summary.finishedAt = new Date().toISOString();
     summary.complete &&= !interrupted() && summary.failures.length === 0 && cleanup.complete === true;
+    if (summary.complete) {
+      // A complete pass must read: the same validator a reader runs, on what is about to be saved.
+      try { (convergence ? validateConvergence : validateSoak)(structuredClone(summary)); } catch (e) {
+        keep("summary", e);
+        summary.failures.push({ stage: "suite", code: "summary-invalid" });
+        summary.complete = false;
+        log(`summary FAILED (summary-invalid): ${firstLine(e)}`);
+      }
+    }
     save();
   }
-  log(`marketplace ${options.kind} ${options.name}: ${summary.complete ? "COMPLETE" : "INCOMPLETE"}${summary.cleanupFailures.length ? `; cleanup not confirmed: ${summary.cleanupFailures.map((f) => f.resource).join(", ")}` : ""}; ${join(folder, "summary.json")}`);
+  log(`marketplace ${options.kind} ${options.name}: ${summary.complete ? "COMPLETE" : "INCOMPLETE"}${summary.cleanup.failures ? `; cleanup not confirmed (${summary.cleanup.failures} failure${summary.cleanup.failures === 1 ? "" : "s"}, in cleanup.json)` : ""}; ${join(folder, "summary.json")}`);
   return summary;
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { checkFixture, convergenceLines, convergenceSchema, flattenPoint, flattenRule, heldThrough, parseSteadyArgs, readDropped, readWindows, ruleText, soakArrivals, soakMemoryClock, soakSchema, summarizeSoak, timedStartup, timedWarmupVus, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
+import { checkFixture, convergenceLines, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, parseSaved, parseSteadyArgs, readDropped, readEvents, readWindows, ruleText, savedValue, soakArrivals, soakMemoryClock, soakSchema, summarizeSoak, timedWarmupVus, unlikeRound, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
+import { savedPass } from "./steady-saved-fixture.mjs";
 import { cpuSettings, resultSchema, v5Schema } from "./run-contract.mjs";
 import { convergenceReport, soakReport, steadyReport } from "./steady-report.mjs";
 import { groupApps } from "./groups.mjs";
@@ -81,7 +82,8 @@ test("the reviewer's four constructed passes read as the documented limits say",
   assert.deepEqual(started, { withinTolerance: false, reason: "earlier-above-tail", tailRps: 1000, previousRps: 1000, headRps: 1100 });
   assert.equal(verdictText(started), "not within tolerance at the end: the median of the first 60 s is more than 5% above the last 60 s median");
   // The stated bounds and limits are what the report prints.
-  for (const text of ["not a certificate of steady state", "within 10% of the median of the last 60 s", "every three-window median within 5%", "changed by at most 5% of the tail",
+  for (const text of ["not a certificate of steady state", "within 10% of the median of the last 60 s", "every three-window median within 5%", "changed by at most 5% of it",
+    "that window's own throughput within 5% of it", "those two are comparisons between medians, not of each window",
     "Oscillation or drift inside those bounds reads as within tolerance", "a shift of under 10% in the last window can go undetected", "resolved to one window and given as that window's end", "readings at different window lengths are not comparable"])
     assert.ok(ruleText.includes(text), text);
 });
@@ -191,7 +193,6 @@ const imageIds = { corten: `sha256:${"1".repeat(64)}`, aspnet: `sha256:${"2".rep
 const fixtureSha256 = "f".repeat(64), tools = { upstream: { imageId: `sha256:${"4".repeat(64)}` }, k6: { imageId: `sha256:${"5".repeat(64)}` } };
 const pinnedEnv = { MARKETPLACE_APP_CPUS: "1", MARKETPLACE_LOAD_CPUS: "4-7", MARKETPLACE_API_CPUS: "2-3" };
 const measurement = () => ({ cpus: cpuSettings(pinnedEnv), appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity" });
-const cleanCleanup = () => ({ complete: true, remaining: { containers: [], networks: [] }, created: 6, removed: 6, recovered: 0, unacknowledged: [] });
 // A timed round's per-profile runs with the warmup failures given.
 const runs = (failed = 0) => ({ "fixture-rotating-page": [{ warmup: { requests: 1000, failed } }], "fixture-json": [{ warmup: { requests: 1000, failed: 0 } }] });
 // A timed round like-for-like with convergencePass() on every compared input.
@@ -204,10 +205,7 @@ const cellOf = (app, source, target, rps) => {
 function convergencePass({ commit = "c".repeat(40), cells } = {}) {
   const options = parseSteadyArgs(["convergence", "w3", "--apps", "corten,aspnet", "--minutes", "3"], apps, groupApps);
   const rps = { corten: Array(12).fill(1000), aspnet: [200, 400, 600, 800, 900, 1000, 1000, 1000, 1000, 1000, 1000, 1000] };
-  return { schema: convergenceSchema, name: "w3", runId: "marketplace-convergence-w3-0", options, rule: flattenRule, commit, finishedCommit: commit, dirty: false, complete: true,
-    startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z", host: { cpu: "Synthetic test only", kernel: "6.8.0-test", onlineCpus: "0-7" }, admission: null, failures: [], cleanupFailures: [], cleanup: cleanCleanup(),
-    images: { corten: imageIds.corten, aspnet: imageIds.aspnet }, measurement: measurement(), fixtureSha256, tools: structuredClone(tools), startup: timedStartup,
-    cells: cells ?? options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) => cellOf(app, source, target, rps[app])))) };
+  return savedPass(options, cells ?? options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) => cellOf(app, source, target, rps[app])))), { commit });
 }
 test("a saved convergence pass validates, recomputes every reading and sets no warmup", () => {
   const s = convergencePass();
@@ -239,30 +237,33 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.cells[0].failedRequests = 1; }, /failed requests in k6's aggregate/],
     [(v) => { delete v.fixtureSha256; }, /fixture hash/],
     [(v) => { delete v.tools.upstream; }, /upstream image ID/],
-    [(v) => { delete v.host.kernel; }, /host kernel/],
+    [(v) => { delete v.host.kernel; }, /the pass's host has fields its schema does not save, or lacks one it does/],
     [(v) => { delete v.startup; }, /how it started/],
     // What the saved reader refuses beyond the windows: another finishing commit, a suite failure,
     // cleanup that failed or is unconfirmed, totals that do not reconcile, and an empty matrix.
     [(v) => { v.finishedCommit = "d".repeat(40); }, /finishes at the commit it started at/],
     [(v) => { delete v.finishedCommit; }, /finishes at the commit it started at/],
-    [(v) => { v.failures = [{ stage: "suite", error: "x" }]; }, /suite failure/],
-    [(v) => { v.cleanupFailures = [{ resource: "container x", error: "removal failed" }]; }, /cleanup failed/],
+    [(v) => { v.failures = [{ stage: "suite", code: "error" }]; }, /suite failure/],
+    [(v) => { v.cleanup.failures = 1; }, /cleanup failed/],
     [(v) => { v.cleanup.complete = false; }, /cleanup is not confirmed complete/],
     [(v) => { v.cleanup.remaining.containers = ["a".repeat(64)]; }, /cleanup is not confirmed complete/],
     [(v) => { v.cleanup.unacknowledged = [{ name: "x-k6", label: "l", outcome: "unconfirmed" }]; }, /cleanup is not confirmed complete/],
     [(v) => { delete v.cleanup; }, /cleanup is not confirmed complete/],
     [(v) => { v.cells[0].requests += 1; }, /do not add up to k6's request total/],
     [(v) => { v.cells[0].unrecorded = 1; v.cells[0].requests += 1; v.cells[0].iterations += 1; }, /more unrecorded requests than unfinished iterations/],
-    [(v) => { delete v.cells[0].iterations; }, /request and iteration totals/],
+    [(v) => { delete v.cells[0].iterations; }, /a convergence cell has fields its schema does not save, or lacks one it does/],
+    [(v) => { v.cells[0].iterations = v.cells[0].requests + 1; }, /request and iteration totals/],
     [(v) => { v.options.apps = []; v.images = {}; v.cells = []; }, /at least one of its apps/],
     [(v) => { v.cells[0].latencyMaxMs = 1; }, /latency above k6's aggregate http_req_duration maximum/],
-    [(v) => { delete v.cells[0].latencyMaxMs; }, /aggregate latency maximum/],
-    [(v) => { v.schema = "marketplace-convergence/v2"; }, /not a marketplace-convergence\/v3 result/],
+    [(v) => { v.cells[0].latencyMaxMs = null; }, /aggregate latency maximum/],
+    [(v) => { v.schema = "marketplace-convergence/v3"; }, /not a marketplace-convergence\/v4 result/],
   ]) { const v = structuredClone(s); mutate(v); assert.throws(() => validateConvergence(v), pattern); }
+  // A complete pass whose cells failed stays reportable: each such cell reads "no reading", with the
+  // text of its failure code.
   const failed = structuredClone(s);
-  failed.cells[2] = { app: failed.cells[2].app, source: failed.cells[2].source, target: failed.cells[2].target, verdict: null, failure: "not ready in 120s: HTTP 500" };
+  failed.cells[2] = { app: failed.cells[2].app, source: failed.cells[2].source, target: failed.cells[2].target, verdict: null, failure: "cold-start" };
   validateConvergence(failed);
-  assert.match(convergenceReport(failed), /no reading: the cell failed/);
+  assert.match(convergenceReport(failed), /\| aspnet \| fixture \| page \| no reading: the cell failed \(the app did not start as the timed cold start requires\) \| - \| - \|/);
 });
 
 test("a soak reports memory at the start and end, p99 per interval and any restart", () => {
@@ -274,9 +275,11 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   assert.equal(cell.memory.samples, 360);
   assert.ok(Math.abs(cell.memory.startMiB - 102.95) < 1e-9 && Math.abs(cell.memory.endMiB - 132.95) < 1e-9 && Math.abs(cell.memory.growthMiB - 30) < 1e-9, JSON.stringify(cell.memory));
   assert.deepEqual(cell.p99, { first: 20, last: 30, max: 30 });
-  assert.deepEqual(cell.restarts, { restarted: false, restartCount: 0, replaced: false, events: [], runningAtEnd: true, oomKilled: false });
-  const restarted = summarizeSoak({ ...base, after: { ...held, running: false, oomKilled: true }, events: [{ action: "oom", atSeconds: 70 }, { action: "die", atSeconds: 70.1 }, { action: "exec_start", atSeconds: 1 }] });
-  assert.deepEqual(restarted.restarts, { restarted: true, restartCount: 0, replaced: false, events: [{ action: "oom", atSeconds: 70 }, { action: "die", atSeconds: 70.1 }], runningAtEnd: false, oomKilled: true });
+  assert.deepEqual(cell.restarts, { restarted: false, restartCount: 0, replaced: false, eventStream: "clean", events: [], runningAtEnd: true, oomKilled: false });
+  const restarted = summarizeSoak({ ...base, after: { ...held, running: false, oomKilled: true }, events: [{ action: "oom", atSeconds: 70 }, { action: "die", atSeconds: 70.1 }] });
+  assert.deepEqual(restarted.restarts, { restarted: true, restartCount: 0, replaced: false, eventStream: "seen", events: [{ action: "oom", atSeconds: 70 }, { action: "die", atSeconds: 70.1 }], runningAtEnd: false, oomKilled: true });
+  // Only readEvents's restart-relevant list is accepted.
+  assert.throws(() => summarizeSoak({ ...base, events: [{ action: "exec_start", atSeconds: 1 }] }), /readEvents's list or null/);
   assert.equal(summarizeSoak({ ...base, after: { ...held, restartCount: 2 } }).restarts.restarted, true);
   // A docker restart keeps RestartCount but not StartedAt; another container ID is another instance.
   const restartedInPlace = summarizeSoak({ ...base, after: { ...held, startedAt: "2026-11-20T00:10:00Z" } }).restarts;
@@ -290,15 +293,16 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   const long = windows(Array(30).fill(150), (i) => (i === 29 ? 40 : 10), 60);
   const soakCell = (extra = {}) => ({ app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: long, tail: 0, unrecorded: 0, requests: 270000, iterations: 270000, latencyMaxMs: 90,
     memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: i < 60 ? 50 : 80 })), before: held, after: held, events: [], ...extra }) });
-  const s = { schema: soakSchema, name: "w4", options, commit: "d".repeat(40), finishedCommit: "d".repeat(40), dirty: false, complete: true, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z",
-    failures: [], cleanupFailures: [], cleanup: cleanCleanup(), measurement: { ...measurement(), memoryClock: soakMemoryClock },
-    host: { cpu: "Synthetic test only" }, admission: { round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: "x", selected: ["corten", "aspnet"], admitted: ["corten"] },
-    cells: [soakCell()] };
+  const s = savedPass(options, [soakCell()], { commit: "d".repeat(40),
+    admission: { round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: "bench/marketplace/results/w2/summary.json", selected: ["corten", "aspnet"], admitted: ["corten"] } });
   validateSoak(s);
   const text = soakReport(s);
   assert.match(text, /^\| corten \| fixture \| page \| held \| 50\.0 \| 80\.0 \| \+30\.0 MiB \(60\.0%\) \| 20\.0 \/ 80\.0 \/ 80\.0 \| 0 \| no \|$/m);
   assert.match(text, /those timed round w2 .* admitted, of corten, aspnet/);
-  assert.match(text, /it says whether each adapter's memory, tail latency and process held at the rate asked for/);
+  // Memory and p99 are figures; only the fixed rate has a held criterion.
+  assert.match(text, /it reports each adapter's memory at the start and end and its p99 by interval as figures, with no criterion for whether they held, and says whether the fixed rate held and whether the app restarted/);
+  assert.match(text, /^Memory and p99 are reported figures, not held or not held: no criterion is applied to them\./m);
+  assert.doesNotMatch(text, /memory, tail latency and process held/);
   // The report states both clocks: memory intervals are their own, not the latency intervals.
   assert.ok(text.includes(soakMemoryClock));
   assert.match(soakMemoryClock, /intervals of their own/);
@@ -317,13 +321,17 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
     [(v) => { v.cells[0].restarts.restartCount = 1; }, /restart claim contradicts/],
     [(v) => { v.cells[0].restarts.runningAtEnd = false; }, /restart claim contradicts/],
     [(v) => { v.cells[0].restarts.oomKilled = true; }, /restart claim contradicts/],
-    [(v) => { v.cells[0].restarts.events = [{ action: "die", atSeconds: 5 }]; }, /restart claim contradicts/],
+    [(v) => { v.cells[0].restarts.events = [{ action: "die", atSeconds: 5 }]; }, /event stream's state contradicts its events/],
+    [(v) => { v.cells[0].restarts.events = [{ action: "die", atSeconds: 5 }]; v.cells[0].restarts.eventStream = "seen"; }, /restart claim contradicts/],
+    [(v) => { v.cells[0].restarts.eventStream = "unavailable"; }, /restart claim contradicts/],
+    [(v) => { v.cells[0].restarts.eventStream = "maybe"; }, /restarts/],
     [(v) => { v.cells[0].restarts.replaced = true; }, /restart claim contradicts/],
     [(v) => { delete v.cells[0].restarts.replaced; }, /restarts/],
     [(v) => { v.cells[0].requests += 1; v.cells[0].iterations += 1; }, /do not add up/],
     [(v) => { v.finishedCommit = "e".repeat(40); }, /finishes at the commit/],
     [(v) => { v.cleanup.complete = false; }, /cleanup is not confirmed/],
-    [(v) => { delete v.measurement.memoryClock; }, /clock of its memory samples/],
+    [(v) => { delete v.measurement.memoryClock; }, /the pass's CPU settings and measurement has fields/],
+    [(v) => { v.measurement.memoryClock = "another clock"; }, /clock of its memory samples/],
     [(v) => { v.options.apps = []; v.cells = []; }, /at least one of its apps/],
     [(v) => { v.cells[0].latencyMaxMs = 1; }, /latency above k6's aggregate/],
     // More failures than requests, or failures outside the windows beyond the requests outside them.
@@ -342,7 +350,10 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   assert.match(droppedText, /^\| corten \| fixture \| page \| not held \|/m);
   assert.match(droppedText, /^corten fixture page: k6 recorded 269970 requests and dropped 31 iterations; the schedule has at most 270001 arrivals, so 0 are not accounted for \(allowance 151\)\.$/m);
   assert.match(droppedText, /^corten fixture page: the fixed 150 requests\/second was not held, so this is not a fixed-rate result/m);
-  for (const mutate of [(v) => { v.cells[0].rate.held = true; }, (v) => { v.cells[0].rate.requested = 20; }, (v) => { delete v.cells[0].rate; }, (v) => { v.cells[0].rate.met = true; }]) { const v = structuredClone(dropped); mutate(v); assert.throws(() => validateSoak(v), /rate/); }
+  for (const [mutate, pattern] of [[(v) => { v.cells[0].rate.held = true; }, /rate/], [(v) => { v.cells[0].rate.requested = 20; }, /rate/],
+    [(v) => { delete v.cells[0].rate; }, /a soak cell has fields its schema does not save, or lacks one it does/], [(v) => { v.cells[0].rate.met = true; }, /rate/]]) {
+    const v = structuredClone(dropped); mutate(v); assert.throws(() => validateSoak(v), pattern);
+  }
   assert.throws(() => summarizeSoak({ rate: 150, windows: long, tail: 0, unrecorded: 0, memory: [], before: held, after: held, events: [] }), /dropped iterations/);
   assert.throws(() => steadyReport({ schema: "marketplace-results/v6" }), /not a/);
 });
@@ -356,9 +367,7 @@ test("a soak says the fixed rate held only when k6's counts reconcile with the s
     memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 60 })), before: held, after: held, events: [] });
   assert.deepEqual(cell.rate, { requested: 150, seconds: 1800, scheduled: 270001, requests: 1800, droppedIterations: 0, shortfall: 268201, allowance: 151, held: false });
   const options = parseSteadyArgs(["soak", "w5", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
-  const s = { schema: soakSchema, name: "w5", options, commit: "d".repeat(40), finishedCommit: "d".repeat(40), dirty: false, complete: true, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z",
-    failures: [], cleanupFailures: [], cleanup: cleanCleanup(), measurement: { ...measurement(), memoryClock: soakMemoryClock }, host: { cpu: "Synthetic test only" }, admission: null,
-    cells: [{ app: "corten", source: "fixture", target: "page", ...cell }] };
+  const s = savedPass(options, [{ app: "corten", source: "fixture", target: "page", ...cell }], { commit: "d".repeat(40) });
   validateSoak(s);
   const text = soakReport(s);
   assert.match(text, /^\| corten \| fixture \| page \| not held \|/m);
@@ -383,14 +392,12 @@ test("memory that cannot be read leaves the restart, stop and OOM observations i
   // A zero sample (an app the kernel killed reads 0 B), and a sampler that failed outright.
   const zero = summarizeSoak({ ...base, memory: [{ atSeconds: 1, mib: 60 }, { atSeconds: 1799, mib: 0 }] });
   assert.deepEqual(zero.memory, { samples: 2, unavailable: "1 memory sample had no time or no positive size", startMiB: null, endMiB: null, growthMiB: null, growthPct: null });
-  assert.deepEqual(zero.restarts, { restarted: true, restartCount: 0, replaced: false, events: [{ action: "oom", atSeconds: 900 }], runningAtEnd: false, oomKilled: true });
+  assert.deepEqual(zero.restarts, { restarted: true, restartCount: 0, replaced: false, eventStream: "seen", events: [{ action: "oom", atSeconds: 900 }], runningAtEnd: false, oomKilled: true });
   const failed = summarizeSoak({ ...base, memory: null });
   assert.equal(failed.memory.unavailable, "memory sampling failed");
   assert.equal(failed.restarts.oomKilled, true);
   const options = parseSteadyArgs(["soak", "w6", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
-  const s = { schema: soakSchema, name: "w6", options, commit: "d".repeat(40), finishedCommit: "d".repeat(40), dirty: false, complete: true, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z",
-    failures: [], cleanupFailures: [], cleanup: cleanCleanup(), measurement: { ...measurement(), memoryClock: soakMemoryClock }, host: { cpu: "Synthetic test only" }, admission: null,
-    cells: [{ app: "corten", source: "fixture", target: "page", ...zero }] };
+  const s = savedPass(options, [{ app: "corten", source: "fixture", target: "page", ...zero }], { commit: "d".repeat(40) });
   validateSoak(s);
   const text = soakReport(s);
   assert.match(text, /^\| corten \| fixture \| page \| held \| unavailable \| unavailable \| unavailable \| .* \| yes: oom at 900 s, not running at the end, OOM-killed \|$/m);
@@ -403,7 +410,7 @@ test("memory that cannot be read leaves the restart, stop and OOM observations i
 test("the timed reporter lists every differing or missing input and never judges the warmup", () => {
   assert.throws(() => convergenceLines(likeRound(), ["corten"], null), /reads a convergence pass/);
   const lines = convergenceLines(likeRound(), ["corten", "aspnet"], convergencePass());
-  assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v3, reading marketplace-tolerance\/v4\), measured at commit `c{40}`\. Host CPU: Synthetic test only\. One 32-user closed-loop pass .* after the timed round's cold start\.$/);
+  assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v4, reading marketplace-tolerance\/v4\), measured at commit `c{40}`\. Host CPU: Synthetic test only\. One 32-user closed-loop pass .* after the timed round's cold start \(the app created, then started while a sidecar polls the target's path to its first 200\)\.$/);
   assert.match(lines[1], /^The pass is like-for-like with this round on every input compared: commit, group, adapter images, .* startup timeout, memory limits, response encoding, .* a timed warmup with no failed request\.$/);
   assert.match(lines[2], /^Tolerance reading marketplace-tolerance\/v4: a screening reading of throughput, not a certificate of steady state\./);
   assert.ok(lines.includes("Reading: aspnet api page: within the stated tolerance from the window ending at 90 s."));
@@ -416,43 +423,41 @@ test("the timed reporter lists every differing or missing input and never judges
   for (const text of [lines, long]) assert.ok(!text.some((l) => /reaches|is shorter than|is enough|supports|establishes|was sufficient\b(?!:)/.test(l.replace(/^This report does not establish whether [^:]*:/, ""))), text.join("\n"));
 
   const pass = convergencePass(), explore = convergencePass(); explore.options.vus = 64;
-  const otherStart = convergencePass(); otherStart.startup = "one readiness request/v0";
   const host = likeRound().host;
   const withMeasurement = (change) => { const round = likeRound(90); change(round.measurement); return round; };
   const unpinnedPass = convergencePass(); unpinnedPass.measurement.cpus = cpuSettings({});
   const unlike = [
-    [{ ...likeRound(90), commit: "a".repeat(40) }, pass, /the pass measured commit `c{40}`, this round `a{40}`/],
-    [{ ...likeRound(90), options: { warmup: 90, startupTimeout: 120, group: "production" } }, pass, /the pass ran no group, this round group production/],
+    [{ ...likeRound(90), commit: "a".repeat(40) }, pass, /the pass measured another commit than this round/],
+    [{ ...likeRound(90), options: { warmup: 90, startupTimeout: 120, group: "production" } }, pass, /the pass ran no group and this round a group, so their images and container settings differ/],
     [{ ...likeRound(90), apps: { corten: { imageId: `sha256:${"3".repeat(64)}`, runs: runs() } } }, pass, /the image IDs differ for corten/],
     [{ ...likeRound(90), apps: { corten: { runs: runs() } } }, pass, /image IDs are not recorded on both sides for corten/],
-    [withMeasurement((m) => { m.cpus.app.quota = 2; }), pass, /the app CPU quota differs \(pass: 1; round: 2\)/],
-    [withMeasurement((m) => { m.cpus = cpuSettings({ ...pinnedEnv, MARKETPLACE_APP_CPUS: "0" }); }), pass, /the app CPU pinning \(cpuset\) differs \(pass: 1; round: 0\)/],
+    [withMeasurement((m) => { m.cpus.app.quota = 2; }), pass, /the app CPU quota differs(;|\.$)/],
+    [withMeasurement((m) => { m.cpus = cpuSettings({ ...pinnedEnv, MARKETPLACE_APP_CPUS: "0" }); }), pass, /the app CPU pinning \(cpuset\) differs(;|\.$)/],
     // Missing pinning is missing on either side, not equal because both are absent.
-    [withMeasurement((m) => { m.cpus = cpuSettings({}); }), pass, /the app CPU pinning \(cpuset\) is not recorded on both sides \(pass: 1; round: not recorded\)/],
+    [withMeasurement((m) => { m.cpus = cpuSettings({}); }), pass, /the app CPU pinning \(cpuset\) is not recorded on both sides \(pass: recorded; round: not recorded\)/],
     [withMeasurement((m) => { m.cpus = cpuSettings({}); }), unpinnedPass, /the app CPU pinning \(cpuset\) is not recorded on both sides \(pass: not recorded; round: not recorded\)/],
     [{ ...likeRound(90), measurement: {} }, pass, /the app CPU quota is not recorded on both sides/],
-    [withMeasurement((m) => { m.appMemoryBytes = 2 ** 31; }), pass, /the app memory limit \(bytes\) differs \(pass: 1073741824; round: 2147483648\)/],
+    [withMeasurement((m) => { m.appMemoryBytes = 2 ** 31; }), pass, /the app memory limit \(bytes\) differs(;|\.$)/],
     [withMeasurement((m) => { delete m.upstreamMemoryBytes; }), pass, /the upstream memory limit \(bytes\) is not recorded on both sides/],
-    [withMeasurement((m) => { m.encoding = "br"; }), pass, /the response encoding differs \(pass: identity; round: br\)/],
-    [{ ...likeRound(90), options: { warmup: 90, startupTimeout: 60 } }, pass, /the startup timeout \(s\) differs \(pass: 120; round: 60\)/],
+    [withMeasurement((m) => { m.encoding = "br"; }), pass, /the response encoding differs(;|\.$)/],
+    [{ ...likeRound(90), options: { warmup: 90, startupTimeout: 60 } }, pass, /the startup timeout \(s\) differs(;|\.$)/],
     [{ ...likeRound(90), options: { warmup: 90 } }, pass, /the startup timeout \(s\) is not recorded on both sides/],
-    [{ ...likeRound(90), host: { ...host, cpu: "Another CPU" } }, pass, /the host CPU differs \(pass: Synthetic test only; round: Another CPU\)/],
-    [{ ...likeRound(90), host: {} }, pass, /the host CPU is not recorded on both sides \(pass: Synthetic test only; round: not recorded\)/],
+    [{ ...likeRound(90), host: { ...host, cpu: "Another CPU" } }, pass, /the host CPU differs(;|\.$)/],
+    [{ ...likeRound(90), host: {} }, pass, /the host CPU is not recorded on both sides \(pass: recorded; round: not recorded\)/],
     [likeRound(90), explore, /the pass ran 64 users, the timed warmup 32/],
     [{ ...likeRound(90), split: { droplets: 2, parts: [] } }, pass, /split across droplets/],
     [{ ...likeRound(90), fixtureSha256: "e".repeat(64) }, pass, /the fixture SHA-256 differs/],
-    [{ ...likeRound(90), fixtureSha256: undefined }, pass, /the fixture SHA-256 is not recorded on both sides \(pass: f{64}; round: not recorded\)/],
+    [{ ...likeRound(90), fixtureSha256: undefined }, pass, /the fixture SHA-256 is not recorded on both sides \(pass: recorded; round: not recorded\)/],
     [{ ...likeRound(90), tools: { ...tools, upstream: { imageId: `sha256:${"6".repeat(64)}` } } }, pass, /the upstream image ID differs/],
     [{ ...likeRound(90), tools: {} }, pass, /the upstream image ID is not recorded on both sides/],
     [{ ...likeRound(90), tools: { ...tools, k6: { imageId: `sha256:${"6".repeat(64)}` } } }, pass, /the k6 image ID differs/],
-    [{ ...likeRound(90), host: { ...host, release: "6.8.0-other" } }, pass, /the kernel release differs \(pass: 6\.8\.0-test; round: 6\.8\.0-other\)/],
-    [{ ...likeRound(90), host: { ...host, onlineCpus: "0-3" } }, pass, /the online CPU set differs \(pass: 0-7; round: 0-3\)/],
-    [likeRound(90), otherStart, /the pass started each app another way than the timed round's cold start \(one readiness request\/v0\)/],
-    [{ ...likeRound(90), schema: v5Schema }, pass, /this round's page warmup \(marketplace-results\/v5\) used one locale per profile, while the pass rotates locales/],
+    [{ ...likeRound(90), host: { ...host, release: "6.8.0-other" } }, pass, /the kernel release differs(;|\.$)/],
+    [{ ...likeRound(90), host: { ...host, onlineCpus: "0-3" } }, pass, /the online CPU set differs(;|\.$)/],
+    [{ ...likeRound(90), schema: v5Schema }, pass, /this round's page warmup used one locale per profile, while the pass rotates locales/],
     [{ ...likeRound(90), schema: undefined }, pass, /this round's page warmup does not record its locale profiles/],
     // A timed warmup that itself failed requests, or does not say, makes the round not comparable.
-    [{ ...likeRound(90), apps: { corten: { imageId: imageIds.corten, runs: runs(3) } } }, pass, /this round's timed warmup had failed requests for corten \(fixture-rotating-page: 3\), so it is not comparable/],
-    [{ ...likeRound(90), apps: { corten: { imageId: imageIds.corten, runs: { "fixture-json": [{ warmup: { requests: 5 } }] } } } }, pass, /this round does not record the failed requests of corten's timed warmup \(fixture-json\)/],
+    [{ ...likeRound(90), apps: { corten: { imageId: imageIds.corten, runs: runs(3) } } }, pass, /this round's timed warmup had 3 failed requests for corten in 1 run, so it is not comparable/],
+    [{ ...likeRound(90), apps: { corten: { imageId: imageIds.corten, runs: { "fixture-json": [{ warmup: { requests: 5 } }] } } } }, pass, /this round does not record the failed requests of corten's timed warmup in 1 run/],
     [{ ...likeRound(90), apps: { corten: { imageId: imageIds.corten } } }, pass, /this round records no timed warmup for corten/],
   ];
   for (const [round, p, reason] of unlike) {
@@ -462,11 +467,15 @@ test("the timed reporter lists every differing or missing input and never judges
     assert.ok(text.some((l) => /^Reading: corten fixture page: /.test(l)), "the readings stay listed");
     assert.equal(text.at(-1), judged(90));
   }
+  // A startup other than the timed cold start is a difference; a reader refuses a code it does not
+  // know, so this is reached only through unlikeRound itself.
+  assert.ok(unlikeRound(likeRound(90), ["corten"], { ...pass, startup: "another-start/v0" }).includes("the pass started each app another way than the timed round's cold start"));
   const missing = convergenceLines(likeRound(), ["corten", "drogon"], convergencePass());
   assert.ok(missing.includes("No convergence pass for: drogon fixture page, drogon fixture json, drogon api page, drogon api json."));
   assert.match(missing[1], /image IDs are not recorded on both sides for drogon/);
-  const falling = convergencePass(); falling.options = parseSteadyArgs(["convergence", "w3", "--apps", "corten,aspnet", "--minutes", "5"], apps, groupApps);
-  falling.cells = falling.cells.map((c) => cellOf(c.app, c.source, c.target, Array.from({ length: 20 }, (_, i) => (c.app === "corten" && c.source === "fixture" && c.target === "page" ? 1500 - 25 * i : 1000))));
+  const fallingOptions = parseSteadyArgs(["convergence", "w3", "--apps", "corten,aspnet", "--minutes", "5"], apps, groupApps);
+  const falling = savedPass(fallingOptions, fallingOptions.sources.flatMap((source) => fallingOptions.apps.flatMap((app) => fallingOptions.targets.map((target) =>
+    cellOf(app, source, target, Array.from({ length: 20 }, (_, i) => (app === "corten" && source === "fixture" && target === "page" ? 1500 - 25 * i : 1000)))))));
   const fallingText = "not within tolerance at the end: the median of the first 60 s and the median of the 60 s before the last 60 s are each more than 5% above the last 60 s median";
   assert.ok(convergenceLines(likeRound(90), ["corten"], falling).includes(`Reading: corten fixture page: ${fallingText}.`));
   assert.ok(convergenceReport(falling).includes(`| corten | fixture | page | ${fallingText} |`));
@@ -484,4 +493,130 @@ test("a convergence cell refuses an app that stopped, restarted, was replaced or
     assert.throws(() => heldThrough(inspect(), after), /stopped, restarted, was replaced or was OOM-killed/);
   assert.throws(() => heldThrough({ RestartCount: 0, State: { Running: true } }, inspect()), /instance before the load is not recorded/);
   // steady-run.test.mjs shows the runner applying it to a cell whose app was OOM-killed or restarted under load.
+});
+
+test("a value from outside the checkout is saved only when it matches its pattern", () => {
+  const canary = "leaked canary";
+  for (const [kind, good, bad] of [
+    ["cpu", "AMD EPYC 7543 32-Core Processor", [`AMD <${canary}>`, "X".repeat(97), "AMD\u0000EPYC", "Intel(R) Xeon(R) CPU @ 2.20GHz; rm"]],
+    ["kernel", "6.8.0-49-generic", [`6.8.0 ${canary}`, "linux", "6.8.0/../x"]],
+    ["onlineCpus", "0-3,8-11", ["0-7;", `0-7 ${canary}`, "all"]],
+    ["docker", "27.5.1", [`27.5.1 ${canary}`, "27.5.1-ce+abc", "v27.5.1"]],
+    ["k6Version", "2.4.0", ["2.4.0-canary", "v2.4.0", "2.4"]],
+    ["imageId", `sha256:${"a".repeat(64)}`, [`sha256:${"a".repeat(63)}`, `sha256:${"a".repeat(65)}`, `sha256:${"A".repeat(64)}`, `example.com/x@sha256:${"a".repeat(64)}`]],
+    ["sha256", "f".repeat(64), ["f".repeat(63), `sha256:${"f".repeat(64)}`]],
+    ["commit", "c".repeat(40), ["c".repeat(39), "C".repeat(40)]],
+    ["path", "bench/marketplace/results/w2/summary.json", ["../w2/summary.json", "bench/./x", "/abs/path", "C:\\Users\\x", `bench/${canary}`]],
+    ["label", "agent.owner=codex", [`a=${canary}`, "noequals"]],
+    ["time", "2026-11-20T00:00:00.000Z", ["2026-11-20 00:00:00", `2026-11-20T00:00:00Z ${canary}`]],
+  ]) {
+    assert.equal(savedValue(kind, good), good, kind);
+    // Whitespace around a value (a probe's line ending) is normalized; anything else is not recorded.
+    assert.equal(savedValue(kind, ` ${good}\n`), good, kind);
+    for (const value of bad) assert.equal(savedValue(kind, value), null, `${kind}: ${value}`);
+    assert.equal(savedValue(kind, undefined), null);
+  }
+  assert.throws(() => savedValue("hostname", "x"), /^AssertionError \[ERR_ASSERTION\]: unknown saved value kind$/);
+});
+
+test("every Docker event row must be an action and a time, or the stream is unavailable", () => {
+  const startedMs = Date.parse("2026-11-20T00:00:00Z"), at = (seconds) => String(BigInt(startedMs + seconds * 1000) * 1_000_000n);
+  assert.deepEqual(readEvents("", startedMs), []);
+  // Rows that are not restart-relevant are read and dropped, with any detail.
+  assert.deepEqual(readEvents(`exec_start: sh -c true|${at(1)}\nhealth_status: healthy|${at(2)}\r\n`, startedMs), []);
+  assert.deepEqual(readEvents(`kill|${at(3)}\ndie|${at(3.5)}\nstart|${at(4)}\n`, startedMs), [{ action: "kill", atSeconds: 3 }, { action: "die", atSeconds: 3.5 }, { action: "start", atSeconds: 4 }]);
+  const canary = "leaked-canary";
+  for (const text of [`oom|NOT_A_TIMESTAMP\n`, `die|${at(1)}\n${canary}\n`, `${canary}|${at(1)}\n`, `die|-5\n`, `die|${at(1)}|${canary}\n`, `|${at(1)}\n`, `DIE|${at(1)}\n`]) {
+    assert.throws(() => readEvents(text, startedMs), (error) => {
+      assert.match(error.message, /^1 docker events row is not an action and a time/);
+      assert.ok(!error.message.includes(canary) && !error.message.includes("NOT_A_TIMESTAMP"));
+      return true;
+    }, text);
+  }
+  assert.throws(() => readEvents(`a|b\nc|d\n`, startedMs), /^AssertionError \[ERR_ASSERTION\]: 2 docker events rows are not an action and a time/);
+  assert.throws(() => readEvents(null, startedMs), /returned no text/);
+  assert.throws(() => readEvents("", Number.NaN), /StartedAt is not a time/);
+  // The three states of the stream are independent of the memory samples.
+  const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
+  const base = { rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60), tail: 0, unrecorded: 0, requests: 270000, iterations: 270000, latencyMaxMs: 25,
+    memory: null, before: held, after: held };
+  assert.deepEqual(summarizeSoak({ ...base, events: null }).restarts, { restarted: null, restartCount: 0, replaced: false, eventStream: "unavailable", events: [], runningAtEnd: true, oomKilled: false });
+  assert.deepEqual([summarizeSoak({ ...base, events: [] }).restarts.eventStream, summarizeSoak({ ...base, events: [] }).restarts.restarted], ["clean", false]);
+  const oom = summarizeSoak({ ...base, events: null, after: { ...held, running: false, oomKilled: true } });
+  assert.deepEqual([oom.restarts.eventStream, oom.restarts.restarted, oom.memory.unavailable], ["unavailable", true, "memory sampling failed"]);
+});
+
+test("a saved pass's own text never reaches an error or a report: every field is refused unless it validates", () => {
+  const canary = "<leaked canary>";
+  const soakOptions = parseSteadyArgs(["soak", "w7", "--apps", "corten", "--targets", "page"], apps, groupApps);
+  const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
+  const soakCell = { app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60), tail: 0, unrecorded: 0,
+    requests: 270000, iterations: 270000, latencyMaxMs: 25, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 50 })), before: held, after: held, events: [{ action: "kill", atSeconds: 5 }] }) };
+  const soak = savedPass(soakOptions, [soakCell, { app: "corten", source: "api", target: "page", failure: "cold-start" }],
+    { admission: { round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: "bench/marketplace/results/w2/summary.json", selected: ["corten"], admitted: ["corten"] } });
+  const convergence = convergencePass();
+  convergence.cells[1] = { app: convergence.cells[1].app, source: convergence.cells[1].source, target: convergence.cells[1].target, failure: "load-exit", verdict: null };
+  convergence.options.labels = ["agent.owner=codex"];
+  validateSoak(soak); validateConvergence(convergence);
+  // Every value in the saved pass (of the windows, the first two and the last of each cell, which
+  // the reader checks alike): replaced by text, and a number by the same number as text.
+  const sampled = ([k], i, all) => i < 2 || i === all.length - 1;
+  const leaves = (value, path = []) => (value !== null && typeof value === "object"
+    ? Object.entries(value).filter((entry, i, all) => path.at(-1) !== "windows" || sampled(entry, i, all)).flatMap(([k, v]) => leaves(v, [...path, k])) : [path]);
+  const objects = (value, path = []) => (value !== null && typeof value === "object" ? [path, ...Object.entries(value).flatMap(([k, v]) => objects(v, [...path, k]))] : []);
+  const at = (root, path) => path.reduce((v, k) => v[k], root);
+  let checked = 0;
+  for (const [pass, validate, kind] of [[convergence, validateConvergence, "convergence"], [soak, validateSoak, "soak"]]) {
+    const refused = (mutate, what) => {
+      const v = structuredClone(pass); mutate(v);
+      for (const read of [validate, steadyReport, ...(kind === "convergence" ? [(x) => convergenceLines(likeRound(), ["corten", "aspnet"], x)] : [])]) {
+        assert.throws(() => read(v), (error) => {
+          assert.ok(!error.message.includes("leaked") && !error.message.includes("\n") && Object.keys(error).length === 0, `${kind} ${what}: ${error.message}`);
+          return true;
+        }, `${kind} ${what}`);
+      }
+      checked++;
+    };
+    for (const path of leaves(pass)) {
+      const value = at(pass, path), parent = (v) => at(v, path.slice(0, -1)), key = path.at(-1);
+      refused((v) => { parent(v)[key] = typeof value === "string" ? `${value}${canary}` : canary; }, path.join("."));
+      if (typeof value === "number") refused((v) => { parent(v)[key] = String(value); }, `${path.join(".")} as text`);
+    }
+    for (const path of objects(pass)) {
+      const target = at(pass, path);
+      if (Array.isArray(target)) continue;
+      refused((v) => { at(v, path)[`leaked${canary}`] = 1; }, `${path.join(".")} with an extra field`);
+    }
+  }
+  assert.ok(checked > 400, `${checked} mutations`);
+});
+
+test("saved memory medians and growth must be numbers before the report does any arithmetic", () => {
+  const options = parseSteadyArgs(["soak", "w8", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
+  const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
+  const cell = { app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60), tail: 0, unrecorded: 0,
+    requests: 270000, iterations: 270000, latencyMaxMs: 25, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: i < 60 ? 10 : 20 })), before: held, after: held, events: [] }) };
+  const s = savedPass(options, [cell]);
+  assert.match(soakReport(s), /\| 10\.0 \| 20\.0 \| \+10\.0 MiB \(100\.0%\) \|/);
+  for (const mutate of [(m) => { m.startMiB = "10"; m.endMiB = "20"; }, (m) => { m.startMiB = "10"; }, (m) => { m.growthMiB = "10"; }, (m) => { m.growthPct = "100"; },
+    (m) => { m.startMiB = 0; m.growthMiB = 20; m.growthPct = Infinity; }, (m) => { m.endMiB = Infinity; m.growthMiB = Infinity; }, (m) => { m.samples = "1800"; }]) {
+    const v = structuredClone(s); mutate(v.cells[0].memory);
+    assert.throws(() => validateSoak(v), /^Error: corten fixture page: memory$/);
+    assert.throws(() => soakReport(v), /^Error: corten fixture page: memory$/);
+  }
+});
+
+test("a pass's failure and startup are codes the reader knows, printed as their text", () => {
+  assert.ok(Object.values(failureCodes).every((text) => typeof text === "string" && !/[<>`|]/.test(text)));
+  const s = convergencePass();
+  for (const failure of ["Error: docker rm exited 1", "cold probe exited 1; its output is in cold.log", "toString", "__proto__"]) {
+    const v = structuredClone(s); v.cells[0] = { app: "corten", source: "fixture", target: "page", failure, verdict: null };
+    assert.throws(() => validateConvergence(v), /^Error: corten fixture page: a failed cell keeps a known failure code$/);
+  }
+  for (const startup of ["the timed round's cold start", "marketplace-cold-start/v2", "toString"]) {
+    const v = structuredClone(s); v.startup = startup;
+    assert.throws(() => validateConvergence(v), /^Error: a pass records how it started each app, by a known code$/);
+  }
+  assert.throws(() => parseSaved("{\"leaked canary\": "), (error) => error.message === "the saved pass is not JSON");
+  assert.deepEqual(parseSaved("{\"a\":1}"), { a: 1 });
 });

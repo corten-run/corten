@@ -10,7 +10,8 @@ import { apps, locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { aggregate, appStop, cpuSettings, phases, resultSchema, sources, stageAggregate, timedProfilesFor, v4Schema, v5Schema } from "./run-contract.mjs";
 import { report, validateSummary } from "./report.mjs";
-import { convergenceLines, convergenceSchema, flattenPoint, flattenRule, timedStartup, timedWarmupVus } from "./steady-contract.mjs";
+import { convergenceLines, flattenPoint, parseSteadyArgs } from "./steady-contract.mjs";
+import { savedPass } from "./steady-saved-fixture.mjs";
 import { compare, comparisonKey } from "./compare.mjs";
 import { groupApps } from "./groups.mjs";
 import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, produceBoundedQualification, qualification, qualificationSettings } from "./feature-contract.mjs";
@@ -607,6 +608,8 @@ test("the report states the convergence pass given to it, or that none was provi
   const s = grouped("production", "r21");
   // Pinned, as an official round is: an unpinned round records no CPU placement to match.
   s.measurement.cpus = cpuSettings({ MARKETPLACE_APP_CPUS: "1", MARKETPLACE_LOAD_CPUS: "4-7", MARKETPLACE_API_CPUS: "2-3" });
+  // A kernel release of the form a pass saves (savedText), so the two can match.
+  s.host.release = "6.8.0-test";
   const probes = boundedQualificationProbes("api"); delete probes.page.headers["content-security-policy"];
   // Corten and ASP.NET Core are measured; the other candidates are excluded, not timed.
   for (const app of ["nextjs", "fastapi", "express", "topcoat", "leptos"]) Object.assign(s.apps[app], { runs: {}, phases: {} }).qualification.api = produceBoundedQualification(probes, "api");
@@ -616,21 +619,18 @@ test("the report states the convergence pass given to it, or that none was provi
   assert.doesNotMatch(none, /cannot show|may include warming/);
   const windows = (rps) => rps.map((r, index) => ({ index, startSeconds: index * 15, seconds: 15, requests: r * 15, failed: 0, rps: r, p95: 5, p99: 9 }));
   // Like-for-like with the round on every compared input.
-  const options = { kind: "convergence", name: "w5", group: "production", apps: ["corten", "aspnet"], sources: ["fixture", "api"], targets: ["page", "json"], minutes: 3, windowSeconds: 15, windows: 12, vus: timedWarmupVus, startupTimeout: 120 };
-  const pass = { schema: convergenceSchema, name: "w5", options, rule: flattenRule, commit: s.commit, finishedCommit: s.commit, dirty: false, complete: true, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z",
-    failures: [], cleanupFailures: [], cleanup: { complete: true, remaining: { containers: [], networks: [] }, created: 1, removed: 1, recovered: 0, unacknowledged: [] },
-    host: { cpu: s.host.cpu, kernel: s.host.release, onlineCpus: s.host.onlineCpus }, images: { corten: s.apps.corten.imageId, aspnet: s.apps.aspnet.imageId },
+  const options = { ...parseSteadyArgs(["convergence", "w5", "--group", "production", "--minutes", "3"], apps, groupApps), apps: ["corten", "aspnet"] };
+  const pass = savedPass(options, options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) => {
+    const w = windows(app === "aspnet" ? [300, 600, 900, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000] : Array(12).fill(1000));
+    const requests = w.reduce((sum, x) => sum + x.requests, 0);
+    return { app, source, target, windows: w, tail: 0, unrecorded: 0, requests, iterations: requests, latencyMaxMs: 10, failedRequests: 0, verdict: flattenPoint(w) };
+  }))), { commit: s.commit, host: { cpu: s.host.cpu, kernel: s.host.release, onlineCpus: s.host.onlineCpus }, images: { corten: s.apps.corten.imageId, aspnet: s.apps.aspnet.imageId },
     measurement: { cpus: s.measurement.cpus, appMemoryBytes: s.measurement.appMemoryBytes, upstreamMemoryBytes: s.measurement.upstreamMemoryBytes, encoding: s.measurement.encoding },
-    fixtureSha256: s.fixtureSha256, tools: { upstream: { imageId: s.tools.upstream.imageId }, k6: { imageId: s.tools.k6.imageId } }, startup: timedStartup,
-    cells: options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) => {
-      const w = windows(app === "aspnet" ? [300, 600, 900, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000] : Array(12).fill(1000));
-      const requests = w.reduce((sum, x) => sum + x.requests, 0);
-      return { app, source, target, windows: w, tail: 0, unrecorded: 0, requests, iterations: requests, latencyMaxMs: 10, failedRequests: 0, verdict: flattenPoint(w) };
-    }))) };
+    fixtureSha256: s.fixtureSha256, tools: { upstream: { imageId: s.tools.upstream.imageId }, k6: { imageId: s.tools.k6.imageId, version: "2.4.0" } } });
   const given = (p) => (round, apps) => convergenceLines(round, apps, p);
   const text = report(s, { convergence: given(pass) });
   assert.doesNotMatch(text, /none provided to this report/);
-  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v3, reading marketplace-tolerance\/v4\), measured at commit `a{40}`/m);
+  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v4, reading marketplace-tolerance\/v4\), measured at commit `a{40}`/m);
   assert.match(text, /^The pass is like-for-like with this round on every input compared: /m);
   assert.match(text, /^Tolerance reading marketplace-tolerance\/v4: a screening reading of throughput, not a certificate of steady state\./m);
   assert.match(text, /^Reading: aspnet api json: within the stated tolerance from the window ending at 60 s\.$/m);
@@ -653,9 +653,11 @@ test("the report states the convergence pass given to it, or that none was provi
   assert.match(other, /^Reading: aspnet api json: within the stated tolerance from the window ending at 60 s\.$/m);
   assert.match(other, judged);
   assert.doesNotMatch(evidence(other), /reaches|is shorter than|establish|sufficient|long enough to/);
-  // A pass that ran on another kernel lists that too.
-  const otherKernel = structuredClone(pass); otherKernel.host.kernel = "6.8.0-other";
-  assert.match(report(s, { convergence: given(otherKernel) }), /^The pass is not like-for-like with this round\. Differing or missing inputs: the kernel release differs \(pass: 6\.8\.0-other; round: test\)\.$/m);
+  // A pass that ran on another kernel lists that too, naming the input and neither value.
+  const otherKernel = structuredClone(pass); otherKernel.host.kernel = "6.8.0-canarykernel";
+  const kernelText = report(s, { convergence: given(otherKernel) });
+  assert.match(kernelText, /^The pass is not like-for-like with this round\. Differing or missing inputs: the kernel release differs\.$/m);
+  assert.ok(!kernelText.includes("canarykernel"));
   // The replay's validateSummary closure must not load steady-contract.mjs: report.mjs imports it only on the --convergence CLI path.
   const source = readFileSync(new URL("./report.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(source, /^import[^\n]*steady-contract/m);
@@ -668,5 +670,56 @@ test("the report states the convergence pass given to it, or that none was provi
     assert.equal(cli.stdout, `${other}\n`);
     const plain = spawnSync(process.execPath, [fileURLToPath(new URL("./report.mjs", import.meta.url)), round], { encoding: "utf8" });
     assert.equal(plain.stdout, `${none}\n`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("report.mjs --convergence prints no text it read from a saved pass or round unless it was validated or is a fixed code's text", async () => {
+  const s = grouped("production", "r21");
+  s.measurement.cpus = cpuSettings({ MARKETPLACE_APP_CPUS: "1", MARKETPLACE_LOAD_CPUS: "4-7", MARKETPLACE_API_CPUS: "2-3" });
+  s.host.release = "6.8.0-test";
+  const probes = boundedQualificationProbes("api"); delete probes.page.headers["content-security-policy"];
+  for (const app of ["nextjs", "fastapi", "express", "topcoat", "leptos"]) Object.assign(s.apps[app], { runs: {}, phases: {} }).qualification.api = produceBoundedQualification(probes, "api");
+  validateSummary(s);
+  const canary = "leaked canary text";
+  const windows = (rps) => rps.map((r, index) => ({ index, startSeconds: index * 15, seconds: 15, requests: r * 15, failed: 0, rps: r, p95: 5, p99: 9 }));
+  const options = { ...parseSteadyArgs(["convergence", "w6", "--group", "production", "--minutes", "3"], apps, groupApps), apps: ["corten", "aspnet"] };
+  const pass = savedPass(options, options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) => {
+    const w = windows(Array(12).fill(1000)), requests = w.reduce((sum, x) => sum + x.requests, 0);
+    return { app, source, target, windows: w, tail: 0, unrecorded: 0, requests, iterations: requests, latencyMaxMs: 10, failedRequests: 0, verdict: flattenPoint(w) };
+  }))), { commit: s.commit });
+  const given = (p) => (round, list) => convergenceLines(round, list, p);
+  const refusedWithout = (mutate) => {
+    const p = structuredClone(pass); mutate(p);
+    assert.throws(() => report(s, { convergence: given(p) }), (error) => { assert.ok(!error.message.includes("canary") && !JSON.stringify(error).includes("canary"), error.message); return true; });
+  };
+  // Synthetic text in a pass's startup, in a cell's failure, in a host value, an option or a reading.
+  refusedWithout((p) => { p.startup = canary; });
+  refusedWithout((p) => { p.cells[0] = { app: "corten", source: "fixture", target: "page", failure: canary, verdict: null }; });
+  refusedWithout((p) => { p.host.cpu = `CPU <${canary}>`; });
+  refusedWithout((p) => { p.host.docker = canary; });
+  refusedWithout((p) => { p.options.labels = [canary]; });
+  refusedWithout((p) => { p.cells[1].verdict.reason = canary; });
+  refusedWithout((p) => { p[canary] = 1; });
+  // A failed cell with a known code prints that code's text: no reading.
+  const failedCell = structuredClone(pass); failedCell.cells[0] = { app: "corten", source: "fixture", target: "page", failure: "cold-start", verdict: null };
+  assert.match(report(s, { convergence: given(failedCell) }), /^Reading: corten fixture page: no reading, the cell failed \(the app did not start as the timed cold start requires\)\.$/m);
+  // Values that differ between the round and the pass are named by input, never quoted from either side.
+  const round = structuredClone(s); round.host.cpu = "Round CPU canaryround"; round.host.onlineCpus = "0-3";
+  const differing = structuredClone(pass); differing.host = { ...differing.host, cpu: "Pass CPU canarypass", kernel: "6.8.0-canarypass", onlineCpus: "0-5" };
+  const lines = convergenceLines(round, ["corten", "aspnet"], differing);
+  assert.match(lines[1], /the host CPU differs; the kernel release differs; the online CPU set differs/);
+  assert.ok(!lines.slice(1).join("\n").includes("canary") && !lines.slice(1).join("\n").includes("0-3"), lines.join("\n"));
+  // Through the CLI: a pass with text in its startup, and a file that is not JSON, are refused with fixed messages.
+  const dir = mkdtempSync(join(tmpdir(), "marketplace-report-")), roundFile = join(dir, "round.json");
+  try {
+    writeFileSync(roundFile, JSON.stringify(s));
+    const cli = (bytes) => { const file = join(dir, "pass.json"); writeFileSync(file, bytes); return spawnSync(process.execPath, [fileURLToPath(new URL("./report.mjs", import.meta.url)), roundFile, "--convergence", file], { encoding: "utf8" }); };
+    const started = structuredClone(pass); started.startup = canary;
+    for (const [bytes, message] of [[JSON.stringify(started), "a pass records how it started each app, by a known code"], [`{"${canary}": `, "the saved pass is not JSON"]]) {
+      const r = cli(bytes);
+      assert.notEqual(r.status, 0);
+      assert.ok(r.stderr.includes(message), r.stderr);
+      assert.ok(!r.stderr.includes("canary") && !r.stdout.includes("canary"), r.stderr);
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { memorySampler, runSteady } from "./steady-run.mjs";
 import { convergenceLines, ownerLabelKey, parseSteadyArgs, timedStartup, validateConvergence, validateSoak } from "./steady-contract.mjs";
+import { steadyReport } from "./steady-report.mjs";
 import { resultSchema } from "./run-contract.mjs";
 import { groupApps } from "./groups.mjs";
 import { apps } from "./contract.mjs";
@@ -154,6 +155,9 @@ const run = (fake, options, folder, extra = {}) => runSteady({ options, folder, 
   fixture: () => "f".repeat(64), upstreamReady: async () => {}, print: quiet, ...extra });
 const flat = (n, rps = 1000, seconds = 15) => Array(n).fill(rps * seconds);
 const isId = (value) => /^[0-9a-f]{64}$/.test(value);
+// The raw files a failure's message and a cleanup failure's first line go to (never summary.json).
+const errorsOf = (dir) => readFileSync(join(dir, "errors.log"), "utf8");
+const cleanupOf = (dir) => JSON.parse(readFileSync(join(dir, "cleanup.json"), "utf8"));
 
 test("a convergence pass starts each cell with the timed round's cold start and records what like-for-like needs", async (t) => {
   const folder = folderOf(t);
@@ -165,7 +169,7 @@ test("a convergence pass starts each cell with the timed round's cold start and 
   assert.deepEqual(s.cells.map((c) => [c.target, c.verdict.withinTolerance, c.verdict.fromSeconds, c.failedRequests, c.requests, c.iterations]), [["page", true, 15, 0, 120_000, 120_000], ["json", true, 15, 0, 120_000, 120_000]]);
   assert.equal(s.startup, timedStartup);
   assert.equal(s.finishedCommit, commit);
-  assert.deepEqual(s.cleanup, { complete: true, remaining: { containers: [], networks: [] }, created: 10, removed: 10, recovered: 0, unacknowledged: [] });
+  assert.deepEqual(s.cleanup, { complete: true, remaining: { containers: [], networks: [] }, created: 10, removed: 10, recovered: 0, failures: 0, unacknowledged: [] });
   assert.deepEqual([s.host.kernel, s.host.cpu, s.host.onlineCpus, s.fixtureSha256, s.tools.upstream.imageId, s.tools.k6.imageId], ["6.8.0-test", "Synthetic CPU", "0-7", "f".repeat(64), upstreamImageId, k6ImageId]);
   // The k6 version came from an owned container, created, attached and removed by ID: no docker run.
   assert.equal(s.tools.k6.version, "2.4.0");
@@ -214,12 +218,15 @@ test("a load whose k6 engine clock does not cover the pass gives the cell no rea
   // A 1 ms engine clock, with counter rates consistent with it: not a complete 120 s pass.
   const short = await run(fakeDocker({ exportFor: () => k6Export(flat(8), { clockMs: 1 }), clockMs: 1 }), options, folder("1ms"));
   assert.equal(short.cells[0].verdict, null);
-  assert.match(short.cells[0].failure, /k6 engine duration truncated\/outside container window/);
+  assert.equal(short.cells[0].failure, "load-evidence");
+  assert.match(errorsOf(folder("1ms")), /k6 engine duration truncated\/outside container window/);
   // A clock longer than the container's own run, or rates not over the engine clock, is refused too.
   const outside = fakeDocker({ exportFor: () => k6Export(flat(8), { clockMs: 130_000 }), clockMs: 130_000, runMs: 120_000 });
-  assert.match((await run(outside, options, folder("outside"))).cells[0].failure, /k6 engine duration truncated\/outside container window/);
+  assert.equal((await run(outside, options, folder("outside"))).cells[0].failure, "load-evidence");
+  assert.match(errorsOf(folder("outside")), /k6 engine duration truncated\/outside container window/);
   const rates = await run(fakeDocker({ exportFor: () => k6Export(flat(8), { clockMs: 125_000 }) }), options, folder("rates"));
-  assert.match(rates.cells[0].failure, /count\/rate differs from engine elapsed clock/);
+  assert.equal(rates.cells[0].failure, "load-evidence");
+  assert.match(errorsOf(folder("rates")), /count\/rate differs from engine elapsed clock/);
   // The same pass with a consistent clock reads.
   assert.equal((await run(fakeDocker({ exportFor: () => k6Export(flat(8)) }), options, folder("ok"))).cells[0].verdict.withinTolerance, true);
 });
@@ -230,7 +237,8 @@ test("a convergence cell whose app was restarted in place during the load gets n
   // A docker restart: the same container ID and RestartCount 0, a new StartedAt, running again.
   const s = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), restartOnLoad: true }), options, folder("restart"));
   assert.equal(s.cells[0].verdict, null);
-  assert.equal(s.cells[0].failure, "app container stopped, restarted, was replaced or was OOM-killed during the pass: another StartedAt");
+  assert.equal(s.cells[0].failure, "instance-changed");
+  assert.ok(errorsOf(folder("restart")).includes("app container stopped, restarted, was replaced or was OOM-killed during the pass: another StartedAt"));
 });
 
 test("a failure answered during k6's graceful stop, or in a window, gives the cell no verdict", async (t) => {
@@ -239,10 +247,12 @@ test("a failure answered during k6's graceful stop, or in a window, gives the ce
   // Every window served; three 500s completed after the last window, during the graceful stop.
   const grace = await run(fakeDocker({ exportFor: () => k6Export(flat(8), { graceFailed: 3 }) }), options, folder("grace"));
   assert.equal(grace.cells[0].verdict, null);
-  assert.match(grace.cells[0].failure, /3 requests failed in k6's aggregate, which includes the graceful stop; no verdict/);
+  assert.equal(grace.cells[0].failure, "failed-requests");
+  assert.match(errorsOf(folder("grace")), /3 requests failed in k6's aggregate, which includes the graceful stop; no verdict/);
   assert.equal(grace.complete, true); validateConvergence(grace);
   const inWindow = await run(fakeDocker({ exportFor: () => k6Export(flat(8), { windowFailed: { 2: 5 } }) }), options, folder("window"));
-  assert.match(inWindow.cells[0].failure, /5 requests failed in the pass's windows; no verdict/);
+  assert.equal(inWindow.cells[0].failure, "failed-requests");
+  assert.match(errorsOf(folder("window")), /5 requests failed in the pass's windows; no verdict/);
 });
 
 test("a convergence cell whose app was OOM-killed during the load gets no verdict", async (t) => {
@@ -250,7 +260,8 @@ test("a convergence cell whose app was OOM-killed during the load gets no verdic
   const options = parseSteadyArgs(["convergence", "t3", "--apps", "corten", "--sources", "fixture", "--targets", "json", "--minutes", "2"], apps, groupApps);
   const s = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), oomOnLoad: true }), options, folder("oom"));
   assert.equal(s.cells[0].verdict, null);
-  assert.equal(s.cells[0].failure, "app container stopped, restarted, was replaced or was OOM-killed during the pass: not running, OOM-killed or not recorded");
+  assert.equal(s.cells[0].failure, "instance-changed");
+  assert.ok(errorsOf(folder("oom")).includes("app container stopped, restarted, was replaced or was OOM-killed during the pass: not running, OOM-killed or not recorded"));
 });
 
 test("a create whose ID Docker withholds is not reported clean, and no further cell is measured", async (t) => {
@@ -261,15 +272,21 @@ test("a create whose ID Docker withholds is not reported clean, and no further c
   const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), withhold: (name) => name === "marketplace-test-run-k6" });
   const s = await run(fake, options, folder("withheld"));
   assert.equal(s.complete, false);
-  assert.match(s.cells[0].failure, /context deadline exceeded/);
-  assert.match(s.failures[0].error, /corten fixture page did not settle \(the create of marketplace-test-run-k6 was not acknowledged\), so no further cell is measured/);
+  assert.equal(s.cells[0].failure, "container");
+  assert.deepEqual(s.failures, [{ stage: "suite", code: "unsettled" }]);
+  const errors = errorsOf(folder("withheld"));
+  assert.match(errors, /context deadline exceeded/);
+  assert.match(errors, /corten fixture page did not settle \(the create of marketplace-test-run-k6 was not acknowledged\), so no further cell is measured/);
   assert.equal(s.cells.length, 1, "aspnet was not measured");
   assert.ok(!fake.calls.some((c) => c.args[0] === "create" && c.args[2] === "marketplace-test-run-aspnet"));
-  const cleanup = JSON.parse(readFileSync(join(folder("withheld"), "cleanup.json"), "utf8"));
+  const cleanup = cleanupOf(folder("withheld"));
   assert.equal(cleanup.complete, false);
   assert.deepEqual(cleanup.remaining, { containers: [], networks: [] }, "the scans found nothing, and that is not taken as clean");
   assert.deepEqual(cleanup.unacknowledged.map((a) => [a.name, a.outcome]), [["marketplace-test-run-k6", "unconfirmed"]]);
-  assert.ok(s.cleanupFailures.some((f) => /cleanup is unconfirmed/.test(f.error)));
+  assert.ok(cleanup.failures.some((f) => /cleanup is unconfirmed/.test(f.error)));
+  assert.equal(s.cleanup.complete, false);
+  assert.ok(s.cleanup.failures > 0);
+  assert.deepEqual(s.cleanup.unacknowledged.map((a) => [a.name, a.outcome]), [["marketplace-test-run-k6", "unconfirmed"]]);
   // The cell's own app was removed before the pass stopped.
   const corten = fake.calls.find((c) => c.args[0] === "create" && c.args[2] === "marketplace-test-run-corten");
   assert.ok(corten && !fake.containers.size);
@@ -283,7 +300,8 @@ test("a load container that cannot be removed still has its app removed, and no 
   assert.equal(s.complete, false);
   // The cell itself measured; its teardown is what failed.
   assert.equal(s.cells[0].verdict.withinTolerance, true);
-  assert.match(s.failures[0].error, /corten fixture page did not settle \(container [0-9a-f]{64} was not removed\), so no further cell is measured/);
+  assert.deepEqual(s.failures, [{ stage: "suite", code: "unsettled" }]);
+  assert.match(errorsOf(folder("stuck")), /corten fixture page did not settle \(container [0-9a-f]{64} was not removed\), so no further cell is measured/);
   // The app's removal is attempted after the load container's failed one, before the pass stops.
   const removals = fake.calls.map((c, index) => ({ index, args: c.args })).filter((c) => c.args[0] === "rm");
   const firstK6 = removals.find((r) => r.args[3] === fake.ids["marketplace-test-run-k6"]), appRemoval = removals.find((r) => r.args[3] === fake.ids["marketplace-test-run-corten"]);
@@ -291,7 +309,8 @@ test("a load container that cannot be removed still has its app removed, and no 
   assert.ok(appRemoval.index < fake.calls.findIndex((c) => c.args[0] === "ps" && c.args.includes(`label=${ownerLabelKey}=marketplace-test-run`)), "before the teardown sweep");
   assert.ok([...fake.containers.values()].every((c) => c.name === "marketplace-test-run-k6"), "only the stuck load container is left");
   assert.ok(!fake.calls.some((c) => c.args[0] === "create" && c.args[2] === "marketplace-test-run-aspnet"));
-  assert.ok(s.cleanupFailures.some((f) => /marketplace-test-run-k6/.test(f.resource)));
+  assert.ok(cleanupOf(folder("stuck")).failures.some((f) => f.resource === fake.ids["marketplace-test-run-k6"] || /marketplace-test-run-k6/.test(f.resource)));
+  assert.ok(s.cleanup.failures > 0);
 });
 
 // A docker stats client: emits `rows(args)` `delayMs` after it starts; closes when signalled unless `holds`.
@@ -371,7 +390,8 @@ test("a soak cell whose k6 aggregate failures exceed every request outside its i
   const fake = fakeDocker({ exportFor: load, clockMs: 1_800_000, loadMs: 50 });
   const stats = statsClient({ delayMs: 10, rows: (args) => Array.from({ length: 180 }, () => ({ ID: args.at(-1), Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" })) });
   const s = await run(fake, options, folder("failed"), { spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ } });
-  assert.equal(s.cells[0].failure, "corten fixture page: k6's aggregate failures are fewer than its windows' or more than its windows' plus the requests outside them");
+  assert.equal(s.cells[0].failure, "load-evidence");
+  assert.ok(errorsOf(folder("failed")).includes("corten fixture page: k6's aggregate failures are fewer than its windows' or more than its windows' plus the requests outside them"));
   assert.equal(s.cells[0].windows, undefined);
 });
 
@@ -418,22 +438,124 @@ test("Docker's and k6's own output never reaches summary.json or cleanup.json; i
   // A cold probe that exits 1 with untrusted output.
   const cold = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args) => args[0] === "wait" ? "1" : args[0] === "logs" && args[1] === cold.ids["marketplace-test-run-corten-probe"] ? `catalog-probe-ready\n${canary} ${token}` : undefined });
   const a = await run(cold, options, folder("cold"));
-  assert.equal(a.cells[0].failure, "cold probe exited 1; its output is in cold.log");
+  assert.equal(a.cells[0].failure, "cold-start");
+  assert.ok(errorsOf(folder("cold")).includes("cold probe exited 1; its output is in cold.log"));
   clean(folder("cold"));
   // A k6 summary with a metric this load does not define, named by the canary.
   const k6 = await run(fakeDocker({ exportFor: () => { const e = k6Export(flat(8)); e.metrics[`${token}_${canary}`] = { count: 1, rate: 1 / 120 }; return e; } }), options, folder("metric"));
-  assert.equal(k6.cells[0].failure, "the k6 summary export has 1 metric this load does not define");
+  assert.equal(k6.cells[0].failure, "load-evidence");
+  assert.ok(errorsOf(folder("metric")).includes("the k6 summary export has 1 metric this load does not define"));
   clean(folder("metric"));
   // A removal that fails with Docker's own text after the first line: the record keeps the first line.
   const stuck = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => args[0] === "rm" && args[3] === state.ids["marketplace-test-run-k6"] ? new Error(`docker rm -f: exit 1\n${canary} ${token}`) : undefined });
   const b = await run(stuck, options, folder("rm"));
   assert.equal(b.complete, false);
-  assert.ok(b.cleanupFailures.some((f) => f.error === "docker rm -f: exit 1"), JSON.stringify(b.cleanupFailures));
+  assert.ok(cleanupOf(folder("rm")).failures.some((f) => f.error === "docker rm -f: exit 1"), JSON.stringify(cleanupOf(folder("rm")).failures));
+  assert.ok(b.cleanup.failures > 0);
   clean(folder("rm"));
   assert.ok(readFileSync(join(folder("rm"), "errors.log"), "utf8").includes(canary), "the full error is kept raw");
   // An image inspect answering something that is not JSON: the JSON.parse excerpt is not saved.
   const odd = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args) => args[0] === "image" && args[2] === "cb-marketplace-corten" ? `${token} ${canary}` : undefined }), options, folder("json"));
-  assert.equal(odd.failures[0].error, "docker image inspect of cb-marketplace-corten is not JSON");
+  assert.deepEqual(odd.failures, [{ stage: "suite", code: "image" }]);
+  assert.ok(errorsOf(folder("json")).includes("docker image inspect of cb-marketplace-corten is not JSON"));
   clean(folder("json"));
   assert.ok(readFileSync(join(folder("json"), "errors.log"), "utf8").includes(token));
+});
+
+test("summary.json keeps a value from Docker, the host or k6 only when it matches its saved pattern; the raw text stays in its own file", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t10", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const token = "leaked-canary-token";
+  const longCpu = `Synthetic ${"X".repeat(96)}`;
+  // Docker's server version with a suffix outside its pattern, a host probe whose kernel, CPU model
+  // and online CPUs carry text outside theirs, k6's version output with trailing text (the version
+  // itself matches the pin), and an extra repository digest on the k6 image.
+  const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => {
+    if (args[0] === "version") return `27.5.1 <${token}>`;
+    if (args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-host"]) return `6.8.0-test ${token}\nmodel name\t: Synthetic <${token}>\n0-7;${token}`;
+    if (args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-k6-version"]) return `k6 v2.4.0 (commit/${token}, go1.24, linux/amd64)`;
+    if (args[0] === "image" && args[2] === k6Image) return JSON.stringify([{ Id: k6ImageId, Os: "linux", Architecture: "amd64", RepoDigests: [k6Image, `example.com/${token}@sha256:${"e".repeat(64)}`] }]);
+    return undefined;
+  } });
+  const s = await run(fake, options, folder("canary"));
+  assert.equal(s.complete, true, JSON.stringify(s.failures));
+  validateConvergence(s);
+  assert.deepEqual([s.host.docker, s.host.kernel, s.host.cpu, s.host.onlineCpus], [null, null, null, null]);
+  assert.deepEqual(s.tools.k6, { imageId: k6ImageId, version: "2.4.0" });
+  const text = readFileSync(join(folder("canary"), "summary.json"), "utf8");
+  assert.ok(!text.includes(token) && !text.includes("example.com"), text);
+  // The raw files keep what Docker, the host and k6 said.
+  assert.ok(readFileSync(join(folder("canary"), "docker-version.txt"), "utf8").includes(token));
+  assert.ok(readFileSync(join(folder("canary"), "host.txt"), "utf8").includes(token));
+  const k6 = readFileSync(join(folder("canary"), "k6.json"), "utf8");
+  assert.ok(k6.includes(token) && k6.includes("example.com"));
+  // A CPU model longer than its pattern allows is not recorded either, and the report says so.
+  const long = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) =>
+    args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-host"] ? `6.8.0-test\nmodel name\t: ${longCpu}\n0-7` : undefined }), options, folder("long"));
+  assert.deepEqual([long.host.kernel, long.host.cpu, long.host.onlineCpus], ["6.8.0-test", null, "0-7"]);
+  assert.match(steadyReport(long), /CPU: not recorded \(online CPUs 0-7\)/);
+  assert.ok(!readFileSync(join(folder("long"), "summary.json"), "utf8").includes("XXXX"));
+});
+
+test("an adapter or upstream image ID that is not a canonical Docker ID fails its step with a fixed code, and is not saved", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t11", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const odd = `sha256:${"a".repeat(63)}g-leaked-canary`;
+  const app = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args) => args[0] === "image" && args[2] === "cb-marketplace-corten"
+    ? JSON.stringify([{ Id: odd, Size: 1, Config: { Labels: { "run.corten.marketplace.commit": commit, "run.corten.marketplace.dirty": "false" } }, RepoDigests: [] }]) : undefined }), options, folder("app"));
+  assert.deepEqual([app.complete, app.failures, app.images], [false, [{ stage: "suite", code: "image" }], {}]);
+  assert.ok(errorsOf(folder("app")).includes("an adapter image ID is not a value a pass saves"));
+  assert.ok(!readFileSync(join(folder("app"), "summary.json"), "utf8").includes("leaked-canary"));
+  assert.ok(readFileSync(join(folder("app"), "images.json"), "utf8").includes("leaked-canary"), "the receipt keeps it raw");
+  // The upstream container reports an image that is not a canonical ID.
+  const upstream = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => {
+    const id = state.ids["marketplace-test-run-upstream"];
+    if (args[0] === "start" && args[1] === id) state.containers.get(id).imageId = odd;
+    return undefined;
+  } }), options, folder("upstream"));
+  assert.deepEqual([upstream.complete, upstream.failures, upstream.tools.upstream], [false, [{ stage: "suite", code: "tools" }], null]);
+  assert.ok(!readFileSync(join(folder("upstream"), "summary.json"), "utf8").includes("leaked-canary"));
+  // A k6 version with text in place of its patch number does not match the pin: a tools failure.
+  const k6 = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) =>
+    args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-k6-version"] ? "k6 v2.4.leaked-canary" : undefined }), options, folder("k6"));
+  assert.deepEqual([k6.complete, k6.failures, k6.tools], [false, [{ stage: "suite", code: "tools" }], null]);
+  assert.ok(!readFileSync(join(folder("k6"), "summary.json"), "utf8").includes("leaked-canary"));
+});
+
+test("a soak's Docker event stream is unavailable, clean or seen, every row checked, and independent of its memory samples", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["soak", "t12", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps);
+  const soak = async (name, events, extra = {}) => {
+    let tick = 0;
+    const fake = fakeDocker({ exportFor: () => k6Export(Array(30).fill(150 * 60), { clockMs: 1_800_000 }), clockMs: 1_800_000, loadMs: 50, ...extra,
+      override: (args, state) => (args[0] === "events" ? events(state) : undefined) });
+    const stats = statsClient({ delayMs: 10, rows: (args) => Array.from({ length: 180 }, () => ({ ID: args.at(-1), Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" })) });
+    const s = await run(fake, options, folder(name), { spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ } });
+    assert.equal(s.complete, true, JSON.stringify([s.failures, s.cells]));
+    validateSoak(s);
+    return s;
+  };
+  const nanos = (state, afterMs) => (BigInt(state.now() + afterMs) * 1_000_000n).toString();
+  // A row that is not an action and a time, or an OOM row with no timestamp: the whole stream is
+  // unavailable, not read as "no restart", and the row is not saved.
+  for (const [name, rows] of [["malformed", () => "die|1\nleaked-canary row\n"], ["no-time", () => "oom|NOT_A_TIMESTAMP\n"]]) {
+    const s = await soak(name, rows);
+    const r = s.cells[0].restarts;
+    assert.deepEqual([r.eventStream, r.events, r.restarted], ["unavailable", [], null]);
+    assert.equal(s.cells[0].memory.startMiB, 100, "memory is still read");
+    assert.match(steadyReport(s), /\| not established: the event stream was unavailable and nothing else showed a restart \|$/m);
+    assert.match(errorsOf(folder(name)), /docker events: \w*Error[^:]*: 1 docker events row is not an action and a time/);
+    assert.ok(!readFileSync(join(folder(name), "summary.json"), "utf8").includes("canary") && !readFileSync(join(folder(name), "summary.json"), "utf8").includes("NOT_A_TIMESTAMP"));
+  }
+  // The same unreadable stream with the app OOM-killed: the OOM and stop observations still make it a restart.
+  const oom = await soak("oom", () => "oom|NOT_A_TIMESTAMP\n", { oomOnLoad: true });
+  assert.deepEqual([oom.cells[0].restarts.eventStream, oom.cells[0].restarts.restarted, oom.cells[0].restarts.oomKilled, oom.cells[0].restarts.runningAtEnd], ["unavailable", true, true, false]);
+  // A stream Docker could not give at all.
+  const failed = await soak("failed", () => new Error("docker events: exit 1"));
+  assert.deepEqual([failed.cells[0].restarts.eventStream, failed.cells[0].restarts.restarted], ["unavailable", null]);
+  // A clean stream (rows that are not restart-relevant are read and dropped), and one with a kill.
+  const clean = await soak("clean", (state) => `exec_start: sh -c true|${nanos(state, 0)}\nhealth_status: healthy|${nanos(state, 0)}\n`);
+  assert.deepEqual([clean.cells[0].restarts.eventStream, clean.cells[0].restarts.events, clean.cells[0].restarts.restarted], ["clean", [], false]);
+  const seen = await soak("seen", (state) => `kill|${nanos(state, 0)}\n`);
+  assert.deepEqual([seen.cells[0].restarts.eventStream, seen.cells[0].restarts.events.map((e) => e.action), seen.cells[0].restarts.restarted], ["seen", ["kill"], true]);
 });
