@@ -2973,13 +2973,17 @@ const typedIn = new Map();
 
 /** The key of the history entry whose page `<main>` shows. */
 let drawnFor = navigation?.currentEntry?.key ?? "";
-/** The address (`pageKey`) the last navigation drew `<main>` for, and how many times it has changed. */
+/**
+ * The address (`pageKey`) of the page `<main>` shows, as the last navigation drew it or a script
+ * put it in the address since, and how many times a navigation changed it.
+ */
 let shownAt = pageKey(new URL(location.href));
 let turns = 0;
-// An entry the runtime did not go to (a link to a fragment, a script's `pushState`) shows the page
-// that was there.
+// An entry the runtime did not go to (a link to a fragment, a script's `pushState` or
+// `replaceState`, as a sort in place does) shows the page that was there, at that address: a read
+// of it again is not a turn.
 navigation?.addEventListener("currententrychange", () => {
-  if (!navigation?.transition) drawnFor = navigation?.currentEntry?.key ?? drawnFor;
+  if (!navigation?.transition) (drawnFor = navigation?.currentEntry?.key ?? drawnFor), (shownAt = pageKey(new URL(location.href)));
 });
 
 /**

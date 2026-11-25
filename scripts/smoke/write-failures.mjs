@@ -12,7 +12,8 @@ const plainly = (route) => ({ ...route.request().headers(), "accept-encoding": "
 
 /**
  * One case: the write is pressed on the watch form of `/` while a read of the page `to`
- * (started by a link, a script's navigation, or the whole page read a write's redirect sends) is on
+ * (started by a link, a script's navigation, the whole page read a write's redirect sends, or Back
+ * to `to`, the page loaded before `/`) is on
  * its way, held at the route; the write fails once the read has drawn (`after`) or while it is
  * still held (`before`), and is heard once, on the form in its place or on the document.
  * `abandoned` first starts a navigation to `/alerts` whose section stylesheet never loads, which
@@ -24,7 +25,7 @@ const plainly = (route) => ({ ...route.request().headers(), "accept-encoding": "
  * on it while the read is still held; one added to the layout's header while the read is the whole
  * page; or one in the layout's element that is the page's (the sector nav), drawn again without its
  * `page` mark as a patch may draw it. The last two are held until the read has drawn.
- * @typedef {{ name: string, to: string, start: "link" | "script" | "write", fails: "after" | "before", at: "successor" | "document" | "sent", abandoned?: boolean, action?: boolean, pressed?: boolean, own?: boolean, outside?: "body" | "header" | "part" }} Case
+ * @typedef {{ name: string, to: string, start: "link" | "script" | "write" | "back", fails: "after" | "before", at: "successor" | "document" | "sent", abandoned?: boolean, action?: boolean, pressed?: boolean, own?: boolean, outside?: "body" | "header" | "part" }} Case
  */
 
 /**
@@ -97,6 +98,15 @@ export async function writeFailures(browser) {
       own: true,
     },
     {
+      // Back and forward change the address as they start in every browser.
+      name: "a write that fails, sent from a write's own page drawn while Back to another address with a form of the same id was on its way, says so on the document, not on that form",
+      to: "/?again=1",
+      start: "back",
+      fails: "after",
+      at: "document",
+      own: true,
+    },
+    {
       name: "a write that fails from a form outside <main> while a navigation is on its way says so at once, on that form",
       to: "/alerts",
       start: "link",
@@ -148,10 +158,21 @@ export async function writeFailures(browser) {
       try {
         const p = await run.step(() => context.newPage());
         page = p;
-        await run.step(() => p.goto(`${base}/`, { waitUntil: "load" }));
+        await run.step(() => p.goto(`${base}${start === "back" ? to : "/"}`, { waitUntil: "load" }));
         if (!(await run.step(() => p.evaluate(() => "navigation" in window)))) {
           skip(name, "without the Navigation API a navigation is a full load");
           continue;
+        }
+        if (start === "back") {
+          // `to`, then `/` drawn over it, so Back reads `to` again.
+          stage = "the page before drawn";
+          await run.step(() =>
+            p.evaluate(async () => {
+              const w = /** @type {any} */ (window);
+              await w.navigation.navigate("/").finished;
+              while (document.querySelector("main[aria-busy]")) await new Promise((resolve) => setTimeout(resolve, 20));
+            }),
+          );
         }
         /** @type {() => void} */
         let readHeard = () => {};
@@ -305,6 +326,7 @@ export async function writeFailures(browser) {
         } else {
           if (whole) await run.step(() => pressOn("watch-form"));
           else if (start === "link") await run.step(() => follow(to));
+          else if (start === "back") await run.step(() => p.evaluate(() => void (/** @type {any} */ (window)).navigation.back().finished.catch(() => {})));
           else await run.step(() => p.evaluate((to) => void (/** @type {any} */ (window)).navigation.navigate(to).finished.catch(() => {}), to));
           stage = "the read asked for";
           await run.step(() => readHeld);
@@ -416,5 +438,132 @@ export async function writeFailures(browser) {
         () => within(10_000, "the case's browser context did not close within 10 s", context.close()),
       );
     }
+  }
+  await readAgainAfterReplace(browser);
+}
+
+/**
+ * A page that reads itself again, whose address a script changed (`history.replaceState`, as a sort
+ * in place does): the read of it again is the same page, not a turn, so a write pressed while that
+ * read is on its way and failing after it drew says so on the form drawn in its place. The page's
+ * form is given an id, and the read the press meets is told by the script's query and held at the
+ * route until the press; its answer carries a mark, so its draw is seen.
+ * @param {import("@playwright/test").Browser} browser
+ */
+async function readAgainAfterReplace(browser) {
+  const name = "a write that fails after the page's read of itself again, at the address a script put in, drew over its form says so on the form in its place";
+  const path = "/smoke/written/again";
+  /** @type {() => void} */
+  let releaseRead = () => {};
+  const readLetGo = new Promise((resolve) => (releaseRead = () => resolve(undefined)));
+  /** @type {() => void} */
+  let failPost = () => {};
+  const postLetGo = new Promise((resolve) => (failPost = () => resolve(undefined)));
+  const context = await within(10_000, "the case's browser context did not open within 10 s", browser.newContext());
+  /** @type {import("@playwright/test").Page | undefined} */
+  let page;
+  try {
+    const run = steps(20_000, "the case did not finish within 20 s");
+    /** @type {Record<string, unknown>} */
+    let seen = {};
+    let stage = "setup";
+    try {
+      const p = await run.step(() => context.newPage());
+      page = p;
+      /** @type {() => void} */
+      let readHeard = () => {};
+      const readHeld = new Promise((resolve) => (readHeard = () => resolve(undefined)));
+      /** @type {() => void} */
+      let postHeard = () => {};
+      const postHeld = new Promise((resolve) => (postHeard = () => resolve(undefined)));
+      await run.step(() =>
+        p.route(
+          (url) => url.pathname === path,
+          async (route) => {
+            const request = route.request();
+            if (request.method() === "POST") {
+              postHeard();
+              await postLetGo;
+              return route.abort("failed").catch(() => {});
+            }
+            // The read the press meets: the first at the script's address, drawn with a mark.
+            const held = !!request.headers().corten && new URL(request.url()).searchParams.has("sorted");
+            if (held) {
+              readHeard();
+              await readLetGo;
+            }
+            const answer = await route.fetch({ headers: plainly(route) });
+            let body = (await answer.text()).replace(`<form method="post" action="${path}"`, `<form id="again-form" method="post" action="${path}"`);
+            if (held) body += '<p id="again-drawn">Read again.</p>';
+            const headers = Object.fromEntries(Object.entries(answer.headers()).filter(([key]) => !["content-length", "content-encoding"].includes(key)));
+            await route.fulfill({ status: answer.status(), headers, body }).catch(() => {});
+          },
+        ),
+      );
+      await run.step(() => p.goto(`${base}${path}`, { waitUntil: "load" }));
+      if (!(await run.step(() => p.evaluate(() => "navigation" in window)))) {
+        skip(name, "without the Navigation API a page reading itself again is a full load");
+        return;
+      }
+      await run.step(() =>
+        p.evaluate(() => {
+          const state = /** @type {any} */ (window);
+          state.__sent = document.getElementById("again-form");
+          if (!state.__sent) throw new Error("the page's form has no id");
+          /** @type {Map<Event, string>} */
+          const events = new Map();
+          state.__events = events;
+          /** @param {Event} event */
+          const note = (event) => {
+            if (events.has(event)) return;
+            const target = event.target;
+            const where =
+              target === document
+                ? "document"
+                : target === state.__sent
+                  ? `sent form, connected=${state.__sent.isConnected}`
+                  : target === document.getElementById("again-form")
+                    ? "form in its place"
+                    : "another element";
+            events.set(event, `${where}, status ${/** @type {CustomEvent} */ (event).detail.status}`);
+          };
+          state.__sent.addEventListener("corten:error", note);
+          addEventListener("corten:error", note);
+          // A sort in place puts its query in the address.
+          history.replaceState(history.state, "", `${location.pathname}?sorted=1`);
+        }),
+      );
+      stage = "the read again asked for";
+      await run.step(() => readHeld);
+      await run.step(() => p.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#again-form button")).click()));
+      stage = "the write sent";
+      await run.step(() => postHeld);
+      releaseRead();
+      stage = "the read again drawn";
+      await run.step(() =>
+        p.waitForFunction(
+          () => !!document.getElementById("again-drawn") && document.getElementById("again-form") !== (/** @type {any} */ (window)).__sent && !(/** @type {any} */ (window)).navigation.transition,
+          null,
+          { timeout: 10_000, polling: 50 },
+        ),
+      );
+      failPost();
+      stage = "the failure heard";
+      await run.step(() => p.waitForFunction(() => (/** @type {any} */ (window)).__events.size > 0, null, { timeout: 5_000, polling: 50 }));
+      // Two tasks more, past anything the runtime puts in a task.
+      await run.step(() => p.evaluate(async () => { for (let i = 0; i < 2; i += 1) await new Promise((resolve) => setTimeout(resolve)); }));
+      seen = await run.step(() => p.evaluate(() => ({ heard: [.../** @type {any} */ (window).__events.values()] })));
+    } catch (error) {
+      seen = { ...seen, stopped: run.over || String(error), stage };
+    }
+    const heard = /** @type {string[] | undefined} */ (seen.heard) ?? [];
+    check(name, !seen.stopped && heard.length === 1 && heard[0] === "form in its place, status 0", JSON.stringify(seen));
+  } finally {
+    await cleanUp(
+      () => releaseRead(),
+      () => failPost(),
+      () => page?.unrouteAll({ behavior: "ignoreErrors" }),
+      () => within(10_000, "the case's browser context did not close within 10 s", context.close()),
+    );
   }
 }

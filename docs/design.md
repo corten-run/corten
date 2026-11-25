@@ -10340,7 +10340,12 @@ rules something out.
     forward) shows the new address while `<main>` still shows the page being left. A page a
     submit's answer draws (a `GET` `data-patch` form's `<main>`, a write's own page) is the page
     on screen: it takes no turn and leaves that address as it is, and the form it draws is a
-    successor by the same rules. Anything else
+    successor by the same rules. So is the page at an address a script put in (`replaceState`, as
+    a sort in place does): the address it shows from then on is the page's, and the page reading
+    itself again there takes no turn. A limit follows from the first: a `GET` `data-patch` form
+    whose `action` is another path draws that path's `<main>` without a turn, so a form there
+    with the same `id`, `action` and `method` as one on the page it drew over hears that page's
+    failure. Anything else
     goes to the document, which `on:document:corten:error` and corten-ui's `Toaster` hear. A successor is the read's markup, with the submit key the server drew, so a
     retry from it is a new submission (the guide says so). A submit that waited for a write's
     answer is still sent from the form with its `id` after an answer that drew; that is not a
@@ -10359,8 +10364,8 @@ rules something out.
     again on the page, two events for one failure; or carrying the failed form's submit key into
     its successor, a second change to what a read draws.
 
-    Stands on: measured (the runtime grows by 796 bytes, 325 gzipped, from 45,676 and 16,389 on
-    `babd52d28`, main's runtime, unchanged on main since, to 46,472 and 16,714: one build of
+    Stands on: measured (the runtime grows by 826 bytes, 329 gzipped, from 45,676 and 16,389 on
+    `babd52d28`, main's runtime, unchanged on main since, to 46,502 and 16,718: one build of
     each, as the build is the same each time); platform (an event dispatched on a node outside
     the document travels through its detached ancestors only: the first five smoke cases in
     `scripts/smoke/write-failures.mjs`, a navigation to the same page, one to another page, a
@@ -10379,15 +10384,19 @@ rules something out.
     a write sent from a write's own page drawn while a navigation to another address with a form
     of the same `id` is on its way, heard the failure on that address's form in WebKit and on the
     document in the other two with the runtime of `a919f7e71`, one run in each); measured (with
-    this change, five runs of each of the thirteen cases in each of the three heard it once, where
+    this change, five runs of each of the fifteen cases in each of the three heard it once, where
     the case says; with one new rule taken out at a time, one run in each of the three, only that
     rule's cases failed, in all three unless named: the turn read from `location`, the tenth in
-    WebKit; a form outside `<main>` said at once, the eleventh, which heard nothing within 5 s
-    with the read held; the wait while a whole page is on its way, the twelfth, and a page's part
-    known by an `id` it had, the thirteenth, each heard with the read held; and what waits run
-    in a task rather than at once, the four cases where the write fails before the draw, whose
-    handler's scroll the navigation's own scroll then undid. The `page` mark has no case of its
-    own: an element marked when the page loads or a navigation draws is known by its `id` too.
+    WebKit and the eleventh, Back to another address, which every browser commits as it starts;
+    a form outside `<main>` said at once, the twelfth, which heard nothing within 5 s with the
+    read held; the wait while a whole page is on its way, the thirteenth, and a page's part known
+    by an `id` it had, the fourteenth, each heard with the read held; the address a script put in
+    taken as the page's, the fifteenth, the page reading itself again at that address, which then
+    said the failure on the document, as the runtime of `77e21c1e1` did (one run of that variant
+    also stopped the ninth case in WebKit at its stylesheet wait, and two runs again passed it);
+    and what waits run in a task rather than at once, the four cases where the write fails before
+    the draw, whose handler's scroll the navigation's own scroll then undid. The `page` mark has
+    no case of its own: an element marked when the page loads or a navigation draws is known by its `id` too.
     The count released at once for a navigation abandoned before it starts has no case: two
     navigations started in one task, a microtask apart, or a link's and a script's, never started
     a visit with its signal aborted in Chromium or WebKit, and Firefox was not tried); reasoned
@@ -10408,14 +10417,16 @@ rules something out.
     again is seen to draw over a failure's note; the runtime comes to hold back a read that has
     started while a write is out; a navigation is seen to hang long enough that a failure held
     behind it goes unsaid while the user acts on the page; a navigation that does not read the
-    whole page comes to draw over an element outside `<main>` and the page's parts; or a standard
+    whole page comes to draw over an element outside `<main>` and the page's parts; an app's
+    `GET` `data-patch` form draws another path's `<main>` whose form shares an `id`, `action`
+    and `method` with one on the page it replaces; or a standard
     gives an event on a removed element a way to reach the document.
 
     Last checked: 2026-11-25, Playwright 1.65.1's Chromium 159.0.8154.6, Firefox 159.0 and WebKit
-    27.2, the thirteen smoke cases in `scripts/smoke/write-failures.mjs`, the first five failing
+    27.2, the fifteen smoke cases in `scripts/smoke/write-failures.mjs`, the first five failing
     with the runtime of `babd52d28`, the ninth with that of `4752cff6d`, the tenth (in WebKit)
-    and the eleventh with that of `a919f7e71`, and each of the other new ones with its rule taken
-    out;
+    and the twelfth with that of `a919f7e71`, the fifteenth with that of `77e21c1e1`, and each of
+    the other new ones with its rule taken out;
     2026-11-25, the runtime's size from `npm run build:js` on `babd52d28` and with this change.
 
 ## Rules
