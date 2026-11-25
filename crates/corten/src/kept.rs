@@ -344,10 +344,13 @@ impl Verdict {
         signal.found::<Verdict>().get().copied()
     }
 
-    /// Its bit among the verdicts a route has said: one for each kind, whatever its numbers.
+    /// Its bit among the verdicts a route has said: one for each kind, whatever its numbers. A
+    /// body held whole and one read as it was sent are kept on different terms (the second only if
+    /// a release build reads it within the route's deadline), so each has its own.
     fn bit(self) -> u32 {
         let at = match self {
-            Verdict::Kept { .. } => 0,
+            Verdict::Kept { read: false, .. } => 0,
+            Verdict::Kept { read: true, .. } => 25,
             Verdict::Off => 1,
             Verdict::Unkeyed => 2,
             Verdict::NotWhole => 3,

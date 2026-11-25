@@ -2693,6 +2693,60 @@ async fn corten_dev_does_not_hold_a_slow_body() {
     assert!(text().contains(&format!("corten: /slow {KEPT_IF_READ}")), "{}", text());
 }
 
+/// A route whose answer is held whole for one request and sent as it is read for another says
+/// each once: a release build keeps the second only if it reads the body within the route's
+/// deadline, so that caveat is not hidden by the first having been said, nor the first by the
+/// second.
+#[cfg(feature = "log")]
+#[tokio::test]
+async fn corten_dev_says_a_held_and_a_sent_body_each_once_for_a_route() {
+    use crate::route::get as typed;
+    let piece: &'static str = Box::leak("w".repeat(600).into_boxed_str());
+    let routes = move || {
+        let route = typed(move |req: Req, uri: http::Uri| async move {
+            let sent = uri.query() == Some("sent");
+            let page = req.test_page_for("Switch", html! { <p>"switch"</p> }).map(|mut page| {
+                if sent {
+                    *page.0.body_mut() = Body::new(Frames::new(&[piece, piece], None));
+                }
+                page
+            });
+            Public::new(Duration::from_secs(60), page)
+        });
+        Table::new().route("/switch", route.0)
+    };
+    let lines = Lines(std::sync::Arc::default());
+    let _logging = log_to(&lines);
+    let dev = App::new(Routes::from(routes())).dev(true).router();
+    let held = "corten: /switch is Public, and a release build would keep its answer for 60 s while its store has room, given";
+    let sent = format!("corten: /switch {KEPT_IF_READ}");
+    // What one request logged, its body read to its end.
+    let logged = |uri: &'static str| {
+        let (dev, lines) = (dev.clone(), lines.clone());
+        async move {
+            lines.0.lock().unwrap().clear();
+            fetch(&dev, "GET", uri, &[]).await;
+            String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap()
+        }
+    };
+    for (uri, said) in [("/switch", held), ("/switch?sent", sent.as_str())] {
+        let text = logged(uri).await;
+        assert!(text.contains(said) && text.matches("is Public").count() == 1, "{uri}: {text}");
+    }
+    // Each said once: neither again, in either order.
+    for uri in ["/switch", "/switch?sent", "/switch?sent", "/switch"] {
+        let text = logged(uri).await;
+        assert!(!text.contains("is Public"), "{uri}: said once: {text}");
+    }
+    // The other order, in an app of its own: the held body is said after the sent one.
+    let dev = App::new(Routes::from(routes())).dev(true).router();
+    lines.0.lock().unwrap().clear();
+    fetch(&dev, "GET", "/switch?sent", &[]).await;
+    fetch(&dev, "GET", "/switch", &[]).await;
+    let text = String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
+    assert!(text.contains(&sent) && text.contains(held) && text.matches("is Public").count() == 2, "{text}");
+}
+
 /// What `corten dev` says of a body it read as it was sent and that read whole.
 #[cfg(feature = "log")]
 const KEPT_IF_READ: &str =
@@ -2747,7 +2801,9 @@ impl http_body::Body for Late {
 /// known size leaves) reads whole in a release build, which keeps it, and `corten dev`, where it
 /// failed, says so without saying what that build answers.
 #[cfg(feature = "log")]
-#[tokio::test]
+// The clock is paused, and moves only when every task waits on a timer: the deadline (50 ms)
+// always ends before the slow body's wait (300 ms), however busy the machine.
+#[tokio::test(start_paused = true)]
 async fn corten_dev_says_of_a_body_it_reads_only_what_it_saw() {
     use crate::route::get as typed;
     let piece = bytes::Bytes::from("l".repeat(600));

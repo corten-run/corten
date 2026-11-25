@@ -1625,8 +1625,8 @@ caller it read, a URL it
 changed) or the answer decides, only for a request a kept answer could stand for, one that shows
 nothing about who asks. So open the page signed out, or in a private window: a request
 with a session's cookie, a navigation inside the app, a `HEAD` or a write is its handler's whatever
-the page does, and says nothing. Each route says each verdict once while the app runs (kept, or
-each reason, whatever its numbers), so loading a page again adds nothing, and a page that answers
+the page does, and says nothing. Each route says each verdict once while the app runs (kept with its body held whole, kept if
+it reads the body in time, or each reason, whatever its numbers), so loading a page again adds nothing, and a page that answers
 another way says the new verdict once; `corten dev` starts the app again on each change, so a
 changed page says its verdict again.
 
