@@ -10541,15 +10541,23 @@ rules something out.
     seen, as `fetch` does not show it, the same as for a link the runtime follows); the same
     address calls nothing, and a nav link to the new address is marked current, as for a
     navigation. No entry is added, so Back goes to the page before the screen, and Forward and a
-    reload read the page at the address, as for any entry.
+    reload read the page at the address, as for any entry. A page's own `navigate` listener can
+    cancel that `replaceState`, which then changes nothing and throws nothing: the runtime reads
+    the address after the call, and when it is not the one asked for, reloads the entry's own
+    page, so what the screen shows is the page at the address the entry has.
 
     A marked answer draws only on the visit it was sent from, and on the history entry it was sent
     from: a navigation the runtime takes to a page (a link, Back or Forward, a redirect it follows)
-    starts another visit as it begins, a change of entry it does not take (Back to an `#id` of the
-    page, a script's `pushState`) is another entry, and one pressed while a navigation to another
-    page is on its way belongs to none. A page drawn in place on the same entry is the same visit:
-    another form's answer, and the page reading itself again (`ReadAgain`), whose navigation the
-    answer's `replaceState` cancels, as a script's does; it reads again later, at the new address.
+    starts another visit as it begins, a change of entry the browser makes without it (Back or
+    Forward to an `#id` of the page, a link to one) starts another as it is made (`popstate`,
+    `hashchange`), so Back and then Forward to the entry the answer was sent from still leave it,
+    and a script's `pushState` is another entry by its key where the Navigation API is (without
+    it, nothing fires for one, and it is not seen). One pressed while a navigation to another page
+    is on its way belongs to none. A page drawn in place on the same entry is the same visit:
+    another form's answer, a script's `replaceState`, and the page reading itself again
+    (`ReadAgain`), whose navigation the answer's `replaceState` cancels, as a script's does; it
+    reads again later, at the new address, and an address on another path starts the read over
+    there, since without the Navigation API the read follows the path.
     This matters more for a replace than for any other draw: `replaceState` during a navigation to
     another page aborts it, and on another entry it would put this screen's address over that
     entry's. An answer that comes once its visit is left draws nothing and says nothing
@@ -10567,8 +10575,9 @@ rules something out.
     is drawn in place; one the runtime cannot draw in place (another layout) loads the page in
     full, as for any form, and that load is of the entry's address. The rest is the runtime's
     ordinary `data-patch` form: Corten's redirect (`corten-location`) is followed as a
-    navigation, its submits are ordered as any form's are, and two marked forms' answers are drawn
-    as they come, the address that of the last one that moved it. The route at each such address
+    navigation, its submits are ordered as any form's are, by its id, so a press of the form a read
+    drew in place of the one pressed drops the read that one sent, and two marked forms' answers
+    are drawn as they come, the address that of the last one that moved it. The route at each such address
     answers its part with `req.patch_or`, drawing all that the address changes, a link or form
     that carries the address included (a `keep_query` form's hidden inputs are the query it was
     drawn with); a route whose patch appends (Load more) is not one to mark. Without the Navigation
@@ -10612,20 +10621,37 @@ rules something out.
       drawn in place since the press, the page reading itself again included, dropped it, as this
       Choice's first build did: the answer was sent and then dropped without a word while the form
       showed the new scope and the part and address the old, for a page the user never left.
+    - Fencing to the visit and the entry's key alone, as the build before this one did: Back to an
+      `#id` of the page and Forward again before the answer came left the key as it was, so the
+      answer drew and put its address in an entry the user had left and come back to; without the
+      Navigation API even one such Back was unseen.
+    - When a `navigate` listener cancels the replace, leaving the answer drawn under the entry's
+      address, as the build before this one did: a reload, and a form without an `action`, then
+      read the old address beside the new part, output that is wrong where reading it again costs
+      one request in a case a page's own script chose (README conflict order 1 above 2). Nor
+      replacing the address before the answer is drawn, which could see the veto first: the
+      address would then move for an answer whose patch skips an element or that loads in full.
+    - Keeping each pending submit by the form element, as any `data-patch` form's was before:
+      a form a read drew in place of the pressed one was another form, so a press of it did not
+      drop the older read, whose answer, coming last, drew over the newer one's and took the
+      address.
 
-    What it costs: the runtime every page loads is 663 bytes larger raw (46,502 to 47,165), 276
-    with gzip (16,718 to 16,994) and 248 with brotli (15,106 to 15,354), paid once a release by
-    every user. A `data-patch` submit reads one attribute; only a marked GET captures its visit
-    and entry, compares them where it could draw and builds an address. A patch tracks whether it
-    placed every element as it walks them, without a separate scan, and a navigation the runtime
-    takes to a page adds one to a counter and keeps its signal. On the server nothing runs that did not: `html!` writes the mark as
+    What it costs: the runtime every page loads is 820 bytes larger raw (46,502 to 47,322), 338
+    with gzip (16,718 to 17,056) and 308 with brotli (15,106 to 15,414), paid once a release by
+    every user. A `data-patch` submit reads one attribute and its form's id; only a marked GET
+    captures its visit and entry, compares them where it could draw and builds an address, which
+    it reads back once after the replace. A patch tracks whether it placed every element as it
+    walks them, without a separate scan, and a navigation the runtime takes to a page, a
+    `popstate` and a `hashchange` each add one to a counter; the navigation keeps its signal. On the server nothing runs that did not: `html!` writes the mark as
     an attribute and refuses a misplaced one when the markup compiles.
 
     Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
     defaults, once for each build; the page's and the patch's bodies, once each); platform
     (`history.replaceState` changes the current entry's URL, keeps its Navigation API key, fires
-    a `navigate` of type `replace` that the runtime does not intercept, and aborts a navigation
-    the runtime has under way, in Chromium, Firefox and WebKit; the smoke's checks in all three);
+    a `navigate` of type `replace` that the runtime does not intercept and a page's listener can
+    cancel without an exception, and aborts a navigation the runtime has under way; Back and Forward
+    between entries that differ by their `#id` fire `popstate`, with and without the Navigation
+    API; in Chromium, Firefox and WebKit; the smoke's checks in all three);
     reasoned (the form's mark says which answers are the page at their address, which neither the
     handler nor the runtime can tell; a replace in the task that draws leaves nothing able to see
     the patch without its address; one fenced to its visit and entry cannot touch another entry,
@@ -10640,9 +10666,10 @@ rules something out.
     of such a filter to be an entry Back steps through; a route's type can say that its patch
     draws the part for its address, when `html!` could refuse marking a form whose route
     appends, which the guide only asks today; or `replaceState` stops keeping the entry's key or
-    stops aborting a navigation under way in one of the engines.
+    stops aborting a navigation under way in one of the engines, or a traversal between `#id`
+    entries stops firing `popstate` in one.
 
-    Last checked: 2026-11-25, the runtime's size with this change merged with main `9e209a32f` against
+    Last checked: 2026-11-25, the runtime's size with this change on main `9e209a32f` against
     that main, and the page's and the patch's bodies on `6ca02c26e`; 2026-11-25, the watchlist smoke on the same
     server in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2, every `data-address`
     check passing in each.

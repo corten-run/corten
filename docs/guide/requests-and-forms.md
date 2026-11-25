@@ -2240,13 +2240,17 @@ answer that draws whole moves the address: a 204, an empty patch, a patch with a
 finds no place and a 5xx (which may still draw) leave it, while removing an element the page no
 longer has counts as done. A 4xx patch that draws (a 422) moves it, and so does a page answer
 (`<main>`) drawn in place. An answer that comes once the user has left the page it was sent
-from (a link, Back or Forward, Back to an `#id` of the page) draws nothing and fires no
-`corten:error`, as for any submit a navigation cuts off. One that comes while the page reads
-itself again (`ReadAgain`), or after another form's answer was drawn in place, draws as usual,
-and the read starts again later at the new address. A GET pressed while a Save
-(`formmethod="post"`) of the form is on its way waits for the Save's answer, as any submit of
-the form does, and is sent only if the user is still on that page. Two marked forms are not
-ordered against each other: their answers are drawn as they come.
+from (a link, Back or Forward, Back to an `#id` of the page, even if Forward has come back)
+draws nothing and fires no `corten:error`, as for any submit a navigation cuts off. One that
+comes while the page reads itself again (`ReadAgain`), or after another form's answer was
+drawn in place, draws as usual, and the read starts again later at the new address. A script of
+the page whose `navigate` listener cancels the replace refuses the address: the runtime then
+reloads the page at the entry's address rather than leave the answer under it. A GET pressed
+while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer, as
+any submit of the form does, and is sent only if the user is still on that page. A form's
+submits are kept by its id, so a press of the form a read drew in its place drops a GET the
+form sent before. Two marked forms are not ordered against each other: their answers are drawn
+as they come.
 
 Which mark a filter takes depends on what its change redraws. One that changes most of what the
 page shows (a list's results) is a navigation, `data-keep-place`: each change reads the page,

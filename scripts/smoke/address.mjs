@@ -436,6 +436,51 @@ export async function dataAddress(browser) {
       !sent.api && sent.at === "/smoke/address?scope=week" && sent.shown === "week" && sent.kept && sent.added === 0,
       JSON.stringify(sent),
     );
+    // Back and Forward between entries of the page that differ by their `#id` are entries all the
+    // same without the API, seen by `popstate`.
+    const trip = await fragmentRoundTrip(plain);
+    check(
+      "without the Navigation API a marked patch on its way while Back and Forward go to another #id of the page and back draws nothing",
+      trip.out && trip.trip.join() === ",#smoke-address" && trip.done && trip.at === "#smoke-address" && trip.shown === "all",
+      JSON.stringify(trip),
+    );
+    // The page reading itself again (`ReadAgain`, a tag put in the screen's head) goes by the
+    // page's path without the API: an answer whose address is on another path starts it there.
+    const other = `${base}/smoke/address-other?scope=week`;
+    await plain.route(home, async (route) => {
+      if (route.request().resourceType() !== "document") return route.fallback();
+      const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+      const body = (await res.text()).replace("</head>", '<noscript data-corten-read-again="2"></noscript></head>');
+      await route.fulfill({ response: res, body });
+    });
+    await plain.route(other, (route) =>
+      route.fulfill(
+        route.request().headers()["corten"] === "action"
+          ? { headers: { "corten-patch": "1", "content-type": "text/html" }, body: '<section id="smoke-address"><output>other</output></section>' }
+          : { headers: { "content-type": "text/html" }, body: "<!doctype html><title>other</title>" },
+      ),
+    );
+    await plain.goto(home);
+    const readThere = plain.waitForRequest((r) => r.url() === other && r.resourceType() === "document", { timeout: 8000 }).then(() => true, () => false);
+    await plain.evaluate((action) => {
+      const form = document.createElement("form");
+      form.action = action;
+      form.dataset.patch = "";
+      form.dataset.address = "";
+      const field = document.createElement("input");
+      field.name = "scope";
+      field.value = "week";
+      form.append(field);
+      document.body.append(form);
+      form.requestSubmit();
+    }, other.split("?")[0]);
+    const moved = await plain
+      .waitForFunction(() => location.pathname === "/smoke/address-other" && document.querySelector("#smoke-address output")?.textContent === "other", undefined, { timeout: 5000 })
+      .then(() => true, () => false);
+    const readAgain = { moved, read: await readThere };
+    await plain.unroute(home);
+    await plain.unroute(other);
+    check("without the Navigation API a marked patch that moves the address to another path reads the page again there", readAgain.moved && readAgain.read, JSON.stringify(readAgain));
     await plain.close();
   }
   check("no page errors on the data-address screens", errors.length === 0, errors.join(" | "));
@@ -527,17 +572,19 @@ async function markedPatchVisits(browser, errors) {
   const markup = await answer.text();
   const headers = Object.fromEntries(["corten-page", "corten-shell", "content-type"].flatMap((name) => (answer.headers.has(name) ? [[name, answer.headers.get(name) ?? ""]] : [])));
   await page.route(ordinary, (route) => route.fulfill({ headers, body: markup }));
-  await page.evaluate((action) => {
-    const form = document.createElement("form");
-    form.action = action;
-    form.dataset.patch = "";
-    const field = document.createElement("input");
-    field.name = "scope";
-    field.value = "ordinary";
-    form.append(field);
-    document.body.append(form);
-    Object.assign(window, { __ordinary: form });
-  }, home);
+  const addOrdinary = () =>
+    page.evaluate((action) => {
+      const form = document.createElement("form");
+      form.action = action;
+      form.dataset.patch = "";
+      const field = document.createElement("input");
+      field.name = "scope";
+      field.value = "ordinary";
+      form.append(field);
+      document.body.append(form);
+      Object.assign(window, { __ordinary: form });
+    }, home);
+  await addOrdinary();
   const redraw = async () => {
     await page.evaluate(() => {
       Object.assign(window, { __before: document.getElementById("smoke-address") });
@@ -657,6 +704,76 @@ async function markedPatchVisits(browser, errors) {
     fragmentSent && backTo === "" && fragmentDone && fragmentBack.at === "" && fragmentBack.shown === "all" && fragmentBack.ahead === `${home}#smoke-address`,
     JSON.stringify({ fragmentSent, backTo, fragmentDone, fragmentBack }),
   );
+  // Back to that entry and Forward again, to the entry the submit was sent from, before its answer
+  // comes: the page has left the entry and come back, so the answer draws nothing all the same.
+  const trip = await fragmentRoundTrip(page);
+  check(
+    "a marked patch on its way while Back and Forward go to another #id of the page and back draws nothing and puts no address in history",
+    trip.out && trip.trip.join() === ",#smoke-address" && trip.done && trip.at === "#smoke-address" && trip.shown === "all",
+    JSON.stringify(trip),
+  );
+
+  // Day, pressed on the form drawn in place of the one Week was pressed on (another form's page
+  // drawn in place between the presses), is a newer submit of the same form, by its id: it drops
+  // Week, whose answer, let go after Day's has drawn, draws nothing and puts no address in the entry.
+  await page.goto(home);
+  await page.route(ordinary, (route) => route.fulfill({ headers, body: markup }));
+  await addOrdinary();
+  const weekHeld = await hold(week, "action");
+  const dayHeld = await hold(`${home}?scope=day`, "action");
+  await page.evaluate(() => {
+    const fetch_ = window.fetch;
+    Object.assign(window, { __weekEnded: false });
+    window.fetch = function (input, init) {
+      const sent = fetch_.call(this, input, init);
+      if (!String(input instanceof Request ? input.url : input).endsWith("?scope=week") || new Headers(init?.headers).get("corten") !== "action") return sent;
+      window.fetch = fetch_;
+      const ended = () => Object.assign(window, { __weekEnded: true });
+      sent.then((res) => {
+        const text = res.text;
+        res.text = () => text.call(res).finally(ended);
+      }, ended);
+      return sent;
+    };
+  });
+  await press("Week");
+  const weekOut = await weekHeld.sent;
+  const redrawn = await redraw();
+  await press("Day");
+  const dayOut = await dayHeld.sent;
+  dayHeld.release();
+  const dayDrawn = await wait(() => location.search === "?scope=day" && document.querySelector("#smoke-address output")?.textContent === "day");
+  weekHeld.release();
+  const weekEnded = await wait(() => /** @type {any} */ (window).__weekEnded);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  await weekHeld.clear();
+  await dayHeld.clear();
+  await page.unroute(ordinary);
+  const latest = await state();
+  check(
+    "a marked GET pressed on the form drawn in place of the one an earlier press came from drops that press, whose late answer draws nothing",
+    weekOut && redrawn && dayOut && dayDrawn && weekEnded && latest.at === "?scope=day" && latest.shown === "day",
+    JSON.stringify({ weekOut, redrawn, dayOut, dayDrawn, weekEnded, latest }),
+  );
+
+  // A page's own `navigate` listener that cancels the replacement refuses the address: the entry's
+  // own page is read again whole, so the answer is not left on screen under the entry's address.
+  await page.goto(home);
+  await page.evaluate(() =>
+    /** @type {any} */ (window).navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (event.navigationType === "replace" && new URL(event.destination.url).search === "?scope=week") event.preventDefault();
+    }),
+  );
+  const vetoStart = await state();
+  const vetoRead = page.waitForRequest((r) => r.url() === home && r.resourceType() === "document", { timeout: 5000 }).then(() => true, () => false);
+  const vetoLoaded = page.waitForEvent("load", { timeout: 5000 }).then(() => true, () => false);
+  await press("Week");
+  const vetoed = { read: await vetoRead, loaded: await vetoLoaded, ...(await state()) };
+  check(
+    "a marked patch whose replacement a navigate listener cancels reads the entry's own page again",
+    vetoed.read && vetoed.loaded && vetoed.at === "" && vetoed.shown === "all" && vetoed.entries === vetoStart.entries,
+    JSON.stringify({ vetoStart, vetoed }),
+  );
 
   const patch = async (/** @type {number} */ status, /** @type {string} */ body) => {
     await page.goto(home);
@@ -716,4 +833,44 @@ async function markedPatchVisits(browser, errors) {
     JSON.stringify({ failed, invalid }),
   );
   await page.close();
+}
+
+/**
+ * Presses Week on the screen's entry at its `#id`, holds its answer, goes Back to the entry before
+ * and Forward to that one again by the history API (so the same in a browser without the
+ * Navigation API), then lets the answer go, and says where the page is once its submit has ended.
+ * @param {import("@playwright/test").Page} page
+ */
+async function fragmentRoundTrip(page) {
+  const week = `${base}/smoke/address?scope=week`;
+  await page.goto(`${base}/smoke/address`);
+  await page.evaluate(() => (location.hash = "smoke-address"));
+  /** @type {() => void} */
+  let release = () => {};
+  const held = new Promise((resolve) => (release = () => resolve(undefined)));
+  await page.route(week, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    await held;
+    await route.continue().catch(() => {});
+  });
+  const sent = page.waitForRequest((r) => r.url() === week && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(() => Object.assign(window, { __form: document.getElementById("smoke-address-form") }));
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const out = await sent;
+  const trip = await page.evaluate(async () => {
+    const step = (/** @type {"back" | "forward"} */ way) =>
+      new Promise((resolve) => {
+        addEventListener("popstate", () => resolve(location.hash), { once: true });
+        history[way]();
+      });
+    return [await step("back"), await step("forward")];
+  });
+  release();
+  const done = await page
+    .waitForFunction(() => !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  await page.unroute(week);
+  const end = await page.evaluate(() => ({ at: location.search + location.hash, shown: document.querySelector("#smoke-address output")?.textContent }));
+  return { out, trip, done, ...end };
 }
