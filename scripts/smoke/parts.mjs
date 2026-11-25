@@ -1,4 +1,4 @@
-import { base, engine, skip, check } from "./helpers.mjs";
+import { base, engine, skip, check, cleanUp } from "./helpers.mjs";
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -36,77 +36,95 @@ export async function partReads(page, browser, swaps, noSwaps) {
     /** @type {"hold" | "empty" | "abort"} */
     let answer = "hold";
     let reads = 0;
-    // The runtime's read of the part is the page's own address, asked with `corten: action`.
-    await held.route(`${base}/`, (route) => {
-      if (route.request().headers().corten !== "action") return route.continue();
-      reads++;
-      if (answer === "hold") return new Promise(() => {});
-      if (answer === "abort") return route.abort("internetdisconnected");
-      return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
-    });
-    const read = () => held.waitForResponse((r) => r.request().headers().corten === "action", { timeout: 5000 }).catch(() => {});
-    const placeholder = async () => ({
-      reads,
-      busy: await held.getAttribute("#picks", "aria-busy"),
-      failed: await held.getAttribute("#picks", "data-corten-read-failed"),
-      line: await held.isVisible("#picks span"),
-      link: await held.isVisible("#picks a"),
-    });
-    await held.goto(`${base}/`);
-    await held.waitForSelector('#picks[aria-busy="true"]', { state: "attached", timeout: 5000 }).catch(() => {});
-    const loaded = await placeholder();
-    // Busy: the runtime ran and sent the read, which the route holds unanswered.
-    check("with JavaScript a slow part waiting says it is on its way and is busy, with no link for it", loaded.line && !loaded.link && loaded.busy === "true" && loaded.failed === null && loaded.reads === 1, JSON.stringify(loaded));
-    if (swaps) {
-      let documents = 0;
-      held.on("request", (r) => r.resourceType() === "document" && documents++);
-      await held.click('header nav a[href="/news"]');
-      await held.waitForFunction(() => document.title === "News | Watchlist");
-      await held.click('header nav a[href="/"]');
-      await held.waitForFunction(() => location.pathname === "/" && !!document.querySelector('#picks[aria-busy="true"]'), null, { timeout: 5000 }).catch(() => {});
-      // The part is busy once its fetch starts, which in Firefox can be before the route sees it.
-      for (let waited = 0; reads < 2 && waited < 5000; waited += 100) await held.waitForTimeout(100);
-      const drawn = { ...(await placeholder()), documents };
-      check("and so does it in a page a client navigation drew", drawn.line && !drawn.link && drawn.busy === "true" && drawn.reads === 2 && documents === 0, JSON.stringify(drawn));
-    } else skip("and so does it in a page a client navigation drew", noSwaps);
-    answer = "empty";
-    const emptyRead = read();
-    await held.goto(`${base}/`);
-    await emptyRead;
-    await held.waitForFunction(() => !document.querySelector("#picks[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
-    const kept = await placeholder();
-    check("a read whose patch leaves the part as it was marks it failed, as it did not bring it", kept.busy === null && kept.failed === "" && !kept.line && kept.link, JSON.stringify(kept));
-    answer = "abort";
-    await held.goto(`${base}/`);
-    await held.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
-    const failed = await placeholder();
-    check("a slow part whose read failed links to the page with it read in, in place of its line", failed.failed === "" && failed.busy === null && !failed.line && failed.link, JSON.stringify(failed));
-    // Followed only when shown, so a link that is not fails the checks, not the run. Pressed in the
-    // page: a loaded Firefox's click can run out of its time before it lands, and then the page never
-    // left (#2035). The page it opens commits within 5 s of the press, and has its list within 5 s
-    // of that.
-    let opened = false;
-    if (failed.link) {
-      const pressed = await held.evaluate(() => {
-        const link = /** @type {HTMLAnchorElement | null} */ (document.querySelector("#picks a"));
-        link?.click();
-        return !!link;
+    // The route is removed and the page closed however the case ends.
+    try {
+      // The runtime's read of the part is the page's own address, asked with `corten: action`.
+      await held.route(`${base}/`, (route) => {
+        if (route.request().headers().corten !== "action") return route.continue();
+        reads++;
+        if (answer === "hold") return new Promise(() => {});
+        if (answer === "abort") return route.abort("internetdisconnected");
+        return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
       });
-      opened =
-        pressed &&
-        (await held.waitForURL((url) => url.search === "?picks=true", { waitUntil: "commit", timeout: 5000 }).then(
-          () => true,
-          () => false,
-        ));
-      if (opened) await held.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
+      const read = () => held.waitForResponse((r) => r.request().headers().corten === "action", { timeout: 5000 }).catch(() => {});
+      const placeholder = async () => ({
+        reads,
+        busy: await held.getAttribute("#picks", "aria-busy"),
+        failed: await held.getAttribute("#picks", "data-corten-read-failed"),
+        line: await held.isVisible("#picks span"),
+        link: await held.isVisible("#picks a"),
+      });
+      await held.goto(`${base}/`);
+      await held.waitForSelector('#picks[aria-busy="true"]', { state: "attached", timeout: 5000 }).catch(() => {});
+      const loaded = await placeholder();
+      // Busy: the runtime ran and sent the read, which the route holds unanswered.
+      check("with JavaScript a slow part waiting says it is on its way and is busy, with no link for it", loaded.line && !loaded.link && loaded.busy === "true" && loaded.failed === null && loaded.reads === 1, JSON.stringify(loaded));
+      if (swaps) {
+        let documents = 0;
+        held.on("request", (r) => r.resourceType() === "document" && documents++);
+        await held.click('header nav a[href="/news"]');
+        await held.waitForFunction(() => document.title === "News | Watchlist");
+        await held.click('header nav a[href="/"]');
+        await held.waitForFunction(() => location.pathname === "/" && !!document.querySelector('#picks[aria-busy="true"]'), null, { timeout: 5000 }).catch(() => {});
+        // The part is busy once its fetch starts, which in Firefox can be before the route sees it.
+        for (let waited = 0; reads < 2 && waited < 5000; waited += 100) await held.waitForTimeout(100);
+        const drawn = { ...(await placeholder()), documents };
+        check("and so does it in a page a client navigation drew", drawn.line && !drawn.link && drawn.busy === "true" && drawn.reads === 2 && documents === 0, JSON.stringify(drawn));
+      } else skip("and so does it in a page a client navigation drew", noSwaps);
+      answer = "empty";
+      const emptyRead = read();
+      await held.goto(`${base}/`);
+      await emptyRead;
+      await held.waitForFunction(() => !document.querySelector("#picks[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+      const kept = await placeholder();
+      check("a read whose patch leaves the part as it was marks it failed, as it did not bring it", kept.busy === null && kept.failed === "" && !kept.line && kept.link, JSON.stringify(kept));
+      answer = "abort";
+      await held.goto(`${base}/`);
+      await held.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
+      const failed = await placeholder();
+      check("a slow part whose read failed links to the page with it read in, in place of its line", failed.failed === "" && failed.busy === null && !failed.line && failed.link, JSON.stringify(failed));
+      // Followed only when shown, so a link that is not fails the checks, not the run. Pressed in the
+      // page: a loaded Firefox's click can run out of its time before it lands, and then the page never
+      // left (#2035). The page it opens commits within 5 s from just before the press (the wait for
+      // it has what is left of them once the press task returns), and has its part read in within
+      // 5 s of the check seeing that commit.
+      let opened = false;
+      let listed = false;
+      if (failed.link) {
+        const since = performance.now();
+        const pressed = await held.evaluate(() => {
+          const link = /** @type {HTMLAnchorElement | null} */ (document.querySelector("#picks a"));
+          link?.click();
+          return !!link;
+        });
+        opened =
+          pressed &&
+          (await held
+            .waitForURL((url) => url.search === "?picks=true", { waitUntil: "commit", timeout: Math.max(1, 5000 - (performance.now() - since)) })
+            .then(
+              () => true,
+              () => false,
+            ));
+        listed =
+          opened &&
+          (await held
+            .waitForFunction(() => document.querySelectorAll("ul#picks li").length === 2 && !document.querySelector("template[data-corten-read-now]"), null, { timeout: 5000 })
+            .then(
+              () => true,
+              () => false,
+            ));
+      }
+      check(
+        "the page it links to has the slow part read in, with JavaScript too",
+        opened && listed && new URL(held.url()).search === "?picks=true",
+        `${held.url()}${opened ? (listed ? "" : ", its part not read in within 5 s of its commit") : ", not opened within 5 s of the press"}`,
+      );
+    } finally {
+      await cleanUp(
+        () => held.unrouteAll({ behavior: "ignoreErrors" }),
+        () => held.context().close(),
+      );
     }
-    check(
-      "the page it links to has the slow part read in, with JavaScript too",
-      opened && new URL(held.url()).search === "?picks=true" && (await held.$$("ul#picks li")).length === 2 && (await held.$("template[data-corten-read-now]")) === null,
-      `${held.url()}${opened ? "" : ", not opened within 5 s of the press"}`,
-    );
-    await held.unrouteAll({ behavior: "ignoreErrors" });
-    await held.context().close();
   }
   // The part module does not load (a 503), though the page and the runtime do: no read starts, and
   // the waiting part shows its link, as without JavaScript: nothing marked it busy, which alone

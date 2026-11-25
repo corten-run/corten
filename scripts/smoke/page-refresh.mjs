@@ -54,6 +54,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // its status line saying so, and the tag asking again from the same address. A later read is
       // the server's own.
       const from = new URL(url).pathname + new URL(url).search;
+      // Each answer's status line is marked with its place in `answers` (`data-smoke-read`), so the
+      // check can tell which answer the page drew last.
       /** Each part read's answer, in order: whether it asked again, and whether the stand-in gave it. @type {{ asks: boolean, standIn: boolean }[]} */
       const answers = [];
       const partReads = (/** @type {URL} */ u) => u.pathname + u.search === from;
@@ -69,8 +71,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const saving = body.replace('<p id="alert-status" role="status">Saved.</p>', '<p id="alert-status" role="status">Saving...</p>');
         const standIn = answers.length === 0 && res.ok() && saving !== body && !body.includes("data-corten-read-again");
         const answer = standIn ? `${saving}<template data-corten-read-again="1" data-from="${from}"></template>` : body;
+        const marked = answer.replace('<p id="alert-status"', `<p data-smoke-read="${answers.length}" id="alert-status"`);
         answers.push({ asks: answer.includes("data-corten-read-again"), standIn });
-        await route.fulfill({ status: res.status(), headers, body: answer });
+        await route.fulfill({ status: res.status(), headers, body: marked });
       };
       await page.route(partReads, partRead);
       try {
@@ -109,12 +112,26 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           answers.some((a) => a.asks) && tags.length === 1 && tags[0] === parts.at(-1) && tagged.pageTag && tagged.pageTagGone,
           `${JSON.stringify({ ...tagged, answers })} after ${parts.at(-1)}`,
         );
+        // Quiet only once an answer that does not ask again has drawn `Saved.`, within 5 s: reads
+        // that stopped after an answer that asked again are not a part that stopped.
+        const drawn = await pollFor(5000, () =>
+          page.evaluate(() => {
+            const status = document.getElementById("alert-status");
+            return status?.textContent === "Saved." ? (status.getAttribute("data-smoke-read") ?? undefined) : undefined;
+          }),
+        );
+        const last = drawn === null ? null : (answers[Number(drawn)] ?? null);
+        const quiet = !!last && !last.asks;
+        const settled = parts.length;
+        if (quiet) await page.waitForTimeout(2200);
+        check(
+          "a page's part stops once its patch no longer asks",
+          quiet && parts.length === settled,
+          quiet ? `${parts.length - settled} more reads` : `no answer that does not ask again drew Saved. within 5 s (${JSON.stringify({ drawn, answers })})`,
+        );
       } finally {
         await page.unroute(partReads, partRead);
       }
-      const settled = parts.length;
-      await page.waitForTimeout(2200);
-      check("a page's part stops once its patch no longer asks", parts.length === settled, `${parts.length - settled} more reads`);
       if (swaps) {
         const from = parts.length;
         await go(await pending());
