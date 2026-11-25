@@ -313,6 +313,31 @@ test("a failed label lookup is kept, and the owner-label sweep still removes con
   checkCalls(docker);
 });
 
+test("a cleanup listing with a noncanonical ID is refused before anything in it is inspected, and the teardown fails", async () => {
+  for (const odd of ["abc123", "A".repeat(64), `${"0".repeat(64)}x`]) {
+    const docker = fakeDocker();
+    // The owner-label sweep's listing also returns an entry that is not a full 64-hex ID.
+    const listing = Object.assign(async (args, opts) => {
+      const out = await docker(args, opts);
+      return args[0] === "ps" && args.includes(`label=${ownerKey}=alert-probe-test`) ? [out, odd].filter(Boolean).join("\n") : out;
+    }, { calls: docker.calls });
+    const owned = ownedResources({ docker: listing, runId: "alert-probe-test" });
+    const network = await owned.network("alert-probe-test-net");
+    await owned.container(["--network", network, "img"], "alert-probe-test-app");
+    const record = await owned.teardown();
+    assert.ok(!docker.calls.some(({ args }) => args.includes(odd)), `nothing was inspected or removed as ${odd}`);
+    assert.ok(record.failures.some((f) => f.error.includes("noncanonical IDs") && f.error.includes(JSON.stringify(odd).slice(1, 20))), JSON.stringify(record.failures));
+    assert.equal(record.complete, false);
+    // What the run created was still removed by its own ID.
+    assert.equal(docker.containers.size + docker.networks.size, 0);
+    checkCalls(docker);
+  }
+  // The same run with an ordinary listing completes.
+  const docker = fakeDocker(), owned = ownedResources({ docker, runId: "alert-probe-test" });
+  await owned.container(["--network", await owned.network("alert-probe-test-net"), "img"], "alert-probe-test-app");
+  assert.equal((await owned.teardown()).complete, true);
+});
+
 test("caller labels cannot set the owner or attempt key, and are refused before any Docker command", async (t) => {
   for (const key of [ownerKey, attemptKey, `${ownerKey}.other`]) {
     const docker = fakeDocker();

@@ -10,6 +10,9 @@
 // the host.
 // Startup: each app is started the way run.mjs coldStart starts it before a timed warmup (created,
 // a sidecar polls the target's path from docker start to its first 200), then the load.
+// k6: its version is read from a container this pass creates and removes like any other, and each
+// load's engine clock and counters are checked by load-evidence.mjs validateLoadExecution, as a
+// timed round's are, before any window is read.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -22,13 +25,13 @@ import { admitted, boundedFeatureProfile, boundedQualificationSettings } from ".
 import { validateSummary } from "./report.mjs";
 import { memoryMiB, summarizeSamples } from "../catalog/stats.mjs";
 import { containerReceipt, imageReceipt, nodeImage } from "./raw-contract.mjs";
-import { retainLoadEvidence } from "./load-evidence.mjs";
-import { describeK6, k6Image } from "../load-tool.mjs";
+import { retainLoadEvidence, validateLoadExecution } from "./load-evidence.mjs";
+import { k6Image, k6Provenance } from "../load-tool.mjs";
 import { validateMarketplace } from "./records.mjs";
 import { records } from "./fixtures.mjs";
 import { locales } from "./contract.mjs";
 import { ownedResources, reconcileWindow, runClock } from "./alert-probe-run.mjs";
-import { checkFixture, convergenceSchema, flattenPoint, flattenRule, heldThrough, ownerLabelKey, readDropped, readWindows, soakSchema, summarizeSoak, timedStartup, verdictText } from "./steady-contract.mjs";
+import { checkFixture, convergenceSchema, flattenPoint, flattenRule, heldThrough, ownerLabelKey, readDropped, readWindows, soakMemoryClock, soakSchema, summarizeSoak, timedStartup, verdictText } from "./steady-contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -132,7 +135,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       : "marketplace-v2 soak: one fixed-rate pass per adapter, source and target, memory at start and end, p99 per interval and restarts; not a timed round or a comparison",
     measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity",
       clock: "windows are the k6 engine's clock from the start of the test; a request counts in the window its answer completed in",
-      ...(convergence ? {} : { memoryClock: "docker stats sample times from the load container's StartedAt; start and end memory are medians of the samples in the first and last interval" }) } };
+      ...(convergence ? {} : { memoryClock: soakMemoryClock }) } };
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
   const log = (message) => { const line = `${new Date().toISOString()} ${message}`; print(line); appendFileSync(join(folder, "run.log"), `${line}\n`); };
   const retain = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2));
@@ -153,7 +156,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     ...(options.group ? ["--ulimit", "nofile=65536:65536", "-e", `PROFILE=${boundedQualificationSettings.nativeProfile}`, "-e", `MAX_CONNECTIONS=${boundedQualificationSettings.maxConnections}`] : []), image];
   // Removes each of a cell's containers, every one attempted; one not removed is kept in `left`.
   const settle = async (ids, left) => { for (const id of ids) if (id && !(await owned.remove(id))) left.push(id); };
-  const state = (info) => ({ restartCount: info.RestartCount, running: info.State.Running, oomKilled: info.State.OOMKilled, exitCode: info.State.ExitCode });
+  const state = (info) => ({ id: info.Id, startedAt: info.State.StartedAt, restartCount: info.RestartCount, running: info.State.Running, oomKilled: info.State.OOMKilled, exitCode: info.State.ExitCode });
   // run.mjs coldStart: the app is created, a sidecar waits for it, then the app starts and the
   // sidecar polls the target's own path until its first 200.
   async function coldStart(app, name, target, raw, left) {
@@ -197,9 +200,11 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
         ...(convergence ? ["-e", `VUS=${options.vus}`] : ["-e", `RATE=${options.rate}`])];
       k6 = await owned.container(["--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...k6Env,
         k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/window-load.js"], `${runId}-k6`);
-      const phaseStartMs = Date.now();
-      if (!convergence) sampler = memorySampler({ ids: [app], file: join(raw, "stats.log"), seconds: seconds + 120, spawn: spawnStats, ...statsBounds });
+      const phaseStartMs = clock.now();
+      if (!convergence) sampler = memorySampler({ ids: [app], file: join(raw, "stats.log"), seconds: seconds + 120, spawn: spawnStats, now: clock.now, ...statsBounds });
       await owned.inspect(k6);
+      // The memory samples' origin, on the same workstation clock as their own stamps (soakMemoryClock).
+      const memoryOriginMs = clock.now();
       await owned.docker(["start", "-a", k6], { timeout: (seconds + 60) * 1000, file: join(raw, "load.log") });
       let stats, statsError;
       if (sampler) { try { stats = await sampler.stop(); } catch (e) { statsError = e; } }
@@ -207,9 +212,12 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       retain(join(raw, "load-container.json"), containerReceipt(loadInfo));
       assert.equal(loadInfo.State.ExitCode, 0, "k6 exited with an error");
       const k6Summary = await retainLoadEvidence(owned.docker, k6, raw, "load");
+      // The engine clock must cover the pass inside the container's own run, and every counter's
+      // rate must be its count over that clock, as validate.mjs requires of a timed phase.
+      validateLoadExecution({ load: containerReceipt(loadInfo), summary: k6Summary, clock: JSON.parse(readFileSync(join(raw, "load-clock.json"), "utf8")), start: phaseStartMs, end: clock.now(), seconds });
       // k6's aggregate: every request, including those answered during the graceful stop.
       const load = readLoadSummary(k6Summary);
-      const { windows, tail, unrecorded } = readWindows(k6Summary, options);
+      const { windows, tail, unrecorded, requests, iterations } = readWindows(k6Summary, options);
       const after = await owned.inspect(app);
       retain(join(raw, "app-container-after.json"), containerReceipt(after));
       if (convergence) {
@@ -219,21 +227,39 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
         const inWindows = windows.reduce((sum, w) => sum + w.failed, 0);
         assert.equal(inWindows, 0, `${inWindows} requests failed in the pass's windows; no verdict`);
         assert.equal(load.failed, 0, `${load.failed} requests failed in k6's aggregate, which includes the graceful stop; no verdict`);
-        return Object.assign(cell, { windows, tail, unrecorded, failedRequests: load.failed, verdict: flattenPoint(windows) });
+        return Object.assign(cell, { windows, tail, unrecorded, requests, iterations, failedRequests: load.failed, verdict: flattenPoint(windows) });
       }
       if (statsError) throw new Error(`memory samples failed: ${statsError.message}; container ${JSON.stringify(state(after))}`);
       const startedMs = Date.parse(loadInfo.State.StartedAt);
-      const samples = stats.samples[app].map((s) => ({ atSeconds: (s.t - startedMs) / 1000, mib: s.mem }));
+      const samples = stats.samples[app].map((s) => ({ atSeconds: (s.t - memoryOriginMs) / 1000, mib: s.mem }));
+      // Docker's event times and StartedAt are both the daemon's clock.
       const lines = await owned.docker(["events", "--since", String(phaseStartMs / 1000), "--until", String(Date.now() / 1000), "--filter", "type=container", "--filter", `container=${app}`, "--format", "{{.Action}}|{{.TimeNano}}"]);
       const events = lines.split("\n").filter(Boolean).map((line) => ({ action: line.slice(0, line.lastIndexOf("|")), atSeconds: (Number(line.slice(line.lastIndexOf("|") + 1)) / 1e6 - startedMs) / 1000 }));
       retain(join(raw, "events.json"), events);
-      return Object.assign(cell, summarizeSoak({ windows, tail, unrecorded, memory: samples, before: state(before), after: state(after), events, rate: options.rate,
+      return Object.assign(cell, summarizeSoak({ windows, tail, unrecorded, requests, iterations, memory: samples, before: state(before), after: state(after), events, rate: options.rate,
         droppedIterations: readDropped(k6Summary), failedRequests: load.failed }));
     } finally {
       if (sampler) { try { await sampler.stop(); } catch {} }
       if (app) { try { writeFileSync(join(raw, "app.log"), await owned.logs(app)); } catch (e) { log(`${cell.app} ${cell.source} ${cell.target}: app log unavailable: ${e.message}`); } }
       await settle([k6, app], left);
     }
+  }
+  // The pinned k6 image's provenance (load-tool.mjs k6Provenance): its version is read from a
+  // container created, attached and removed through ownedResources, so it is owned and accounted
+  // for like every other.
+  async function k6Tool() {
+    let image;
+    try { image = JSON.parse(await owned.docker(["image", "inspect", k6Image]))[0]; } catch {
+      await owned.docker(["pull", k6Image], { timeout: 5 * 60 * 1000, file: join(folder, "pull-k6.log") });
+      image = JSON.parse(await owned.docker(["image", "inspect", k6Image]))[0];
+    }
+    assert.match(image?.Id ?? "", /^sha256:[a-f0-9]{64}$/, "missing k6 image ID");
+    let probe, output;
+    try {
+      probe = await owned.container(["--network", "none", image.Id, "version"], `${runId}-k6-version`);
+      output = await owned.attach(probe, 60_000);
+    } finally { if (probe) assert.ok(await owned.remove(probe), "the k6 version probe was not removed"); }
+    return k6Provenance(image, output);
   }
 
   try {
@@ -287,8 +313,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     // The image IDs a timed round records too (summary.apps[app].imageId): report.mjs compares them.
     summary.images = Object.fromEntries(options.apps.map((app) => [app, images[app].id]));
     save();
-    // describeK6's version check is a docker run --rm with this pass's owner label, so the teardown sweep finds it.
-    summary.tools = { k6: await describeK6(owned.docker, ["--label", `${ownerLabelKey}=${runId}`, ...callerLabels], { pullLog: join(folder, "pull-k6.log") }) };
+    summary.tools = { k6: await k6Tool() };
     network = await owned.network(`${runId}-net`);
     const upstreamId = await owned.container(["--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
       "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, "node", "/bench/marketplace/upstream.mjs"], upstreamName);
@@ -333,6 +358,9 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     try { cleanup = await owned.teardown(); } catch (e) { cleanup = { ...owned.record, complete: false, failures: [...owned.record.failures, { resource: runId, error: String(e?.message ?? e) }] }; }
     retain(join(folder, "cleanup.json"), cleanup);
     summary.cleanupFailures = cleanup.failures;
+    // What a saved reader checks before it counts the pass (steady-contract.mjs passEvidence).
+    summary.cleanup = { complete: cleanup.complete === true, remaining: cleanup.remaining ?? null, created: cleanup.created.length, removed: cleanup.removed.length, recovered: cleanup.recovered.length,
+      unacknowledged: cleanup.unacknowledged.map((a) => ({ name: a.name, label: a.label, outcome: a.outcome ?? "unconfirmed" })) };
     summary.finishedAt = new Date().toISOString();
     summary.complete &&= !interrupted() && summary.failures.length === 0 && cleanup.complete === true;
     save();

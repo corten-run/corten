@@ -4,9 +4,10 @@
 // then started while a sidecar polls the target's path to its first 200), and then one long k6 pass
 // (window-load.js) whose answers are counted per window. steady-run.mjs does the work.
 //   convergence: a closed loop (the timed warmup's 32 users, 5 minutes in 15 s windows by default);
-//                the flatten rule in steady-contract.mjs names the window each adapter stopped
-//                changing in. A pass with any failed request (in a window or in k6's aggregate),
-//                or whose app stopped, restarted or was OOM-killed, gets no verdict.
+//                the tolerance reading in steady-contract.mjs says from which window each
+//                adapter's throughput stayed within stated bounds to the end; a screening reading,
+//                not a certificate of steady state. A pass with any failed request (in a window or
+//                in k6's aggregate), or whose app stopped, restarted or was OOM-killed, gets none.
 //   soak:        a fixed rate (150 requests/second, 30 minutes in 60 s intervals by default), with
 //                memory at the start and end, p99 per interval and any restart.
 // node bench/marketplace/steady.mjs convergence w3 --group production --build

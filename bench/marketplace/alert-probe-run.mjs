@@ -98,8 +98,16 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
     return info;
   };
   const inspect = async (call, id) => confirm("container", JSON.parse(await call(["container", "inspect", id]))[0], id);
-  const list = async (kind, filter, call = clean) => ids(await call(kind === "network" ? ["network", "ls", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]
-    : ["ps", "-a", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]));
+  // A listing is used only if every ID in it is a full 64-hex Docker ID: a short, prefixed or
+  // otherwise noncanonical entry could name another object, so the whole listing is refused
+  // before anything in it is inspected or removed, and the caller keeps the failure.
+  const list = async (kind, filter, call = clean) => {
+    const found = ids(await call(kind === "network" ? ["network", "ls", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]
+      : ["ps", "-a", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]));
+    const odd = found.filter((id) => !/^[0-9a-f]{64}$/.test(id));
+    assert.equal(odd.length, 0, `docker ${kind} listing for ${filter} returned noncanonical IDs ${JSON.stringify(odd.slice(0, 3)).slice(0, 300)}; nothing in it is inspected or removed`);
+    return found;
+  };
   // A create is acknowledged only by the ID it returns. Without one (an error, even from the daemon,
   // a deadline, a lost connection) Docker may have made the resource or may still make it, even
   // after teardown has looked, so the attempt is kept for teardown to account for. Only a create
