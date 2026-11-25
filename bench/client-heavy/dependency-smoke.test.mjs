@@ -7,6 +7,7 @@ import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import test from "node:test";
+import "./renderer-witness.mjs";
 import { buildApps, root, solidBuildPlugin } from "./build.mjs";
 import { options, buildOptions } from "./contract.mjs";
 import { solidCompiler, matchesSolidRuntime, solidRuntimeFiles, solidRuntimePrefix } from "./compiler.mjs";
