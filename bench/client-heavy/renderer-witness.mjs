@@ -27,6 +27,50 @@ test("renderer witness reports token shape without reflecting argv", () => {
   ]) assert.deepEqual(cmdlineShape(text), shape);
 });
 
+test("renderer witness stops issuing commands when an in-flight command outlives its deadline", { timeout: 10000 }, async (t) => {
+  const commands = ["newContext", "newPage", "setContent", "evaluate", "newBrowserCDPSession", "send"];
+  for (const [index, delayed] of commands.entries()) await t.test(delayed, async (step) => {
+    step.mock.timers.enable({ apis: ["setTimeout"] });
+    const entered = Promise.withResolvers(), release = Promise.withResolvers(), calls = [];
+    const command = (name, result) => async () => {
+      calls.push(name);
+      if (name === delayed) { entered.resolve(); await release.promise; }
+      return result;
+    };
+    const page = { setContent: command("setContent"), evaluate: command("evaluate", true) };
+    const browser = { newContext: command("newContext", { newPage: command("newPage", page) }),
+      newBrowserCDPSession: command("newBrowserCDPSession", { send: command("send") }) };
+    const rejected = assert.rejects(verifyLiveRenderer({ browser }, assert.fail, 16000),
+      index < 4 ? /failed at visible page/ : /failed at process inventory/);
+    await entered.promise;
+    step.mock.timers.tick(16000);
+    await rejected;
+    release.resolve();
+    await new Promise(setImmediate);
+    assert.deepEqual(calls, commands.slice(0, index + 1));
+  });
+});
+
+test("renderer witness rejects PID reuse during the rewritten-title executable read", async (t) => {
+  const { processIdentity, processRole } = await import("../workloads/isolated/host-lifetime.mjs");
+  const pid = 123, at = `/proc/${pid}`, exe = "/chromium/chrome";
+  let start = 100, current;
+  t.mock.method(fs, "openSync", (path) => {
+    current = Buffer.from({ [`${at}/stat`]: `${pid} (chrome) S ${"0 ".repeat(18)}${start}`,
+      [`${at}/cmdline`]: `${exe} --type=renderer --other\0`, [`${at}/cgroup`]: "0::/\n" }[path]);
+    return 0;
+  });
+  t.mock.method(fs, "readSync", (_fd, bytes, offset) => offset ? 0 : current.copy(bytes));
+  t.mock.method(fs, "closeSync", () => {});
+  const image = { dev: 1n, ino: 2n };
+  t.mock.method(fs, "statSync", () => image);
+  const link = t.mock.method(fs, "readlinkSync", () => exe);
+  const inspect = () => inspectChromiumProcess(processIdentity, processRole, pid, image, "0::/\n", null);
+  assert.equal(inspect().productionRole, "renderer");
+  link.mock.mockImplementation(() => { start++; return exe; });
+  assert.deepEqual(inspect(), { process: "unstable" });
+});
+
 function kernelRead(read) {
   try { return { status: "ok", value: read() }; }
   catch (error) {
@@ -56,6 +100,8 @@ function inspectChromiumProcess(processIdentity, processRole, pid, parentImage, 
   if (first.status !== "ok") return { process: first.status };
   const exe = kernelRead(() => fs.statSync(`${at}/exe`, { bigint: true }));
   const cgroup = readWitnessFile(`${at}/cgroup`), cmdline = readWitnessFile(`${at}/cmdline`);
+  const productionRole = cmdline.status === "ok"
+    ? kernelRead(() => processRole(cmdline.value, () => fs.readlinkSync(`${at}/exe`))) : { status: cmdline.status };
   const last = readWitnessFile(`${at}/stat`);
   if (last.status !== "ok") return { process: "recheck-" + last.status };
   const stable = kernelRead(() => {
@@ -63,8 +109,6 @@ function inspectChromiumProcess(processIdentity, processRole, pid, parentImage, 
     return a.pid === pid && b.pid === pid && a.startTicks === b.startTicks;
   });
   if (stable.value !== true) return { process: "unstable" };
-  const productionRole = cmdline.status === "ok"
-    ? kernelRead(() => processRole(cmdline.value, () => fs.readlinkSync(`${at}/exe`))) : { status: cmdline.status };
   return { process: "stable", executable: exe.status,
     sameBrowserImage: exe.value && parentImage ? exe.value.dev === parentImage.dev && exe.value.ino === parentImage.ino : null,
     cgroup: cgroup.status, sameCgroup: cgroup.status === "ok" && ownCgroup !== undefined ? cgroup.value === ownCgroup : null,
@@ -74,51 +118,61 @@ function inspectChromiumProcess(processIdentity, processRole, pid, parentImage, 
 }
 
 async function within(operation, milliseconds) {
-  let timer;
+  const deadline = performance.now() + milliseconds, error = new Error("Chromium witness operation deadline");
+  let timer, expired = false;
+  // Racing the timer does not cancel a pending Playwright command. Fence each continuation.
+  const checkDeadline = () => { if (expired || performance.now() >= deadline) throw error; };
   try {
-    return await Promise.race([Promise.resolve().then(operation), new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error("Chromium witness operation deadline")), milliseconds);
+    return await Promise.race([Promise.resolve().then(() => operation(checkDeadline)), new Promise((_, reject) => {
+      timer = setTimeout(() => { expired = true; reject(error); }, milliseconds);
     })]);
   } finally { clearTimeout(timer); }
 }
 
 // The existing compatibility smoke owns the browser and its teardown. This
 // probe only opens a page after that smoke's application checks have finished.
-export async function verifyLiveRenderer(launched, diagnostic) {
+export async function verifyLiveRenderer(launched, diagnostic, milliseconds) {
   let stage = "visible page", report;
   try {
-    const { processIdentity, processRole } = await import("../workloads/isolated/host-lifetime.mjs");
-    await within(async () => {
+    report = await within(async (checkDeadline) => {
+      const { processIdentity, processRole } = await import("../workloads/isolated/host-lifetime.mjs");
+      checkDeadline();
       const context = await launched.browser.newContext({ viewport: { width: 1100, height: 800 }, serviceWorkers: "block" });
+      checkDeadline();
       const page = await context.newPage();
+      checkDeadline();
       await page.setContent("<main>Renderer witness</main>", { timeout: 5000 });
+      checkDeadline();
       assert.ok(await page.evaluate(() => document.visibilityState === "visible" && document.querySelector("main").checkVisibility()));
-    }, 8000);
+      checkDeadline();
 
-    stage = "process inventory";
-    // Chromium identifies renderer candidates independently of procfs or the role parser.
-    const { processInfo } = await within(async () => {
+      stage = "process inventory";
+      // Chromium identifies renderer candidates independently of procfs or the role parser.
       const cdp = await launched.browser.newBrowserCDPSession();
-      return cdp.send("SystemInfo.getProcessInfo");
-    }, 8000);
-    const pid = launched.process.pid, validPid = (id) => Number.isSafeInteger(id) && id > 0;
-    assert.ok(validPid(pid) && Array.isArray(processInfo) && processInfo.length <= 64);
-    const renderers = processInfo.filter(({ type }) => type === "renderer").map(({ id }) => id);
-    assert.ok(renderers.every(validPid));
+      checkDeadline();
+      const { processInfo } = await cdp.send("SystemInfo.getProcessInfo");
+      checkDeadline();
+      const pid = launched.process.pid, validPid = (id) => Number.isSafeInteger(id) && id > 0;
+      assert.ok(validPid(pid) && Array.isArray(processInfo) && processInfo.length <= 64);
+      const renderers = processInfo.filter(({ type }) => type === "renderer").map(({ id }) => id);
+      assert.ok(renderers.every(validPid));
 
-    stage = "kernel witness";
-    const group = readWitnessFile("/proc/self/cgroup");
-    const path = /^0::(\/[^\n]*)\n?$/.exec(group.value ?? "")?.[1];
-    const census = path && path.split("/").every((part) => part !== ".." && part !== ".")
-      ? readWitnessFile(join("/sys/fs/cgroup", path, "cgroup.procs")) : { status: "no-v2-view" };
-    const ids = census.value === undefined ? null : new Set(census.value.trim().split("\n"));
-    // Only interpret absence if this mount's census can see the test and its known browser.
-    const members = ids?.has(String(process.pid)) && ids.has(String(pid)) ? ids : null;
-    const image = kernelRead(() => fs.statSync(`/proc/${pid}/exe`, { bigint: true })).value;
-    const inspect = (id) => inspectChromiumProcess(processIdentity, processRole, id, image, group.value, members);
-    report = { parentMatchesInventory: processInfo.some(({ type, id }) => type === "browser" && id === pid),
-      census: ids && !members ? "different-view" : census.status,
-      parent: inspect(pid), renderers: [...new Set(renderers)].filter((id) => id !== pid).map(inspect) };
+      stage = "kernel witness";
+      const group = readWitnessFile("/proc/self/cgroup");
+      const path = /^0::(\/[^\n]*)\n?$/.exec(group.value ?? "")?.[1];
+      const census = path && path.split("/").every((part) => part !== ".." && part !== ".")
+        ? readWitnessFile(join("/sys/fs/cgroup", path, "cgroup.procs")) : { status: "no-v2-view" };
+      const ids = census.value === undefined ? null : new Set(census.value.trim().split("\n"));
+      // Only interpret absence if this mount's census can see the test and its known browser.
+      const members = ids?.has(String(process.pid)) && ids.has(String(pid)) ? ids : null;
+      const image = kernelRead(() => fs.statSync(`/proc/${pid}/exe`, { bigint: true })).value;
+      const inspect = (id) => inspectChromiumProcess(processIdentity, processRole, id, image, group.value, members);
+      const observed = { parentMatchesInventory: processInfo.some(({ type, id }) => type === "browser" && id === pid),
+        census: ids && !members ? "different-view" : census.status,
+        parent: inspect(pid), renderers: [...new Set(renderers)].filter((id) => id !== pid).map(inspect) };
+      checkDeadline();
+      return observed;
+    }, milliseconds);
     diagnostic(JSON.stringify(report));
   } catch {
     // Playwright and filesystem errors can contain raw args and executable paths.

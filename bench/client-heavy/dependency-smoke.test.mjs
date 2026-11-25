@@ -90,7 +90,9 @@ test("Remix's private test tool and the benchmark's root bundler both work", () 
   }
 });
 
-test("the locked JavaScript builds still pass the client-heavy browser oracle", { timeout: 120000 }, async (t) => {
+const appSmokeTimeoutMs = 120000, witnessTimeoutMs = process.platform === "linux" ? 16000 : 0;
+test("the locked JavaScript builds still pass the client-heavy browser oracle", { timeout: appSmokeTimeoutMs + witnessTimeoutMs }, async (t) => {
+  const appDeadline = performance.now() + appSmokeTimeoutMs;
   const out = await mkdtemp(join(tmpdir(), "client-dependency-smoke-"));
   try {
     const { workload, settings, timeoutMs } = options(["dependency-smoke"]);
@@ -115,7 +117,10 @@ test("the locked JavaScript builds still pass the client-heavy browser oracle", 
         assert.ok(close?.returned && close.observed && close.failure === null, `${app}: ${JSON.stringify(close)}`);
         assert.equal(pass.actions, null, app);
       }
-      if (process.platform === "linux") await verifyLiveRenderer(launched, (line) => t.diagnostic(line));
+      if (witnessTimeoutMs) {
+        assert.ok(performance.now() < appDeadline, "application checks exceeded the compatibility smoke deadline");
+        await verifyLiveRenderer(launched, (line) => t.diagnostic(line), witnessTimeoutMs);
+      }
     } finally {
       try { await launched?.close(); } finally { await server.close(); }
     }
