@@ -78,7 +78,7 @@ export async function samplingControl(t, signal, scenario) {
       if (proc[2] === "stat") { f.procReads++; return `${pid} (control) S ${[1, ...Array(17).fill(0), pid * 10, 0].join(" ")}`; }
       if (proc[2] === "exe") return Buffer.from("executable");
       if (proc[2] === "cgroup") return `0::${f.scope}\n`;
-      return Buffer.from("control\0");
+      return args[0] === "utf8" ? "control\0" : Buffer.from("control\0");
     }
     if (!isGroup(p)) return original.readFileSync(path, ...args);
     const key = p.slice(p.lastIndexOf("/") + 1), here = p.slice("/sys/fs/cgroup".length, p.lastIndexOf("/"));

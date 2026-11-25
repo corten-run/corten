@@ -1,5 +1,6 @@
 // Untimed control, included in the hosted dependency smoke. It does not run the observer.
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -83,11 +84,35 @@ async function within(operation, milliseconds) {
 }
 
 function shutdownBrowser(server, milliseconds = 4000) {
+  const child = server.process();
+  const exited = () => child.exitCode !== null || child.signalCode !== null;
+  async function confirmExit(operation) {
+    let onExit;
+    const exit = exited() ? Promise.resolve() : new Promise((resolve) => {
+      onExit = resolve;
+      child.once("exit", onExit);
+    });
+    try {
+      await within(async () => { await operation(); await exit; }, milliseconds);
+    } finally {
+      if (onExit) child.removeListener("exit", onExit);
+    }
+  }
   let finishing;
   return () => finishing ??= (async () => {
-    try { await within(() => server.close(), milliseconds); }
+    try { await confirmExit(() => server.close()); }
     catch {
-      await within(() => server.kill(), milliseconds);
+      try { await confirmExit(() => server.kill()); }
+      catch {
+        // Playwright normally kills the owned browser group; if its cleanup
+        // does not settle, use only the original child handle, never a PID.
+        try {
+          if (!exited()) await confirmExit(() => child.kill("SIGKILL"));
+        } finally {
+          for (const pipe of child.stdio ?? []) pipe?.destroy();
+          child.unref();
+        }
+      }
       throw new Error("Chromium witness required forced browser shutdown");
     }
   })();
@@ -96,9 +121,11 @@ function shutdownBrowser(server, milliseconds = 4000) {
 test("renderer witness kills its owned browser once if graceful shutdown stalls", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let closes = 0, kills = 0;
+  const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
   const close = shutdownBrowser({
+    process: () => child,
     close() { closes++; return new Promise(() => {}); },
-    async kill() { kills++; },
+    async kill() { kills++; child.signalCode = "SIGKILL"; child.emit("exit"); },
   }, 25);
   const attempt = close();
   const failed = assert.rejects(attempt, { message: "Chromium witness required forced browser shutdown" });
@@ -108,6 +135,21 @@ test("renderer witness kills its owned browser once if graceful shutdown stalls"
   t.mock.timers.tick(25);
   await failed;
   assert.equal(kills, 1);
+});
+
+test("renderer witness kills the original handle and releases owned pipes if Playwright never settles", async () => {
+  let kills = 0, stopped = 0, released = 0;
+  const child = Object.assign(new EventEmitter(), {
+    exitCode: null, signalCode: null,
+    stdio: [null, { destroy() { stopped++; } }],
+    unref() { released++; },
+    kill(signal) { kills++; this.signalCode = signal; this.emit("exit"); return true; },
+  });
+  const stall = () => new Promise(() => {});
+  const close = shutdownBrowser({ process: () => child, close: stall, kill: stall }, 20);
+  await assert.rejects(close(), { message: "Chromium witness required forced browser shutdown" });
+  assert.equal(child.signalCode, "SIGKILL");
+  assert.deepEqual([kills, stopped, released, child.listenerCount("exit")], [1, 1, 1, 0]);
 });
 
 test("Linux Chromium renderer witness with one visible page", { skip: process.platform !== "linux", timeout: 45000 }, async (t) => {
