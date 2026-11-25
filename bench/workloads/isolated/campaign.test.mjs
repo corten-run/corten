@@ -200,7 +200,7 @@ mock.module("./host-lifetime.mjs", { exports: {
     const { directory, command, startupSignal } = args;
     const startup = lifetimeStartup;
     mkdirSync(directory); writeFileSync(join(directory, "raw.json"), "{}");
-    const observer = { attach() { if (startup) startup.attached++; }, dispose() { if (startup) startup.disposed++; }, finish(result, retainTerminalClock, settled) {
+    const observer = { attach() { if (startup) { startup.attached++; startup.onAttach?.(); } }, dispose() { if (startup) startup.disposed++; }, finish(result, retainTerminalClock, settled) {
       const checks = { accounting: true, terminal: result.terminal, empty: true, observer: true,
         unforced: !result.cancelled && !result.forced, leader: true };
       if (lifetimeFailure?.command === command) Object.assign(checks, lifetimeFailure.checks);
@@ -1096,6 +1096,41 @@ for (const stop of ["cancel", "close"]) for (const failure of [false, true]) tes
     await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, 1);
   } finally { release(); await rejected; }
 });
+
+for (const boundary of ["before attach", "after attach", "after attachment check"]) {
+  test(`campaign startup cutoff without dispatching timers: ${boundary}`, { timeout: 10000 }, async (t) => {
+    const s = setupGroup("client-heavy"), h = await begin(s);
+    let elapsed = 100, readsUntilCutoff = Infinity, enter, release;
+    t.mock.method(performance, "now", () => elapsed + (readsUntilCutoff-- <= 0 ? 30000 : 0));
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const entered = new Promise((resolve) => { enter = resolve; });
+    const gate = new Promise((resolve) => { release = resolve; });
+    const expire = () => { elapsed += 30000; };
+    const owner = lifetimeStartup = { enter, gate, attached: 0, disposed: 0, onAttach() {
+      if (boundary === "after attach") expire();
+      if (boundary === "after attachment check") readsUntilCutoff = 1;
+    } };
+    const advancing = s.campaign.advance(h).then(() => null, (error) => error);
+    try {
+      await entered;
+      if (boundary === "before attach") expire();
+      release();
+      assert.match((await advancing)?.message ?? "", /lifetime or cleanup unproven/);
+      assert.equal(owner.attached, boundary === "before attach" ? 0 : 1);
+      assert.equal(owner.disposed, 1);
+      assert.equal(existsSync(join(owner.directory, "terminal.json")), false);
+      const exit = readdirSync(h.directory).find((name) => name.endsWith("-command-exited.json"));
+      const result = JSON.parse(readFileSync(join(h.directory, exit), "utf8"));
+      assert.equal(result.error, "native host observation setup incomplete");
+      assert.equal(result.success, false);
+      assert.equal(result.hostManifestSha256, undefined);
+      const state = s.campaign.status(h);
+      assert.equal(state.state, "preserved-uncertain");
+      assert.equal(state.uncollectedNativeRoots.length, 1);
+      assert.equal(calls.length, 1);
+    } finally { release(); await advancing; }
+  });
+}
 
 for (const group of groupNames) test(`${group}: one complete group runs and replays without inventing other groups`, async () => {
   const s = setupGroup(group), h = await begin(s); mode = "complete";

@@ -129,15 +129,15 @@ export function createCampaign({ authorize }) {
         env: { PATH: "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(), LANG: "C.UTF-8", TZ: "UTC",
           GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", ...binding.resources.requestedCpuEnv, ...compilerTarget?.env }, signal: commandSignal,
         log(bytes) { let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset, bytes.length - offset); assert.ok(n > 0); offset += n; } },
-        async onStart(value, startupSignal) {
+        async onStart(value, startupSignal, checkStartup) {
           pid = value; event(c, "command-started", { pid });
           try {
             observer = await beginLifetime({ campaign: c.handle.id, binding, invocation,
               directory: hostDirectory, command: number, pid, signal: commandSignal, startupSignal,
               onFault() { observerStop.abort(); } });
-            startupSignal.throwIfAborted();
+            checkStartup();
             await observer.attach(pid);
-            startupSignal.throwIfAborted();
+            checkStartup();
             attached = true;
           } catch (error) {
             observer?.dispose(); observer = undefined; throw error;
@@ -145,9 +145,13 @@ export function createCampaign({ authorize }) {
         },
       });
     } finally {
-      const storage = startupDiagnostic(interruptedByStartupDeadline(result));
-      if (!attached && storage) c.startupStorageFailure = storage;
-      try { fsyncSync(fd); } finally { closeSync(fd); }
+      const expired = interruptedByStartupDeadline(result);
+      const storage = startupDiagnostic(expired);
+      if (storage && (!attached || expired)) c.startupStorageFailure = storage;
+      try {
+        // The supervisor can reject setup after attachment's own final check.
+        if (expired && attached) { attached = false; observer.dispose(); }
+      } finally { try { fsyncSync(fd); } finally { closeSync(fd); } }
     }
     c.files.push({ path, sha256: digest(readRegular(join(c.directory, path))) });
     const settled = compilerTarget ? () => { compilerTarget.settled = true; } : undefined;

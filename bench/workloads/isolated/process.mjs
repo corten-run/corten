@@ -17,9 +17,23 @@ export function supervise(invocation, { cwd, env, log, signal, onStart }, deadli
     let child, ready = false, settled = false, cancelled = false, forced = false, error = null, exited = false, observed = false;
     let code = null, exitSignal = null, timer, stopTimer, killTimer, setupTimer, pendingTerminal;
     const startup = new AbortController();
-    let setupPending = true, setupExpired = false, deadlineInterrupted = false;
+    let startupCutoff, setupPending = true, setupExpired = false, deadlineInterrupted = false;
     function noteStartupDeadline() {
       if (setupPending && !startup.signal.aborted) deadlineInterrupted = true;
+    }
+    function expireReady() { noteStartupDeadline(); cancel(); }
+    function expireSetup() {
+      if (!setupPending || settled) return;
+      setupExpired = true; error ??= "native host observation setup incomplete";
+      noteStartupDeadline(); startup.abort(); cancel();
+      if (pendingTerminal !== undefined) finish(pendingTerminal);
+    }
+    function expireElapsedSetup() {
+      if (!startup.signal.aborted && performance.now() >= startupCutoff) expireSetup();
+    }
+    function checkStartup() {
+      expireElapsedSetup();
+      startup.signal.throwIfAborted();
     }
     const finish = (terminal) => {
       if (settled) return;
@@ -74,6 +88,7 @@ export function supervise(invocation, { cwd, env, log, signal, onStart }, deadli
     }
     function start() {
       if (!ready || !observed || settled || cancelled || exited || startup.signal.aborted) return;
+      if (performance.now() >= startupCutoff) { expireReady(); return; }
       clearTimeout(timer); timer = setTimeout(cancel, deadlines.runMs);
       send({ type: "start" });
     }
@@ -105,18 +120,16 @@ export function supervise(invocation, { cwd, env, log, signal, onStart }, deadli
       });
       child.once("exit", (value, reason) => { exited = true; code = value; exitSignal = reason; startup.abort(); });
       child.once("close", (value, reason) => { code = value; exitSignal = reason; finish(true); });
-      timer = setTimeout(() => { noteStartupDeadline(); cancel(); }, deadlines.readyMs);
-      setupTimer = setTimeout(() => {
-        if (!setupPending || settled) return;
-        setupExpired = true; error ??= "native host observation setup incomplete";
-        noteStartupDeadline(); startup.abort(); cancel();
-        if (pendingTerminal !== undefined) finish(pendingTerminal);
-      }, deadlines.readyMs);
+      startupCutoff = performance.now() + deadlines.readyMs;
+      timer = setTimeout(expireReady, deadlines.readyMs);
+      setupTimer = setTimeout(expireSetup, deadlines.readyMs);
       signal?.addEventListener("abort", cancel, { once: true });
       if (signal?.aborted) cancel();
       // Observation/containment must precede the bootstrap start message. A
       // rejected setup still drains this owned child through normal cancellation.
-      Promise.resolve().then(() => onStart?.(child.pid ?? null, startup.signal)).then(() => {
+      Promise.resolve().then(() => onStart?.(child.pid ?? null, startup.signal, checkStartup)).then(() => {
+        // A setup continuation can run before the already-due timer callback.
+        expireElapsedSetup();
         setupPending = false; clearTimeout(setupTimer);
         observed = true;
         if (pendingTerminal !== undefined) { finish(pendingTerminal); return; }
