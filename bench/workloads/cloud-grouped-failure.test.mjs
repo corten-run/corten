@@ -249,8 +249,10 @@ async function handoffFixture(t, flags = {}) {
     },
     providerFactory: ({ createMode }) => Object.assign((argv, timeout, allowFail, expiry) => {
       assert.equal(createMode, null); launched.push(["provider", ...argv]);
-      if (argv[0] === "account" && h.saved().deletionIntentAt) knobs.dispatchAccount?.();
-      if (argv[2] === "get" && h.saved().deletionIntentAt) knobs.exactRead?.();
+      if (knobs.beforeFinalPending && argv[2] === "get" && f.probes === 2) knobs.beforeFinalPending();
+      if (knobs.beforeIntent && argv[2] === "get" && f.probes === 3 && !h.saved().deletionIntentAt) knobs.beforeIntent();
+      if (knobs.dispatchAccount && argv[0] === "account" && h.saved().deletionIntentAt) knobs.dispatchAccount();
+      if (knobs.exactRead && argv[2] === "get" && h.saved().deletionIntentAt) knobs.exactRead();
       if (knobs.failExactRead && argv[2] === "get")
         return { status: 1, providerDiagnostic: { code: "get-http", httpStatus: 500 } };
       if (argv[2] === "delete") {
@@ -411,6 +413,101 @@ test("handoff refuses a byte-only capture change during the final fence before i
   assert.deepEqual(readFileSync(path), changed);
   assert.equal(f.probes, 3);
   assert.match(error?.message ?? "", /approved original handoff capture changed/);
+});
+
+test("handoff refuses to overwrite unexpected state at final SSH acknowledgement", async (t) => {
+  for (const kind of ["bad-json", "byte-drift", "missing", "unreadable", "same-byte replacement"]) await t.test(kind, async (t) => {
+    const { f, knobs, preview, retire } = await handoffFixture(t);
+    const { h } = f, path = h.statePath, approved = await preview();
+    const moved = join(h.temp, "prior-pending-state");
+    let expected, changedInode;
+    knobs.finalFence = () => {
+      const pending = readFileSync(path);
+      assert.equal(JSON.parse(pending).control.ledger.at(-1).localTerminal, false);
+      if (kind === "bad-json") writeFileSync(path, expected = Buffer.from("{"));
+      else if (kind === "byte-drift") {
+        expected = Buffer.concat([pending, Buffer.from("\n")]);
+        appendFileSync(path, "\n");
+      }
+      else {
+        renameSync(path, moved);
+        if (kind === "unreadable") mkdirSync(path);
+        if (kind === "same-byte replacement") {
+          writeFileSync(path, expected = pending, { flag: "wx" });
+          changedInode = lstatSync(path, { bigint: true }).ino;
+          assert.notEqual(changedInode, lstatSync(moved, { bigint: true }).ino);
+        }
+      }
+    };
+    const error = await retire(approved).catch(e => e);
+    assert.equal(f.probes, 3);
+    assert.equal(h.deletes, 0);
+    if (kind === "missing") assert.ok(!existsSync(path));
+    else if (kind === "unreadable") assert.ok(lstatSync(path).isDirectory());
+    else assert.deepEqual(readFileSync(path), expected);
+    if (changedInode !== undefined) assert.equal(lstatSync(path, { bigint: true }).ino, changedInode);
+    assert.ok(!existsSync(`${path}.tmp`), "must refuse before staging the acknowledgement");
+    assert.ok(!existsSync(join(h.local, "failed-native-host.json")));
+    assert.ok(existsSync(join(h.local, "operation.lock")), "keep custody of the unacknowledged command");
+    assert.match(error?.message ?? "", /handoff reservation changed or unreadable/);
+  });
+});
+
+test("handoff refuses state drift before writing the final SSH pending row", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t);
+  const { h } = f, path = h.statePath, approved = await preview();
+  let expected;
+  knobs.beforeFinalPending = () => {
+    delete knobs.beforeFinalPending;
+    const settled = readFileSync(path);
+    assert.equal(JSON.parse(settled).control.ledger.at(-1).localTerminal, true);
+    expected = Buffer.concat([settled, Buffer.from("\n")]);
+    appendFileSync(path, "\n");
+  };
+  const error = await retire(approved).catch(e => e);
+  assert.deepEqual({ probes: f.probes, deletes: h.deletes }, { probes: 2, deletes: 0 });
+  assert.deepEqual(readFileSync(path), expected);
+  assert.ok(!existsSync(`${path}.tmp`));
+  assert.ok(!existsSync(join(h.local, "failed-native-host.json")));
+  assert.ok(existsSync(join(h.local, "operation.lock")));
+  assert.match(error?.message ?? "", /handoff reservation changed or unreadable/);
+});
+
+test("handoff refuses a same-byte state replacement at intent, dispatch or absence settlement", async (t) => {
+  for (const phase of ["intent", "dispatch", "acknowledged DELETE", "lost-ack retry"]) await t.test(phase, async (t) => {
+    const lost = phase === "lost-ack retry";
+    const { f, knobs, preview, retire } = await handoffFixture(t, { deleteLost: lost });
+    const { h } = f, path = h.statePath, moved = join(h.temp, "prior-state");
+    const beforeIntent = phase === "intent", beforeDispatch = phase === "dispatch";
+    if (lost) await assert.rejects(retire(await preview()), /acknowledgement lost/);
+    const approved = await preview();
+    let expected, inode;
+    const hook = beforeIntent ? "beforeIntent" : beforeDispatch ? "dispatchAccount" : "exactRead";
+    const replace = () => {
+      expected = readFileSync(path);
+      renameSync(path, moved);
+      writeFileSync(path, expected, { flag: "wx" });
+      inode = lstatSync(path, { bigint: true }).ino;
+      assert.notEqual(inode, lstatSync(moved, { bigint: true }).ino);
+    };
+    knobs[hook] = () => {
+      delete knobs[hook];
+      // Cross the account-return checkpoint and change the file after the
+      // preliminary dispatch check, just before production worker dispatch.
+      if (beforeDispatch) setImmediate(() => setImmediate(() => setImmediate(replace)));
+      else replace();
+    };
+    const error = await retire(approved).catch(e => e);
+    assert.equal(f.probes, 3);
+    assert.equal(h.deletes, beforeIntent || beforeDispatch ? 0 : 1);
+    assert.equal(h.saved().destroyedAt, undefined);
+    assert.equal(!!h.saved().deletionIntentAt, !beforeIntent);
+    assert.deepEqual(readFileSync(path), expected);
+    assert.equal(lstatSync(path, { bigint: true }).ino, inode);
+    assert.ok(!existsSync(`${path}.tmp`));
+    assert.ok(existsSync(join(h.local, "operation.lock")));
+    assert.match(error?.message ?? "", /handoff reservation changed or unreadable/);
+  });
 });
 
 test("handoff refuses a same-byte operation lock replacement during the final fence and preserves it", async (t) => {

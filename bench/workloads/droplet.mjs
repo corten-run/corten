@@ -47,6 +47,15 @@ function acquireHandoffLock(path, bytes) {
   return () => assert.ok(matches() && regular(path, 1024).equals(bytes) && matches(), "handoff operation lock changed; preserve custody");
 }
 
+const sameStateFile = (a, b) => ["dev", "ino", "birthtimeNs"].every(key => a[key] === b[key]);
+const sameStateVersion = (a, b) => sameStateFile(a, b)
+  && ["mode", "nlink", "size", "mtimeNs", "ctimeNs"].every(key => a[key] === b[key]);
+function handoffStateSnapshot(path) {
+  const stat = lstatSync(path, { bigint: true }), bytes = regular(path, 1024 * 1024);
+  assert.ok(sameStateVersion(stat, lstatSync(path, { bigint: true })), "handoff state changed during read");
+  return { stat, bytes };
+}
+
 const createErroredStop = () => Object.assign(new Error("provider create errored; exact allocation verified absent; no DELETE or replacement create"),
   { providerDiagnostic: { code: "create-errored-absent" } });
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -76,16 +85,26 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const recoveryLock = "stream-recovery.lock", recheckLock = createRecheckLock, groupedPreplan = recoveryApproval?.policy === "grouped-preplan-failure-custody-only";
   const groupedHandoff = recoveryApproval?.policy === handoffRetirementPolicy;
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
-  let assertHandoffLock, assertHandoffCustody, handoffReceiptSha256, handoffStateSha256;
+  let assertHandoffLock, assertHandoffCustody, handoffReceiptSha256, expectedHandoffState;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
+  const assertHandoffState = () => {
+    try {
+      const current = handoffStateSnapshot(statePath);
+      assert.ok(current.bytes.equals(expectedHandoffState.bytes)
+        && sameStateVersion(current.stat, expectedHandoffState.stat));
+    } catch (cause) {
+      preserveOperationLock = true;
+      throw new Error("handoff reservation changed or unreadable; preserve custody", { cause });
+    }
+    handoffLocks(local, true);
+    assertHandoffLock();
+  };
   const checkHandoffDelete = (includeTrees = true) => {
     assertHandoffCustody(includeTrees);
-    handoffLocks(local, true);
     if (handoffReceiptSha256 !== undefined)
       assert.equal(digest(regular(join(local, "failed-native-host.json"))), handoffReceiptSha256, "failed-native retirement receipt changed");
-    assert.equal(digest(regular(statePath, 1024 * 1024)), handoffStateSha256, "handoff reservation changed");
-    assertHandoffLock();
+    assertHandoffState();
   };
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
   const stateStage = (kind) => kind ? `${statePath}.${kind}-${randomBytes(16).toString("hex")}.tmp` : `${statePath}.tmp`;
@@ -95,8 +114,31 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // An interrupted ordinary save can leave its exclusive staging file behind.
     // Never consume it or let it prevent a failure-only write under retained custody.
     const staging = stateStage(kind);
-    durable(staging, stateBytes(value));
-    replace(staging, statePath); syncDirectory(local);
+    const bytes = stateBytes(value);
+    if (!groupedHandoff) {
+      durable(staging, bytes);
+      replace(staging, statePath); syncDirectory(local);
+      return;
+    }
+    // A terminal SSH acknowledgement still owns only the exact pending state
+    // we wrote, not whatever appeared at the same path while SSH was in flight.
+    try {
+      assertHandoffState();
+      const authored = Buffer.from(bytes);
+      durable(staging, authored);
+      const staged = handoffStateSnapshot(staging);
+      assert.ok(staged.bytes.equals(authored), "handoff state stage changed");
+      assertHandoffState();
+      assert.ok(sameStateVersion(staged.stat, lstatSync(staging, { bigint: true })), "handoff state stage changed");
+      replace(staging, statePath); syncDirectory(local);
+      const published = handoffStateSnapshot(statePath);
+      // Rename can advance ctime; the published file must still be our stage.
+      assert.ok(sameStateFile(staged.stat, published.stat) && published.bytes.equals(authored), "handoff state publication changed");
+      expectedHandoffState = { stat: published.stat, bytes: authored };
+    } catch (error) {
+      preserveOperationLock = true;
+      throw error;
+    }
   };
   const save = () => { check(); writeState(state); };
   // The provider-errored outcome is published through its own fresh exclusive stage,
@@ -1025,10 +1067,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const confirmation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs, grouped);
     assert.deepEqual(withoutTime(confirmation), withoutTime(capture.observation), "final custody fence differs");
     await own(); check();
-    if (handoff) {
-      handoffStateSha256 = digest(stateBytes(state));
-      checkHandoffDelete();
-    }
+    if (handoff) checkHandoffDelete();
     // Bound the whole local fence operation, including SSH response delivery.
     // Its start precedes the observation without relying on remote clock skew.
     const deleteProofExpiresAtMs = startedAtMs + 60000;
@@ -1048,7 +1087,6 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(Date.now() < deleteProofExpiresAtMs, "current retirement proof expired");
     }
     Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
-    if (handoff) handoffStateSha256 = digest(stateBytes(state));
     await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
     await confirmDeleted();
     if (handoff) checkHandoffDelete();
@@ -1496,18 +1534,18 @@ else ${pack}; fi` : pack, 11 * 60000);
           const { controllerCommit, reservationSha256, ...recovery } = recoveryApproval;
           assert.deepEqual({ controllerCommit: lockedApproval.controllerCommit, reservationSha256: lockedApproval.reservationSha256,
             recovery: lockedApproval.recovery }, { controllerCommit, reservationSha256, recovery }, "locked recovery approval changed");
-          const bytes = regular(statePath, 1024 * 1024);
+          const snapshot = groupedHandoff ? handoffStateSnapshot(statePath) : undefined;
+          const bytes = snapshot?.bytes ?? regular(statePath, 1024 * 1024);
           assert.equal(digest(bytes), reservationSha256, "locked recovery reservation changed");
           state = controllerState(JSON.parse(bytes), options.round);
           assert.ok(stagedFleet(state.fleet) && state.fleet.single?.group === state.group, "staged single-group recovery required");
           if (groupedHandoff) {
-            handoffLocks(local, true);
-            assertHandoffLock();
+            expectedHandoffState = snapshot;
+            assertHandoffState();
             const handoff = { controllerCommit, captureSha256: recovery.captureSha256, launchIntentSha256: recovery.intent.launch };
             if (state.status !== "retired") return retireNativeFailure(controllerCommit, undefined, handoff);
             assertHandoffCustody = pinHandoffRetirement(local, state, handoff);
             handoffReceiptSha256 = state.retirement.evidenceSha256;
-            handoffStateSha256 = reservationSha256;
             checkHandoffDelete(false);
             await confirmDeleted();
             checkHandoffDelete();

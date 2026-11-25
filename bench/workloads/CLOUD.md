@@ -1280,6 +1280,10 @@ fences, and bounded DELETE. Before intent and dispatch it rechecks the held
 lock, verified custody file identities, both extraction inventories, and the
 approved capture and retirement receipt. These checks read metadata and small
 records, not archive or extraction payloads, inside the same proof deadline.
+The handoff controller checks the approved reservation bytes and file identity
+before every state write, including SSH requests and acknowledgements, and only
+advances that expectation after publishing its own verified replacement.
+Unexpected state is not repaired or overwritten; the operation lock is retained.
 It records the merged repair commit separately from the unchanged original
 capture. If DELETE was uncertain and the operation lock was released cleanly,
 take a new preview at the same repair commit. With a recorded deletion intent,
