@@ -824,12 +824,23 @@ async fn own_and_hyper_answer_every_stream_alike() {
 /// The gate at the size a pull request reports: `H1_FUZZ_STREAMS` streams made at random (250,000
 /// unless set) with the seed `H1_FUZZ_SEED` (this file's unless set), on as many threads as the
 /// machine has. `cargo test --release -p corten-run --lib -- --ignored --nocapture
-/// tests::h1_fuzz::own_and_hyper_answer_every_stream_of_a_long_run_alike`.
+/// tests::h1_fuzz::own_and_hyper_answer_every_stream_of_a_long_run_alike`. With `H1_FUZZ_ONLY`
+/// (stream numbers, comma separated) only those streams are sent, on one thread: a stream a run
+/// names is sent again alone that way.
 #[test]
 #[ignore]
 fn own_and_hyper_answer_every_stream_of_a_long_run_alike() {
     let number = |name: &str| std::env::var(name).ok().and_then(|number| number.parse::<u64>().ok());
     let seed = number("H1_FUZZ_SEED").unwrap_or(SEED);
+    if let Ok(only) = std::env::var("H1_FUZZ_ONLY") {
+        let only: Vec<usize> =
+            only.split(',').map(|index| index.trim().parse().expect("H1_FUZZ_ONLY is stream numbers")).collect();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build().unwrap();
+        let found = runtime.block_on(run(seed, only.into_iter()));
+        report(seed, &found);
+        assert!(found.failures.is_empty(), "{} of {} streams fail the gate", found.failures.len(), found.streams);
+        return;
+    }
     let streams = fixed(&bases()) + number("H1_FUZZ_STREAMS").unwrap_or(250_000) as usize;
     let threads = std::thread::available_parallelism().map_or(4, usize::from);
     let handles: Vec<_> = (0..threads)
