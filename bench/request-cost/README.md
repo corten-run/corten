@@ -112,7 +112,11 @@ closed while recording shows as the hundredths.
 client then opens the connections one after another, sends what the case says on each and reads
 the answers, and waits a second. The growth of the process's `VmRSS` over those connections,
 divided by their number, is the figure. The kernel's socket buffers are not the process's and
-are not in it. A run in which the probe closed any of the connections fails and says so.
+are not in it. A run in which the probe closed any of the connections fails, says so and prints
+no figure. Corten closes a connection that has sent no request for 30 seconds, so `--silent`
+reads only as many connections as open in that time: 5,000 opened in 0.4 seconds, and 100,000
+over 16 addresses took 64 seconds and failed, where 100,000 that each sent a request opened in
+14 seconds and read 8,421 bytes a connection (on `26ab0e37f`).
 
 The allocator is jemalloc by `LD_PRELOAD`, as the image `corten new` writes sets it, with
 `tcache_max:65536`; its background thread is off for the reason above. The probe refuses to

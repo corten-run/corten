@@ -83,10 +83,10 @@ try {
   // A connection the probe has closed (Corten waits 30 seconds for a request unless the app says
   // otherwise) holds nothing there: the growth is divided by the connections only if all are open.
   const closed = held.filter((connection) => connection.closed).length;
+  for (const connection of held) connection.socket.destroy();
+  if (closed > 0) throw new Error(`not a measurement: the probe had closed ${closed} of the ${connections} connections, which took ${took.toFixed(1)} s to open`);
   const what = values.silent ? "sent nothing" : `answered ${requests} ${name}`;
   console.log(`${Math.round((after - before) / connections)} bytes a connection (${connections} that ${what}, opened in ${took.toFixed(1)} s; ${before} before, ${after} after)`);
-  for (const connection of held) connection.socket.destroy();
-  if (closed > 0) throw new Error(`not a measurement: the probe had closed ${closed} of the connections`);
 } finally {
   await probe.stop();
 }
