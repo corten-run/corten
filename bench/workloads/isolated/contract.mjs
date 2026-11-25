@@ -245,13 +245,16 @@ function resources(group, recipe, campaignMode) {
   const prefix = { "catalog-page": "CATALOG", "json-api": "JSON_API", "localized-marketplace": "MARKETPLACE", "mixed-production": "MIXED_PRODUCTION" }[group];
   if (prefix) {
     const wide = campaignMode === catalogFleetPlacement.loadLayout, json = campaignMode === jsonFleetPlacement.loadLayout;
-    // The JSON API c-16 pins are catalog's c16-generator-v1 under JSON API's own selector.
+    // The JSON API c-16 pins are catalog's c16-generator-v1 under JSON API's own selector. cpuSettings
+    // reads its pins by the catalog names and refuses any other, so a changed JSON pin cannot pass silently.
     const env = wide ? { ...catalogFleetPlacement.cpuEnv, CATALOG_LOAD_LAYOUT: campaignMode }
       : json ? { ...jsonFleetPlacement.cpuEnv, JSON_API_LOAD_LAYOUT: campaignMode }
       : Object.fromEntries(Object.entries({ APP: "1", API: "2-3", LOAD: "4-7" }).map(([role, value]) => [`${prefix}_${role}_CPUS`, value]));
+    const jsonPins = json && Object.fromEntries(Object.entries(jsonFleetPlacement.cpuEnv)
+      .map(([key, value]) => [key.replace(/^JSON_API_/, "CATALOG_"), value]));
     return { nativeCpuDefaults: cpuSettings({}), requestedCpuEnv: env,
       expectedCpus: wide ? cpuSettings(env, campaignMode)
-        : json ? cpuSettings(catalogFleetPlacement.cpuEnv, catalogFleetPlacement.loadLayout) : cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
+        : json ? cpuSettings(jsonPins, catalogFleetPlacement.loadLayout) : cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
       memoryBytes: { app: 2 ** 30, upstream: 512 * 2 ** 20, load: 2 ** 31 },
       hostProcesses: "unisolated driver; JSON functional checker also runs on host", state: "unknown",
       requiredEvidence: "actual per-role container quotas/cpusets/memory, tool identities, host topology and quiet-host/headroom observations" };
