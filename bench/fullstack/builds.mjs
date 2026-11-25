@@ -87,6 +87,9 @@ const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */
  * where the list must offer `expect`; `features` are the cargo features an editor sets.
  * @type {Record<string, Recipe>}
  */
+/** How long docker-rebuild.mjs gives each measured image build before it stops it. */
+export const rebuildTimeoutMs = 20 * 60_000;
+
 export const recipes = {
   corten: {
     tools: "rust:1-trixie",

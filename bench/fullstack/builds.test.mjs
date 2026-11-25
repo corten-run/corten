@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { parse as parseYaml } from "yaml";
 import { allApps } from "./apps.mjs";
-import { buildRow, cargoBuilds, changeOf, contextOf, copyFilter, crateCost, dockerfileOf, oomKills, compiledIn, ranARun, ranSteps, readStep, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { buildRow, cargoBuilds, changeOf, contextOf, copyFilter, crateCost, dockerfileOf, oomKills, compiledIn, ranARun, ranSteps, readStep, rebuildTimeoutMs, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 import { compiledFirst } from "./round.mjs";
 import { imageBuildTimeoutMs as catalogBuildTimeoutMs } from "../catalog/contract.mjs";
 import { imageBuildTimeoutMs as marketplaceBuildTimeoutMs } from "../marketplace/run-contract.mjs";
@@ -448,9 +448,7 @@ function springTestStepSeconds(/** @type {{ run: string }} */ step, /** @type {n
   assert.equal(maven.length, 1, "the native Spring tests run Maven outside one exact positive bound");
   const tests = /** @type {RegExpExecArray} */ (springTestMaven.exec(maven[0]));
   assert.equal(wordCount(step.run, "mvn"), 1, "the native Spring test step runs Maven in more than its one bounded command");
-  const builds = commands.filter((command) => command.startsWith("docker build "));
-  assert.deepEqual(builds, [springTestBuild], "the native Spring test step builds only the test stage");
-  assert.ok(commands.indexOf(springTestBuild) < commands.indexOf(maven[0]), "the native Spring test step builds before its tests");
+  assert.deepEqual(commands, [springTestBuild, maven[0]], "the native Spring test step runs only its test-stage build, then its bounded tests");
   return imageSeconds + durationSeconds(tests[2]) + durationSeconds(tests[1]);
 }
 
@@ -482,6 +480,12 @@ function checkSpringProofStep(/** @type {{ run: string }} */ step) {
   assert.equal(wordCount(step.run, "mvn"), 0, "the proof step runs Maven outside the proof script");
   assert.deepEqual(commands.filter((command) => wordCount(command, "run.sh") > 0), ["exec sh /proof/run.sh /src /evidence"],
     "the proof step runs the proof script exactly once");
+}
+
+/** Whether docker-rebuild.mjs measures images in one buildx call, bounded by builds.mjs's rebuildTimeoutMs. */
+function rebuildCallUses(/** @type {string} */ source) {
+  const calls = source.split('must(["buildx", "build",');
+  return calls.length === 2 && /^[^;]*?, \.\.\.extra, context\], rebuildTimeoutMs\);/.test(calls[1]);
 }
 
 /** Whether a runner builds images in one docker build call, bounded by its contract's imageBuildTimeoutMs. */
@@ -527,6 +531,14 @@ test("Spring bounds each Maven run inside the image build or step that contains 
     assert.ok(!buildCallUses(catalogRunner.replace("{ timeout: imageBuildTimeoutMs, file:", to)), `accepted ${to}`);
   }
   assert.ok(!buildCallUses(catalogRunner.replace('await docker(["build",', 'await docker(["build", "--quiet"]);\n        await docker(["build",')), "accepted a second build call");
+  // The Docker rebuild benchmark stops each measured build at rebuildTimeoutMs (20 minutes); the
+  // image's Maven runs take at most 18m20s of it, which leaves a nominal 1m40s for the rest.
+  const rebuild = readFileSync(join(repo, "bench/fullstack/docker-rebuild.mjs"), "utf8");
+  assert.ok(rebuildCallUses(rebuild), "docker-rebuild.mjs: its one measured build is not bounded by rebuildTimeoutMs");
+  assert.ok(image < rebuildTimeoutMs / 1000, "Spring's bounded Maven runs outlast the Docker rebuild benchmark's build deadline");
+  for (const to of ["...extra, context], 20 * minute);", "...extra, context], rebuildTimeoutMs / 4);"]) {
+    assert.ok(!rebuildCallUses(rebuild.replace("...extra, context], rebuildTimeoutMs);", to)), `accepted ${to}`);
+  }
 
   const { testStep, proofStep } = springSteps(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
   // The native test step builds the test stage (both of the image's Maven runs) and runs the tests,
@@ -579,6 +591,8 @@ test("Spring's Maven bound checks refuse a zero, an unbounded or extra run, a bo
     ["            cb-spring-tests timeout --verbose --kill-after=10s 10m mvn -B test # timeout 1m\n", /outside one exact positive bound/],
     [`${tests}          docker run --rm cb-spring-tests mvn -B test\n`, /more than its one bounded command/],
     [`${tests}          docker run --rm cb-spring-tests "mvn" -B help:active-profiles\n`, /more than its one bounded command/],
+    [`${tests}          docker image build --target build -t cb-spring-tests bench/fullstack/apps/spring\n`, /only its test-stage build, then its bounded tests/],
+    [`${tests}          echo built\n`, /only its test-stage build, then its bounded tests/],
   ])) {
     assert.ok(workflow.includes(tests), "the native Spring test command moved");
     assert.throws(() => springTestStepSeconds(springSteps(workflow.replace(tests, to)).testStep, image), refusal, `accepted ${to}`);
