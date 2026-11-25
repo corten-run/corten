@@ -9,15 +9,19 @@ Pending entries are in [changelog.d/](changelog.d/).
 
 ## 0.3.0 (2026-11-25)
 
-Upgrading from 0.2.0: each of the 40 entries under [Breaking changes](#breaking-changes) says what
-to change. The largest are that the app keeps a `Public` page, and `Public` JSON, text and files
+Upgrading from 0.2.0: each of the 54 entries under
+[Breaking changes](https://github.com/corten-run/corten/blob/v0.3.0/CHANGELOG.md#breaking-changes)
+says what to change; those marked "debug builds only" fail an app's debug builds and its own tests,
+not its release build. The largest are that the app keeps a `Public` page, and `Public` JSON, text and files
 of 1,024 bytes or more, for its shared lifetime instead of running the handler for every request
 (`App::kept_answers`); that a write answering its own page is drawn whole with its layout reads,
 and a direct patch comes from `req.action()`; that `html!` refuses a path in the app written as
 text in a URL attribute (`href="/items"`), which links to the route instead; and that `html!` and
-component stylesheets refuse more markup and selectors a browser would read differently, while
-values a script reads move from `data-` attributes to typed refs (copied `corten-ui` kits update
-with `corten ui add --merge`).
+component stylesheets refuse more markup, selectors and values a browser would read differently,
+while values a script reads move from `data-` attributes to typed refs (copied `corten-ui` kits
+update with `corten ui add --merge`). `corten check` refuses a missing or stale `Cargo.lock`,
+`data-on` is written single-quoted, and under `Policy::hsts` a plain-http page can no longer
+write to the app.
 `corten build --profile-from` makes a profile-guided release build, which the image `corten new`
 writes can use. Apps need Rust 1.89 or later and, with scripts, TypeScript 6.0 or later;
 `corten-cluster` apps move to async-nats 0.53. Entries about `bench/` and CI change nothing an app
@@ -80,6 +84,14 @@ builds against.
   filled too, within the request's deadline, including a replacement page made with a
   retained request head after the route answers ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
 
+- **Breaking:** `corten check` refuses a missing or stale `Cargo.lock` before formatting or
+  compiling and keeps lint, build and tests locked. Run `cargo build` or `corten dev`, then commit
+  the lock (at the workspace root for workspace members). `corten new` writes the app's lock and
+  `corten ui add` updates it when it adds `corten-ui`, so `corten check` passes straight after
+  either. The starter and example images build with `--locked` too, instead of resolving a different
+  graph during deployment.
+  [#1582 Require a fresh Cargo.lock in corten check and starter images](https://github.com/corten-run/corten/pull/1582)
+
 - **Breaking:** a component stylesheet's selector compiles only when the element it styles, or
   one that element is inside, has one of the file's classes, in every selector of the list and
   every matchable arm of an `:is()` or `:where()` that supplies the class. A class only in
@@ -111,6 +123,24 @@ builds against.
   `patch_or`, `invalid` and `invalid_with` keep their APIs; the plain-request debug guard still
   covers explicit mode overrides and raw marked responses.
 
+- **Breaking:** `corten-cluster` checks feed keys at creation, write and lookup. Corten's rule is
+  stricter than what the NATS broker accepts: it rejects names such as `a*b` and keys containing a
+  non-breaking space to follow the documented subject rules, excludes control characters, and caps
+  keys at 1,024 bytes so they fit NATS publish lines and Postgres indexes. Invalid keys return
+  `InvalidFeedKey` at `create_feed` and `begin`, and `None` at `Cluster::feed`. Subject prefixes
+  follow the same rules with a 255-byte limit. Startup also refuses custom NATS reply inbox prefixes
+  over 2,729 bytes at the default control-line limit. The relay logs and drops pending rows with
+  invalid legacy keys instead of stopping other feeds. No schema change; publish and acknowledgement
+  errors still retry. Rename a key or prefix 0.2.0 took that breaks the rule (nonempty dot-separated
+  tokens without whitespace, control characters, `*` or `>`), and build `corten_cluster::Options`
+  with `..Options::default()`, since it gains `max_control_line`.
+
+- **Breaking:** `#[derive(FromJson)]` rejects `#[serde(transparent)]` combined with `from`,
+  `try_from` or `into`, using serde's compile error messages. It also reports `from` and `try_from`
+  together as a conflict instead of an unsupported attribute, after checking that each conversion
+  has a string literal argument. A `transparent` type that also said `into` compiled under 0.2.0;
+  keep one of the two, as serde's derive requires.
+
 - **Breaking:** For tables using a copied kit `SortHeader` or a custom header with `rows::sort`, declare `let cell = refs();` in the table's component, replace `data-sort={value}` with `ref={cell.with(value)}` on the cell, and change that column's handler to `rows::sortByNumber(event, target, cell)` or `rows::sortByText(event, target, cell)`. Headers that sort by cell contents or on the server do not need to change. ComboBox search terms now use an internal typed ref; its Rust API is unchanged. The table kit entry below then adds the table's head after `target`, so the final call is `rows::sortByNumber(event, target, head, cell)` (`rows.js`: `event, link, head, cells`).
 
 - **Breaking:** `Types::components` now declares named `ToJson` handler arguments and their
@@ -127,6 +157,16 @@ builds against.
   Set `async-nats = "0.53"` in the app's `Cargo.toml` so its client matches `Cluster::start`.
   Review the [async-nats 0.53 release notes](https://github.com/nats-io/nats.rs/releases/tag/async-nats%2Fv0.53.0)
   for changes to connection settings.
+
+- **Breaking:** a component stylesheet whose declaration value closes its delimiters out of order
+  (`calc(1px + 2px]`), or whose registered percentage's `initial-value` is escaped, compiled under
+  0.2.0 and is now refused: close each `(`, `[` and `{` in order, and write the percentage plainly
+  (`50%`). Share CSS tokenization between component stylesheet compilation and the startup
+  custom-property check. Preserve URL payloads and comment boundaries, reject mismatched delimiters,
+  and enforce registered-property priority after nested rules. Reject escaped percents as percentage
+  initial values. Check declarations directly in `@scope`, reads in recognized container size
+  features and page margin boxes, and recognize registrations after a static stylesheet's UTF-8 BOM.
+  `var()` lookups with fallbacks are optional even when the name is brace-wrapped.
 
 - **Breaking:** Update a copied table kit with `corten ui add --merge table`. For client sorting, pass the two typed `SortLinks` refs to each `SortHeader` as `links`, bind `on:ReadSortLinks={rows::read(event, up, down)}` on the referenced `<thead>`, and pass that head to `rows::sort*` after `target`. `ordered::send` and `ordered::link` still take table IDs and read the current routes even after a redraw. A custom header can wrap the sort link inside its cell. Without the route wiring, the built-in sort handlers leave the link alone. For server sorting or an independent custom handler, pass `links={None}`.
 
@@ -146,6 +186,12 @@ builds against.
 
 - **Breaking:** `corten build` refuses an argument it does not take. Before, it ignored every argument and built, so `corten build --release` or a misspelled flag passed as an ordinary build; a script that passes one now fails and says which.
   Drop the argument: `corten build` is already a release build, and it takes Cargo's `--features` (`-F`), `--all-features`, `--no-default-features`, `--locked`, `--package` (`-p`) and `--bin`, and `--profile-from` ([deploy guide](https://github.com/corten-run/corten/blob/main/docs/guide/deploy.md#a-profile-guided-build)).
+
+- **Breaking:** Builds now reject a literal `html!` sent as a whole patch when its top-level
+  elements show that a browser would drop or wrap a sibling, such as a table row after a paragraph.
+  Request method bounds are unchanged, and debug builds still check composed patches when sent. Send
+  each part such a patch loses in a patch of its own, or start the patch with its table part (a
+  `<p>` after a first `<tr>` is kept).
 
 - **Breaking:** `corten check` no longer uses a local Corten checkout's own TypeScript for an app built against that checkout. If your app relied on it, install TypeScript 6.0 or later in the app or on the PATH. ([#1475 The benchmark harness holds the root TypeScript at 5.9.3 although 6.0.3 has the same classic API, so corten check carries a checkout-only compiler lookup to step around it](https://github.com/corten-run/corten/issues/1475))
 
@@ -179,7 +225,14 @@ builds against.
   duplicate attribute and a hand-written `data-key` need no context and are refused anywhere.
   Every refusal assumes the output is drawn where a browser reads tags: a component written into
   script text a caller left open is not supported. This is not a complete HTML validator
-  ([views](docs/guide/views.md)).
+  ([views](https://github.com/corten-run/corten/blob/v0.3.0/docs/guide/views.md)).
+
+- **Breaking:** an option given twice to a `corten` command (`--name`, `--corten-path`, `--port`) is
+  refused instead of taking the first; give each option once. Every `corten` command accepts
+  `--help` and `-h`, printing its own usage and exiting successfully without running the command;
+  `corten help <command>` prints the same and refuses an unknown command. `corten check` reports
+  each step and its elapsed time on stderr, including in redirected logs, while preserving Cargo's
+  output.
 
 - **Breaking:** a view that could be a patch (each top-level element has an `id={..}`) in a shape
   the runtime's parse loses wherever it is written no longer compiles: a table part (`<tr>`,
@@ -192,10 +245,46 @@ builds against.
   Send the table part inside the `<table>`, the `<col>`s in a `<colgroup>` with an id, or the rest
   in a patch of its own. Every other shape depends on what the patch began with or where the view
   is written (a `<p>` and a `<tr>` after it are kept after a first `<tr>`, and an `<svg>` keeps a
-  `<form>` of fields after a `<tr>`), so it still compiles and the debug check below finds it
-  when it is sent
+  `<form>` of fields after a `<tr>`), so a view in such a shape still compiles; sent whole as a
+  patch, a literal `html!` whose own top-level elements show the loss is refused when the app is
+  built (the whole-patch entry above), and the debug check below finds the rest when it is sent
   ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409),
-  [design Choice 54](docs/design.md#choice-html-parse-refusals)).
+  [design Choice 54](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-html-parse-refusals)).
+
+- **Breaking (debug builds only):** A debug build refuses a patch the browser would lose part of:
+  the runtime parses a patch as a `<template>`'s content, where the first top-level element (other
+  than a head's, such as a `<script>` or `<template>`; Chromium and WebKit let a leading `<title>`,
+  `<base>`, `<basefont>`, `<bgsound>` or `<noframes>` decide) decides how the rest is read, so a
+  table row, cell or other table part beside another element was dropped (or a `<table>` or `<form>`
+  after a row taken apart) with only a console error about the next element. `action.patch`,
+  `req.patch_or`, `req.invalid` and `form.draw` now answer it with a 500, and a `corten::live`
+  fragment panics, naming the element lost and the one that came first, so an app's own debug-build
+  tests that draw such a patch now fail; a patch with a token the check does not read as the browser
+  does, whether `html!` writes it or markup placed with `raw` does (an end tag left out, written
+  otherwise than `</name>` or that closes no element open; an HTML start tag ending `/>`; a comment
+  a browser ends elsewhere than at its `-->`; a CDATA section outside an `<svg>` or `<math>` or not
+  ended; a doctype other than `<!DOCTYPE html>`; where text decides, a named character reference it
+  does not decode, and text in a table holder or after a first `<col>`; an element HTML's wherever
+  it lands written straight in an `<svg>` or `<math>`; a script whose text a `<!--` and a `<script`
+  carry past its first `</script>` and over an element; in a form a table's reading empties, any
+  token before what it holds but a comment; a start tag the patch ends in; an HTML `<image>`,
+  `<plaintext>`, `<noscript>`, `<html>`, `<body>`, `<head>`, `<frame>` or `<frameset>`; after a
+  first table part, a `<template>` in an SVG or MathML integration point, past which Firefox reads
+  the rest as a body's; an element the browser does not put where it is written, such as a table
+  part outside a table, a `<div>` in a `<p>` or an `<a>` in an `<a>`; the full list is Limit 2), is
+  checked up to there and sent, with a warning naming where it stopped. A release build sends what
+  it sent before; only `corten dev`'s check that each `data-vars` has a style rule, which reads
+  start tags with the same code, now reads them as the browser's tokenizer does (whitespace around
+  `=`, a `/` not before the `>`, names past ASCII, and the text of an `<xmp>`, `<iframe>`,
+  `<noembed>` or `<noframes>`), which only markup placed with `raw` writes. Send the part the
+  browser loses in a patch of its own, or inside the element that holds it (a row in its `<table>`)
+  ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
+
+- **Breaking:** `patch` takes `TrustedHTML`, not a string, so `corten check` refuses markup the
+  browser's Trusted Types enforcement would reject. The scripts guide shows how to read a part again
+  with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`. A script that
+  passed `patch` a string, which the browser already refused at run time, reads the part again one
+  of those ways; a test passes a `TrustedHTML` from a policy the page allows.
 
 - **Breaking:** `FeedUrl<Row>` now requires `Row` to resolve to the declarations `corten::types` generates
   (`import("../types/app").Row`), as `ScreenUrl<Data>` does. A local typedef, an import from
@@ -237,7 +326,7 @@ builds against.
 - **Breaking:** Raise the minimum supported Rust from 1.88 to 1.89 so `corten-cluster` and
   listings-feed can use async-nats 0.52. It fixes a received header containing a carriage
   return panicking the subscriber's connection task; 0.51 also fixes JetStream hangs and
-  spurious missing-heartbeat errors. [Choice 51](docs/design.md#choice-msrv) records when the
+  spurious missing-heartbeat errors. [Choice 51](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-msrv) records when the
   floor moves and why SQLx stays on 0.8.
   Build the app with Rust 1.89 or later.
 
@@ -282,7 +371,7 @@ builds against.
   against `main`: the runtime is 107 bytes larger raw, 21 with gzip and 24 with brotli;
   card-market's item page, whose 22 listing rows (on average) each give a value, is 418 bytes larger
   and takes about 930 instructions more to render (2.4%); a page whose elements give no value is
-  unchanged, to the instruction ([design Choice 46](docs/design.md#choice-ref-values)). An integer
+  unchanged, to the instruction ([design Choice 46](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-ref-values)). An integer
   handler argument is now written as markup writes a number, with the same digits as before.
   **Breaking:** `data-ref-value` is printed by Corten, as `data-ref` is, so markup that writes it by
   hand no longer compiles; give the value with the element's ref. A spread of pairs (`{..attrs}`)
@@ -327,7 +416,30 @@ builds against.
   now carries in its fourth type parameter whether its elements have keys (`Keyed` or `NoKey`),
   fixed by the markup as its value's kind is
   ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
-  [design Choice 46](docs/design.md#choice-ref-values)).
+  [design Choice 46](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-ref-values)).
+
+- **Breaking (debug builds only):** Debug builds stop a render in which two elements of a ref in one
+  render of its component have keys the browser reads as equal (`key={true}` and `key=""` are one,
+  and so are a carriage return and a line feed), or a `key={..}` writes none (`None`), since the
+  `Map` would hold one entry for them. Whether it runs is `corten-run`'s debug-assertions setting,
+  for every crate's markup. Release builds do not check, and the runtime is unchanged. Give each
+  element of a keyed ref a key of its own that writes a value. The check counts the elements the
+  runtime finds. It leaves out a `<template>`'s or a `<noscript>`'s content, and what an expression
+  or a component writes into an element a browser reads as text (a `<textarea>`, `<title>`,
+  `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` outside an `<svg>` or in its `<foreignObject>`,
+  `<desc>` or `<title>`). It leaves out a key written with a reference Corten does not write (an
+  app's own `AttrValue`). Where the markup cannot know how a browser parses it, it lets a duplicate
+  pass: in a `<template>` or an element read as text at the top of a component's markup, which its
+  parent may write into an `<svg>`, and among a component's children, which the component may write
+  in an `<svg>`'s `<desc>` (unless they are in an `<svg>` of the children's own). Keys a view writes
+  into a string of its own (`html! { .. }.to_html()` or `children.to_html()` as an attribute's
+  value) are not its component's. A document's head tags, each copied into the page, are not checked
+  against each other or the body.
+
+- **Breaking:** A spread of attribute pairs now skips `data-key`, as it skips `data-ref` and
+  `data-ref-value`: a key is `key={..}`'s to write. A `data-key=".."` written by hand beside a ref
+  is still taken as its key, a known limit: `html!` does not yet refuse it as it refuses `data-ref`.
+  Write a key a spread carried as `key={..}` on the element.
 
 - **Breaking:** a component that puts a parent's ref on elements with a key names the ref's type
   `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` where it wrote
@@ -342,7 +454,7 @@ builds against.
   `<title>` included, in a `<math>`, and in its `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (where
   a `<mglyph>` or a `<malignmark>` stays MathML's) and an `<annotation-xml>` whose first
   `encoding` is `text/html` or `application/xhtml+xml`
-  ([design Choice 54](docs/design.md#choice-html-parse-refusals)). An element inside a `<textarea>`, `<title>` (a `<title>` nested in an
+  ([design Choice 54](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-html-parse-refusals)). An element inside a `<textarea>`, `<title>` (a `<title>` nested in an
   SVG `<title>` too), `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` was text to the browser:
   put the element beside it, or write text meant to show tags as a string (`"<b>"`). An element
   inside a `<script>` or a `<style>`: behavior goes in a `#[component(js)]`, styles in the
@@ -358,7 +470,7 @@ builds against.
   drawing or the formula and holds elements. At the top of a component's markup, among a
   component's children and in an `<annotation-xml>` whose `encoding` an expression or a spread may
   write first, where the markup does not show how they are parsed, none of this is refused until
-  an element of the markup shows the context ([design Limit 30](docs/design.md#limit-markup-context)).
+  an element of the markup shows the context ([design Limit 30](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#limit-markup-context)).
 
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
@@ -369,7 +481,7 @@ builds against.
   then answer the mode it wrote, are not checked). Before, any route compiled, and one whose handler answered its page left
   the part as it was with an error in the console, found only when the page ran; now that route,
   or a `patches` route whose `get` handler may answer a page or a redirect, does not compile, at
-  the call or at the handler's name ([design Choice 50](docs/design.md#choice-patch-routes)). A
+  the call or at the handler's name ([design Choice 50](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-patch-routes)). A
   route given by hand (a `#[derive(Route)]` struct) is never one, and a `patches` route mounted
   by hand (`Area::route`, `Api::route`) takes only a `get` handler that returns
   `HtmlResult<Patches>`: `get(h)` carries what `h` answers (`Methods<S, Patches>`), and
@@ -438,7 +550,7 @@ builds against.
   here); the deploy guide says how to build one from access logs that leaves out
   `status = 501 AND method not in the app's served methods`, which hides neither the app's own
   501s to a method it serves nor any other 5xx, and that an app with an `any` route has nothing
-  to leave out ([Deploying](docs/guide/deploy.md#monitoring)). A method
+  to leave out ([Deploying](https://github.com/corten-run/corten/blob/v0.3.0/docs/guide/deploy.md#monitoring)). A method
   some route has, and `GET`, `HEAD` and `OPTIONS` always, are still a 405 with `Allow` where the
   route lacks them; an app with an `any` route (a relay) implements every method, so it answers no
   501; an unknown URL is still a 404 whatever the method, and so is a `CONNECT` to a host and port
@@ -456,7 +568,7 @@ builds against.
   within 2), an unstaged route and a 404 move by 1 to 3 instructions and a page route by 182
   fewer, all in the allocator; a 405 costs 28 to 29 more, and a `PROPFIND` that was a 405 costs
   355 to 481 more as a 501, which allocates the router's marker
-  ([design Choice 25](docs/design.md#choice-axum-router), migration step 1)
+  ([design Choice 25](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-axum-router), migration step 1)
   ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
 
 - **Breaking:** `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
@@ -490,6 +602,24 @@ builds against.
   any other connection, and end idle ones in the route (a deadline from the last frame heard, with
   pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
   ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
+
+- **Breaking:** `data-on` is written single-quoted, so the JSON of a handler's arguments keeps its
+  quotes and only `&`, `'`, `<` and `>` in it are entities. A large `ToJson` argument, the data a
+  script searches or sorts in the browser, stays a typed handler argument and costs about its JSON's
+  size: 300 products (51,073 bytes of JSON) went from an attribute of 96,130 bytes to one of 51,130,
+  5,302 bytes with zstd against 6,265, and Chromium, Firefox and WebKit parsed such a page in about
+  9 to 23% of the time, four to twelve times faster (Chromium 235 to 323 µs against 1,401 to 1,616,
+  Firefox 120 to 130 against 1,240 to 1,390, WebKit 390 to 480 against 2,620 to 3,500, measured; the
+  ends of each engine's ranges paired, from Firefox's 120 against 1,390 to Chromium's 323 against
+  1,401). Formats and messages a page passes to a script shrink the same way. The `data-on` format,
+  the runtime and the typing are unchanged; a test or tool that matched `data-on="` or `&quot;` in a
+  page's text matches `data-on='` and `"` now, and a `corten` and a `corten-macros` from either side
+  of the change do not build together, since a message's text is written for one attribute or the
+  other: update such a test or tool, and take `corten` and `corten-macros` at the same version. This
+  is why the release is 0.3.0, not 0.2.x: Cargo would take a 0.2.x `corten-macros` for an app that
+  holds `corten-run` at 0.2.0, and that app would fail to build. The data block the issue asks for
+  is left open
+  ([#1253 A script's data can only reach it as a handler argument in an attribute, so a large ToJson list grows about 55% from escaped quotes](https://github.com/corten-run/corten/issues/1253)).
 
 - A patch answered by a handler in an area (`Area::components`) brings the area's stylesheet:
   the answer links its handler's section stylesheets after its elements, as a navigation's
@@ -549,6 +679,22 @@ builds against.
   `..` text of its own (`/sitemap/{page}.xml`), and refuse `.`, `..` and empty values where the app
   accepts a value it later links by.
 
+- **Breaking:** `#[derive(FromJson)]` reads its `#[serde(..)]` once, and writes its reader and the
+  `Deserialize` it falls back to from that one reading, as Choice 26 says. A `transparent` struct is
+  read as its one field that is neither skipped, defaulted nor a `PhantomData`, the field serde
+  reads, so one beside a `PhantomData` or a defaulted field compiles and reads as serde's derive
+  reads it, where before the reader's stricter rule refused it. A `PhantomData` is told by the field
+  type's path, as serde_derive tells it: `<X as Tr>::PhantomData` is one, and a `&PhantomData<T>` or
+  `*const PhantomData<T>` is not, so beside another read field it is refused as serde refuses it. A
+  transparent struct whose one read field is a path ending in `PhantomData`
+  (`<X as Tr>::PhantomData`), which compiled before, is now refused as serde refuses it: give such a
+  struct a field serde reads, or drop `transparent`. Each other attribute it refused is still a
+  compile error, some with reworded messages: a `rename` or `rename_all` that is not one string now
+  asks for one name (or rule) for reading and writing, as `Fields` does, and a transparent struct
+  with no field to read or more than one gives serde_derive's message. `corten-macros` is 87 lines
+  shorter (measured: line count)
+  ([#1224 #[derive(FromJson)] reads its serde attributes twice, so a transparent struct serde accepts (beside a PhantomData or a defaulted field) does not compile, though Choice 26 says one reading](https://github.com/corten-run/corten/issues/1224)).
+
 - **Breaking:** A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
   `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and
   `slot` are classes of the file (`class={Slot}`). Before, the prelude was copied as written, so
@@ -561,6 +707,33 @@ builds against.
   ([#1237 A component stylesheet's @scope prelude is copied unprefixed, so @scope (.list) matches nothing and its rules never apply, and it compiles](https://github.com/corten-run/corten/issues/1237)). To upgrade, give each
   `@scope` a root, such as one of the file's classes (`@scope (.list)`), and put a pseudo-element
   in a rule inside the block rather than in its root or limit.
+
+- **Breaking:** A write or a WebSocket handshake with no `Sec-Fetch-Site` (every handshake from
+  Chromium and Firefox) is checked against `Host` by its name and port, and under `Policy::hsts` its
+  scheme, where only what followed `://` was compared: under `Policy::hsts` the `Origin` must be
+  `https` or loopback, so a plain-http page on the app's host can no longer open a socket to the
+  HTTPS app (with the user's `Secure` cookies) or post to it. Browsers send `Sec-Fetch-Site` only to
+  secure origins, so an app with `hsts` now refuses every write and handshake from a plain-http page
+  other than loopback, in every browser, the app itself reached as `http://192.168.1.5` included;
+  one served that way must not set `hsts`. A default port is the same written or left out
+  (`https://app.example` matches `Host: app.example:443`), also for the plain notice cookie, and an
+  origin of another scheme (`capacitor://localhost`) is refused. Without `hsts` the scheme is still
+  not compared, since behind a proxy that ends TLS the app cannot tell which it is served over
+  ([design Limit 26](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#limit-origin-scheme)); the deploy guide's checklist says to set
+  `hsts` for an app served only over HTTPS even when the proxy sends the header. An app that takes
+  writes or sockets from an origin of another scheme lists it with `Policy::allow_origin`
+  ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
+
+- **Breaking:** The MCP endpoint (`agent::Tools`) answers a request whose `MCP-Protocol-Version`
+  header names a revision it does not speak, or that sends the header twice, with `400 Bad Request`,
+  as MCP 2025-06-18 and 2025-11-25 require: a JSON-RPC error with no `id` (`-32600`, its `data` the
+  revisions it speaks and the one requested), checked before the token, or for a body that is not
+  JSON or a batch, the same error as without the header. It answered such a request as one of its
+  own revisions, with a 200. A request without the header is still read as 2025-03-26, and an
+  `initialize` request (with an `id`), sent before a revision is agreed, is answered whatever the
+  header names. A client on another revision (2024-11-05 among them) sends one
+  `agent::PROTOCOL_VERSIONS` lists, or no header; the app has nothing to change
+  ([#1231 The MCP endpoint ignores the MCP-Protocol-Version header, so a request naming a revision Corten does not speak gets a 200 where both revisions it lists require a 400](https://github.com/corten-run/corten/issues/1231)).
 
 ### Other changes
 
@@ -658,14 +831,6 @@ builds against.
   without renaming global options or treating them as registered custom properties. Document
   the component CSS at-rule inventory, including raw bodies and global names.
 
-- `corten check` refuses a missing or stale `Cargo.lock` before formatting or compiling and
-  keeps lint, build and tests locked. Run `cargo build` or `corten dev`, then commit the lock
-  (at the workspace root for workspace members). `corten new` writes the app's lock and
-  `corten ui add` updates it when it adds `corten-ui`, so `corten check` passes straight after
-  either. The starter and example images build with `--locked` too, instead of resolving a
-  different graph during deployment.
-  [#1582 Require a fresh Cargo.lock in corten check and starter images](https://github.com/corten-run/corten/pull/1582)
-
 - Parse `Accept-Language` and `Accept-Encoding` weights with the same RFC 9110 qvalue
   grammar (0 to 1, at most three decimals). Ignore items with malformed or repeated weights instead of
   accepting float syntax or treating a malformed compression weight as `1`. Ignore apparent
@@ -683,24 +848,9 @@ builds against.
 - Document and test that `Json<T>` reports the same field path in a 422 with the derived
   and serde-only readers.
 
-- `corten-cluster` checks feed keys at creation, write and lookup. Corten's rule is stricter
-  than what the NATS broker accepts: it rejects names such as `a*b` and keys containing a
-  non-breaking space to follow the documented subject rules, excludes control characters, and
-  caps keys at 1,024 bytes so they fit NATS publish lines and Postgres indexes. Invalid keys
-  return `InvalidFeedKey` at `create_feed` and `begin`, and `None` at `Cluster::feed`.
-  Subject prefixes follow the same rules with a 255-byte limit. Startup also refuses custom
-  NATS reply inbox prefixes over 2,729 bytes at the default control-line limit. The relay
-  logs and drops pending rows with invalid legacy keys instead of stopping other feeds.
-  No schema change; publish and acknowledgement errors still retry.
-
 - Put unreleased changelog entries in separate files so pull requests no longer conflict over
   the changelog. Release preparation collects and removes those files; a release cannot ship
   with entries still pending.
-
-- `#[derive(FromJson)]` rejects `#[serde(transparent)]` combined with `from`, `try_from`
-  or `into`, using serde's compile error messages. It also reports `from` and `try_from`
-  together as a conflict instead of an unsupported attribute, after checking that each conversion
-  has a string literal argument.
 
 - Remove two unused workspace dependency entries and have Cargo 1.100 or later wait three days
   before selecting newly published dependency versions in the Corten checkout; `corten new` does
@@ -766,14 +916,6 @@ builds against.
 
 - Keep `Failure` exhaustive so an app's error page notices new variants at compile time.
   Use `Failure::default_text()` for Corten's default title and message in your own layout.
-
-- Share CSS tokenization between component stylesheet compilation and the startup
-  custom-property check. Preserve URL payloads and comment boundaries, reject
-  mismatched delimiters, and enforce registered-property priority after nested
-  rules. Reject escaped percents as percentage initial values. Check declarations directly
-  in `@scope`, reads in recognized container size features and page margin boxes, and
-  recognize registrations after a static stylesheet's UTF-8 BOM.
-  `var()` lookups with fallbacks are optional even when the name is brace-wrapped.
 
 - Fix the listings-feed failover benchmark so it can kill and restart instances.
 
@@ -852,10 +994,6 @@ builds against.
 
 - `corten build --profile-from <command>` builds the release binary with a profile of the app at work: it builds an instrumented copy under `target/corten-profile`, starts it on a free port, runs `<command>` with that port in `PORT` to send it requests, stops the copy with `SIGTERM`, merges the profile it wrote with the toolchain's `llvm-profdata` (`rustup component add llvm-tools`), and builds `target/release` with it. `target/release` never holds the instrumented copy, and a step that fails leaves it as it was. The build is refused before its first step on a system that is not Unix, while another profiled build runs in the same target directory, when the command is not there or the toolchain lacks `llvm-profdata`, and when a Cargo configuration sets `rustflags` (or includes another file) while neither `RUSTFLAGS` nor `CARGO_ENCODED_RUSTFLAGS` is set, since the profile's flag would replace them.
 
-- Builds now reject a literal `html!` sent as a whole patch when its top-level elements show that
-  a browser would drop or wrap a sibling, such as a table row after a paragraph. Request method
-  bounds are unchanged, and debug builds still check composed patches when sent.
-
 - Find older releases from the changelog's archive links and scan shorter notes for new changes.
   ([#1717 Changelog entries run to design-note length, so CHANGELOG.md grows far faster than the changes it lists](https://github.com/corten-run/corten/issues/1717);
   [#1718 CHANGELOG.md keeps every release in one file; move released sections to per-version files at release](https://github.com/corten-run/corten/issues/1718))
@@ -888,13 +1026,13 @@ builds against.
 
 - Corten needs tokio 1.44 or later ([#1756 send timeout over TLS](https://github.com/corten-run/corten/pull/1756)).
 
-- `corten build` passes Cargo's `--features` (`-F`), `--all-features`, `--no-default-features`, `--locked`, `--package` (`-p`) and `--bin`, given before `--profile-from`, to each build it runs, so a profiled release can have features, a package, one binary or the lock ([#1759](https://github.com/corten-run/corten/pull/1759)). Any other argument is still refused.
+- `corten build` passes Cargo's `--features` (`-F`), `--all-features`, `--no-default-features`, `--locked`, `--package` (`-p`) and `--bin`, given before `--profile-from`, to each build it runs, so a profiled release can have features, a package, one binary or the lock ([#1759 Pass a closed list of Cargo arguments from corten build to each build it runs, so a profiled release can have features, a package, one binary or the lock](https://github.com/corten-run/corten/pull/1759)). Any other argument is still refused.
 
 - card-market's example image now builds with `cargo build --locked`, like the starter's and the other examples', so a missing or stale `Cargo.lock` fails the image build instead of being repaired inside it. [#1584 card-market's image and its paired bench recipe still build without --locked](https://github.com/corten-run/corten/issues/1584)
 
 - A flush that waited and then went through, with no write or close waiting, now ends its send-timeout wait, so a later write that waits gets its own `send_timeout` instead of closing at once. Only an app's own IO under `serve_wrapped` could hit this. [#1762 A flush or close that waits and then goes through leaves the send timeout's stall start set, so a later wait may be cut early](https://github.com/corten-run/corten/issues/1762)
 
-- The Dockerfile `corten new` writes builds the image's binary with a profile of the app at work when its build is given the app's script: `docker build --build-arg PROFILE_FROM=train.sh .`. Without the argument it builds as before ([deploying](https://github.com/corten-run/corten/blob/main/docs/guide/deploy.md#a-profile-in-the-image), [#1732](https://github.com/corten-run/corten/issues/1732)).
+- The Dockerfile `corten new` writes builds the image's binary with a profile of the app at work when its build is given the app's script: `docker build --build-arg PROFILE_FROM=train.sh .`. Without the argument it builds as before ([deploying](https://github.com/corten-run/corten/blob/main/docs/guide/deploy.md#a-profile-in-the-image), [#1732 The starter's Dockerfile builds its own binary without a profile, so an app deployed the documented way gains nothing from corten build --profile-from: decide where the command runs in an image build](https://github.com/corten-run/corten/issues/1732)).
 
 - The failover, edge and nodelay benchmarks now run nginx 1.31.9, pinned by digest, with earlier results keeping their versions; the deploy guide's nginx sample, unchanged, was rechecked on it. [#1765 The failover, edge and nodelay benchmarks and the deploy guide's nginx check run nginx 1.27 and 1.29, lines nginx no longer patches, while 1.31.9 is current](https://github.com/corten-run/corten/issues/1765)
 
@@ -951,7 +1089,7 @@ builds against.
 
 - Benchmark collection on the measured checkout now retains the wrapper and complete native
   output of a terminal failed group before retiring its host. Failed output never qualifies
-  as a benchmark result. See [benchmark fleet cleanup](https://github.com/corten-run/corten/issues/1832).
+  as a benchmark result. See [#1832 Benchmark fleet: failed r24 groups retain paid hosts after the wrapper archive is collected](https://github.com/corten-run/corten/issues/1832).
 
 - Once the kept `Public` pages are within an eighth of the bound, an answer is kept only when
   its URL was asked for before: a URL asked for once is not copied into the store, and a page's
@@ -1017,10 +1155,10 @@ builds against.
 - The matched Drogon marketplace adapter now serves strict response headers, honors configured hosts, and answers liveness without consulting the record source. Failed upstream page reads return HTML instead of an empty response ([#1300 Benchmark parity: Drogon in approved workload groups](https://github.com/corten-run/corten/issues/1300)).
 
 - Bounded live fan-out captures use the selected app's wire binding, fixing
-  [the fan-out capture error for Corten and ASP.NET](https://github.com/corten-run/corten/issues/1902).
+  [#1902 Live-delivery fan-out records `wire is not defined` for Corten and ASP.NET](https://github.com/corten-run/corten/issues/1902).
 
 - The live benchmark opens Chromium separately for each adapter. A lost browser stays a
-  [reported case failure](https://github.com/corten-run/corten/issues/1900) instead of also
+  reported case failure ([#1900 Live-delivery browser contexts are closed for Express, Phoenix and Rails in r32](https://github.com/corten-run/corten/issues/1900)) instead of also
   failing later adapters before their pages open. A cancelled round retains what actually ran
   for replay without treating unattempted cases as failures or qualifying the round.
 
@@ -1086,9 +1224,9 @@ builds against.
 - Benchmark collection preserves an acknowledged failed setup query and reports missing cleanup proof without repeating the query or deleting the host ([#1942 Failed-setup collection saves the r44 archive but leaves its idle paid host allocated](https://github.com/corten-run/corten/issues/1942)).
 
 - Bound the Next.js benchmark image's dependency install and log package fetches and npm errors.
-  [Marketplace r41 times out installing Next.js dependencies before any adapter reaches load testing](https://github.com/corten-run/corten/issues/1946).
+  [#1946 Marketplace r41 times out installing Next.js dependencies before any adapter reaches load testing](https://github.com/corten-run/corten/issues/1946).
 
-- New client-heavy builds use Remix 3.3.0, Svelte 5.59.1 and Vue 3.5.46. Solid 2 still lacks a compatible stable compiler for the benchmark. [Client-heavy dependency refresh](https://github.com/corten-run/corten/issues/1385)
+- New client-heavy builds use Remix 3.3.0, Svelte 5.59.1 and Vue 3.5.46. Solid 2 still lacks a compatible stable compiler for the benchmark. [#1385 bench/browser and client-heavy build Remix 3.0.0, Solid, Svelte and Vue a release behind, with @babel/core 7.28.5 carrying a published advisory](https://github.com/corten-run/corten/issues/1385)
 
 - The marketplace benchmark times one localized page mix and one neutral JSON endpoint per source. All three locales still have to pass correctness checks. Earlier per-locale timings remain separate
   ([#1952 Time one rotating localized marketplace page per source](https://github.com/corten-run/corten/pull/1952)).
@@ -1233,11 +1371,6 @@ builds against.
   (`raw("<table>")` keeps the row after it); the debug check reads them when sent. One inside
   the lost top-level element itself does not save it (`<table id={..}>{text}</table>` after a
   first row, or a row holding an expression after a first `<table>`, is still refused).
-- Every `corten` command accepts `--help` and `-h`, printing its own usage and exiting
-  successfully without running the command; `corten help <command>` prints the same and refuses an
-  unknown command. An option given twice (`--name`, `--corten-path`, `--port`) is refused instead of
-  taking the first. `corten check` reports each step and its elapsed time on stderr, including in
-  redirected logs, while preserving Cargo's output.
 - The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
   `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
 - Document script testing without runtime stubs: import-free shared logic in Node, including
@@ -1259,7 +1392,7 @@ builds against.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
-- Give maintainers one [release runbook](RELEASING.md) for deciding readiness, shipping urgent and
+- Give maintainers one [release runbook](https://github.com/corten-run/corten/blob/v0.3.0/RELEASING.md) for deciding readiness, shipping urgent and
   security patches, publishing, verifying public packages and binaries, and recovering from failed
   releases.
 - The catalog benchmark uses a fixed two-worker upstream within its existing CPU
@@ -1353,41 +1486,8 @@ builds against.
   and quiescence proofs, separate reviewed approval and single-delete confirmation.
   This is cleanup eligibility, not benchmark validation or permission to stop a run.
 
-- A debug build refuses a patch the browser would lose part of: the runtime parses a patch as a
-  `<template>`'s content, where the first top-level element (other than a head's, such as a
-  `<script>` or `<template>`; Chromium and WebKit let a leading `<title>`, `<base>`,
-  `<basefont>`, `<bgsound>` or `<noframes>` decide) decides how the rest is read, so a table
-  row, cell or other table part beside another element was dropped (or a `<table>` or `<form>`
-  after a row taken apart) with only a console error about the next element. `action.patch`,
-  `req.patch_or`, `req.invalid` and `form.draw` now answer it with a 500, and a `corten::live`
-  fragment panics, naming the element lost and the one that came first, so an app's own
-  debug-build tests that draw such a patch now fail; a patch with a token the check does not read
-  as the browser does, whether `html!` writes it or markup placed with `raw` does (an end tag left
-  out, written otherwise than `</name>` or that closes no element open; an HTML start tag ending
-  `/>`; a comment a browser ends elsewhere than at its `-->`; a CDATA section outside an `<svg>`
-  or `<math>` or not ended; a doctype other than `<!DOCTYPE html>`; where text decides, a named
-  character reference it does not decode, and text in a table holder or after a first `<col>`; an
-  element HTML's wherever it lands written straight in an `<svg>` or `<math>`; a script whose text
-  a `<!--` and a `<script` carry past its first `</script>` and over an element; in a form a
-  table's reading empties, any token before what it holds but a comment; a start tag the patch
-  ends in; an HTML `<image>`, `<plaintext>`, `<noscript>`, `<html>`, `<body>`, `<head>`,
-  `<frame>` or `<frameset>`; after a first table part, a `<template>` in an SVG or MathML
-  integration point, past which Firefox reads the rest as a body's; an element the browser does
-  not put where it is written, such as a table part outside a table, a `<div>` in a `<p>` or an
-  `<a>` in an `<a>`; the full list is Limit 2), is checked up to there and sent, with a warning
-  naming where it stopped. A release build sends what it sent before; only `corten dev`'s check
-  that each `data-vars` has a style rule, which reads start tags with the same code, now reads them
-  as the browser's tokenizer does (whitespace around `=`, a `/` not before the `>`, names past
-  ASCII, and the text of an `<xmp>`, `<iframe>`, `<noembed>` or `<noframes>`), which only markup
-  placed with `raw` writes
-  ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
-
 - Preserve type-token punctuation in `#[derive(Fields)]`, so group, row and key types
   written as paths compile, including keys of `#[fields(map)]` fields.
-
-- `patch` takes `TrustedHTML`, not a string, so `corten check` refuses markup the browser's
-  Trusted Types enforcement would reject. The scripts guide shows how to read a part again
-  with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`.
 
 - Form controls named `parentElement`, `parentNode` or other DOM members no longer hang
   patching or stand in for the form's members that the runtime (patches, navigation),
@@ -1515,7 +1615,7 @@ builds against.
   `<input type="date">`, or a `LocalDateTime`), and `day.start(zone)` is where a day begins in a
   zone: the first instant its clock reads the day, as Temporal's `startOfDay` gives, which where
   the clocks skip midnight is the change, even one that starts the day before (Toronto's day of
-  1919-03-31 began at `00:30`) ([design Choice 59](docs/design.md#choice-local-date-time)).
+  1919-03-31 began at `00:30`) ([design Choice 59](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-local-date-time)).
 
 - `Visitor` (`req.zone()`) gives the offset before a change of the clocks up to the change itself
   before 1970 too: jiff looks an instant up by its second toward zero, which before 1970 is the
@@ -1669,7 +1769,7 @@ builds against.
 - A page's several writes are named posts of its own route, `#[route("/inventory", get = show,
   post(price) = set_price, post(photo) = add_photo)]`, so a screen with several writes declares
   its query set once instead of on a route per write to redirect back to the same view
-  ([#1403](https://github.com/corten-run/corten/issues/1403)). The routes module gives the route a
+  ([#1403 A screen with several write actions declares its query set on a route per action, 53 times in the tcgplayer port, to redirect back to the same view](https://github.com/corten-run/corten/issues/1403)). The routes module gives the route a
   method per name, `action={at.price()}` or a button's `formaction={at.photo()}`, whose address is
   the page's own with `do=price`; the router chooses the handler from the address alone, so a
   urlencoded form and a multipart upload are chosen alike and the handler's extractor still owns
@@ -1762,7 +1862,7 @@ builds against.
   changing launch, settlement, lock or cleanup gates.
 
 - Record RUSTSEC-2026-0459 in auction-room's bundled SQLite as an explained exception
-  ([Choice 51](docs/design.md#choice-msrv)): it needs a database file a less trusted party
+  ([Choice 51](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-msrv)): it needs a database file a less trusted party
   wrote, and the example opens only the file its operator names in `DATABASE_URL`, never a
   user-supplied one.
 
@@ -1782,7 +1882,7 @@ builds against.
 
 - Link to [corten.run](https://corten.run) from the README's introduction.
 
-- Record [Choice 49](docs/design.md#choice-release-verification): verify release archives with
+- Record [Choice 49](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-release-verification): verify release archives with
   GitHub artifact attestations and `SHA256SUMS`, without a minisign signing key. Binstall users
   follow the documented manual check before installing the binary.
 
@@ -1817,7 +1917,7 @@ builds against.
   count, and the control is looked for again in `<main>` only when nothing under its ancestor
   matches. A matching field that switches to or from `type="hidden"` across the swap now counts as
   inserted or removed, so focus may be left unrestored or go to another field; give the control
-  its own id ([Limit 28](docs/design.md#limit-keep-place-identity))
+  its own id ([Limit 28](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#limit-keep-place-identity))
   ([#1372 A data-keep-place navigation gives focus to a hidden input with the focused control's name and value: placeOf matches any input in main by index](https://github.com/corten-run/corten/issues/1372)).
 
 - Keep grouped cloud create actions with a numeric zero resource ID pending until
@@ -1844,7 +1944,7 @@ builds against.
   `Map<string, El>` takes only a keyed ref. A component's prop for a parent's keyed ref names it
   `Ref<El, NoRows, NoValue, Keyed>`; `Ref<El>` is `NoKey`
   ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
-  [design Choice 46](docs/design.md#choice-ref-values)).
+  [design Choice 46](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-ref-values)).
 - Bind native browser DOM evidence to bounded public reads, the actual document and
   network origin, with exact replay and separate semantic and apparatus lifetimes.
   Unsupported structure, private data, missing proof and uncertain cleanup remain
@@ -2231,26 +2331,6 @@ builds against.
 
 #### Changed
 
-- Debug builds stop a render in which two elements of a ref in one render of its component have
-  keys the browser reads as equal (`key={true}` and `key=""` are one, and so are a carriage
-  return and a line feed), or a `key={..}` writes none (`None`), since the `Map` would hold one
-  entry for them. Whether it runs is `corten-run`'s debug-assertions setting, for every crate's
-  markup. Release builds do not check, and the runtime is unchanged.
-- The check counts the elements the runtime finds. It leaves out a `<template>`'s or a
-  `<noscript>`'s content, and what an expression or a component writes into an element a browser
-  reads as text (a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>`
-  outside an `<svg>` or in its `<foreignObject>`, `<desc>` or `<title>`). It leaves out a key
-  written with a reference Corten does not write (an app's own `AttrValue`). Where the markup
-  cannot know how a browser parses it, it lets a duplicate pass: in a `<template>` or an element
-  read as text at the top of a component's markup, which its parent may write into an `<svg>`,
-  and among a component's children, which the component may write in an `<svg>`'s `<desc>`
-  (unless they are in an `<svg>` of the children's own). Keys a view writes into a string of its
-  own (`html! { .. }.to_html()` or `children.to_html()` as an attribute's value) are not its
-  component's. A document's head tags, each copied into the page, are not checked against each
-  other or the body.
-- A spread of attribute pairs now skips `data-key`, as it skips `data-ref` and `data-ref-value`:
-  a key is `key={..}`'s to write. A `data-key=".."` written by hand beside a ref is still taken
-  as its key, a known limit: `html!` does not yet refuse it as it refuses `data-ref`.
 - A `#[component]`'s own string (`to_html`, which a patch, a refused form's patch and a live
   fragment are rendered with when the view is a component) now starts at the size that component
   last rendered to, an eighth more and never below 256 bytes, as an `html!` call site's does,
@@ -2272,7 +2352,7 @@ builds against.
   overlaps the other build's, so no wall-time gain is established beyond the noise on that host;
   the instruction counts are the evidence.
   A patch whose handler is under an area with a stylesheet ends with that stylesheet's link
-  ([design Choice 47](docs/design.md#choice-patch-brings-area-styles)); a component patch's
+  ([design Choice 47](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-patch-brings-area-styles)); a component patch's
   string now starts with room for it (256 bytes against the watchlist's 88-byte link), so it no
   longer grows to hold the link, the about 510 instructions that Choice counts in its harness
   (reasoned from the sizes, not measured on the merged code).
@@ -2317,23 +2397,6 @@ builds against.
   when it was looked up by path (at `084db982` against `416882fa`, three runs each)
   ([#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)).
 
-- `data-on` is written single-quoted, so the JSON of a handler's arguments keeps its quotes and
-  only `&`, `'`, `<` and `>` in it are entities. A large `ToJson` argument, the data a script
-  searches or sorts in the browser, stays a typed handler argument and costs about its JSON's
-  size: 300 products (51,073 bytes of JSON) went from an attribute of 96,130 bytes to one of
-  51,130, 5,302 bytes with zstd against 6,265, and Chromium, Firefox and WebKit parsed such a page
-  in about 9 to 23% of the time, four to twelve times faster (Chromium 235 to 323 µs against
-  1,401 to 1,616, Firefox 120 to 130 against 1,240 to 1,390, WebKit 390 to 480 against 2,620 to
-  3,500, measured; the ends of each engine's ranges paired, from Firefox's 120 against 1,390 to
-  Chromium's 323 against 1,401). Formats and messages a page passes to a script shrink the same
-  way.
-  The `data-on` format, the runtime and the typing are unchanged; a test or tool that matched
-  `data-on="` or `&quot;` in a page's text matches `data-on='` and `"` now, and a `corten` and a
-  `corten-macros` from either side of the change do not build together, since a message's text is
-  written for one attribute or the other. This is why the release is 0.3.0, not 0.2.x: Cargo
-  would take a 0.2.x `corten-macros` for an app that holds `corten-run` at 0.2.0, and that app
-  would fail to build. The data block the issue asks for is left open
-  ([#1253 A script's data can only reach it as a handler argument in an attribute, so a large ToJson list grows about 55% from escaped quotes](https://github.com/corten-run/corten/issues/1253)).
 - The seven crates name `https://corten.run` as their `homepage` again, now that the site is
   served there
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
@@ -2415,22 +2478,6 @@ builds against.
   ones stay on the builder until `docker builder prune`
   ([#1345 The Dockerfile template's target cache has no id, so every app's build on a host waits for every other's](https://github.com/corten-run/corten/issues/1345)).
 
-- `#[derive(FromJson)]` reads its `#[serde(..)]` once, and writes its reader and the
-  `Deserialize` it falls back to from that one reading, as Choice 26 says. A `transparent` struct
-  is read as its one field that is neither skipped, defaulted nor a `PhantomData`, the field serde
-  reads, so one beside a `PhantomData` or a defaulted field compiles and reads as serde's derive
-  reads it, where before the reader's stricter rule refused it. A `PhantomData` is told by the
-  field type's path, as serde_derive tells it: `<X as Tr>::PhantomData` is one, and a
-  `&PhantomData<T>` or `*const PhantomData<T>` is not, so beside another read field it is refused
-  as serde refuses it. A transparent struct whose one read field is a path ending in
-  `PhantomData` (`<X as Tr>::PhantomData`), which compiled before, is now refused as serde
-  refuses it. Each other attribute it refused is still a compile error, some with reworded
-  messages: a `rename` or `rename_all` that is not one string now asks for one name (or rule)
-  for reading and writing, as `Fields` does, and a transparent struct with no field to read or more
-  than one gives serde_derive's message. `corten-macros` is 87 lines shorter (measured: line
-  count)
-  ([#1224 #[derive(FromJson)] reads its serde attributes twice, so a transparent struct serde accepts (beside a PhantomData or a defaulted field) does not compile, though Choice 26 says one reading](https://github.com/corten-run/corten/issues/1224)).
-
 - A `data-patch` submit answered with a bare `204 No Content` (the `StatusCode::NO_CONTENT` the
   server's docs give for a write with nothing to say) or `205 Reset Content` is the submit done
   with nothing to draw (RFC 9110, 15.3.5 and 15.3.6): no `corten:error`, so corten-ui's `Toaster`
@@ -2448,7 +2495,7 @@ builds against.
 - A slow part a `<corten-live>` stream sends once had no answer without JavaScript: the browser
   opens no stream, so its placeholder stayed for good, as it did when a stream gave up. The live
   data guide's slow-part pattern and
-  [design Choice 44](docs/design.md#choice-slow-part-link) now give it one with what routes
+  [design Choice 44](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-slow-part-link) now give it one with what routes
   already do: the placeholder holds a link (`rel="nofollow"`) to the page's own route with a query
   field that has its handler read the part in (`url::Home { picks: Some(true) }`), so an app
   writes no second route per part, at the cost of one field plus one handler branch per page.
@@ -2478,37 +2525,14 @@ builds against.
   and a request costs the same instructions; a listener of the app's own keeps its choice (design
   Choice 41, `bench/nodelay`)
   ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
-- A write or a WebSocket handshake with no `Sec-Fetch-Site` (every handshake from Chromium and
-  Firefox) is checked against `Host` by its name and port, and under `Policy::hsts` its scheme,
-  where only what followed `://` was compared: under `Policy::hsts` the `Origin` must be `https` or
-  loopback, so a plain-http page on the app's host can no longer open a socket to the HTTPS app
-  (with the user's `Secure` cookies) or post to it. Browsers send `Sec-Fetch-Site` only to secure
-  origins, so an app with `hsts` now refuses every write and handshake from a plain-http page other
-  than loopback, in every browser, the app itself reached as `http://192.168.1.5` included; one
-  served that way must not set `hsts`. A default port is the same written or left out
-  (`https://app.example` matches `Host: app.example:443`), also for the plain notice cookie, and an
-  origin of another scheme (`capacitor://localhost`) is refused. Without `hsts` the scheme is still
-  not compared, since behind a proxy that ends TLS the app cannot tell which it is served over
-  ([design Limit 26](docs/design.md#limit-origin-scheme)); the deploy guide's checklist says to set
-  `hsts` for an app served only over HTTPS even when the proxy sends the header
-  ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
 - Locale negotiation follows RFC 4647 Lookup, then Corten's same-language step: an
   `Accept-Language` tag loses its last subtag (and a single-character one before it) until it
   names a listed locale, and only then is the first locale of its language taken
-  ([design Choice 42](docs/design.md#choice-locale-same-language)), so `zh-Hant-TW` gets `zh-Hant`
+  ([design Choice 42](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-locale-same-language)), so `zh-Hant-TW` gets `zh-Hant`
   and `sr-Latn-RS` gets `sr-Latn` in an app that lists `zh` or `sr` first, and
   `fr-CA-u-ca-gregory` gets a listed `fr-CA`. Before, a tag that was not listed went straight to
   the first locale of its language, so those readers got the other script
   ([#1234 Locale negotiation jumps from an exact tag straight to the primary language, so zh-Hant-TW gets zh and sr-Latn-RS gets sr when both are listed](https://github.com/corten-run/corten/issues/1234)).
-- The MCP endpoint (`agent::Tools`) answers a request whose `MCP-Protocol-Version` header names
-  a revision it does not speak, or that sends the header twice, with `400 Bad Request`, as MCP
-  2025-06-18 and 2025-11-25 require: a JSON-RPC error with no `id` (`-32600`, its `data` the
-  revisions it speaks and the one requested), checked before the token, or for a body that is not
-  JSON or a batch, the same error as without the header. It answered such a request as one of its
-  own revisions, with a 200. A request without the header is still read as 2025-03-26, and an
-  `initialize` request (with an `id`), sent before a revision is agreed, is answered whatever the
-  header names
-  ([#1231 The MCP endpoint ignores the MCP-Protocol-Version header, so a request naming a revision Corten does not speak gets a 200 where both revisions it lists require a 400](https://github.com/corten-run/corten/issues/1231)).
 - `examples/deck-builder`'s `DeckAnswered`, the pattern the scripts guide shows for learning a
   `data-patch` submit's outcome, carries it as `SaveOutcome`, an enum that derives `ToJson`, in
   place of a `String`: `answered` takes it and the builder's branches compare its declared names,
@@ -2547,7 +2571,7 @@ builds against.
   `Form`, `String`, `Bytes` and what an `Upload` keeps, then a 413), each with its overrides, so
   they are found where every other default is
   ([#1220 The app guide's table of defaults leaves out the 30-second handler deadline and the 2 MiB body limit, so an app learns of its 503 and 413 only from prose](https://github.com/corten-run/corten/issues/1220)).
-- [The Choice on npm onboarding](docs/design.md#choice-no-npm-launcher) records why Corten
+- [The Choice on npm onboarding](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#choice-no-npm-launcher) records why Corten
   publishes no npm initializer that creates an app (`npm create corten`): the app would still
   build with Cargo and its other commands are installed by Cargo, so it would replace only
   `corten new`, at the cost of a second way to start an app and a second release channel. It also

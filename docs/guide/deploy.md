@@ -858,7 +858,8 @@ What the argument asks of the app and its build, which the ordinary build does n
   release without the option is refused there, before the app is built. 0.2.0 is one: its
   `corten build` took no arguments and would build the ordinary binary without a word. A
   `corten` built from a commit between releases writes the number of the release before it,
-  so its Dockerfile is refused this way until that line names a release that has the option.
+  so its Dockerfile installs that release's command, not the commit's, and is refused this way
+  only when that release lacks the option (a command built before 0.3.0 wrote 0.2.0).
 - `llvm-tools` is added to the build image's toolchain. An app with a `rust-toolchain.toml`
   builds with its own, and `corten build` refuses a toolchain without the component, naming
   it; that file's `components` is where rustup takes it from. Not tried in an image build.
