@@ -15,6 +15,12 @@ import { savedFiles } from "./saved-files.mjs";
 import { assertSameEvidence, verifyK6Provenance } from "../load-tool.mjs";
 
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "invalid receipt timestamp"); return n; };
+function terminalSampleAt(finished) {
+  const match = typeof finished === "string"
+    && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.(\d{1,9}))?(?:Z|[+-]\d\d:\d\d)$/.exec(finished);
+  // A millisecond receipt must not make a sub-millisecond exit look earlier.
+  return match ? time(finished) + Number(/[1-9]/.test(match[1]?.slice(3) ?? "")) : Infinity;
+}
 const record = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const sameKeys = (v, keys) => Object.keys(v).length === keys.length && keys.every((key) => Object.hasOwn(v, key));
 const same = (actual, expected, message) => assert.ok(isDeepStrictEqual(actual, expected), message);
@@ -304,11 +310,15 @@ function replay({ folder, round, commit }) {
           cpuObservations.push({ id: name === coldApp.name ? coldApp.id : upstream.id, start, end, before: raw.before[name], after: raw.after[name] });
         }
         const stop = phaseEnd({ ...raw.seen, errors: raw.seen.errors.map((e) => ({ ...e, error: new Error(e.error) })), summary: k6Summary });
+        let appTerminalAt = Infinity;
         if (stop) {
           assert.deepEqual(stop, run.stopped, "raw stop differs");
           const loadStart = time(k6.state.StartedAt), loadEnd = time(k6.state.FinishedAt);
-          if (!raw.app.state.Running) assert.ok(time(raw.app.state.FinishedAt) >= loadStart && time(raw.app.state.FinishedAt) <= loadEnd, "app stop is outside generator execution");
-          else assert.ok(raw.seen.events.some((e) => e.action === "oom" && e.ms >= loadStart && e.ms <= loadEnd), "app OOM is outside generator execution");
+          if (!raw.app.state.Running) {
+            const finished = raw.app.state.FinishedAt;
+            assert.ok(time(finished) >= loadStart && time(finished) <= loadEnd, "app stop is outside generator execution");
+            appTerminalAt = terminalSampleAt(finished);
+          } else assert.ok(raw.seen.events.some((e) => e.action === "oom" && e.ms >= loadStart && e.ms <= loadEnd), "app OOM is outside generator execution");
           assert.ok(raw.seen.events.every((e) => Number.isFinite(e.ms) && e.ms >= start && e.ms <= end), "Docker stop events are outside the phase window");
           const sidecars = [raw.cpu, ...(profile.source === "api" ? [raw.upstream] : [])];
           assert.deepEqual(raw.seen.sidecars, sidecars.map((c) => ({ name: c.name, startedAt: c.state.StartedAt, state: c.state })), "stop sidecar identities/state differ from runtime receipts");
@@ -322,19 +332,10 @@ function replay({ folder, round, commit }) {
           const statsText = files.text(`${base}/${phase}-stats.log`);
           assert.ok(statsText.endsWith("\n"), "truncated stats log");
           for (const line of statsText.split("\n").map((s) => s.trim()).filter(Boolean)) {
-            const { name, cpu, mem, usage, limit } = parseStatsSample(line);
+            const sample = parseStatsSample(line), { name } = sample;
             assert.ok(Object.hasOwn(history, name), "unexpected stats participant");
             assert.ok(history[name].length < maxStatsSamples, "stats log exceeds sample bound");
-            if (!stop) {
-              // Docker reports one logical CPU as 100%, rounded to two decimals.
-              // Samples can burst beyond quota; only the whole host is a bound.
-              assert.ok(cpu <= onlineCpus.size * 100 + 0.005, "sampled CPU exceeds physical host capacity");
-              const c = name === coldApp.name ? raw.app : raw.upstream;
-              const expected = c.memoryBytes / 2 ** 20;
-              assert.ok(Math.abs(limit.mib - expected) <= limit.rounding + 1e-12, "memory display limit differs from container");
-              assert.ok(usage.mib <= expected + usage.rounding + 1e-12, "memory sample exceeds container limit");
-            }
-            history[name].push({ cpu, mem });
+            history[name].push(sample);
           }
           let sampled;
           try { sampled = files.json(`${base}/${phase}-stats.log.json`); }
@@ -347,10 +348,21 @@ function replay({ folder, round, commit }) {
           for (const name of participants) {
             const samples = sampled.samples[name];
             assert.ok(Array.isArray(samples) && samples.length > 0 && samples.length <= maxStatsSamples, "invalid/bounded stats history required");
-            same(samples.map(({ cpu, mem }) => ({ cpu, mem })), history[name], "stats history differs from raw Docker samples");
+            same(samples.map(({ cpu, mem }) => ({ cpu, mem })), history[name].map(({ cpu, mem }) => ({ cpu, mem })), "stats history differs from raw Docker samples");
+            const appSample = name === coldApp.name;
+            const expected = (appSample ? raw.app : raw.upstream).memoryBytes / 2 ** 20;
             let last = start;
-            for (const p of samples) {
-              assert.ok(Number.isSafeInteger(p.t) && p.t >= last && p.t <= end && (stop || p.cpu >= 0 && p.mem > 0), "invalid stats clock/value");
+            for (const [i, p] of samples.entries()) {
+              assert.ok(Number.isSafeInteger(p.t) && p.t >= last && p.t <= end, "invalid stats clock/value");
+              const { cpu, mem, usage, limit } = history[name][i];
+              // Docker reports one logical CPU as 100%, rounded to two decimals.
+              // Samples can burst beyond quota; only the whole host is a bound.
+              assert.ok(cpu <= onlineCpus.size * 100 + 0.005, "sampled CPU exceeds physical host capacity");
+              const terminalZero = appSample && p.t >= appTerminalAt && cpu === 0 && mem === 0;
+              assert.ok((terminalZero && limit.mib === 0) || Math.abs(limit.mib - expected) <= limit.rounding + 1e-12,
+                "memory display limit differs from container");
+              assert.ok(usage.mib <= expected + usage.rounding + 1e-12, "memory sample exceeds container limit");
+              assert.ok(terminalZero || mem > 0, "invalid stats clock/value");
               last = p.t;
             }
             stats[name] = summarizeSamples(samples); same(sampled.summary[name], stats[name], "stats aggregate differs from raw history");

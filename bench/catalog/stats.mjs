@@ -53,6 +53,9 @@ export function summarizeSamples(samples) {
 }
 export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGraceMs = 5000 } = {}) {
   const child = spawn("docker", ["stats", "--format", "{{json .}}", ...names], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  // Docker can return 0 on POSIX SIGTERM, indistinguishable from an unsolicited exit.
+  // Hang up the local CLI there; Windows reports its forced termination as SIGTERM.
+  const stopSignal = process.platform === "win32" ? "SIGTERM" : "SIGHUP";
   const samples = Object.fromEntries(names.map((n) => [n, []]));
   // Retain the failure kind and observation time, not the Docker client's stderr text.
   const errors = [];
@@ -61,7 +64,7 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
   const infrastructure = (kind) => record(kind, statsInfrastructure[kind]);
   let buffer = "";
   let raw = "";
-  let stderrSeen = false, termSent = false, forced = false;
+  let stderrSeen = false, stopSent = false, forced = false;
   child.stdout.on("data", (chunk) => {
     const data = chunk.toString().replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
     raw += data;
@@ -91,18 +94,16 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
   child.once("close", (code, signal) => {
     closed = true;
     clearTimeout(escalation); clearTimeout(release);
-    // A requested SIGTERM may be handled by the CLI (0 or 128 + SIGTERM), or
-    // reported as a signal by Node. An unrequested exit, even 0, proves nothing.
-    const terminated = code === null && signal === "SIGTERM";
-    const handled = signal == null && (code === 0 || code === 143);
-    if (!termSent || forced || !(terminated || handled)) infrastructure("client-process");
+    // Signal delivery can succeed for a child that has already exited. Require
+    // the matching wait status, not just a successful kill() and a closed pipe.
+    if (!stopSent || forced || code !== null || signal !== stopSignal) infrastructure("client-process");
     settle();
   });
   const signal = (name) => {
     if (closed || exited) return;
     try {
       if (child.kill(name)) {
-        if (name === "SIGTERM") termSent = true;
+        if (name === stopSignal) stopSent = true;
         else forced = true;
       }
     } catch { infrastructure("shutdown-signal"); }
@@ -117,7 +118,7 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
       child.stdout.destroy(); child.stderr.destroy(); child.unref();
       settle();
     }, pipeGraceMs);
-    signal("SIGTERM");
+    signal(stopSignal);
   };
   const timer = setTimeout(() => { infrastructure("deadline"); terminate(); }, seconds * 1000);
   return {

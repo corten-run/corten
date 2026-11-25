@@ -1147,7 +1147,7 @@ test("native sampler rejects a trailing incomplete record and retains its bytes"
   const folder = mkdtempSync(join(tmpdir(), "catalog-stats-framing-"));
   const old = childProcess.spawn;
   const fake = new EventEmitter(); fake.stdout = new PassThrough(); fake.stderr = new PassThrough();
-  fake.kill = () => { setImmediate(() => fake.emit("close", 0)); return true; };
+  fake.kill = (signal) => { setImmediate(() => fake.emit("close", null, signal)); return true; };
   childProcess.spawn = () => fake; syncBuiltinESMExports();
   try {
     const path = join(folder, "stats.log");
@@ -1202,7 +1202,9 @@ test("stats retains its raw prefix and fails when an exited client's pipes never
   }
 });
 
-for (const scenario of ["EOF before stop", "connect during stop", "nonzero during stop", "unsolicited zero exit", "requested TERM", "handled TERM"]) {
+const samplerStopSignal = process.platform === "win32" ? "SIGTERM" : "SIGHUP";
+for (const scenario of ["EOF before stop", "connect during stop", "nonzero during stop", "unsolicited zero exit",
+  "zero exit racing requested signal", "requested signal", "numeric signal status", "wrong signal"]) {
   test(`stats transport and exit attribution: ${scenario}`, async (t) => {
     const folder = mkdtempSync(join(tmpdir(), "catalog-stats-transport-")), path = join(folder, "stats.log");
     const fake = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), unref() {} });
@@ -1216,12 +1218,16 @@ for (const scenario of ["EOF before stop", "connect during stop", "nonzero durin
     });
     const app = { Running: false, OOMKilled: false, ExitCode: 1, FinishedAt: new Date(Date.now() - 1000).toISOString() };
     const seen = { pass: 1, phase: "fixed", phaseStart: new Date(Date.now() - 5000).toISOString(), app };
-    fake.kill = () => {
+    fake.kill = (signal) => {
+      assert.equal(signal, samplerStopSignal);
+      // The kernel can accept the signal after exit but before Node reports it.
+      if (scenario === "zero exit racing requested signal") return true;
       setImmediate(() => {
         if (scenario === "connect during stop") fake.stderr.write("error during connect: synthetic-private-detail\n");
         if (scenario === "nonzero during stop") close(1);
-        else if (scenario === "handled TERM") close(143);
-        else close(null, "SIGTERM");
+        else if (scenario === "numeric signal status") close(process.platform === "win32" ? 143 : 129);
+        else if (scenario === "wrong signal") close(null, "SIGINT");
+        else close(null, signal);
       });
       return true;
     };
@@ -1229,8 +1235,9 @@ for (const scenario of ["EOF before stop", "connect during stop", "nonzero durin
     fake.stdout.write('{"Name":"app","CPUPerc":"50%","MemUsage":"8MiB / 1GiB"}\n');
     if (scenario === "EOF before stop") fake.stderr.write("unexpected EOF\n");
     if (scenario === "unsolicited zero exit") close(0);
+    if (scenario === "zero exit racing requested signal") setImmediate(() => close(0));
     const stopping = sampler.stop();
-    if (scenario === "requested TERM" || scenario === "handled TERM") {
+    if (scenario === "requested signal") {
       assert.equal((await stopping).app.samples, 1);
       assert.deepEqual(phaseEnd(seen), { pass: 1, phase: "fixed", exitCode: 1, oomKilled: false });
     } else {
@@ -1247,7 +1254,7 @@ for (const scenario of ["EOF before stop", "connect during stop", "nonzero durin
   });
 }
 
-for (const failure of ["TERM throw", "KILL throw", "emitted signal error", "emitted spawn error", "deadline", "exit race", "forced kill"]) {
+for (const failure of ["stop signal throw", "KILL throw", "emitted signal error", "emitted spawn error", "deadline", "exit race", "forced kill"]) {
   test(`stats sampler refuses ${failure} despite app exit`, async (t) => {
     const folder = mkdtempSync(join(tmpdir(), "catalog-stats-shutdown-")), path = join(folder, "stats.log");
     const fake = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), unref() {} });
@@ -1264,10 +1271,10 @@ for (const failure of ["TERM throw", "KILL throw", "emitted signal error", "emit
     let allowDeadline;
     const startStop = new Promise((resolve) => { allowDeadline = resolve; });
     fake.kill = (signal) => {
-      if ((failure === "KILL throw" || failure === "forced kill") && signal === "SIGTERM") return true;
+      if ((failure === "KILL throw" || failure === "forced kill") && signal === samplerStopSignal) return true;
       close();
       allowDeadline();
-      if (failure === "TERM throw" || failure === "KILL throw") throw new Error(privateDetail);
+      if (failure === "stop signal throw" || failure === "KILL throw") throw new Error(privateDetail);
       if (failure === "emitted signal error") {
         fake.emit("error", Object.assign(new Error(privateDetail), { syscall: "kill", code: "EPERM" }));
         return false;

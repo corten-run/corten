@@ -156,7 +156,7 @@ test("the stats sampler rejects malformed terminal displays and keeps the origin
   const child = () => {
     const fake = new EventEmitter();
     fake.stdout = new PassThrough(); fake.stderr = new PassThrough();
-    fake.kill = () => { setImmediate(() => fake.emit("close", 0)); return true; };
+    fake.kill = (signal) => { setImmediate(() => fake.emit("close", null, signal)); return true; };
     return fake;
   };
   let fake;
@@ -197,7 +197,7 @@ test("native replay admits the producer's decimal sum overshoot, not an inconsis
   const rows = names.flatMap((Name) => fixture[Name].map((p) => ({ ...p, Name }))).sort((a, b) => a.t - b.t);
   const fake = new EventEmitter();
   fake.stdout = new PassThrough(); fake.stderr = new PassThrough();
-  fake.kill = () => { setImmediate(() => fake.emit("close", 0)); return true; };
+  fake.kill = (signal) => { setImmediate(() => fake.emit("close", null, signal)); return true; };
   const spawn = t.mock.method(childProcess, "spawn", () => fake);
   let now = start;
   const clock = t.mock.method(Date, "now", () => now);
@@ -464,6 +464,43 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   withTerminal.summary[appName] = summarizeSamples(withTerminal.samples[appName]);
   const terminalLog = (CPUPerc, MemUsage) => cleanLog + JSON.stringify({ Name: appName, CPUPerc, MemUsage }) + "\n";
   const beyondDouble = "9".repeat(309), conversionOverflow = `1${"0".repeat(308)}GiB`;
+  for (const [label, role, at, cpu, mem, CPUPerc, MemUsage, message] of [
+    ["pre-exit CPU", "app", "before", 999999, 8, "999999%", "8MiB / 1GiB", "sampled CPU exceeds physical host capacity"],
+    ["pre-exit memory", "app", "before", 50, 2048, "50%", "2GiB / 1GiB", "memory sample exceeds container limit"],
+    ["pre-exit zero", "app", "before", 0, 0, "0.00%", "0B / 0B", "memory display limit differs from container"],
+    ["post-exit upstream zero", "upstream", "after", 0, 0, "0.00%", "0B / 0B", "memory display limit differs from container"],
+    ["post-exit nonzero with zero limit", "app", "after", 50, 8, "50%", "8MiB / 0B", "memory display limit differs from container"],
+  ]) await t.test(`bounds stopped samples: ${label}`, () => {
+    const name = raw[role].name, saved = structuredClone(stats);
+    Object.assign(saved.samples[name][0], { cpu, mem, ...(at === "after" && { t: terminal.t }) });
+    saved.summary[name] = summarizeSamples(saved.samples[name]);
+    const edited = cleanLog.trimEnd().split("\n").map((line) => {
+      const row = JSON.parse(line);
+      return row.Name === name ? JSON.stringify({ ...row, CPUPerc, MemUsage }) : line;
+    }).join("\n") + "\n";
+    try {
+      writeFileSync(log, edited);
+      writeFileSync(statsPath, JSON.stringify(saved));
+      assert.throws(() => validateSaved(args), fixedFault(message));
+    } finally { writeFileSync(log, cleanLog); writeFileSync(statsPath, cleanStats); }
+  });
+  await t.test("bounds stopped samples: terminal zero at exact but not rounded-down exit", () => {
+    const finished = raw.app.state.FinishedAt, saved = structuredClone(withTerminal);
+    saved.samples[appName].at(-1).t = Date.parse(finished);
+    writeFileSync(log, terminalLog("0.00%", "0B / 0B"));
+    writeFileSync(statsPath, JSON.stringify(saved));
+    try {
+      assert.equal(validateSaved(args).complete, true);
+      raw.app.state.FinishedAt = finished.replace(/Z$/, "001Z");
+      writeFileSync(path, JSON.stringify(raw));
+      assert.throws(() => validateSaved(args), fixedFault("memory display limit differs from container"));
+    } finally {
+      raw.app.state.FinishedAt = finished;
+      writeFileSync(path, JSON.stringify(raw));
+      writeFileSync(log, cleanLog);
+      writeFileSync(statsPath, cleanStats);
+    }
+  });
   await t.test("rejects coerced Docker participant names without exposing saved data", () => {
     const edit = rows.find((row) => row.Name === appName);
     try {
