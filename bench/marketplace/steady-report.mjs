@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { convergenceSchema, failureCodes, flattenRule, parseSaved, restartsSeen, ruleText, soakMemoryClock, soakSchema, startups, timedWarmupVus, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
+import { convergenceSchema, failureCodes, flattenRule, hasReading, parseSaved, restartsSeen, ruleText, soakMemoryClock, soakSchema, startups, timedWarmupVus, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
 
 // Every value printed here has been checked by validateConvergence or validateSoak first: a code
 // is printed as its text from steady-contract.mjs, and anything else is a validated number or a
@@ -18,12 +18,16 @@ const header = (s, title) => [`# Marketplace ${title} ${s.name}`, "",
   `Each adapter, source and target ran in a fresh container started by ${startups[s.startup]}; windows are the k6 engine's clock from the start of the load, which follows that first 200.`,
   `This is not a timed round and ranks nothing: ${s.schema === soakSchema ? "it reports each adapter's memory at the start and end and its p99 by interval as figures, with no criterion for whether they held, and says whether the fixed rate held, whether the app restarted, and any exit, signal or OOM kill of it" : "it gives each adapter's throughput by window and whether the end of the pass stayed within a stated tolerance"}, not how fast it is beside another.`];
 // What a reading rests on, scoped to the cells with one: a failed cell (one that failed `settings`
-// or `unconfirmed`, say) did not pass these checks, and a pass with no reading states none of them,
-// as report.mjs --convergence (convergenceLines) does.
+// or `unconfirmed`, say) did not pass these checks, a convergence cell whose tolerance reading is
+// itself "no reading" (hasReading) has nothing they back, and a pass with no reading states none of
+// them, as report.mjs --convergence (convergenceLines) does. A soak cell that did not fail always
+// has its figures, so it is a reading.
 const checksLines = (s) => {
-  const read = s.cells.filter((c) => c.failure === undefined).length, all = s.cells.length;
+  const convergence = s.schema === convergenceSchema;
+  const read = s.cells.filter((c) => (convergence ? hasReading(c) : c.failure === undefined)).length, all = s.cells.length;
   if (read === 0) return [];
-  return [`Container checks, for ${read === all ? "every cell, each with a reading" : `the ${read} of ${all} cells with a reading only; a failed cell has none`}: ${s.measurement.containerChecks}.`];
+  const without = convergence ? "a cell that failed, or whose tolerance reading gave none, has none" : "a failed cell has none";
+  return [`Container checks, for ${read === all ? "every cell, each with a reading" : `the ${read} of ${all} cells with a reading only; ${without}`}: ${s.measurement.containerChecks}.`];
 };
 /** A convergence pass as Markdown, with each cell's tolerance reading and windows. It sets no timed warmup. */
 export function convergenceReport(s) {

@@ -369,10 +369,13 @@ a row the reader would accept (a container ID, an action and a nanosecond time).
 therefore rests on what was checked: its settings matched at every inspect (the app after its cold
 start, at the launch check and after the load; the load before it started and after it ran; an API
 cell's upstream before the cell, at the launch check and after the load), and Docker's event stream
-delivered no update of those containers and no start, restart, die, kill or OOM of the upstream,
-which can drop events for a slow subscriber. Each pass saves that text (`containerChecks`) and
+delivered no update of those containers, no start, restart, die, kill or OOM of the upstream and,
+for a convergence cell, no qualifying start, restart, die, kill or OOM of the app (one delivered
+before the marker's second start or stamped at or before the load finished; a later one is
+teardown, below, is not read and stays in `events.log`); the stream can drop events for a slow subscriber. Each pass saves that text (`containerChecks`) and
 both reports print it beside the readings, scoped to the cells with one: a failed cell did not pass
-those checks, and a pass with no reading prints none. The load's inspect before it starts is kept as
+those checks, a convergence cell whose tolerance reading gave none (too few windows, or a zero
+last 60 s median) has no reading for them to back, and a pass with no reading prints none. The load's inspect before it starts is kept as
 `load-container-before.json` before its settings are checked, so a load refused there keeps what
 Docker had too. Then, for a
 convergence cell: the same ID
@@ -424,8 +427,9 @@ that was not the app's, the load's, an API cell's upstream's or the marker's ID,
 nanosecond time, or was an app or upstream row naming a start, restart, die, kill or OOM, or any
 row naming an `update`, with anything after that word, or ended with a row that has no newline, or
 had a blank row; none of its rows is then used, and the cell fails `unconfirmed` with no reading.
-A read stream is saved as `none-seen` (it delivered no start, restart, die, kill or OOM event of the
-app, which does not show there was none) or `seen` (with those events). "Restarted" is yes only on restart evidence: a RestartCount increase,
+A read stream is saved as `none-seen` (no qualifying start, restart, die, kill or OOM event of the
+app was observed: none delivered before the second marker start or stamped at or before FinishedAt,
+so a teardown event, which `events.log` still keeps, does not count; this does not show there was none) or `seen` (with those events). "Restarted" is yes only on restart evidence: a RestartCount increase,
 another container ID or StartedAt at the end, a `restart` event, or a `start` of the app stamped
 strictly after a `die` of it (events are paired by their daemon times, never by the order the
 stream delivered them). It is no when none was observed: a soak with a reading always had its stream

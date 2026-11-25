@@ -1735,3 +1735,38 @@ test("a cell whose event stream lost an update still has a reading, and its save
     if (options.kind === "soak") assert.equal(s.cells[0].restarts.eventStream, "none-seen");
   }
 });
+
+test("an app kill delivered after the marker's second start and before the fence is teardown: the cell keeps its reading, and the saved text says only qualifying app events were checked", async (t) => {
+  const folder = folderOf(t);
+  const convergence = parseSteadyArgs(["convergence", "t56", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const soak = parseSteadyArgs(["soak", "t57", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps);
+  for (const [name, options] of [["convergence", convergence], ["soak", soak]]) {
+    const fake = fakeDocker(options.kind === "soak" ? { exportFor: () => soakExport(), clockMs: 1_800_000, loadMs: 50 } : { exportFor: () => k6Export(flat(8)) });
+    // The app's kill, stamped a nanosecond after the marker's second start (so after the load's
+    // FinishedAt) and delivered before that start's exit, the fence.
+    let starts = 0, kill = null;
+    const rewrite = (row) => {
+      const [id, action, nanos] = row.split("|");
+      if (id !== fake.ids["marketplace-test-run-corten-marker"] || action !== "start" || ++starts !== 2) return [row];
+      kill = `${fake.ids["marketplace-test-run-corten"]}|kill|${BigInt(nanos) + 1n}`;
+      return [row, kill];
+    };
+    const s = await sampled(fake, options, folder(name), { env: pinnedEnv, spawnEvents: eventsClient(fake, { rewrite }).spawn });
+    assert.ok(kill !== null, name);
+    assert.equal(s.complete, true, name);
+    assert.equal(s.cells[0].failure, undefined, `${name}: ${JSON.stringify(s.cells[0])}`);
+    (options.kind === "soak" ? validateSoak : validateConvergence)(s);
+    if (options.kind === "convergence") assert.equal(s.cells[0].verdict.withinTolerance, true, name);
+    else assert.equal(s.cells[0].restarts.eventStream, "none-seen", name);
+    // The stream delivered the kill and events.log keeps it; the reader left it out as teardown.
+    const raw = join(folder(name), "fixture", "corten", "page");
+    assert.ok(readFileSync(join(raw, "events.log"), "utf8").split("\n").includes(kill), `${name}: events.log keeps the kill`);
+    assert.deepEqual(JSON.parse(readFileSync(join(raw, "events.json"), "utf8")).events, [], `${name}: the kill is not read`);
+    // So the saved text claims only that no qualifying app event was observed, never that the
+    // stream delivered none, and says what qualifies as the reader does.
+    const checks = s.measurement.containerChecks;
+    assert.doesNotMatch(checks, /delivered no update of them and no start, restart, die, kill or OOM of the upstream \(nor, for a convergence cell, of the app\)/, name);
+    assert.match(checks, /for a convergence cell, no qualifying start, restart, die, kill or OOM of the app: one delivered before the marker's second start or stamped at or before the load finished; a later one is teardown, is not read and stays in events\.log/, name);
+    assert.ok(steadyReport(s).split("\n").includes(`Container checks, for every cell, each with a reading: ${checks}.`), name);
+  }
+});

@@ -292,7 +292,7 @@ export const windowClock = "windows are the k6 engine's clock from the start of 
  * between them: an update undone before the next inspect, or a restart of the upstream, can have
  * gone unseen. No subscriber can show that every event was delivered, so the stream is detection.
  */
-export const containerChecks = "the app's and the load's settings, and an API cell's upstream's, matched what the pass records at each of Docker's inspects (the app after its cold start, at the launch check and after the load; the load before it started and after it ran; the upstream before the cell, at the launch check and after the load), and Docker's live event stream, from before the launch check to after the last inspect, delivered no update of them and no start, restart, die, kill or OOM of the upstream (nor, for a convergence cell, of the app); Docker can drop events for a slow subscriber without ending the stream, so this is detection of what the stream delivered, not proof that none happened";
+export const containerChecks = "the app's and the load's settings, and an API cell's upstream's, matched what the pass records at each of Docker's inspects (the app after its cold start, at the launch check and after the load; the load before it started and after it ran; the upstream before the cell, at the launch check and after the load), and Docker's live event stream, from before the launch check to after the last inspect, delivered no update of them, no start, restart, die, kill or OOM of the upstream and, for a convergence cell, no qualifying start, restart, die, kill or OOM of the app: one delivered before the marker's second start or stamped at or before the load finished; a later one is teardown, is not read and stays in events.log; Docker can drop events for a slow subscriber without ending the stream, so this is detection of what the stream delivered, not proof that none happened";
 /** The format of a cell's live event stream (steady-run.mjs eventStream): one row per event. */
 export const eventFormat = "{{.Actor.ID}}|{{.Action}}|{{.TimeNano}}";
 /**
@@ -915,8 +915,10 @@ function soakMemory(memory, seconds, end) {
  * when sampling failed. `events` is readEvents's list of the app's events: a cell whose live event
  * stream could not be read or did not show the marker's starts around the load keeps no reading (the
  * runner saves it `unconfirmed`), so a soak cell always has one. The stream's state is saved as
- * eventStream: "none-seen" (it delivered no start, restart, die, kill or OOM event of the app, which
- * does not show there was none: containerChecks) or "seen" (at least one). Memory is independent of
+ * eventStream: "none-seen" (no qualifying start, restart, die, kill or OOM event of the app was
+ * observed: readEvents leaves out teardown, an app event after the second marker start stamped after
+ * the load finished, which events.log still keeps; and it does not show there was none: containerChecks)
+ * or "seen" (at least one). Memory is independent of
  * the stream: it can be unavailable while the stream and the container states are reported.
  */
 export function summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory, before, after, events, rate, droppedIterations, failedRequests, arrivals }) {
@@ -1086,6 +1088,12 @@ const readable = (schema) => { try { timedProfilesFor(schema); return true; } ca
 // The tolerance reading's own "no reading" outcomes (flattenPoint steps 1 and 2).
 const noReading = (verdict) => !verdict.withinTolerance && (verdict.reason === "too-few-windows" || verdict.reason === "no-throughput");
 /**
+ * Whether a validated convergence cell has a reading: it did not fail, and its tolerance reading is
+ * not itself "no reading" (too few windows, or a zero last-60 s median). Both reports state the
+ * container checks (containerChecks) only for such cells.
+ */
+export const hasReading = (cell) => cell.failure === undefined && !noReading(cell.verdict);
+/**
  * What the timed reporter says about a convergence pass it was given (#1851): which pass, which of
  * the round's measured adapter, source and target cells it has a reading for (stated before any
  * comparison), whether it is like-for-like with the round for those cells with every differing or
@@ -1119,7 +1127,7 @@ export function convergenceLines(round, apps, convergence) {
     found.push({ name, cell });
     // A cell whose tolerance reading is itself "no reading" (a zero last-60 s median) is listed
     // with its explanation below, but it is not coverage and is compared on no input.
-    (cell.failure !== undefined ? failed : noReading(cell.verdict) ? none : source === "api" ? api : read).push({ name, cell });
+    (cell.failure !== undefined ? failed : !hasReading(cell) ? none : source === "api" ? api : read).push({ name, cell });
   }
   const total = apps.length * steadySources.length * steadyTargets.length, complete = read.length === total;
   lines.push(complete ? `Coverage: the pass has a reading for every one of this round's ${total} measured adapter, source and target cells.`
@@ -1138,7 +1146,7 @@ export function convergenceLines(round, apps, convergence) {
   }
   lines.push(`Tolerance reading ${flattenRule.name}: ${ruleText}`);
   // What a reading rests on, its limit included; a pass with no reading for the round has nothing it backs.
-  if (found.some(({ cell }) => cell.failure === undefined)) lines.push(`Container checks: ${c.measurement.containerChecks}.`);
+  if (found.some(({ cell }) => hasReading(cell))) lines.push(`Container checks: ${c.measurement.containerChecks}.`);
   const unproven = new Set(api.map((a) => a.name));
   for (const { name, cell } of found) lines.push(`Reading: ${name}: ${cell.failure !== undefined ? `no reading, the cell failed (${failureCodes[cell.failure]})` : verdictText(cell.verdict)}${unproven.has(name) ? " (not compared with this round: the pass does not record that this cell's requests reached the upstream)" : ""}.`);
   lines.push(`This report does not establish whether this round's ${warmup}s timed warmup was sufficient: the pass is a screening reading of throughput, and a timed warmup is set only by a separate reviewed change from a saved like-for-like pass.`);

@@ -468,10 +468,33 @@ test("a report states its container checks only for the cells with a reading, an
   const partial = convergencePass(); partial.cells[2] = { app: partial.cells[2].app, source: partial.cells[2].source, target: partial.cells[2].target, verdict: null, failure: "settings" };
   Object.assign(partial.cleanup, { created: 32, removed: 32 });
   validateConvergence(partial);
-  assert.ok(convergenceReport(partial).split("\n").includes(`Container checks, for the 7 of 8 cells with a reading only; a failed cell has none: ${containerChecks}.`));
+  assert.ok(convergenceReport(partial).split("\n").includes(`Container checks, for the 7 of 8 cells with a reading only; a cell that failed, or whose tolerance reading gave none, has none: ${containerChecks}.`));
   assert.ok(convergenceReport(convergencePass()).split("\n").includes(`Container checks, for every cell, each with a reading: ${containerChecks}.`));
 });
 
+test("a convergence cell whose tolerance reading gave none (a zero last-60 s median) is not a reading, so neither report states container checks for it", () => {
+  const zeroTail = [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 0, 0, 0, 0];
+  const { containerChecks } = convergencePass().measurement;
+  const checksIn = (lines) => lines.filter((l) => l.startsWith("Container checks"));
+  // A valid one-cell save with a zero tail median: "no reading" in both reports, and no checks.
+  const options = parseSteadyArgs(["convergence", "w10", "--apps", "corten", "--targets", "page", "--sources", "fixture", "--minutes", "3"], apps, groupApps);
+  const one = savedPass(options, [cellOf("corten", "fixture", "page", zeroTail)]);
+  validateConvergence(one);
+  assert.equal(one.cells[0].verdict.reason, "no-throughput");
+  const oneReport = convergenceReport(one).split("\n"), oneLines = convergenceLines(likeRound(90), ["corten"], one);
+  assert.ok(oneReport.includes("| corten | fixture | page | no reading: the last 60 s median is zero | 0.0 | 0 |"), oneReport.join("\n"));
+  assert.ok(oneLines.includes("Reading: corten fixture page: no reading: the last 60 s median is zero."));
+  assert.deepEqual([checksIn(oneReport), checksIn(oneLines)], [[], []]);
+  // Every cell of a full pass with a zero tail median: no reading anywhere, so no checks either.
+  const allZero = convergencePass(); allZero.cells = allZero.cells.map((c) => cellOf(c.app, c.source, c.target, zeroTail));
+  validateConvergence(allZero);
+  assert.deepEqual([checksIn(convergenceReport(allZero).split("\n")), checksIn(convergenceLines(likeRound(90), ["corten", "aspnet"], allZero))], [[], []]);
+  // One such cell among readings: the steady report scopes the line to the 7 cells with a reading,
+  // and the timed report still states the checks its readings rest on.
+  const oneZero = convergencePass(); oneZero.cells[0] = cellOf("corten", "fixture", "page", zeroTail);
+  assert.deepEqual(checksIn(convergenceReport(oneZero).split("\n")), [`Container checks, for the 7 of 8 cells with a reading only; a cell that failed, or whose tolerance reading gave none, has none: ${containerChecks}.`]);
+  assert.deepEqual(checksIn(convergenceLines(likeRound(90), ["corten", "aspnet"], oneZero)), [`Container checks: ${containerChecks}.`]);
+});
 test("a soak report lists only the observed events that qualify for the cell, never claiming the whole stream", () => {
   const options = parseSteadyArgs(["soak", "w9", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
