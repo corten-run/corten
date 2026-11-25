@@ -528,6 +528,8 @@ pub(crate) struct Connections {
     pub max: Option<usize>,
     /// How long a connection may go on once shutdown begins, set by `run` (`App::drain`).
     pub drain: Drain,
+    /// [`App::own_http1`].
+    pub own: bool,
 }
 
 /// How long a connection still answering may go on once shutdown begins: the longer of the grace
@@ -611,8 +613,17 @@ impl Default for Connections {
             send_timeout: Some(Duration::from_secs(60)),
             max: None,
             drain: Drain { grace: GRACE, most: GRACE.max(DEADLINE), each: false },
+            own: own_in_tests(),
         }
     }
+}
+
+/// Whether an app that does not say is served by Corten's own connection ([`App::own_http1`]):
+/// never, outside this crate's tests. In them, when `CORTEN_TEST_OWN_HTTP1` is set, so the whole
+/// suite is run against each connection (CONTRIBUTING.md, Checks); a test that compares the two
+/// says which it wants.
+fn own_in_tests() -> bool {
+    cfg!(test) && std::env::var_os("CORTEN_TEST_OWN_HTTP1").is_some()
 }
 
 impl App {
@@ -1244,6 +1255,29 @@ impl<M: Middleware> App<M> {
     pub fn max_connections(mut self, max: usize) -> Self {
         assert!(max > 0, "corten: max_connections is at least 1");
         self.connections.max = Some(max);
+        self
+    }
+
+    /// Whether [`serve`] answers the HTTP/1.1 requests that have no body with Corten's own
+    /// connection code in the place of hyper's: off unless set. With it on, a connection's
+    /// requests are read and answered by Corten up to the first whose head has a
+    /// `Content-Length`, a `Transfer-Encoding`, an `Expect` or an `Upgrade` header, whatever the
+    /// header says, or that is a `CONNECT`, or an HTTP/1.0 request that asks to keep its
+    /// connection. The answers before that request are sent, and it and everything after it on
+    /// the connection are hyper's, as every request is with this off: a request's body, a
+    /// WebSocket's handshake and a tunnel are read by hyper either way.
+    ///
+    /// The app sees the same requests and its clients the same answers, and every limit here
+    /// holds as it does with hyper: [`App::header_timeout`], [`App::send_timeout`],
+    /// [`App::max_request_head`], [`App::max_connections`], the [deadline](App::deadline) and
+    /// [`App::shutdown_grace`]. What differs: the answers to requests that arrived together
+    /// (pipelined) leave in one write, where hyper writes each as it is made; an answer's
+    /// trailers are not sent; and a client that pipelines requests and reads no answer holds
+    /// more of the server's memory than it does with hyper, which is why this is off unless an
+    /// app asks (`docs/design.md#choice-own-http1`, with what was measured and what would make
+    /// it the default). Behind a proxy that does not pipeline, that last does not arise.
+    pub fn own_http1(mut self, enabled: bool) -> Self {
+        self.connections.own = enabled;
         self
     }
 
@@ -1938,6 +1972,7 @@ pub(crate) async fn serve_router<L, W, F, Io, E, D>(
         clock: crate::watch::Clock::start(connections.header_timeout, connections.send_timeout),
         open: connections.max.map(|max| Arc::new(tokio::sync::Semaphore::new(max))),
         bounds: connections.drain.each,
+        own: connections.own.then_some(connections.head),
     };
     let wrap = Arc::new(wrap);
     let mut http = hyper::server::conn::http1::Builder::new();
@@ -1974,6 +2009,9 @@ struct Held {
     open: Option<Arc<tokio::sync::Semaphore>>,
     /// Each connection keeps its request's deadline for shutdown ([`Drain::each`]).
     bounds: bool,
+    /// For [`App::own_http1`]: each connection is served by Corten's own HTTP/1.1 connection
+    /// ([`crate::h1`]) until a request that is hyper's, with this limit on a request's head.
+    own: Option<usize>,
 }
 
 /// When shutdown began, and how long connections may go on from then.
@@ -2042,6 +2080,11 @@ where
         let bound = held.bounds.then(|| Arc::new(Bound::new()));
         let connection = Connection { router: router.clone(), peer, watch: watch.clone(), bound: bound.clone() };
         let (alive, mut stop, wrap, http) = (alive.clone(), stop.clone(), wrap.clone(), http.clone());
+        if let Some(head) = held.own {
+            let own = OwnConnection { head, watch, bound, permit, alive, stop, http };
+            tokio::spawn(own.serve(async move { wrap(io).await.ok() }, connection));
+            continue;
+        }
         tokio::spawn(async move {
             // `permit` is held by the task until the step is done, then by the IO (`Watched`).
             // The step, until it is done, the clock expires the connection or shutdown begins.
@@ -2097,6 +2140,151 @@ where
     cut
 }
 
+/// What the task of a connection served by Corten's own HTTP/1.1 connection holds
+/// ([`App::own_http1`]): what `serve_listener` gives the task hyper's connection is served in. A
+/// task of its own kind, so that one holds none of this one's state and is compiled as it is
+/// without it.
+struct OwnConnection {
+    /// [`App::max_request_head`].
+    head: usize,
+    watch: Option<Arc<crate::watch::Watch>>,
+    bound: Option<Arc<Bound>>,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    alive: tokio::sync::mpsc::Sender<()>,
+    stop: tokio::sync::watch::Receiver<Option<Closing>>,
+    http: hyper::server::conn::http1::Builder,
+}
+
+impl OwnConnection {
+    /// One connection, from its step (`step`: the IO it gives, or `None` when it fails) to its
+    /// end: held to the same clock, cap and shutdown as hyper's in `serve_listener`.
+    async fn serve<S, Io, D>(self, step: S, connection: Connection)
+    where
+        S: Future<Output = Option<(Io, D)>> + Send + 'static,
+        Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+        D: ConnectionData,
+    {
+        use std::task::Poll;
+        let OwnConnection { head, watch, bound, permit, alive, mut stop, http } = self;
+        // The step, until it is done, the clock expires the connection or shutdown begins.
+        let (io, data) = {
+            let mut step = std::pin::pin!(step);
+            let mut stopping = std::pin::pin!(stop.wait_for(Option::is_some));
+            let stepped = std::future::poll_fn(|cx| {
+                if let Poll::Ready(done) = crate::watch::bounded(watch.as_deref(), step.as_mut(), cx) {
+                    return Poll::Ready(done.flatten());
+                }
+                stopping.as_mut().poll(cx).map(|_| None)
+            });
+            match stepped.await {
+                Some(io) => io,
+                None => return,
+            }
+        };
+        // The connection is told that shutdown began by `ending`, and polled again.
+        let ending = std::sync::atomic::AtomicBool::new(false);
+        let io = crate::watch::Watched { io, watch, _open: permit };
+        // What the connection gave back, if it stopped at a request that is hyper's.
+        let handed = 'own: {
+            let mut conn = std::pin::pin!(crate::h1::serve(io, data.service(connection), head, &ending));
+            // Shutdown is waited for once. That poll leaves this task's waker with the channel
+            // (the future is the task's own, so its waker is the same at every poll, and the
+            // wait is polled outside the task's budget, which could put it off). After it, a
+            // wake asks only whether the channel's value has changed, one load, where polling
+            // the wait again would take a lock and compare the waker at every read and write of
+            // the connection.
+            let changed = stop.clone();
+            let closing = {
+                let mut stopping = std::pin::pin!(tokio::task::unconstrained(stop.wait_for(Option::is_some)));
+                let mut waits = false;
+                let stopped = std::future::poll_fn(|cx| {
+                    if let Poll::Ready(handed) = conn.as_mut().poll(cx) {
+                        return Poll::Ready(Err(handed));
+                    }
+                    // A channel whose sender is gone is asked too: the wait ends with it.
+                    if waits && !changed.has_changed().unwrap_or(true) {
+                        return Poll::Pending;
+                    }
+                    waits = true;
+                    stopping.as_mut().poll(cx).map(|closing| Ok(closing.ok().and_then(|closing| *closing)))
+                });
+                match stopped.await {
+                    Ok(closing) => closing,
+                    Err(handed) => break 'own handed,
+                }
+            };
+            ending.store(true, std::sync::atomic::Ordering::Relaxed);
+            // The server gone without a shutdown: close now.
+            let Some(closing) = closing else {
+                break 'own tokio::time::timeout_at(tokio::time::Instant::now(), conn.as_mut()).await.ok().flatten();
+            };
+            let until = |settled| closing.until(bound.as_deref(), settled);
+            let mut by = until(false);
+            loop {
+                match tokio::time::timeout_at(by, conn.as_mut()).await {
+                    Ok(handed) => break 'own handed,
+                    // As in `serve_listener`: a request may give its connection longer.
+                    Err(_) => match until(true) {
+                        later if later > by => by = later,
+                        _ => {
+                            let _ = alive.send(()).await;
+                            break 'own None;
+                        }
+                    },
+                }
+            }
+        };
+        if let Some((io, read, service)) = handed {
+            let io = crate::h1::Rewound::new(io, read);
+            // In an allocation of its own, made here: hyper's connection is about a kilobyte,
+            // which every connection's task would otherwise have room for.
+            Box::pin(handed_over::<_, D>(&http, io, service, &mut stop, bound.as_deref(), &alive)).await;
+        }
+    }
+}
+
+/// The rest of a connection Corten's own gave back at a request that is hyper's (one that may
+/// have a body or switch protocols; [`crate::h1::Rewound`]: that request's head and what the
+/// client sent behind it are read first). hyper serves it as `serve_listener` has it serve every
+/// connection without [`App::own_http1`], shutdown included.
+async fn handed_over<I, D>(
+    http: &hyper::server::conn::http1::Builder,
+    io: crate::h1::Rewound<I>,
+    service: D::Service,
+    stop: &mut tokio::sync::watch::Receiver<Option<Closing>>,
+    bound: Option<&Bound>,
+    alive: &tokio::sync::mpsc::Sender<()>,
+) where
+    I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    D: ConnectionData,
+{
+    let service = hyper_util::service::TowerToHyperService::new(service);
+    let mut conn = std::pin::pin!(http.serve_connection(hyper_util::rt::TokioIo::new(io), service).with_upgrades());
+    // The connection first: the request it was handed over at has arrived, and is answered
+    // though shutdown began before hyper read it.
+    let closing = tokio::select! {
+        biased;
+        _ = conn.as_mut() => return,
+        closing = stop.wait_for(Option::is_some) => closing.ok().and_then(|closing| *closing),
+    };
+    conn.as_mut().graceful_shutdown();
+    let Some(closing) = closing else {
+        let _ = tokio::time::timeout_at(tokio::time::Instant::now(), conn.as_mut()).await;
+        return;
+    };
+    let until = |settled| closing.until(bound, settled);
+    let mut by = until(false);
+    while tokio::time::timeout_at(by, conn.as_mut()).await.is_err() {
+        match until(true) {
+            later if later > by => by = later,
+            _ => {
+                let _ = alive.send(()).await;
+                break;
+            }
+        }
+    }
+}
+
 /// One connection's service: the router, each of whose requests runs with the connection's
 /// peer at hand for [`ClientIp`](crate::ClientIp). Not a request extension: `http`'s extensions
 /// box each value, and one more cost every request 497 instructions whether anything read it or
@@ -2116,6 +2304,11 @@ pub(crate) struct Connection {
 pub(crate) trait ConnectionData: Clone + Send + Sync + 'static {
     type Service: tower_service::Service<
             hyper::Request<hyper::body::Incoming>,
+            Response = http::Response<crate::watch::Answered>,
+            Error = Infallible,
+            Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>,
+        > + tower_service::Service<
+            Request,
             Response = http::Response<crate::watch::Answered>,
             Error = Infallible,
             Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>,
@@ -2155,12 +2348,50 @@ impl<T: Clone + Send + Sync + 'static> tower_service::Service<hyper::Request<hyp
     type Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>;
 
     fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
-        self.connection.poll_ready(cx)
+        tower_service::Service::<hyper::Request<hyper::body::Incoming>>::poll_ready(&mut self.connection, cx)
     }
 
     fn call(&mut self, mut req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
         req.extensions_mut().insert(self.info.clone());
         self.connection.call(req)
+    }
+}
+
+/// The same service for a request Corten's own connection read ([`crate::h1`]), which has no
+/// body. A second implementation, so the one hyper calls is compiled as it is without it.
+impl<T: Clone + Send + Sync + 'static> tower_service::Service<Request> for Informed<T> {
+    type Response = http::Response<crate::watch::Answered>;
+    type Error = Infallible;
+    type Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>;
+
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        tower_service::Service::<Request>::poll_ready(&mut self.connection, cx)
+    }
+
+    fn call(&mut self, mut req: Request) -> Self::Future {
+        req.extensions_mut().insert(self.info.clone());
+        self.connection.call(req)
+    }
+}
+
+impl tower_service::Service<Request> for Connection {
+    type Response = http::Response<crate::watch::Answered>;
+    type Error = std::convert::Infallible;
+    type Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>;
+
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        tower_service::Service::<Request>::poll_ready(&mut self.router, cx)
+    }
+
+    fn call(&mut self, req: Request) -> Self::Future {
+        let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
+        if let Some(bound) = &self.bound {
+            bound.arrived();
+        }
+        let call = tower_service::Service::<Request>::call(&mut self.router, req);
+        let inner = crate::client::WithPeer::new(self.peer, self.bound.clone(), call);
+        // Never a `CONNECT`: that request is hyper's, with the rest of its connection.
+        crate::watch::Answer { inner, watch, connect: false }
     }
 }
 

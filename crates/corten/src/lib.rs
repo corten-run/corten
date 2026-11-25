@@ -508,6 +508,7 @@ mod client;
 pub mod compress;
 pub mod extract;
 pub mod form;
+mod h1;
 mod handler;
 mod html;
 pub mod http;
