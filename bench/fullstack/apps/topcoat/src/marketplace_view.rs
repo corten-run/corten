@@ -8,9 +8,12 @@ use topcoat::{
     Result,
     context::Cx,
     router::{
+        Body, HeaderValue, LayerFuture, Next, StatusCode,
         content::{Form, Json},
-        error::{bad_request, not_found},
-        page, path_param, request, route,
+        error::{InternalServerError, MethodNotAllowedError, NotFoundError, bad_request, internal_server_error, not_found},
+        header, page, path_param, request,
+        response::{IntoResponse, Response},
+        route, try_endpoint,
     },
     view::{View, ViewExt, component, view},
 };
@@ -22,7 +25,22 @@ pub async fn marketplace_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<im
     let locale = PageLocale::parse(locale(cx)).ok_or_else(|| bad_request("unsupported marketplace locale"))?;
     let query = Form::<Query>::from_bytes(request::uri(cx).query().unwrap_or_default().as_bytes())?.0;
     let trace = crate::trace::TraceContext::from_request(cx);
-    let record = marketplace::source::get(id(cx), &trace).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
+    let record = match marketplace::source::get(id(cx), &trace).await {
+        Ok(Some(record)) => record,
+        Ok(None) => return Err(not_found().into()),
+        Err(_) if crate::matched() => {
+            return Ok(view! {
+                (StatusCode::INTERNAL_SERVER_ERROR)
+                <!DOCTYPE html>
+                <html lang="en">
+                    <head><meta charset="utf-8"><title>"Marketplace unavailable"</title></head>
+                    <body><h1>"Marketplace unavailable"</h1></body>
+                </html>
+            }
+            .boxed());
+        }
+        Err(error) => return Err(topcoat::Error::msg(error)),
+    };
     let posted = request::method(cx).as_str() == "POST";
     if posted && !record.valid_for_alert(id(cx)) {
         return Err(topcoat::Error::msg("malformed marketplace record"));
@@ -65,8 +83,52 @@ pub async fn marketplace_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<im
 #[route(GET "/api/marketplace/{id}")]
 pub async fn marketplace_json(cx: &Cx) -> Result<Json<Arc<Record>>> {
     let trace = crate::trace::TraceContext::from_request(cx);
-    let record = marketplace::source::get(id(cx), &trace).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
+    let record = marketplace::source::get(id(cx), &trace)
+        .await
+        .map_err(|error| internal_server_error(topcoat::Error::msg(error)))?
+        .ok_or_else(not_found)?;
     Ok(Json(record))
+}
+
+pub fn matched_responses<'a>(cx: &'a Cx, body: Body, next: Next<'a>) -> LayerFuture<'a> {
+    Box::pin(async move {
+        match next.run(cx, body).await {
+            Ok(mut response)
+                if try_endpoint(cx).is_some_and(|endpoint| endpoint.path().as_str() == "/marketplace/{locale}/{id}") =>
+            {
+                // Keep the runtime and readiness assets, but this document has no client
+                // expressions, event directives, shards or runtime-managed links.
+                response
+                    .headers_mut()
+                    .insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(crate::MATCHED_MARKETPLACE_CSP));
+                Ok(response)
+            }
+            // The matched endpoint is available even for a native 405, without a matched route.
+            Err(error)
+                if (error.is::<NotFoundError>() || error.is::<MethodNotAllowedError>() || error.is::<InternalServerError>())
+                    && try_endpoint(cx).is_some_and(|endpoint| endpoint.path().as_str() == "/api/marketplace/{id}") =>
+            {
+                problem(cx, error.into_response(cx)?)
+            }
+            result => result,
+        }
+    })
+}
+
+fn problem(cx: &Cx, response: Response) -> Result<Response> {
+    let status = response.status();
+    let (parts, _) = response.into_parts();
+    let mut response = (
+        parts,
+        Json(serde_json::json!({
+            "type": "about:blank",
+            "title": status.canonical_reason(),
+            "status": status.as_u16(),
+        })),
+    )
+        .into_response(cx)?;
+    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/problem+json"));
+    Ok(response)
 }
 #[component]
 async fn detail(cx: &Cx, record: &Record, locale: PageLocale, query: &Query, message: &str) -> Result<impl View> {
