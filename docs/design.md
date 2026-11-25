@@ -8946,8 +8946,8 @@ rules something out.
     controls; it does not show they are unchanged, and a placement cost in the binary that ships is
     still a cost, which no check here measures: the gate reads the change, and a release binary is
     one placement of it ([design Choice 72](#choice-placement-runs)). A workload the change touches
-    keeps +1% with no floor, however flat its
-    instructions, since a change to the data a request reads, its allocation, the kernel's work or
+    and judged on cycles ([Choice 76](#choice-cycles-threshold)) keeps +1% with no floor, however
+    flat its instructions, since a change to the data a request reads, its allocation, the kernel's work or
     its waiting can cost cycles on the same instructions; so does a workload not named before the
     run, and the affected-route, memory and waiting measurements are required as before. This
     answers
@@ -9079,7 +9079,9 @@ rules something out.
     [#1923 Control workloads with flat instructions miss the +1% cycle margin by up to 2.8% of user cycles, so the gate blocks changes it cannot attribute](https://github.com/corten-run/corten/issues/1923).
 
     Not chosen: the exception for any workload whose instructions are flat (this Choice as first
-    proposed), which would pass a real cost on a workload the change touches, such as data laid out
+    proposed), which would pass a real cost on a workload the change touches (a risk
+    [Choice 76](#choice-cycles-threshold) since takes for a touched workload whose instructions
+    rise under 1%, which it no longer reads on cycles), such as data laid out
     to miss the cache more, work in the kernel or waiting on a lock, whose instructions stay flat;
     the margin raised to the floor for every workload, which would let a change that adds
     instructions pass a cost of up to 1.62%; an instruction band of 0.05% either way, which the A/A
@@ -9161,7 +9163,8 @@ rules something out.
     hundred instructions on a touched request passes or misses by where its code landed, and a floor
     ([design Choice 71](#choice-layout-floor)) is not the answer there, for that Choice's reason: a
     touched workload can cost cycles on flat instructions. So a run's plan may declare, before the
-    run, that a touched workload is read across placements, and the gate then reads it as Pull
+    run, that a touched workload judged on cycles ([Choice 76](#choice-cycles-threshold)) is read
+    across placements, and the gate then reads it as Pull
     requests says: each side compiled once; K placements of it from its captured final link run
     again with one more object, a function of p bytes that nothing calls, placed first in `.text`
     by `-Wl,--symbol-ordering-file`, so every other function moves by p in the default order with
@@ -10526,6 +10529,51 @@ rules something out.
     2026), RFC 6454, Mozilla bugs 1405971 (open, last updated November 2026) and 1685570 (fixed
     for `fetch` in 86 and wholly in 87), electron/electron issues 6859 and 7931 and MDN's
     `web_accessible_resources` page, read at `49b6e79eb`.
+
+76. <a id="choice-cycles-threshold"></a>**A touched workload is judged on cycles only when its
+    instructions per request rise by 1% or more, or a CPU-cost win is claimed on it.** Every change
+    to the request path gives instructions per request on each workload it touches, base and head
+    from one counter ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2). Cycles under load
+    on a quiet Linux host are read only for a workload judged on cycles: one whose instructions rise
+    by 1% or more, the size of the no-regression margin; one the pull request claims a CPU-cost win
+    on; or one it chooses to run the comparison on, whose result then stands. Each workload's own
+    change decides, and one with no valid count is judged on cycles. Until this Choice every touched
+    workload needed a paired-cycle bound under +1% ([Choice 71](#choice-layout-floor)), and a
+    single build's bound inside the placement spread decided nothing and called for a placement
+    run ([Choice 72](#choice-placement-runs)). For a change of a few hundred instructions that is
+    hours of a paid host and a plan reviewed before the run, for a reading that placement and a
+    process's start move by more than the change: builds of one commit differed by up to about 4%
+    either way in a touched request's cycles, and the recorded spreads run from -2.98% to +3.33%.
+    [#2044 Say under corten dev whether a release build keeps a Public answer, and why not](https://github.com/corten-run/corten/pull/2044)
+    waited on such a run for a release cost under 0.1% of its instructions.
+
+    The cost accepted: an instruction count measures work, not CPU cost. A change that keeps its
+    instructions but lays data out to miss the cache more, moves work into the kernel or waits on a
+    lock can cost cycles that no gate now asks to see, the risk
+    [Choice 71](#choice-layout-floor) named when it declined an exception for flat instructions. The memory and waiting measurements (item 2, points 2 and 3)
+    still apply and see part of it; the rest is taken as a risk.
+
+    Not chosen: cycles for every touched workload, the rule until now, for the cost above; a lower
+    threshold such as 0.5%, which still asks for runs a single build cannot resolve; a threshold at
+    the default band (about 3%), which would let a change add up to 3% more work a request without
+    a cycles reading; and one change summed across workloads, which would let a fall on one hide a
+    rise on another.
+
+    Stands on: measured (the placement spreads of [Choice 72](#choice-placement-runs) and the
+    layout bounds of [Choice 71](#choice-layout-floor));
+    value (fast, and proven fast: every request-path change is still measured with the number that
+    can see it, and a rise of 1% or more is read on cycles, README Values 1); decision (the
+    project's owner, 2026-11-25,
+    [#2117 CONTRIBUTING asks for quiet-host cycles on a request-path change whose instructions per request barely move](https://github.com/corten-run/corten/issues/2117)).
+
+    Revisit when: a change that passed on its instructions alone is later measured costing 1% or
+    more in cycles on a workload it touched; a placement spread under 1% is recorded on the gate's
+    setup, so a single build could resolve a change this size; or the no-regression margin moves
+    from +1%.
+
+    Last checked: 2026-11-25, [Choice 71](#choice-layout-floor), [Choice 72](#choice-placement-runs)
+    and Pull requests item 2 as they stood at
+    `9e209a32f`.
 
 ## Rules
 

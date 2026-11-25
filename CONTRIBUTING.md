@@ -521,19 +521,26 @@ establish a general ranking.
 
       For work around the handler (routing, middleware and other stages, headers read or
       written, future sizes, allocations or copies per request), give the instruction count per
-      request on each workload the change touches: the median of the alternated rounds, head
-      against base.
+      request on each workload the change touches, base and head from one counter (callgrind's
+      instructions, or `perf stat`'s user plus kernel instructions): its change is the head's
+      median over the alternated rounds less the base's, divided by the base's, unrounded.
 
-      Cycles per request under equivalent load on a quiet Linux bench host are needed only when a
-      touched workload's instructions per request rise by 1% or more, or the pull request claims a
-      CPU-cost win. Below that, the instruction count is the measurement, and the pull request
-      says so with each touched workload's change: builds of one commit differ by up to about 4% in
-      a touched request's cycles by where the linker put the code
-      ([design Choice 72](docs/design.md#choice-placement-runs)), so a cycles run cannot resolve a
-      change that small without a placement run of hours on a paid host. A cycles run a pull
-      request did take is reported, and a regression it shows by the rules below stands. The
-      memory, waiting and bytes measurements (points 2 to 4) are not affected. When cycles are
-      needed, the rest of this point applies.
+      A touched workload is **judged on cycles** when that change is +1% or more, when the pull
+      request claims a CPU-cost win on it, or when the pull request runs the cycles comparison
+      below on it anyway. Each touched workload needs a valid count on both sides, and its own
+      change decides: a fall on one workload does not offset a rise on another, and a workload
+      with no valid count is judged on cycles. A touched workload not judged on cycles needs no
+      cycles bound and no placement run; the pull request gives its instruction change and says it
+      was not judged on cycles. That accepts a risk: an instruction count measures work, not CPU
+      cost, and does not see a cost on the same instructions (cache misses, kernel work), which
+      the memory and waiting measurements (points 2 and 3) cover only in part. It is taken
+      because placement and a process's start can move a touched request's cycles by more than
+      such a change (up to about 4% either way between builds of one commit,
+      [design Choice 72](docs/design.md#choice-placement-runs)), so a single build cannot resolve
+      it and a placement run takes hours of a paid host. Cycles a counter reads beside
+      instructions (`bench/fullstack/count.mjs` records both) are not that comparison and decide
+      nothing. The rest of this point applies to each workload judged on cycles; a regression such
+      a run shows by its rules stands. Points 2 to 4 apply as before.
 
       For changes exercised by the catalog item page or item JSON, use
       [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs) with target `page` or `json` and
@@ -563,8 +570,8 @@ establish a general ranking.
       the margin is not met, with one exception, for a negative control: a workload the run's
       plan (its `margin.md`) names before the run as one whose code paths the change does not
       touch, with the reason, which the pull request's review accepts. A workload the change
-      touches is held to +1% with no floor, however flat its instructions, and so is a workload
-      not named so before the run; a declaration is never added or changed after a run to clear
+      touches and judged on cycles is held to +1% with no floor, however flat its instructions,
+      and so is a workload not named so before the run; a declaration is never added or changed after a run to clear
       its result, and a plan that made +1% decisive before this exception existed stays bound by
       it. This single-build reading and the CPU-win rule above do not decide a touched workload
       whose single-build bound's distance from its threshold is inside its recorded placement
@@ -644,7 +651,8 @@ establish a general ranking.
       A layout floor never applies to the benefit side: it cannot establish a CPU-cost win, which
       the rule above decides as before.
 
-      A workload the change touches may instead be read across placements, when the run's plan
+      A workload the change touches and judged on cycles may instead be read across placements,
+      when the run's plan
       names it before the run with the numbers below
       ([design Choice 72](docs/design.md#choice-placement-runs)). Builds of one commit whose code
       sits at different places have differed by up to about 4% in a touched request's cycles
