@@ -1236,9 +1236,12 @@ the job runs, so a poll whose watcher fails after that point would find both
 daemons older than its fence, which alone would accept them. In drain mode only,
 the host query and the verifier therefore both refuse with
 `Docker or containerd present` when `/run/docker.sock` or
-`/run/containerd/containerd.sock` exists, or when any process's kernel command
-name is `dockerd` or `containerd` or starts with `containerd-` (a shim). The
-query records the two socket observations in the proof as `dockerSockets`. The
+`/run/containerd/containerd.sock` exists or is a symlink (even a dangling one), or
+when any process's kernel command name is `dockerd` or `containerd` or starts with
+`containerd-` (a shim). The query records the two socket observations in the proof
+as `dockerSockets`. A `dockerd` or `containerd` started after the fence never
+reaches this check: the start-time check runs first on both sides and refuses it
+with `process started during or after a failed session`. The
 command name is what a process reports, not an identity: this is a conservative
 refusal, not a proof that no daemon held session work, and it also refuses a host
 running Docker for any other reason. A failure before Docker started that leaves
@@ -1250,7 +1253,10 @@ collect stops with `setup-host-proof-refused` before another query, and the host
 is then handled as it was before this proof existed, by the operator cleanup
 below. The proof covers processes that were started. It cannot see work the
 session handed to a process that already existed (such as `dockerd` or a D-Bus
-service) or a thread added to an existing process.
+service) or a thread added to an existing process. Nor does it see work handed to
+systemd or D-Bus that has not started a process yet, such as a transient timer
+that has not fired; that is acceptable only because control sessions run the
+controller's fixed scripts.
 
 `setup-watcher-proof-missing` means an
 archived failure is not that deadline record, there is no control ledger, the

@@ -324,7 +324,9 @@ test("the drain verifier refuses another boot, a query inside the failed window,
 });
 
 test("the drain proof refuses a Docker or containerd socket or daemon, even one older than the failed session", () => {
-  for (const mode of ["setup-drain-docker-socket", "setup-drain-containerd-socket", "setup-drain-dockerd", "setup-drain-containerd", "setup-drain-containerd-shim"]) {
+  // A dangling symlink at a socket path does not exist but is a symlink; it refuses as well.
+  for (const mode of ["setup-drain-docker-socket", "setup-drain-containerd-socket", "setup-drain-docker-symlink", "setup-drain-containerd-symlink",
+    "setup-drain-dockerd", "setup-drain-containerd", "setup-drain-containerd-shim"]) {
     const f = fixture(mode, { drain: true });
     assert.equal(f.rejected, true, mode); assert.match(f.reason, /^AssertionError: Docker or containerd present$/, mode);
   }
@@ -336,6 +338,9 @@ test("the drain proof refuses a Docker or containerd socket or daemon, even one 
   refuses((p) => { p.dockerSockets.extra = false; });
   // Each daemon starts before the fence (10000), so only this check sees it.
   for (const comm of ["dockerd", "containerd", "containerd-shim"]) refuses((p) => { p.observation.processes.push(procRow(6, 1, `/system.slice/${comm}.service`, 600, 0, comm)); });
+  // One started after the fence is refused first by the start-time check.
+  for (const comm of ["dockerd", "containerd"]) refuses((p) => { p.observation.processes.push(procRow(6, 1, `/system.slice/${comm}.service`, 10500, 0, comm)); },
+    /process started during or after a failed session/);
   check((p) => { p.observation.processes.push(procRow(6, 1, "/system.slice/cron.service", 600, 0, "cron")); });
 });
 

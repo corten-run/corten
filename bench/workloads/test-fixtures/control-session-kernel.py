@@ -107,6 +107,8 @@ current = {}
 
 removed_scopes = set()
 remove_on_read = set()
+# Paths that are dangling symbolic links: is_symlink() is true and exists() is false.
+symlinks = set()
 
 class Path:
     def __init__(self, value):
@@ -146,7 +148,7 @@ class Path:
         return self.value in data or self.value in folders
 
     def is_symlink(self):
-        return False
+        return self.value in symlinks
 
     def read_text(self, **kwargs):
         assert self.name == "cgroup.events"
@@ -276,6 +278,9 @@ class Child:
             # Docker after docker-install: a socket, or a daemon older than the failed session.
             if mode == "setup-drain-docker-socket": data["/run/docker.sock"] = b""
             if mode == "setup-drain-containerd-socket": data["/run/containerd/containerd.sock"] = b""
+            # A dangling symlink at either socket path: exists() is false, is_symlink() is true.
+            if mode == "setup-drain-docker-symlink": symlinks.add("/run/docker.sock")
+            if mode == "setup-drain-containerd-symlink": symlinks.add("/run/containerd/containerd.sock")
             for pid, name in ((6, "dockerd"), (7, "containerd"), (8, "containerd-shim")):
                 if mode == "setup-drain-" + name:
                     rows[pid] = row(pid, 1, "/system.slice/" + name + ".service")
