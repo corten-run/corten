@@ -557,8 +557,9 @@ establish a general ranking.
       its result, and a plan that made +1% decisive before this exception existed stays bound by
       it. This single-build reading and the CPU-win rule above do not decide a touched workload
       whose single-build bound's distance from its threshold is inside its recorded placement
-      spread or, where none applies, the default band, or one read across placements; both are
-      decided as described below.
+      spread or, where none applies, the default band, or one read across placements (a
+      threshold one build read outside stays as that build read it); both are decided as
+      described below.
 
       A negative control whose bound is at or above +1% but under the layout floor that applies
       to it may go ahead when its user instructions pass a screen: the median of the paired
@@ -672,17 +673,20 @@ establish a general ranking.
       `count.mjs` starts across placements
       ([design Choice 72](docs/design.md#choice-placement-runs)). Where a plan reads one or more
       workloads across placements on a probe, each on the path the change touches (an unaffected
-      route does not count, as above), and names before the run, for each of `page` and `json`
-      the change exercises, which of those workloads runs the changed code that target's request
-      runs, with the reason, which the pull request's review accepts, those workloads are what
-      item 2 asks of the change's cycles, held as the plan declares them and as this item says:
-      no margin, A/A or placement is loosened. A target the plan names no such workload for, as
-      where its probe has no request that runs that code, is not under this case until the
-      plan's probe has one: it is held as any other workload is, and inside does not pass. For
-      this case such a workload may be read across placements whatever a single build of it
-      read. Where one build read it outside its spread or the band, that reading still binds, as
-      above: the reading across placements then changes nothing for the workload, and brings a
-      target under the case only if its A/A resolves and its bound is under +1%.
+      route does not count, as above), all the workloads it reads so are what item 2 asks of the
+      change's cycles, each held as the plan declares it and as this item says: no margin, A/A
+      or placement is loosened. The plan also names before the run, for each of `page` and
+      `json` the change exercises, which of those workloads runs the changed code that target's
+      request runs, with the reason, which the pull request's review accepts. A target the plan
+      names no such workload for, as where its probe has no request that runs that code, is not
+      under this case until a plan of the pull request names one; a workload named for a target
+      is not replaced after it is read. Until one is named the target is held as any other
+      workload is, and inside does not pass. For this case a workload on that path may be read
+      across placements whatever a single build of it read. Where one build read it outside its
+      spread or the band, that reading still binds, as above: the reading across placements then
+      changes nothing for the workload, and brings the target it is named for, which is
+      otherwise held as any other workload is, under the case only if its A/A resolves and its
+      bound is under +1%.
       `page` and `json`, whichever the change exercises, are still counted, once
       for that plan, with `count.mjs`: one build of each side, declared in the plan with its
       pairs and its checks before the plan's first turn and before the count is taken, and each

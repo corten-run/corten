@@ -9288,8 +9288,8 @@ rules something out.
     did any of it (`df9242b56`); `bench/placement` now does, for a probe a plan file names, and
     no run has been read from it; and no run has read the image `count.mjs` starts across
     placements, which that kit does not read either, so a catalog target the band leaves not
-    decided has that to build, unless its plan reads the change across placements on a probe
-    (The catalog's `page` and `json`, below). The
+    decided has that to build, unless its plan names a probe workload for it that is read
+    across placements (The catalog's `page` and `json`, below). The
     band is a default by policy, not a bound on what placement moves on a setup nobody has read
     (Stands on, bet).
 
@@ -9333,11 +9333,21 @@ rules something out.
     The rule leaves a placement run only the thresholds one build read inside, so a change
     whose probe workloads one build each read outside its spread or the band would have no
     reading across placements, and its counts inside the band could not pass though nothing
-    about them differs. What that build read still binds, so the reading made for the case decides nothing
-    for the workload, and it is asked to resolve and meet the margin because it is what stands
-    in for the image. The maintainer decided both, on the first review of
+    about them differs. What that build read still binds, so the reading made for the case
+    decides nothing for the workload (read the other way, it is one of this Choice's
+    Revisit-when conditions). The maintainer decided both, the match and the reading made
+    whatever one build read, on the first review of
     [#2109 Let a probe read across placements decide a change's cycles, and count the catalog's page and JSON once under such a plan](https://github.com/corten-run/corten/pull/2109),
-    whose description records the answers. The count is kept for what a probe is not: it
+    whose description records the answers. Three sentences of item 2 beside them are that pull
+    request's reading and not the maintainer's wording. A workload named for a target brings it
+    under the case only if its A/A resolves and its bound is under +1%, because that reading is
+    what stands in for the image; the pull request's second review finds the condition implied
+    by item 2's rule for any reading across placements. A target with no named workload waits
+    for a plan of the pull request that names one. And a workload named for a target is not
+    replaced after it is read, since a pull request that named workloads until one met the
+    margin would gain by choosing what reads a workload, which the rule that a declaration is
+    never added or changed after a run to clear its result already bars. The count is kept for
+    what a probe is not: it
     is the only reading of the change in the catalog's own image, and outside the band it binds
     for the margin as it did, whatever the probe read. It is declared before the plan's first
     turn and before it is taken, so it is not chosen by its result, and a count an earlier plan
@@ -10166,7 +10176,8 @@ rules something out.
     read across placements for that case after one build read it outside the band clears
     nothing, that build's reading still binding; and a count declared before the
     plan's first turn and before it is taken, and taken once for a pull request, is not chosen
-    by its result);
+    by its result, nor is a workload named for a target before the run and not replaced after
+    it is read);
     bet
     (moving the whole of the code by declared offsets varies placement about as much as real
     changes do, though a real change moves only the code after it and by sizes no plan chose, so
