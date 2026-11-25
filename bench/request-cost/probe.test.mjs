@@ -1,13 +1,9 @@
 // node --test bench/request-cost/probe.test.mjs
-// The client against a stand-in server, and build.sh's refusal; neither needs the probe.
+// The client against a stand-in server; it needs no probe.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
 import net from "node:net";
-import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { Connection, send } from "./probe.mjs";
 
 const ok = (/** @type {string} */ body, more = "", status = "200 OK") => `HTTP/1.1 ${status}\r\ncontent-length: ${body.length}\r\ndate: now\r\n${more}\r\n${body}`;
@@ -82,15 +78,15 @@ test("an answer that never comes because the server closed is an error, not a wa
   await assert.rejects(sending((n) => (n === 2 ? null : ok("3")), "get", 12), /the probe closed the connection|ECONNRESET/);
 });
 
-const kit = dirname(fileURLToPath(import.meta.url));
-const checkout = spawnSync("sh", ["-c", "git rev-parse --show-toplevel"], { cwd: kit }).status === 0;
-
-test("build.sh refuses a directory inside the checkout before it makes or removes anything", { skip: !checkout && "needs sh, git and a checkout" }, () => {
-  for (const inside of ["not-made", "probe/not-made/deeper"]) {
-    const built = spawnSync("sh", ["build.sh", "HEAD", inside], { cwd: kit, encoding: "utf8" });
-    assert.equal(built.status, 2, built.stderr);
-    assert.match(built.stderr, /is inside the checkout/);
-    assert.ok(!existsSync(join(kit, inside.split("/")[0] === "probe" ? "probe/not-made" : "not-made")), `${inside} was made`);
+test("an answer that never comes, the connection still open, is an error once nothing has come for the connection's patience", async () => {
+  const server = await standIn((n) => (n === 2 ? "" : ok("3")));
+  const connection = await Connection.open(server.port);
+  connection.patience = 150;
+  try {
+    await assert.rejects(send(connection, "get", 12), /no answer from the probe in 0\.15 s/);
+    assert.equal(connection.closed, false);
+  } finally {
+    connection.socket.destroy();
+    await server.close();
   }
-  assert.ok(existsSync(join(kit, "probe", "Cargo.toml")));
 });

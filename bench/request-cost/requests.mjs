@@ -1,5 +1,6 @@
 // The requests the kit sends, the answer each must get, and how a connection's bytes are split
 // into answers.
+import zlib from "node:zlib";
 
 /** The header lines a browser sends with a navigation (Firefox 140's). */
 const BROWSER = [
@@ -16,16 +17,14 @@ const get = (path, more = []) => (port) => Buffer.from([`GET ${path} HTTP/1.1`, 
 const post = (path, type, body) => (port) =>
   Buffer.from([`POST ${path} HTTP/1.1`, `Host: localhost:${port}`, `Content-Type: ${type}`, `Content-Length: ${body.length}`, "", body].join("\r\n"), "latin1");
 
-/** The probe's page as it is sent uncompressed: from its doctype to its last row, 119 and 7 times 119. */
+/** The probe's page: from its doctype to its last row, 119 and 7 times 119. */
 const PAGE = /^<!DOCTYPE html>.*<td>119<\/td><td>A row of the page, about as long as a row of a listing is<\/td><td>833<\/td><\/tr><\/table><\/main><\/body><\/html>$/s;
-/** A body compressed with zstd begins with a frame's four magic bytes. */
-const ZSTD = /^\x28\xb5\x2f\xfd/;
 
 /**
  * Each case: the probe's configuration that answers it, its request for a port, and the answer
  * it must get: the body (as Latin-1 text, the whole of it or what it matches) and the
- * `Content-Encoding`, none unless given.
- * @type {Record<string, { configuration: "api" | "pages", request: (port: number) => Buffer, body: string | RegExp, encoding?: string }>}
+ * `Content-Encoding`, none unless given. A body sent with an encoding is the case's once decoded.
+ * @type {Record<string, { configuration: "api" | "pages", request: (port: number) => Buffer, body: string | RegExp, encoding?: "zstd" }>}
  */
 export const cases = {
   // A staged route in an API: typed query parameters in, a short String out.
@@ -40,7 +39,7 @@ export const cases = {
   // The same with a browser's header lines: the page is compressed, the short answers are not.
   "get-browser": { configuration: "api", request: get("/baseline11?a=1&b=2", BROWSER), body: "3" },
   "text-browser": { configuration: "pages", request: get("/text", BROWSER), body: "ok" },
-  "page-browser": { configuration: "pages", request: get("/page", BROWSER), body: ZSTD, encoding: "zstd" },
+  "page-browser": { configuration: "pages", request: get("/page", BROWSER), body: PAGE, encoding: "zstd" },
 };
 
 /** The cases a list names, or an error naming the one that is not a case. @param {string} list */
@@ -62,7 +61,17 @@ export function unexpected(name, answer) {
   if (!head.startsWith("HTTP/1.1 200 ")) return `not a 200: ${head.split("\r\n")[0]}`;
   const coded = /^content-encoding:[ \t]*(\S*)[ \t]*$/im.exec(head)?.[1];
   if (coded !== encoding) return `Content-Encoding ${coded ?? "none"}, not ${encoding ?? "none"}`;
-  const sent = answer.latin1Slice(end + 4);
+  let bytes = answer.subarray(end + 4);
+  if (encoding === "zstd") {
+    // Node's zlib has zstd from 22.15; the repository's .node-version is later.
+    if (typeof zlib.zstdDecompressSync !== "function") throw new Error(`${name}: this Node's zlib has no zstd to read the answer with (22.15 or later has)`);
+    try {
+      bytes = zlib.zstdDecompressSync(bytes);
+    } catch (error) {
+      return `not a zstd body: ${/** @type {Error} */ (error).message}`;
+    }
+  }
+  const sent = bytes.latin1Slice();
   if (typeof body === "string" ? sent !== body : !body.test(sent)) return `not the body of ${name}: ${JSON.stringify(sent.slice(0, 80))}`;
   return null;
 }

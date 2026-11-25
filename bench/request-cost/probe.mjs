@@ -1,10 +1,11 @@
 // Starts the probe held to one CPU, under callgrind or not, and talks HTTP/1.1 to it.
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
-import { COUNTED, WARM } from "./figures.mjs";
+import { instructions } from "./allocations.mjs";
+import { COUNTED, WARM, alone } from "./figures.mjs";
 import { Answers, cases, masked, unexpected } from "./requests.mjs";
 
 /**
@@ -68,6 +69,8 @@ export class Connection {
   #failed = null;
   /** Whether the probe has closed its side, or the connection failed. */
   closed = false;
+  /** How long `answer` waits with nothing read, in milliseconds: as long as Corten waits for a request. */
+  patience = 30_000;
 
   /** @param {net.Socket} socket @param {number} port */
   constructor(socket, port) {
@@ -105,14 +108,24 @@ export class Connection {
     this.socket.write(bytes);
   }
 
-  /** The next answer. @returns {Promise<Buffer>} */
+  /**
+   * The next answer, or an error when nothing has come for `patience`: a request sent on a
+   * connection the probe has not accepted is never answered. @returns {Promise<Buffer>}
+   */
   async answer() {
     for (;;) {
       if (this.#failed) throw this.#failed;
       const next = this.#whole.shift();
       if (next) return next;
       if (this.closed) throw new Error("the probe closed the connection");
-      await new Promise((resolve) => (this.#wake = () => resolve(undefined)));
+      /** @type {NodeJS.Timeout | undefined} */
+      let late;
+      const came = await new Promise((resolve) => {
+        this.#wake = () => resolve(true);
+        late = setTimeout(() => resolve(false), this.patience);
+      });
+      clearTimeout(late);
+      if (!came) throw new Error(`no answer from the probe in ${this.patience / 1000} s`);
     }
   }
 
@@ -153,33 +166,52 @@ export async function send(connection, name, count, depth = 1) {
 }
 
 /**
- * The profile of a case's counted requests: the probe under callgrind answers `WARM` requests on
+ * The window of a case's counted requests: the probe under callgrind answers `WARM` requests on
  * one connection, then `COUNTED` more on the same one (`depth` at a time), with a dump before
- * them and one after. A dump writes what each thread ran since the dump before it, so the second
- * holds those requests and nothing of the probe's start, of the connection's opening and closing,
- * or of shutdown. Resolves to the second dump of callgrind's thread 1, the thread the probe
- * serves on, written without name compression (allocations.mjs reads it).
+ * them and one after. A dump writes what each thread ran since the dump before it, a file a
+ * thread, so the second holds those requests and nothing of the probe's start, of the
+ * connection's opening and closing, or of shutdown.
+ *
+ * Resolves to the second dump of callgrind's thread 1, the probe's first thread, which is the
+ * one its runtime serves on (`profile`, written without name compression: allocations.mjs reads
+ * it), the instructions it holds (`serving`), what the other threads ran in the window together
+ * (`others`, and how many `threads`), and how long the window lasted (`seconds`, from the first
+ * dump asked for to the second written). Fails when the window is not a count (`alone` in
+ * figures.mjs): the first thread did not serve, or another thread ran more than the clock does.
  * @param {string} binary @param {string} name
  * @param {{ cpu: string, port: number, depth: number, scratch: string }} how `scratch`: a directory for the dumps
  */
 export async function counted(binary, name, { cpu, port, depth, scratch }) {
-  const out = join(mkdtempSync(join(scratch, "run-")), "callgrind");
+  const directory = mkdtempSync(join(scratch, "run-"));
+  const out = join(directory, "callgrind");
   const options = ["--separate-threads=yes", "--compress-strings=no", "--compress-pos=no"];
   const probe = await start(binary, /** @type {typeof cases[string]} */ (cases[name]).configuration, { cpu, port, callgrind: { out, options } });
-  // callgrind_control exits 0 whether or not it reached the process: a dump is known by its file.
+  /** The files of a dump, one a thread: `callgrind.<part>-<thread>`. */
+  const written = (/** @type {number} */ part) => readdirSync(directory).filter((file) => new RegExp(`^callgrind\\.${part}-\\d+$`).test(file));
+  // callgrind_control exits 0 whether or not it reached the process: a dump is known by its files.
   const dump = (/** @type {number} */ part) => {
     execFileSync("callgrind_control", ["-d", String(probe.pid)], { stdio: "ignore" });
-    if (!existsSync(`${out}.${part}-01`)) throw new Error(`callgrind_control did not make the probe write dump ${part}`);
+    if (written(part).length === 0) throw new Error(`callgrind_control did not make the probe write dump ${part}`);
   };
+  let seconds = 0;
   try {
     const connection = await Connection.open(port);
     await send(connection, name, WARM, depth);
+    const began = performance.now();
     dump(1);
     await send(connection, name, COUNTED, depth);
     dump(2);
+    seconds = (performance.now() - began) / 1000;
     await connection.close();
   } finally {
     await probe.stop();
   }
-  return readFileSync(`${out}.2-01`, "latin1");
+  const read = (/** @type {string} */ file) => readFileSync(join(directory, file), "latin1");
+  const first = "callgrind.2-01";
+  const rest = written(2).filter((file) => file !== first);
+  // A thread that ran nothing in the window may have no file: that is none of its instructions.
+  const profile = existsSync(join(directory, first)) ? read(first) : "totals: 0\n";
+  const window = { serving: instructions(profile), others: rest.reduce((sum, file) => sum + instructions(read(file)), 0), threads: rest.length, seconds };
+  alone(window, depth);
+  return { profile, ...window };
 }

@@ -1,6 +1,7 @@
 // node --test bench/request-cost/requests.test.mjs
 import assert from "node:assert/strict";
 import test from "node:test";
+import zlib from "node:zlib";
 import { Answers, cases, masked, named, unexpected } from "./requests.mjs";
 
 const answer = (/** @type {string} */ body, more = "", status = "200 OK") => Buffer.from(`HTTP/1.1 ${status}\r\ncontent-length: ${Buffer.byteLength(body, "latin1")}\r\n${more}\r\n${body}`, "latin1");
@@ -73,7 +74,7 @@ test("a list of cases is refused when it names one that is not a case", () => {
 test("an answer is the case's only as a 200 with the case's body and encoding", () => {
   const row = (/** @type {number} */ n) => `<tr><td>${n}</td><td>A row of the page, about as long as a row of a listing is</td><td>${n * 7}</td></tr>`;
   const page = `<!DOCTYPE html><html lang="en"><head></head><body><main><h1>Items</h1><table>${row(118)}${row(119)}</table></main></body></html>`;
-  const zstd = "\x28\xb5\x2f\xfd\x00\x58";
+  const zstd = (/** @type {string} */ text) => zlib.zstdCompressSync(Buffer.from(text, "latin1")).latin1Slice();
   for (const [name, body] of Object.entries({ get: "3", post: "23", unstaged: "3", pipeline: "ok", text: "ok", page, "get-browser": "3", "text-browser": "ok" })) {
     assert.equal(unexpected(name, answer(body)), null, name);
     assert.match(String(unexpected(name, answer(body, "", "404 Not Found"))), /^not a 200: HTTP\/1\.1 404 Not Found$/, name);
@@ -81,10 +82,13 @@ test("an answer is the case's only as a 200 with the case's body and encoding", 
     assert.match(String(unexpected(name, answer(body, "Content-Encoding: zstd\r\n"))), /^Content-Encoding zstd, not none$/, name);
     assert.match(String(unexpected(name, answer(`${body} `))), /^not the body of /, name);
   }
-  assert.equal(unexpected("page-browser", answer(zstd, "content-encoding: zstd\r\n")), null);
-  assert.match(String(unexpected("page-browser", answer(zstd))), /^Content-Encoding none, not zstd$/);
-  assert.match(String(unexpected("page-browser", answer(zstd, "content-encoding: br\r\n"))), /^Content-Encoding br, not zstd$/);
-  assert.match(String(unexpected("page-browser", answer(page, "content-encoding: zstd\r\n"))), /^not the body of page-browser/);
+  // The compressed page is the page once decompressed: not another page, not what only begins as zstd does.
+  assert.equal(unexpected("page-browser", answer(zstd(page), "content-encoding: zstd\r\n")), null);
+  assert.match(String(unexpected("page-browser", answer(zstd(page)))), /^Content-Encoding none, not zstd$/);
+  assert.match(String(unexpected("page-browser", answer(zstd(page), "content-encoding: br\r\n"))), /^Content-Encoding br, not zstd$/);
+  assert.match(String(unexpected("page-browser", answer(page, "content-encoding: zstd\r\n"))), /^not a zstd body: /);
+  assert.match(String(unexpected("page-browser", answer("\x28\xb5\x2f\xfd\x00\x58", "content-encoding: zstd\r\n"))), /^not a zstd body: /);
+  assert.match(String(unexpected("page-browser", answer(zstd(page.replace(row(119), "")), "content-encoding: zstd\r\n"))), /^not the body of page-browser: "<!DOCTYPE html>/);
   // The sum, not a digit of it, and the page to its last row.
   assert.match(String(unexpected("post", answer("3"))), /^not the body of post: "3"$/);
   assert.match(String(unexpected("page", answer(page.replace(row(119), "")))), /^not the body of page/);

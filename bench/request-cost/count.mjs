@@ -2,7 +2,9 @@
 // HTTP/1.1 connection. Needs Linux with valgrind, taskset and libjemalloc.so.2 (README.md).
 //
 // Usage: node count.mjs <probe binary> [--cases get,post,...] [--depth 1] [--reps 3] [--cpu 0] [--port 8080]
-//          instructions a request, each case's median, least and most of `reps` counts
+//          instructions a request: each case's median, least and most of `reps` counts, how many
+//          seconds the longest of their windows lasted, and the most that threads other than the
+//          serving one ran in a window, as "<instructions> in <threads>"
 //        node count.mjs <probe binary> --allocations [--cases ...] [--depth 1] [--cpu 0] [--port 8080]
 //          allocations and frees a request
 //        node count.mjs <probe binary> --answers <directory> [--cases ...] [--cpu 0] [--port 8080]
@@ -11,13 +13,17 @@
 // A count is one run of the probe under callgrind: 240 requests on one connection, then the 1,000
 // that are counted on the same connection, each written after the answer before it (or `--depth`
 // at a time), with a callgrind dump before those 1,000 and one after. The count is what the
-// serving thread ran between the two dumps, over the requests (`counted` in probe.mjs).
+// probe's first thread, which serves, ran between the two dumps, over the requests (`counted` in
+// probe.mjs). What other threads ran there is not in it: a run where they ran more than Corten's
+// clock does, or where the first thread did not serve, is refused. The serving thread also does
+// some work once a second whatever it serves, so a longer window counts a little more a request:
+// the seconds are printed to compare (README.md, How a number is read).
 // `--allocations` reads the calls into the allocator from the same kind of dump.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { allocatorCalls, instructions } from "./allocations.mjs";
+import { allocatorCalls } from "./allocations.mjs";
 import { COUNTED, WARM, each, median, sent } from "./figures.mjs";
 import { Connection, counted, send, start } from "./probe.mjs";
 import { cases, named } from "./requests.mjs";
@@ -60,12 +66,17 @@ try {
 }
 
 async function count() {
-  const row = (/** @type {(string | number)[]} */ [name, ...numbers]) => String(name).padEnd(14) + numbers.slice(0, 3).map((n) => String(n).padStart(10)).join("") + "  " + numbers.slice(3).join(" ");
-  console.log(row(["case", "median", "least", "most", "counts"]));
+  const row = (/** @type {(string | number)[]} */ [name, middle, least, most, seconds, others, ...counts]) =>
+    String(name).padEnd(14) + [middle, least, most].map((n) => String(n).padStart(10)).join("") + String(seconds).padStart(9) + String(others).padStart(15) + "  " + counts.join(" ");
+  console.log(row(["case", "median", "least", "most", "seconds", "other threads", "counts"]));
   for (const name of names) {
-    const counts = [];
-    for (let rep = 0; rep < reps; rep += 1) counts.push(Math.round(each(instructions(await counted(binary, name, { cpu, port, depth, scratch })), depth)));
-    console.log(row([name, median(counts), Math.min(...counts), Math.max(...counts), ...counts]));
+    const windows = [];
+    for (let rep = 0; rep < reps; rep += 1) windows.push(await counted(binary, name, { cpu, port, depth, scratch }));
+    const counts = windows.map((window) => Math.round(each(window.serving, depth)));
+    // The longest window, and the most the other threads ran in one, with how many they were.
+    const seconds = Math.max(...windows.map((window) => window.seconds)).toFixed(1);
+    const most = windows.reduce((a, b) => (b.others > a.others ? b : a));
+    console.log(row([name, median(counts), Math.min(...counts), Math.max(...counts), seconds, `${most.others} in ${most.threads}`, ...counts]));
   }
 }
 
@@ -73,7 +84,7 @@ async function allocations() {
   const two = (/** @type {number} */ count) => each(count, depth).toFixed(2);
   console.log("case".padEnd(14) + "allocations".padStart(12) + "frees".padStart(10) + "  calls");
   for (const name of names) {
-    const found = allocatorCalls(await counted(binary, name, { cpu, port, depth, scratch }));
+    const found = allocatorCalls((await counted(binary, name, { cpu, port, depth, scratch })).profile);
     // Every case allocates for each request: fewer means the profile is not of the requests.
     if (found.allocations < sent(COUNTED, depth)) throw new Error(`${name}: the profile holds ${found.allocations} allocations for ${sent(COUNTED, depth)} requests`);
     const calls = Object.entries(found.calls).sort().map(([call, count]) => `${call}=${two(count)}`).join(" ");

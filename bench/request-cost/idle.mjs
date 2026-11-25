@@ -9,8 +9,8 @@
 // reads its answer (`--silent`: sends nothing), waits a second with nothing sent, and divides
 // the growth of the process's resident memory (VmRSS) by the connections. The kernel's socket
 // buffers are not the process's and are not counted. A run prints no figure when an answer was
-// not the case's, when the probe had closed a connection, or when its open files did not grow by
-// the number of connections.
+// not the case's or did not come in 30 seconds, when the probe had closed a connection, or when
+// its open files did not grow by the number of connections.
 //
 // One client address has ports for about 28,000 connections to the probe: `--addresses 4` opens
 // them from 127.0.0.1 to 127.0.0.4, for 100,000. This process and the probe each need that many
