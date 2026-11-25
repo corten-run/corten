@@ -334,12 +334,13 @@ export function recheckCreateQuarantine(root, row, selection) {
   assert.ok(isDeepStrictEqual(readCreateQuarantine(readFleet(row.root, row.round, { priorSelection: true })), row), "create quarantine changed");
 }
 
+// The worker projects trusted sightings even from a response that cannot prove absence.
 export function checkQuarantineCensus(root, quarantined, selection, rows) {
   const text = (value) => typeof value === "string" && value.length > 0;
-  assert.ok(rows.every((d) => Number.isSafeInteger(d?.id) && d.id > 0 && text(d.name)
-    && Array.isArray(d.tags) && d.tags.every(text)), "create quarantine census rows incomplete");
+  assert.ok(rows.every((d) => Number.isSafeInteger(d?.id) && d.id > 0 && (d.name === undefined || text(d.name))
+    && (d.tags === undefined || Array.isArray(d.tags) && d.tags.every(text))), "invalid create quarantine census rows");
   for (const { id, name, tags } of rows) {
-    const nameSha256 = digest(name), tagSha256s = new Set(tags.map(digest));
+    const nameSha256 = name === undefined ? undefined : digest(name), tagSha256s = new Set(tags?.map(digest));
     const match = quarantined.find((row) => row.nameSha256 === nameSha256 || tagSha256s.has(row.tagSha256));
     if (!match) continue;
     try {

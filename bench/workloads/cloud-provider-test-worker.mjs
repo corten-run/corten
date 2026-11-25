@@ -24,7 +24,7 @@ if (mode === "worker-new-report") process.report.reportOnSignal = true;
 const server = createServer((_req, res) => { res.writeHead(400); res.end(); });
 server.listen(0, "127.0.0.1"); await once(server, "listening");
 let created, clock = 0;
-const censusModes = ["shape", "total", "id", "duplicate", "links", "pages", "next", "count", "bounds"].map((predicate) => `list-${predicate}`);
+const censusModes = ["shape", "total", "id", "duplicate", "links", "pages", "next", "last", "count", "bounds", "partial"].map((predicate) => `list-${predicate}`);
 const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create", "withhold-close", "reflect", "post-invalid-action-id",
   "post-link-shape", "post-link-count", "post-link-id", "post-link-rel", "post-link-href-variant", "post-link-href-type", "arbitrary-create-hints",
   "first-action-http-failure", "zero-resource-create", "first-action-invalid", "first-action-errored", "pending-create", "create-http-failure", "list-converges", "get-http-failure", ...censusModes].includes(mode) ? async ({ method, path, body, credential }) => {
@@ -46,6 +46,11 @@ const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create"
     if (mode === "list-links") value.links = credential;
     if (mode === "list-pages") value.links.pages = credential;
     if (mode === "list-next") value.links.pages = { next: `https://foreign.invalid/${credential}` };
+    if (mode === "list-last") value.links.pages = { last: "https://api.digitalocean.com/v2/droplets?page=2&per_page=200" };
+    if (mode === "list-partial") {
+      value.droplets = [{ id: 123, name: "saved-name", tags: null }, { id: 124, name: null, tags: ["saved-tag", null] }];
+      value.meta.total = 2;
+    }
     if (mode === "list-count") value.meta.total = 1;
     if (mode === "list-converges" && state.calls.filter((call) => call.path.startsWith("/v2/droplets?")).length <= 2) value.meta.total = 1;
     if (mode === "list-bounds") value.meta.total = 20001;

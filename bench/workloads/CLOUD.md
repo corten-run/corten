@@ -838,9 +838,10 @@ or retryable. Other groups can continue only in the same provider account, and
 their approved create uses one fresh, account-bracketed provider response for
 both the quarantine and historical ID checks and the ordinary pre-create
 census. Only a complete inventory with unique, checkable rows proves absence;
-there is no second read, page or retake. A second page, inconsistent count, or
-uncheckable row still permits positive sightings from validated rows in the
-bounded response. Any earlier historical ID blocks the create even if renamed
+there is no second read, page or retake. Nonempty pagination links, an inconsistent
+count, or an uncheckable row cannot prove absence. A checkable ID and matching
+name or tag can still prove a sighting when another field is malformed. Any
+earlier historical ID blocks the create even if renamed
 and untagged. This is not proof the original POST never succeeded. A validated
 name or tag match writes an exclusive `receipts/create-quarantine-witness.json` with the
 numeric droplet ID and the matching quarantine digest, without changing the

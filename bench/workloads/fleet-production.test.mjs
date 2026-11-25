@@ -866,7 +866,7 @@ test("continuation appends authorized retries after no-create and retirement whi
   assert.equal(fs.readFileSync(index, "utf8"), "[]");
 });
 
-for (const scenario of ["admission", "nonterminal sighting", "count-mismatch sighting", "incomplete absence", "malformed absence",
+for (const scenario of ["admission", "nonterminal sighting", "count-mismatch sighting", "malformed name sighting", "malformed tags sighting", "incomplete absence", "malformed absence",
   "witnessed census", "absent census", "capacity", "historical ID"]) {
 test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, async (t) => {
   const mixed = scenario === "historical ID";
@@ -940,6 +940,11 @@ test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, asy
     if (scenario === "count-mismatch sighting") fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({
       droplets: [{ ...providerMatch, name: "renamed", tags: [pending.tag] }, { id: 124, tags: null }], meta: { total: 3 },
     }));
+    if (scenario === "malformed name sighting" || scenario === "malformed tags sighting") {
+      const match = scenario === "malformed name sighting"
+        ? { ...providerMatch, name: null, tags: [pending.tag] } : { ...providerMatch, tags: null };
+      fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({ droplets: [match], meta: { total: 1 } }));
+    }
     if (scenario === "incomplete absence" || scenario === "malformed absence")
       fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({
         droplets: [{ id: 123, name: "unrelated", tags: scenario === "malformed absence" ? null : [] }],
@@ -977,7 +982,7 @@ test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, asy
     assert.ok(!events.some((row) => row.method === "POST" || row.method === "DELETE"));
     assert.equal(state.createIntentAt, undefined, "no create intent");
     const witness = path.join(slot, "receipts", "create-quarantine-witness.json");
-    if (!["nonterminal sighting", "count-mismatch sighting", "witnessed census"].includes(scenario)) {
+    if (!scenario.endsWith(" sighting") && scenario !== "witnessed census") {
       assert.ok(!fs.existsSync(witness));
       const refusal = mixed ? "historical host is listed" : scenario === "capacity" ? "account capacity unavailable" : "pre-create census incomplete";
       assert.ok(p.refusals().flat().some((line) => line.includes(refusal)));
@@ -985,7 +990,7 @@ test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, asy
     else {
       assert.deepEqual(JSON.parse(fs.readFileSync(witness)), { schema: "benchmark-create-quarantine-witness/v1", quarantineSha256: old.sha256, dropletId: "123" });
       if (scenario === "nonterminal sighting") fs.unlinkSync(p.hosts + ".census-next");
-      if (scenario === "count-mismatch sighting") fs.unlinkSync(p.hosts + ".census-first");
+      if (scenario.endsWith(" sighting") && scenario !== "nonterminal sighting") fs.unlinkSync(p.hosts + ".census-first");
       fs.writeFileSync(p.hosts, JSON.stringify([{ ...providerMatch, name: "renamed", tags: [] }]));
       await assert.rejects(prepare("r22", "recoverable-live"), /witnessed in provider inventory/);
       assert.ok(!fs.existsSync(path.join(p.h.base, "recoverable-live")));
@@ -1014,7 +1019,8 @@ test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, asy
   census([]);
   census([{ id: 123, name: "unrelated", tags: ["production"] }]);
   assert.ok(!JSON.stringify(old).includes(pending.tag), "the next approval need not carry the old provider tag");
-  assert.throws(() => census([{ id: 123, name: "unrelated" }]), /census rows incomplete/);
+  census([{ id: 123, name: "unrelated" }]);
+  assert.throws(() => census([{ id: 123, name: "unrelated", tags: [null] }]), /invalid create quarantine census rows/);
   assert.equal(treeHash(slot), sealed);
   assert.equal(p.events().filter((row) => row.method === "POST").length, 0);
   fs.writeFileSync(record, JSON.stringify({ ...proof, binding: { ...binding, stateSha256: "a".repeat(64) } }));

@@ -413,7 +413,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         const object = (v) => v && typeof v === "object" && !Array.isArray(v);
         const text = (v) => typeof v === "string" && v.length > 0 && v.length <= 255;
         let complete = Array.isArray(batch) && batch.length <= 200 && total === batch.length
-          && (links === undefined || !!object(links)) && (pages === undefined || !!object(pages) && pages.next === undefined);
+          && (links === undefined || !!object(links)) && (pages === undefined || !!object(pages) && Object.keys(pages).length === 0);
         const rows = [], seen = new Set();
         // Valid sightings survive an incomplete envelope or bad sibling row. An ID
         // also stands on its own for the historical fence, unlike a name/tag match.
@@ -422,10 +422,11 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
           if (seen.has(d.id)) complete = false;
           seen.add(d.id);
           const row = { id: d.id }; rows.push(row);
-          if (!(text(d.name) && Array.isArray(d.tags) && d.tags.length <= 256 && d.tags.every(text))) {
+          if (text(d.name)) row.name = d.name;
+          if (Array.isArray(d.tags) && d.tags.length <= 256) row.tags = d.tags.filter(text);
+          if (row.name === undefined || row.tags === undefined || row.tags.length !== d.tags.length) {
             complete = false; continue;
           }
-          row.name = d.name; row.tags = d.tags;
           // Preserve exactly the placement and public-address checks used by the
           // ordinary pre-create census, not the provider's full droplet record.
           const size = d.size_slug ?? d.size?.slug, region = d.region?.slug, v4 = d.networks?.v4;

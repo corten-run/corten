@@ -407,7 +407,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   const inspectPreCreateInventory = !historicalHostsAbsent ? (rows, complete) => {
     const listed = rows.some(({ id }) => historicalIds.has(String(id)));
     if (quarantined.length) {
-      checkQuarantineCensus(dirname(admission.fleetRoot), quarantined, manifest, rows.filter((row) => Object.hasOwn(row, "name")));
+      checkQuarantineCensus(dirname(admission.fleetRoot), quarantined, manifest, rows);
       assert.ok(!listed, "an earlier historical host is listed; preserve reservation");
     }
     historicalHostsAbsent = complete && !listed;

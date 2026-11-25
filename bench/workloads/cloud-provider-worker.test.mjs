@@ -264,13 +264,19 @@ test("pre-create census worker preserves the census fields, refuses other modes 
       ["/v2/droplets?page=1&per_page=200"]);
   });
   await t.test("incomplete or malformed reply", async (t) => {
-    for (const mode of ["list-converges", "list-next", "list-shape"]) {
+    for (const mode of ["list-converges", "list-next", "list-last", "list-shape"]) {
       const h = harness(t, mode);
       assert.deepEqual(JSON.parse((await h.run(list)).stdout), { complete: false, rows: [] });
       assert.equal((await h.run(account)).status, 0, "the same worker can bracket the reply");
       assert.deepEqual(h.state().calls.map(({ path }) => path), ["/v2/droplets?page=1&per_page=200", "/v2/account"]);
       await h.run.close();
     }
+  });
+  await t.test("independently checkable sightings survive a malformed field", async (t) => {
+    const h = harness(t, "list-partial");
+    assert.deepEqual(JSON.parse((await h.run(list)).stdout), { complete: false,
+      rows: [{ id: 123, name: "saved-name" }, { id: 124, tags: ["saved-tag"] }] });
+    assert.deepEqual(h.state().calls.map(({ path }) => path), ["/v2/droplets?page=1&per_page=200"]);
   });
   await t.test("no create mode", async (t) => {
     const h = harness(t, "success", undefined, undefined, undefined, null);
