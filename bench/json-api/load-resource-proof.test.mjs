@@ -94,6 +94,15 @@ test("all scheduled observations and both coverage edges are mandatory", () => {
   assert.throws(() => replayLoadResources(overlap, bounds), /overlapping/);
 });
 
+test("six probe samples cover a nine-second participant, not twelve seconds", () => {
+  const rows = Array.from({ length: 6 }, (_, i) => capture(i));
+  const bounds = fixture(9000);
+  bounds.plan.count = rows.length;
+  assert.equal(replayLoadResources(rows, bounds).samples, 6);
+  assert.throws(() => replayLoadResources(rows, { ...bounds, finishedAt: stamp(12000) }),
+    /uncovered load resource finish/);
+});
+
 test("missing, zero, at-budget, reset, and inconsistent clock evidence cannot qualify", () => {
   for (const [edits, message] of [
     [{ cpu: "user_usec 10\n" }, /missing\/malformed.*usage_usec/],

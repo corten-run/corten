@@ -136,7 +136,7 @@ jobs:
                   const until = performance.now() + 10;
                   while (performance.now() < until) mem[0] ^= 1;
                 }, 100);
-                setTimeout(() => clearInterval(work), 12000);')
+                setTimeout(() => clearInterval(work), 9000);')
           [[ "$id" =~ ^[a-f0-9]{64}$ ]]
           trap 'docker_local rm -f -v "$id" >/dev/null || exit 1' EXIT
           docker_local start "$id" >/dev/null
