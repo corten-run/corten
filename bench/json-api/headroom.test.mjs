@@ -31,7 +31,6 @@ test("a closed fixture phase whose generator is at its quota names the generator
   const row = phaseHeadroom(raw({ load: 390, loadPeak: 399.3, requests: 649684, appUs: 22.24e6 }));
   assert.equal(row.rps, 21656);
   assert.deepEqual(row.atBound, { load: true, upstreamSampled: false, upstreamCounted: false });
-  assert.equal(row.nearestLimit, "generator");
   assert.equal(row.load.maxPct, 399.3); assert.equal(row.load.boundPct, 320);
   assert.equal(row.app.countedPct, 74.1);
   // 21,656 req/s at a 399.3% peak reaches the 320% bound near 17,355 req/s; the app's one
@@ -48,7 +47,6 @@ test("an API phase separates a sampled upstream peak from its counted average", 
     upstream: 69, upstreamPeak: 102.3, appUs: 29.79e6, upUs: 21.12e6 }));
   assert.deepEqual(row.atBound, { load: false, upstreamSampled: true, upstreamCounted: false });
   assert.equal(row.upstream.countedPct, 70.4);
-  assert.equal(row.nearestLimit, "app");
   assert.equal(row.estimates.rateAtUpstreamBound, 5578);
   assert.equal(row.estimates.headroomRate, 5578);
   assert.equal(row.perRequestUs.upstream, 98.7);
@@ -68,11 +66,23 @@ test("generator samples outside the native k6 lifetime do not count, as in produ
   assert.equal(row.load.maxPct, 210); assert.equal(row.atBound.load, false);
 });
 
-test("the bounds mirror production.mjs", () => {
+test("the bounds and their sample windows mirror production.mjs", () => {
   const source = readFileSync(new URL("./production.mjs", import.meta.url), "utf8");
   assert.ok(source.includes(`stats.load.cpuMaxPct >= expected.cpus.load.quota * ${headroomBounds.loadPctOfQuotaCore}`));
   assert.ok(source.includes(`stats.upstream.cpuMaxPct >= ${headroomBounds.upstreamPctOfOneCore}`));
   assert.ok(source.includes(`/ (raw.clock.k6DurationMs * 10) >= ${headroomBounds.upstreamPctOfOneCore}`));
+  // Generator over the native k6 container's lifetime; app and upstream over the command clock.
+  assert.ok(source.includes("const start = raw.command.clock.startedAt, end = raw.command.clock.finishedAt;"));
+  assert.ok(source.includes("const loadLife = raw.after.liveness.load;"));
+  assert.ok(source.includes(`const begin = role === "load" ? Date.parse(loadLife.startedAt) : start, finish = role === "load" ? Date.parse(loadLife.finishedAt) : end;`));
+  assert.ok(source.includes("const samples = all.filter((s) => s.t >= begin && s.t <= finish);"));
+});
+
+test("a missing measure is shown as unknown, not as no bound reached", () => {
+  const r = raw({ load: 200 }); delete r.after.liveness.load;
+  const row = phaseHeadroom(r);
+  assert.equal(row.atBound.load, null);
+  assert.match(renderHeadroom({ bounds: headroomBounds, rows: [row], refusedFiles: 0, unavailableRows: 0 }), /\| unknown: load \|/);
 });
 
 test("a timing folder reports only phases of this checkout's matrix at their own path", (t) => {
@@ -101,4 +111,57 @@ test("a timing folder reports only phases of this checkout's matrix at their own
   assert.ok(!json.stdout.includes(canary));
   const bad = spawnSync(process.execPath, [cli, root, "--write"], { encoding: "utf8" });
   assert.equal(bad.status, 1); assert.match(bad.stderr, /only --json/);
+});
+
+test("saved counts and quotas of the wrong type make the row unavailable and are never printed", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "json-headroom-"));
+  t.after(() => { assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep)); rmSync(root, { recursive: true, force: true }); });
+  const canary = "Zq7canaryValue";
+  const cases = [
+    (r) => { r.k6.metrics.http_req_failed.passes = canary; },
+    (r) => { r.k6.metrics.dropped_iterations.count = { canary }; },
+    (r) => { r.k6.metrics.json_timeout.count = -1; },
+    (r) => { r.k6.metrics.json_timeout.count = 1.5; },
+    (r) => { r.identity.cpus.load.quota = "0x4"; },
+    (r) => { r.identity.cpus.app.quota = `${canary}`; },
+    (r) => { r.identity.cpus.app.quota = { canary }; },
+    (r) => { r.clock.k6DurationMs = "30000"; },
+  ];
+  const keys = ["catalog-v1-fixture-neutral-json", "catalog-v1-api-neutral-json", "marketplace-v2-api-neutral-json", "marketplace-v2-fixture-neutral-json"];
+  const where = cases.map((_, i) => ["corten", keys[i % 4], `p${1 + Math.floor(i / 4)}`, "fixed.json"]);
+  cases.forEach((mutate, i) => {
+    const r = raw({ key: where[i][1], pass: 1 + Math.floor(i / 4), phase: "fixed" }); mutate(r);
+    mkdirSync(join(root, ...where[i].slice(0, -1)), { recursive: true }); writeFileSync(join(root, ...where[i]), JSON.stringify(r));
+  });
+  for (const row of cases.map((mutate, i) => { const r = raw({ key: where[i][1] }); mutate(r); return phaseHeadroom(r); })) {
+    assert.ok(row.unavailable); assert.ok(!JSON.stringify(row).includes(canary)); assert.ok(!JSON.stringify(row).includes("0x4"));
+  }
+  const result = collectHeadroom(root);
+  assert.equal(result.rows.length, cases.length); assert.equal(result.unavailableRows, cases.length); assert.equal(result.refusedFiles, 0);
+  const markdown = renderHeadroom(result);
+  assert.match(markdown, /8 phase\(s\) were unavailable/);
+  const json = spawnSync(process.execPath, [fileURLToPath(new URL("./headroom.mjs", import.meta.url)), root, "--json"], { encoding: "utf8" });
+  assert.equal(json.status, 0, json.stderr);
+  for (const text of [markdown, json.stdout]) { assert.ok(!text.includes(canary)); assert.ok(!text.includes("0x4")); }
+});
+
+test("a malformed resource sample makes only its phase unavailable", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "json-headroom-"));
+  t.after(() => { assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep)); rmSync(root, { recursive: true, force: true }); });
+  const canary = "Zq7canaryValue";
+  const put = (parts, text) => { mkdirSync(join(root, ...parts.slice(0, -1)), { recursive: true }); writeFileSync(join(root, ...parts), text); };
+  // 1e999 parses to Infinity, the non-finite value summarizeSamples refuses.
+  const infinite = raw(); infinite.samples.app[5].cpu = "INFINITE";
+  put(["corten", "catalog-v1-fixture-neutral-json", "p1", "warmup.json"], JSON.stringify(infinite).replace('"INFINITE"', "1e999"));
+  const text = raw({ pass: 2 }); text.samples.load[5].mem = canary;
+  put(["corten", "catalog-v1-fixture-neutral-json", "p2", "warmup.json"], JSON.stringify(text));
+  put(["corten", "catalog-v1-fixture-neutral-json", "p3", "warmup.json"], JSON.stringify(raw({ pass: 3, load: 150 })));
+  const result = collectHeadroom(root);
+  assert.equal(result.rows.length, 3); assert.equal(result.unavailableRows, 2);
+  assert.deepEqual(result.rows.map((r) => r.unavailable ?? null), ["phase has a malformed resource sample in its window",
+    "phase has a malformed resource sample in its window", null]);
+  assert.equal(result.rows[2].atBound.load, false);
+  const markdown = renderHeadroom(result);
+  assert.match(markdown, /\| corten \| catalog-v1-fixture-neutral-json \| 3 \| warmup \| 20000 \|/);
+  assert.ok(!markdown.includes(canary)); assert.ok(!JSON.stringify(result).includes(canary));
 });
