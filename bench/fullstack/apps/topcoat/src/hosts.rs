@@ -84,7 +84,7 @@ mod tests {
     use topcoat::router::{Router, request::Request, route};
 
     #[route(GET "/")]
-    async fn probe(_cx: &Cx) -> &'static str {
+    async fn probe(cx: &Cx) -> &'static str {
         "ok"
     }
 

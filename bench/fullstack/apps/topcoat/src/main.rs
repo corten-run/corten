@@ -107,7 +107,7 @@ fn matched() -> bool {
 }
 
 #[route(GET "/health/live")]
-async fn live(_cx: &Cx) -> &'static str {
+async fn live(cx: &Cx) -> &'static str {
     "ok\n"
 }
 

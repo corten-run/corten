@@ -33,8 +33,8 @@ pub async fn marketplace_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<im
                 (StatusCode::INTERNAL_SERVER_ERROR)
                 <!DOCTYPE html>
                 <html lang="en">
-                    <head><meta charset="utf-8"><title>Marketplace unavailable</title></head>
-                    <body><h1>Marketplace unavailable</h1></body>
+                    <head><meta charset="utf-8"><title>"Marketplace unavailable"</title></head>
+                    <body><h1>"Marketplace unavailable"</h1></body>
                 </html>
             }
             .boxed());
