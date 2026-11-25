@@ -324,7 +324,8 @@ export async function validateCampaign(input) {
     assert.ok(isDeepStrictEqual(tree(folder), snapshot), "saved campaign mutated during validation");
     const complete = currentExecution && status.state === "finished" && collectionEntry && !replay.incomplete && !replay.pending.length
       && verifiedGroups.length === plan.order.length && verifiedGroups.every((g, i) => g.group === plan.order[i]) && !blockers.length;
-    const loadLayout = groupScoped ? plan.bindings[0].resources.requestedCpuEnv?.CATALOG_LOAD_LAYOUT : undefined;
+    const cpuEnv = groupScoped ? plan.bindings[0].resources.requestedCpuEnv : undefined;
+    const loadLayout = cpuEnv?.CATALOG_LOAD_LAYOUT ?? cpuEnv?.JSON_API_LOAD_LAYOUT;
     const mode = groupScoped ? plan.bindings[0].campaignMode : undefined;
     const placement = alternateCampaignPlacements.includes(mode) ? mode : undefined;
     const common = { schema: groupScoped ? "benchmark-isolated-group-campaign-inspection/v1" : "benchmark-isolated-campaign-inspection/v1", scope: "intrinsic-evidence",

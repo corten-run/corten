@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
-import { cpuSettings, descriptor, identity, k6Image, nodeImage, payloads, phases, runtimeContext, scheduledProducerMarker, scheduledProducerSchema, schema, sha256, timingPlan, verifyImage, verifyImageExecution, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
+import { descriptor, identity, k6Image, nodeImage, payloads, phases, runtimeContext, scheduledProducerMarker, scheduledProducerSchema, schema, sha256, timingPlan, verifyImage, verifyImageExecution, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
 import { reader } from "./artifacts.mjs";
 import { functionalVerifier, verifyFunctionalFailure, verifyFunctionalLiveness, verifyAggregates, verifyRun } from "./evidence.mjs";
 import { spread } from "../fullstack/passes.mjs";
@@ -13,6 +13,7 @@ import { isDeepStrictEqual } from "node:util";
 import { timedSummarySchema, timedCaseProjection } from "./timed-outcomes.mjs";
 import { legacyProducerSchema, producerSourceNames, verifyProducer } from "./production.mjs";
 import { replayTimedRun } from "./evidence.mjs";
+import { c16Generator, c16Layout, recordedPlacement } from "./placement.mjs";
 
 function gitAtMeasuredCheckout(repo, args, options) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));
@@ -95,10 +96,14 @@ function inspectReport(summary, { load, commit, verifySource }) {
     for (const [key, max] of [["duration", 300], ["warmup", 120], ["rate", 10000], ["startupTimeout", 300]]) {
       assert.ok(Number.isSafeInteger(summary.options[key]) && summary.options[key] >= 1 && summary.options[key] <= max, `invalid ${key}`);
     }
-    const cpus = summary.measurement?.cpus;
-    const expected = cpuSettings(Object.fromEntries(["app", "load", "api"].map((role) => [`JSON_API_${role.toUpperCase()}_CPUS`, cpus?.[role]?.cpuset])));
-    assert.deepEqual(cpus, expected, "missing/wrong CPU quotas or placement");
-    assert.deepEqual(summary.measurement, { cpus: expected, encoding: "identity", fixedRate: summary.options.rate,
+    // An unmarked summary is the default placement exactly as before; only an explicit
+    // json-c16-generator-v1 marker with its own recorded cold probe and sampler CPUs admits c-16.
+    let placed;
+    try { placed = recordedPlacement(summary.measurement); }
+    catch { assert.fail("missing/wrong CPU quotas or placement"); }
+    const { cpus: expected, generatorPlacement } = placed;
+    assert.deepEqual(summary.measurement, { cpus: expected,
+      ...(generatorPlacement === undefined ? {} : { loadLayout: placed.placement, generatorPlacement }), encoding: "identity", fixedRate: summary.options.rate,
       appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, loadMemoryBytes: 2 ** 31,
       nativeProfile: "framework-default", phases: ["warmup", ...phases] }, "measurement settings differ");
     assert.ok(summary.timingDisposition === undefined || gated, "unknown timing disposition");
@@ -305,6 +310,10 @@ export function renderJson(report) {
   for (const role of ["app", "load", "api"]) {
     const budget = config.measurement?.cpus?.[role]; lines.push(`| ${role} | ${budget?.quota ?? "missing"} | ${budget?.cpuset === null ? "unpinned" : budget?.cpuset ?? "missing"} |`);
   }
+  // Fixed text from this checkout's layout, never the saved values; the configuration check validates those.
+  if (config.measurement?.loadLayout !== undefined) lines.push("", config.measurement.loadLayout === c16Layout
+    ? `Load layout ${c16Layout}: the untimed cold probe ran on CPUs ${c16Generator.coldProbe.cpuset} at quota ${c16Generator.coldProbe.quota}; load resource samples are bounded against k6's quota ${c16Generator.loadSampler.quota} on CPUs ${c16Generator.loadSampler.cpuset}. This is apparatus placement for a 16-CPU host, not a measured speedup.`
+    : "Load layout: unknown (see the configuration check).");
   lines.push("", "## Limits", "", "CPU is whole-container cgroup usage. The upstream is a single Node process and can limit throughput independently. Cold time is Docker container-start to first complete 200, not process exec. No build, browser, instruction-count or deployment parity claim is made.");
   for (const warning of report.warnings) lines.push(`- ${warning.replace(/[\r\n]+/g, " ")}`);
   return `${lines.join("\n")}\n`;
