@@ -65,11 +65,15 @@ take screening readings toward those questions outside the nightly; they do not 
 either. A convergence pass gives each cell a screening reading of throughput, not a certificate
 of steady state: within a stated tolerance from a named window
 to the end (every window within 10% of the tail median, three-window medians within 5%, trend
-within 5%), or not within it at the end. Oscillation or drift inside those bounds reads as within
+within 5%, the onset window's own throughput within 5%, and medians of the first 60 s and of the
+60 s before the tail no more than 5% above the tail median, comparisons between medians, not of
+each window), or not within it at the end. Oscillation or drift inside those bounds reads as within
 tolerance, a last-window shift under 10% can go undetected, the onset is resolved to one window, and
 readings at different window lengths are not comparable. k6's raw engine clock and the app
 container's before-and-after inspect are checked only while a pass runs; its saved summary records
-the outcome but cannot re-verify them. No report concludes from a pass that a
+the outcome but cannot re-verify them. A soak reports memory at the start and end and p99 per
+interval as figures, with no criterion for whether they held; only its fixed rate is reported as
+held or not. No report concludes from a pass that a
 timed warmup is long enough: the timed warmup is set only by a separate reviewed change from a
 saved pass that is like-for-like with the rounds it will time (the same commit, adapter images,
 fixture, upstream and k6 images, CPU settings, host CPU, kernel and online CPUs, startup timeout,

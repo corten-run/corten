@@ -201,7 +201,8 @@ the last 60 s. Otherwise it reads "within the stated tolerance from the window e
 when, from that window to the end and for at least 60 s, every window is within 10% of the tail
 median, every three-window median within 5%, and the least-squares line through those windows
 changes by at most 5% of the tail; the onset window must itself be within 5% of the tail, and
-neither the first 60 s nor the 60 s before the tail may have a median more than 5% above it.
+neither the first 60 s nor the 60 s before the tail may have a median more than 5% above it
+(those two are comparisons between medians, not of each window).
 A reading of "not within tolerance at the end" names the comparison that decided it, never a
 direction of travel:
 
@@ -237,26 +238,50 @@ What the reading does not detect, by construction (each case is pinned in `stead
 the window-to-window spread on the measurement host. A cell with any failed request, in a window or
 in k6's aggregate count (which includes answers completed during the graceful stop), or whose app
 stopped, restarted, was replaced (another container ID or StartedAt) or was OOM-killed, gets no
-reading, and a saved pass with one is refused when read. k6's engine clock is checked as a timed
-phase's is (`validateLoadExecution`). A saved pass is also refused if it finished at another commit,
+reading: the cell is saved with only its failure code, and a complete pass with such cells stays
+reportable, each of them reading "no reading" with its code's text. A saved cell that has a reading
+but records a failed request is refused. k6's engine clock is checked as a timed
+phase's is (`validateLoadExecution`). A saved pass is refused if it finished at another commit,
 if its cleanup failed or is not confirmed complete, if its window totals do not add up to k6's
 request count, if a window's p95 or p99 is above k6's aggregate latency maximum, if k6's aggregate
 failures are fewer than its windows' or more than its windows' plus the requests outside them (the
 graceful-stop tail and unrecorded requests), or if it has no adapters, sources or targets.
+
+What a pass saves is an allowlist (`savedText` and `passEvidence` in
+[steady-contract.mjs](steady-contract.mjs)): every field in `summary.json` is fixed by the
+checkout (the options, the rule, the scope, a failure or startup code), a validated number, or a
+value from Docker, the host or k6 that matched a strict pattern: 64-hex image IDs and hashes, a k6
+version `N.N.N`, a kernel release, an online CPU set, a Docker server version and a CPU model of
+letters, digits, single spaces and `( ) . , @ / + -` up to 96 characters. A value that does not
+match is saved as null (not recorded), or, where the pass depends on it (an image ID, the k6
+version), fails that step. A failure is saved only as a code (`failureCodes`), and how a pass
+started each app as a code (`startups`); the readers refuse any other field, value or code, with a
+fixed message that never quotes the file, and print a code only as its text. Docker's, the host's
+and k6's own output, and each failure's message, stay in the raw files beside the summary
+(`host.txt`, `docker-version.txt`, `k6.json`, `images.json`, the container receipts,
+`events.log`, `errors.log`, `run.log`), outside Git with the rest of the results. The timed
+report's like-for-like list names each differing or missing input and quotes neither side's value.
 
 Some checks are made only while a pass runs, because the saved summary does not keep what they
 read: k6's raw engine clock against the load container's own run (`validateLoadExecution`, from
 the raw `load-clock.json` and container receipts), the app container's before and after inspect
 (for a convergence cell: the same ID and StartedAt, running, not restarted or OOM-killed,
 `heldThrough`; for a soak: the restart, stop and OOM observations it saves), the cold-start
-clock, and the k6 export's metric names. A saved summary records their outcome (a cell that failed
+clock, the k6 export's metric names and every row of a soak's Docker event stream. A saved summary records their outcome (a cell that failed
 one has no reading) but cannot be re-verified from summary.json alone; the raw files beside it
 (`app-container.json`, `app-container-after.json`, `load-container.json`, `load-clock.json`,
-`load-summary.json`) are what they read.
+`load-summary.json`, `events.log`) are what they read.
 
 A soak reports memory at the start and the end (the median sample in the first and last memory
 interval), p99 per latency interval, failed requests (in its intervals and in k6's aggregate) and
-any restart, replacement, stop or OOM kill. Latency intervals start at the k6 engine's start; memory
+any restart, replacement, stop or OOM kill. Memory and p99 are reported figures: no criterion
+says whether they held. Only the fixed rate (below) is reported as held or not. Docker's event
+stream for the app is saved as one of three states: unavailable (the command failed, or any row
+was not an action and a nanosecond time, so none of its rows is used), clean (read, with no start,
+restart, die, kill or OOM event) or seen (with those events). "Restarted" is yes on any sign of a
+restart, no only when the stream was clean and nothing else showed one, and not established when
+the stream was unavailable and nothing else showed one; the container states and the memory
+samples are read independently of it. Latency intervals start at the k6 engine's start; memory
 samples are stamped on the workstation clock from the moment the load's `docker start` was issued,
 in intervals of their own of the same length, which lead the latency intervals by the load
 container's startup; restart events use the Docker daemon's clock. The report states both clocks.
