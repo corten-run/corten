@@ -520,8 +520,21 @@ establish a general ranking.
       fixture's 500 item API responses once each, and its doc comment gives the command.
 
       For work around the handler (routing, middleware and other stages, headers read or
-      written, future sizes, allocations or copies per request), give the instruction count
-      **and** cycles per request under equivalent load on a quiet Linux bench host.
+      written, future sizes, allocations or copies per request), give the instruction count per
+      request on each workload the change touches: the median of the alternated rounds, head
+      against base.
+
+      Cycles per request under equivalent load on a quiet Linux bench host are needed only when a
+      touched workload's instructions per request rise by 1% or more, or the pull request claims a
+      CPU-cost win. Below that, the instruction count is the measurement, and the pull request
+      says so with each touched workload's change: builds of one commit differ by up to about 4% in
+      a touched request's cycles by where the linker put the code
+      ([design Choice 72](docs/design.md#choice-placement-runs)), so a cycles run cannot resolve a
+      change that small without a placement run of hours on a paid host. A cycles run a pull
+      request did take is reported, and a regression it shows by the rules below stands. The
+      memory, waiting and bytes measurements (points 2 to 4) are not affected. When cycles are
+      needed, the rest of this point applies.
+
       For changes exercised by the catalog item page or item JSON, use
       [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs) with target `page` or `json` and
       one repeat per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`).
