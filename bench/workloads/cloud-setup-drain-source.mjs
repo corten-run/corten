@@ -5,6 +5,13 @@
 export default String.raw`
 
 SETTLED_EVENTS = r"populated 0\n(?:frozen [01]\n)?"
+DRAINED_RECORDS = ("request", "start", "launcher", "registration", "result", "watch-failure")
+
+
+def kernel_thread(row):
+    # PF_KTHREAD (stat field 9) under kthreadd in the root cgroup. Userspace cannot become one.
+    fields = row["stat"].rsplit(") ", 1)[1].split()
+    return (int(fields[6]) & 0x00200000) != 0 and int(fields[1]) == 2 and row["cgroup"] == "0::/\n"
 
 
 def setup_drained_session(root, request, failure):
@@ -158,6 +165,14 @@ def setup_drain_query(root, expected):
         assert not row["cgroup"].startswith("0::/user.slice/") and not re.search(r"/session-[^/\n]+\.scope(?:/|\n)", row["cgroup"])
         assert not row["cgroup"].startswith("0::/system.slice/corten-bench"), "unknown owned-unit participant"
         assert row["cgroup"] != registration["listener"]["cgroup"] and not row["cgroup"].startswith(registration["listener"]["cgroup"].rstrip("\n") + "/")
+    # A failed session's process can leave both its scope and its parent (systemd-run --scope,
+    # then reparenting to PID 1), so neither cgroup nor parentage finds it. Every process outside
+    # the live query's own set must have started before the earliest failed session's first
+    # process. Later unrelated processes refuse too; that is accepted.
+    fence = min(int(p["startTicks"]) for entry in drained for p in entry["registration"]["session"]["chain"])
+    for row in rows.values():
+        if row["pid"] not in allowed and not kernel_thread(row):
+            assert int(row["startTicks"]) < fence, "process started during or after a failed session"
     entries, total = [], 0
     for path in sorted(root.iterdir()):
         contents = read(path)
@@ -173,7 +188,7 @@ def setup_drain_query(root, expected):
         assert contents == read(root / path.name), "original custody changed"
         copied.append({"name": path.name, "bytes": len(contents), "sha256": sha(contents)})
     assert {p["name"] for p in copied} >= {"helper.py", "binding.json"}
-    assert {"watch-failure-" + failure["id"] + ".json" for failure in failures} <= {p["name"] for p in copied}, "archived watcher failure missing"
+    assert {name + "-" + failure["id"] + ".json" for failure in failures for name in DRAINED_RECORDS} <= {p["name"] for p in copied}, "failed watcher record missing from custody"
     observed = time.monotonic_ns()
     assert observed < int(start["deadlineMonoNs"])
     proof = {"schema": "benchmark-control-setup-query/v2", "binding": expected["binding"], "requests": requests + [current],

@@ -125,7 +125,13 @@ export function verifyControlRegistration(expected, registration) {
   return registration;
 }
 
-const settledEvents = (events) => events === null || /^populated 0\n(?:frozen [01]\n)?$/.test(events);
+const settledEvents = (events) => events === null || typeof events === "string" && scopeEvents(events, 0);
+// The guardian writes records with Python's ensure_ascii JSON. Match those bytes exactly.
+const asciiDigest = (value) => createHash("sha256").update(JSON.stringify(value)
+  .replace(/[\u007f-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`) + "\n").digest("hex");
+const drainedRecords = ["request", "start", "launcher", "registration", "result", "watch-failure"];
+const drainProofKeys = ["schema", "binding", "requests", "receipts", "watchers", "drained", "registration", "start", "launcher", "watcher",
+  "query", "timeout", "executables", "observation", "entries", "custody"];
 // A failed watcher has no receipt. Its replacement is a later positive observation:
 // the exact recorded result, an inactive watcher unit and an absent session.
 function verifyDrainedSession(invocation, failure, entry, host, map, now) {
@@ -168,7 +174,10 @@ export function verifyControlSetupQuery(expected, proof) {
   assert.equal(proof.schema, drain ? "benchmark-control-setup-query/v2" : "benchmark-control-setup-query/v1");
   const failed = new Map(failures.map((failure, index) => [failure.id, index]));
   assert.equal(failed.size, failures.length, "duplicate drain expectation");
-  if (drain) assert.ok(Array.isArray(proof.drained) && proof.drained.length === failures.length, "drained watcher proof required");
+  if (drain) {
+    exact(proof, drainProofKeys);
+    assert.ok(Array.isArray(proof.drained) && proof.drained.length === failures.length, "drained watcher proof required");
+  }
   same(proof.binding, expected.binding, "setup control source/owner differs");
   assert.equal(proof.requests.length, expected.sequence + 1);
   same(proof.requests.slice(0, -1), expected.requests, "setup control sequence differs");
@@ -235,6 +244,16 @@ export function verifyControlSetupQuery(expected, proof) {
     assert.ok(!p.cgroup.startsWith("0::/system.slice/corten-bench"), "unknown owned-unit participant");
     assert.ok(p.cgroup !== registration.listener.cgroup && !p.cgroup.startsWith(registration.listener.cgroup.trimEnd() + "/"), "unknown listener participant");
   }
+  if (drain) {
+    // A failed session's process can leave its scope and its parent (systemd-run --scope,
+    // then reparenting to PID 1). Outside the live query's own set, only processes that
+    // started before the earliest failed session's first process, or kernel threads, remain.
+    const fence = proof.drained.flatMap((entry) => entry.registration.session.chain).map((p) => BigInt(p.startTicks)).reduce((a, b) => (b < a ? b : a));
+    for (const p of map.values()) if (!allowed.has(p.pid)) {
+      const kernel = processStat(p.stat).kernelThread && p.parentPid === 2 && p.cgroup === "0::/\n";
+      assert.ok(kernel || BigInt(p.startTicks) < fence, "process started during or after a failed session");
+    }
+  }
   assert.ok(Array.isArray(proof.entries) && proof.entries.length <= 32768 && Array.isArray(proof.custody));
   const names = new Set(["helper.py", "binding.json", "mutex"]), entries = new Map();
   for (const [i, row] of proof.requests.entries()) for (const name of ["request", "start", "launcher", "registration",
@@ -255,11 +274,13 @@ export function verifyControlSetupQuery(expected, proof) {
     const entry = proof.drained[index], id = failure.id;
     assert.equal(entries.get(`watch-failure-${id}.json`).sha256, failure.failureSha256, "watcher failure differs from the archive");
     for (const name of ["result", "start", "launcher"]) assert.equal(entries.get(`${name}-${id}.json`).sha256, rawDigest(entry[name]), "drained control record differs");
+    assert.equal(entries.get(`registration-${id}.json`).sha256, asciiDigest(entry.registration), "drained registration differs");
   }
   const copied = new Set();
   for (const entry of proof.custody) { same(entry, entries.get(entry.name), "control custody differs"); assert.ok(!copied.has(entry.name)); copied.add(entry.name); }
   assert.ok(copied.has("helper.py") && copied.has("binding.json"));
-  assert.ok(failures.every((failure) => copied.has(`watch-failure-${failure.id}.json`)), "archived watcher failure missing");
+  // Every record of a failed row is copied, so retirement compares each with the archive.
+  assert.ok(failures.every((failure) => drainedRecords.every((name) => copied.has(`${name}-${failure.id}.json`))), "failed watcher record missing from custody");
   return { allowedPids: [...allowed], host, sequence: expected.sequence, remoteDrained: false };
 }
 const identityFields = (p) => Object.fromEntries(["pid", "startTicks", "cgroup", "executable", "commandSha256"].map((field) => [field, p[field]]));

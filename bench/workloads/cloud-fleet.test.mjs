@@ -501,7 +501,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor"]) test(
 });
 
 test("failed pre-registration cleanup preserves the archive and stops on missing proof, including on restart", async (t) => {
-  for (const mode of ["cancelled-proof", "invalid-proof", "refused", "lost-result", "archived-watcher", "archived-watcher-receipt"]) {
+  for (const mode of ["cancelled-proof", "invalid-proof", "refused", "lost-result", "archived-watcher", "archived-watcher-receipt",
+    "archived-watcher-scope", "archived-watcher-cap"]) {
     const cancelled = mode === "cancelled-proof";
     const { h, options } = configured(t);
     h.flags.hook = (bin, a) => { if (bin === "ssh" && a.at(-1).startsWith("systemctl show") && h.units === 1) h.flags.active = false; };
@@ -512,6 +513,12 @@ test("failed pre-registration cleanup preserves the archive and stops on missing
     if (mode === "archived-watcher") entries.push({ name: "control/" }, { name: `control/watch-failure-${"f".repeat(32)}.json`, body: '{"helperLine":342}\n' });
     if (mode === "archived-watcher-receipt") entries.push({ name: "control/" }, { name: `control/watch-failure-${first}.json`, body: '{"helperLine":342}\n' },
       { name: `control/receipt-${first}.json`, body: "{}\n" });
+    // Only the deadline-expiry line selects the drain proof; any other watcher failure keeps refusing.
+    const line = (text) => guardianSource.split("\n").findIndex((l) => l.includes(text)) + 1;
+    if (mode === "archived-watcher-scope") entries.push({ name: "control/" },
+      { name: `control/watch-failure-${first}.json`, body: `{"helperLine":${line('"unowned scope participant"')}}\n` });
+    if (mode === "archived-watcher-cap") entries.push({ name: "control/" },
+      { name: `control/watch-failure-${first}.json`, body: `{"helperLine":${line("assert len(samples) <= 4096 and rows_count <= 65536")}}\n` });
     const bytes = archive(entries); h.setArchive(bytes);
     let queries = 0;
     const run = (bin, args, timeout, allowFail, expiry, control) => {

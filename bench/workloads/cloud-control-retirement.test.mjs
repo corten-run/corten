@@ -10,12 +10,22 @@ import { digest } from "./cloud-local.mjs";
 import { controlRequest, guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { verifyControlSetupQuery } from "./cloud-control-session.mjs";
 import { remoteFiles } from "./cloud-remote.mjs";
-import { setupEvidence, setupWatcherFailures, terminalSetupScript } from "./cloud-retirement.mjs";
+import { setupEvidence, setupWatcherFailures, terminalSetupScript, watcherDeadlineFailure } from "./cloud-retirement.mjs";
 import setupDrainSource from "./cloud-setup-drain-source.mjs";
 
 // The guardian records only this line when a watcher misses its drainage deadline.
 const deadlineLine = guardianSource.split("\n").indexOf('    raise AssertionError("remote session drainage deadline expired")') + 1;
 const deadlineFailure = `{"helperLine":${deadlineLine}}\n`;
+const guardianLine = (text) => {
+  const lines = guardianSource.split("\n").flatMap((line, i) => (line.includes(text) ? [i + 1] : []));
+  assert.equal(lines.length, 1, text); return lines[0];
+};
+// A synthetic /proc row: stat field 4 is the parent, 9 the flags, 22 the start time.
+function procRow(pid, ppid, cgroup, ticks, flags = 0) {
+  const fields = Array(49).fill("0"); fields[0] = String(ppid); fields[5] = String(flags); fields[18] = String(ticks);
+  return { pid, startTicks: String(ticks), cgroup: `0::${cgroup}\n`, stat: `${pid} (synthetic) S ${fields.join(" ")}\n`,
+    executable: { device: "1", inode: String(pid) }, commandSha256: "0".repeat(64) };
+}
 
 // A drain fixture holds the first bootstrap session open until its watcher fails.
 function fixture(mode, { drain = false, code = 0 } = {}) {
@@ -29,7 +39,7 @@ function fixture(mode, { drain = false, code = 0 } = {}) {
     if (binary === "scp") request.invocation.requestSha256 = digest("synthetic-sftp-protocol");
     state.control.ledger.push({ request, localTerminal: true, code: 0 });
   }
-  if (drain) state.control.ledger[0].code = code;
+  if (drain) { state.control.ledger[0].code = code; state.preBootstrapTerminal = { hostId: state.id, ip: state.ip }; }
   const failures = drain ? [{ id: state.control.ledger[0].request.invocation.id, failureSha256: digest(deadlineFailure) }] : [];
   const script = terminalSetupScript(state, 1, undefined, failures), files = Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
   const expected = { binding: { round: state.round, commit: state.commit, token: state.token, helperSha256: guardianSha256 }, sequence: 2,
@@ -165,7 +175,7 @@ test("the drain proof refuses residual sessions, live or queued watchers, change
     "setup-drain-descendant": /session descendant remains/, "setup-drain-active": /watcher unit still active or queued/,
     "setup-drain-queued": /watcher unit still active or queued/, "setup-drain-result": /^KeyError: .*result-/,
     "setup-drain-bytes": /watcher failure differs from the archive/, "setup-drain-extra-record": /unknown control custody member/,
-    "setup-drain-stream": /unknown control custody member/,
+    "setup-drain-stream": /unknown control custody member/, "setup-drain-escaped": /process started during or after a failed session/,
   };
   for (const [mode, reason] of Object.entries(cases)) {
     const f = fixture(mode, { drain: true });
@@ -176,4 +186,68 @@ test("the drain proof refuses residual sessions, live or queued watchers, change
   // Without the archived failure the ordinary query still needs every receipt.
   const legacy = fixture("setup-drain-legacy");
   assert.equal(legacy.rejected, true); assert.match(legacy.reason, /^KeyError: .*receipt-/);
+});
+
+test("the drain proof refuses any process that started with or after the failed session, wherever it moved", () => {
+  // The kernel fixture gives each process startTicks = pid * 100. The failed session's first
+  // process is PID 100, so the fence is 10000.
+  for (const mode of ["setup-drain-older", "setup-drain-kthread"]) {
+    const f = fixture(mode, { drain: true });
+    assert.equal(f.rejected, false, f.reason); verifyControlSetupQuery(f.expected, f.proof);
+    assert.ok(f.proof.observation.processes.some((p) => p.pid === (mode === "setup-drain-older" ? 5 : 998)), mode);
+  }
+  const f = fixture("setup-drain-normal", { drain: true }), chain = f.proof.drained[0].registration.session.chain;
+  assert.equal(chain.map((p) => BigInt(p.startTicks)).reduce((a, b) => (b < a ? b : a)), 10000n);
+  const accepts = (row) => { const p = structuredClone(f.proof); p.observation.processes.push(row); verifyControlSetupQuery(f.expected, p); };
+  const refuses = (row) => assert.throws(() => accepts(row), /process started during or after a failed session/, row.cgroup);
+  // The escaped grandchild: its own transient scope, reparented to PID 1, outside the empty session scope.
+  refuses(procRow(999, 1, "/system.slice/run-u7.scope", 99900));
+  refuses(procRow(7, 1, "/system.slice/cron.service", 10000));
+  // A kernel-thread flag counts only under kthreadd in the root cgroup.
+  refuses(procRow(997, 1, "/", 99700, 0x00200000)); refuses(procRow(997, 2, "/system.slice/x.service", 99700, 0x00200000));
+  refuses(procRow(997, 2, "/", 99700));
+  accepts(procRow(5, 1, "/system.slice/cron.service", 9999)); accepts(procRow(997, 2, "/", 99700, 0x00200000));
+});
+
+test("only the guardian's exact drainage deadline record selects the drain proof; every other watcher failure keeps refusing", (t) => {
+  assert.equal(watcherDeadlineFailure, deadlineFailure);
+  const f = fixture("setup-drain-normal", { drain: true }), failed = f.expected.watcherFailures[0].id;
+  const { local, custody } = custodyFolder(t, f), path = join(custody, `watch-failure-${failed}.json`);
+  assert.deepEqual(setupWatcherFailures(f.state, local), [{ id: failed, failureSha256: digest(deadlineFailure) }]);
+  const other = {
+    "unowned scope participant": guardianLine('"unowned scope participant"'),
+    "listener identity": guardianLine('assert all(actual_identity[field] == p[field] for field in ("pid", "startTicks", "cgroup", "executable"))'),
+    "observer identity": guardianLine("                assert actual_identity == p"),
+    "sample or row cap": guardianLine("assert len(samples) <= 4096 and rows_count <= 65536"),
+    "known process cap": guardianLine("        assert len(known) <= 8192"),
+    "launcher timing": guardianLine('"watcher launcher did not settle"'),
+    "observation timing": guardianLine('"control observation exceeded original deadline"'),
+  };
+  const bytes = { ...Object.fromEntries(Object.entries(other).map(([name, line]) => [name, `{"helperLine":${line}}\n`])),
+    "unknown line": '{"helperLine":0}\n', "spaced": `{"helperLine": ${deadlineLine}}\n`, "no newline": `{"helperLine":${deadlineLine}}`,
+    "extra field": `{"helperLine":${deadlineLine},"reason":"x"}\n` };
+  for (const [name, body] of Object.entries(bytes)) {
+    writeFileSync(path, body);
+    assert.throws(() => setupWatcherFailures(f.state, local), /not a drainage deadline expiry/, name);
+  }
+  writeFileSync(path, deadlineFailure);
+  // After registration, the drain receipt is never accepted.
+  const now = Date.now(), observation = { schema: "benchmark-failed-setup-host/v3", hostId: f.state.id, unit: f.state.unit,
+    setupFailed: true, exitCode: 1, observedAtMs: now, control: f.proof };
+  assert.equal(setupEvidence(JSON.stringify(observation), f.state, f.script, 1, now - 1, now, local).schema, "benchmark-failed-setup-retirement/v3");
+  const registered = { ...f.state }; delete registered.preBootstrapTerminal;
+  assert.throws(() => setupEvidence(JSON.stringify(observation), registered, f.script, 1, now - 1, now, local), /pre-registration custody/);
+});
+
+test("a drain proof binds every record of the failed row to the host entries and the copied custody, with exact keys", () => {
+  const f = fixture("setup-drain-normal", { drain: true }), failed = f.expected.watcherFailures[0].id;
+  verifyControlSetupQuery(f.expected, f.proof);
+  const refuses = (mutate, pattern) => { const p = structuredClone(f.proof); mutate(p); assert.throws(() => verifyControlSetupQuery(f.expected, p), pattern); };
+  refuses((p) => { p.drained[0].registration.first.monoNs = String(BigInt(p.drained[0].registration.first.monoNs) + 1n); }, /drained registration differs/);
+  for (const name of ["request", "start", "launcher", "registration", "result", "watch-failure"])
+    refuses((p) => { p.custody = p.custody.filter((entry) => entry.name !== `${name}-${failed}.json`); }, /failed watcher record missing from custody/);
+  refuses((p) => { p.drained[0].cgroupEvents = ["populated 0\n"]; }, /failed watcher cgroup populated/);
+  refuses((p) => { p.drained[0].scope = { ...p.drained[0].scope, exists: true, events: ["populated 0\n"] }; }, /drained session scope populated/);
+  refuses((p) => { p.extra = true; }, /unexpected control record fields/);
+  refuses((p) => { delete p.executables; }, /unexpected control record fields/);
 });

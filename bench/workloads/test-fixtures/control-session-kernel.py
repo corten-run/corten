@@ -260,18 +260,27 @@ class Child:
             if mode == "setup-drain-descendant": rows[999] = row(999, 102, "/foreign.scope")
             if mode == "setup-drain-extra-record": write(root / "unknown.json", b"{}")
             if mode == "setup-drain-stream": write(root / "stream-registration.json", b"{}")
+            # A failed-session grandchild that moved to its own transient scope and was reparented to PID 1.
+            if mode == "setup-drain-escaped": rows[999] = row(999, 1, "/system.slice/run-u7.scope")
+            # An unrelated process older than the failed session, and a kernel thread, are allowed.
+            if mode == "setup-drain-older": rows[5] = row(5, 1, "/system.slice/cron.service")
+            if mode == "setup-drain-kthread":
+                rows[998] = row(998, 2, "/")
+                fields = rows[998]["stat"].split(" ")
+                fields[8] = str(0x00200000)
+                rows[998]["stat"] = " ".join(fields)
             local.pid = query_pid
             query = scope["setup_drain_query"] if "watcherFailures" in argument["expected"] else scope["setup_query"]
             try:
                 with patch.object(scope["os"], "getppid", lambda: timeout_pid), patch.object(sys, "argv", query_argv[1:]):
                     current["proof"] = query(root, argument["expected"])
             except (AssertionError, KeyError) as error:
-                assert mode not in ("setup-normal", "setup-drain-normal"), traceback.format_exc()
+                assert mode not in ("setup-normal", "setup-drain-normal", "setup-drain-older", "setup-drain-kthread"), traceback.format_exc()
                 current["rejected"] = True
                 current["reason"] = type(error).__name__ + ": " + str(error)
             finally:
                 local.pid = current["guardian"]
-                for pid in (query_pid, timeout_pid, 999): rows.pop(pid, None)
+                for pid in (query_pid, timeout_pid, 999, 998, 5): rows.pop(pid, None)
         rows.pop(self.pid)
         if mode == "disconnect":
             raise scope["subprocess"].TimeoutExpired("synthetic-disconnect", timeout)

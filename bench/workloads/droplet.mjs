@@ -832,7 +832,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const record = JSON.parse(bytes), raw = JSON.stringify(record.observation);
     if (!setup) return verifyUnusedEvidence(record, state);
     // The preserved archive selects the schema: v3 only beside an archived watcher failure.
-    const exit = setupExit(), failures = state.control ? setupWatcherFailures(state, local) : [];
+    const exit = setupExit(), failures = state.control && state.preBootstrapTerminal ? setupWatcherFailures(state, local) : [];
     const expected = setupEvidence(raw, state, terminalSetupScript(state, exit, state.control ? record.observation.control.requests.length - 1 : undefined, failures), exit, record.startedAtMs, record.finishedAtMs, local);
     assert.deepEqual(record, expected, "retirement evidence differs");
   };
@@ -956,10 +956,18 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       refuseSetup("setup-host-proof-refused");
     return failures;
   };
+  // After registration a watcher failure still refuses before any query. The drain proof
+  // is only for the pre-registration bootstrap, where no stream state can exist yet.
+  const refuseRegisteredWatcher = () => {
+    const custody = join(local, state.evidence, "control");
+    if (state.control && existsSync(custody) && readdirSync(custody).some((name) => /^watch-failure-[a-f0-9]{32}\.json$/.test(name)))
+      refuseSetup("setup-watcher-proof-missing");
+  };
   const retireFailedSetup = async () => {
     assert.ok(["starting", "running"].includes(state.status) && !preserveOperationLock, "uncertain work cannot use setup retirement");
     const exit = setupExit(), beforeEntry = !!state.preBootstrapTerminal;
-    const failures = beforeEntry ? checkSetupCustody(exit) : state.control ? setupWatcherFailures(state, local) : [];
+    if (!beforeEntry) refuseRegisteredWatcher();
+    const failures = beforeEntry ? checkSetupCustody(exit) : [];
     const script = terminalSetupScript(state, exit, undefined, failures), startedAtMs = Date.now();
     const sequence = state.control?.ledger.length;
     const result = await ssh(script, 30000, beforeEntry).catch((error) => {

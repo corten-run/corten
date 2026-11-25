@@ -1255,9 +1255,19 @@ export function verifyUnusedEvidence(record, state) {
   assert.deepEqual(record, unusedEvidence(JSON.stringify(record.observation), state, script, record.startedAtMs, record.finishedAtMs, record.knownHostsSha256));
 }
 
+// The hashed guardian's watcher records only its own line number. This exact record
+// means the session was still not drained when the watcher's loop reached its deadline.
+// Any other line (an unowned scope participant, a changed listener or observer, a sample
+// or row cap, a launcher or observation timing failure) is a different failure.
+const deadlineLines = guardianSource.split("\n").flatMap((line, i) =>
+  line === '    raise AssertionError("remote session drainage deadline expired")' ? [i + 1] : []);
+assert.equal(deadlineLines.length, 1, "guardian drainage deadline line changed");
+export const watcherDeadlineFailure = `{"helperLine":${deadlineLines[0]}}\n`;
+
 // An archived watch-failure names an earlier bootstrap control whose watcher stopped
 // before its receipt. Each must be exactly one settled bootstrap ledger row without an
-// archived receipt. The record is diagnostic: it only selects the separate drain proof.
+// archived receipt, and must be the deadline expiry above. The record is diagnostic:
+// it only selects the separate drain proof.
 export function setupWatcherFailures(state, local) {
   const custody = join(local, state.evidence, "control");
   if (!lstatSync(custody, { throwIfNoEntry: false })) return [];
@@ -1271,7 +1281,9 @@ export function setupWatcherFailures(state, local) {
     assert.ok(rows.length === 1 && rows[0].request.epoch === "bootstrap" && rows[0].localTerminal === true && Number.isInteger(rows[0].code),
       "watcher failure outside the settled bootstrap ledger");
     assert.ok(!names.includes(`receipt-${id}.json`), "watcher failure beside its receipt");
-    failures.push({ sequence: rows[0].request.sequence, id, failureSha256: digest(regular(join(custody, name), 4096)) });
+    const bytes = regular(join(custody, name), 4096);
+    assert.ok(bytes.equals(Buffer.from(watcherDeadlineFailure)), "watcher failure is not a drainage deadline expiry");
+    failures.push({ sequence: rows[0].request.sequence, id, failureSha256: digest(bytes) });
   }
   return failures.sort((a, b) => a.sequence - b.sequence).map(({ id, failureSha256 }) => ({ id, failureSha256 }));
 }
@@ -1290,7 +1302,7 @@ function setupControlExpected(state, exitCode, sequence, failures = []) {
   // Only an archived watcher failure adds this key, so every other query keeps its bytes.
   if (failures.length) expected.watcherFailures = failures.map(({ id, failureSha256 }) => {
     const row = rows.find((r) => r.request.invocation.id === id);
-    assert.ok(row && row.request.epoch === "bootstrap" && /^[a-f0-9]{64}$/.test(failureSha256), "failed watcher outside the earlier bootstrap ledger");
+    assert.ok(row && row.request.epoch === "bootstrap" && failureSha256 === digest(watcherDeadlineFailure), "failed watcher outside the earlier bootstrap ledger");
     return { id, code: row.code, failureSha256 };
   });
   return expected;
@@ -1420,6 +1432,8 @@ export function setupEvidence(raw, state, script, exitCode, startedAtMs, finishe
   const sequence = state.control ? observation.control.requests.length - 1 : undefined;
   // The preserved archive, not the receipt, decides whether a watcher failure needs the drain proof.
   const failures = state.control && typeof local === "string" ? setupWatcherFailures(state, local) : [], version = state.control ? failures.length ? "v3" : "v2" : "v1";
+  // The drain proof exists only for a pre-registration bootstrap; after registration stream state can exist.
+  assert.ok(!failures.length || state.preBootstrapTerminal, "drained watcher retirement requires pre-registration custody");
   assert.ok(typeof script === "string" && script === terminalSetupScript(state, exitCode, sequence, failures), "fixed setup script required");
   assert.deepEqual(Object.keys(observation).sort(), [...(state.control ? ["control"] : []), "exitCode", "hostId", "observedAtMs", "schema", "setupFailed", "unit"]);
   assert.equal(observation.schema, `benchmark-failed-setup-host/${version}`);
