@@ -14,18 +14,32 @@ from .models import Alert
 
 @require_http_methods(["GET", "POST"])
 def show(request, locale, record_id):
-    if request.method == "POST" and request.headers.get("Sec-Fetch-Site") == "cross-site":
-        return HttpResponseForbidden("Forbidden")
-    if locale not in LABELS:
-        return HttpResponseBadRequest("Unsupported locale")
+    rejected = page_request_error(request, locale)
+    if rejected is not None:
+        return rejected
     traceparent = request.headers.get("traceparent")
     try:
         record = source.get(record_id) if traceparent is None else source.get(record_id, traceparent)
     except Timeout:
         # The existing Requests inactivity timeout closes its upstream connection.
         # This is not a WSGI disconnect signal or a whole-operation deadline.
-        return HttpResponse("Record source timed out", status=504, content_type="text/plain",
-            headers={"Cache-Control": "private, no-store"})
+        return page_timeout()
+    return page_response(request, locale, record_id, record)
+
+
+def page_request_error(request, locale):
+    if request.method == "POST" and request.headers.get("Sec-Fetch-Site") == "cross-site":
+        return HttpResponseForbidden("Forbidden")
+    if locale not in LABELS:
+        return HttpResponseBadRequest("Unsupported locale")
+
+
+def page_timeout():
+    return HttpResponse("Record source timed out", status=504, content_type="text/plain",
+        headers={"Cache-Control": "private, no-store"})
+
+
+def page_response(request, locale, record_id, record):
     if record is None:
         raise Http404
     fmt = MarketplaceFormat(locale)
