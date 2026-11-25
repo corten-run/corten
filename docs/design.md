@@ -9033,9 +9033,10 @@ rules something out.
     The CPU-win rule in Pull requests decides wins as before. Nor does a floor apply to a workload
     read across placements ([design Choice 72](#choice-placement-runs)), whose own A/A says what
     the run resolves; this Choice's floor and its calibration are for single-build runs, whose
-    protocol that Choice leaves as it was except for a touched workload with a recorded placement
-    spread, where a single-build bound whose distance from its threshold is inside the spread, by
-    that Choice's one test, no longer decides it, for the margin or for a win.
+    protocol that Choice leaves as it was except for a touched workload, where a single-build
+    bound whose distance from its threshold is inside the placement spread recorded for its
+    setup or, with none, that Choice's default band, by that Choice's one test, no longer
+    decides it, for the margin or for a win.
 
     The runs: one host with nothing else running (Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD
     23.1.5 and the repository's release profile, jemalloc 5.3.0 preloaded), every binary built there
@@ -9143,7 +9144,7 @@ rules something out.
 72. <a id="choice-placement-runs"></a>**A touched workload may be read across placements the run's
     plan declares, each side compiled once and relinked with a never-called pad of a declared size
     first in its code, and must be when a single build's distance from its threshold lands inside the placement
-    spread.** The
+    spread recorded for its setup or, with none recorded, the widest of the recorded spreads.** The
     paired-cycle gate reads one build of each side
     ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2), and builds of one commit whose code sits at
     different places have differed in a touched request's cycles by more than its +1% margin:
@@ -9185,20 +9186,28 @@ rules something out.
     one reading's bound look resolved while raising the other's. The benefit side may use the
     protocol when the plan declares it and its smallest worthwhile reduction before the run.
 
-    When it is required. A placement run of 30 placements costs about two hours of a c-8 for one
-    workload's change and A/A beside an A/A on `plain` (the second run's four comparisons took 164
-    minutes, and more placements cost in proportion), against about 35 minutes for three
-    single-build comparisons of 100 pairs ([design Choice 71](#choice-layout-floor)'s runs), so it is not the rule for every
-    change. Each placement run's A/A records the workload's
-    placement spread here, its lowest and highest placement median. One test decides:
+    When it is required. A placement run costs hours where a single build costs minutes, so it is
+    asked only where one build cannot decide. A placement of 8 recorded pairs took 62 s of turns
+    on the third run's API host and 101 s in the fourth, whose workload waits 2 s at each start. At
+    those rates a setup with no eligible A/A reads a pilot of 100 placements in about 1.7 to 2.8
+    hours, and then a change and its A/A in about 2.4 to 3.9 hours at the 69 placements the fourth
+    run's medians size, or 3.5 to 5.6 at the 100 it ran: about 4.1 to 8.4 hours of turns for one
+    workload, estimated, with builds and setup beside, where a single-build comparison of 100
+    pairs took about 12 minutes ([design Choice 71](#choice-layout-floor)'s runs). The first two
+    runs' 30 placements (164 minutes for the second's four comparisons) are not a size to assume
+    (How many placements, below). A placement run's A/A records the workload's
+    placement spread here, its lowest and highest placement median, only if its plan declares
+    before the run that it records one (asked of plans declared once this sentence is on `main`:
+    the three spreads below were recorded before it, the third run's plan declared that it
+    recorded none and the fourth's that it measured the apparatus). One test decides:
     a single-build bound's distance from its threshold (the bound less +1% for the margin, the
     bound plus the smallest worthwhile reduction for a CPU-cost win) is inside the spread when it is
     at or above its lowest and at or below its highest. Inside does not decide the workload, a pass
     as much as a miss and a win no more than a loss, since the build's own placement could account
     for the whole distance either way; the pull request reads that workload across placements,
-    under a plan written before that run. Outside, or with no recorded spread for the run's setup,
-    the single-build bound is the reading, and a placement run declared after it does not clear
-    its miss.
+    under a plan written before that run. Outside, the single-build bound is the reading, and a
+    placement run declared after it does not clear its miss. With no recorded spread for the
+    run's setup, the same test is made against the default band (below).
     Item 2's other requirements, user L1 instruction-cache misses when a change adds or moves code
     among them, apply to a run read across placements as to any other. So a change whose
     single-build reading this rule leaves decided keeps the cheaper run. That is a rule, not a
@@ -9213,7 +9222,8 @@ rules something out.
     turns); and the CPU model. A run that differs in any, such as `plain` or `kept` on a c-8 with
     a Xeon Platinum 8168 or 8280, which [design Choice 71](#choice-layout-floor) records c-8s
     have also had, has no
-    recorded spread, so its single-build bound is the reading, until a placement run on its setup
+    recorded spread, so its single-build bound is tested against the default band, until a
+    placement run on its setup
     records one. These are what decide which code a request runs, what else runs with it and what a
     placement costs on the CPU's caches and predictors; the kernel and toolchain are not among
     them, as a policy choice (Stands on, bet). Only a complete, resolved A/A (both readings, below) records a
@@ -9240,6 +9250,44 @@ rules something out.
     too if it is to match; the same turn protocol; and a Xeon Platinum
     8280. Its A/A on that request with the answer 10,005 seconds old did not resolve, so it
     records none.
+
+    The default band. One build whose distance from its threshold is inside the range placement
+    alone has been seen to move a reading says where the code landed, not what the change costs,
+    whether or not its own setup has been read. So where no recorded spread applies, the one
+    test above is made against the widest of them, the default band: from the lowest low end to
+    the highest high end of the spreads recorded above, each end
+    as printed and the two not always one spread's: -2.98% to +3.33% today, both `kept`'s. It
+    reads no other A/A reported here, and so less than this Choice has seen: the third run's
+    three A/As resolved and ran from -1.96% to +2.10%, -3.64% to +3.04% and -5.47% to +4.15%
+    (recomputed from the counts under the tag `evidence/stage-header-checks-2002`), and its plan
+    recorded no spread. It is
+    read as a spread is, either end inside, from this Choice on `main` when the plan is
+    declared: a pull request that records or replaces a spread restates the band here and in
+    Pull requests, a band that moves after a reading does not reopen it, and a plan declared
+    before `main` gave a band is read without one, so nobody is held to a rule `main` did not
+    show them and no reading changes what it decided. The band is the same whatever reads the
+    workload, `bench/fullstack/count.mjs` or a probe, so nothing is gained against it by
+    choosing one. The test gives what it gives with a spread of the setup's own. A negative
+    control keeps [design Choice 71](#choice-layout-floor)'s rule. Each threshold a plan
+    declared for a workload, its margin and a reduction, is tested on its own distance: one
+    outside stays as one build read it, whatever a placement run then reads, and one inside is
+    not decided and is read
+    across placements with the dead ends that reading already has: an A/A that does not resolve
+    does not pass, a side or a pull request the plan's fifth point leaves with no reading across
+    placements does not pass (Code aligned beyond 16 bytes, below), and a workload no K the pads
+    allow can size is not read across placements,
+    so its reading inside the band does not pass (How many placements, below). For the margin
+    the band holds every bound from -1.98% to +4.33%, so a workload the change leaves about as
+    fast as it was is read across placements on any setup, as it already was where a spread
+    applies; one build decides it only when it reads clearly faster or slower. That reading
+    needs what Pull requests' plan lists: each side's final link captured and run again with
+    pads, the unpadded link's map recorded, each placement checked, K sized from a pilot or an eligible A/A, and the change and
+    its A/A under the turn protocol. The rule does not wait on a kit for it: each run below
+    adapted the kit before it, under its evidence tag; on 2026-11-24 no script under `bench/`
+    did any of it (`df9242b56`); and no run has read the image `count.mjs` starts across
+    placements, so the first catalog target the band leaves not decided has that to build. The
+    band is a default by policy, not a bound on what placement moves on a setup nobody has read
+    (Stands on, bet).
 
     How many placements. A plan declares each workload's K before the run, for at most a 5% chance
     that an A/A of a commit against itself fails one of its two readings, sized from an eligible
@@ -9879,9 +9927,20 @@ rules something out.
     source moves only what follows it, by an amount inlining and alignment decide, where one at the
     start of `.text` moves each function by an amount the run checks is exactly its size; the protocol for every change, at
     more than three times a single-build run's cost, for readings no placement could flip as well
-    as those it could; a placement run only after a single-build miss, which reads a
+    as those it could, or for every one on a setup with no recorded spread, which would read
+    again a bound further from its threshold than any recorded spread reaches; a placement run
+    only after a single-build miss, which reads a
     miss again and never a pass, though a lucky placement passes a real cost as easily as an
-    unlucky one blocks a free change; the mean across placements with a Student t bound as the
+    unlucky one blocks a free change; a setup with no recorded spread left its single-build bound
+    as the reading at any distance (this Choice as first written), which held the setups nobody
+    had read to less than the ones somebody had; a default band that also reads the A/As
+    reported here that recorded no spread, -5.47% to +13.10% as recorded, since the band reads
+    the spreads recorded here and those A/As did not resolve or their plans recorded none: its
+    high end is besides one placement of the fourth run's 100 (the next +3.89%), and a maximum
+    is the statistic one unlucky placement moves most, but its low end is not (two of the third
+    run's 60 placements on its API read under -5.3%), so there that is the only reason, a limit
+    of the band and not a finding that placement moves an unread setup less; the mean
+    across placements with a Student t bound as the
     gate's statistic, which assumes the placement medians are near normal, which nothing measured
     shows, and lets one unlucky placement move the bound as far as it is from the rest (reported
     as a diagnostic); more pairs on one build, since more pairs narrow the bound around that
@@ -9962,7 +10021,8 @@ rules something out.
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
     in [design Choice 70](#choice-kept-pages); the first placement run above, tag
     `evidence/ee7b0b41`, its A/As on main rather than the change's base, its answers compared after
-    its kit's normalization, which this Choice accepts for that receipt alone; and the second
+    its kit's normalization, which this Choice accepts for that receipt alone, and its `kept`
+    spread both ends of the default band; and the second
     above, tags `evidence/ca2af2ab` and `evidence/0c0c599c`, the first under the rule as written,
     one of its two A/As resolved; the third above, tag `evidence/stage-header-checks-2002`,
     its three A/As at 60 placements resolved; the fourth above, tag
@@ -9992,6 +10052,9 @@ rules something out.
     read across placements, not at one; relinking the same objects with a pad changes placement
     alone, as the answers, the unchanged symbol set and the kept neighbours check; a bound inside
     the spread is one the build's own placement could account for, by the spread one run measured;
+    with no spread of the setup's own, a bound inside the widest recorded is one placement has
+    been seen to account for elsewhere, which is reason to read it across placements and no
+    measure of that setup;
     the A/A read with its lists' labels swapped takes away any advantage one list's placements
     gave its bound, since both readings use the same pairs; and the order statistic's coverage
     holds for any distribution of placement medians that are
@@ -10024,7 +10087,14 @@ rules something out.
     builds under their unpadded one in 15 of 16, against two unpadded builds, each one side alone;
     the fourth read one exact base and two near-base unpadded builds among their padded
     placements and head's above its own, and head's offset less base's at -0.38%, zero inside an
-    interval that eight pads leave wide, which shows neither a difference nor its absence); an
+    interval that eight pads leave wide, which shows neither a difference nor its absence); on a
+    setup with no recorded spread, placement moves the single-build bound of 100 pairs of a
+    commit against itself outside the default band in fewer than one placement in 20, which no
+    run has read (the band is from three A/As of 30 placements on two CPU models, and in the
+    five A/As that record no spread 18 of 310 placement medians lie outside it: 3 of 30 on the
+    second run's `old`, 0, 1 and 8 of 60 in the third run's and 6 of 100 in the fourth's, one
+    at +13.10%, recomputed from the counts under their tags, each a median of 8 pairs, which
+    the pairs' own noise spreads further than a bound of 100); an
     A/A sized by the rule above fails to resolve +1% no more often than it was sized for, which
     takes the medians of the A/A it was sized from as independent and alike over time and the
     setup's spread as holding from one run to the next
@@ -10097,8 +10167,14 @@ rules something out.
     symbol (`#[no_mangle]`, `#[export_name]`, `#[link_section]`), other than the compiler's
     built-ins, is found from the first such section on or outside `.text`, which the test
     does not see; a recorded spread
-    is so wide that most single-build readings land inside it, so the protocol is the rule in
-    practice, or so narrow that none do; a placement run with another kernel or toolchain on an
+    or the default band is so wide that no single-build reading lands outside it, so one build
+    decides no touched workload, or so narrow that none land inside; a pull request records or
+    replaces a spread and an end of the default band moves, which changes what one build decides
+    on every setup with no spread of its own; a commit read against itself across placements
+    at 100 pairs a placement, on a setup with no recorded spread, has more than one placement
+    in 20 with its bound outside the default band, or a single-build reading the band left
+    decided is read the other way across placements on the same commits and setup; a placement
+    run with another kernel or toolchain on an
     otherwise matching setup records a spread wider than the one here, so they belong among what a
     spread must match; a run's time across placements falls to a single-build
     run's, so the protocol could be the rule rather than an option; or the release binary's own
@@ -10149,7 +10225,15 @@ rules something out.
     unpadded maps kept there read by name for Rust-mangled symbols, and five written cases,
     with node alone, by `rust-names.mjs` at `bc1d7dabc` (the tag above); 2026-11-24, the third
     run's time read from its
-    log at `2fb31fbaa` (tag `evidence/stage-header-checks-2002`).
+    log at `2fb31fbaa` (tag `evidence/stage-header-checks-2002`);
+    2026-11-24, the default band's two ends read from the spreads recorded above, and
+    `bench/` searched for a script that relinks a build with a pad or sizes K, none found, at
+    `df9242b56`; 2026-11-24, the third run's A/A ranges and the 18 of 310 placement medians
+    outside the default band, recomputed from the counts under `evidence/0c0c599c`
+    (`0c0c599cb`), `evidence/stage-header-checks-2002` (`2fb31fbaa`) and
+    `evidence/placement-sizing-1999` (`912199b97`), and the third and fourth runs' time a
+    placement, from the `progress.log`s under the last two (120 placements in 124 minutes 46
+    seconds on the third's API host, 132 a median 101 s apart in the fourth).
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
