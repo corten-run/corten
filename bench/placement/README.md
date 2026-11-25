@@ -119,6 +119,14 @@ it to find a plan's mistakes before the run that counts. Its turns are still tur
 placements of the plan's commits: where the Choice ties a pull request's next plan to any further
 such turn, stop after `build.sh`, which starts nothing.
 
+A dry run does not reach the path a gated part takes at a sized K: it takes its K from `DRY_K`
+and ignores `--sized-from`, so it sizes nothing and checks no K, and nothing of it shows that a
+gated part binds to its pilot, that the K passes, or that `build.sh`, `run.sh` and `report.mjs`
+take a part of that size. Resolving the gated part without `DRYRUN` shows the first two and
+builds nothing. Only a run shows the third, and a part that is read is run once, so a fault met
+there is not mended by running it again. The kit has gone down that path once, in a test read
+for nothing ([Tests](#tests) says what that run was and what no run has shown).
+
 `sh selftest/selftest.sh <work dir>`, after `build.sh`, shows on that host that a wrong answer, a
 failed request, a placement past its time limit, a second pad of a wrong size, files that are no
 longer what `plan.mjs` listed, a run `run.sh` must refuse and a counter that read zero each stop
@@ -251,9 +259,38 @@ counters at 100% and the refusal of one under it, the answers of every placement
 unpadded binary, a masked header that does differ between two starts, and the probe's source
 and each build's environment reaching the results.
 
-Two dry runs of the kit are kept, each read for nothing. The results under the tag
-`evidence/placement-kit-2` were written by the kit at `2839ccda6`, on a host with `perf` and
-`wrk`, and `node report.mjs` reads them. Those under `evidence/placement-kit` were written by
-the kit at `88c4e26cd`, before a run's results held the list of files the plan names by path:
-the `report.mjs` of that commit reads them, and this one refuses them, as it refuses any
-results without that list.
+Three runs of the kit on a host with `perf` and `wrk` are kept, each a test of the scripts and
+read for nothing. What they turned is `main` at `e2d0c464e` against itself with the example
+probe, and nothing else.
+
+1. Under the tag `evidence/placement-kit-3`, by the kit at `556b23d53`: the selftest's seven
+   cases, and a gated part built and turned at a K that `plan.mjs` sized from an A/A. It was
+   not a dry run: K = 93, 186 placements of 4 recorded pairs and 2 s turns, declared in its plan
+   as a test of the kit and not a reading, ended `complete`. `node report.mjs` reads its
+   results and prints the page kept there.
+2. Under `evidence/placement-kit-2`, by the kit at `2839ccda6`: a dry run of a pilot part and of
+   a gated part, the selftest, a masked header with a range through `verify.sh` behind a
+   stand-in, and one part that was not a dry run, a 30-placement A/A declared as a test of the
+   kit, from which the K of 93 above was sized. `node report.mjs` reads its three complete
+   results (`a-pilot`, `a-gated`, `t-pilot`) and refuses the fourth (`alike`), which ended
+   `verify-failed`, as its plan was written to.
+3. Under `evidence/placement-kit`, by the kit at `88c4e26cd`: a dry run from before a run's
+   results held the list of files the plan names by path. The `report.mjs` of that commit reads
+   its results, and this one refuses them, as it refuses any results without that list.
+
+What no kept run shows, and the first plan that is read will meet for the first time:
+
+1. A pilot of the size the rule asks, and a K sized from it. The A/A that K = 93 came from had
+   30 placements, the fewest the kit takes, and the sizing check has not run on a host on more.
+2. A gated part at a sized K whose base and head differ, or in which a side has code aligned
+   beyond 16 bytes, so that each placement's second pad is chosen. The part that was turned had
+   one commit on both sides and no such code; the first dry run linked 18 placements with a
+   second pad and turned none.
+3. A run on a host that `setup.sh` prepared for it. `setup.sh` prepared the first dry run's
+   host and has not changed since; the other two runs borrowed a host that other work had
+   prepared, which had no git.
+4. A workload of Corten's own with a masked header that has a range (item 12 of
+   [what it does not do](#what-it-does-not-do)).
+5. A run that nobody looked in on. In the two later runs a login was made on the host while
+   turns ran, in the third only to ask whether the run's process was alive; a run that is read
+   does not allow it.

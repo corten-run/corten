@@ -10245,7 +10245,12 @@ rules something out.
     against itself through a pilot part and a gated part of 6 placements each, the selftest's
     seven cases, and a 30-placement A/A declared as a test of the kit, from which `plan.mjs`
     sized a gated part's K with nothing of that part built, its plans and results at
-    `dcdab6d92` (tag `evidence/placement-kit-2`).
+    `dcdab6d92` (tag `evidence/placement-kit-2`); 2026-11-25 (UTC), `bench/placement` as it is
+    at `556b23d53` run on that host as a test of the kit, read for nothing: the selftest's seven
+    cases, and that gated part, which `plan.mjs` sized again at K = 93 from the 30-placement
+    A/A, built and turned, 186 placements of `e2d0c464e` against itself, complete, with
+    `report.mjs` printing its page again byte for byte, its plan and results at `647f918c1` (tag
+    `evidence/placement-kit-3`).
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
