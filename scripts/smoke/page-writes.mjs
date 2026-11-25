@@ -1,13 +1,15 @@
 import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, opened, closeContext } from "./helpers.mjs";
 
 export async function pageWrites(page, browser) {
+  /** Whether the browser has the Navigation API, read within 5 s. */
+  const hasNavigation = () => readWithin("whether the browser has the Navigation API", page.evaluate(() => "navigation" in window));
   // After a write, the page it sends the browser to is fetched whole; when that page's handler
   // sends it on to a place, the server names the place (`corten-location`, for the runtime's
   // `corten: page`), so it keeps its `#id` rather than `fetch` following a 303 without it
   // (#1034). The stand-in answers as the server does: `corten-location` to the runtime's
   // fetches, a 303 to any other.
   const wholePlaceName = "a page fetched whole after a write that sends the browser to a place lands on the place";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(wholePlaceName, "without the Navigation API a write's page is a full load");
+  if (!(await hasNavigation())) skip(wholePlaceName, "without the Navigation API a write's page is a full load");
   else {
     const whole = await (await browser.newContext()).newPage();
     /** @type {string[]} */
@@ -169,31 +171,58 @@ export async function pageWrites(page, browser) {
         () => false,
       );
   /**
+   * What became of a press (`pressThen`): `ok`, or the step that failed (`failed`), so a check's
+   * details say whether the press task stalled, failed or found nothing, or what it led to did not
+   * come.
+   * @typedef {{ ok: boolean, failed: string | null }} Pressed
+   */
+  /**
+   * Runs `press`, a page task that finds an element and presses it and says whether it found one,
+   * then polls `came` until it holds, both within 5 s counted from just before the page is asked to
+   * press (`steps`): a press task that has not returned by then, or returns after them, fails the
+   * press however soon its outcome came. Says which step failed, by what `outcome` names, without
+   * adding to the 5 s.
+   * @param {() => Promise<boolean>} press @param {string} missing what the press found nothing of
+   * @param {() => Promise<boolean>} came @param {string} outcome what the press must lead to
+   * @returns {Promise<Pressed>}
+   */
+  const pressThen = async (press, missing, came, outcome) => {
+    const ranOut = "the 5 s from the press ran out";
+    const budget = steps(5000, ranOut);
+    let pressing = true;
+    try {
+      if (!(await budget.step(press))) return { ok: false, failed: `the press task found no ${missing}` };
+      pressing = false;
+      await budget.poll(came);
+      return { ok: true, failed: null };
+    } catch (error) {
+      const why = budget.over || (error instanceof Error ? error.message.split("\n")[0] : String(error));
+      if (pressing) return { ok: false, failed: why === ranOut ? "the press task did not return within 5 s of the press" : `the press task failed: ${why}` };
+      return { ok: false, failed: why === ranOut ? `${outcome} did not come within 5 s of the press` : `the wait for ${outcome} failed: ${why}` };
+    }
+  };
+  /**
    * Finds the button at `selector` and presses it in one page task, and whether the write it sends
-   * reaches the stand-in within 5 s counted from just before the page is asked to press. The press
-   * task and the wait for its write share those 5 s: a press task that has not returned by then, or
-   * returns after them, fails the press however soon its write came. A page that
-   * reads itself again swaps <main> a second after it loads, and again whenever its answer changes:
-   * a Playwright click can find the button, then land once it is gone, and a press that reaches no
-   * button sends nothing (#2035).
+   * reaches the stand-in within 5 s counted from just before the page is asked to press, the press
+   * task and the wait for its write sharing those 5 s (`pressThen`). A page that reads itself again
+   * swaps <main> a second after it loads, and again whenever its answer changes: a Playwright click
+   * can find the button, then land once it is gone, and a press that reaches no button sends nothing
+   * (#2035).
    * @param {import("@playwright/test").Page} own @param {{ writes: number }} seen @param {string} selector
    */
   const pressWrite = async (own, seen, selector) => {
     const writes = seen.writes;
-    const press = steps(5000, "the write was not sent within 5 s of the press");
-    return press
-      .step(() =>
+    return pressThen(
+      () =>
         own.evaluate((selector) => {
           const button = /** @type {HTMLButtonElement | null} */ (document.querySelector(selector));
           button?.click();
           return !!button;
         }, selector),
-      )
-      .then((pressed) => pressed && press.poll(async () => seen.writes > writes))
-      .then(
-        (sent) => sent === true,
-        () => false,
-      );
+      `button at ${selector}`,
+      async () => seen.writes > writes,
+      "the write at the stand-in",
+    );
   };
   /**
    * Notes, from now on, each mark a case's stand-in put in an answer (`data-smoke-at`, the answer's
@@ -334,7 +363,7 @@ export async function pageWrites(page, browser) {
   // in the same area and layout, which a navigation swaps in: the write is done, so that page is
   // read whole and shows what the write changed, as after a write that redirects.
   const leftName = "a navigation that leaves a write's own page on its way reads the next page whole, with what the write changed";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(leftName, "without the Navigation API a link is a full load");
+  if (!(await hasNavigation())) skip(leftName, "without the Navigation API a link is a full load");
   else {
     const { own, seen } = await writtenPage(brand);
     /** @type {() => void} */
@@ -375,7 +404,7 @@ export async function pageWrites(page, browser) {
   // layout does not draw what the second write changed, so the next page is still read whole and
   // shows the count the server has, 2.
   const bothName = "a write's own page drawn first leaves another write's change to the layout for the next page to draw";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(bothName, "without the Navigation API a link is a full load");
+  if (!(await hasNavigation())) skip(bothName, "without the Navigation API a link is a full load");
   else {
     // The first write's page draws no component, so it needs no module; the second's does.
     const counted = (/** @type {string} */ body, /** @type {number} */ writes) => {
@@ -436,7 +465,7 @@ export async function pageWrites(page, browser) {
   // replaced, so the second write is undrawn again and the next page is read whole, with the count
   // the server has.
   const laterName = "a write's own page drawn after a later write's leaves that write's change to the layout for the next page to draw";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(laterName, "without the Navigation API a link is a full load");
+  if (!(await hasNavigation())) skip(laterName, "without the Navigation API a link is a full load");
   else {
     const counted = (/** @type {string} */ body, /** @type {number} */ writes) => body.replace(">Watchlist</span>", `>Count ${writes}</span>`);
     const { own, seen } = await writtenPage(counted);
@@ -484,7 +513,7 @@ export async function pageWrites(page, browser) {
   // navigation cuts it off, and since the write may have been applied, the next page is read whole
   // and shows what it changed.
   const cutOffName = "a navigation that cuts off a write before its answer reads the next page whole, with what the write changed";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(cutOffName, "without the Navigation API a link is a full load");
+  if (!(await hasNavigation())) skip(cutOffName, "without the Navigation API a link is a full load");
   else {
     const { own, seen } = await writtenPage(brand);
     /** @type {() => void} */
@@ -518,32 +547,22 @@ export async function pageWrites(page, browser) {
   /**
    * Follows the link to /smoke/quoted, found and pressed in one page task, and whether that page
    * came in within 5 s counted from just before the press: the press task and the wait share those
-   * 5 s (`pressWrite`). A page that reads itself again swaps <main> every second, so a Playwright
+   * 5 s (`pressThen`). A page that reads itself again swaps <main> every second, so a Playwright
    * click can find the link, then land once it is gone, and the page never leaves (#2035).
    * @param {import("@playwright/test").Page} own
    */
-  const toQuoted = async (own) => {
-    const press = steps(5000, "/smoke/quoted did not come in within 5 s of the press");
-    return press
-      .step(() =>
+  const toQuoted = async (own) =>
+    pressThen(
+      () =>
         own.evaluate(() => {
           const link = /** @type {HTMLAnchorElement | null} */ (document.querySelector('main a[href="/smoke/quoted"]'));
           link?.click();
           return !!link;
         }),
-      )
-      .then(
-        (pressed) =>
-          pressed &&
-          press.poll(() => own.evaluate(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"))),
-      )
-      .then(
-        (came) => came === true,
-        () => false,
-      );
-  };
-  /** Whether the browser has the Navigation API, read within 5 s. */
-  const hasNavigation = () => readWithin("whether the browser has the Navigation API", page.evaluate(() => "navigation" in window));
+      "link to /smoke/quoted",
+      () => own.evaluate(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]")),
+      "/smoke/quoted",
+    );
   // A write the server applied whose answer the network lost: the page shows the failure in its
   // layout (as a toaster there does), for the user to send again. The page reading itself again
   // (`ReadAgain`) reads <main> alone and keeps the failure shown, where a whole page, whose header
@@ -572,14 +591,15 @@ export async function pageWrites(page, browser) {
       let follows = seen.writes + 1;
       const sent = await pressWrite(own, seen, "main form button");
       const failed =
-        sent &&
+        sent.ok &&
         (await own
           .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
           .then(
             () => true,
             () => false,
           ));
-      let legacySent = true;
+      /** @type {Pressed | null} */
+      let legacySent = null;
       let legacyDrew = true;
       if (legacy) {
         seen.fail = false;
@@ -589,7 +609,7 @@ export async function pageWrites(page, browser) {
         await watchWritten(own);
         follows = seen.writes + 1;
         legacySent = await pressWrite(own, seen, "main form button");
-        legacyDrew = legacySent && (await writtenSeen(own)) && "corten-page" in seen.answered;
+        legacyDrew = legacySent.ok && (await writtenSeen(own)) && "corten-page" in seen.answered;
       }
       // The page's first read of itself after the stand-in failed or answered that write, drawn
       // with the failure already shown (`nextPollDrawn`), and the failure still shown at a look at
@@ -606,7 +626,7 @@ export async function pageWrites(page, browser) {
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         failedName,
-        failed && legacyDrew && again === "GET /smoke/written/again nav" && drewAgain && kept && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
+        failed && legacyDrew && again === "GET /smoke/written/again nav" && drewAgain && kept && arrived.ok && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
         JSON.stringify({ sent, failed, legacySent, legacyDrew, again, drawn, drewAgain, kept, arrived, asked: seen.asked, shown }),
       );
     } finally {
@@ -646,7 +666,7 @@ export async function pageWrites(page, browser) {
   // (2); then the first's page comes, made before the second write (its count is 1), and draws its
   // layout over the patch. The patch is in the record, so the next page is read whole and shows 2.
   const overName = "a write's own page drawn over a later write's patch to the layout leaves that write's change for the next page to draw";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(overName, "without the Navigation API a link is a full load");
+  if (!(await hasNavigation())) skip(overName, "without the Navigation API a link is a full load");
   else {
     const { before, edit } = patchedAndWhole(2);
     const { own, seen } = await writtenPage(edit, before);
@@ -664,7 +684,7 @@ export async function pageWrites(page, browser) {
     const shown = await shownOf(own);
     check(
       overName,
-      patched && drewOver && arrived && shown.brand === "Count 2" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
+      patched && drewOver && arrived.ok && shown.brand === "Count 2" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
       JSON.stringify({ patched, drewOver, answers: seen.answers, arrived, asked: seen.asked, shown }),
     );
     await own.context().close();
@@ -673,7 +693,7 @@ export async function pageWrites(page, browser) {
   // made after it, draws the count the server has (2). Nothing is older than what is drawn, so the
   // next page reads <main> alone and the count stays 2.
   const underName = "a write's patch to the layout drawn after another write's own page is current, and the next page reads <main> alone";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(underName, "without the Navigation API a link is a full load");
+  if (!(await hasNavigation())) skip(underName, "without the Navigation API a link is a full load");
   else {
     const { before, edit } = patchedAndWhole(2);
     const { own, seen } = await writtenPage(edit, before);
@@ -691,7 +711,7 @@ export async function pageWrites(page, browser) {
     const shown = await shownOf(own);
     check(
       underName,
-      drewFirst && patched && arrived && shown.brand === "Count 2" && shown.same && seen.asked.includes("GET /smoke/quoted nav"),
+      drewFirst && patched && arrived.ok && shown.brand === "Count 2" && shown.same && seen.asked.includes("GET /smoke/quoted nav"),
       JSON.stringify({ drewFirst, patched, answers: seen.answers, arrived, asked: seen.asked, shown }),
     );
     await own.context().close();
@@ -703,8 +723,9 @@ export async function pageWrites(page, browser) {
    * (`released`, the time the page returned as it let go) bounds the first look too, so the time the
    * check took to hear of it is not added; without one, while the page has not said it let go, `by`
    * is 5 s from the call. Until `by` each look has only what is left before it; then the check looks
-   * once more, that look bounded to 5 s, as one started at or after `by` sees all the page recorded
-   * by then. So it waits at most until 5 s after `by` (10 s from a release it was given, else 5 s
+   * once more, as one started at or after `by` sees all the page recorded by then, that look having
+   * only what is left before 5 s after `by` (none, and no look, if it would start later). So it
+   * waits at most until 5 s after `by` (10 s from a release it was given, else 5 s
    * from the call, or from a release the page recorded after it), and the recorded times decide, so
    * a check that looks late neither passes an outcome that came after `by` nor fails one that came
    * before it.
@@ -726,7 +747,10 @@ export async function pageWrites(page, browser) {
     for (;;) {
       const lookedAt = Date.now();
       const last = lookedAt >= by;
-      const now = await within(last ? 5000 : by - lookedAt, "the page did not say what became of the body in time", look()).catch(() => null);
+      // The last look has only what is left before 5 s after `by` (10 s from the release), so one
+      // that starts late does not get 5 s of its own.
+      const left = last ? by + 5000 - lookedAt : by - lookedAt;
+      const now = left > 0 ? await within(left, "the page did not say what became of the body in time", look()).catch(() => null) : null;
       if (now === null) {
         if (last) return { releasedAt: null, bodyAt: null, failedAt: null, by: null };
         continue;
@@ -859,14 +883,16 @@ export async function pageWrites(page, browser) {
       // The write whose body is cut (or given): the page's next read of itself follows its answer, or,
       // with a second write, the body's release, before which it cannot fail.
       const first = seen.writes + 1;
-      let sent = await pressWrite(own, seen, overlap ? "#held-write button" : "main form button");
+      const sent = await pressWrite(own, seen, overlap ? "#held-write button" : "main form button");
+      /** The second write's press, with a second write. @type {Pressed | null} */
+      let sentSecond = null;
       // With a second write, the first's body is asked for within 5 s of its press being seen sent.
       let bodyAsked = !overlap;
       let drewOver = true;
       let released = !overlap;
       /** @type {Since | undefined} */
       let releasedAt;
-      if (overlap && sent) {
+      if (overlap && sent.ok) {
         bodyAsked = await own.waitForFunction(() => typeof (/** @type {any} */ (window)).__releaseBody === "function", null, { timeout: 5000 }).then(
           () => true,
           () => false,
@@ -878,8 +904,8 @@ export async function pageWrites(page, browser) {
           // brand it brought at the same moment, nothing in <main> busy (the first form, outside it,
           // waits for its body).
           await watchWritten(own, "Watchlist, written", true);
-          sent = await pressWrite(own, seen, "main form button");
-          drewOver = sent && (await writtenSeen(own));
+          sentSecond = await pressWrite(own, seen, "main form button");
+          drewOver = sentSecond.ok && (await writtenSeen(own));
           // Let go in a page task that does not wait for the body, bounded: whether the body came
           // and the failure it brings are what the bounded wait below checks. The page's next read
           // is counted from the release itself: its place among the reads is taken before the page
@@ -929,10 +955,10 @@ export async function pageWrites(page, browser) {
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         cutBodyName,
-        sent && bodyAsked && drewOver && released && failed && afterHeaders === (complete ? "completed" : "cut") && seen.answers === (overlap ? 2 : 1) &&
-          again === "GET /smoke/written/again nav" && drewAgain && kept && arrived && shown.brand === (overlap ? "Poll brand" : "Watchlist, written") &&
+        sent.ok && (!overlap || !!sentSecond?.ok) && bodyAsked && drewOver && released && failed && afterHeaders === (complete ? "completed" : "cut") && seen.answers === (overlap ? 2 : 1) &&
+          again === "GET /smoke/written/again nav" && drewAgain && kept && arrived.ok && shown.brand === (overlap ? "Poll brand" : "Watchlist, written") &&
           seen.asked.includes("GET /smoke/quoted page"),
-        JSON.stringify({ sent, bodyAsked, drewOver, released, failed, outcome, afterHeaders, errors, answers: seen.answers, again, drawn, drewAgain, kept, keptAs, arrived, asked: seen.asked, shown }),
+        JSON.stringify({ sent, sentSecond, bodyAsked, drewOver, released, failed, outcome, afterHeaders, errors, answers: seen.answers, again, drawn, drewAgain, kept, keptAs, arrived, asked: seen.asked, shown }),
       );
     } finally {
       await closeContext(own.context(), "the cut body case's context");
@@ -965,7 +991,7 @@ export async function pageWrites(page, browser) {
       await watchMarks(own);
       const firstWrite = seen.writes + 1;
       const sentFirst = await pressWrite(own, seen, "main form button");
-      const drew = sentFirst && (await writtenSeen(own));
+      const drew = sentFirst.ok && (await writtenSeen(own));
       // Read whole while it reads itself again: the page's first read of itself after the stand-in
       // answered the write is asked within 5 s of that answer, and its answer drawn within 5 s of
       // that read (`drawnBy`), before the second write is clicked.
@@ -1023,7 +1049,7 @@ export async function pageWrites(page, browser) {
           again === "GET /smoke/written/again nav" &&
           drewAgain &&
           kept &&
-          arrived &&
+          arrived.ok &&
           shown.brand === "Count 2" &&
           seen.asked.includes("GET /smoke/quoted page"),
         JSON.stringify({ sentFirst, drew, wholeBefore, wholeDrawn, sentSecond, failed, again, drawn, drewAgain, kept, arrived, asked: seen.asked, shown }),
@@ -1050,10 +1076,10 @@ export async function pageWrites(page, browser) {
     // The check's evidence, each part bounded from its own start; a part not seen in time leaves the
     // ones after it unmade, and the hold, routes and page go however it ends.
     const got = {
-      sent: false,
+      sent: /** @type {Pressed | null} */ (null),
       drew: false,
       waiting: false,
-      sentFailing: false,
+      sentFailing: /** @type {Pressed | null} */ (null),
       failed: false,
       retry: /** @type {string | undefined} */ (undefined),
       drawnNext: /** @type {{ time: number, failed: string | null } | null} */ (null),
@@ -1080,13 +1106,13 @@ export async function pageWrites(page, browser) {
       // stylesheet, within 5 s from just before the press.
       const asset = own.waitForRequest("**/assets/smoke-held-poll.css", { timeout: 5000 }).then(() => true, () => false);
       got.sent = await pressWrite(own, seen, "main form button");
-      got.drew = got.sent && (await writtenSeen(own));
+      got.drew = got.sent.ok && (await writtenSeen(own));
       got.waiting = await asset;
       if (got.drew && got.waiting) {
         seen.fail = true;
         got.sentFailing = await pressWrite(own, seen, "main form button");
         got.failed =
-          got.sentFailing &&
+          got.sentFailing.ok &&
           (await own
             .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
             .then(() => true, () => false));
@@ -1116,7 +1142,7 @@ export async function pageWrites(page, browser) {
     }
     check(
       waitingPollName,
-      got.sent && got.drew && got.waiting && got.sentFailing && got.failed && got.retry === "nav" && got.drewNext && got.kept,
+      !!got.sent?.ok && got.drew && got.waiting && !!got.sentFailing?.ok && got.failed && got.retry === "nav" && got.drewNext && got.kept,
       JSON.stringify({ ...got, asked: seen.asked }),
     );
   }
@@ -1197,7 +1223,7 @@ export async function pageWrites(page, browser) {
   // failed). This runtime, given <main> alone for a write (a server from before), draws it and reads
   // the next page whole, which shows what the write changed.
   const oldName = "a write that does not say it draws the whole page gets <main> alone, and the next page is read whole";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(oldName, "without the Navigation API a link is a full load");
+  if (!(await hasNavigation())) skip(oldName, "without the Navigation API a link is a full load");
   else {
     const { own, seen } = await writtenPage(brand);
     seen.draws = false;

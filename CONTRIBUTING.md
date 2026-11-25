@@ -384,7 +384,9 @@ The watchlist's write-page checks on a page that reads itself again (`/smoke/wri
 find and press their buttons in one page task, and require each write to reach the stand-in
 within five seconds counted from just before the page is asked to press: the press task and the
 wait for the write share those five seconds, and a press task that has not returned by then, or
-returns after them, fails the press. The link to `/smoke/quoted` these checks then follow is
+returns after them, fails the press. A failed press names its step in the check's details: the
+press task not returning in time, failing or finding nothing to press, or what it led to not
+coming in time. The link to `/smoke/quoted` these checks then follow is
 pressed the same way, and that page must come in within five seconds counted from just before the
 press, a budget the press task shares. The page that reads itself again swaps `<main>` about a
 second after it loads and whenever its answer changes, so a click that found the button (or the
@@ -445,7 +447,8 @@ is cut (or given) and as that failure is first shown with nothing busy. With a s
 release time the page returned as the check let the body go bounds the first look too, so the time
 the check took to hear of the release is not added to them. Until those five seconds
 are over each look at the page has only what is left of them, then the check looks once more, that
-look bounded to five seconds, so it waits at most five seconds past them, and a late look neither
+look having only what is left of the five seconds after them, so it waits at most five seconds past
+them, and a late look neither
 passes an outcome that came after them nor fails one that came in time. The page's first failure
 must be the one expected, said after the wrapper cut (or gave) the body, on the form that sent the
 held write: each failure the page says
@@ -475,7 +478,10 @@ needs an answer that asks: the write lands 1.5 s after it is sent and the part's
 a second after the page loads, so a loaded browser can find it landed. A first read that finds it
 landed is answered as the server answers one while it lands (its status line saying so, and a tag
 asking again from the same address); the check requires an answer that asked, and every later read
-is the server's. Setting the case up and loading the page can take longer than 1.5 s too, and a
+is the server's. The first read's answer, whatever it found, is held until the case has read the
+status line, filled the form and recorded the document and its history length, so no answer draws
+before the case has what it compares it with. Setting the case up and loading the page can take
+longer than 1.5 s too, and a
 document that says `Saved.` asks for no part at all, so the document the case loads, if it finds
 the write landed, is answered the same way (its status line, its head asking to be read again and
 the tag asking again from the same address, as the server writes them while the write lands).
@@ -511,7 +517,9 @@ page too; the page it opens must commit within five seconds counted from just be
 budget the press task shares, and have its part read in within five seconds of the check seeing that
 commit. The check that a read whose patch leaves the part as it was marks it failed requires that
 load's own read, answered by the route with its empty patch, and that answer received within five
-seconds from just before the load, since a read that fails leaves the same placeholder.
+seconds from just before the load, since a read that fails leaves the same placeholder. It loads a
+fresh page of the same context, whose one document's read is the one it waits for, so a late read
+of an earlier document of the held page is not taken for it.
 
 The account page's posts without JavaScript (the name, the refused name and the picture) each
 press their button only once the page the previous post led to has loaded. That load, the post

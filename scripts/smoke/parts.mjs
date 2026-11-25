@@ -39,10 +39,16 @@ export async function partReads(page, browser, swaps, noSwaps) {
       await closeContext(context, "the held part's context").catch(() => {});
       throw error;
     });
-    /** How the route answers a read; `closing` once the case ends, when it lets each go at once. @type {"hold" | "empty" | "abort" | "closing"} */
+    /** How the route answers a read; `closing` once the case ends, when it lets each go at once. @type {"hold" | "abort" | "closing"} */
     let answer = "hold";
     let reads = 0;
-    /** The reads the route answered with an empty patch, each as it starts to answer it. @type {import("@playwright/test").Request[]} */
+    /**
+     * The page the empty patch case loads, made fresh in the same context, so the read it waits for
+     * is its one document's: a read the held page's earlier documents send late is not seen there.
+     * @type {import("@playwright/test").Page | null}
+     */
+    let fresh = null;
+    /** The fresh page's part reads, each answered with an empty patch, as the route starts to answer it. @type {import("@playwright/test").Request[]} */
     const emptied = [];
     /** Lets go of each read the route holds: its request is aborted and its handler returns. @type {(() => Promise<void>)[]} */
     const holds = [];
@@ -63,20 +69,19 @@ export async function partReads(page, browser, swaps, noSwaps) {
           reads++;
           if (answer === "closing") return route.abort().catch(() => {});
           if (answer === "hold") return new Promise((resolve) => holds.push(() => route.abort().catch(() => {}).finally(resolve)));
-          if (answer === "abort") return route.abort("internetdisconnected");
-          emptied.push(route.request());
-          return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
+          return route.abort("internetdisconnected");
         }),
       );
-      const placeholder = () =>
+      /** The slow part's state in `on`, with its count of part reads. @param {import("@playwright/test").Page} [on] */
+      const placeholder = (on = held) =>
         readWithin(
           "the slow part's state",
           (async () => ({
-            reads,
-            busy: await held.getAttribute("#picks", "aria-busy"),
-            failed: await held.getAttribute("#picks", "data-corten-read-failed"),
-            line: await held.isVisible("#picks span"),
-            link: await held.isVisible("#picks a"),
+            reads: on === held ? reads : emptied.length,
+            busy: await on.getAttribute("#picks", "aria-busy"),
+            failed: await on.getAttribute("#picks", "data-corten-read-failed"),
+            line: await on.isVisible("#picks span"),
+            link: await on.isVisible("#picks a"),
           }))(),
         );
       await held.goto(`${base}/`);
@@ -95,20 +100,32 @@ export async function partReads(page, browser, swaps, noSwaps) {
         const drawn = { ...(await placeholder()), documents };
         check("and so does it in a page a client navigation drew", drawn.line && !drawn.link && drawn.busy === "true" && drawn.reads === 2 && documents === 0, JSON.stringify(drawn));
       } else skip("and so does it in a page a client navigation drew", noSwaps);
-      answer = "empty";
-      // The load's own read, answered by the route with its empty patch, and that answer received
-      // within 5 s from just before the load: a read that fails (offline) leaves the same
+      // On a fresh page whose route answers each part read with an empty patch: the load's own read
+      // (the page's first part read, the only document it loads), and that exact answer received
+      // within 5 s from just before the load. A read that fails (offline) leaves the same
       // placeholder, so only a part marked failed after this answer counts.
-      const emptyRead = held
-        .waitForResponse((r) => emptied.includes(r.request()), { timeout: 5000 })
+      const emptyPage = await opened("the empty patch case's page", context.newPage());
+      fresh = emptyPage;
+      await within(
+        5000,
+        "the empty patch case's route was not set within 5 s",
+        emptyPage.route(`${base}/`, (route) => {
+          if (route.request().headers().corten !== "action") return route.continue();
+          if (answer === "closing") return route.abort().catch(() => {});
+          emptied.push(route.request());
+          return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
+        }),
+      );
+      const emptyRead = emptyPage
+        .waitForResponse((r) => r.request() === emptied[0], { timeout: 5000 })
         .then(
           (r) => ({ status: r.status(), patch: r.headers()["corten-patch"] ?? null }),
           () => null,
         );
-      await held.goto(`${base}/`);
+      await emptyPage.goto(`${base}/`);
       const emptyAnswer = await emptyRead;
-      await held.waitForFunction(() => !document.querySelector("#picks[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
-      const kept = await placeholder();
+      await emptyPage.waitForFunction(() => !document.querySelector("#picks[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+      const kept = await placeholder(emptyPage);
       check(
         "a read whose patch leaves the part as it was marks it failed, as it did not bring it",
         emptyAnswer !== null && emptyAnswer.status === 200 && emptyAnswer.patch === "1" && kept.busy === null && kept.failed === "" && !kept.line && kept.link,
@@ -125,12 +142,12 @@ export async function partReads(page, browser, swaps, noSwaps) {
       // and the wait for the commit share those 5 s, and either one that settles after them fails the
       // press, as one that never returns does. The page then has its part read in within 5 s of the
       // check seeing that commit.
-      let opened = false;
+      let linkOpened = false;
       let listed = false;
       if (failed.link) {
         const until = performance.now() + 5000;
         const press = steps(5000, "the page the link opens did not commit within 5 s of the press");
-        opened = await press
+        linkOpened = await press
           .step(() =>
             held.evaluate(() => {
               const link = /** @type {HTMLAnchorElement | null} */ (document.querySelector("#picks a"));
@@ -148,7 +165,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
             () => false,
           );
         listed =
-          opened &&
+          linkOpened &&
           (await held
             .waitForFunction(() => document.querySelectorAll("ul#picks li").length === 2 && !document.querySelector("template[data-corten-read-now]"), null, { timeout: 5000 })
             .then(
@@ -158,8 +175,8 @@ export async function partReads(page, browser, swaps, noSwaps) {
       }
       check(
         "the page it links to has the slow part read in, with JavaScript too",
-        opened && listed && new URL(held.url()).search === "?picks=true",
-        `${held.url()}${opened ? (listed ? "" : ", its part not read in within 5 s of its commit") : ", not opened within 5 s of the press"}`,
+        linkOpened && listed && new URL(held.url()).search === "?picks=true",
+        `${held.url()}${linkOpened ? (listed ? "" : ", its part not read in within 5 s of its commit") : ", not opened within 5 s of the press"}`,
       );
     } finally {
       answer = "closing";
@@ -167,6 +184,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
         () => held.off("request", onDocument),
         () => within(5000, "the held reads were not let go within 5 s", Promise.all(holds.splice(0).map((release) => release()))),
         () => within(5000, "the held part's route was not removed within 5 s", held.unrouteAll({ behavior: "ignoreErrors" })),
+        () => fresh && within(5000, "the empty patch case's route was not removed within 5 s", fresh.unrouteAll({ behavior: "ignoreErrors" })),
         () => closeContext(context, "the held part's context"),
       );
     }

@@ -87,8 +87,19 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const partReads = (/** @type {URL} */ u) => u.pathname + u.search === from || u.pathname + u.search === movedFrom;
       /** Set once the case is over: the route lets each read through, whether or not its removal is confirmed. */
       let over = false;
+      // The first part read's answer is held until the case has its baseline (the status line, the
+      // form filled, the document marked and the history length read), so no answer draws before
+      // it: the page asks for its first read a second after it loads, and a loaded browser can take
+      // longer than that to give the baseline. Let go however the case ends.
+      /** @type {() => void} */
+      let releaseFirst = () => {};
+      const firstHeld = new Promise((resolve) => (releaseFirst = () => resolve(undefined)));
+      /** Whether the first part read came before the case had its baseline, and so was held. */
+      let firstWasHeld = false;
       /** Whether the route has answered the case's document, and whether as the server answers it while the write lands. */
       let documentAnswered = false;
+      /** Whether the case has its baseline, and has let the first part read go. */
+      let baselined = false;
       let documentStandIn = false;
       const savedLine = '<p id="alert-status" role="status">Saved.</p>';
       const savingLine = '<p id="alert-status" role="status">Saving...</p>';
@@ -117,6 +128,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const address = asked.pathname + asked.search;
         answers.push({ url: address, asks: false, standIn: false });
         answered.push(request);
+        if (at === 0) {
+          firstWasHeld = !baselined;
+          await firstHeld;
+          if (over) return route.fallback();
+        }
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
         const headers = res.headers();
@@ -203,6 +219,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             "the page's history length",
             page.evaluate(() => history.length),
           );
+          baselined = true;
+          releaseFirst();
           // The check that the part stops needs `Saved.` drawn within 5 s from here, the wait below
           // included: by the draw's own time, recorded by the page.
           const savedBy = Date.now() + 5000;
@@ -211,7 +229,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           check(
             "a page's part waiting for a write is read again after a full load, not the page",
             waiting === "Saving..." && status === "Saved." && initial !== null && parts().length > 0 && whole().length === 0 && page.url() === url,
-            `${waiting} -> ${status} after ${parts().length} part and ${whole().length} page reads${whole().length ? ` (${whole().map((e) => address(e)).join(", ")})` : ""}${prefetches().length ? `, and ${prefetches().length} prefetches not counted (${prefetches().map((e) => address(e)).join(", ")})` : ""}${initial ? "" : " (the document loaded not seen)"}${documentStandIn ? " (the document found the write landed, and was answered as while it lands)" : ""}`,
+            `${waiting} -> ${status} after ${parts().length} part and ${whole().length} page reads${whole().length ? ` (${whole().map((e) => address(e)).join(", ")})` : ""}${prefetches().length ? `, and ${prefetches().length} prefetches not counted (${prefetches().map((e) => address(e)).join(", ")})` : ""}${initial ? "" : " (the document loaded not seen)"}${documentStandIn ? " (the document found the write landed, and was answered as while it lands)" : ""}${firstWasHeld ? " (its first part read held until the baseline was read)" : ""}`,
           );
           const kept = await readWithin(
             "what the page kept",
@@ -287,6 +305,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           );
         } finally {
           over = true;
+          releaseFirst();
           await within(5000, "the part route was not removed within 5 s", page.unroute(partReads, partRead));
         }
         if (swaps) {
