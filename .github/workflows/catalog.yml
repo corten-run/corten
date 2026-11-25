@@ -226,6 +226,13 @@ jobs:
         run: |
           docker build --target build -t cb-spring-tests bench/fullstack/apps/spring
           docker run --rm --cpus 2 --memory 2g cb-spring-tests mvn -q -B test
+      - name: Probe Spring HTTP disconnect behavior with Reactor Netty
+        if: matrix.app == 'spring'
+        timeout-minutes: 12
+        run: |
+          docker run --rm --cpus 2 --memory 2g \
+            --mount "type=bind,source=$PWD/bench/fullstack/apps/spring/transport-proof,target=/proof,readonly" \
+            cb-spring-tests sh -eu -c 'cp -R /proof /src/transport-proof; exec mvn -B -f /src/transport-proof/pom.xml -Dtest=WebFluxDisconnectHttpTest -DfailIfNoTests=true -Dscope=test test dependency:tree'
       - name: Test matched Leptos marketplace HTTP cells in both sources
         if: matrix.app == 'leptos'
         run: node bench/fullstack/apps/leptos/check-marketplace-production.mjs cb-marketplace-leptos
