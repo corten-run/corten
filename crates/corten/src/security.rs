@@ -1739,13 +1739,19 @@ fn asked<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bo
     }
 }
 
+#[inline]
 fn read<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bool), hosts: Option<&[String]>) -> Asked {
     let (host, more) = lines();
     if more {
         return Asked::Malformed;
     }
     match (req.uri().authority(), host) {
-        (None, Some(host)) => named(host.as_bytes(), hosts),
+        // [`named`], with the choice between its two readers made here, so the one an app
+        // that answers to any host needs is in line.
+        (None, Some(host)) => match hosts {
+            Some(names) => among(host.as_bytes(), names),
+            None => any(host.as_bytes()),
+        },
         (None, None) => unnamed(req),
         (Some(target), host) => targeted(target.as_str(), host, req, hosts),
     }
@@ -1757,6 +1763,7 @@ fn read<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, boo
 /// else to say why. One line a reason, so a request refused for one does not use up the line of
 /// a request refused for another; a later one costs the look for its reason and no more.
 #[cold]
+#[inline(never)]
 fn malformed(req: &Request) -> Asked {
     use std::sync::atomic::AtomicBool;
     static LOGGED: [AtomicBool; Refused::COUNT] = [const { AtomicBool::new(false) }; Refused::COUNT];
@@ -1900,6 +1907,7 @@ fn mark_if_unnamed(req: &mut Request) {
 /// app's own, which answers for what it read). An HTTP/1.1 message the server read is not one
 /// HTTP allows, and carries its mark ([`Unnamed`]).
 #[cold]
+#[inline(never)]
 fn unnamed(req: &Request) -> Asked {
     match req.extensions().get::<Unnamed>() {
         Some(Unnamed) => Asked::Malformed,
@@ -1916,6 +1924,7 @@ fn unnamed(req: &Request) -> Asked {
 /// server should answer an invalid request-target with a `400` or a redirect, each less than
 /// 3.2 says of `Host`. It is the one part of a target read here, since it is the name asked for.
 #[cold]
+#[inline(never)]
 fn targeted(target: &str, host: Option<&HeaderValue>, req: &Request, hosts: Option<&[String]>) -> Asked {
     let line = match host {
         Some(host) => named(host.as_bytes(), None),
@@ -1943,18 +1952,55 @@ fn targeted(target: &str, host: Option<&HeaderValue>, req: &Request, hosts: Opti
 /// the part before a name the app holds subdomains under, a name it does not hold, and any name
 /// when it has none. A name refused as another host's is logged.
 fn named(host: &[u8], names: Option<&[String]>) -> Asked {
+    match names {
+        Some(names) => among(host, names),
+        None => any(host),
+    }
+}
+
+/// [`named`] with no names to hold the host to: whether it is a host and maybe a port at all.
+/// Every request to an app that answers to any host comes here, so it is in line where the
+/// request is read, and a `Host` of a name's own characters and a port is read once, its port
+/// from the end and its name four bytes at a look ([`without_port`], [`reg_name`]).
+#[inline]
+fn any(host: &[u8]) -> Asked {
     // `[::1]:3000`: an IPv6 address is always in brackets.
     if host.first() == Some(&b'[') {
         return if ip_literal(host) { Asked::Here } else { Asked::Malformed };
     }
-    let name = match host.iter().rposition(|&b| b == b':') {
-        Some(colon) if host[colon + 1..].iter().all(u8::is_ascii_digit) => &host[..colon],
-        Some(_) => return Asked::Malformed,
-        None => host,
-    };
-    let Some(names) = names else {
-        return if reg_name(name) { Asked::Here } else { Asked::Malformed };
-    };
+    if reg_name(without_port(host)) {
+        Asked::Here
+    } else {
+        Asked::Malformed
+    }
+}
+
+/// `host` without its port: what is before its last colon when digits alone follow it (or
+/// nothing: `shop.example:` has an empty port), and all of `host` when it has no colon or
+/// something else follows its last one. It is read from the end, where a port is a few bytes,
+/// and not searched for a colon from the start, so the name's bytes are read by whoever reads
+/// the name and not here as well. A colon that is no port's is left in what this gives, and
+/// neither a `reg-name` nor a name the app answers to holds one, so [`any`] and [`among`] find
+/// such a `Host` malformed by the name's own rule.
+#[inline]
+fn without_port(host: &[u8]) -> &[u8] {
+    let mut name = host;
+    while let [rest @ .., b'0'..=b'9'] = name {
+        name = rest;
+    }
+    match name {
+        [name @ .., b':'] => name,
+        _ => host,
+    }
+}
+
+/// [`named`] in an app that names its hosts.
+fn among(host: &[u8], names: &[String]) -> Asked {
+    // `[::1]:3000`: an IPv6 address is always in brackets.
+    if host.first() == Some(&b'[') {
+        return if ip_literal(host) { Asked::Here } else { Asked::Malformed };
+    }
+    let name = without_port(host);
     let bare = name.strip_suffix(b".").unwrap_or(name);
     if bare.eq_ignore_ascii_case(b"localhost") {
         return Asked::Here;
@@ -1993,22 +2039,37 @@ fn ends_with(name: &[u8], suffix: &[u8]) -> bool {
 
 /// Whether `name` is a `reg-name` (RFC 3986 3.2.2) of at least one byte: unreserved characters,
 /// sub-delimiters and percent-encoded bytes. No colon, so a second one in a `Host` is not a port's.
+#[inline]
 fn reg_name(name: &[u8]) -> bool {
-    /// The bytes a `reg-name` holds as they are: unreserved characters and sub-delimiters.
-    const AS_WRITTEN: [bool; 256] = {
-        let mut bytes = [false; 256];
-        let mut byte = 0;
-        while byte < 256 {
-            bytes[byte] = (byte as u8).is_ascii_alphanumeric() || matches!(byte as u8, b'-' | b'.' | b'_' | b'~');
-            bytes[byte] |= matches!(byte as u8, b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'=');
-            byte += 1;
-        }
-        bytes
-    };
-    // Few names hold a percent-encoded byte: one look at each byte says so of the rest.
-    if name.iter().all(|&byte| AS_WRITTEN[usize::from(byte)]) {
+    // Few names hold a percent-encoded byte, so the name is read first for the bytes it holds
+    // as they are, four to a look and then the one to three left over: a look at four costs
+    // little more than a look at one, and a name is some tens of bytes.
+    let written = |byte: &u8| AS_WRITTEN[usize::from(*byte)];
+    let (fours, rest) = name.as_chunks::<4>();
+    if fours.iter().all(|[a, b, c, d]| written(a) & written(b) & written(c) & written(d)) && rest.iter().all(written) {
         return !name.is_empty();
     }
+    encoded(name)
+}
+
+/// The bytes a `reg-name` holds as they are: unreserved characters and sub-delimiters.
+static AS_WRITTEN: [bool; 256] = {
+    let mut bytes = [false; 256];
+    let mut byte = 0;
+    while byte < 256 {
+        bytes[byte] = (byte as u8).is_ascii_alphanumeric() || matches!(byte as u8, b'-' | b'.' | b'_' | b'~');
+        bytes[byte] |= matches!(byte as u8, b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'=');
+        byte += 1;
+    }
+    bytes
+};
+
+/// [`reg_name`] for a name with a byte it does not hold as written: whether each such byte
+/// starts a percent-encoded one (`%` and two hex digits). Out of line: few names have one, and
+/// a `Host` that is none ends here.
+#[cold]
+#[inline(never)]
+fn encoded(name: &[u8]) -> bool {
     let mut rest = name;
     loop {
         rest = match rest {
@@ -2035,6 +2096,7 @@ fn ip_literal(host: &[u8]) -> bool {
 /// Logs the first refused host of the process: a deployed app that has not listed its name
 /// answers 421 to everyone, and this says why.
 #[cold]
+#[inline(never)]
 fn refused_host(host: &[u8]) {
     static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -2629,6 +2691,116 @@ mod tests {
             assert_eq!(named(host.as_bytes(), Some(&names)), Asked::Malformed, "{host}");
             assert_eq!(named(host.as_bytes(), None), Asked::Malformed, "{host}, in an app that answers to any host");
         }
+    }
+
+    /// RFC 9110 7.2's `uri-host [ ":" port ]` with RFC 3986 3.2.2's host and Corten's two
+    /// choices (a name of no bytes is none, and an address in brackets is IPv6 or none), read
+    /// from the start a byte at a time with no table: the other way round from [`any`], which
+    /// takes the port off the end and reads the name four bytes at a look.
+    fn is_host(host: &[u8]) -> bool {
+        fn port(rest: &[u8]) -> bool {
+            match rest {
+                [] => true,
+                [b':', digits @ ..] => digits.iter().all(u8::is_ascii_digit),
+                _ => false,
+            }
+        }
+        if let [b'[', inside @ ..] = host {
+            let Some(end) = inside.iter().position(|&b| b == b']') else { return false };
+            let address = std::str::from_utf8(&inside[..end]).ok().and_then(|a| a.parse::<std::net::Ipv6Addr>().ok());
+            return address.is_some() && port(&inside[end + 1..]);
+        }
+        let mut at = 0;
+        while at < host.len() {
+            at += match host[at] {
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => 1,
+                b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'=' => 1,
+                b'%' if host[at + 1..].len() >= 2 && host[at + 1].is_ascii_hexdigit() && host[at + 2].is_ascii_hexdigit() => 3,
+                _ => break,
+            };
+        }
+        at > 0 && port(&host[at..])
+    }
+
+    /// The reader's two short cuts, the port taken off the end and the name read four bytes at
+    /// a look, give what the grammar read a byte at a time gives ([`is_host`]): for every
+    /// value of up to four bytes of what a `Host` is made of and is not, and for names of each
+    /// length around a look's four bytes with each byte of them changed in turn. A name the
+    /// app does not hold is another host's when it is a host, and malformed when it is none.
+    #[test]
+    fn a_host_read_four_bytes_at_a_look_is_what_the_grammar_says() {
+        let names = ["shop.example".to_string(), ".corp.example".to_string()];
+        let mut read = 0;
+        let mut hold = |host: &[u8]| {
+            let shown = String::from_utf8_lossy(host);
+            let is = is_host(host);
+            assert_eq!(named(host, None), if is { Asked::Here } else { Asked::Malformed }, "{shown:?} ({host:?})");
+            assert_eq!(named(host, Some(&names)) == Asked::Malformed, !is, "{shown:?} ({host:?}), in an app with names");
+            read += 1;
+        };
+        // Every value of none to four of these bytes.
+        let bytes = [b'a', b'G', b'.', b'-', b'0', b'9', b':', b'[', b']', b'%', b'@', b'/', b' ', b',', 0xC3, 0xA9, 0xFF];
+        for length in 0..=4 {
+            for mut number in 0..bytes.len().pow(length) {
+                let mut host = Vec::new();
+                for _ in 0..length {
+                    host.push(bytes[number % bytes.len()]);
+                    number /= bytes.len();
+                }
+                hold(&host);
+            }
+        }
+        // A name of 1 to 20 bytes, of each kind a name holds as written, and its ports.
+        let whole = b"a1-b2.c3_d4~e5!f6$G7";
+        let ports: [&[u8]; 11] =
+            [b"", b":", b":8", b":80", b":8080", b":65535", b":0123456789", b":80a", b":a", b"::80", b":80:"];
+        let with = |name: &[u8], port: &[u8]| [name, port].concat();
+        for length in 1..=whole.len() {
+            let name = &whole[..length];
+            for (port, good) in ports.iter().zip([true, true, true, true, true, true, true, false, false, false, false]) {
+                let asked = if good { Asked::Here } else { Asked::Malformed };
+                assert_eq!(named(&with(name, port), None), asked, "{length} bytes and {:?}", String::from_utf8_lossy(port));
+                hold(&with(name, port));
+                for at in 0..length {
+                    // A byte no name holds, at each place in it: the first is a space.
+                    for bad in *b" /@:[%\"\\^`{|}<>#?\x00\x7F\x80\xFF" {
+                        let mut host = with(name, port);
+                        host[at] = bad;
+                        if bad == b' ' {
+                            assert_eq!(named(&host, None), Asked::Malformed, "a space at {at} of {length} bytes");
+                        }
+                        hold(&host);
+                    }
+                    // A percent-encoded byte there, whole and cut short (`%4` is whole or not
+                    // by the byte that follows it, so only the grammar says which).
+                    for (encoded, whole) in [
+                        (&b"%4a"[..], Some(true)),
+                        (b"%C3%A9", Some(true)),
+                        (b"%4", None),
+                        (b"%4g", Some(false)),
+                        (b"%g4", Some(false)),
+                    ] {
+                        let host = [&name[..at], encoded, &name[at..], port].concat();
+                        if let Some(whole) = whole {
+                            let asked = if whole && good { Asked::Here } else { Asked::Malformed };
+                            assert_eq!(named(&host, None), asked, "{:?}", String::from_utf8_lossy(&host));
+                        }
+                        hold(&host);
+                    }
+                }
+            }
+        }
+        // Each of the 256 bytes at each place in a name of up to nine.
+        for length in 1..=9 {
+            for at in 0..length {
+                for byte in 0..=255 {
+                    let mut host = whole[..length].to_vec();
+                    host[at] = byte;
+                    hold(&host);
+                }
+            }
+        }
+        assert!(read > 100_000, "{read} values read");
     }
 
     /// What a request asks for where no connection brought it (a test's, as these are): its
