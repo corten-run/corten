@@ -21,7 +21,7 @@ import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../l
 import { fanoutProfile } from "../../live/fanout.mjs";
 import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
 import { clientActorCpus, hardeningActorCpus, liveActorCpus, liveApplication, liveGroup } from "./native-roles.mjs";
-import { catalogFleetPlacement, fleetCatalogSlugs, host, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
+import { catalogFleetPlacement, fleetCatalogSlugs, host, jsonFleetPlacement, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const schema = "benchmark-isolated-contract/v1";
 export const alternateCampaignPlacements = Object.freeze(fleetCatalogSlugs.regions
@@ -136,7 +136,8 @@ const selection = (group) => ({ registry: registrySchema, group, contractSha256:
 function subjectFor(r, sources, campaignMode) {
   assert.ok(campaignMode === "dedicated" || campaignMode === "legacy"
     || alternateCampaignPlacements.includes(campaignMode) && r.group !== "catalog-page"
-    || campaignMode === catalogFleetPlacement.loadLayout && r.group === "catalog-page", "unknown campaign placement");
+    || campaignMode === catalogFleetPlacement.loadLayout && r.group === "catalog-page"
+    || campaignMode === jsonFleetPlacement.loadLayout && r.group === "json-api", "unknown campaign placement");
   const inputs = Object.fromEntries(Object.entries(latestStableSources).filter(([key]) => key === "policy" || r.group === "client-heavy").map(([key, path]) => {
     const bytes = git(["show", `${r.commit}:${path}`]);
     assert.equal(sources.files.find((file) => file.path === path)?.sha256, sha256(bytes), `${path}: latest-stable source differs`);
@@ -243,11 +244,14 @@ function resources(group, recipe, campaignMode) {
     state: "unknown", requiredEvidence: "separate functional and measured participants, actual runtime limits/cpusets, calibration/headroom and quiet-host observations" };
   const prefix = { "catalog-page": "CATALOG", "json-api": "JSON_API", "localized-marketplace": "MARKETPLACE", "mixed-production": "MIXED_PRODUCTION" }[group];
   if (prefix) {
-    const wide = campaignMode === catalogFleetPlacement.loadLayout;
+    const wide = campaignMode === catalogFleetPlacement.loadLayout, json = campaignMode === jsonFleetPlacement.loadLayout;
+    // The JSON API c-16 pins are catalog's c16-generator-v1 under JSON API's own selector.
     const env = wide ? { ...catalogFleetPlacement.cpuEnv, CATALOG_LOAD_LAYOUT: campaignMode }
+      : json ? { ...jsonFleetPlacement.cpuEnv, JSON_API_LOAD_LAYOUT: campaignMode }
       : Object.fromEntries(Object.entries({ APP: "1", API: "2-3", LOAD: "4-7" }).map(([role, value]) => [`${prefix}_${role}_CPUS`, value]));
     return { nativeCpuDefaults: cpuSettings({}), requestedCpuEnv: env,
-      expectedCpus: wide ? cpuSettings(env, campaignMode) : cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
+      expectedCpus: wide ? cpuSettings(env, campaignMode)
+        : json ? cpuSettings(catalogFleetPlacement.cpuEnv, catalogFleetPlacement.loadLayout) : cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
       memoryBytes: { app: 2 ** 30, upstream: 512 * 2 ** 20, load: 2 ** 31 },
       hostProcesses: "unisolated driver; JSON functional checker also runs on host", state: "unknown",
       requiredEvidence: "actual per-role container quotas/cpusets/memory, tool identities, host topology and quiet-host/headroom observations" };

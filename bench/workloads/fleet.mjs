@@ -6,7 +6,7 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isIPv4 } from "node:net";
-import { fleetCatalogCommand, fleetPlan, fleetRegion, requireStagedFleet, roundName } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, fleetPlan, fleetRegion, jsonFleetPlacement, requireStagedFleet, roundName } from "./cloud-contract.mjs";
 import { digest, durable, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { controllerFailure, fleetCatalogResult, full, providerAccount, providerFailure, providerIdentity } from "./cloud-options.mjs";
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
@@ -35,7 +35,8 @@ const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 export function parseFleetArgs(args) {
   const o = { round: args[0] }, seen = new Set();
   const values = { "--fleet-root": "root", "--continuation-root": "continuationRoot", "--group": "group", "--commit": "commit",
-    "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--approve-reviewed-merged-ready": "approval" };
+    "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--approve-reviewed-merged-ready": "approval",
+    "--load-layout": "loadLayout" };
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]; assert.ok(!seen.has(flag), "fleet-option"); seen.add(flag);
     if (["--prepare", "--detach", "--admit-remaining", "--collect", "--print-approval", "--offline-handoff"].includes(flag)) o[flag.slice(2)] = true;
@@ -53,6 +54,9 @@ export function parseFleetArgs(args) {
   } else assert.equal(o.group, undefined, "group requires a continuation root");
   fleetRoot(o.root);
   if (o["offline-handoff"]) assert.ok(o.prepare && o.continuationRoot, "offline handoff must be selected at single-group preparation");
+  // The opted-in JSON API c-16 placement is saved in the fleet at preparation; nothing later selects it.
+  if (o.loadLayout !== undefined) assert.ok(o.prepare && o.continuationRoot && o.group === "json-api"
+    && o.loadLayout === jsonFleetPlacement.loadLayout, "fleet-load-layout");
   if (o.prepare) {
     full(o.commit, /[a-f0-9]{40}/, "fleet-source"); full(o.sshKey, /[1-9]\d*/, "fleet-key");
     providerIdentity({ accountId: o.accountId, context: o.context });
@@ -433,8 +437,9 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       const provider = { accountId: options.accountId, context: options.context };
       const single = continuation && { group: options.group, indexSha256: continuation.indexSha256, checkout: repo,
-        ...(options["offline-handoff"] ? { offlineHandoff: true } : {}) };
-      const region = await readPlacement(provider, placement, undefined, { staged: true, group: single?.group });
+        ...(options["offline-handoff"] ? { offlineHandoff: true } : {}), ...(options.loadLayout ? { loadLayout: options.loadLayout } : {}) };
+      const region = await readPlacement(provider, placement, undefined, { staged: true, group: single?.group,
+        ...(single?.loadLayout ? { loadLayout: single.loadLayout } : {}) });
       const used = new Set(), token = () => { let v; do { v = randomBytes(8).toString("hex"); } while (used.has(v)); used.add(v); return v; };
       const manifest = fleetPlan({ round: options.round, commit: options.commit, token: token(),
         tokens: Object.fromEntries((single ? [single.group] : groupNames).map((group) => [group, token()])),

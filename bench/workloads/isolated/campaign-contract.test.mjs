@@ -3,7 +3,8 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { bindExecution, clientComparisonRecipe } from "./contract.mjs";
-import { catalogFleetPlacement, providerCreateHost } from "../cloud-contract.mjs";
+import { catalogFleetPlacement, jsonFleetPlacement, providerCreateHost } from "../cloud-contract.mjs";
+import { c16Env, placementCpus } from "../../json-api/placement.mjs";
 import { bindCampaign, campaignRounds, jsonPhase, mixedPhase, productionRecipes, validateCampaign } from "./campaign-contract.mjs";
 import { groupNames, selectedApps } from "../registry.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
@@ -51,9 +52,37 @@ test("captured pre-create worker uses the real committed placements including bo
   const check = (group, mode) => inspectCampaign({ action: "actor-role-preflight", round: "r25", commit, group, mode });
   for (const [group, mode, blockers] of [
     ["catalog-page", catalogFleetPlacement.loadLayout, []],
+    ["json-api", jsonFleetPlacement.loadLayout, []],
     ["live-delivery", "dedicated-lon1", []],
     ["hardening", "dedicated", []],
   ]) assert.deepEqual(await check(group, mode), blockers);
+});
+test("the opted-in JSON API c-16 layout widens only k6 and binds only the json-api group", () => {
+  const request = { round: "r25", commit, group: "json-api" };
+  const [d] = campaigns.bindGroupCampaign(request).bindings;
+  const plan = campaigns.bindGroupCampaign(request, jsonFleetPlacement.loadLayout);
+  validateCampaign(plan);
+  const [b] = plan.bindings;
+  assert.equal(b.campaignMode, "json-c16-generator-v1");
+  assert.deepEqual(b.host, { ...d.host, size: "c-16", region: "sfo2" });
+  assert.deepEqual(b.host, { ...providerCreateHost("json-c16-generator-v1"), allocation: "not-created", isolation: "unverified" });
+  for (const key of ["execution", "selection", "validation", "preparation"]) assert.deepEqual(b[key], d[key]);
+  // The binding's requested CPU environment is exactly the runner-side opt-in, and its expected CPUs are the placement's.
+  assert.deepEqual(b.resources.requestedCpuEnv, c16Env);
+  assert.deepEqual(b.resources.expectedCpus, placementCpus(c16Env));
+  assert.deepEqual(b.resources, { ...d.resources, requestedCpuEnv: c16Env, expectedCpus: { ...d.resources.expectedCpus,
+    load: { ...d.resources.expectedCpus.load, quota: 12, cpuset: "4-15", args: ["--cpus", "12", "--cpuset-cpus", "4-15"] } } });
+  assert.deepEqual(d.resources.requestedCpuEnv, { JSON_API_APP_CPUS: "1", JSON_API_API_CPUS: "2-3", JSON_API_LOAD_CPUS: "4-7" });
+  assert.deepEqual(nativeControlPartition(b).cpus, { app: "1", load: "4-15", api: "2-3" });
+  assert.notEqual(b.subjectSha256, d.subjectSha256);
+  for (const change of [(p) => { p.bindings[0].resources = d.resources; }, (p) => { p.bindings[0].host = d.host; },
+    (p) => { delete p.bindings[0].resources.requestedCpuEnv.JSON_API_LOAD_LAYOUT; }]) {
+    const changed = structuredClone(plan); change(changed);
+    assert.throws(() => validateCampaign(changed), /differs from fixed native bindings/);
+  }
+  for (const group of groupNames.filter((name) => name !== "json-api"))
+    assert.throws(() => campaigns.bindGroupCampaign({ ...request, group }, "json-c16-generator-v1"), /unknown group placement/);
+  assert.throws(() => campaigns.bindGroupCampaign(request, catalogFleetPlacement.loadLayout), /unknown group placement/);
 });
 test("alternate dedicated placement is replayable and changes neither resources nor native execution", () => {
   const request = { round: "r25", commit, group: "json-api" };

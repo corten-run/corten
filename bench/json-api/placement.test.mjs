@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { cpuSettings } from "./contract.mjs";
-import { c16Env, c16Host, c16Layout, layoutKey, placementCpus, recordedPlacement, runnerPlacement } from "./placement.mjs";
-import { fleetPlan, reservation } from "../workloads/cloud-contract.mjs";
+import { c16Env, c16Host, c16Layout, coldProbeCpus, layoutKey, loadSamplerCpus, placementCpus, recordedPlacement, runnerPlacement } from "./placement.mjs";
+import { fleetPlan, jsonFleetPlacement, providerCreateHost, reservation } from "../workloads/cloud-contract.mjs";
 import { remoteFiles } from "../workloads/cloud-remote.mjs";
 import { groupNames } from "../workloads/registry.mjs";
 
@@ -24,8 +24,29 @@ test("the c-16 selector gives k6 CPUs 4-15 and leaves the app and upstream budge
     args: ["--cpus", "12", "--cpuset-cpus", "4-15"] });
   assert.deepEqual(wide.app, base.app);
   assert.deepEqual(wide.api, base.api);
-  assert.deepEqual(runnerPlacement(c16Env, c16Host.logicalCpus), { loadLayout: c16Layout, cpus: wide });
+  assert.deepEqual(runnerPlacement(c16Env, c16Host.logicalCpus), { loadLayout: c16Layout, cpus: wide, generatorPlacement: generator });
   assert.deepEqual(runnerPlacement(c16Env, 32).cpus, wide);
+});
+
+const generator = { coldProbe: { quota: 4, cpuset: "4-7" }, loadSampler: { quota: 12, cpuset: "4-15" } };
+test("the fleet's saved c-16 placement is this layout's pins and host", () => {
+  assert.deepEqual({ ...jsonFleetPlacement.cpuEnv, [layoutKey]: jsonFleetPlacement.loadLayout }, c16Env);
+  assert.equal(jsonFleetPlacement.host.size, c16Host.size);
+  assert.deepEqual(providerCreateHost(c16Layout), jsonFleetPlacement.host);
+});
+
+test("the cold probe stays on CPUs 4-7 while the load sampler accounts for all of k6's CPUs 4-15", () => {
+  const wide = placementCpus(c16Env), measurement = { loadLayout: c16Layout, cpus: wide, generatorPlacement: generator };
+  assert.deepEqual(coldProbeCpus(measurement), { quota: 4, cpuset: "4-7", placement: "explicit logical CPU pinning plus quota",
+    args: ["--cpus", "4", "--cpuset-cpus", "4-7"] });
+  assert.deepEqual(coldProbeCpus(measurement), cpuSettings(pinned).load);
+  assert.deepEqual(loadSamplerCpus(measurement), { quota: 12, cpuset: "4-15" });
+  assert.equal(loadSamplerCpus(measurement).quota * 80, 960);
+  // The default keeps today's single load set for the probe, k6 and the sampler.
+  for (const cpus of [cpuSettings(pinned), cpuSettings({})]) {
+    assert.deepEqual(coldProbeCpus({ cpus }), cpus.load);
+    assert.deepEqual(loadSamplerCpus({ cpus }), { quota: cpus.load.quota, cpuset: cpus.load.cpuset });
+  }
 });
 
 test("the selector refuses another name, an empty value or any other pin", () => {
@@ -48,8 +69,15 @@ test("a result names its placement with an explicit marker that must agree with 
   assert.deepEqual(recordedPlacement({ cpus: cpuSettings(pinned) }), { placement: "default", cpus: cpuSettings(pinned) });
   assert.deepEqual(recordedPlacement({ cpus: cpuSettings({}) }), { placement: "default", cpus: cpuSettings({}) });
   const wide = placementCpus(c16Env);
-  assert.deepEqual(recordedPlacement({ loadLayout: c16Layout, cpus: wide }), { placement: c16Layout, cpus: wide });
-  for (const measurement of [{ cpus: wide }, { loadLayout: c16Layout, cpus: cpuSettings(pinned) },
+  assert.deepEqual(recordedPlacement({ loadLayout: c16Layout, cpus: wide, generatorPlacement: generator }),
+    { placement: c16Layout, cpus: wide, generatorPlacement: generator });
+  const probe = (coldProbe) => ({ loadLayout: c16Layout, cpus: wide, generatorPlacement: { ...generator, coldProbe } });
+  const sampler = (loadSampler) => ({ loadLayout: c16Layout, cpus: wide, generatorPlacement: { ...generator, loadSampler } });
+  for (const measurement of [{ cpus: wide }, { loadLayout: c16Layout, cpus: cpuSettings(pinned) }, { loadLayout: c16Layout, cpus: wide },
+    { loadLayout: c16Layout, cpus: wide, generatorPlacement: {} }, { cpus: cpuSettings(pinned), generatorPlacement: generator },
+    { cpus: cpuSettings(pinned), generatorPlacement: undefined }, probe({ quota: 12, cpuset: "4-15" }), probe({ quota: 4, cpuset: "4-15" }),
+    probe(undefined), sampler({ quota: 4, cpuset: "4-7" }), sampler({ quota: 12, cpuset: "4-7" }), sampler({ quota: 1, cpuset: "4-15" }),
+    { loadLayout: c16Layout, cpus: wide, generatorPlacement: { ...generator, extra: true } },
     { loadLayout: "c16-generator-v1", cpus: wide }, { loadLayout: c16Layout, cpus: { ...wide, load: { ...wide.load, quota: 4 } } },
     { cpus: { ...cpuSettings(pinned), load: { ...cpuSettings(pinned).load, quota: 12 } } }, {}, undefined]) {
     assert.throws(() => recordedPlacement(measurement));

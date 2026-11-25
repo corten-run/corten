@@ -1207,7 +1207,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             assert.ok(existing.length + fleet.jobs.length - present <= limit, "account capacity cannot cover the reserved fleet");
             const catalog = fleetCatalogResult(await execute("doctl", fleetCatalogCommand, 60000, true));
             fleetRegion(catalog, remainingPlacement?.region ?? fleet.host.region,
-              { remainingOnly: remainingAdmission, staged: stagedFleet(fleet), group: fleet.single?.group });
+              { remainingOnly: remainingAdmission, staged: stagedFleet(fleet), group: fleet.single?.group,
+                ...(fleet.single?.loadLayout ? { loadLayout: fleet.single.loadLayout } : {}) });
           }
           let created;
           try {

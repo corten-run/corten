@@ -1,5 +1,5 @@
-// Opt-in c-16 placement for the JSON API group (issue 2057). Not wired into run.mjs,
-// report.mjs or the fleet yet; with no layout selected every result is the default.
+// Opt-in c-16 placement for the JSON API group (issue 2057). The fleet and campaign can
+// select it; run.mjs and report.mjs do not read it yet, so a run still uses the default.
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { cpuSettings as catalogCpus } from "../catalog/contract.mjs";
@@ -12,6 +12,12 @@ export const c16Layout = "json-c16-generator-v1";
 export const c16Env = Object.freeze({ JSON_API_APP_CPUS: "1", JSON_API_API_CPUS: "2-3", JSON_API_LOAD_CPUS: "4-15", [layoutKey]: c16Layout });
 export const c16Host = Object.freeze({ size: "c-16", logicalCpus: 16 });
 const roles = ["app", "api", "load"];
+// Two generator-side participants, recorded beside the layout. The untimed cold probe keeps
+// its default placement, CPUs 4-7 at quota 4, as catalog's c16-generator-v1 does. The load
+// resource sampler accounts for every assigned generator CPU: k6's quota 12 on 4-15, so its
+// 80%-per-core bound is 960%.
+const budget = ({ quota, cpuset }) => ({ quota, cpuset });
+const coldProbeBudget = Object.freeze(budget(cpuSettings({ JSON_API_LOAD_CPUS: "4-7" }).load));
 
 // Without JSON_API_LOAD_LAYOUT this is exactly contract.mjs cpuSettings(env).
 export function placementCpus(env) {
@@ -31,12 +37,27 @@ export function runnerPlacement(env, logicalCpus) {
   assert.ok(Number.isSafeInteger(logicalCpus) && logicalCpus >= c16Host.logicalCpus,
     `${c16Layout} needs ${c16Host.logicalCpus} logical CPUs; this host has ${logicalCpus}`);
   verifyNativePartition(Object.fromEntries(roles.map((role) => [role, cpus[role].cpuset])), roles, logicalCpus);
-  return { loadLayout: c16Layout, cpus };
+  return { loadLayout: c16Layout, cpus, generatorPlacement: generatorPlacement(cpus) };
+}
+
+function generatorPlacement(cpus) {
+  return { coldProbe: { ...coldProbeBudget }, loadSampler: budget(cpus.load) };
+}
+
+// Docker arguments for the cold probe: the default load set, or 4-7 under the c-16 layout.
+export function coldProbeCpus(measurement) {
+  const { placement, cpus } = recordedPlacement(measurement);
+  return placement === c16Layout ? cpuSettings({ JSON_API_LOAD_CPUS: coldProbeBudget.cpuset }).load : cpus.load;
+}
+
+// The quota and CPU set the load resource sampler accounts for: all of k6's assigned CPUs.
+export function loadSamplerCpus(measurement) {
+  return budget(recordedPlacement(measurement).cpus.load);
 }
 
 // Reader side: a result says its placement by an explicit marker, never by quota alone.
 export function recordedPlacement(measurement) {
-  const { loadLayout, cpus } = measurement ?? {};
+  const { loadLayout, cpus, generatorPlacement: recorded } = measurement ?? {};
   const env = Object.fromEntries(roles.map((role) => [`JSON_API_${role.toUpperCase()}_CPUS`, cpus?.[role]?.cpuset]));
   if (loadLayout !== undefined) {
     assert.equal(loadLayout, c16Layout, "unknown recorded JSON API placement");
@@ -44,5 +65,9 @@ export function recordedPlacement(measurement) {
   }
   const expected = placementCpus(env);
   assert.ok(isDeepStrictEqual(cpus, expected), "recorded CPU quotas or placement differ from the recorded layout");
-  return { placement: loadLayout ?? "default", cpus: expected };
+  // The default never records the field, so its saved bytes do not change; the layout always does.
+  if (loadLayout === undefined) assert.ok(!Object.hasOwn(measurement, "generatorPlacement"), "generator placement without the c-16 layout");
+  else assert.ok(isDeepStrictEqual(recorded, generatorPlacement(expected)), "recorded cold probe or load sampler placement differs from the c-16 layout");
+  return { placement: loadLayout ?? "default", cpus: expected,
+    ...(loadLayout === undefined ? {} : { generatorPlacement: generatorPlacement(expected) }) };
 }
