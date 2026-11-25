@@ -63,6 +63,7 @@ const createErroredStop = () => Object.assign(new Error("provider create errored
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
   authorizeRecovery = authorizeAudit, unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission,
+  inspectPreCreateInventory, singleResponsePreCreate = false,
   renameBootstrapSeal = process.platform === "win32" ? renameSync : undefined, monotonicNow = () => performance.now(),
   createReappearedIo = { durable, rename: renameSync } } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
@@ -266,7 +267,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     await account(); // A changed context cannot supply absence/deletion authority.
     return result;
   }
-  const list = async () => { const d = JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--output", "json"])).stdout); assert.ok(Array.isArray(d)); return d; };
+  const list = async (singleResponse = false) => {
+    const d = JSON.parse((await execute("doctl", ["compute", "droplet", "list", ...(singleResponse ? ["--single-response"] : []), "--output", "json"])).stdout);
+    assert.ok(Array.isArray(d)); return d;
+  };
   // A provider-errored create retires only on positive absence: exact-ID 404, then a
   // single-response census (the whole inventory in one provider response) whose every
   // row has an inspectable ID, name and tags, none of them this create's. execute()
@@ -1328,7 +1332,15 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           await execute("git", ["merge-base", "--is-ancestor", state.commit, mergedHead]);
           for (const path of ["bench/workloads/droplet.mjs", "bench/workloads/cloud-contract.mjs", "bench/workloads/isolated/campaign-entry.mjs", "bench/workloads/isolated/campaign-verify.mjs", ...benchPackagePaths])
             await execute("git", ["cat-file", "-e", `${state.commit}:${path}`]);
+          const inspectInventory = (rows) => {
+            try { inspectPreCreateInventory?.(rows); }
+            catch (error) { if (error.controlUncertain) preserveOperationLock = true; throw error; }
+          };
+          // First check the strict name/tag projection. The ordinary listing still
+          // supplies placement and address fields for the running-peer checks.
+          if (singleResponsePreCreate) inspectInventory(await list(true));
           const existing = await list();
+          inspectInventory(existing);
           assert.ok(!existing.some((d) => postedIds.has(String(d.id))),
             "an earlier provider-errored create's posted droplet is listed; never create beside it; preserve reservation");
           if (fleet) assertFleetCensus(existing, fleet, remainingPlacement?.region, fleet.single ? checkFleetAdmission("census") : []);

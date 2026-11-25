@@ -18,7 +18,7 @@ import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, preloginUserData, reservation, savedLoadLayout, savedPlacement, tags, verifySshIngress } from "./cloud-contract.mjs";
-import { quarantineCensusAbsent, readFleet, recheckCreateQuarantine, recheckSetupAttempt, unacknowledgedCreateBinding, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { checkQuarantineCensus, readFleet, recheckCreateQuarantine, recheckSetupAttempt, unacknowledgedCreateBinding, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { unitQuery } from "./cloud-options.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { createErroredReceipt, createErroredRecord, offlineNeverStarted, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
@@ -84,7 +84,7 @@ function roleCheckFor(fixtureCommit, sourceCommit) {
   };
 }
 
-function fixture(t, mode = "success") {
+function fixture(t, mode = "success", fakeRoleGroup) {
   // A throwing after hook skips the hooks after it, so the trace is checked before the
   // harness removes it and a failure is raised only after that removal has run.
   let traceFailure = null;
@@ -140,7 +140,8 @@ import { bootstrapMarker as syntheticMarker, bootstrapReadScript as syntheticRea
 import { bootstrapWorkspaceScript } from './cloud-contract.mjs';
 const syntheticArgs = syntheticData.args;
 const syntheticGroup = syntheticArgs[syntheticArgs.indexOf('--group') + 1];
-const syntheticRoleCheck = (${roleCheckFor.toString()})(${JSON.stringify(commit)}, ${JSON.stringify(checkoutCommit)});
+const nativeRoleCheck = (${roleCheckFor.toString()})(${JSON.stringify(commit)}, ${JSON.stringify(checkoutCommit)});
+const syntheticRoleCheck = (subject) => subject.group === ${JSON.stringify(fakeRoleGroup)} ? [] : nativeRoleCheck(subject);
 const synthetic = (${syntheticDependencies.toString()})({
   repo: ${JSON.stringify(repo)}, trace: ${JSON.stringify(trace)}, hosts: ${JSON.stringify(hosts)},
   stateDir: syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], group: syntheticGroup,
@@ -859,8 +860,9 @@ test("continuation appends authorized retries after no-create and retirement whi
   assert.equal(fs.readFileSync(index, "utf8"), "[]");
 });
 
-test("a quarantined unacknowledged create is not a result or retry, but a different group can prepare", { timeout: 60000 }, async (t) => {
-  const p = fixture(t), group = "json-api", other = "hardening", round = "r19", slot = path.join(p.h.base, group);
+for (const scenario of ["admission", "incomplete census", "witnessed census", "absent census"]) {
+test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, async (t) => {
+  const group = "json-api", other = "hardening", round = "r19", next = "r21", p = fixture(t, "success", other), slot = path.join(p.h.base, group);
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
   p.deps.inspect = () => { assert.fail("no collected evidence"); };
   // This control exercises the admission and approval bytes, not Linux actor
@@ -895,6 +897,12 @@ test("a quarantined unacknowledged create is not a result or retry, but a differ
   fs.unlinkSync(outer); // synthetic operator's positive custody proof and archive, not a controller action
   await assert.rejects(prepare("r20", other), (error) => error.code === "ESRCH" || error.message.includes("unresolved custody"));
   const record = path.join(slot, "receipts", "create-quarantine.json");
+  const receipt = path.join(slot, "receipts", fs.readdirSync(path.join(slot, "receipts"))[0]);
+  const failure = fs.readFileSync(receipt);
+  fs.writeFileSync(receipt, JSON.stringify({ ...JSON.parse(failure), SAVEDKEYCANARY: "SAVEDVALUECANARY" }));
+  assert.throws(() => unacknowledgedCreateBinding(readFleet(slot, round)), (error) =>
+    error.message === "create quarantine detach outcome differs" && !String(error).includes("CANARY"));
+  fs.writeFileSync(receipt, failure);
   const binding = unacknowledgedCreateBinding(readFleet(slot, round));
   const proof = { schema: "benchmark-create-quarantine/v1", binding, localCustodyProofSha256: "4".repeat(64) };
   fs.writeFileSync(record, JSON.stringify(proof));
@@ -904,27 +912,68 @@ test("a quarantined unacknowledged create is not a result or retry, but a differ
   assert.ok(!report.eligibleToRun.includes(group));
   assert.equal(report.groups.find((row) => row.group === group).outcome, "quarantined-create");
   await assert.rejects(prepare("r20", group), /never allocate again/);
-  assert.equal(await prepare("r20", other), 3);
-  const preview = await fleetMain([...args("r20", other), "--detach", "--print-approval"], p.deps);
+  assert.equal(await prepare(next, other), 3);
+  const preview = await fleetMain([...args(next, other), "--detach", "--print-approval"], p.deps);
   assert.equal(preview, 3);
   const [old] = p.output.at(-1).subject.continuation.quarantinedCreates;
   assert.equal(old.sha256, fileHash(record)); assert.equal(old.group, group);
-  const nextFleet = readFleet(path.join(p.h.base, other), "r20").manifest;
+  const nextFleet = readFleet(path.join(p.h.base, other), next).manifest;
   recheckCreateQuarantine(p.h.base, old, nextFleet);
+  if (scenario !== "admission") {
+    const providerMatch = { id: 123, name: pending.name, tags: [] };
+    if (scenario === "incomplete census") fs.writeFileSync(p.hosts + ".census-next", JSON.stringify(providerMatch));
+    if (scenario === "witnessed census") fs.writeFileSync(p.hosts, JSON.stringify([providerMatch]));
+    const approved = p.output.at(-1).approvalSha256;
+    const code = await fleetMain([...args(next, other), "--detach", "--approve-reviewed-merged-ready", approved], p.deps);
+    const events = p.events();
+    const state = p.saved(path.join(other, other));
+    if (scenario === "absent census") {
+      assert.equal(code, 3);
+      assert.ok(state.createIntentAt);
+      assert.equal(events.filter((row) => row.method === "POST" && row.group === other).length, 1);
+      assert.equal(treeHash(slot), sealed);
+      return;
+    }
+    assert.equal(code, 2);
+    assert.deepEqual(events.filter((row) => row.method === "GET" && row.path.startsWith("/v2/droplets?")).map((row) => row.path),
+      ["/v2/droplets?page=1&per_page=200"], "one strict response, never a later page or retake");
+    assert.ok(!events.some((row) => row.method === "POST" || row.method === "DELETE"));
+    assert.equal(state.createIntentAt, undefined, "no create intent");
+    const witness = path.join(slot, "receipts", "create-quarantine-witness.json");
+    if (scenario === "incomplete census") assert.ok(!fs.existsSync(witness));
+    else {
+      assert.deepEqual(JSON.parse(fs.readFileSync(witness)), { schema: "benchmark-create-quarantine-witness/v1", quarantineSha256: old.sha256, dropletId: "123" });
+      fs.writeFileSync(p.hosts, JSON.stringify([{ ...providerMatch, name: "renamed", tags: [] }]));
+      await assert.rejects(prepare("r22", "recoverable-live"), /witnessed in provider inventory/);
+      assert.equal(fileHash(path.join(local, "state.json")), binding.stateSha256);
+      assert.ok(!p.events().some((row) => row.method === "POST" || row.method === "DELETE"));
+    }
+    return;
+  }
   assert.throws(() => recheckCreateQuarantine(p.h.base, old, fleet), /only other groups/);
   assert.throws(() => recheckCreateQuarantine(p.h.base, old, { ...nextFleet, provider: { accountId: "user:elsewhere" } }), /saved account/);
-  assert.equal(quarantineCensusAbsent([old], []), true);
-  assert.equal(quarantineCensusAbsent([old], [{ name: "unrelated", tags: ["production"] }]), true);
-  assert.equal(quarantineCensusAbsent([old], [{ name: pending.name, tags: [] }]), false);
-  assert.equal(quarantineCensusAbsent([old], [{ name: "renamed", tags: [pending.tag] }]), false);
+  const census = (rows) => checkQuarantineCensus(p.h.base, [old], nextFleet, rows);
+  census([]);
+  census([{ id: 123, name: "unrelated", tags: ["production"] }]);
   assert.ok(!JSON.stringify(old).includes(pending.tag), "the next approval need not carry the old provider tag");
-  assert.throws(() => quarantineCensusAbsent([old], [{ name: "unrelated" }]), /census rows incomplete/);
+  assert.throws(() => census([{ id: 123, name: "unrelated" }]), /census rows incomplete/);
   assert.equal(treeHash(slot), sealed);
   assert.equal(p.events().filter((row) => row.method === "POST").length, 0);
   fs.writeFileSync(record, JSON.stringify({ ...proof, binding: { ...binding, stateSha256: "a".repeat(64) } }));
   assert.throws(() => recheckCreateQuarantine(p.h.base, old, nextFleet), /quarantine binding differs/);
-  await assert.rejects(prepare("r21", other), /quarantine binding differs/);
+  await assert.rejects(prepare("r22", other), /quarantine binding differs/);
+  fs.writeFileSync(record, JSON.stringify(proof));
+  assert.throws(() => census([{ id: 123, name: "renamed", tags: [pending.tag] }]), /witnessed in provider inventory/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(slot, "receipts", "create-quarantine-witness.json"))), {
+    schema: "benchmark-create-quarantine-witness/v1", quarantineSha256: old.sha256, dropletId: "123",
+  });
+  assert.equal(fileHash(path.join(local, "state.json")), binding.stateSha256);
+  // Even if later inventory is empty or has a different name and tags, a new
+  // prepare and the locked gate cannot reinterpret the original as unwitnessed.
+  await assert.rejects(prepare("r22", other), /witnessed in provider inventory/);
+  assert.throws(() => recheckCreateQuarantine(p.h.base, old, nextFleet), /witnessed in provider inventory/);
 });
+}
 
 test("continuation retries past a create that errored after its launch deadline once the operator released its custody and the child recheck settled it", { timeout: 60000 }, async (t) => {
   const p = fixture(t), group = "json-api", slot = path.join(p.h.base, group);

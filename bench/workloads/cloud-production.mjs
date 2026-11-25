@@ -17,7 +17,7 @@ import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellati
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
-import { continuationIndexSha256, quarantineCensusAbsent, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
+import { checkQuarantineCensus, continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
   recheckContinuationPeers, recheckCreateErroredAttempt, recheckCreateQuarantine, recheckExitOneRetirement, recheckIndexedLaunchCustody, recheckPostedCreate,
   recheckSetupAttempt } from "./fleet-verify.mjs";
 
@@ -307,7 +307,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     assert.equal(accountId, manifest.provider.accountId, "historical custody requires the same provider account");
     return full(id, /[1-9]\d*/, "historical custody requires a bound host ID");
   }));
-  let historicalHostsAbsent;
+  let historicalHostsAbsent = !historicalIds.size && !quarantined.length;
   const deps = { repo, run, compiler, roleCheck, interrupted, remainingPlacement: admission?.placement };
   const plan = await productionPlan(options, deps);
   if (preview) {
@@ -327,7 +327,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     assert.equal(job.approvalSha256, approval, "child approval differs from consumed fleet admission");
     assert.deepEqual(job.subject, plan.subject);
     if (beforeCreate && manifest.single) {
-      if (historicalIds.size || quarantined.length) assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
+      assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
       const root = dirname(current.fleetRoot), { indexSha256, indexedCustody, peers } = current.subject.continuation;
       const currentPeers = recheckContinuationPeers(root, indexSha256, manifest.provider, options.group, peers);
       if (manifest.single.offlineHandoff) assert.deepEqual(currentPeers, [], "offline handoff requires no live peer");
@@ -402,20 +402,16 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       await authorizeLocked();
       entered = true;
     }
-    const result = await run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch);
-    // Use the controller's complete, account-bracketed pre-create list, not
-    // just the rows that still carry their original benchmark name or tags.
-    if ((historicalIds.size || quarantined.length) && historicalHostsAbsent === undefined && binary === "doctl"
-        && argv[0] === "compute" && argv[1] === "droplet" && argv[2] === "list") {
-      const rows = JSON.parse(result.stdout);
-      assert.ok(Array.isArray(rows));
-      historicalHostsAbsent = quarantineCensusAbsent(quarantined, rows) && !rows.some(({ id }) => historicalIds.has(String(id)));
-    }
-    return result;
+    return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch);
   };
+  const inspectPreCreateInventory = !historicalHostsAbsent ? (rows) => {
+    if (quarantined.length) checkQuarantineCensus(dirname(admission.fleetRoot), quarantined, manifest, rows);
+    historicalHostsAbsent = !rows.some(({ id }) => historicalIds.has(String(id)));
+  } : undefined;
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
     mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, approvedFleetSha256: plan.subject.fleetSha256, remainingAdmission,
+    inspectPreCreateInventory, singleResponsePreCreate: quarantined.length > 0,
     ...(admission ? { checkFleetAdmission, ...(stagedSibling
       ? { remainingPlacement: { region: admission.placement.region, intentSha256: admission.sha256 } } : {}) } : {}),
     ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {

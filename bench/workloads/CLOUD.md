@@ -835,10 +835,16 @@ droplet or action ID may be isolated in its existing continuation root. This
 does not settle the POST, record deletion, release the child or fleet locks, or
 allow the failed group to retry. Its row stays `quarantined-create`, not verified
 or retryable. Other groups can continue only in the same provider account, and
-their approved create checks that a fresh complete account inventory contains
-neither the original name nor the original tag. This check is not proof the
-original POST never succeeded. If a match appears, stop and reconcile it; do
-not submit another create.
+their approved create checks that a fresh, account-bracketed inventory in one
+provider response contains neither the original name nor the original tag. A
+second page, inconsistent count, or uncheckable row refuses rather than
+retaking the proof. This is not proof the original POST never succeeded. A
+match writes an exclusive `receipts/create-quarantine-witness.json` with the
+numeric droplet ID and the matching quarantine digest, without changing the
+original reservation. The witness blocks all subsequent creates in this root
+even if the droplet changes name or tags. Reconcile it before another create;
+there is no automatic clearance. A failed witness write retains operation
+custody.
 
 The operator must stop dispatch to the root and positively account for the
 original local controller, worker and their descendants. A stale PID, a missing
