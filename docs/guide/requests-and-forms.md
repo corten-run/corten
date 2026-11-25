@@ -1210,13 +1210,39 @@ a redirect, not a bare `204` or `205`.
 When a `data-patch` submit gets any other answer the runtime cannot draw, it dispatches `corten:error` on
 the form (it bubbles), with `detail.status`: the answer's status (a proxy's 502 page), or 0 when
 there was none or its body was cut off (`detail.error` says why). A submit abandoned for a newer
-one or a navigation dispatches nothing. corten-ui's `Toaster` in the layout says it with its
-`failed` message, so no write fails silently; a screen that says it its own way (beside the
-form, as watchlist's watch form does with `on:corten:error={js::failed(..)}`, or by sending again
-from its script) calls `preventDefault()` in its handler (the event is cancelable), and the
-toaster says nothing. The form keeps what the user typed, so the page can say what happened and
-the user can send it again: with the same key after a 5xx or no whole answer,
-and with a new one after a whole answer below 500, as above. A script
+one or a navigation dispatches nothing. A read of the page can draw over the form while its write
+is out (a navigation started before the press, or the page reading itself again). A failure that
+comes while a navigation is on its way is said once none is left: each counts until it ends or is
+abandoned, and one that abandons another counts in its place. So the draw does not take away what
+the page says; a navigation that hangs (an answer or a stylesheet that never comes) holds it as long
+as it hangs. A form no navigation can draw over hears it at once: one outside `<main>` (in the
+layout's header, or a dialog there) and outside the layout's elements that are the page's (`page`
+in `html!`, or with an `id` one of them had, as a patch may draw one again without the mark),
+while no navigation on its way reads the whole page (one after a write). When the
+read drew over the form, the event goes to the form in its place: the one with its `id`, marked
+`data-patch`, with the same `action` and `method`, drawn with no navigation to another address
+since the press, that has sent no submit itself. A page a submit's answer draws (a `GET`
+`data-patch` form's `<main>`, a write's own page) is the page on screen, even while the address
+already shows a navigation still on its way, and these rules still pick the form. One limit follows:
+a `GET` `data-patch` form whose `action` is another path draws that path's `<main>` without counting
+as a navigation to another address, so a form there with the same `id`, `action` and `method`
+hears the failure of the page it drew over ([Choice 74](../design.md#choice-failure-in-place)). Any other form,
+one of another page with the same `id` among them, does not get it: the event goes to the
+document, where `on:document:corten:error` hears it, since an event on a form no longer in the
+page reaches no handler. corten-ui's
+`Toaster` in the layout says it with its `failed` message, so no write fails silently. A failure
+held for a navigation is said on the page that navigation draws, even one the user started after
+the write failed: the toaster closes a toast as a navigation starts, before this one is shown, so
+the failure is said on that page rather than lost. A screen
+that says it its own way (beside the form, as watchlist's watch form does with
+`on:corten:error={js::failed(..)}`, or by sending again from its script) calls
+`preventDefault()` in its handler (the event is cancelable), and the toaster says nothing. The
+form that sent it keeps what the user typed, so the page can say what happened and the user can
+send it again: with the same key after a 5xx or no whole answer, and with a new one after a whole
+answer below 500, as above. A form a read drew in its place keeps neither: it is the read's
+markup, with the values and the submit key the server drew, so sending it again is a new
+submission, which carries a new key, so the server cannot know it repeats the one that failed, and
+may apply both. A script
 that needs what the server decided on a submit that did draw (saved at version 4, refused,
 stale) gets it from the answer itself; see [Typed events](scripts.md#typed-events).
 

@@ -21,6 +21,7 @@ import { scroll } from "./smoke/scroll.mjs";
 import { appendPatches, retainedPatchState } from "./smoke/patches.mjs";
 import { history } from "./smoke/history.mjs";
 import { pageWrites } from "./smoke/page-writes.mjs";
+import { writeFailures } from "./smoke/write-failures.mjs";
 import { feedRecovery } from "./smoke/feeds.mjs";
 import { patchUploads, uploads } from "./smoke/uploads.mjs";
 import { prefetch } from "./smoke/prefetch.mjs";
@@ -58,6 +59,7 @@ await runSmoke(async (browser) => {
   await history(swaps, browser, noSwaps, errors);
   const { formatLoaded } = await guardedNavigation(page, browser, bug);
   await pageWrites(page, browser);
+  await writeFailures(browser);
   await shellChanges(prices, page, formatLoaded, signsIn, swaps, noSwaps);
   await partsInPatches(page, openStreams, browser);
   await streamRecovery(page);

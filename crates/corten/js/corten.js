@@ -1586,10 +1586,12 @@ function focusNear(el, root, fresh) {
  *   frame as the page ({@link swapDocument})
  * @param {DocumentFragment} [content] `html` parsed already (a whole page's head tags and page)
  * @param {boolean} [wholePoll] a whole read again may be superseded by a visible write failure
+ * @param {string} [drew] the address (`pageKey`) a navigation drew the page for; none for a
+ *   submit's page, which stays the page on screen
  * @param {() => boolean} [here] a marked answer draws only on the visit it was sent from ({@link send})
  * @returns {Promise<boolean>} false when it loaded the page in full instead, or drew nothing
  */
-async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html), wholePoll, here) {
+async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html), wholePoll, drew, here) {
   preload(content);
   const [, styled] = await Promise.all([modulesOf(content), stylesOf(content)]);
   signal?.throwIfAborted();
@@ -1611,6 +1613,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
     for (const part of Array.from(content.children)) {
       if (!hasAttr(part, "data-corten-page")) continue;
       const id = idOf(part);
+      notePart(part);
       const old = id ? document.getElementById(id) : null;
       if (!old || main.contains(old)) {
         reload(notice);
@@ -1661,6 +1664,10 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
     replaceKeeping(old, part, null, false, !!stay);
   }
   main.replaceChildren(content);
+  // A navigation's page at another address is a turn: a failed write sent from a form before it is
+  // not said on one of its forms ({@link sayFailed}). Read from the address the navigation drew,
+  // not the one shown, which a browser may have changed already for a navigation still on its way.
+  if (drew !== undefined && drew !== shownAt) (shownAt = drew), (turns += 1);
   // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
   if (html.includes("data-vars")) for (const el of [main, ...parts.map(([, part]) => part)]) setVars(el);
   layout?.apply();
@@ -1726,6 +1733,18 @@ const drawn = new WeakMap();
  * @type {WeakMap<Element, string>}
  */
 const partSent = new WeakMap();
+/**
+ * The ids of the layout's elements that have been the page's: a navigation draws the one with the
+ * id, marked or not (a patch may have replaced it), so a write's failure from a form in it waits
+ * for the navigation ({@link sayFailed}).
+ * @type {Set<string>}
+ */
+const partIds = new Set();
+/** @param {Element} part */
+const notePart = (part) => {
+  const id = idOf(part);
+  if (id) partIds.add(id);
+};
 
 /**
  * A patch (`put`) changed what the server drew inside `el`: the layout element around it, if any,
@@ -1775,7 +1794,7 @@ for (let el = document.querySelector("main"); el && el !== document.body; el = p
   const parent = parentElementOf(el);
   for (const beside of parent ? Array.from(childrenOf(parent)) : []) if (beside !== el) drawn.set(beside, outerOf(beside));
 }
-for (const part of Array.from(document.querySelectorAll("[data-corten-page]"))) partSent.set(part, markupOf(part));
+for (const part of Array.from(document.querySelectorAll("[data-corten-page]"))) partSent.set(part, markupOf(part)), notePart(part);
 
 /**
  * What a write's page can change only by loading in full, one entry each: the element path from
@@ -1966,9 +1985,10 @@ function drawLayout(old, fresh, before, said, inside = false) {
  * @param {boolean} stay keep the user's place ({@link swapPage})
  * @param {boolean} own the write's own answer, not a page at an address
  * @param {Covers} covers the writes whose change to the layout the page draws
+ * @param {string} [drew] the address a navigation drew the page for ({@link swapPage})
  * @returns {Promise<boolean>}
  */
-async function swapDocument(html, signal, notice, again, stay, own, covers) {
+async function swapDocument(html, signal, notice, again, stay, own, covers, drew) {
   const doc = new DOMParser().parseFromString(trustedHTML(html), "text/html");
   // Parsed with scripting off, as `parse` does, so a `<noscript>`'s content would be live.
   for (const noscript of Array.from(doc.querySelectorAll("noscript"))) noscript.replaceChildren();
@@ -1989,7 +2009,10 @@ async function swapDocument(html, signal, notice, again, stay, own, covers) {
   // A write's own page whose frame differs swaps in what a navigation's answer holds, the layout's
   // elements that are the page's (`page` in `html!`, a section's nav) included ({@link swapPage}).
   // With the layout drawn, they are drawn with it.
-  const parts = layout ? [] : Array.from(doc.body.querySelectorAll("[data-corten-page]")).filter((el) => {
+  const marked = Array.from(doc.body.querySelectorAll("[data-corten-page]"));
+  // With the layout drawn, its parts are the page's from now on ({@link partIds}).
+  for (const el of marked) notePart(el);
+  const parts = layout ? [] : marked.filter((el) => {
     const parent = parentElementOf(el);
     return !parent || !closestOf(parent, "[data-corten-page]");
   });
@@ -2010,7 +2033,7 @@ async function swapDocument(html, signal, notice, again, stay, own, covers) {
   // The nodes parsed above, not the text parsed again.
   const content = document.createDocumentFragment();
   content.append(...head, ...parts, ...Array.from(childNodesOf(main)));
-  const swappedIn = await swapPage(text, signal, stay, notice, layout, content, again);
+  const swappedIn = await swapPage(text, signal, stay, notice, layout, content, again, drew);
   // The layout not drawn, the write's own page among the writes it has not drawn: the next
   // navigation reads the page whole, as after a write that redirected.
   if (swappedIn && layout) swappedWhole = text;
@@ -2350,6 +2373,15 @@ function prefetch(target) {
 
 /** The page the newest visit is fetching, until that visit ends. @type {{ key: string } | null} */
 let fetching = null;
+/**
+ * Navigations on their way, each with whether it draws the whole page: a write's failure waits for
+ * the last to end ({@link sayFailed}). The page reading itself again is not one: a whole read again
+ * puts itself off while a failure is undrawn ({@link deferWholeRead}).
+ * @type {Set<{ whole: boolean }>}
+ */
+const reading = new Set();
+/** What waits for that, each run in a task of its own once no navigation is on its way. @type {(() => void)[]} */
+const afterReads = [];
 
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let hoverTimer;
@@ -2402,6 +2434,18 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
   };
   signal.addEventListener("abort", idle);
   if (going) fetching = going;
+  // Counted until it ends or is abandoned, whichever comes first: an abandoned visit draws nothing
+  // (it checks its signal before each draw), and what it still awaits (a section stylesheet, a
+  // prefetched answer) may never end. Then what waits runs, after the navigation's own end (its
+  // focus reset, its scroll), in a task.
+  const read = { whole: !!whole };
+  if (!again) reading.add(read);
+  const done = () => {
+    if (reading.delete(read) && !reading.size) for (const run of afterReads.splice(0)) setTimeout(run);
+  };
+  signal.addEventListener("abort", done);
+  // One abandoned before it started gets no abort event.
+  if (signal.aborted) done();
   try {
     /** @type {Response} */
     let res;
@@ -2438,6 +2482,8 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
     // The address changes now that the answer is here, as a full load's does: whatever is done
     // with the answer after this (a swap, a full load) starts from it.
     const took = (await precommit?.commit(res)) ?? false;
+    // The address it draws the page for: the redirect's target when the address took it.
+    const drew = pageKey(took ? new URL(res.url) : url);
     signal.throwIfAborted();
     if (deferWholeRead(whole && again)) return;
     const notice = noticeOf(res);
@@ -2471,12 +2517,16 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
     // A page loaded in full instead announces the notice once it has loaded. A read again's is the
     // one the page drew already.
     const stay = again || place !== undefined;
-    const swappedIn = whole ? await swapDocument(html, signal, notice, !!again, stay, false, { through }) : await swapPage(html, signal, stay, notice);
+    const swappedIn = whole
+      ? await swapDocument(html, signal, notice, !!again, stay, false, { through }, drew)
+      : await swapPage(html, signal, stay, notice, null, undefined, undefined, drew);
     if (swappedIn && !again) announce(notice);
   } finally {
     signal.removeEventListener("abort", idle);
     idle();
     if (fetching === going) fetching = null;
+    signal.removeEventListener("abort", done);
+    done();
   }
 }
 
@@ -2943,10 +2993,17 @@ const typedIn = new Map();
 
 /** The key of the history entry whose page `<main>` shows. */
 let drawnFor = navigation?.currentEntry?.key ?? "";
-// An entry the runtime did not go to (a link to a fragment, a script's `pushState`) shows the page
-// that was there.
+/**
+ * The address (`pageKey`) of the page `<main>` shows, as the last navigation drew it or a script
+ * put it in the address since, and how many times a navigation changed it.
+ */
+let shownAt = pageKey(new URL(location.href));
+let turns = 0;
+// An entry the runtime did not go to (a link to a fragment, a script's `pushState` or
+// `replaceState`, as a sort in place does) shows the page that was there, at that address: a read
+// of it again is not a turn.
 navigation?.addEventListener("currententrychange", () => {
-  if (!navigation?.transition) drawnFor = navigation?.currentEntry?.key ?? drawnFor;
+  if (!navigation?.transition) (drawnFor = navigation?.currentEntry?.key ?? drawnFor), (shownAt = pageKey(new URL(location.href)));
 });
 
 /**
@@ -3161,6 +3218,8 @@ addEventListener("pagehide", () => (left += 1));
  * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
+/** The forms that have sent a submit ({@link sayFailed}). @type {WeakSet<HTMLFormElement>} */
+const sentFrom = new WeakSet();
 
 /** The visit a marked GET waiting for a write was pressed on, by where it was pressed. @type {WeakMap<Set<string>, number>} */
 const queuedVisits = new WeakMap();
@@ -3230,6 +3289,8 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   // A `data-address` GET's answer is the page at its address, for the visit it was sent from; one
   // sent while a navigation is under way is for none (the page on screen is being left).
   const origin = sends.method === "get" && hasAttr(form, "data-address") ? (navigation?.transition ? -1 : pageVisit) : undefined;
+  sentFrom.add(form);
+  const turn = turns;
   const data = new FormData(form, submitter);
   const method = sends.method.toUpperCase();
   const url = new URL(sends.action);
@@ -3385,7 +3446,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
         // own page is whole, as the page a write redirects to is, so what the write changed around
         // `<main>` (a count the layout reads) is drawn as a browser without JavaScript draws it.
         if (res.headers.has("corten-page")) {
-          if (!(await swapPage(body, signal, false, notice, null, undefined, undefined, here)) && here) return;
+          if (!(await swapPage(body, signal, false, notice, null, undefined, undefined, undefined, here)) && here) return;
           announce(notice);
         } else if (await swapDocument(body, signal, notice, false, false, true, { through, write })) announce(notice);
       }
@@ -3421,7 +3482,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
         // version): the page says so with `corten:error`, and the user sends it again.
         if (pending.n) failedWrite(pending.n);
         pending.next = undefined;
-        formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: res.status } }));
+        sayFailed(form, { status: res.status }, turn);
       }
     }
   } catch (error) {
@@ -3436,7 +3497,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     // the Navigation API cancels it): the form stays as it is, and the page can say so. A submit
     // that waited goes with it, since it would fail the same way, and the user sends it again.
     pending.next = undefined;
-    formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: 0, error } }));
+    sayFailed(form, { status: 0, error }, turn);
   } finally {
     // Cleared when this submit ends, but not those a newer submit of the form or the page a
     // redirect sends the browser to marked again (theirs, cleared when they end).
@@ -3449,6 +3510,50 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next, nextWithin));
     }
   }
+}
+
+/**
+ * The form that sent a submit while it is on the page, else the element that has its id now: the
+ * form an answer or a read drew in its place. Null for one without an id that left the page.
+ * @param {HTMLFormElement} form
+ */
+function inPlaceOf(form) {
+  const id = idOf(form);
+  return formProperty(form, "isConnected") ? form : id ? document.getElementById(id) : null;
+}
+
+/**
+ * Says a `data-patch` submit got no answer it can draw (`corten:error`, cancelable, with `detail`),
+ * where the page hears it, once no navigation is on its way: its draw would take away what a
+ * handler showed; a form no navigation on its way can draw over (one outside `<main>` and the
+ * page's parts, with no whole page on its way) hears it at once. Then on the form that sent it,
+ * while that is in the page; else on the form a read drew in its place: the one with its id now
+ * ({@link inPlaceOf}), with the same `action` and `method`, drawn with no navigation to another
+ * address since the press (`turn`), that has sent no submit itself. Else on the document: an
+ * event on a form no longer in the page reaches no handler, and a form of another page, or one
+ * used since, did not send this write.
+ * @param {HTMLFormElement} form @param {{ status: number, error?: unknown }} detail @param {number} turn
+ */
+function sayFailed(form, detail, turn) {
+  // A navigation draws `<main>` and the layout's elements that are the page's, and the whole
+  // layout only after a write: a form in the page outside them it leaves where it is.
+  let kept = formProperty(form, "isConnected") && !Array.from(reading).some((read) => read.whole);
+  for (let up = /** @type {Element | null} */ (form); kept && up; up = parentElementOf(up))
+    kept = localNameOf(up) !== "main" && !hasAttr(up, "data-corten-page") && !partIds.has(idOf(up) ?? "");
+  if (reading.size && !kept) {
+    afterReads.push(() => sayFailed(form, detail, turn));
+    return;
+  }
+  const at = inPlaceOf(form);
+  const event = new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail });
+  const successor =
+    at instanceof HTMLFormElement &&
+    turn === turns &&
+    hasAttr(at, "data-patch") &&
+    !sentFrom.has(at) &&
+    /** @type {const} */ (["action", "method"]).every((name) => formProperty(at, name) === formProperty(form, name));
+  if (at === form || successor) formCall(/** @type {HTMLFormElement} */ (at), "dispatchEvent", event);
+  else document.dispatchEvent(event);
 }
 
 /**
@@ -3465,8 +3570,7 @@ function sendAgain(form, submitter, within) {
   // A marked GET pressed on a visit the page has since left is not sent.
   const origin = within && queuedVisits.get(within);
   if (origin !== undefined && origin !== pageVisit) return;
-  const id = idOf(form);
-  const now = formProperty(form, "isConnected") ? form : id ? document.getElementById(id) : null;
+  const now = inPlaceOf(form);
   if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
   const all = /** @type {HTMLElement[]} */ (Array.from(formProperty(now, "elements")));
   const by =
