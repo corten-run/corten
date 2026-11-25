@@ -6,6 +6,7 @@
 //! counts the matched parameter route. No sockets, fixture or global allocator is needed.
 //! `ROUTER_TARGET=unstaged` counts a text answer from a route outside the app's stages.
 //! (`ROUTER_PUBLIC` and `ROUTER_ASKED` change nothing it counts: that route keeps no answer).
+//! `ROUTER_TARGET=api` counts a text answer from a route under an API.
 //!
 //! What a write pays for the answers the app keeps: `ROUTER_TARGET=write` counts a `POST` to
 //! the same path (a route with no parameter, so the three apps share its handlers), in an app
@@ -46,6 +47,16 @@ mod plain {
 #[corten::routes]
 mod bare {
     #[route("/items/7/edit", get = crate::read, unstaged)]
+    pub struct Item;
+}
+
+/// The route under an API.
+#[corten::routes(api = Api)]
+mod api {
+    #[route("/api")]
+    pub struct Api;
+
+    #[route("/api/items/7/edit", get = crate::read)]
     pub struct Item;
 }
 
@@ -104,7 +115,12 @@ fn request_cost() {
     let public = std::env::var("ROUTER_PUBLIC").unwrap_or_default();
     let asked = std::env::var("ROUTER_ASKED").is_ok_and(|asked| asked == "1");
     let (missing, write, kept, unstaged) = (target == "missing", target == "write", target == "kept", target == "unstaged");
-    let path = if missing { "/items/7/unknown" } else { "/items/7/edit" };
+    let mounted = target == "api";
+    let path = match (missing, mounted) {
+        (true, _) => "/items/7/unknown",
+        (false, true) => "/api/items/7/edit",
+        (false, false) => "/items/7/edit",
+    };
     let status = if missing { 404 } else { 200 };
     let (routes, shared) = match (write || kept, public.as_str()) {
         (false, _) if unstaged => (bare::router(), None),
@@ -114,7 +130,7 @@ fn request_cost() {
         (true, "page") => (paged::router(), Some("/home")),
         (true, _) => panic!("unknown ROUTER_PUBLIC: {public}"),
     };
-    let app = App::new(routes);
+    let app = if mounted { App::new(routes).api(api::api) } else { App::new(routes) };
     let off = std::env::var("ROUTER_KEPT").is_ok_and(|kept| kept == "0");
     let router = if off { app.kept_answers(0).router() } else { app.router() };
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
@@ -150,7 +166,7 @@ fn request_cost() {
             let body = response.into_body().collect().await.unwrap().to_bytes();
             if write {
                 assert_eq!(body.as_ref(), b"saved");
-            } else if unstaged {
+            } else if unstaged || mounted {
                 assert_eq!(body.as_ref(), b"item");
             } else if !missing {
                 assert_eq!(body.as_ref(), b"item 7");
