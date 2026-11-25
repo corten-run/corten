@@ -502,7 +502,10 @@ test("group inspection is distinct from whole-campaign evidence and retains term
   h.setArchive(archive([...metadata().map((row) => row.name === "exit-code" ? { ...row, body: "0\n" } : row),
     { name: "campaign/" }, { name: "campaign/fake.json", body: "{}" }]));
   const { loadLayout, ...narrowReport } = report;
-  await assert.rejects(h.task({ inspect: async () => narrowReport }).collect(), /native campaign validation unavailable or invalid/);
+  await assert.rejects(h.task({ inspect: async () => narrowReport }).collect(), {
+    message: "native campaign validation unavailable or invalid; evidence/host preserved",
+    controllerStage: "collect-native-report-refused",
+  });
   assert.equal(h.deletes, 0);
   assert.equal(await h.task({ inspect: async () => report }).collect(), 0);
   assert.equal(h.deletes, 1); assert.ok(h.saved().destroyedAt);
@@ -534,6 +537,25 @@ test("failed and blocked collection preserves a host when evidence belongs to an
     assert.equal(h.deletes, 0); assert.equal(h.saved().destroyedAt, undefined);
     assert.equal(h.saved().deletionIntentAt, undefined);
   }
+});
+
+test("native replay refusal preserves a sealed exit-1 grouped archive without qualifying or deleting", async (t) => {
+  const { h, options } = configured(t); await h.task({}, options).launch();
+  finishSupervisedFixture(h, "failed");
+  h.setArchive(archive([...metadata().map((row) => row.name === "exit-code" ? { ...row, body: "1\n" } : row),
+    { name: "campaign/" }, { name: "campaign/plan.json", body: "{}" }]));
+  await assert.rejects(h.task({ inspect: async () => { throw new Error("PRIVATE_NATIVE_REPLAY"); } }).collect(), {
+    message: "native campaign validation unavailable or invalid; evidence/host preserved",
+    controllerStage: "collect-native-replay-refused",
+  });
+  const saved = h.saved();
+  assert.ok(saved.archiveSha256 && saved.evidenceSha256);
+  assert.equal(readFileSync(join(h.local, saved.evidence, "exit-code"), "ascii"), "1\n");
+  assert.equal(saved.status, "running");
+  assert.equal(saved.fullGroupQualified, false);
+  assert.equal(saved.validation, undefined);
+  assert.equal(saved.deletionIntentAt, undefined);
+  assert.equal(h.deletes, 0);
 });
 
 test("first official group waits for the bound common bootstrap marker, not native qualification", async (t) => {

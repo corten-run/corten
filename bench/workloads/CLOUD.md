@@ -398,6 +398,16 @@ A collect refusal with a supported operator route keeps its own stage through th
 wrapper instead: `setup-watcher-proof-missing`, `setup-host-proof-refused`,
 `offline-never-started`, `create-errored-contradicted` or
 `create-contradiction-unpublished`.
+After the archive is extracted, collect marks which native replay check stopped:
+`collect-native-evidence-refused` (checks of the extracted directory and its
+saved exit marker, or post-replay integrity), `collect-native-replay-start`,
+`collect-native-replay-deadline`, `collect-native-replay-interrupted`,
+`collect-native-replay-refused` (worker rejected), or
+`collect-native-report-refused` (replay prerequisites or the report did not
+bind to the reservation and terminal check). These stages do not authorize
+retirement or change the replay deadline.
+Initial archive scanning and extraction, and the grouped path's first exit
+marker read, still report `controller-collect`.
 The stage identifies the failing operation, not its cause or whether a host exists.
 Only an own data property from that vocabulary crosses the worker boundary;
 unknown values and accessors are not forwarded. It adds no retry, cleanup or
