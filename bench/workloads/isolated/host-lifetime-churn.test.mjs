@@ -748,7 +748,8 @@ for (const mode of ["startup transition", "stable startup", "persistent wrong PI
   listed = false; await f.finish();
   if (stable) assert.equal(Object.hasOwn(f.terminal, "firstDockerGap"), false);
   else assert.deepEqual(f.terminal.firstDockerGap, {
-    stage: mode === "startup transition" ? "process-identity-close" : "process-identity-open", code: "ERR_ASSERTION",
+    // "start" is not a Docker start time, so the name change is not rechecked.
+    stage: mode === "startup transition" ? "process-name-close" : "process-identity-open", code: "ERR_ASSERTION",
   });
   assert.ok(!JSON.stringify(f.terminal).includes("PRIVATE_STARTUP_NAME"));
   assert.equal(f.terminal.observerFailures.count, 0);
