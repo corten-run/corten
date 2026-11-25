@@ -337,7 +337,12 @@ not yet. A check that stops before its first press never left the page and does 
 page that does not get back stops the smoke, after the check's hold, listeners and the News page's
 route are removed.
 The check that navigating away abandons a held write requires that write to
-fail while it is still held, within five seconds of the page's leaving. The check of a navigation
+fail while it is still held, within five seconds of the page's leaving. The check that navigating
+away stops a page's part reads holds each part read of the page it reaches, so the part cannot draw
+`Saved.` and stop by itself first: it requires a read held within five seconds while the page still
+says `Saving...`, then leaves by a link, answers each held read as one that asks again, and requires
+no part read in the 2.2 s after; without a held read it fails, and its holds are let go and its
+route removed in a `finally`, each bounded to five seconds. The check of a navigation
 during a patch's stylesheet load holds the one stylesheet the patch links until the runtime has
 read the navigation's answer, and requires that
 the page did not swap while it was held and that the browser requested it once while it was
@@ -458,8 +463,9 @@ is recorded with the wrapper's state at that moment and its target, compared wit
 as it submitted that write, so a failure said at the headers, before the body, or said on the
 window or on another form, does not count as the body's.
 These cases, the check that a write's patch answered before a navigation is drawn by that page,
-and the two checks of a write's patch to the layout beside another write's own page, close their
-page in a `finally` too, the latter after letting go of the script or write they hold; one cleanup
+the two checks of a write's patch to the layout beside another write's own page, and each case that
+holds a script or write while it follows the link to `/smoke/quoted` close their page in a
+`finally` too, all but the first after letting go of the script or write they hold; one cleanup
 step that fails does not skip the next, and removing a route is
 bounded to five seconds, so one that never settles does not keep the page open. Setting a route,
 starting a page's notes of what it draws and listening for its failures are bounded to five seconds
@@ -477,7 +483,9 @@ fails, before a case holds it.
 That check counts only the
 reads of the page it goes back to, since the page that comes can prefetch the link left under the
 pointer, and goes back only once the step before it saw the write answered once with its scripts
-held and the link's page read whole and come: otherwise it fails saying so, since a return that
+held and the link's page read whole and come, drawn with the brand the write changed
+(`Watchlist, written`) in the document the page kept: otherwise it fails saying so, naming what the
+page showed, since a return that
 reads `<main>` alone shows nothing of a patch never left behind. The check that a page part's
 answer that asks again takes the place of the page's tag needs an answer that asks: the write lands
 1.5 s after it is sent and the part's first read comes
