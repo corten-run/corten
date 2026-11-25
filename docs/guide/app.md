@@ -2029,6 +2029,22 @@ Under the prefix:
    its CORS preflight, adds `Access-Control-Allow-Origin` and lets its writes through. The
    pages keep refusing that site's writes. The site authenticates with a token: a write from it
    that carries the user's cookies is refused, and no `Access-Control-Allow-Credentials` is sent.
+   It takes one origin, as `Policy::allow_origin` (a site whose pages may write with the user's
+   cookies) does: a scheme, a host (a name, an IPv4 address or a bracketed IPv6 one) and a
+   port. Both keep it as a browser writes it in `Origin` (RFC 6454) and compare a request's
+   `Origin` with that: the scheme and host lowercase, and the scheme's default port (`:443` for
+   `https`, `:80` for `http`) and a trailing `/` left out, so `https://partner.example:443/` is
+   `https://partner.example` and `https://partner.example:8443` keeps its port. An app webview's
+   or a browser extension's own scheme is kept the same way with any port it names, so
+   `capacitor://localhost`, `tauri://localhost` or `chrome-extension://<id>` can be allowed
+   ([why](../design.md#choice-allowed-origin-schemes)). `capacitor://localhost` is every
+   Capacitor iOS app's default origin, so prefer a distinct `server.hostname`; Capacitor on
+   Android defaults to `https://localhost` and Tauri on Windows to `http://tauri.localhost` (or
+   `https://`), loopback origins any local server can also serve in an ordinary browser. A name
+   may hold `_`; a Unicode name is written in its `xn--` form, as browsers send it. A value no
+   `Origin` could equal (no scheme, a path, a query, a user, a wildcard, a comma-separated list,
+   `null`, or a scheme no page sends from: `file`, `data`, `blob`, `javascript`, `about`,
+   `ws`, `wss`, `ftp`) panics at startup and names the setter.
 6. `Json` in the prelude is `corten::Json` (feature `json`). It reads a request body into a
    `FromJson` (item 8) with the value and the rejections axum's `Json` gave (recorded from axum
    0.8.9 and held by a test): a body with a JSON content type (`application/json`,

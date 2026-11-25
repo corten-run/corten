@@ -337,7 +337,7 @@ export function campaignOutcome(report, s, exitCode) {
   assert.equal(report.round, s.round); assert.equal(report.commit, s.commit);
   assert.deepEqual(report.selection, s.selection, "complete current native selection required");
   const loadLayout = savedLoadLayout(s);
-  assert.equal(report.loadLayout, loadLayout, "replayed catalog load layout differs from reservation");
+  assert.equal(report.loadLayout, loadLayout, "replayed group load layout differs from reservation");
   const placement = savedPlacement(s);
   assert.equal(report.placement, placement, "replayed host placement differs from reservation");
   full(report.campaign, new RegExp(`${s.round}-[a-f0-9]{16}`), "native campaign identity");

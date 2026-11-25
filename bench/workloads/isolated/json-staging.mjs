@@ -17,6 +17,7 @@ export function inspectPreparation(binding, root) {
   assert.equal(summary.round, binding.request.round); assert.equal(summary.commit, binding.request.commit);
   assert.deepEqual(summary.options, binding.execution.effectiveOptions);
   assert.deepEqual(summary.measurement?.cpus, binding.resources.expectedCpus);
+  assert.equal(summary.measurement?.loadLayout, binding.resources.requestedCpuEnv?.JSON_API_LOAD_LAYOUT, "JSON API load layout differs from binding");
   assert.equal(summary.options.build, true); assert.equal(summary.options.checkOnly, true);
   assert.equal(summary.checksPassed, false); assert.equal(summary.complete, false); assert.equal(summary.attemptComplete, false);
   assert.deepEqual(summary.cleanupFailures, []);
