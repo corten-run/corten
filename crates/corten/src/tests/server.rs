@@ -2783,6 +2783,82 @@ async fn a_new_connection_polled_inside_anothers_poll_does_not_take_its_timer() 
     assert_eq!(timers(), 1, "the inner connection's");
 }
 
+/// Two deadlines that first wait in one poll of such a connection (a handler that joins two
+/// calls), inside the poll of a connection that has made its timer: the second finds the thread
+/// told that a deadline has waited in this poll, and makes its own as the first did. Neither
+/// takes the outer connection's timer.
+#[tokio::test(start_paused = true)]
+async fn two_deadlines_in_one_poll_of_a_new_connection_do_not_take_another_connections_timer() {
+    use crate::deadline::{Keeps, Timer};
+    use std::{future::Future, pin::pin, task::Poll};
+    let (short, long) = (Duration::from_secs(10), Duration::from_secs(20));
+    let inners = std::cell::Cell::new(None);
+    let mut inner = pin!(Keeps::new(std::future::poll_fn(|cx| {
+        let (mut first, mut second) = (pin!(Timer::Unset), pin!(Timer::Unset));
+        assert!(first.as_mut().poll(long, cx).is_pending());
+        assert!(second.as_mut().poll(long, cx).is_pending());
+        inners.set(Some((first.is_kept(), second.is_kept())));
+        Poll::<()>::Pending
+    })));
+    {
+        let mut polls = 0;
+        let mut outer = pin!(Keeps::new(std::future::poll_fn(|cx| {
+            polls += 1;
+            if polls <= 2 {
+                let mut timer = pin!(Timer::Unset);
+                assert!(timer.as_mut().poll(short, cx).is_pending());
+            } else {
+                assert!(inner.as_mut().poll(cx).is_pending());
+            }
+            Poll::<()>::Pending
+        })));
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        for _ in 0..2 {
+            assert!(outer.as_mut().poll(&mut cx).is_pending());
+        }
+        let unset = outer.kept_until();
+        assert!(unset.is_some_and(|until| until > tokio::time::Instant::now() + long), "made, not set");
+        assert!(outer.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(inners.get(), Some((false, false)), "both make their own in the inner connection's first poll");
+        assert_eq!((timers(), outer.kept_until()), (1, unset), "the outer connection's timer is as it was");
+        assert!(outer.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(inners.get(), Some((false, false)), "and in its second, at which it makes its timer");
+        assert_eq!((timers(), outer.kept_until()), (2, unset), "the outer connection's timer is as it was");
+        assert!(outer.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(inners.get(), Some((true, false)), "then one takes the inner connection's and the other makes its own");
+        assert_eq!(outer.kept_until(), unset);
+    }
+    assert_eq!(inner.kept_until(), Some(tokio::time::Instant::now() + long));
+    assert_eq!(timers(), 1, "the inner connection's");
+}
+
+/// A deadline of the longest `Duration` there is sets its connection's timer 30 years off, as far
+/// as tokio's own `sleep` waits, where that length added to the time would overflow and panic.
+#[tokio::test(start_paused = true)]
+async fn a_deadline_of_the_longest_duration_sets_the_connections_timer_30_years_off() {
+    use crate::deadline::{Keeps, Timer};
+    use std::{future::Future, pin::pin, task::Poll};
+    let mut kept = Vec::new();
+    {
+        let mut conn = pin!(Keeps::new(std::future::poll_fn(|cx| {
+            let mut timer = pin!(Timer::Unset);
+            assert!(timer.as_mut().poll(Duration::MAX, cx).is_pending());
+            kept.push(timer.is_kept());
+            Poll::<()>::Pending
+        })));
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        for _ in 0..2 {
+            assert!(conn.as_mut().poll(&mut cx).is_pending());
+        }
+        // So that the time the third deadline sets is not the one the timer was made with.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(conn.as_mut().poll(&mut cx).is_pending());
+        let set = tokio::time::Instant::now() + Duration::from_secs(86400 * 365 * 30);
+        assert_eq!((timers(), conn.kept_until()), (1, Some(set)));
+    }
+    assert_eq!(kept, [false, false, true]);
+}
+
 /// A deadline that has its connection's timer and is then polled somewhere else (a layer moved its
 /// call to another task) is woken there when the timer fires: the timer keeps the waker of its
 /// last poll, not the connection's.
@@ -2827,6 +2903,64 @@ async fn a_kept_timer_wakes_what_polled_it_last() {
     }
     assert_eq!((conns.0.load(Relaxed), elsewhere.0.load(Relaxed)), (0, 1), "woken where it was polled last");
     assert!(moved.as_mut().poll(limit, &mut cx).is_ready());
+}
+
+/// A connection's timer that is left set, with no deadline having it (the connection sits idle,
+/// or serves requests that do not wait), wakes the connection once when its time comes, not
+/// before and not again, and the next deadline to wait sets it from then.
+#[tokio::test(start_paused = true)]
+async fn a_timer_left_set_wakes_its_connection_once_when_its_time_comes() {
+    use crate::deadline::{Keeps, Timer};
+    use std::{
+        future::Future,
+        pin::pin,
+        sync::atomic::{AtomicUsize, Ordering::Relaxed},
+        task::Poll,
+    };
+    struct Woken(AtomicUsize);
+    impl std::task::Wake for Woken {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Relaxed);
+        }
+    }
+    async fn settled() {
+        for _ in 0..3 {
+            tokio::task::yield_now().await;
+        }
+    }
+    let limit = Duration::from_secs(30);
+    let woken = Arc::new(Woken(AtomicUsize::new(0)));
+    let waits = std::cell::Cell::new(3);
+    let mut conn = pin!(Keeps::new(std::future::poll_fn(|cx| {
+        if waits.get() > 0 {
+            waits.set(waits.get() - 1);
+            let mut timer = pin!(Timer::Unset);
+            assert!(timer.as_mut().poll(limit, cx).is_pending());
+        }
+        Poll::<()>::Pending
+    })));
+    let waker = std::task::Waker::from(woken.clone());
+    let mut cx = std::task::Context::from_waker(&waker);
+    for _ in 0..3 {
+        assert!(conn.as_mut().poll(&mut cx).is_pending());
+    }
+    assert_eq!(conn.kept_until(), Some(tokio::time::Instant::now() + limit), "set by the third deadline");
+    tokio::time::advance(limit - Duration::from_millis(2)).await;
+    settled().await;
+    assert_eq!(woken.0.load(Relaxed), 0, "not before its time");
+    tokio::time::advance(Duration::from_millis(4)).await;
+    settled().await;
+    assert_eq!(woken.0.load(Relaxed), 1, "once, at its time");
+    // Polls in which no deadline waits, then three deadlines' length of time.
+    for _ in 0..5 {
+        assert!(conn.as_mut().poll(&mut cx).is_pending());
+    }
+    tokio::time::advance(limit * 3).await;
+    settled().await;
+    assert_eq!(woken.0.load(Relaxed), 1, "and not again");
+    waits.set(1);
+    assert!(conn.as_mut().poll(&mut cx).is_pending());
+    assert_eq!(conn.kept_until(), Some(tokio::time::Instant::now() + limit));
 }
 
 /// Deadlines on four threads: 64 connections, each a task that serves 40 requests one after
@@ -3026,6 +3160,74 @@ fn a_deadline_polled_while_its_thread_ends_makes_its_own_timer() {
     // Its own, its own, the connection's, and its own while the thread ends; then that the
     // connection's poll came back.
     assert_eq!(all, [false, false, true, false, true]);
+}
+
+/// A deadline that has its connection's timer and is dropped in the connection's poll while the
+/// thread ends, after the thread's place for that timer is gone, drops the timer: there is
+/// nowhere left to give it back to.
+#[test]
+fn a_deadline_dropped_while_its_thread_ends_drops_its_connections_timer() {
+    use crate::deadline::{Keeps, Timer};
+    use std::{
+        cell::{Cell, RefCell},
+        future::Future,
+        rc::Rc,
+        task::Poll,
+    };
+    struct AtEnd(RefCell<Option<Box<dyn FnOnce()>>>);
+    impl Drop for AtEnd {
+        fn drop(&mut self) {
+            if let Some(run) = self.0.get_mut().take() {
+                run();
+            }
+        }
+    }
+    thread_local!(static AT_END: AtEnd = const { AtEnd(RefCell::new(None)) });
+    let (said, heard) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        // tokio's local, then this test's, then (at the connection's third poll) the one its timer
+        // is lent to, which is therefore gone when this test's destructor runs.
+        drop(runtime.enter());
+        AT_END.with(|_| ());
+        // The deadline that has the connection's timer, and whether the thread is ending.
+        let (away, ending) = (Rc::new(RefCell::new(None)), Rc::new(Cell::new(false)));
+        let (held, ends) = (away.clone(), ending.clone());
+        let mut conn = Box::pin(Keeps::new(std::future::poll_fn(move |cx| {
+            if ends.get() {
+                drop(held.borrow_mut().take());
+                return Poll::<()>::Pending;
+            }
+            let mut timer = Box::pin(Timer::Unset);
+            assert!(timer.as_mut().poll(Duration::from_secs(30), cx).is_pending());
+            if timer.is_kept() {
+                *held.borrow_mut() = Some(timer);
+            }
+            Poll::Pending
+        })));
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        {
+            let _entered = runtime.enter();
+            for _ in 0..3 {
+                assert!(conn.as_mut().poll(&mut cx).is_pending());
+            }
+        }
+        let _ = said.send((away.borrow().is_some(), timers()));
+        AT_END.with(|at_end| {
+            *at_end.0.borrow_mut() = Some(Box::new(move || {
+                let _entered = runtime.enter();
+                ending.set(true);
+                let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+                assert!(conn.as_mut().poll(&mut cx).is_pending());
+                let _ = said.send((away.borrow().is_some(), timers()));
+                drop(conn);
+            }));
+        });
+    });
+    thread.join().expect("the thread ends without a panic");
+    let all: Vec<(bool, isize)> = heard.try_iter().collect();
+    // The deadline has the connection's one timer; dropped while the thread ends, so is the timer.
+    assert_eq!(all, [(true, 1), (false, 0)]);
 }
 
 /// How late a deadline's answer is, for a comparison of two builds: 200 requests whose handler
