@@ -30,7 +30,7 @@ import { deploymentSha256 } from "../deployments.mjs";
 import { isolatedLiveCapture, isolatedLiveLifetime } from "./test-fixtures/live-campaign.mjs";
 import { registration as controlRegistration } from "../test-fixtures/control-stream-fixture.mjs";
 import { streamHash } from "./control-stream.mjs";
-import { supervise } from "./process.mjs";
+import { limits, supervise } from "./process.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
@@ -1102,6 +1102,47 @@ for (const stop of ["cancel", "close"]) for (const failure of [false, true]) tes
     assert.equal(calls.length, 1);
     await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, 1);
   } finally { release(); await rejected; }
+});
+
+for (const crossed of [false, true]) test(`command-started journal ${crossed ? "crosses" : "stays within"} the observation startup cutoff`, async (t) => {
+  const s = setupGroup("catalog-page"); s.plan.bindings[0].preparation.fixtures = [];
+  const h = await begin(s);
+  let now = 100, journalFd, journalSyncs = 0, setups = 0;
+  const open = fs.openSync, sync = fs.fsyncSync;
+  t.mock.method(performance, "now", () => now);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.method(fs, "openSync", (path, ...args) => {
+    const fd = open(path, ...args);
+    if (args[0] === "wx" && typeof path === "string" && path.endsWith("-command-started.json")) journalFd = fd;
+    return fd;
+  });
+  t.mock.method(fs, "fsyncSync", (fd) => {
+    sync(fd);
+    if (fd === journalFd) {
+      journalFd = undefined; journalSyncs++;
+      now += limits.readyMs + (crossed ? 1 : -1);
+    }
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const owner = lifetimeStartup = { enter() { setups++; }, gate: Promise.resolve(), attached: 0, disposed: 0 };
+  if (crossed) await assert.rejects(s.campaign.advance(h), /lifetime or cleanup unproven/);
+  else assert.equal((await s.campaign.advance(h)).state, "finished");
+
+  const files = readdirSync(h.directory);
+  const receipt = (kind) => JSON.parse(readFileSync(join(h.directory, files.find((name) => name.endsWith(`-${kind}.json`))), "utf8"));
+  const started = receipt("command-started"), exited = receipt("command-exited");
+  assert.equal(journalSyncs, 1);
+  assert.equal(started.kind, "command-started");
+  assert.ok(started.sequence < exited.sequence);
+  assert.equal(exited.success, !crossed);
+  assert.equal(exited.cancelled, crossed);
+  assert.equal(exited.error, crossed ? "native host observation setup incomplete" : null);
+  assert.equal(setups, crossed ? 0 : 1);
+  assert.equal(owner.attached, crossed ? 0 : 1);
+  const host = join(h.directory, "00-catalog-page-timing", "command-0-host");
+  assert.equal(existsSync(host), !crossed);
+  assert.equal(existsSync(join(host, "terminal.json")), !crossed);
 });
 
 for (const boundary of ["before attach", "after attach", "after attachment check"]) {

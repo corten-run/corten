@@ -144,6 +144,7 @@ export function createCampaign({ authorize }) {
         async onStart(value, startupSignal, checkStartup) {
           pid = value; event(c, "command-started", { pid });
           try {
+            checkStartup();
             observer = await beginLifetime({ campaign: c.handle.id, binding, invocation,
               directory: hostDirectory, command: number, pid, signal: commandSignal, startupSignal,
               onFault() { observerStop.abort(); } });
