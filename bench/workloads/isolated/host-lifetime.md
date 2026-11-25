@@ -60,6 +60,14 @@ the cause of a swallowed exception. Successful samples describe only completed
 observations, not the failed attempt. Do not infer a specific exit race, permission
 failure, identity change or latency cause from a generic `host-observation-gap` alone.
 
+If a Docker participant snapshot fails, a sealed terminal record also includes
+`firstDockerGap`: the failed collector stage and an allowlisted error code, or
+`unknown`. It is absent without a gap. Only the first failure is described,
+including when a later sample is complete. The diagnostic keeps no error text,
+daemon output, commands, environment or values read from procfs. The existing
+sample still records the gap and notifies as before. A stage identifies a failed
+check, not the cause of the underlying failure, and adds no retry.
+
 ## Fault Shutdown
 
 The first irrecoverable interval observation or storage failure requests command-local
