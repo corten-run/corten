@@ -88,6 +88,18 @@ test "$(forks)" -eq 6
 # A refused connection must not fork the listener. Its counter distinguishes
 # an observed probe from an idle window; it is not a claim of zero timing cost.
 node=$1
+# Root-cause control for the r62 setup failure: Node gives a spawnSync child a
+# socket for piped stdin, and this nft refuses `nft -f -` on a socket. Feeding
+# the same rules that way must fail and must leave no native fence behind.
+"$node" --input-type=module -e '
+  import assert from "node:assert/strict";
+  import {spawnSync} from "node:child_process";
+  import {offlineFenceRules} from "./bench/workloads/isolated/control-admission.mjs";
+  const r = spawnSync("/usr/bin/taskset", ["-c", "0", "/usr/sbin/nft", "-f", "-"], {input: offlineFenceRules, encoding: "utf8"});
+  assert.ok(!r.error && r.signal === null && Number.isSafeInteger(r.status), "nft did not run");
+  assert.notEqual(r.status, 0, "nft accepted rules on socket stdin");
+'
+if /usr/sbin/nft list table inet corten_bench_native >/dev/null 2>&1; then echo 'socket-stdin install left a native fence' >&2; exit 1; fi
 install_fence() { "$node" --input-type=module -e 'import {installOfflineFence} from "./bench/workloads/isolated/control-admission.mjs"; installOfflineFence()'; }
 install_fence
 sample() { /usr/sbin/nft -j -a list table inet corten_bench_native; }
@@ -104,7 +116,8 @@ window() {
 }
 sample > "$work/before"
 # A second install is one refused batch that leaves the verified table unchanged.
-if install_fence 2>/dev/null; then echo 'replaced an existing native fence' >&2; exit 1; fi
+if install_fence 2>"$work/second-install"; then echo 'replaced an existing native fence' >&2; exit 1; fi
+grep -Eq 'native SSH fence unavailable: install exit=[1-9][0-9]*$' "$work/second-install"
 sample > "$work/idle"
 window "$work/before" "$work/idle" idle
 if owner true </dev/null 2>"$work/refused"; then exit 1; fi
