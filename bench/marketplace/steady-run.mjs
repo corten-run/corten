@@ -382,7 +382,6 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       // A memory sampling failure makes only the memory reading unavailable (summarizeSoak); the
       // restart, stop and OOM observations below do not depend on it.
       if (statsError) { keep("memory samples", statsError); log(`${cell.app} ${cell.source} ${cell.target}: memory samples failed: ${firstLine(statsError)}`); }
-      const startedMs = Date.parse(loadInfo.State.StartedAt);
       const samples = statsError ? null : (stats?.samples?.[app] ?? []).map((s) => ({ atSeconds: (s.t - memoryOriginMs) / 1000, mib: s.mem }));
       const end = await step("container", () => appInstance(after, "after"));
       // The marker's second start, after the app's last inspect, shows the stream had delivered every
@@ -393,7 +392,8 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       let events = null, text;
       if (!streamError) { try { await owned.start(marker); await stream.marker(2); } catch (e) { streamError = e; } }
       try { text = await stream.stop(); } catch (e) { streamError ??= e; }
-      if (!streamError) { try { events = readEvents(text, startedMs, { app, marker, finishedMs: Date.parse(loadInfo.State.FinishedAt) }); } catch (e) { streamError = e; } }
+      // Docker's own StartedAt and FinishedAt text, read to the nanosecond as the event times are.
+      if (!streamError) { try { events = readEvents(text, { app, marker, startedAt: loadInfo.State.StartedAt, finishedAt: loadInfo.State.FinishedAt }); } catch (e) { streamError = e; } }
       if (streamError) { keep("docker events", streamError); log(`${cell.app} ${cell.source} ${cell.target}: Docker's event stream is unavailable: ${firstLine(streamError)}`); }
       retain(join(raw, "events.json"), events);
       Object.assign(cell, await step("load-evidence", () => summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory: samples, before: appBefore(before), after: end, events, rate: options.rate,
@@ -458,8 +458,14 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     });
     if (options.admittedFrom) await step("admission", () => {
       // Only the adapters a saved timed round admitted: its feature qualification decides, not this pass.
-      const bytes = readFileSync(options.admittedFrom);
-      const round = validateSummary(JSON.parse(bytes));
+      // Reading, parsing and validating it can quote the file (a JSON.parse fragment, a saved value
+      // in a validator's message): that detail goes to errors.log only, and the step fails with a
+      // fixed refusal, as report.mjs --convergence does.
+      let bytes, round;
+      try { bytes = readFileSync(options.admittedFrom); round = validateSummary(JSON.parse(bytes)); } catch (error) {
+        keep("the round given to --admitted-from", error);
+        throw new Error("the round given to --admitted-from could not be read or did not validate as a timed round (the reason is in errors.log)");
+      }
       const admittedApps = Object.keys(round.apps).filter((a) => !round.options.group || admitted(round.apps[a]));
       // The path only when it is inside the checkout and plain; the operator's own paths are not kept.
       summary.admission = { round: pinned("round", round.round, "the admitting round"), commit: pinned("commit", round.commit, "the admitting round's commit"),
@@ -546,11 +552,16 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     // What a saved reader checks before it counts the pass (steady-contract.mjs passEvidence): counts,
     // and the names and labels this pass gave its own creates. cleanup.json keeps the whole record.
     const ids = (list) => (Array.isArray(list) ? list.filter((id) => containerId.test(id)) : []);
-    summary.cleanup = { complete: cleanup.complete === true, remaining: cleanup.remaining ? { containers: ids(cleanup.remaining.containers), networks: ids(cleanup.remaining.networks) } : null,
+    // Complete only when every acknowledged create is among the resources confirmed removed or
+    // recovered, whatever the record's own flag says.
+    const gone = new Set([...(cleanup.removed ?? []), ...(cleanup.recovered ?? [])].map((entry) => entry?.id));
+    const accounted = Array.isArray(cleanup.created) && cleanup.created.every((entry) => gone.has(entry?.id));
+    if (cleanup.complete === true && !accounted) log("cleanup not confirmed: an acknowledged create is not among the resources removed or recovered (cleanup.json)");
+    summary.cleanup = { complete: cleanup.complete === true && accounted, remaining: cleanup.remaining ? { containers: ids(cleanup.remaining.containers), networks: ids(cleanup.remaining.networks) } : null,
       created: cleanup.created.length, removed: cleanup.removed.length, recovered: cleanup.recovered.length, failures: cleanup.failures.length,
       unacknowledged: cleanup.unacknowledged.map((a) => ({ name: savedValue("runId", a.name), label: savedValue("attemptLabel", a.label), outcome: ["removed", "not removed"].includes(a.outcome) ? a.outcome : "unconfirmed" })) };
     summary.finishedAt = new Date().toISOString();
-    summary.complete &&= !interrupted() && summary.failures.length === 0 && cleanup.complete === true;
+    summary.complete &&= !interrupted() && summary.failures.length === 0 && summary.cleanup.complete;
     if (summary.complete) {
       // A complete pass must read: the same validator a reader runs, on what is about to be saved.
       try { (convergence ? validateConvergence : validateSoak)(structuredClone(summary)); } catch (e) {

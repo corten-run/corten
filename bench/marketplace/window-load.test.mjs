@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { registerHooks } from "node:module";
-import { readWindows } from "./steady-contract.mjs";
+import { fixedRateLoad, readWindows } from "./steady-contract.mjs";
 
 // The k6 modules window-load.js imports. Node evaluates each once, so each delegates at call time
 // to the current engine in globalThis.__k6.
@@ -83,7 +83,9 @@ test("window-load.js counts each answer in the window its engine clock reads, th
 
 test("window-load.js writes the engine clock k6 reports, unrounded, and refuses an unknown mode before it runs", async () => {
   const { script } = await load({ ...closed, MODE: "fixed", RATE: "150", TARGET: "json" });
-  assert.deepEqual(script.options.scenarios.steady, { executor: "constant-arrival-rate", rate: 150, timeUnit: "1s", duration: "30s", preAllocatedVUs: 200, maxVUs: 1000, gracefulStop: "10s" });
+  // The VUs and graceful stop steady-contract.mjs bounds a soak's outstanding iterations by (soakArrivals).
+  assert.deepEqual(script.options.scenarios.steady, { executor: "constant-arrival-rate", rate: 150, timeUnit: "1s", duration: "30s", preAllocatedVUs: fixedRateLoad.preAllocatedVUs,
+    maxVUs: fixedRateLoad.maxVUs, gracefulStop: `${fixedRateLoad.gracefulStopSeconds}s` });
   assert.deepEqual(script.handleSummary({ state: { testRunDurationMs: 40_000.5 } }), { "/tmp/marketplace-clock.json": JSON.stringify({ testRunDurationMs: 40_000.5 }) });
   await assert.rejects(load({ ...closed, MODE: "open" }), /MODE must be fixed or closed/);
   await assert.rejects(load({ ...closed, WINDOWS: "0" }), /WINDOWS and WINDOW_SECONDS must be positive integers/);

@@ -237,31 +237,39 @@ export const windowClock = "windows are the k6 engine's clock from the start of 
 export const eventFormat = "{{.Actor.ID}}|{{.Action}}|{{.TimeNano}}";
 /**
  * The restart-relevant events of a soak's app from its live Docker event stream, with their time in
- * seconds from `startedMs` (the load container's StartedAt, on the daemon's clock as the events
+ * seconds from `startedAt` (the load container's StartedAt, on the daemon's clock as the events
  * are). `docker events --since/--until` replays only what the daemon still buffers (its last 256
  * events), so an empty answer to such a query does not show that nothing happened; a soak reads a
  * live stream instead, filtered to its app and to a marker container, and started before the load.
  * The pass starts the marker once the stream runs, before the load, and again after the app's last
- * inspect. A stream delivers events in the order the daemon publishes them, so one that shows both
- * marker starts was listening before the load began and had delivered every app event published
+ * inspect. Every time is compared in nanoseconds: the load's StartedAt and FinishedAt
+ * (`startedAt`, `finishedAt`, Docker's own RFC 3339 text with up to nine fractional digits) and
+ * each row's TimeNano, so a marker start earlier in the same millisecond as the load's FinishedAt is
+ * not taken for one after it. A stream delivers events in the order the daemon publishes them, so
+ * one that shows both marker starts was listening before the load began and had delivered every app event published
  * before the load's end. Two marker start rows alone do not show that: two copies of the first
  * start would read as both. So the first two marker starts in the stream are the witnesses, and
  * they must bracket the load on the daemon's clock: the first at or before the load's StartedAt
- * (`startedMs`), the second strictly later than the first (so a distinct row) and strictly after
- * the load's FinishedAt (`finishedMs`). The app's last inspect has no daemon time; the load's
+ * (`startedAt`), the second strictly later than the first (so a distinct row) and strictly after
+ * the load's FinishedAt (`finishedAt`). The app's last inspect has no daemon time; the load's
  * FinishedAt is the latest daemon time before it, and the pass starts the marker the second time
  * only once that inspect has returned. Every row must be one of the two container IDs, an action
  * (lowercase letters and underscores, optionally followed by ": " and detail, as health_status and
  * exec_start are) and a time in nanoseconds. One row that is not, fewer than two marker starts, or
  * witnesses that do not bracket the load make the whole observation unreadable: this throws a fixed
  * message (with a count), and the caller saves the stream as unavailable. Returns the app's start,
- * restart, die, kill and oom events before the second marker start, with no detail.
+ * restart, die, kill and oom events, with no detail, that are before the second marker start or
+ * stamped at or before the load's FinishedAt: the stream's order does not decide that an event
+ * stamped inside the load is teardown. Only an app event both after the second marker start and
+ * stamped after the load finished is left out.
  */
-export function readEvents(text, startedMs, { app, marker, finishedMs } = {}) {
+export function readEvents(text, { app, marker, startedAt, finishedAt } = {}) {
   assert.ok(typeof text === "string", "docker events returned no text");
-  assert.ok(Number.isFinite(startedMs), "the load container's StartedAt is not a time");
+  const startNs = dockerNanos(startedAt);
+  assert.ok(startNs !== null, "the load container's StartedAt is not a time");
   assert.ok(matches("containerId", app) && matches("containerId", marker) && app !== marker, "the event stream reads an app and a marker by their container IDs");
-  assert.ok(Number.isSafeInteger(startedMs) && Number.isSafeInteger(finishedMs) && finishedMs >= startedMs, "the load container's FinishedAt is not a time at or after its StartedAt");
+  const finishNs = dockerNanos(finishedAt);
+  assert.ok(finishNs !== null && finishNs >= startNs, "the load container's FinishedAt is not a time at or after its StartedAt");
   const rows = text.split("\n").map((line) => line.replace(/\r$/, "")).filter((line) => line.length > 0);
   const events = [], witnesses = [];
   let unreadable = 0;
@@ -269,19 +277,32 @@ export function readEvents(text, startedMs, { app, marker, finishedMs } = {}) {
     const first = row.indexOf("|"), last = row.lastIndexOf("|");
     const id = row.slice(0, Math.max(first, 0)), action = row.slice(first + 1, Math.max(last, first + 1)), nanos = row.slice(last + 1);
     if (first <= 0 || last <= first || (id !== app && id !== marker) || !/^[a-z_]{1,32}(: .*)?$/.test(action) || !/^[1-9]\d{0,19}$/.test(nanos)) { unreadable++; continue; }
-    const name = action.split(":", 1)[0];
-    if (id === marker) { if (name === "start") witnesses.push(BigInt(nanos)); continue; }
-    // After the second marker start: past the end of the observation (teardown).
-    if (witnesses.length < 2 && restartActions.includes(name)) events.push({ action: name, atSeconds: (Number(nanos) / 1e6 - startedMs) / 1000 });
+    const name = action.split(":", 1)[0], at = BigInt(nanos);
+    if (id === marker) { if (name === "start") witnesses.push(at); continue; }
+    if (!restartActions.includes(name)) continue;
+    // Teardown only when both after the second marker start and stamped after the load finished.
+    if (witnesses.length >= 2 && at > finishNs) continue;
+    events.push({ action: name, atSeconds: Number(at - startNs) / 1e9 });
   }
   assert.ok(unreadable === 0, `${unreadable} docker events row${unreadable === 1 ? " is" : "s are"} not this soak's app or marker, an action and a time`);
   assert.ok(witnesses.length >= 2, `the event stream showed ${witnesses.length} of the marker's 2 starts, so it does not cover the soak`);
-  const [before, after] = witnesses, ns = (ms) => BigInt(ms) * 1_000_000n;
-  assert.ok(before <= ns(startedMs), "the marker's first start in the event stream is not at or before the load's start, so it does not show the stream was listening when the load began");
-  assert.ok(after > before && after > ns(finishedMs), "the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load");
+  const [before, after] = witnesses;
+  assert.ok(before <= startNs, "the marker's first start in the event stream is not at or before the load's start, so it does not show the stream was listening when the load began");
+  assert.ok(after > before && after > finishNs, "the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load");
   return events;
 }
 const restartActions = Object.freeze(["start", "restart", "die", "oom", "kill"]);
+/**
+ * A Docker timestamp (savedText's UTC form, up to nine fractional digits) in nanoseconds since the
+ * epoch, at its full precision, or null when it is not one or is not a real start (Docker writes
+ * 0001-01-01T00:00:00Z for a time it does not have).
+ */
+export function dockerNanos(value) {
+  if (!startTime(value)) return null;
+  const [, whole, fraction = ""] = /^([^.]+?)(?:\.(\d{1,9}))?Z$/.exec(value);
+  const ms = Date.parse(`${whole}Z`);
+  return Number.isFinite(ms) ? BigInt(ms) * 1_000_000n + BigInt(fraction.padEnd(9, "0")) : null;
+}
 
 const metric = (summary, name) => summary?.metrics?.[name]?.values ?? summary?.metrics?.[name];
 const count = (summary, name) => {
@@ -478,8 +499,9 @@ function passEvidence(s, schema) {
   assert.equal(s.dirty, false, "a pass measures a clean checkout");
   assert.equal(s.complete, true, "an incomplete pass is not evidence");
   assert.deepEqual(s.failures, [], "a pass with a suite failure is not evidence");
-  // Cleanup must be confirmed: no failure, nothing left with the owner label, and every create
-  // Docker did not acknowledge found and removed (cleanup.json keeps the whole record).
+  // Cleanup must be confirmed: no failure, nothing left with the owner label, every create Docker
+  // acknowledged confirmed removed or recovered, and every create it did not acknowledge found and
+  // removed (cleanup.json keeps the whole record).
   const k = s.cleanup;
   assert.ok(k?.complete === true && Array.isArray(k.remaining?.containers) && Array.isArray(k.remaining?.networks) && k.remaining.containers.length === 0 && k.remaining.networks.length === 0
     && Array.isArray(k.unacknowledged) && k.unacknowledged.every((a) => a?.outcome === "removed"), "a pass whose cleanup is not confirmed complete is not evidence");
@@ -487,6 +509,10 @@ function passEvidence(s, schema) {
   fields(k, ["complete", "remaining", "created", "removed", "recovered", "failures", "unacknowledged"], "the pass's cleanup");
   fields(k.remaining, ["containers", "networks"], "the pass's remaining resources");
   assert.ok([k.created, k.removed, k.recovered].every(nonNegative), "the pass's cleanup counts");
+  // Each acknowledged create is one removed or recovered resource, and each unacknowledged one that
+  // was found and removed at least one more (recovered, since it was never acknowledged): fewer
+  // than that means a create's removal was not confirmed, whatever `complete` says.
+  assert.ok(k.removed + k.recovered >= k.created + k.unacknowledged.length, "a pass whose creates were not all confirmed removed or recovered is not evidence");
   for (const a of k.unacknowledged) { fields(a, ["name", "label", "outcome"], "an unacknowledged create"); nullable("runId", a.name, "an unacknowledged create's name"); nullable("attemptLabel", a.label, "an unacknowledged create's label"); }
   assert.ok(matches("time", s.startedAt) && matches("time", s.finishedAt) && Date.parse(s.finishedAt) >= Date.parse(s.startedAt), "a pass records its window");
   const host = s.host;
@@ -581,6 +607,12 @@ function checkConvergence(s) {
  */
 export const soakMemoryClock = "memory: docker stats samples on the workstation clock from the issue of the load's docker start, in intervals of their own (the latency intervals' length, from that origin, which leads the k6 engine's start by the load container's startup); start and end memory are medians of the samples in the first and last of those intervals. Restart events: the Docker daemon's clock from the load container's StartedAt";
 /**
+ * What window-load.js's fixed-rate scenario declares (options.scenarios.steady): k6 runs at most
+ * maxVUs VUs, each one iteration and one synchronous request at a time. A Node module cannot import
+ * the k6 script, so window-load.test.mjs loads it and requires these values of its options.
+ */
+export const fixedRateLoad = Object.freeze({ preAllocatedVUs: 200, maxVUs: 1000, gracefulStopSeconds: 10 });
+/**
  * The fixed rate's schedule per interval: constant-arrival-rate starts one iteration per tick of
  * floor(1e9 / rate) ns from slot 0, so interval i holds the slots from i * windowSeconds up to, not
  * including, (i + 1) * windowSeconds, and the last interval also the boundary slot at the very end
@@ -615,11 +647,18 @@ export function intervalSchedule({ rate, seconds, windowSeconds }) {
  * same engine clock as the arrivals. A request completes after its iteration starts, so at every
  * interval boundary the requests completed before it cannot outnumber the iterations started before
  * it; counts that say otherwise (270,000 completions in the first minute when 9,001 iterations had
- * started by then) are refused, whatever their totals.
+ * started by then) are refused, whatever their totals. Nor can the backlog grow the other way past
+ * what the load can hold: each iteration makes one synchronous request on its own VU, so at every
+ * boundary the iterations started but whose request the windows have not counted as completed are
+ * at most fixedRateLoad.maxVUs, plus the `unrecorded` requests the graceful stop cut off before
+ * their window was counted (reconcileCell bounds those). Counts with every arrival on schedule and
+ * no completion in any interval (all of them in the graceful-stop tail) are refused at the first
+ * boundary.
  */
-export function soakArrivals({ rate, seconds, windowSeconds, requests, droppedIterations, arrivals, completions }) {
+export function soakArrivals({ rate, seconds, windowSeconds, requests, droppedIterations, arrivals, completions, unrecorded }) {
   assert.ok(Number.isSafeInteger(rate) && rate > 0 && Number.isSafeInteger(seconds) && seconds > 0, "a soak's rate and length");
   assert.ok(Number.isSafeInteger(requests) && requests >= 0 && Number.isSafeInteger(droppedIterations) && droppedIterations >= 0, "k6's requests and dropped iterations");
+  assert.ok(nonNegative(unrecorded) && unrecorded <= requests, "a soak counts the requests the graceful stop left unrecorded");
   const schedule = intervalSchedule({ rate, seconds, windowSeconds });
   assert.ok(Array.isArray(arrivals) && arrivals.length === schedule.length && arrivals.every(nonNegative), "a soak counts the arrivals k6 started in each interval");
   const tick = Math.floor(1e9 / rate), scheduled = Math.floor((seconds * 1e9) / tick) + 1, allowance = rate + 1;
@@ -629,9 +668,11 @@ export function soakArrivals({ rate, seconds, windowSeconds, requests, droppedIt
   assert.ok(Array.isArray(completions) && completions.length === schedule.length && completions.every(nonNegative) && completions.reduce((a, b) => a + b, 0) <= requests,
     "a soak counts the requests completed in each interval, no more than k6's requests");
   let begun = 0, done = 0;
+  const inFlight = fixedRateLoad.maxVUs + unrecorded;
   for (let i = 0; i < schedule.length; i++) {
     begun += arrivals[i]; done += completions[i];
     assert.ok(done <= begun, `more requests completed by the end of interval ${i} than iterations had started by then`);
+    assert.ok(begun - done <= inFlight, `more iterations were outstanding at the end of interval ${i} than the load's ${fixedRateLoad.maxVUs} VUs hold in flight, with ${unrecorded} unrecorded`);
   }
   const shortfall = scheduled - requests - droppedIterations;
   const intervals = schedule.map((expected, index) => ({ index, startSeconds: index * windowSeconds, scheduled: expected, arrivals: arrivals[index], held: Math.abs(arrivals[index] - expected) <= allowance }));
@@ -680,7 +721,7 @@ export function summarizeSoak({ windows, tail, unrecorded, requests, iterations,
   const eventStream = events === null ? "unavailable" : restartEvents.length ? "seen" : "clean";
   const replaced = after.id !== before.id || after.startedAt !== before.startedAt;
   const p99 = windows.filter((w) => w.p99 !== null).map((w) => w.p99);
-  return { windows, tail, unrecorded, requests, iterations, latencyMaxMs, rate: soakArrivals({ rate, seconds: end, windowSeconds: seconds, requests, droppedIterations, arrivals, completions: windows.map((w) => w.requests) }), memory: soakMemory(memory, seconds, end),
+  return { windows, tail, unrecorded, requests, iterations, latencyMaxMs, rate: soakArrivals({ rate, seconds: end, windowSeconds: seconds, requests, droppedIterations, arrivals, completions: windows.map((w) => w.requests), unrecorded }), memory: soakMemory(memory, seconds, end),
     p99: { first: windows[0].p99, last: windows.at(-1).p99, max: p99.length ? Math.max(...p99) : null },
     failed: windows.reduce((sum, w) => sum + w.failed, 0), failedRequests,
     restarts: restartClaim({ restartCount: after.restartCount - before.restartCount, replaced, eventStream, events: restartEvents, runningAtEnd: after.running, oomKilled: after.oomKilled }) };
@@ -726,7 +767,7 @@ function checkSoak(s) {
       && c.rate.intervals.every((i) => i !== null && typeof i === "object" && nonNegative(i.arrivals)), `${cellKey(c)}: rate`);
     // The saved arrivals per interval are the input; everything else in the claim is recomputed from them.
     assert.deepEqual(c.rate, soakArrivals({ rate: s.options.rate, seconds: s.options.windows * s.options.windowSeconds, windowSeconds: s.options.windowSeconds, requests: c.requests,
-      droppedIterations: c.rate.droppedIterations, arrivals: c.rate.intervals.map((i) => i.arrivals), completions: c.windows.map((w) => w.requests) }), `${cellKey(c)}: the fixed-rate claim contradicts k6's counts and the schedule`);
+      droppedIterations: c.rate.droppedIterations, arrivals: c.rate.intervals.map((i) => i.arrivals), completions: c.windows.map((w) => w.requests), unrecorded: c.unrecorded }), `${cellKey(c)}: the fixed-rate claim contradicts k6's counts and the schedule`);
   }
   return s;
 }

@@ -306,6 +306,30 @@ test("a create whose ID Docker withholds is not reported clean, and no further c
   assert.ok(corten && !fake.containers.size);
 });
 
+test("a round given to --admitted-from that does not read is refused with a fixed message on stdout and in run.log; its text stays in errors.log", async (t) => {
+  const folder = folderOf(t);
+  const canary = "CANARYadm";
+  // A saved round whose schema is the canary (a validator names the value it refused), text that is
+  // not JSON (JSON.parse quotes the input) and a file that is not there (its error quotes the path).
+  for (const [name, text] of [["schema", JSON.stringify({ schema: canary, round: canary })], ["fragment", `${canary} {"round": "${canary}`], ["missing", null]]) {
+    const file = folder(`${name}-${canary}.json`);
+    if (text !== null) writeFileSync(file, text);
+    const options = parseSteadyArgs(["convergence", "t9", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2", "--admitted-from", file], apps, groupApps);
+    const printed = [];
+    const s = await run(fakeDocker({ exportFor: () => k6Export(flat(8)) }), options, folder(name), { print: (line) => printed.push(line) });
+    assert.equal(s.complete, false);
+    assert.deepEqual(s.failures, [{ stage: "suite", code: "admission" }]);
+    assert.equal(s.admission, null);
+    const refusal = "suite FAILED (admission): the round given to --admitted-from could not be read or did not validate as a timed round (the reason is in errors.log) (detail in errors.log)";
+    for (const [where, out] of [["stdout", printed.join("\n")], ["run.log", readFileSync(join(folder(name), "run.log"), "utf8")]]) {
+      assert.ok(!out.includes(canary), `${name}: ${where} quotes the admitting round`);
+      assert.ok(out.includes(refusal), `${name}: ${where}`);
+    }
+    assert.ok(!readFileSync(join(folder(name), "summary.json"), "utf8").includes(canary), name);
+    assert.ok(errorsOf(folder(name)).includes(canary), `${name}: errors.log keeps the detail`);
+  }
+});
+
 test("a load container that cannot be removed still has its app removed, and no further cell is measured", async (t) => {
   const folder = folderOf(t);
   const options = parseSteadyArgs(["convergence", "t5", "--apps", "corten,aspnet", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appBefore, appInstance, checkFixture, convergenceLines, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, intervalSchedule, parseSaved, parseSteadyArgs, readDropped, readEvents, readWindows, ruleText, savedValue, soakArrivals, soakMemoryClock, soakSchema, summarizeSoak, timedWarmupVus, unlikeRound, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
+import { appBefore, appInstance, checkFixture, fixedRateLoad, convergenceLines, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, intervalSchedule, parseSaved, parseSteadyArgs, readDropped, readEvents, readWindows, ruleText, savedValue, soakArrivals, soakMemoryClock, soakSchema, summarizeSoak, timedWarmupVus, unlikeRound, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
 import { savedPass } from "./steady-saved-fixture.mjs";
 import { cpuSettings, resultSchema, v5Schema } from "./run-contract.mjs";
 import { convergenceReport, soakReport, steadyReport } from "./steady-report.mjs";
@@ -256,6 +256,11 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.cleanup.remaining.containers = ["a".repeat(64)]; }, /cleanup is not confirmed complete/],
     [(v) => { v.cleanup.unacknowledged = [{ name: "x-k6", label: "l", outcome: "unconfirmed" }]; }, /cleanup is not confirmed complete/],
     [(v) => { delete v.cleanup; }, /cleanup is not confirmed complete/],
+    // Complete with acknowledged creates that no count shows removed or recovered.
+    [(v) => { Object.assign(v.cleanup, { created: 6, removed: 0, recovered: 0 }); }, /^Error: a pass whose creates were not all confirmed removed or recovered is not evidence$/],
+    [(v) => { Object.assign(v.cleanup, { created: 6, removed: 5, recovered: 0 }); }, /creates were not all confirmed removed or recovered/],
+    // An unacknowledged create found and removed is one more resource than the acknowledged ones.
+    [(v) => { v.cleanup.unacknowledged = [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }]; }, /creates were not all confirmed removed or recovered/],
     [(v) => { v.cells[0].requests += 1; }, /do not add up to k6's request total/],
     [(v) => { v.cells[0].unrecorded = 1; v.cells[0].requests += 1; v.cells[0].iterations += 1; }, /more unrecorded requests than unfinished iterations/],
     [(v) => { delete v.cells[0].iterations; }, /a convergence cell has fields its schema does not save, or lacks one it does/],
@@ -265,6 +270,10 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.cells[0].latencyMaxMs = null; }, /aggregate latency maximum/],
     [(v) => { v.schema = "marketplace-convergence/v3"; }, /not a marketplace-convergence\/v4 result/],
   ]) { const v = structuredClone(s); mutate(v); assert.throws(() => validateConvergence(v), pattern); }
+  // Every acknowledged create removed or recovered, and an unacknowledged one recovered, reads.
+  for (const cleanup of [{ created: 6, removed: 5, recovered: 1 }, { created: 6, removed: 6, recovered: 1, unacknowledged: [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }] }]) {
+    const v = structuredClone(s); Object.assign(v.cleanup, cleanup); validateConvergence(v);
+  }
   // A complete pass whose cells failed stays reportable: each such cell reads "no reading", with the
   // text of its failure code.
   const failed = structuredClone(s);
@@ -394,7 +403,7 @@ test("a soak says the fixed rate held only when k6's counts reconcile with the s
   const forged = structuredClone(s); forged.cells[0].rate.held = true;
   assert.throws(() => validateSoak(forged), /fixed-rate claim contradicts/);
   // Within the allowance it held; one arrival beyond it did not; more than the schedule is refused.
-  const rate = { rate: 150, seconds: 1800, windowSeconds: 60 }, oneDropped = onSchedule(); oneDropped[29] -= 1;
+  const rate = { rate: 150, seconds: 1800, windowSeconds: 60, unrecorded: 0 }, oneDropped = onSchedule(); oneDropped[29] -= 1;
   assert.equal(soakArrivals({ ...rate, requests: 270001 - 151, droppedIterations: 0, arrivals: onSchedule(), completions: served(onSchedule(), 270001 - 151) }).held, true);
   assert.equal(soakArrivals({ ...rate, requests: 270001 - 152, droppedIterations: 0, arrivals: onSchedule(), completions: served(onSchedule(), 270001 - 152) }).held, false);
   assert.equal(soakArrivals({ ...rate, requests: 270000, droppedIterations: 1, arrivals: oneDropped, completions: served(oneDropped, 270000) }).held, false);
@@ -418,15 +427,15 @@ test("a soak says held only when every interval sustained the fixed rate, and na
   // All 270,000 requests arrived in the first minute: the totals match the schedule, the later 29
   // intervals are empty, and the rate was not sustained.
   const concentrated = [270001, ...Array(29).fill(0)];
-  const rate = soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: concentrated, completions: served(concentrated, 270000) });
+  const rate = soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, unrecorded: 0, requests: 270000, droppedIterations: 0, arrivals: concentrated, completions: served(concentrated, 270000) });
   assert.deepEqual([rate.shortfall, rate.held], [1, false]);
   assert.deepEqual(rate.intervals.filter((i) => !i.held).map((i) => i.index), Array.from({ length: 30 }, (_, i) => i));
   // One interval short (a minute at half the rate, the next catching up) is named on its own.
   const uneven = onSchedule(); uneven[10] -= 4500; uneven[11] += 4500;
-  assert.deepEqual(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: uneven, completions: served(uneven, 270000) }).intervals.filter((i) => !i.held).map((i) => i.index), [10, 11]);
+  assert.deepEqual(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, unrecorded: 0, requests: 270000, droppedIterations: 0, arrivals: uneven, completions: served(uneven, 270000) }).intervals.filter((i) => !i.held).map((i) => i.index), [10, 11]);
   // Within the allowance of one second's arrivals plus one, an interval held.
   const edge = onSchedule(); edge[3] -= 151; edge[4] += 151;
-  assert.equal(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: edge, completions: served(edge, 270000) }).held, true);
+  assert.equal(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, unrecorded: 0, requests: 270000, droppedIterations: 0, arrivals: edge, completions: served(edge, 270000) }).held, true);
 
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
   const cell = (arrivals) => ({ app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows([270000 / 60, ...Array(29).fill(0)], () => 10, 60),
@@ -454,7 +463,7 @@ test("a soak refuses counts whose requests completed before their iterations sta
   // Every iteration started on schedule (9,001 by the end of the first minute), k6 dropped none, and
   // the totals reconcile, but 270,000 requests completed in the first minute: more than had started.
   const front = [270000, ...Array(29).fill(0)];
-  const counts = { rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: onSchedule() };
+  const counts = { rate: 150, seconds: 1800, windowSeconds: 60, unrecorded: 0, requests: 270000, droppedIterations: 0, arrivals: onSchedule() };
   const order = /^AssertionError \[ERR_ASSERTION\]: more requests completed by the end of interval 0 than iterations had started by then$/;
   assert.throws(() => soakArrivals({ ...counts, completions: front }), order);
   // One completion too many at a later boundary is refused there; exactly as many as started is not.
@@ -473,6 +482,39 @@ test("a soak refuses counts whose requests completed before their iterations sta
   const forged = structuredClone(s);
   Object.assign(forged.cells[0], { windows: frontWindows, p99: { first: 20, last: null, max: 20 } });
   assert.throws(() => validateSoak(forged), /^Error: more requests completed by the end of interval 0 than iterations had started by then$/);
+});
+
+test("a soak refuses a backlog of started iterations larger than the load's VUs can hold in flight", () => {
+  assert.equal(fixedRateLoad.maxVUs, 1000);
+  const counts = { rate: 150, seconds: 1800, windowSeconds: 60, unrecorded: 0, requests: 270001, droppedIterations: 0, arrivals: onSchedule() };
+  // Every arrival on schedule and no request completed in any interval: all 270,001 in the
+  // graceful-stop tail. 9,001 iterations were outstanding at the first boundary, with 1,000 VUs.
+  const none = Array(30).fill(0);
+  const backlog = /^AssertionError \[ERR_ASSERTION\]: more iterations were outstanding at the end of interval 0 than the load's 1000 VUs hold in flight, with 0 unrecorded$/;
+  assert.throws(() => soakArrivals({ ...counts, completions: none }), backlog);
+  // A realistic lag: 300 requests in flight at every boundary, answered in the next interval, the
+  // last 300 in the graceful stop. It holds the rate.
+  const lagged = onSchedule().map((n, i) => (i === 0 ? n - 300 : n));
+  assert.equal(soakArrivals({ ...counts, completions: lagged }).held, true);
+  // Exactly the VUs outstanding at a boundary is possible; one more is not, unless the graceful stop
+  // left that many requests unrecorded.
+  const at = (outstanding) => onSchedule().map((n, i) => (i === 4 ? n - outstanding : i === 5 ? n + outstanding : n));
+  assert.equal(soakArrivals({ ...counts, completions: at(1000) }).held, true);
+  assert.throws(() => soakArrivals({ ...counts, completions: at(1001) }), /outstanding at the end of interval 4 than the load's 1000 VUs hold in flight, with 0 unrecorded/);
+  assert.equal(soakArrivals({ ...counts, requests: 270001, completions: at(1001), unrecorded: 1 }).held, true);
+  for (const unrecorded of [undefined, -1, 1.5, 270002]) assert.throws(() => soakArrivals({ ...counts, completions: lagged, unrecorded }), /graceful stop left unrecorded/);
+  // The runner's summary refuses the zero-completion counts, and so does the reader of a saved soak.
+  const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
+  const intervals = (completions) => completions.map((n, index) => ({ index, startSeconds: index * 60, seconds: 60, requests: n, failed: 0, rps: n / 60, p95: n ? 10 : null, p99: n ? 20 : null }));
+  const soak = (completions, tail) => summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: intervals(completions), tail, unrecorded: 0, requests: 270001, iterations: 270001, latencyMaxMs: 25,
+    memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 60 })), before: held, after: held, events: [], arrivals: onSchedule() });
+  assert.throws(() => soak(none, 270001), backlog);
+  const options = parseSteadyArgs(["soak", "w9", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
+  const s = savedPass(options, [{ app: "corten", source: "fixture", target: "page", ...soak(lagged, 300) }], { commit: "d".repeat(40) });
+  assert.equal(validateSoak(s).cells[0].rate.held, true);
+  const forged = structuredClone(s);
+  Object.assign(forged.cells[0], { windows: intervals(none), tail: 270001, p99: { first: null, last: null, max: null } });
+  assert.throws(() => validateSoak(forged), /^Error: more iterations were outstanding at the end of interval 0 than the load's 1000 VUs hold in flight, with 0 unrecorded$/);
 });
 
 test("memory that cannot be read leaves the restart, stop and OOM observations in place", () => {
@@ -681,21 +723,21 @@ test("a value from outside the checkout is saved only when it matches its patter
 test("a soak's event stream covers the load only when it shows the marker's start before and after it, and every row is read", () => {
   const startedMs = Date.parse("2026-11-20T00:00:00Z"), at = (seconds) => String(BigInt(startedMs + seconds * 1000) * 1_000_000n);
   // A 30-minute load: the marker's starts at -1 s and 2000 s bracket it.
-  const app = "a".repeat(64), marker = "b".repeat(64), finishedMs = startedMs + 1_800_000, ids = { app, marker, finishedMs };
+  const app = "a".repeat(64), marker = "b".repeat(64), ids = { app, marker, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T00:30:00Z" };
   const row = (id, action, seconds) => `${id}|${action}|${at(seconds)}\n`;
   const mark = (seconds) => row(marker, "start", seconds) + row(marker, "die", seconds + 0.1);
-  const read = (body) => readEvents(mark(-1) + body + mark(2000), startedMs, ids);
+  const read = (body) => readEvents(mark(-1) + body + mark(2000), ids);
   assert.deepEqual(read(""), []);
   // Rows that are not restart-relevant are read and dropped, with any detail.
   assert.deepEqual(read(row(app, "exec_start: sh -c true", 1) + row(app, "health_status: healthy", 2).replace("\n", "\r\n")), []);
   assert.deepEqual(read(row(app, "kill", 3) + row(app, "die", 3.5) + row(app, "start", 4)), [{ action: "kill", atSeconds: 3 }, { action: "die", atSeconds: 3.5 }, { action: "start", atSeconds: 4 }]);
   // App events after the second marker start are teardown, past the observation.
-  assert.deepEqual(readEvents(mark(-1) + mark(2000) + row(app, "kill", 2001) + row(app, "die", 2001), startedMs, ids), []);
+  assert.deepEqual(readEvents(mark(-1) + mark(2000) + row(app, "kill", 2001) + row(app, "die", 2001), ids), []);
   // A response that looks clean but does not show both marker starts (a retrospective query whose
   // buffer no longer held the first, a stream that started late, or one stopped early) does not
   // cover the load, so it is not read as "no restart".
   for (const text of ["", mark(2000), mark(-1), row(app, "exec_start: true", 1)]) {
-    assert.throws(() => readEvents(text, startedMs, ids), /^AssertionError \[ERR_ASSERTION\]: the event stream showed [01] of the marker's 2 starts, so it does not cover the soak$/, JSON.stringify(text));
+    assert.throws(() => readEvents(text, ids), /^AssertionError \[ERR_ASSERTION\]: the event stream showed [01] of the marker's 2 starts, so it does not cover the soak$/, JSON.stringify(text));
   }
   const canary = "leaked-canary";
   for (const text of [`${app}|oom|NOT_A_TIMESTAMP\n`, `${app}|die|${at(1)}\n${canary}\n`, `${app}|${canary}|${at(1)}\n`, `${app}|die|-5\n`, `${app}|die|${at(1)}|${canary}\n`, `${app}||${at(1)}\n`, `${app}|DIE|${at(1)}\n`,
@@ -708,33 +750,34 @@ test("a soak's event stream covers the load only when it shows the marker's star
     }, text);
   }
   assert.throws(() => read(`a|b\nc|d\n`), /^AssertionError \[ERR_ASSERTION\]: 2 docker events rows are not this soak's app or marker, an action and a time$/);
-  assert.throws(() => readEvents(null, startedMs, ids), /returned no text/);
-  assert.throws(() => readEvents("", Number.NaN, ids), /StartedAt is not a time/);
-  for (const bad of [{}, { app, marker: app }, { app: "x", marker }, { app, marker: `${marker}\n` }]) assert.throws(() => readEvents(mark(-1) + mark(2000), startedMs, bad), /by their container IDs/);
-  // The load's FinishedAt must be a time, at or after its StartedAt.
-  for (const bad of [undefined, Number.NaN, startedMs - 1, startedMs + 0.5]) assert.throws(() => readEvents(mark(-1) + mark(2000), startedMs, { app, marker, finishedMs: bad }), /FinishedAt is not a time at or after its StartedAt/);
+  assert.throws(() => readEvents(null, ids), /returned no text/);
+  for (const bad of [undefined, Number.NaN, startedMs, "not a time", "0001-01-01T00:00:00Z", "2026-13-45T00:00:00Z"]) assert.throws(() => readEvents("", { ...ids, startedAt: bad }), /StartedAt is not a time/);
+  for (const bad of [{}, { app, marker: app }, { app: "x", marker }, { app, marker: `${marker}\n` }]) assert.throws(() => readEvents(mark(-1) + mark(2000), { startedAt: ids.startedAt, finishedAt: ids.finishedAt, ...bad }), /by their container IDs/);
+  // The load's FinishedAt must be a Docker time, at or after its StartedAt to the nanosecond.
+  for (const bad of [undefined, Number.NaN, startedMs + 1_800_000, "not a time", "0001-01-01T00:00:00Z", "2026-11-19T23:59:59.999999999Z"])
+    assert.throws(() => readEvents(mark(-1) + mark(2000), { ...ids, finishedAt: bad }), /FinishedAt is not a time at or after its StartedAt/);
 });
 
 test("a soak's two marker starts must be distinct and bracket the load: one at or before its start, one after it finished", () => {
   const startedMs = Date.parse("2026-11-20T00:00:00Z"), at = (seconds) => String(BigInt(startedMs + seconds * 1000) * 1_000_000n);
-  const app = "a".repeat(64), marker = "b".repeat(64), finishedMs = startedMs + 1_800_000, ids = { app, marker, finishedMs };
+  const app = "a".repeat(64), marker = "b".repeat(64), ids = { app, marker, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T00:30:00Z" };
   const row = (id, action, seconds) => `${id}|${action}|${at(seconds)}\n`;
   const start = (seconds) => row(marker, "start", seconds);
   // The real stream: a start before the load, a start after it, each followed by the marker's exit.
-  assert.deepEqual(readEvents(start(-1) + row(marker, "die", -0.9) + row(app, "kill", 900) + start(1801) + row(marker, "die", 1801.1), startedMs, ids), [{ action: "kill", atSeconds: 900 }]);
+  assert.deepEqual(readEvents(start(-1) + row(marker, "die", -0.9) + row(app, "kill", 900) + start(1801) + row(marker, "die", 1801.1), ids), [{ action: "kill", atSeconds: 900 }]);
   // At the load's start exactly is still before it.
-  assert.deepEqual(readEvents(start(0) + start(1801), startedMs, ids), []);
+  assert.deepEqual(readEvents(start(0) + start(1801), ids), []);
   const before = /^AssertionError \[ERR_ASSERTION\]: the marker's first start in the event stream is not at or before the load's start, so it does not show the stream was listening when the load began$/;
   const after = /^AssertionError \[ERR_ASSERTION\]: the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load$/;
   // Two identical pre-load rows and then a die during the load: two starts, but no second witness,
   // and the die would otherwise have been read as past the observation's end.
-  assert.throws(() => readEvents(start(-1) + start(-1) + row(app, "die", 900), startedMs, ids), after);
+  assert.throws(() => readEvents(start(-1) + start(-1) + row(app, "die", 900), ids), after);
   // Two distinct starts both before the load, or the second inside it or at its FinishedAt exactly.
-  for (const second of [-0.5, 900, 1800]) assert.throws(() => readEvents(start(-1) + start(second) + row(app, "die", 1700), startedMs, ids), after, String(second));
+  for (const second of [-0.5, 900, 1800]) assert.throws(() => readEvents(start(-1) + start(second) + row(app, "die", 1700), ids), after, String(second));
   // A first start after the load began: the stream may have missed the load's start.
-  assert.throws(() => readEvents(start(0.001) + start(1801), startedMs, ids), before);
+  assert.throws(() => readEvents(start(0.001) + start(1801), ids), before);
   // Out of order: a later start first.
-  assert.throws(() => readEvents(start(1801) + start(-1), startedMs, ids), before);
+  assert.throws(() => readEvents(start(1801) + start(-1), ids), before);
   // The three states of the stream are independent of the memory samples.
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
   const base = { rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60), tail: 0, unrecorded: 0, requests: 270000, iterations: 270000, latencyMaxMs: 25,
@@ -743,6 +786,34 @@ test("a soak's two marker starts must be distinct and bracket the load: one at o
   assert.deepEqual([summarizeSoak({ ...base, events: [] }).restarts.eventStream, summarizeSoak({ ...base, events: [] }).restarts.restarted], ["clean", false]);
   const oom = summarizeSoak({ ...base, events: null, after: { ...held, running: false, oomKilled: true } });
   assert.deepEqual([oom.restarts.eventStream, oom.restarts.restarted, oom.memory.unavailable], ["unavailable", true, "memory sampling failed"]);
+});
+
+test("a soak keeps an app event stamped inside the load wherever the stream put it, and compares the load's times to the nanosecond", () => {
+  const startedAt = "2026-11-20T00:00:00Z", base = BigInt(Date.parse(startedAt)) * 1_000_000n;
+  const app = "a".repeat(64), marker = "b".repeat(64), ids = { app, marker, startedAt, finishedAt: "2026-11-20T00:30:00Z" };
+  const row = (id, action, nanos) => `${id}|${action}|${base + nanos}\n`, s = 1_000_000_000n;
+  // An OOM kill stamped 15 s into the load, delivered after the second marker start: it is the
+  // load's, not teardown, so it is kept and the soak reads restarted, never clean.
+  const late = readEvents(row(marker, "start", -s) + row(marker, "start", 1801n * s) + row(app, "oom", 15n * s) + row(app, "die", 15n * s + 1n), ids);
+  assert.deepEqual(late, [{ action: "oom", atSeconds: 15 }, { action: "die", atSeconds: 15.000000001 }]);
+  const held = { id: app, startedAt, restartCount: 0, running: true, oomKilled: false };
+  const restarts = summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60), tail: 0, unrecorded: 0, requests: 270000, iterations: 270000,
+    latencyMaxMs: 25, memory: null, before: held, after: held, arrivals: onSchedule(), events: late }).restarts;
+  assert.deepEqual([restarts.eventStream, restarts.restarted], ["seen", true]);
+  // Stamped at the load's FinishedAt exactly is still inside it; one nanosecond later, after the
+  // second marker start, is teardown and is left out.
+  assert.deepEqual(readEvents(row(marker, "start", -s) + row(marker, "start", 1801n * s) + row(app, "kill", 1800n * s) + row(app, "die", 1800n * s + 1n), ids), [{ action: "kill", atSeconds: 1800 }]);
+  // FinishedAt with nanoseconds: a second marker start 0.4 ms before it, in the same millisecond,
+  // is not after the load finished; one nanosecond after it is.
+  const precise = { ...ids, finishedAt: "2026-11-20T00:30:00.000900000Z" };
+  const after = /^AssertionError \[ERR_ASSERTION\]: the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load$/;
+  assert.throws(() => readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 500_000n), precise), after);
+  assert.throws(() => readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 900_000n), precise), after);
+  assert.deepEqual(readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 900_001n), precise), []);
+  // The same at the start: a first marker start 1 ns after a StartedAt with nanoseconds is too late.
+  const startPrecise = { ...ids, startedAt: "2026-11-20T00:00:00.000000500Z" };
+  assert.throws(() => readEvents(row(marker, "start", 501n) + row(marker, "start", 1801n * s), startPrecise), /first start in the event stream is not at or before the load's start/);
+  assert.deepEqual(readEvents(row(marker, "start", 500n) + row(marker, "start", 1801n * s), startPrecise), []);
 });
 
 test("a saved pass's own text never reaches an error or a report: every field is refused unless it validates", () => {

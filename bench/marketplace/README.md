@@ -176,7 +176,9 @@ item or the first locale's page, until its first 200), and then one long k6 pass
 the timed requests and checks, with each answer counted in the window it completed in).
 `--admitted-from <round>/summary.json`
 measures only the adapters that saved timed round admitted; without it every selected adapter
-runs and the report says admission was not checked. `--minutes`, `--window` (convergence),
+runs and the report says admission was not checked. A round that cannot be read or does not
+validate fails the pass with a fixed refusal on the console and in `run.log`; why, which can quote
+the file, is kept only in `errors.log`. `--minutes`, `--window` (convergence),
 `--interval` (soak), `--vus`, `--rate`, `--targets` and `--sources` change the defaults;
 `--label key=value` (repeatable) adds a label to every container and network the pass creates,
 beside its ownership label. Like a timed round, a pass refuses to start without the current
@@ -185,7 +187,10 @@ go to `results/convergence/<name>/` and `results/soak/<name>/`, outside Git like
 Every container is read, logged, sampled and removed by the ID Docker printed for it, after its
 owner label is checked; teardown also removes, by ID, anything else carrying the pass's owner label.
 A create whose ID Docker did not return is looked for by its own label for a bounded time; if
-nothing turns up its cleanup is reported unconfirmed and the pass is incomplete. Each cell's
+nothing turns up its cleanup is reported unconfirmed and the pass is incomplete. Cleanup is complete
+only when every create Docker acknowledged is among the resources confirmed removed or recovered;
+a saved pass whose counts show fewer removed and recovered than its acknowledged creates plus its
+found unacknowledged ones is refused, whatever its `complete` flag says. Each cell's
 containers are removed before the next cell starts; a cell that leaves one behind ends the pass.
 For the production group's seven candidates a convergence pass is 28 five-minute passes, about
 two and a half hours with container starts, plus image builds (estimated, not measured). A pass
@@ -291,7 +296,12 @@ had delivered every app event published before it ended. Two start rows alone do
 copies of the first would read as both), so the first two marker starts are witnesses that must
 bracket the load on the daemon's clock: the first at or before the load container's StartedAt, the
 second strictly later than the first and strictly after the load container's FinishedAt (the
-latest daemon time before the app's last inspect, which has none of its own). The stream is saved
+latest daemon time before the app's last inspect, which has none of its own). These comparisons
+use the full nanoseconds of the load container's StartedAt and FinishedAt and of each event, so a
+marker start earlier in the same millisecond as FinishedAt is not after it. An app event is the
+load's whenever it is stamped at or before FinishedAt, even if the stream delivered it after the
+second marker start (an OOM kill stamped 15 s into the load reads as a restart, never clean); only
+an app event both after the second marker start and stamped after FinishedAt is teardown. The stream is saved
 as one of three states: unavailable (the stream failed, did not show both marker starts within its
 bound, had witnesses that do not bracket the load, or had a row that was not the app's or the
 marker's ID, an action and a nanosecond time, so none of its rows is used), clean (read, covering the load, with no start, restart, die, kill or OOM event) or seen
@@ -314,7 +324,12 @@ requests all arrived in its first minute did not hold the rate, even though its 
 Arrivals and completions are on the same engine clock, and a request completes after its iteration
 starts, so a soak whose intervals show more requests completed by an interval boundary than
 iterations started by it (270,000 completed in the first minute when 9,001 had started) is refused,
-whatever its totals, both when it is captured and when a saved one is read.
+whatever its totals, both when it is captured and when a saved one is read. Nor can the backlog
+run the other way: each iteration makes one synchronous request on its own VU, so at every
+boundary the iterations started but not yet counted as completed are at most the load's 1,000 VUs
+(`maxVUs` in `window-load.js`, which `window-load.test.mjs` holds equal to `fixedRateLoad`)
+plus the requests the graceful stop left unrecorded. A soak with every arrival on schedule and no
+request completed in any interval (all of them in the graceful-stop tail) is refused.
 Otherwise it reports the shortfall, names each interval that did not hold with its arrivals and
 schedule, and does not present the cell as a fixed-rate result. The reader recomputes every
 interval's claim from the saved arrivals, so a saved soak cannot claim an interval held. The counts it prints are k6's own, never the schedule's. Memory is
