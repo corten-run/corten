@@ -410,8 +410,9 @@ stand-in puts in each navigation's `<main>` shows (a request alone is not a draw
 already shown at that draw and still shown when the check looks again 500 ms after it (a later
 look, not a watch through those 500 ms): a poll drawn before the failure was shown is not one that
 kept it. In the cut-body cases the failure shown at that later look must be the body's own (its
-status), so another failure that took its place does not count. That first read is taken from the moment the stand-in failed (or
-answered) the write it follows, or from a held body's release, not from when the check sees the
+status), so another failure that took its place does not count. That first read is taken from the
+moment the stand-in failed (or answered) the write it follows, or from a held body's release, not
+from when the check sees the
 failure, and must reach the stand-in within five seconds of that moment: the stand-in records the
 time of each outcome and request, and the page records the time it let a held body go, so a read
 asked later fails however soon the check looks. A read counts as after that moment only if it
@@ -442,8 +443,9 @@ seconds of the body's release, by the times the page records as it lets the body
 is cut (or given) and as that failure is first shown with nothing busy; until those five seconds
 are over each look at the page has only what is left of them, then the check looks once more, that
 look bounded to five seconds, so it waits at most five seconds past them, and a late look neither
-passes an outcome that came after them nor fails one that came in time. The page's first failure must be the one expected, said after the
-wrapper cut (or gave) the body, on the form that sent the held write: each failure the page says
+passes an outcome that came after them nor fails one that came in time. The page's first failure
+must be the one expected, said after the wrapper cut (or gave) the body, on the form that sent the
+held write: each failure the page says
 is recorded with the wrapper's state at that moment and its target, compared with the form noted
 as it submitted that write, so a failure said at the headers, before the body, or said on the
 window or on another form, does not count as the body's.
@@ -459,8 +461,9 @@ context or page and closing its context are bounded to 30 seconds, Playwright's 
 action, since a loaded Firefox has taken over five seconds to close one. Each case makes its context
 before its page, so it holds the context to close even if making the page never settles, and
 closing one of its pages closes that page alone: if the context's close is not confirmed in time,
-each of its pages is closed, bounded the same, and the case fails rather than waits. The page these checks make is closed by the helper that makes it if
-making it, its route, its load or its mark fails, before a case holds it.
+each of its pages is closed, bounded the same, and the case fails rather than waits. The page these
+checks make is closed by the helper that makes it if making it, its route, its load or its mark
+fails, before a case holds it.
 That check counts only the
 reads of the page it goes back to, since the page that comes can prefetch the link left under the
 pointer. The check that a page part's answer that asks again takes the place of the page's tag
