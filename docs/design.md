@@ -9186,6 +9186,14 @@ rules something out.
     one reading's bound look resolved while raising the other's. The benefit side may use the
     protocol when the plan declares it and its smallest worthwhile reduction before the run.
 
+    Which changes it reads. This Choice was written when every change around the handler was
+    asked for cycles a request. Pull requests (item 2) now asks them only of a change it has
+    measured: one of a kind a count cannot judge, one whose count is over its budget, or one
+    whose reason is a win in cycles, time or requests a second
+    ([design Choice 76](#choice-counted-or-measured)). A counted change has no cycles reading,
+    on one build or across placements, and nothing here is asked of it. What this Choice says
+    of a touched workload, it says of a measured change's, with no word of the reading changed.
+
     When it is required. A placement run costs hours where a single build costs minutes, so it is
     asked only where one build cannot decide. A placement of 8 recorded pairs took 62 s of turns
     on the third run's API host and 101 s in the fourth, whose workload waits 2 s at each start. At
@@ -10177,7 +10185,10 @@ rules something out.
     nothing, that build's reading still binding; and a count declared before the
     plan's first turn and before it is taken, and taken once for a pull request, is not chosen
     by its result, nor is a workload named for a target before the run and not replaced after
-    it is read);
+    it is read; and the gate reads the changes Pull requests has measured and no others, a
+    count deciding a change it can judge, which is
+    [design Choice 76](#choice-counted-or-measured)'s to stand on, with its bets, and takes no
+    reason from this Choice, whose reading is as it was for every change it still reads);
     bet
     (moving the whole of the code by declared offsets varies placement about as much as real
     changes do, though a real change moves only the code after it and by sizes no plan chose, so
@@ -10289,7 +10300,9 @@ rules something out.
     workload is and need no case of their own; a count taken under that case reads above the
     default band while every probe workload of its plan meets its margin across placements, or
     a later reading finds on either target a cost a change brought in under it, so a probe does
-    not stand in for the image; or the release binary's own
+    not stand in for the image; the kinds of change Pull requests has measured change, or
+    [design Choice 76](#choice-counted-or-measured) is reopened, so what this gate reads does;
+    or the release binary's own
     placement is asked to be checked.
 
     Last checked: 2026-11-22 for the source pads of each side of
@@ -10364,7 +10377,11 @@ rules something out.
     linker an ordering file (`symbol-ordering-file`), `bench/placement/relink.mjs` alone found,
     which runs a probe's captured link again, and `bench/fullstack/count.mjs` read for what it
     starts, each app's container from its image, at `1155bfdf8`, with the default band as the
-    maintainer's decision of that day gives it, -2.98% to +3.33%, read at `c6e9be955`.
+    maintainer's decision of that day gives it, -2.98% to +3.33%, read at `c6e9be955`;
+    2026-11-25, this Choice read whole at `9e209a32f` for what
+    [design Choice 76](#choice-counted-or-measured) takes from it and leaves as it was (the
+    default band, the hours a reading across placements takes, the fourth run's 0.5% and the
+    reason against gating a release), no number taken again.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
@@ -10640,6 +10657,123 @@ rules something out.
     2026), RFC 6454, Mozilla bugs 1405971 (open, last updated November 2026) and 1685570 (fixed
     for `fetch` in 86 and wholly in 87), electron/electron issues 6859 and 7931 and MDN's
     `web_accessible_resources` page, read at `49b6e79eb`.
+
+76. <a id="choice-counted-or-measured"></a>**A change around the handler is decided by a count
+    where a count can judge it and by cycles where it cannot, and `main` is read against the last
+    release for what adds up.** Pull requests (item 2) asked every change around the handler for
+    cycles a request, held to +1%. One build's cycles say where its code landed as much as what
+    the change costs: the default band is -2.98% to +3.33%
+    ([design Choice 72](#choice-placement-runs)), so for the margin one build decides only a
+    bound under -1.98% or over +4.33% where no spread is recorded, and a smaller change was read
+    across placements, which that Choice estimates at about 4.1 to 8.4 hours of turns for one
+    workload on a setup with no eligible A/A. A count is the other way about.
+    [`bench/request-cost`](../bench/request-cost/README.md) counts the instructions the serving
+    thread runs for a request, and 30 counts of one binary spanned at most 1 instruction in each of
+    its 13 rows on the host it was read on, with two busy loops on the probe's CPU as without, and
+    up to 4 on a slower, loaded machine, where `get` counts 18,987. So a count resolves a change
+    of a few tens of instructions, which one build's cycles cannot, and it does not see what
+    cycles see: the kernel, another thread, a lock, a wait, a cache miss.
+
+    So [Pull requests](../CONTRIBUTING.md#pull-requests) (item 2) names three ways a change is
+    decided and which one a change takes, counted, measured and the trend. They are not said
+    again here; these are the reasons. The counted way decides what a count can judge. The
+    measured way is the reading in cycles that
+    [design Choice 71](#choice-layout-floor) and
+    [design Choice 72](#choice-placement-runs) give, unchanged in how it is made, and its list
+    is the kinds of change that can cost cycles on the same instructions, with a count over the
+    budget and any win claimed in cycles, time or requests a second. The trend, `main` across
+    placements against the last release, is the run
+    [#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)
+    asks for, which nothing makes yet. It gates no pull request, for the reason the second of
+    those Choices gives against gating a release: it reads every change since that release
+    together and cannot attribute a cost to one.
+
+    The budget is +0.5% of base's instructions in a case, about 95 on `get`. It is a proposal,
+    not a measured threshold. It stands clear of what a count cannot tell from nothing: repeats
+    of one binary differed by 4 at most, 0.02% of `get`'s count, and the one difference the kit's
+    page records between builds of one commit, 32 to 37 instructions on seven cases from the name
+    of the build directory (`get` 19,019 against 18,987, 0.17%), is kept out by building both
+    sides in one directory. It is half the +1% the measured way holds a request's cycles to. And
+    0.5% of user instructions is the line the fourth placement run's plan drew, for another
+    purpose, under which a nearby commit compiles a path nearly as its base. Nothing in the
+    repository measures what a rise in a request's instructions costs it in cycles, so that a
+    rise inside the budget costs under +1% is a bet (below).
+
+    What is given up: a counted change has no cycles reading. The gate keeps +1% on a workload
+    the change touches however flat its instructions, "since a change to the data a request
+    reads, its allocation, the kernel's work or its waiting can cost cycles on the same
+    instructions" (the first of those Choices, which turned down an exception for flat
+    instructions for that reason), and still holds every workload it reads so. A counted change
+    is not read by it: a cost in cycles that leaves its count inside the budget is seen by no
+    reading of its pull request, the catalog's `page` and `json` included, which only the
+    measured way counts. Two things guard that. The list sends to the measured way the changes
+    that sentence names, and a review checks a change against it. The trend reads what is left
+    as it adds up (twenty costs at the budget are about 10% more instructions), and does not
+    exist yet. A saving is claimed in instructions and not as a CPU-cost win for the same reason
+    turned about: in the first placement run
+    [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
+    ran 1.52% fewer user instructions on `kept` and read 0.07% fewer cycles across placements,
+    with a bound of +0.28%, one change in a reading that gated nothing.
+
+    The way is a line of the description, `Request path: counted` or `Request path: measured`,
+    the simplest thing a hosted job can read
+    ([#2112 No hosted job counts a pull request's instructions, allocations and idle memory a request against its base](https://github.com/corten-run/corten/issues/2112)
+    asks for the job); a label is not, since a fork's author cannot set one. A pull request that
+    declares a plan stays measured, by item 2's rule that a declaration is never added or
+    changed after a run to clear its result. A reading published under the rule as it stood
+    stays published, since a reading taken back is a result chosen after it was read; whether
+    it decides its pull request is by the rule in force when that merges, so the pull requests
+    open when the rule changed are held to what every later one is.
+
+    Not chosen: cycles asked of every change, the rule as it stood, at a pilot and a gated run
+    across placements for an effect one build cannot show; a count for every change, which passes
+    a lock, a wake, kernel work or a structure laid out to miss the cache more; no rise at all,
+    which sends each change that adds a check to a placement run, the cost this Choice removes;
+    a budget of +1%, which leaves a counted change nothing under the margin the measured way
+    holds; a budget of a fixed number of instructions, since `unstaged` counts 12,860 and
+    `page-browser` 221,809; a running total of counted costs kept in the
+    repository, a second record of what the trend reads in the unit that matters; the way left
+    to the author with no list, since a way taken after a look at a result is a result chosen;
+    and a published reading binding its pull request under a rule no later one is held to.
+
+    Stands on: bet (a change of none of the listed kinds whose count stays inside the budget
+    costs a request under +1% of its cycles, which nothing has measured, the figure being a
+    proposal; the list names the ways a change costs cycles on the same instructions, and an
+    author and a reviewer can tell from a diff that a change is of none; a cost inside the
+    budget on the kit's probe, whose handlers do nearly nothing, is inside it in an app, though
+    the kit's page says a count is of one program's binary and never to be compared with
+    another's; and the trend is made before counted costs add up past what a release can carry,
+    no such run having been made); measured (the kit's repeats as its page records them, 30
+    counts of one binary in each of 13 rows on one 16-CPU host, on `c9666dc96`, and five builds
+    of that commit in five directories, and, by a review of the kit's pull request, 24 and 22
+    counts of four cases on a slower, loaded machine, none taken again here; the default band
+    and the estimate of a reading across placements, which are
+    [design Choice 72](#choice-placement-runs)'s); reasoned (a bound inside the default band does
+    not decide, so for a change this small the only cycles reading was across placements; a
+    count that repeats within 4 in 18,987 resolves a rise of 0.5%; callgrind counts the serving
+    thread's user-space instructions, so the kernel, another thread, a lock, a wait and the
+    cache are not in a count, which is what the list is made from; and a count attributes a cost
+    to one pull request where a reading of `main` against a release cannot, so the count gates
+    and the trend reports); value (Fast, and proven fast: a claim has the number that can see
+    it behind it, instructions where a count sees the change and cycles where only cycles do,
+    README Values).
+
+    Revisit when: a change that merged counted is later read, by the trend or by any reading
+    across placements, to cost a request more than +1% of its cycles, so the list misses a kind
+    or the budget is too wide; the trend moves past its threshold with every change since the
+    last release counted inside the budget; a release is made with no trend reading against the
+    one before it, so the guard this Choice leans on is not there; repeats of one binary differ
+    by more than a quarter of the budget in a case, so a count no longer resolves it; a placement
+    run is read on the kit's probe, which its page says none has been, and shows what a few tens
+    of instructions between two commits are worth; a hosted job counts every pull request
+    against its base, so the line of the description can be checked or dropped; or a reading
+    across placements comes to cost what a count does, so cycles can be asked of every change.
+
+    Last checked: 2026-11-25, the kit's page read at `3eb752d8e` for its repeats and its builds
+    in five directories (taken on `c9666dc96`, not taken again), and
+    [design Choice 72](#choice-placement-runs) read at `9e209a32f` for the default band, the
+    hours a reading across placements takes, the fourth run's 0.5% and the first run's reading
+    of the kept answer's change.
 
 ## Rules
 

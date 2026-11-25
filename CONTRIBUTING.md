@@ -526,9 +526,47 @@ establish a general ranking.
       Docker Desktop hide. Reading JSON: `read_cost` in `examples/card-market` reads the
       fixture's 500 item API responses once each, and its doc comment gives the command.
 
-      For work around the handler (routing, middleware and other stages, headers read or
-      written, future sizes, allocations or copies per request), give the instruction count
-      **and** cycles per request under equivalent load on a quiet Linux bench host.
+      Work around the handler (routing, middleware and other stages, headers read or
+      written, future sizes, allocations or copies per request) is decided one of three ways
+      ([design Choice 76](docs/design.md#choice-counted-or-measured)). The description says
+      which on a line of its own, `Request path: counted` or `Request path: measured`. A pull
+      request that declares a plan once this paragraph is on `main` is measured and stays so:
+      the way is not changed after a reading to clear its result.
+
+      **Counted.** Take every count [`bench/request-cost`](bench/request-cost/README.md) lists
+      under Running it on base and on head, as its page says: both built in one directory from
+      one checkout of the kit, their answers compared before any count. The counts decide the
+      change when no case's instructions a request rise by more than +0.5% of base's (the
+      budget, by the medians the kit prints), no case's allocations a request rise, the memory
+      an idle connection holds does not rise, and the change is none of the kinds the measured
+      way lists. The description gives each figure for both builds. A cost inside the budget is
+      stated there and weighed in review against what the change is for. A saving is claimed in
+      instructions, not as a CPU-cost win. A run the kit refuses gives no figure and does not
+      pass. A counted change needs no cycles, plan or quiet host: nothing else in this point
+      (2.1) is asked of it, and points 2.2 to 2.4 ask of it what they ask of any change.
+
+      **Measured.** Give the instruction count **and** cycles per request under equivalent load
+      on a quiet Linux bench host, as the rest of this point says. This is the way for what a
+      count cannot judge: a lock or a shared atomic added or changed; a change to when a task is
+      woken, a timer is set or a system call is made; a change to the size or layout of a
+      structure a request touches; a change of allocator, toolchain or build profile; a change
+      no case of the kit runs (an unaffected case does not count); a count over the budget, or
+      allocations or idle memory that rise; and any change whose reason is a win in cycles, time
+      or requests a second. Plans, their addenda and their notes belong to this way alone.
+
+      **Trend.** `main` is to be read across placements against the last release on a schedule,
+      so that costs that each passed do not add up unseen.
+      [#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)
+      asks for that run, and none has been made: until one is, no reading sees what counted
+      changes add up to in cycles.
+
+      A reading published under the rule as it stood before the three ways were on `main` stays
+      published and is never withdrawn, and is read by the rule it was made under. Whether it
+      decides its pull request is by the rule in force when the pull request merges, and the
+      description shows both: the reading as published, a miss as a miss, and what decides the
+      change now.
+
+      The rest of this point is the measured way's.
       For changes exercised by the catalog item page or item JSON, use
       [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs) with target `page` or `json` and
       one repeat per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`); how
