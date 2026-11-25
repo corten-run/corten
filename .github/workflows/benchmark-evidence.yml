@@ -136,40 +136,41 @@ jobs:
           key=corten.json.resource-probe-attempt
           attempt=$(node -p 'require("node:crypto").randomUUID()')
           id=
+          full_id() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
           owns() {
             local candidate=$1 receipt
-            [[ "$candidate" =~ ^[a-f0-9]{64}$ ]] || return 1
+            full_id "$candidate" || return 1
             receipt=$(docker_local 3s container inspect --format \
               '{{.Id}} {{index .Config.Labels "corten.json.resource-probe"}} {{index .Config.Labels "corten.json.resource-probe-attempt"}}' "$candidate") || return 2
             [[ "$receipt" == "$candidate 1 $attempt" ]]
           }
+          refuse_cleanup() {
+            echo 'Synthetic JSON resource probe cleanup could not confirm one owned container' >&2
+            return 1
+          }
           cleanup() {
-            local candidate=$id found pending= retry
-            if [[ -z "$candidate" ]]; then
-              # A timed-out create can reach the daemon without returning its ID. Allow
-              # four lookup/inspect attempts and three sleeps (at most 39s before removal).
-              # Retry absence or transport failure, never a disproved or changing identity.
-              for retry in 1 2 3 4; do
-                if found=$(docker_local 2s ps --all --no-trunc --filter "label=$key=$attempt" --format '{{.ID}}') && [[ -n "$found" ]]; then
-                  [[ -z "$pending" || "$pending" == "$found" ]] || break
-                  pending=$found
-                  if owns "$found"; then
-                    candidate=$found
-                    break
-                  elif (( $? != 2 )); then
-                    break
-                  fi
+            local found pending= retry
+            # Four attempts and three sleeps: at most 39s even with label lookup.
+            # Retry unavailable inspection, never a disproved or changing identity.
+            for retry in 1 2 3 4; do
+              if [[ -n "$id" ]]; then
+                found=$id
+              elif ! found=$(docker_local 2s ps --all --no-trunc --filter "label=$key=$attempt" --format '{{.ID}}'); then
+                found=
+              fi
+              if [[ -n "$found" ]]; then
+                [[ -z "$pending" || "$pending" == "$found" ]] || break
+                pending=$found
+                if owns "$found"; then
+                  docker_local 10s rm -f -v "$found" >/dev/null
+                  return $?
+                elif (( $? != 2 )); then
+                  break
                 fi
-                if [[ "$retry" != 4 ]]; then sleep 1; fi
-              done
-            elif ! owns "$candidate"; then
-              candidate=
-            fi
-            if [[ -z "$candidate" ]]; then
-              echo 'Synthetic JSON resource probe cleanup could not confirm one owned container' >&2
-              return 1
-            fi
-            docker_local 10s rm -f -v "$candidate" >/dev/null
+              fi
+              if [[ "$retry" != 4 ]]; then sleep 1; fi
+            done
+            refuse_cleanup
           }
           trap 'status=$?; trap - EXIT; if ! cleanup && (( status == 0 )); then status=1; fi; exit "$status"' EXIT
           trap 'exit 130' INT
@@ -182,6 +183,14 @@ jobs:
                   while (performance.now() < until) mem[0] ^= 1;
                 }, 100);
                 setTimeout(() => clearInterval(work), 9000);')
-          owns "$candidate" || exit 1
+          full_id "$candidate" || exit 1
           id=$candidate
-          timeout --kill-after=2s 30s node bench/json-api/load-resource-probe.mjs "$id"
+          if owns "$id"; then
+            timeout --kill-after=2s 30s node bench/json-api/load-resource-probe.mjs "$id"
+          else
+            if (( $? != 2 )); then
+              trap - EXIT
+              refuse_cleanup
+            fi
+            exit 1
+          fi

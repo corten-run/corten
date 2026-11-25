@@ -244,6 +244,7 @@ export function* passPlan(passes, apps, profiles, runsOf) {
 const statsFaultMessage = (kind) => typeof kind === "string" && Object.hasOwn(statsInfrastructure, kind)
   ? statsInfrastructure[kind]
   : "docker stats sampler infrastructure failed";
+const statsFaultMessages = new Set(Object.values(statsInfrastructure));
 export function statsPhaseErrors(error) {
   if (!Array.isArray(error.errors)) return [{ step: "sampler", error, at: new Date().toISOString() }];
   return error.errors.map(({ kind, message, at }) => kind === "stats"
@@ -257,10 +258,10 @@ function statsDiagnostic({ step, error, kind }) {
   if (step !== "stats" && step !== "sampler") return null;
   if (kind !== undefined) return statsFaultMessage(kind);
   const message = error?.message ?? "";
+  if (statsFaultMessages.has(message)) return message;
   const syscall = legacyErrno.exec(message)?.[1];
   if (syscall) return statsInfrastructure[syscall === "kill" ? "shutdown-signal" : "client-process"];
   if (step === "stats" && /exceeded its deadline/.test(message)) return statsInfrastructure.deadline;
-  if (step === "stats" && message === statsInfrastructure["pipe-release-timeout"]) return message;
   return null;
 }
 function phaseFailure(entry) {

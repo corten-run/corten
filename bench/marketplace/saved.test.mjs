@@ -363,7 +363,7 @@ test("hostile saved edits fail replay, even when the summary remains internally 
   assert.equal(validateSaved(args).complete, true);
 });
 
-test("stopped profiles replay actual phase/sidecar/event evidence, never invented numeric passes", (t) => {
+test("stopped profiles replay actual phase/sidecar/event evidence, never invented numeric passes", async (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   const s = writeSavedFixture(folder, commit, sourceTree(commit));
   const a = s.apps.corten, runs = a.runs["api-neutral-json"], run = runs[2], base = "api/corten/p3-neutral-json";
@@ -406,11 +406,19 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
     ["stats", "spawn docker ENOENT", "docker stats client process failed"],
     ["sampler", "synthetic-private-process-detail", "docker stats client signal failed", "shutdown-signal"],
     ["stats", "synthetic-private-process-detail", "docker stats client signal failed", "shutdown-signal"],
+    ["stats", "synthetic-private-process-detail", "docker stats client process failed", "client-process"],
   ]) {
     raw.seen.errors = [{ ...postExitError, step, error, kind }];
     writeFileSync(path, JSON.stringify(raw));
     assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
       && e.cause?.message === expected && !e.message.includes("synthetic-private-process-detail"), `${step}: ${kind ?? error}`);
+  }
+  for (const message of ["docker stats client signal failed", "docker stats client process failed"]) {
+    await t.test(`untagged stats infrastructure: ${message}`, () => {
+      raw.seen.errors = [{ ...postExitError, error: message }];
+      writeFileSync(path, JSON.stringify(raw));
+      assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID" && e.cause?.message === message);
+    });
   }
   raw.seen.errors = [];
   writeFileSync(path, original);
