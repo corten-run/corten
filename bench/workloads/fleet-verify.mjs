@@ -11,7 +11,7 @@ import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verify
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { createContradiction, createErroredCustody, readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
-  exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyHistoricalFailedNativeRetirement,
+  exitOneEvidenceFingerprint, exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyHistoricalFailedNativeRetirement,
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
@@ -380,8 +380,12 @@ export function recheckExitOneRetirement(root, row) {
     assert.equal(state.provider.accountId, row.accountId);
     assert.equal(state.id, row.id);
     assert.equal(state.retirement.evidenceSha256, row.receiptSha256);
-    assert.equal(digest(regular(join(local, "failed-native-host.json"), 65536)), row.receiptSha256);
+    const receipt = regular(join(local, "failed-native-host.json"), 65536);
+    assert.equal(digest(receipt), row.receiptSha256);
     assert.equal(digest(regular(join(local, "failed-native-reservation.json"), 1024 * 1024)), row.reservationSha256);
+    const { evidenceFingerprint } = JSON.parse(receipt);
+    assert.ok(typeof evidenceFingerprint === "string" && /^[a-f0-9]{64}$/.test(evidenceFingerprint)
+      && evidenceFingerprint === exitOneEvidenceFingerprint(local, state));
     exitOneReadLocks(local);
   } catch (cause) {
     throw new Error("prior exit-one retirement changed or holds custody; do not create", { cause });

@@ -17,7 +17,7 @@ import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-s
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
   handoffLocks, handoffRetirementPolicy, pinHandoffRetirement, verifyHandoffCustody,
-  failedExitOneObservation, failedExitOnePolicy, verifyFailedExitOneCustody, verifyFailedExitOneRetirement,
+  exitOneEvidenceFingerprint, failedExitOneObservation, failedExitOnePolicy, verifyFailedExitOneCustody, verifyFailedExitOneRetirement,
   interruptedFirstUpload, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
   verifyUnusedEvidence, createErroredBytes, createErroredCustody, createErroredReceipt, createErroredRecord, createRecheckLock, pendingCreateErroredReceipt,
   verifyCreateErrored, offlineNeverStarted, createContradiction, contradictionStages, createReappeared, createReappearedWitness, publicationStages } from "./cloud-retirement.mjs";
@@ -1112,22 +1112,37 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(launchIntentSha256, recovery.intent.launch, "approved exit-one launch changed");
       assert.equal(fleetManifestSha256, recovery.fleetManifestSha256, "approved exit-one fleet changed");
     };
+    const settle = async (dispatch) => {
+      try {
+        if (dispatch) await dispatch();
+        checkHandoffDelete();
+        await confirmDeleted();
+        checkHandoffDelete();
+        if (!state.destroyedAt) { state.destroyedAt = new Date().toISOString(); save(); }
+        return 1;
+      } catch (error) {
+        // A failed provider call can hide a concurrent loss of custody. Once
+        // intent is durable, release only if the exact evidence is still ours.
+        if (state.deletionIntentAt) {
+          try { checkHandoffDelete(); }
+          catch { preserveOperationLock = true; }
+        }
+        throw error;
+      }
+    };
     if (state.status === "retired") {
       const { record, assertCustody } = verifyFailedExitOneRetirement(local, state, state.retirement.evidenceSha256, true);
       assert.equal(record.controllerCommit, controllerCommit, "original exit-one retirement controller required");
       assertLaunch(record);
       assertHandoffCustody = assertCustody;
       handoffReceiptSha256 = state.retirement.evidenceSha256;
-      checkHandoffDelete();
-      await confirmDeleted();
-      checkHandoffDelete();
-      if (!state.destroyedAt) { state.destroyedAt = new Date().toISOString(); save(); }
-      return 1;
+      return settle();
     }
     assert.notEqual(controllerCommit, state.commit, "repair source must be distinct from measured source");
     const custody = verifyFailedExitOneCustody(local, state, { pin: true });
     assertLaunch(custody);
     const { grouped, launchIntentSha256, fleetManifestSha256 } = custody;
+    const evidenceFingerprint = exitOneEvidenceFingerprint(local, state);
     await verifyArchiveTree(archive, join(local, state.evidence), state.archiveSha256);
     check(); assertHandoffState(); custody.assertCustody();
     const probe = async (first) => {
@@ -1153,7 +1168,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     fresh();
     const originalPath = join(local, "failed-native-reservation.json");
     const record = { schema: "benchmark-failed-native-retirement/v3", controllerCommit, reservationSha256, launchIntentSha256,
-      fleetManifestSha256, observation, fence };
+      fleetManifestSha256, evidenceFingerprint, observation, fence };
     const bytes = `${JSON.stringify(record, null, 2)}\n`;
     assert.ok(Buffer.byteLength(bytes) <= 65536, "bounded exit-one retirement receipt required");
     const receiptPath = join(local, "failed-native-host.json");
@@ -1196,10 +1211,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         preserveOperationLock = alreadyUncertain;
       },
     };
-    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, true, deletion);
-    await confirmDeleted();
-    checkHandoffDelete();
-    state.destroyedAt = new Date().toISOString(); save(); return 1;
+    return settle(() => execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, true, deletion));
   }
   return {
     get state() { return state ? structuredClone(state) : undefined; }, local,

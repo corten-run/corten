@@ -107,6 +107,18 @@ function fixture(t, group, flags = {}) {
     const phaseDir = "00-client-heavy-timing/", phaseBinding = { group, phase: "timing", artifactRoot: flags.foreignPath ?? mainRoot };
     const bootstrap = JSON.stringify({ binding, apparatus: reg });
     const exit = { terminal: true, code: 1, signal: null, success: false, cancelled: false, forced: false, error: null };
+    const parent = "/system.slice/" + saved.unit, path = parent + "/native-0-" + "f".repeat(16);
+    const ancestors = [parent, "/system.slice", "/"].map(path => ({ path }));
+    const host = {
+      "binding.json": { schema: "benchmark-isolated-host-lifetime/v1", campaign: campaignId, group, round: "w78", commit: measured,
+        bindingSha256: deploymentSha256(plan.bindings[0]), invocation: plan.bindings[0].execution.invocation, bootId: reg.host.bootId,
+        parent, path, command: 0, leaderPid: 2000, leaderIdentity: { pid: 2000, startTicks: "1234" }, ancestors },
+      "terminal.json": { terminal: true, attached: true, empty: true, command: exit, bootId: reg.host.bootId, ancestors, samples: 3 },
+      "samples.jsonl": [false, true, false].map((live, at) => ({ at, processes: live ? ["a".repeat(64)] : [],
+        groups: [{ path, files: { "cgroup.procs": live ? "2000\n" : "", "cgroup.events": live ? "populated 1\n" : "populated 0\n" } }] })),
+      [`processes/${"a".repeat(64)}.json`]: { stat: "2000 (node) S " + [...Array(18).fill("0"), "1234"].join(" "), cgroup: `0::${path}\n` },
+    };
+    flags.editHost?.(host);
     const inventory = (root) => entries.filter(({ name }) => name.startsWith(root))
       .map(({ name, body }) => ({ path: name.slice(root.length).replace(/\/$/, ""), type: name.endsWith("/") ? "directory" : "file",
         ...(body === undefined ? {} : { bytes: Buffer.byteLength(body), sha256: digest(body) }) }))
@@ -121,8 +133,10 @@ function fixture(t, group, flags = {}) {
       { name: prefix + phaseDir }, { name: prefix + phaseDir + "native/" }, { name: prefix + phaseDir + "native/failure.txt", body: nativePayload },
       { name: prefix + phaseDir + "native-manifest.json", body: JSON.stringify({ entries: nativeEntries, sha256: nativeManifestSha256 }) },
       { name: prefix + phaseDir + "command-0.log", body: "observed exit\n" },
-      { name: prefix + phaseDir + "command-0-host/" }, { name: prefix + phaseDir + "command-0-host/terminal.json",
-        body: JSON.stringify({ terminal: true, attached: true, empty: true, command: exit }) },
+      { name: prefix + phaseDir + "command-0-host/" },
+      { name: prefix + phaseDir + "command-0-host/processes/" },
+      ...Object.entries(host).map(([name, value]) => ({ name: prefix + phaseDir + "command-0-host/" + name,
+        body: name.endsWith(".jsonl") ? value.map(row => JSON.stringify(row) + "\n").join("") : JSON.stringify(value) })),
       { name: prefix + "control-stream-drain.json", body: JSON.stringify({ schema: "benchmark-control-stream-drain/v1", id: reg.id,
         registrationSha256: digest(JSON.stringify(reg)), host: reg.host, identitiesAbsent: true, monoNs: "2500000",
         listener: reg.listener, scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] }) });
@@ -151,7 +165,11 @@ function fixture(t, group, flags = {}) {
     const line = remoteFiles(saved)["job.sh"].split("\n").lastIndexOf("bootstrap_stage=native-entry") + 2;
     wrapperFiles[0].body += `benchmark job failed: stage=native-entry line=${line} exit=${exitOne ? 1 : 2}\n`;
   }
-  const wrapper = archive([...wrapperFiles, ...entries]); h.setArchive(wrapper);
+  // Process-observation filenames are longer than the fixture tar's name field.
+  const members = entries.flatMap((entry) => entry.name.length <= 100 ? [entry] : [
+    { name: "././@LongLink", type: "L", body: entry.name + "\0" }, { ...entry, name: "long-name-member" },
+  ]);
+  const wrapper = archive([...wrapperFiles, ...members]); h.setArchive(wrapper);
   const copy = join(h.temp, "fixture-copy");
   for (const { name, body } of entries) {
     if (name.endsWith("/")) mkdirSync(join(copy, name), { recursive: true });
@@ -354,7 +372,9 @@ async function handoffFixture(t, flags = {}) {
         assert.ok(existsSync(join(h.local, "failed-native-host.json")));
         if (knobs.unsent) return { status: 1, stdout: "", stderr: "", deleteNotDispatched: true };
       }
-      return f.run("doctl", argv, timeout, allowFail, expiry);
+      const result = f.run("doctl", argv, timeout, allowFail, expiry);
+      if (argv[2] === "delete") knobs.afterDelete?.();
+      return result;
     }, { close: async () => { knobs.close?.(); } }),
   };
   return { f, launched, knobs, deps,
@@ -492,6 +512,7 @@ test("exit-one rejects a rehashed incomplete or contradictory command journal be
     ["no authorization or start", (rows) => rows.splice(0, 3)],
     ["no command exit", (rows) => rows.splice(6, 1)],
     ["wrong invocation", (rows) => { rows[4][1].invocation = { command: "wrong" }; }],
+    ["wrong starting PID", (rows) => { rows[5][1].pid++; }],
     ["unobserved exit", (rows) => { rows[6][1].terminal = false; }],
     ["contradictory exit", (rows) => { rows[6][1].success = true; }],
     ["clean exit contradicts sealed command observation", (rows) => { Object.assign(rows[6][1], { code: 0, success: true }); }],
@@ -500,6 +521,47 @@ test("exit-one rejects a rehashed incomplete or contradictory command journal be
     await assert.rejects(preview(), /exit-one command journal/);
     assert.deepEqual(launched, []);
     assert.equal(f.h.deletes, 0);
+  });
+});
+
+test("exit-one refuses rehashed missing or contradictory host lifetime observations before access", async (t) => {
+  for (const [kind, editHost] of [
+    ["no binding", host => { delete host["binding.json"]; }],
+    ["no samples", host => { delete host["samples.jsonl"]; }],
+    ["unrelated boot", host => { host["terminal.json"].bootId = "f".repeat(36); }],
+    ["no observed leader", host => { host["samples.jsonl"][1].groups[0].files["cgroup.procs"] = "2001\n"; }],
+    ["leader record outside the command", host => { host[`processes/${"a".repeat(64)}.json`].cgroup = "0::/other\n"; }],
+    ["unrelated sample cgroup", host => { host["samples.jsonl"][1].groups[0].path += "-other"; }],
+  ]) await t.test(kind, async (t) => {
+    const { f, preview, launched } = await handoffFixture(t, { exitOne: true, editHost });
+    await assert.rejects(preview(), /exit-one command journal/);
+    assert.deepEqual(launched, []);
+    assert.equal(f.h.deletes, 0);
+  });
+});
+
+test("exit-one retains the operation lock when custody changes after DELETE dispatch", async (t) => {
+  for (const mode of ["exact 404", "GET throws", "DELETE throws", "absence-only collect"]) await t.test(mode, async (t) => {
+    const { f, preview, retire, knobs, launched } = await handoffFixture(t,
+      { exitOne: true, deleteLost: mode === "absence-only collect" });
+    const { h } = f;
+    if (mode === "absence-only collect") await assert.rejects(retire(await preview()), /acknowledgement lost/);
+    const approved = await preview(), before = launched.length;
+    let ownedLock;
+    const drift = () => {
+      ownedLock = readFileSync(join(h.local, "operation.lock"));
+      appendFileSync(join(h.local, "results.tgz"), "drift");
+      if (mode.endsWith("throws")) throw new Error("synthetic provider call threw");
+    };
+    if (mode === "DELETE throws") knobs.afterDelete = drift;
+    else knobs.exactRead = drift;
+    await assert.rejects(retire(approved), /local exit-one custody changed|synthetic provider call threw/);
+    assert.equal(h.deletes, 1);
+    assert.ok(h.saved().deletionIntentAt);
+    assert.equal(h.saved().destroyedAt, undefined);
+    assert.deepEqual(readFileSync(join(h.local, "operation.lock")), ownedLock);
+    if (mode === "absence-only collect")
+      assert.ok(launched.slice(before).every((row) => row[0] === "provider" && row.includes("get")));
   });
 });
 
@@ -542,7 +604,8 @@ test("exit-one preflight expiry and positively unsent DELETE require a fresh app
 });
 
 test("the production child refuses changed exit-one custody after the successor fleet intent", async (t) => {
-  for (const changed of ["receipt", "retained lock", "receipt after child intent", "missing binding", "none"]) await t.test(changed, async (t) => {
+  for (const changed of ["receipt", "retained lock", "receipt after child intent", "archive after child intent", "extraction after child intent",
+    "missing binding", "none"]) await t.test(changed, async (t) => {
     const { f, preview, retire, deps } = await handoffFixture(t, { exitOne: true });
     assert.equal(await retire(await preview()), 1);
     const { h, repairCommit } = f, continuation = dirname(f.root), group = "client-heavy", round = "r79";
@@ -568,10 +631,12 @@ test("the production child refuses changed exit-one custody after the successor 
     const statePath = join(options.stateDir, "groups-r79", "state.json");
     let changedAfterIntent = false;
     function interrupted() {
-      if (changed === "receipt after child intent" && !changedAfterIntent && existsSync(statePath)
+      if (changed.endsWith("after child intent") && !changedAfterIntent && existsSync(statePath)
           && JSON.parse(readFileSync(statePath)).createIntentAt) {
         changedAfterIntent = true;
-        appendFileSync(join(h.local, "failed-native-host.json"), "\n");
+        const path = changed.startsWith("receipt") ? "failed-native-host.json"
+          : changed.startsWith("archive") ? "results.tgz" : join(h.saved().evidence, "run.log");
+        appendFileSync(join(h.local, path), "\n");
       }
       return false;
     }
@@ -596,9 +661,9 @@ test("the production child refuses changed exit-one custody after the successor 
     changed === "none" ? /synthetic POST reached/ : /exit-one retirement.*(?:changed or holds custody|not bound)/);
     assert.ok(afterCatalog >= 3, JSON.stringify(calls));
     assert.equal(creates, Number(changed === "none"));
-    assert.equal(changedAfterIntent, changed === "receipt after child intent");
+    assert.equal(changedAfterIntent, changed.endsWith("after child intent"));
     const state = JSON.parse(readFileSync(statePath));
-    assert.equal(!!state.createIntentAt, ["none", "receipt after child intent"].includes(changed));
+    assert.equal(!!state.createIntentAt, changed === "none" || changed.endsWith("after child intent"));
   });
 });
 

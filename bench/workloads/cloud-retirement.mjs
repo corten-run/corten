@@ -1,11 +1,12 @@
 // Retirement evidence is separate from benchmark qualification. No operations on import.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { lstatSync, opendirSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { digest, evidenceEnvelope, evidenceFileIdentity, fileHash, physical, pinEvidenceTree, regular, treeHash } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
-import { bootstrapWorkspaceScript, preloginUserData, savedLoadLayout, savedPlacement, stagedFleet } from "./cloud-contract.mjs";
+import { bootstrapWorkspaceScript, portableEvidenceSegment, preloginUserData, savedLoadLayout, savedPlacement, stagedFleet } from "./cloud-contract.mjs";
 import { sealedMonitor, settledMonitor } from "./cloud-control-stream.mjs";
 import { quote } from "./cloud-transport.mjs";
 import { acknowledgedBootstrapSeal, guardianSha256, guardianSource } from "./cloud-control-runtime.mjs";
@@ -284,6 +285,68 @@ function verifyExitOneManifest(directory, entries) {
   assert.equal(index, entries.length, "archived collection inventory differs");
 }
 
+// Replay only command identity, membership and terminal emptiness. Do not
+// interpret participant executables, renderer proof or resource counters.
+function exitOneLifetime(directory, state, grouped, campaign, binding, pid, command) {
+  try {
+    const read = name => JSON.parse(regular(join(directory, name), 1024 * 1024));
+    const context = read("binding.json"), terminal = read("terminal.json");
+    assert.ok(context.schema === "benchmark-isolated-host-lifetime/v1" && context.campaign === campaign
+      && context.command === 0 && context.group === state.group && context.round === binding.request.round
+      && context.commit === state.commit && context.bindingSha256 === deploymentSha256(binding)
+      && isDeepStrictEqual(context.invocation, binding.execution.invocation) && context.leaderPid === pid);
+    const { bootId, parent, path, leaderIdentity } = context;
+    assert.ok(bootId === grouped.registration.host.bootId && terminal.bootId === bootId
+      && (!terminal.terminalClock || terminal.terminalClock.bootId === bootId));
+    assert.ok(posix.isAbsolute(parent) && posix.normalize(parent) === parent && posix.basename(parent) === state.unit
+      && typeof path === "string" && path.startsWith(parent + "/") && /^native-0-[a-f0-9]{16}$/.test(path.slice(parent.length + 1)));
+    assert.ok(leaderIdentity === undefined || leaderIdentity.pid === pid && /^\d+$/.test(leaderIdentity.startTicks));
+    const ancestors = [];
+    for (let p = parent; ; p = posix.dirname(p)) { ancestors.push(p); if (p === "/") break; }
+    for (const row of [context, terminal]) assert.ok(isDeepStrictEqual(row.ancestors.map(a => a.path), ancestors));
+    assert.ok(terminal.terminal === true && terminal.attached === true && terminal.empty === true);
+    for (const key of ["terminal", "code", "signal", "success", "cancelled", "forced", "error"])
+      assert.ok(terminal.command[key] === command[key]);
+
+    const samples = regular(join(directory, "samples.jsonl")).toString();
+    assert.ok(samples.endsWith("\n") && Number.isSafeInteger(terminal.samples) && terminal.samples >= 3);
+    let observed = false, last = -1, count = 0;
+    for (let start = 0; start < samples.length;) {
+      const end = samples.indexOf("\n", start);
+      assert.ok(++count <= terminal.samples);
+      const { at, groups, processes } = JSON.parse(samples.slice(start, end));
+      start = end + 1;
+      assert.ok(Number.isSafeInteger(at) && at >= last && Array.isArray(processes));
+      last = at;
+      const boundary = count === 1 || start === samples.length, paths = new Set();
+      if (boundary) assert.ok(processes.length === 0);
+      for (const group of groups) {
+        const name = group.path, files = group.files;
+        assert.ok(typeof name === "string" && (name === path || name.startsWith(path + "/"))
+          && posix.normalize(name) === name && !paths.has(name));
+        paths.add(name);
+        const pids = files["cgroup.procs"].trim().split("\n").filter(Boolean);
+        assert.ok(pids.every(value => /^[1-9]\d*$/.test(value)));
+        if (boundary) assert.ok(!pids.length
+          && files["cgroup.events"].split("\n").filter(row => row.startsWith("populated ")).join("\n") === "populated 0");
+        if (!observed && name === path && pids.includes(String(pid))) {
+          observed = processes.some(key => {
+            assert.ok(typeof key === "string" && /^[a-f0-9]{64}$/.test(key));
+            const process = read(`processes/${key}.json`);
+            const stat = /^(\d+) \(.*\) [A-Za-z] (.*)$/.exec(process.stat?.trim() ?? "");
+            return stat?.[1] === String(pid) && (leaderIdentity === undefined || stat[2].split(" ")[18] === leaderIdentity.startTicks)
+              && (process.cgroup === `0::${path}\n` || process.cgroup === `0::${path}`);
+          });
+        }
+      }
+      assert.ok(paths.has(path));
+    }
+    assert.ok(count === terminal.samples && observed);
+  } catch {
+    throw new Error("sealed command lifetime identity or terminal membership differs");
+  }
+}
+
 function exitOneCampaign(state, grouped, { extracted, folder }, campaign, plan, result) {
   verifyNativeEntryLog(extracted, state, 1);
   const { status } = result, dir = join(folder, campaign);
@@ -354,10 +417,7 @@ function exitOneCampaign(state, grouped, { extracted, folder }, campaign, plan, 
     assert.ok(entries.some(({ path, type }) => path === phase + "/command-0.log" && type === "file"), "command log missing");
     const hostRoot = phase + "/command-0-host", host = subtree(hostRoot);
     assert.ok(host.length > 1 && command.hostManifestSha256 === deploymentSha256(host), "command observations differ from journal");
-    const terminal = JSON.parse(regular(join(dir, hostRoot, "terminal.json"), 1024 * 1024));
-    assert.ok(terminal.terminal === true && terminal.attached === true && terminal.empty === true);
-    for (const key of ["terminal", "code", "signal", "success", "cancelled", "forced", "error"])
-      assert.equal(terminal.command[key], command[key], "archived command exit differs from journal");
+    exitOneLifetime(join(dir, hostRoot), state, grouped, campaign, plan.bindings[0], started.pid, command);
     assert.equal(stream.path, "control-stream-seal.json");
     assert.equal(stream.sha256, grouped.terminal.sealSha256);
     assert.deepEqual(stream.binding, grouped.registration.binding);
@@ -429,6 +489,41 @@ export function handoffLocks(local, holdingOperationLock = false, continuation =
 }
 
 export const exitOneReadLocks = (local) => handoffLocks(local, false, true);
+
+// The receipt anchors this checkout-local fingerprint while the original bytes
+// are pinned. The child can then rescan metadata without reopening payloads.
+export function exitOneEvidenceFingerprint(local, state) {
+  const archive = join(local, "results.tgz"), root = join(local, state.evidence);
+  physical(root);
+  const archiveIdentity = evidenceFileIdentity(archive), tree = createHash("sha256");
+  let nodes = 1, nameBytes = 0, memberBytes = 0;
+  const identity = stat => [stat.dev, stat.ino, stat.size, stat.mode, stat.nlink, stat.birthtimeNs, stat.mtimeNs, stat.ctimeNs].join(":");
+  function visit(file, path, depth) {
+    assert.ok(depth <= 64 && path.length <= 4096 && Buffer.byteLength(file) <= 4096, "exit-one extraction path bound");
+    const stat = lstatSync(file, { bigint: true }), current = identity(stat);
+    tree.update(`${path}\0${current}\0`);
+    if (stat.isDirectory() && !stat.isSymbolicLink()) {
+      physical(file);
+      const dir = opendirSync(file), names = [];
+      try {
+        let entry;
+        while ((entry = dir.readSync())) {
+          const { name } = entry;
+          assert.ok(++nodes <= evidenceEnvelope.nodes && name.length <= 255 && portableEvidenceSegment(name), "exit-one extraction inventory bound");
+          nameBytes += name.length + 1;
+          memberBytes += path.length + name.length + 2;
+          assert.ok(nameBytes <= evidenceEnvelope.nameBytes && memberBytes <= evidenceEnvelope.memberBytes, "exit-one extraction inventory bound");
+          names.push(name);
+        }
+      } finally { dir.closeSync(); }
+      for (const name of names.sort()) visit(join(file, name), path ? path + "/" + name : name, depth + 1);
+    } else assert.ok(stat.isFile() && stat.nlink === 1n, "exit-one extraction requires ordinary files");
+    assert.ok(identity(lstatSync(file, { bigint: true })) === current, "exit-one extraction changed during custody check");
+  }
+  visit(root, "", 0);
+  assert.ok(evidenceFileIdentity(archive) === archiveIdentity, "exit-one archive changed during custody check");
+  return digest(archiveIdentity + "\0" + tree.digest("hex"));
+}
 
 function handoffPublications(local) {
   // Ordinary collection leaves its download files behind. Only the published
@@ -960,13 +1055,14 @@ export function verifyFailedExitOneRetirement(local, state, expectedSha256 = sta
   const bytes = regular(path, 65536), record = JSON.parse(bytes);
   assert.equal(digest(bytes), expectedSha256, "exit-one retirement receipt changed");
   assert.equal(record.schema, "benchmark-failed-native-retirement/v3");
-  assert.deepEqual(Object.keys(record).sort(), ["controllerCommit", "fence", "fleetManifestSha256", "launchIntentSha256",
+  assert.deepEqual(Object.keys(record).sort(), ["controllerCommit", "evidenceFingerprint", "fence", "fleetManifestSha256", "launchIntentSha256",
     "observation", "reservationSha256", "schema"]);
   assert.match(record.controllerCommit, /^[a-f0-9]{40}$/);
   assert.notEqual(record.controllerCommit, state.commit);
   assert.equal(state.status, "retired");
   const custody = verifyFailedExitOneCustody(local, state, { pin });
   const { grouped, launchIntentSha256, fleetManifestSha256 } = custody;
+  assert.ok(record.evidenceFingerprint === exitOneEvidenceFingerprint(local, state), "exit-one retirement evidence fingerprint changed");
   assert.ok(record.launchIntentSha256 === launchIntentSha256 && record.fleetManifestSha256 === fleetManifestSha256,
     "exit-one launch or fleet changed");
   const prior = regular(original, 1024 * 1024);
@@ -997,7 +1093,7 @@ export function verifyFailedExitOneRetirement(local, state, expectedSha256 = sta
     custody.assertCustody(includeTree);
     for (const [path, before] of files) assert.ok(evidenceFileIdentity(path) === before, "exit-one receipt files changed");
   };
-  assertCustody(false);
+  assertCustody();
   return { ...custody, record, assertCustody };
 }
 
