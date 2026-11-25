@@ -1,0 +1,8 @@
+comparison change-plain placement 5 workload plain
+A base-p10304 97eb6f3f89634bb9a6d1fe5d248c9dd8faa35bb4cdb6f35438337d1cb075f98c
+B head-p10304 97eb6f3f89634bb9a6d1fe5d248c9dd8faa35bb4cdb6f35438337d1cb075f98c
+run 7fa24931-9b17-4aae-8f0c-308cab4138c6
+plan af43b9a13aafbe4157984ac08b271eacab0b7e113a900027279317ff73619d40
+seq 51
+started 2026-11-25T16:14:29Z
+ended 2026-11-25T16:14:54Z

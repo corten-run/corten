@@ -1,0 +1,8 @@
+comparison change-plain placement 42 workload plain
+A base-p12560 cb7cba4758b8325c1f876b9a40ec464b1bba31c086044d16fdbd57ebaf8e74c0
+B head-p12560 cb7cba4758b8325c1f876b9a40ec464b1bba31c086044d16fdbd57ebaf8e74c0
+run 7fa24931-9b17-4aae-8f0c-308cab4138c6
+plan af43b9a13aafbe4157984ac08b271eacab0b7e113a900027279317ff73619d40
+seq 118
+started 2026-11-25T16:42:08Z
+ended 2026-11-25T16:42:33Z

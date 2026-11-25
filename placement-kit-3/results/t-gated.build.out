@@ -1,0 +1,17 @@
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+== base: e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc, 15:49:57
+warning: `placement-example` (bin "probe") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 42.64s
+base: the captured link run again without a pad, with its map, is byte-identical to the build's own binary
+base e7def622a96d774d912ccc662184755e5acaa81cac7ab4c3494138215ce98ccf 4361120 bytes
+base built in 43 s
+== head: e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc, 15:50:40
+warning: `placement-example` (bin "probe") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 42.81s
+head: the captured link run again without a pad, with its map, is byte-identical to the build's own binary
+head e7def622a96d774d912ccc662184755e5acaa81cac7ab4c3494138215ce98ccf 4361120 bytes
+head built in 44 s
+base: 0 input sections of .text aligned beyond 16 bytes
+head: 0 input sections of .text aligned beyond 16 bytes
+281 binaries, no two of one side with the same sha256; placements linked and checked in 86 s
+BUILD-DONE

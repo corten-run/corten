@@ -1,0 +1,44 @@
+kit: 556b23d531d1122f2dd553ef438e6b43dda6b07d; commits in the checkout: 556b23d531d1122f2dd553ef438e6b43dda6b07d e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc; changed files in it: 0
+started 2026-11-25T15:43:45Z; load 0.00 0.00 0.00; logins: 3
+== (s) a dry gated part resolved and built, and on it the selftest, every case
+15:43:45 d-gated.plan: exit 0: written: /root/placement-kit-dry/w/d-gated/plan
+15:45:18 d-gated.build: exit 0: BUILD-DONE
+15:45:32 d-gated.selftest: exit 0: SELFTEST-OK
+answers: a wrong answer stopped the placement before any turn (exit 1, no counts file): turns: plain: A and B answer differently
+failed: a turn with failed requests recorded nothing (exit 1, 0 rows): turns: plain: errors in pair w1 base: requests 86202, connect 0, read 0, write 0, status 86202, timeout 0
+limit: a placement past its time limit was stopped (exit 124), with no recorded pair and no server left
+map: base-p320: a second pad of 8 bytes refused (a second pad of 8 bytes is not one of 16, 32, 48, 64); of the four sizes, 48 put .data where the rule says and passed the map check; 16 32 64 did not and were refused (with 64: .data begins 0 bytes into a 64-byte line, not 48, the unpadded link's offset plus the first pad's size)
+map: head-p320: a second pad of 8 bytes refused (a second pad of 8 bytes is not one of 16, 32, 48, 64); of the four sizes, 48 put .data where the rule says and passed the map check; 16 32 64 did not and were refused (with 64: .data begins 0 bytes into a 64-byte line, not 48, the unpadded link's offset plus the first pad's size)
+inputs: build.sh built nothing for a probe with Cargo.toml edited, with a symbolic link added, with Cargo.toml made a link to a file of the same bytes, and with the list edited; run.sh refused a list edited after the build with no results directory made, and a probe's copy edited after the build before any server was started
+refusals: run.sh refused a work directory that holds results, binaries built for another part, and a host of another CPU model than the A/A's, each before it made a results directory
+zero: with every counter reported as 0, run.sh ended perf-preflight-failed before any server was started, and a turn failed with no row recorded (exit 1): unusable counter cycles:u in pair w1 base (not a count above zero)
+run.sh was not run on d-gated: 0 results directories under it
+== (g) not a dry run and not a reading: a gated part at a K sized from an A/A, built and turned
+sizing/plan.json as written here: sha256 af43b9a13aafbe4157984ac08b271eacab0b7e113a900027279317ff73619d40; the kept A/A was read under: af43b9a13aafbe4157984ac08b271eacab0b7e113a900027279317ff73619d40 (inputs 48bed34b7444dd0836ace5f3eb43f3626b02d1cc8462fd61b5e8e12763df8878)
+the plan file is the one the kept A/A was read under, byte for byte
+the kept A/A's results: 1626 files, each with the bytes the tag evidence/placement-kit-2 lists for it
+15:49:56 t-gated.plan: exit 0: written: /root/placement-kit-dry/w/t-gated/plan
+the K is sized from the kept A/A: no A/A was run here
+t-gated as resolved: part gated, workload plain, K = 93, R = 4, turns of 2 s, dry 0; in the second dry run the same plan resolved to K = 93
+SIZED_MODEL is this host's model name as run.sh reads it, byte for byte: Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz
+t-gated/plan is the plan the second dry run resolved and did not build, every file byte for byte (10 files)
+15:52:50 t-gated.build: exit 0: BUILD-DONE
+17:10:37 t-gated.run: exit 0: ALL-DONE
+t-gated: build.sh and run.sh ended; run.sh's last status line: RUN-ENDED complete: every comparison complete; results/report.md
+17:10:38 t-gated.report: exit 0: 
+report.mjs again on the gated results: the same page, byte for byte (27031 bytes)
+== what t-gated's results hold
+binaries linked and listed (bin/sha256.txt): 281
+verify.log: verify: 279 placements answer as their unpadded binary
+placements with a row of counts: aa-plain 93, change-plain 93; progress.log: 186 placements ok, 186 lines of placements; failed (their comparison has no bound; nothing is run again): none
+the servers' environment (verify/server-env.txt), names alone: BIN HOME PATH PORT
+the allocator each started server reported, over every turn's server log:    2232 ALLOCATOR jemalloc
+turns recorded: 1860 in the turn logs, 1488 rows of counts, 0 of their values not above zero
+the probe as built, kept in the results: 2 files; sha256sum -c plan/inputs.sha256 there: passes; inputs-check.txt: 0 bytes
+each build's environment in the results: build-base.env build-head.env; cargo's config files outside the probe (host.txt): none
+the report's first lines that say what the run is:
+3:Run 7fa24931-9b17-4aae-8f0c-308cab4138c6, plan sha256 af43b9a13aafbe4157984ac08b271eacab0b7e113a900027279317ff73619d40, inputs sha256 48bed34b7444dd0836ace5f3eb43f3626b02d1cc8462fd61b5e8e12763df8878 (the 3 files the plan names by path: the probe's, the request script and any expected answer, kept with these results); base e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc, head e2d0c464e7d7b56ea69b59c8fe7
+5:The workload as the plan declares it: A TEST OF THE KIT, NOT A READING. GET /private to the example probe, main against itself: a pilot-shaped A/A run only so that pilot.mjs and plan.mjs --sized-from run on a host on real counts. No figure it gives is a measurement of anything, and no K it gives is a K of any plan.
+7:K = 93 is the smallest at which the sizing check passes from run 010ff976-c449-4c2c-b4d4-f048a8d8e243: normal 9324 failing draws of 200000, smoothed 4240 failing draws of 200000, against at most 10000.
+SIZED-RUN-DONE
+ended 2026-11-25T17:10:38Z; sized-run.sh exit 0

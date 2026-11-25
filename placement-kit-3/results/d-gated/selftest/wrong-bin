@@ -1,0 +1,3 @@
+#!/bin/sh
+unset LD_PRELOAD
+exec node /root/placement-kit-dry/corten/bench/placement/selftest/wrong.mjs "$1"

@@ -1,0 +1,3 @@
+DRY RUN: K=6; a test of the scripts, read for nothing
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+build: plan/inputs.sha256 is not the list plan.mjs wrote

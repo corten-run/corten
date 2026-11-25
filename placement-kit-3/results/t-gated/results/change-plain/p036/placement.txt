@@ -1,0 +1,8 @@
+comparison change-plain placement 36 workload plain
+A base-p22192 4bfc8b3eb3f7edd08f5efa3c9bc2446120a750e5201319fe160a3556690faad7
+B head-p22192 4bfc8b3eb3f7edd08f5efa3c9bc2446120a750e5201319fe160a3556690faad7
+run 7fa24931-9b17-4aae-8f0c-308cab4138c6
+plan af43b9a13aafbe4157984ac08b271eacab0b7e113a900027279317ff73619d40
+seq 2
+started 2026-11-25T15:54:15Z
+ended 2026-11-25T15:54:40Z

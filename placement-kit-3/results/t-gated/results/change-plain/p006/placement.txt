@@ -1,0 +1,8 @@
+comparison change-plain placement 6 workload plain
+A base-p21008 629bbf0326afc99f7bbc57be8885d6b9909da3f5fce2fcf4dc763811264b5a08
+B head-p21008 629bbf0326afc99f7bbc57be8885d6b9909da3f5fce2fcf4dc763811264b5a08
+run 7fa24931-9b17-4aae-8f0c-308cab4138c6
+plan af43b9a13aafbe4157984ac08b271eacab0b7e113a900027279317ff73619d40
+seq 166
+started 2026-11-25T17:01:57Z
+ended 2026-11-25T17:02:22Z
