@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { digest, durable, readRegular, syncDirectory } from "./evidence.mjs";
 import { guardianSource } from "../cloud-control-runtime.mjs";
 import { apparatusProof, readApparatus, streamHash, streamLimits, verifyApparatus, verifyStreamDrain, verifyStreamSeal } from "./control-stream.mjs";
+import { streamDrainFailure } from "./control-stream-source.mjs";
 
 // A lease slot is atomically replaced by its sole source-bound writer. A reader
 // may hold the previous unlinked inode, never a partially written replacement.
@@ -161,9 +162,19 @@ export async function superviseControlStream(binding, admission, abort, runtime 
           assert.ok(!abort.signal.aborted && !existsSync(join(root, "stream-invalid.json")));
           stage = "campaign drain deadline";
           assert.ok(attempts < 100 && now() < deadline);
-          stage = "campaign drain probe refused";
+          stage = "campaign drain probe start";
           const result = probe();
-          assert.ok(!result.error && !result.signal && [0, 3].includes(result.status), "apparatus drain uncertain");
+          if (result.error || result.signal || ![0, 3].includes(result.status)) {
+            if (result.error?.code === "ETIMEDOUT") stage = "campaign drain probe deadline";
+            else if (result.error?.code === "ENOBUFS") stage = "campaign drain probe output limit";
+            else if (!result.error) {
+              if (!result.signal && result.status === streamDrainFailure.listener) stage = "campaign drain probe listener";
+              else if (!result.signal && result.status === streamDrainFailure.scope) stage = "campaign drain probe scope";
+              else if (!result.signal && result.status === streamDrainFailure.foreignLogin) stage = "campaign drain probe foreign login";
+              else stage = "campaign drain probe exit";
+            }
+            assert.fail("apparatus drain uncertain");
+          }
           if (result.status === 0) {
             stage = "campaign drain invalid proof";
             const proof = JSON.parse(result.stdout); verifyStreamDrain(binding, registration, proof); ended = true; return proof;

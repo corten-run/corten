@@ -1,5 +1,8 @@
 // Included in measured guardian bytes, never a remote-selected import.
 import { streamLimits } from "./control-stream.mjs";
+// Reserved failure statuses for the fixed stream-drain subprocess only.
+export const streamDrainFailure = { listener: 4, scope: 5, foreignLogin: 6 };
+
 export default String.raw`
 def stream_replace(path, value):
     stage = path.parent / ('.stage-' + secrets.token_hex(16))
@@ -260,16 +263,22 @@ def stream_drain(root):
     rows = inventory()
     if any(p['pid'] in rows and key(rows[p['pid']]) == key(p) for p in registration['members']):
         return None
-    listener = registration['listener']
-    actual = identity(rows[listener['pid']])
-    assert all(actual[k] == listener[k] for k in ('pid', 'startTicks', 'cgroup', 'executable'))
-    scopes = sorted({p['cgroup'][3:-1] for p in registration['members'] if re.search(r'/session-[^/]+\.scope\n$', p['cgroup'])})
-    assert scopes
-    observations = [scope_read(scope, rows) for scope in scopes]
-    assert all(not p['exists'] or p['members'] == [] and re.fullmatch(r'populated 0\n(?:frozen [01]\n)?', p['events']) for p in observations)
-    for row in rows.values():
-        if row['pid'] != listener['pid']:
-            assert row['cgroup'] != listener['cgroup'] and parent(row) != listener['pid'] and not row['cgroup'].startswith('0::/user.slice/') and not re.search(r'/session-[^/]+\.scope(?:/|\n)', row['cgroup']), 'unregistered SSH/login survivor'
+    stage = ${streamDrainFailure.listener}
+    try:
+        listener = registration['listener']
+        actual = identity(rows[listener['pid']])
+        assert all(actual[k] == listener[k] for k in ('pid', 'startTicks', 'cgroup', 'executable'))
+        stage = ${streamDrainFailure.scope}
+        scopes = sorted({p['cgroup'][3:-1] for p in registration['members'] if re.search(r'/session-[^/]+\.scope\n$', p['cgroup'])})
+        assert scopes
+        observations = [scope_read(scope, rows) for scope in scopes]
+        assert all(not p['exists'] or p['members'] == [] and re.fullmatch(r'populated 0\n(?:frozen [01]\n)?', p['events']) for p in observations)
+        stage = ${streamDrainFailure.foreignLogin}
+        for row in rows.values():
+            if row['pid'] != listener['pid']:
+                assert row['cgroup'] != listener['cgroup'] and parent(row) != listener['pid'] and not row['cgroup'].startswith('0::/user.slice/') and not re.search(r'/session-[^/]+\.scope(?:/|\n)', row['cgroup']), 'unregistered SSH/login survivor'
+    except Exception:
+        sys.exit(stage)  # Emit only the fixed failed stage, never exception text.
     proof = {'schema': 'benchmark-control-stream-drain/v1', 'registrationSha256': sha(encoded(registration)[:-1]),
         'id': registration['id'], 'host': host(), 'monoNs': str(time.monotonic_ns()), 'identitiesAbsent': True, 'scopes': observations, 'listener': actual}
     write(root / 'stream-drain.json', encoded(proof))
