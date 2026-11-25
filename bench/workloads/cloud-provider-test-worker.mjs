@@ -24,7 +24,7 @@ if (mode === "worker-new-report") process.report.reportOnSignal = true;
 const server = createServer((_req, res) => { res.writeHead(400); res.end(); });
 server.listen(0, "127.0.0.1"); await once(server, "listening");
 let created, clock = 0;
-const censusModes = ["shape", "total", "id", "duplicate", "links", "pages", "next", "last", "count", "bounds", "partial", "oversized"].map((predicate) => `list-${predicate}`);
+const censusModes = ["shape", "total", "id", "duplicate", "links", "pages", "next", "last", "count", "bounds", "partial", "oversized", "ipc-bound"].map((predicate) => `list-${predicate}`);
 const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create", "withhold-close", "reflect", "post-invalid-action-id",
   "post-link-shape", "post-link-count", "post-link-id", "post-link-rel", "post-link-href-variant", "post-link-href-type", "arbitrary-create-hints",
   "first-action-http-failure", "zero-resource-create", "first-action-invalid", "first-action-errored", "pending-create", "create-http-failure", "list-converges", "get-http-failure", ...censusModes].includes(mode) ? async ({ method, path, body, credential }) => {
@@ -38,6 +38,16 @@ const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create"
       : { status: 404, value: { raw: credential } };
   }
   if (path.startsWith("/v2/droplets?")) {
+    if (mode === "list-ipc-bound") {
+      // Valid JSON under the native HTTP cap. Its full projection grows when
+      // 1e15 is serialized as a 16-digit ID; the last row is the only target.
+      const cap = 16 * 1024 ** 2, head = '{"droplets":[', tail = '{"id":201,"tags":["saved-tag"]}],"meta":{"total":0}}';
+      const row = `{"id":1e15,"name":"other","tags":["${"x".repeat(240)}"]},`;
+      const count = Math.floor((cap - head.length - tail.length) / row.length);
+      const raw = head + row.repeat(count) + tail;
+      assert.ok(raw.length <= cap && raw.length + count * 12 > cap);
+      return { status: 200, value: JSON.parse(raw) };
+    }
     const value = { droplets: created ? [created] : [], meta: { total: created ? 1 : 0 }, links: {} };
     if (mode === "list-shape") value.droplets = { raw: credential };
     if (mode === "list-total") value.meta.total = credential;

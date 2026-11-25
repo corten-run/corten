@@ -12,7 +12,7 @@ const stdinEntry = process.argv[1] === "-" && process.argv.length === 3;
 const directory = stdinEntry ? dirname(resolve(process.argv[2])) : dirname(fileURLToPath(import.meta.url));
 const exact = (value, keys) => assert.deepEqual(Object.keys(value ?? {}).sort(), [...keys].sort());
 const diagnosticEnv = /^(?:NODE_|SSL|OPENSSL|LD_|DYLD_)/i;
-function action(message, host, catalogCommand) {
+function action(message, host, catalogCommand, quarantineCensusTargets) {
   exact(message, ["schema", "sequence", "args", "timeout", "allowFail", ...(Object.hasOwn(message, "deleteProofExpiresAtMs") ? ["deleteProofExpiresAtMs"] : [])]);
   assert.ok(Array.isArray(message.args) && message.args.length <= 20 && message.args.every((value) => typeof value === "string" && value.length <= 512 && !value.includes("\0")));
   assert.ok(Number.isSafeInteger(message.timeout) && message.timeout > 0 && message.timeout <= 900000 && typeof message.allowFail === "boolean");
@@ -29,7 +29,7 @@ function action(message, host, catalogCommand) {
   }
   else if (command[2] === "list" && command[3] === "--pre-create-census") {
     assert.ok(host, "pre-create census is not authorized for this mode");
-    assert.deepEqual(command, ["compute", "droplet", "list", "--pre-create-census", "--output", "json"]);
+    quarantineCensusTargets(command);
   }
   else if (command[2] === "list") assert.ok(['["compute","droplet","list","--output","json"]',
     '["compute","droplet","list","--single-response","--output","json"]'].includes(JSON.stringify(command)), "unknown list command");
@@ -59,7 +59,7 @@ export function serveProviderWorker(dependencies = {}) {
   assert.deepEqual(process.execArgv, stdinEntry ? ["--input-type=module"] : []);
   if (stdinEntry) assert.equal(process.argv[2], join(directory, "cloud-provider-worker.mjs"));
   assert.ok(Object.keys(process.env).every((name) => !diagnosticEnv.test(name) || name === "NODE_CHANNEL_FD" || name === "NODE_CHANNEL_SERIALIZATION_MODE"));
-  let nonce, sequence = 0, active = false, closing = false, failed = false, terminal, run, host, catalogCommand, providerFailure, pendingCreate;
+  let nonce, sequence = 0, active = false, closing = false, failed = false, terminal, run, host, catalogCommand, providerFailure, pendingCreate, quarantineCensusTargets;
   let isSettledAccountFailure, isSettledCatalogFailure;
   const stop = () => { closing = true; if (!active) process.exit(terminal ? 2 : 0); };
   process.on("disconnect", stop);
@@ -94,14 +94,14 @@ export function serveProviderWorker(dependencies = {}) {
           return { format: "module", source, shortCircuit: true };
         } });
         const engine = await import(pathToFileURL(join(directory, "cloud-provider-engine.mjs")).href);
-        ({ providerFailure, pendingCreate } = await import(pathToFileURL(join(directory, "cloud-options.mjs")).href));
+        ({ providerFailure, pendingCreate, quarantineCensusTargets } = await import(pathToFileURL(join(directory, "cloud-options.mjs")).href));
         const contract = await import(pathToFileURL(join(directory, "cloud-contract.mjs")).href);
         host = contract.providerCreateHost(message.createMode); catalogCommand = contract.fleetCatalogCommand;
         const { createProviderEngine } = engine;
         ({ isSettledAccountFailure, isSettledCatalogFailure } = engine);
         run = createProviderEngine({ ...dependencies, repo: process.cwd(), interrupted: () => closing, createMode: message.createMode }); result = "ready";
       } else {
-        action(message, host, catalogCommand); assert.equal(message.schema, "cloud-provider-action/v1"); assert.equal(message.sequence, sequence + 1); sequence++;
+        action(message, host, catalogCommand, quarantineCensusTargets); assert.equal(message.schema, "cloud-provider-action/v1"); assert.equal(message.sequence, sequence + 1); sequence++;
         account = message.args[0] === "account"; create = message.args[2] === "create" && message.allowFail === true;
         catalog = message.args[1] === "placement" && message.allowFail === true;
         deadline = Date.now() + message.timeout;

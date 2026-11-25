@@ -63,7 +63,7 @@ const createErroredStop = () => Object.assign(new Error("provider create errored
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
   authorizeRecovery = authorizeAudit, unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission,
-  inspectPreCreateInventory, quarantinePreCreate = false,
+  inspectPreCreateInventory, quarantineTargets = [],
   renameBootstrapSeal = process.platform === "win32" ? renameSync : undefined, monotonicNow = () => performance.now(),
   createReappearedIo = { durable, rename: renameSync } } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
@@ -1334,8 +1334,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             await execute("git", ["cat-file", "-e", `${state.commit}:${path}`]);
           // With quarantine, both sightings and ordinary pre-create predicates use
           // the same account-bracketed response. Only completeness can prove absence.
+          const quarantinePreCreate = quarantineTargets.length > 0;
           const { rows: existing, complete } = quarantinePreCreate
-            ? JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--pre-create-census", "--output", "json"])).stdout)
+            ? JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--pre-create-census", ...quarantineTargets, "--output", "json"])).stdout)
             : { rows: await list(), complete: true };
           assert.ok(Array.isArray(existing) && (!quarantinePreCreate
             || existing.every((d) => Number.isSafeInteger(d?.id) && d.id > 0)), "invalid pre-create census");

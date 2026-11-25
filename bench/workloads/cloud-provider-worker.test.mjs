@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { fork, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -252,7 +253,9 @@ test("supported lifecycle real worker retains one private credential through kno
 });
 
 test("pre-create census worker preserves the census fields, refuses other modes and never retakes", async (t) => {
-  const suffix = account.slice(-2), list = ["compute", "droplet", "list", "--pre-create-census", "--output", "json", ...suffix];
+  const suffix = account.slice(-2), hash = (text) => createHash("sha256").update(text).digest("hex");
+  const census = (name, tag) => ["compute", "droplet", "list", "--pre-create-census", `${hash(name)}:${hash(tag)}`, "--output", "json", ...suffix];
+  const list = census("saved-name", "saved-tag");
   await t.test("complete projection", async (t) => {
     const h = harness(t), name = "corten-bench-groups-r21-0123456789abcdef";
     const tags = ["corten-bench", "corten-bench-groups", "corten-bench-groups-run-0123456789abcdef"];
@@ -275,15 +278,28 @@ test("pre-create census worker preserves the census fields, refuses other modes 
   await t.test("independently checkable sightings survive a malformed field", async (t) => {
     const h = harness(t, "list-partial");
     assert.deepEqual(JSON.parse((await h.run(list)).stdout), { complete: false,
-      rows: [{ id: 123, name: "saved-name" }, { id: 124, tags: ["saved-tag"] }] });
-    assert.deepEqual(h.state().calls.map(({ path }) => path), ["/v2/droplets?page=1&per_page=200"]);
+      rows: [{ id: 123, name: "saved-name" }] });
+    assert.deepEqual(JSON.parse((await h.run(census("unrelated-name", "saved-tag"))).stdout), { complete: false,
+      rows: [{ id: 124, tags: ["saved-tag"] }] });
   });
   await t.test("a sighting beyond an absence bound is not discarded", async (t) => {
-    const h = harness(t, "list-oversized"), value = JSON.parse((await h.run(list)).stdout);
-    assert.equal(value.complete, false);
-    assert.equal(value.rows.length, 201);
-    assert.deepEqual(value.rows.at(-1), { id: 201, name: "saved-name", tags: [...Array(256).fill("other"), "saved-tag"] });
+    const h = harness(t, "list-oversized");
+    const value = JSON.parse((await h.run(census("unrelated-name", "saved-tag"))).stdout);
+    assert.deepEqual(value, { complete: false, rows: [{ id: 201, tags: ["saved-tag"] }] });
     assert.deepEqual(h.state().calls.map(({ path }) => path), ["/v2/droplets?page=1&per_page=200"]);
+  });
+  await t.test("a compact sighting crosses IPC even when the input nearly fills the HTTP limit", async (t) => {
+    const h = harness(t, "list-ipc-bound");
+    const value = JSON.parse((await h.run(census("unrelated-name", "saved-tag"))).stdout);
+    assert.deepEqual(value, { complete: false, rows: [{ id: 201, tags: ["saved-tag"] }] });
+    assert.deepEqual(h.state().calls.map(({ path }) => path), ["/v2/droplets?page=1&per_page=200"]);
+  });
+  await t.test("missing or malformed targets never issue a request", async (t) => {
+    for (const targets of [[], ["not-a-digest"], [list[4], list[4]]]) {
+      const h = harness(t, "success");
+      await assert.rejects(h.run([...list.slice(0, 4), ...targets, ...list.slice(5)]));
+      assert.equal(h.state().requests, 0);
+    }
   });
   await t.test("no create mode", async (t) => {
     const h = harness(t, "success", undefined, undefined, undefined, null);

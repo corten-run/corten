@@ -2,6 +2,7 @@
 // environment/arguments, mutable doctl provider subprocesses, redirects or mutation retries.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import { ClientRequest, IncomingMessage } from "node:http";
 import { Socket } from "node:net";
@@ -10,7 +11,7 @@ import { debuglog } from "node:util";
 import { url as inspectorUrl } from "node:inspector";
 import { controlCheckpoint, controlEnvironment } from "./cloud-transport.mjs";
 import { fleetCatalogCommand, fleetCatalogSlugs, preloginUserData, providerCreateHost } from "./cloud-contract.mjs";
-import { catalogClosureDetails, providerDiagnostic, providerFailure, unsentDelete } from "./cloud-options.mjs";
+import { catalogClosureDetails, providerDiagnostic, providerFailure, quarantineCensusTargets, unsentDelete } from "./cloud-options.mjs";
 
 const origin = "https://api.digitalocean.com";
 const stopped = (uncertain = false, diagnostic) => Object.assign(new Error("provider control failed; preserve state/evidence/host"),
@@ -407,26 +408,30 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         value = [{ id: action.id, type: action.type, resource_type: action.resource_type, resource_id: action.resource_id, status: action.status }];
       } else if (command[2] === "list" && command[3] === "--pre-create-census") {
         assert.ok(host, "pre-create census is not authorized for this mode");
-        assert.deepEqual(command, ["compute", "droplet", "list", "--pre-create-census", "--output", "json"]);
+        const targets = quarantineCensusTargets(command);
+        const names = new Set(targets.map(([name]) => name)), tags = new Set(targets.map(([, tag]) => tag));
+        const digest = (text) => createHash("sha256").update(text).digest("hex");
         const result = await call("list", "GET", "/v2/droplets?page=1&per_page=200");
         const batch = result?.droplets, total = result?.meta?.total, links = result?.links, pages = links?.pages;
         const object = (v) => v && typeof v === "object" && !Array.isArray(v);
         const text = (v) => typeof v === "string" && v.length > 0 && v.length <= 255;
         let complete = Array.isArray(batch) && batch.length <= 200 && total === batch.length
           && (links === undefined || !!object(links)) && (pages === undefined || !!object(pages) && Object.keys(pages).length === 0);
-        const rows = [], seen = new Set();
-        // Traverse the bounded HTTP reply, not just the rows eligible to prove
-        // absence. An ID also stands on its own for the historical fence.
+        const rows = [], seen = new Set(); let witness;
+        // A positive quarantine match is independent of census completeness and
+        // must cross IPC without depending on the size of the rest of the reply.
         for (const d of Array.isArray(batch) ? batch : []) {
           if (!positive(d?.id)) { complete = false; continue; }
+          if (text(d.name) && names.has(digest(d.name))) { witness = { id: d.id, name: d.name }; break; }
+          const tag = Array.isArray(d.tags) ? d.tags.find((tag) => text(tag) && tags.has(digest(tag))) : undefined;
+          if (tag !== undefined) { witness = { id: d.id, tags: [tag] }; break; }
+          if (!complete) continue;
           if (seen.has(d.id)) complete = false;
           seen.add(d.id);
-          const row = { id: d.id }; rows.push(row);
-          if (text(d.name)) row.name = d.name;
-          if (Array.isArray(d.tags)) row.tags = d.tags.filter(text);
-          if (row.name === undefined || row.tags === undefined || d.tags.length > 256 || row.tags.length !== d.tags.length) {
+          if (!text(d.name) || !Array.isArray(d.tags) || d.tags.length > 256 || !d.tags.every(text)) {
             complete = false; continue;
           }
+          const row = { id: d.id, name: d.name, tags: d.tags }; rows.push(row);
           // Preserve exactly the placement and public-address checks used by the
           // ordinary pre-create census, not the provider's full droplet record.
           const size = d.size_slug ?? d.size?.slug, region = d.region?.slug, v4 = d.networks?.v4;
@@ -440,7 +445,9 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
           if (v4 !== undefined) row.networks = { v4: v4.filter((n) => n.type === "public")
             .map(({ type, ip_address }) => ({ type, ip_address })) };
         }
-        value = { complete, rows };
+        const inventory = { complete: true, rows };
+        value = witness ? { complete: false, rows: [witness] }
+          : complete && Buffer.byteLength(JSON.stringify(inventory)) <= 16 * 1024 ** 2 ? inventory : { complete: false, rows: [] };
       } else if (command[2] === "list" && command[3] === "--single-response") {
         // Absence proof for a provider-errored create: one response is the whole
         // inventory. Offset pages are not a snapshot, so more than one page, a count
