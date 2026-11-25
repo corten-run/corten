@@ -10312,17 +10312,24 @@ rules something out.
     A failure that came just before a navigation drew was heard, and the draw then took away what
     its handler showed.
 
-    So a failure waits while a navigation is on its way: a count of them, and what waits runs in
-    a task of its own once the last ends, after the navigation's own focus reset and scroll, and
-    only then picks where the event goes. The page reading itself again is not waited for: a
-    whole read again already puts itself off while a failed write is undrawn, and one of `<main>`
-    alone draws only an answer that changed, which can still draw over a note the failure put in
+    So a failure waits while a navigation is on its way: a count of them, each counted until it
+    ends or is abandoned, whichever comes first, and what waits runs in a task of its own once
+    none is left, after the navigation's own focus reset and scroll, and only then picks where the
+    event goes. An abandoned navigation draws nothing (it checks its signal before each draw), but
+    what it awaits may never end: in this rule's first form, a section stylesheet that never
+    loaded kept such a navigation counted, and held every later failure behind it. A navigation
+    that is not abandoned and hangs (an answer or a stylesheet that never comes) holds the failure
+    as long as it hangs, and the user sees it busy; no timer says the failure sooner, as one would
+    say it under a draw still to come. The page reading itself again is not waited for: a whole
+    read again already puts itself off while a failed write is undrawn, and one of `<main>` alone
+    draws only an answer that changed, which can still draw over a note the failure put in
     `<main>`, as before. The event goes to the form that sent it while that is in the page. Else
     to its verified successor: the form with its `id` now, marked `data-patch`, with the same
     `action` and `method`, drawn with no page at another address (`pageKey`) since the press,
     which a count of turns taken at each draw of `<main>` tells, and that has sent no submit
-    itself. Anything else goes to the document, which `on:document:corten:error` and corten-ui's
-    `Toaster` hear. A successor is the read's markup, with the submit key the server drew, so a
+    itself. A `<main>` a `GET` `data-patch` form's answer draws at the same address is the same
+    page: it takes no turn, and the form it draws is a successor by the same rules. Anything else
+    goes to the document, which `on:document:corten:error` and corten-ui's `Toaster` hear. A successor is the read's markup, with the submit key the server drew, so a
     retry from it is a new submission (the guide says so). A submit that waited for a write's
     answer is still sent from the form with its `id` after an answer that drew; that is not a
     failure and is not changed here.
@@ -10336,35 +10343,43 @@ rules something out.
     again on the page, two events for one failure; or carrying the failed form's submit key into
     its successor, a second change to what a read draws.
 
-    Stands on: measured (the runtime grows by 387 bytes, 181 gzipped, from 45,676 and 16,389 on
-    `babd52d28`: one build of each, as the build is the same each time); platform (an event
-    dispatched on a node outside the document travels through its detached ancestors only: the
-    five smoke cases in `scripts/smoke/write-failures.mjs`, a navigation to the same page, one to
-    another page, a write's whole page read, and one to another address that draws a form with
-    the same `id`, each drawn before the write fails, and a navigation to the same page that
-    draws after it fails, two runs of each in each of Playwright's Chromium, Firefox and WebKit
-    with the runtime of `babd52d28` (main's, unchanged since), heard the failure only on the
-    detached form, or on the form the draw then replaced; with this change, five runs of each in
-    each of the three, each heard it once, on the form in its place for the same page and on the
-    document otherwise); reasoned (a form
-    with the same `id`, `action` and `method`, drawn at the address of the press and not sent
-    since, is the one the user sees in place of the form that sent it; a form of another page or
-    one used since may stand for another record, and the document, which every page has, is then
-    the only place that is surely this write's); reasoned (waiting delays only the event, and
-    only while a navigation is out: no read waits for a write); value (correctness and
-    reliability first: a failed write is heard, on the right form or none; performance at the
-    user's end next: no read waits; one event and one way to hear it, Values 5).
+    Stands on: measured (the runtime grows by 481 bytes, 208 gzipped, from 45,676 and 16,389 on
+    `babd52d28`, main's runtime, unchanged on main since: one build of each, as the build is the
+    same each time); platform (an event dispatched on a node outside the document travels
+    through its detached ancestors only: the first five smoke cases in
+    `scripts/smoke/write-failures.mjs`, a navigation to the same page, one to another page, a
+    write's whole page read, and one to another address that draws a form with the same `id`,
+    each drawn before the write fails, and a navigation to the same page that draws after it
+    fails, two runs of each in each of Playwright's Chromium, Firefox and WebKit with the runtime
+    of `babd52d28`, heard the failure only on the detached form, or on the form the draw then
+    replaced); measured (the ninth case, a navigation abandoned while its section stylesheet
+    loads for one to the same page that draws, heard nothing within 5 s of the failure with the
+    runtime of `4752cff6d`, one run in each of the three browsers; with this change, five runs of
+    each of the nine cases in each of the three each heard it once, where the case says; and with
+    one rule taken out at a time, one run in each of the three, only that rule's cases failed: the
+    count let go on abort the ninth, the same `action` and a successor that has sent nothing
+    each its own case, and the wait while a navigation is on its way both cases where the write
+    fails before the draw); reasoned (a form with the same `id`, `action` and `method`, drawn at
+    the address of the press and not sent since, is the one the user sees in place of the form
+    that sent it; a form of another page or one used since may stand for another record, and the
+    document, which every page has, is then the only place that is surely this write's);
+    reasoned (waiting delays only the event, and only while a navigation is on its way and not
+    abandoned: no read waits for a write); value (correctness and reliability first: a failed
+    write is heard, on the right form or none; performance at the user's end next: no read waits;
+    one event and one way to hear it, Values 5).
 
     Revisit when: an app needs a failure said beside a form a navigation took away, on the page it
     left; two forms on one address need telling apart by more than `id`, `action` and `method`; a
     retry from a successor must be the same submission (its key carried over); a read of the page
     again is seen to draw over a failure's note; the runtime comes to hold back a read that has
-    started while a write is out; or a standard gives an event on a removed element a way to reach
-    the document.
+    started while a write is out; a navigation is seen to hang long enough that a failure held
+    behind it goes unsaid while the user acts on the page; or a standard gives an event on a
+    removed element a way to reach the document.
 
     Last checked: 2026-11-25, Playwright 1.65.1's Chromium 159.0.8154.6, Firefox 159.0 and WebKit
-    27.2, the five smoke cases in `scripts/smoke/write-failures.mjs`, failing with the runtime of
-    `babd52d28`;
+    27.2, the nine smoke cases in `scripts/smoke/write-failures.mjs`, the first five failing with
+    the runtime of `babd52d28`, the ninth with that of `4752cff6d`, and each of the other new
+    ones with its rule taken out;
     2026-11-25, the runtime's size from `npm run build:js` on `babd52d28` and with this change.
 
 ## Rules

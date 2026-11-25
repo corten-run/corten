@@ -2397,7 +2397,16 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
   };
   signal.addEventListener("abort", idle);
   if (going) fetching = going;
-  if (!again) reading += 1;
+  // Counted until it ends or is abandoned, whichever comes first: an abandoned visit draws nothing
+  // (it checks its signal before each draw), and what it still awaits (a section stylesheet, a
+  // prefetched answer) may never end. Then what waits runs, after the navigation's own end (its
+  // focus reset, its scroll), in a task.
+  let counted = !again;
+  if (counted) reading += 1;
+  const done = () => {
+    if (counted && ((counted = false), !--reading)) for (const run of afterReads.splice(0)) setTimeout(run);
+  };
+  signal.addEventListener("abort", done);
   try {
     /** @type {Response} */
     let res;
@@ -2473,8 +2482,8 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
     signal.removeEventListener("abort", idle);
     idle();
     if (fetching === going) fetching = null;
-    // After the navigation's own end (its focus reset, its scroll), in a task.
-    if (!again && !--reading) for (const run of afterReads.splice(0)) setTimeout(run);
+    signal.removeEventListener("abort", done);
+    done();
   }
 }
 
