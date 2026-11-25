@@ -157,7 +157,7 @@ export function copyEvidence(source, destination) {
 export function verifyJsonProducer(binding, summary) {
   assert.equal(summary.schema, timedSummarySchema, "current JSON campaign requires v2 evidence");
   const names = producerSourceNames(summary.producer?.schema);
-  assert.deepEqual(Object.keys(summary.producer.sources).sort(), [...names].sort(), "JSON producer inventory differs");
+  assert.ok(isDeepStrictEqual(Object.keys(summary.producer.sources).sort(), [...names].sort()), "JSON producer inventory differs");
   assert.equal(binding.sources?.commit, binding.request.commit, "JSON producer commit differs");
   const files = binding.sources.files;
   assert.ok(Array.isArray(files), "JSON bound sources missing");

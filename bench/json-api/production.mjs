@@ -27,14 +27,14 @@ export function producerProvenance(schema = legacyProducerSchema) {
 export const verifyProducer = (value) => same(value, producerProvenance(value?.schema ?? null), "timed producer source/I/O/caps differ from verifier");
 
 export function verifyLife(state, receipt, { before, load, code, at }) {
-  assert.ok(Number.isFinite(Date.parse(state?.startedAt)), "participant start clock missing");
+  assert.ok(typeof state?.startedAt === "string" && Number.isFinite(Date.parse(state.startedAt)), "participant start clock missing");
   const created = load && before;
   same(state, { containerId: receipt.containerId, startedAt: state.startedAt,
     finishedAt: state.finishedAt, status: created ? "created" : load ? "exited" : "running", running: !load,
     oomKilled: false, dead: false, paused: false, restarting: false, restartCount: 0, exitCode: load && !before ? code : 0, error: "" },
   "timed participant exited/restarted/OOM/error state");
   if (!created) assert.ok(Date.parse(state.startedAt) <= at, "participant starts after observation");
-  if (load && !before) assert.ok(Number.isFinite(Date.parse(state.finishedAt)) && Date.parse(state.finishedAt) >= Date.parse(state.startedAt)
+  if (load && !before) assert.ok(typeof state.finishedAt === "string" && Number.isFinite(Date.parse(state.finishedAt)) && Date.parse(state.finishedAt) >= Date.parse(state.startedAt)
     && Date.parse(state.finishedAt) <= at, "load finish clock invalid");
 }
 

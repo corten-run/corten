@@ -535,10 +535,11 @@ test("timed parser checks failure classes when a producer wrote them and reads t
 test("timed parser refuses an unknown series under the failure-class prefix, alone or beside a counted class", () => {
   const counts = { http_errors: 10, invalid_responses: 0 };
   // Alone: a misspelled class must not read as a summary from before the split.
-  assert.throws(() => readFailureClasses(loadSummary({ httpErrors: 10, classes: { http_50x: 10 } }), counts), /unknown timed failure class series: catalog_failed_http_50x/);
+  const unknown = (error) => error.message === "unknown timed failure class series" && !inspect(error).includes("catalog_failed_http_50x");
+  assert.throws(() => readFailureClasses(loadSummary({ httpErrors: 10, classes: { http_50x: 10 } }), counts), unknown);
   assert.throws(() => readTimedLoad(loadSummary({ httpErrors: 10, classes: { http_50x: 10 } })), /unknown timed failure class/);
   // Beside a valid class that already accounts for every HTTP error.
-  assert.throws(() => readFailureClasses(loadSummary({ httpErrors: 10, classes: { http_5xx: 10, http_50x: 1 } }), counts), /unknown timed failure class series: catalog_failed_http_50x/);
+  assert.throws(() => readFailureClasses(loadSummary({ httpErrors: 10, classes: { http_5xx: 10, http_50x: 1 } }), counts), unknown);
   assert.throws(() => readTimedLoad(loadSummary({ httpErrors: 10, classes: { http_5xx: 10, http_50x: 1 } })), /unknown timed failure class/);
   // An empty suffix is not a class either.
   assert.throws(() => readFailureClasses(loadSummary({ classes: { "": 1 } }), { http_errors: 0, invalid_responses: 0 }), /unknown timed failure class/);
@@ -618,6 +619,8 @@ test("timed resource proof rejects internally consistent busy, exhausted or inco
   const statsLog = `${root}/sat256-stats.log`;
   const completeLog = f.reader.readText(statsLog);
   assert.doesNotThrow(() => verifyTimedPhase(f.summary, subject, reader));
+  f.put(statsLog, "\u00a0" + completeLog);
+  assert.doesNotThrow(() => verifyTimedPhase(f.summary, subject, reader), "surrounding raw row whitespace matches capture");
   f.put(statsLog, completeLog.replace(/ \/ [^"\n]+/g, ""));
   assert.throws(() => verifyTimedPhase(f.summary, subject, reader), /memory display missing its limit/);
   f.put(statsLog, completeLog);

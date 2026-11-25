@@ -6,6 +6,7 @@ import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { mock, test } from "node:test";
+import { inspect } from "node:util";
 
 const target = new URL("../../json-api/report.mjs", import.meta.url).href;
 const stub = "data:text/javascript,export function inspectBoundJson(){}";
@@ -38,6 +39,10 @@ test("JSON v2 producer assets must match the bound commit even when local produc
   const withSchedule = structuredClone(binding);
   withSchedule.sources.files = Object.entries(scheduled.sources).map(([name, sha256]) => ({ path: `bench/json-api/${name}`, sha256 }));
   verifyJsonProducer(withSchedule, { ...summary, producer: scheduled });
+  const canary = "SAVED_PRODUCER_FIELD_CANARY", unexpected = structuredClone(scheduled);
+  unexpected.sources[canary] = "c".repeat(64);
+  assert.throws(() => verifyJsonProducer(withSchedule, { ...summary, producer: unexpected }),
+    (error) => error.message === "JSON producer inventory differs" && !inspect(error).includes(canary));
   assert.throws(() => verifyJsonProducer(withSchedule, summary), /cannot downgrade/);
   assert.throws(() => verifyJsonProducer(binding, { ...summary, producer: scheduled }), /missing from bound commit/);
   for (const mutate of [

@@ -104,6 +104,8 @@ test('production full official matrix retains normal99, continues and independen
     [(r) => delete r.loadResources, /load resource evidence differs/],
     [(r) => r.loadResources.rows.pop(), /scheduled load resource coverage/],
     [(r) => r.loadResources.live.startedAt = new Date(start + 1000).toISOString(), /live resource observation differs/],
+    [(r) => { const life = r.after.liveness.load; life.finishedAt = [life.finishedAt]; }, /load finish clock invalid/],
+    [(r) => { const life = r.after.liveness.load; life.startedAt = [life.startedAt]; }, /participant start clock missing/],
   ]) { const bad = structuredClone(scheduled); mutate(bad); assert.throws(() => deriveScheduled(bad), message); }
   const busy = structuredClone(scheduled);
   busy.loadResources.rows[1].usageUsec = busy.loadResources.rows[2].usageUsec = 3_200_000;

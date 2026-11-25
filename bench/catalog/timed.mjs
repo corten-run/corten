@@ -46,8 +46,8 @@ const failurePrefix = "catalog_failed_";
 
 export function readFailureClasses(summary, { http_errors: httpErrors, invalid_responses: invalid }) {
   const metric = (name) => summary?.metrics?.[name]?.values ?? summary?.metrics?.[name];
-  const unknown = Object.keys(summary?.metrics ?? {}).filter((key) => key.startsWith(failurePrefix) && !timedFailureClasses.includes(key.slice(failurePrefix.length)));
-  assert.equal(unknown.length, 0, `unknown timed failure class series: ${unknown.join(", ")}`);
+  assert.ok(!Object.keys(summary?.metrics ?? {}).some((key) => key.startsWith(failurePrefix)
+    && !timedFailureClasses.includes(key.slice(failurePrefix.length))), "unknown timed failure class series");
   const present = timedFailureClasses.filter((name) => metric(`catalog_failed_${name}`) !== undefined);
   if (!present.length) return null;
   const classes = Object.fromEntries(timedFailureClasses.map((name) => [name, present.includes(name) ? metric(`catalog_failed_${name}`)?.count : 0]));
@@ -183,7 +183,7 @@ export function verifyTimedPhase(summary, subject, { readJson, readText }, previ
   same(Object.keys(stats.samples).sort(), [...sampled].sort(), "timed sample inventory differs");
   const raw = readText(`${phase}-stats.log`), parsed = Object.fromEntries(sampled.map((name) => [name, []]));
   assert.ok(raw.endsWith("\n"), "timed stats framing incomplete");
-  for (const line of raw.split("\n").filter((s) => s.trim())) {
+  for (const line of raw.split("\n").map((s) => s.trim()).filter(Boolean)) {
     const { name, cpu, mem } = parseStatsSample(line);
     assert.ok(Object.hasOwn(parsed, name), "unknown timed sample");
     parsed[name].push({ cpu, mem });

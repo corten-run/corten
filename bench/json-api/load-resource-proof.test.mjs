@@ -126,6 +126,7 @@ test("scheduled resource replay derives mandatory slots from Docker, not the sub
   });
   const captureEvidence = { schema: loadResourceCaptureSchema, live: { id, pid, startedAt: start }, rows };
   const replay = (r, overrides = {}) => replayScheduledLoadResources({ ...captureEvidence, rows: r }, { ...life, ...overrides }, budget);
+  assert.throws(() => replay(rows.slice(0, 4), { finishedAt: [life.finishedAt] }), /RFC3339 nanosecond event timestamp required/);
   assert.equal(replay(rows.slice(0, 4)).samples, 4, "terminal partial slot without a sample");
   assert.equal(replay(rows).samples, 5, "terminal partial slot with a complete bracket");
   assert.throws(() => replay(rows.slice(0, 3)), /scheduled load resource coverage/);

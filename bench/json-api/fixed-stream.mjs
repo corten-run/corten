@@ -13,7 +13,7 @@ const sameKeys = (value, keys) => assert.equal(Object.keys(value).sort().join(",
 
 // Parse the exact RFC3339 nanoseconds without passing them through a JS Date double.
 export function timestampNs(value) {
-  const match = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$/.exec(value ?? "");
+  const match = typeof value === "string" && /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$/.exec(value);
   assert.ok(match, "RFC3339 nanosecond event timestamp required");
   const calendar = Date.parse(`${match[1]}Z`), ms = Date.parse(`${match[1]}${match[3]}`);
   assert.ok(Number.isFinite(ms) && Number.isFinite(calendar) && new Date(calendar).toISOString().slice(0, 19) === match[1], "invalid calendar timestamp");
