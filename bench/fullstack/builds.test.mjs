@@ -620,7 +620,8 @@ function rebuildParentMinutes(/** @type {ReturnType<typeof calls>} */ list, /** 
 
 /**
  * The deadline, in seconds, build.mjs gives each measured step (`docker start -a`), the only bound on
- * the build-cost recipe's Maven, which has none of its own: written once, passed on by the wrapper.
+ * the build-cost recipe's Maven when build.mjs is run directly (an unattended round adds run-all.mjs's
+ * call limit and idle cutoff): written once, passed on by the wrapper.
  * Fails when it is shorter than the image's Maven runs are allowed.
  */
 function measuredStepSeconds(/** @type {string} */ source, /** @type {number} */ imageSeconds) {
@@ -714,8 +715,9 @@ test("Spring bounds each Maven run inside the image build or step that contains 
   // step's output only when it returns, so a silent build-cost step is stopped then, before its two-hour
   // deadline; that cutoff is still longer than the image's Maven runs are allowed.
   assert.ok(idleMinutes * 60 > image, "run-all.mjs's idle cutoff stops a quiet build before the image's Maven runs can end");
-  // The build-cost recipe runs quiet Maven with no bound of its own, so only build.mjs's two-hour
-  // deadline on each measured step stops it; that is longer than the image's Maven runs are allowed.
+  // The build-cost recipe runs quiet Maven with no bound of its own, so when build.mjs is run directly
+  // only its two-hour deadline on each measured step stops it; that is longer than the image's Maven
+  // runs are allowed.
   const buildCost = readFileSync(join(repo, "bench/fullstack/build.mjs"), "utf8");
   assert.equal(measuredStepSeconds(buildCost, image), 2 * 3600);
   assert.throws(() => measuredStepSeconds(buildCost.replace("{ timeout: 2 * hour }", "{ timeout: 15 * 60_000 }"), image), /stops before the image's Maven runs can/);

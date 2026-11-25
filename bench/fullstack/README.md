@@ -2264,10 +2264,13 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     downloads or the jar it builds; their performance effect was not measured. Two timed paths see
     it differently: the Docker rebuild benchmark builds this Dockerfile, so it times the bounded,
     verbose Maven runs, while the build-cost recipe in `builds.mjs` still runs quiet Maven without
-    the bound, inside only its two-hour per-command deadline and, in an unattended round,
-    `run-all.mjs`'s 60-minute cutoff for a call that prints nothing (`build.mjs` prints a step's
-    output when it returns, so a quiet step is stopped there first); both are longer than the
-    image's 18m20s of Maven, which `builds.test.mjs` checks. It copies `.mvn`, so only its retry
+    the bound. Run directly, `build.mjs` stops a measured step at its two-hour per-command
+    deadline. In an unattended round `run-all.mjs` also stops the app's whole build call at its
+    90-minute limit and at 60 minutes without output; `build.mjs` prints a step's output only when
+    it returns, so a quiet step meets whichever of the three comes first, which a step started late
+    in the call can be the call limit. The two-hour deadline and the idle cutoff are longer than the
+    image's 18m20s of Maven, which `builds.test.mjs` checks; the call limit is shared by the call's
+    builds. It copies `.mvn`, so only its retry
     policy changes.
     Hosted CI still
     downloads Spring's dependencies from Central on each run: both shared runners
