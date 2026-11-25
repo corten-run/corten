@@ -307,6 +307,21 @@ test("new descriptor binds exact commit/images/config/work/budgets and evidence 
   }
 });
 
+test("Django's Granian ASGI deployment is declared only for Mixed Production and is not qualified", () => {
+  const id = "django-granian-asgi";
+  for (const group of groupNames) {
+    const row = deploymentPlan(group).apps.find((entry) => entry.app === "django"), asgi = row?.deployments.find((entry) => entry.id === id);
+    if (group !== "mixed-production") { assert.equal(asgi, undefined); continue; }
+    assert.equal(row.representative, "django-matched");
+    assert.equal(asgi.qualification, "pending");
+    assert.deepEqual(asgi.evidence, []);
+    assert.equal(asgi.configuration.builds.app.args.PROFILE, "matched-asgi");
+    assert.equal(asgi.configuration.environment.PROFILE, "matched");
+    assert.equal(asgi.configuration.environment.DJANGO_SETTINGS_MODULE, "itempage.mixed_asgi_settings");
+    assert.match(asgi.configuration.command.at(-1), /start_mixed_asgi\.py$/);
+  }
+});
+
 test("all visible receipt outcomes fail closed and references or saved flags alone never assert a full pass", () => {
   for (const status of ["failed", "unsupported", "pending"]) {
     const f = fixture(descriptor(), { status });

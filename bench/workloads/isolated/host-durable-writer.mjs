@@ -4,9 +4,10 @@ import { constants, lstatSync } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { physical } from "./evidence.mjs";
+import { hostObservationBytes } from "./host-observation.mjs";
 import { limits } from "./process.mjs";
 
-export const storageLimits = Object.freeze({ bytes: 256 * 2 ** 20, queuedBytes: 8 * 2 ** 20, frames: 64, records: 4096 });
+export const storageLimits = Object.freeze({ bytes: hostObservationBytes, queuedBytes: 8 * 2 ** 20, frames: 64, records: 4096 });
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const same = (a, b) => ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every((key) => a[key] === b[key]);
 const codes = new Set(["ENOENT", "EEXIST", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ETIMEDOUT", "ERR_ASSERTION"]);
