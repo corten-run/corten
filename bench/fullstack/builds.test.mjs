@@ -444,11 +444,22 @@ function springRequestWaitSeconds(/** @type {string[]} */ lines) {
   return Math.max(linear, count * max) / 1000;
 }
 
-/** The mirrors a Maven settings file declares, past XML comments: each one's id, mirrorOf and url. */
+/** Elements a mirror may have that change nothing but its label: any other (`blocked`, `mirrorOfLayouts`, ...) changes what it does. */
+const mirrorFields = ["id", "name", "mirrorOf", "url"];
+
+/**
+ * The mirrors a Maven settings file declares, past XML comments: each one's id, mirrorOf and url,
+ * or the names of any other elements it has, so a mirror that is blocked or mirrors only some
+ * layouts is not taken for Google's.
+ */
 function mirrorsOf(/** @type {string} */ xml) {
   const plain = xml.replace(/<!--[\s\S]*?-->/g, "");
-  return [...plain.matchAll(/<mirror>([\s\S]*?)<\/mirror>/g)].map((mirror) => Object.fromEntries(["id", "mirrorOf", "url"]
-    .map((key) => [key, new RegExp(`<${key}>\\s*([^<]*?)\\s*</${key}>`).exec(mirror[1])?.[1]])));
+  return [...plain.matchAll(/<mirror>([\s\S]*?)<\/mirror>/g)].map((mirror) => {
+    const other = [...mirror[1].matchAll(/<([A-Za-z][\w.-]*)[\s>/]/g)].map((m) => m[1]).filter((n) => !mirrorFields.includes(n));
+    if (other.length) return { other };
+    return Object.fromEntries(["id", "mirrorOf", "url"]
+      .map((key) => [key, new RegExp(`<${key}>\\s*([^<]*?)\\s*</${key}>`).exec(mirror[1])?.[1]]));
+  });
 }
 
 /**
@@ -920,6 +931,9 @@ test("Spring reaches Central only through Google's mirror, and fails a checksum 
     [mirror, `<!-- ${mirror} -->`],
     ["</mirrors>", "</mirrors>\n  <profiles><profile><id>more</id><repositories><repository><id>more</id><url>https://example.com/maven2/</url></repository></repositories></profile></profiles>"],
     ["</mirrors>", "</mirrors>\n  <proxies><proxy><host>proxy.example.com</host></proxy></proxies>"],
+    ["<mirrorOf>central</mirrorOf>", "<mirrorOf>central</mirrorOf>\n      <blocked>true</blocked>"],
+    ["<mirrorOf>central</mirrorOf>", "<mirrorOf>central</mirrorOf>\n      <mirrorOfLayouts>!default</mirrorOfLayouts>"],
+    ["<mirrorOf>central</mirrorOf>", "<mirrorOf>central</mirrorOf>\n      <layout>legacy</layout>"],
   ])) {
     assert.ok(settings.includes(from), `Spring's Maven settings no longer have ${from.trim()}`);
     assert.throws(() => checkSpringMaven(lines(config), settings.replace(from, to)), /through Google's mirror alone|more than its mirror/, `accepted ${to.trim()}`);
