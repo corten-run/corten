@@ -9,7 +9,7 @@ import { validateCollected } from "../../catalog/droplet-contract.mjs";
 import { inspectCatalog } from "../../catalog/report.mjs";
 import { groupDescriptor } from "../../catalog/group.mjs";
 import { reader } from "../../json-api/artifacts.mjs";
-import { inspectJson } from "../../json-api/report.mjs";
+import { inspectBoundJson } from "../../json-api/report.mjs";
 import { producerSourceNames } from "../../json-api/production.mjs";
 import { scheduledProducerMarker, scheduledProducerSchema } from "../../json-api/contract.mjs";
 import { timedSummarySchema } from "../../json-api/timed-outcomes.mjs";
@@ -200,8 +200,7 @@ export function inspectEvidence(binding, root) {
       options: binding.execution.effectiveOptions, cpus: binding.resources.expectedCpus }, inspectCatalog);
     report = rawProofBlocked(group, diagnosticNativeReport, inspectRawSupport(group, summary, root, before));
   } else if (group === "json-api") {
-    verifyJsonProducer(binding, summary);
-    report = inspectJson(summary, { load: reader(root), commit });
+    report = inspectBoundJson(summary, { load: reader(root), commit, verifyBoundProducer: (value) => verifyJsonProducer(binding, value) });
     assert.equal(report.attemptComplete, true, "strict JSON native attempt incomplete");
   } else {
     validateSummary(summary);

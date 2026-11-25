@@ -1,4 +1,4 @@
-// Read-only: the strict CLI also checks the requested local Git object.
+// Read-only: strict reporting also checks the requested local Git object.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -44,7 +44,24 @@ export function verifyProducerAtCommit(producer, commit, repo = process.cwd()) {
   }
 }
 
-export function inspectJson(summary, { load, commit, requiredProducer } = {}) {
+export function inspectJson(summary, { load, commit } = {}) {
+  return inspectReport(summary, { load, commit, verifySource: commit === undefined ? undefined : () => {
+    const required = producerPolicyAtCommit(commit);
+    const timed = summary.schema === timedSummarySchema;
+    if (required === scheduledProducerSchema || timed)
+      assert.ok(timed && summary.producer?.schema === required, "JSON producer differs from the measured commit policy");
+    if (timed) verifyProducerAtCommit(summary.producer, commit);
+  } });
+}
+
+// Isolated callers supply their trusted source-binding gate instead of probing local Git.
+export function inspectBoundJson(summary, { load, commit, verifyBoundProducer }) {
+  requireMeasuredCommit(commit);
+  verifyBoundProducer(summary);
+  return inspectReport(summary, { load, commit });
+}
+
+function inspectReport(summary, { load, commit, verifySource }) {
   const timed = summary.schema === timedSummarySchema;
   assert.ok(summary.schema === schema || timed, "not a json-api result schema");
   assert.deepEqual(summary.group, descriptor(), "JSON group contract/selection differs");
@@ -71,9 +88,8 @@ export function inspectJson(summary, { load, commit, requiredProducer } = {}) {
     assert.ok(Number.isFinite(Date.parse(summary.startedAt)) && Number.isFinite(Date.parse(summary.finishedAt))
       && Date.parse(summary.finishedAt) >= Date.parse(summary.startedAt), "missing/invalid terminal clock");
   });
+  if (verifySource) check("producer provenance", verifySource);
   check("configuration", () => {
-    if (requiredProducer === scheduledProducerSchema || (requiredProducer && timed))
-      assert.ok(timed && summary.producer?.schema === requiredProducer, "JSON producer differs from the measured commit policy");
     if (timed) verifyProducer(summary.producer);
     assert.deepEqual(summary.timingPlan, timingPlan(summary.options), "missing/wrong effective timing plan");
     for (const [key, max] of [["duration", 300], ["warmup", 120], ["rate", 10000], ["startupTimeout", 300]]) {
@@ -303,11 +319,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       else throw new Error(`unknown/duplicate report argument ${args[i]}`);
     }
     const summary = JSON.parse(readFileSync(file, "utf8"));
+    const load = reader(dirname(file));
     const measured = commit ?? summary.commit;
-    const requiredProducer = strict ? producerPolicyAtCommit(measured) : undefined;
-    if (strict && summary.schema === timedSummarySchema && summary.producer?.schema === requiredProducer)
-      verifyProducerAtCommit(summary.producer, measured);
-    const report = inspectJson(summary, { load: reader(dirname(file)), commit, requiredProducer });
+    if (strict) requireMeasuredCommit(measured);
+    const report = strict ? inspectJson(summary, { load, commit: measured }) : inspectReport(summary, { load, commit });
     console.log(renderJson(report)); if (strict && !report.baseline) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

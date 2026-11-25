@@ -6,6 +6,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import test from "node:test";
 import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 import { scheduledProducerMarker, scheduledProducerSchema } from "./contract.mjs";
+import { gateFunctionalFixture, productionFixture } from "./production-fixtures.mjs";
 import { legacyProducerSchema, producerProvenance } from "./production.mjs";
 import { inspectJson, producerPolicyAtCommit, verifyProducerAtCommit } from "./report.mjs";
 import { settleJsonRun } from "./run.mjs";
@@ -40,7 +41,7 @@ test("terminal provenance failure is recorded after cleanup and before publish",
   assert.deepEqual(events, ["tail", "cleanup", "tree provenance", "publish", "dispose"]);
 });
 
-test("strict JSON replay reads the producer policy from the exact commit, not the working tree or saved schema", (t) => {
+test("strict JSON replay reads the producer policy and blobs from the exact commit, not the working tree or saved schema", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "json-producer-policy-"));
   t.after(() => {
     assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep));
@@ -51,10 +52,16 @@ test("strict JSON replay reads the producer policy from the exact commit, not th
     "-c", "commit.gpgsign=false", "-c", `core.hooksPath=${noHooks}`, ...args], { cwd: root, env: fixtureGitEnv(),
     timeout: 5000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   git("init", "-q");
-  git("commit", "--allow-empty", "-qm", "legacy producer");
-  const old = git("rev-parse", "HEAD");
   const path = join(root, scheduledProducerMarker);
   mkdirSync(dirname(path), { recursive: true });
+  const writeSources = (producer) => {
+    for (const name of Object.keys(producer.sources))
+      writeFileSync(join(dirname(path), name), readFileSync(new URL(name, import.meta.url)));
+    git("add", "--", "bench/json-api");
+  };
+  writeSources(producerProvenance());
+  git("commit", "-qm", "legacy producer");
+  const old = git("rev-parse", "HEAD");
   writeFileSync(path, "source marker\n");
   assert.equal(producerPolicyAtCommit(old, root), legacyProducerSchema, "untracked marker does not alter legacy");
   git("add", "--", scheduledProducerMarker);
@@ -63,19 +70,29 @@ test("strict JSON replay reads the producer policy from the exact commit, not th
   rmSync(path);
   assert.equal(producerPolicyAtCommit(current, root), scheduledProducerSchema, "uncommitted deletion cannot downgrade");
   assert.throws(() => producerPolicyAtCommit("0".repeat(40), root), /cannot read strict JSON producer policy/);
-  const f = result(), summary = { ...f.summary, schema: timedSummarySchema, producer: producerProvenance() };
-  const required = (commit) => ({ load: f.load, requiredProducer: producerPolicyAtCommit(commit, root) });
-  const different = (s, options) => inspectJson(s, options).warnings.some((w) => w.includes("differs from the measured commit policy"));
-  assert.equal(different(summary, required(current)), true, "legacy timed summary may not downgrade");
-  assert.equal(different(f.summary, required(current)), true, "older result schema may not downgrade");
-  assert.equal(different(summary, required(old)), false, "historical producer policy remains readable");
-  assert.equal(different({ ...summary, producer: producerProvenance(scheduledProducerSchema) }, required(old)), true);
+  const cwd = t.mock.method(process, "cwd", () => root);
+  try {
+    const f = result([], { commit: current });
+    const report = inspectJson(f.summary, { load: f.load, commit: current });
+    assert.equal(report.baseline, false);
+    assert.equal(report.attemptComplete, false);
+    assert.deepEqual(report.comparisonEligibleApps, []);
+    const policyWarning = /differs from the measured commit policy/;
+    assert.match(report.warnings.join("\n"), policyWarning, "legacy result schema may not downgrade");
+    assert.equal(inspectJson(f.summary, { load: f.load }).baseline, true, "report-only inspection has no Git source gate");
+    assert.match(inspectJson({ ...f.summary, schema: timedSummarySchema, producer: producerProvenance() },
+      { load: f.load, commit: current }).warnings.join("\n"), policyWarning, "legacy timed producer may not downgrade");
+    const historical = gateFunctionalFixture(await productionFixture(root, { cells: [], commit: old }));
+    const legacy = inspectJson(historical.summary, { load: historical.load, commit: old });
+    assert.equal(legacy.attemptComplete, true, legacy.warnings.join("\n"));
+    assert.equal(legacy.baseline, false, "the historical producer is valid, but this fixture has a functional failure");
+    assert.match(inspectJson({ ...historical.summary, producer: producerProvenance(scheduledProducerSchema) },
+      { load: historical.load, commit: old }).warnings.join("\n"), policyWarning);
+  } finally { cwd.mock.restore(); }
 
   const producer = producerProvenance(scheduledProducerSchema);
   assert.ok(producer.sources["process.mjs"], "the command clock and output bounds belong to the producer");
-  for (const name of Object.keys(producer.sources))
-    writeFileSync(join(dirname(path), name), readFileSync(new URL(name, import.meta.url)));
-  git("add", "--", "bench/json-api");
+  writeSources(producer);
   git("commit", "-qm", "exact producer sources");
   const measured = git("rev-parse", "HEAD");
   verifyProducerAtCommit(producer, measured, root);
@@ -86,4 +103,14 @@ test("strict JSON replay reads the producer policy from the exact commit, not th
   assert.equal(producerPolicyAtCommit(other, root), scheduledProducerSchema);
   assert.throws(() => verifyProducerAtCommit(producer, other, root), /differs from measured commit: process\.mjs/);
   verifyProducerAtCommit(producer, measured, root);
+  // Local producer hashes alone match the verifier and therefore cannot reveal this substitution.
+  const f = result([], { commit: other });
+  const summary = { ...f.summary, schema: timedSummarySchema, producer };
+  const useRepo = t.mock.method(process, "cwd", () => root);
+  try {
+    const strict = inspectJson(summary, { load: f.load, commit: other });
+    assert.match(strict.warnings.join("\n"), /JSON producer differs from measured commit: process\.mjs/);
+    assert.equal(strict.attemptComplete, false);
+    assert.doesNotMatch(inspectJson(summary, { load: f.load }).warnings.join("\n"), /producer provenance:/);
+  } finally { useRepo.mock.restore(); }
 });

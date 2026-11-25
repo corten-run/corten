@@ -247,13 +247,21 @@ test('load sampler failure retains the acquired prefix, terminal observation, k6
   const options = { duration: 1, warmup: 1, rate: 3 }, loadId = 'a'.repeat(64), f = phaseFixture('sat64');
   const capture = { schema: loadResourceCaptureSchema, live: { id: loadId, pid: 42 }, rows: [{ sequence: 0 }] };
   const before = { participants: { load: { containerId: loadId } } }, after = { liveness: { load: { containerId: loadId, status: 'exited' } } };
-  let result, observations = 0;
+  const order = [];
+  let result, observations = 0, counterReads = 0;
   const io = {
     async observe() { return observations++ ? after : before; },
-    async counters() { return {}; },
+    async counters() { order.push(counterReads++ ? 'CPU after' : 'CPU before'); return {}; },
     sample() { return { async stop() { return { app: [], upstream: [] }; } }; },
-    sampleLoad(id) { assert.equal(id, loadId); return { async stop() { return { capture, error: new Error('invalid CPU counter') }; } }; },
-    async execute() { return { ...f.command, exit: { ...f.command.exit, code: 99 }, stdoutBytes: 0 }; },
+    sampleLoad(id) {
+      assert.equal(id, loadId);
+      return { requestStop() { order.push('request load stop'); }, async stop() {
+        await new Promise(setImmediate);
+        order.push('load terminal inspect settled');
+        return { capture, error: new Error('invalid CPU counter') };
+      } };
+    },
+    async execute({ onExit }) { onExit(); return { ...f.command, exit: { ...f.command.exit, code: 99 }, stdoutBytes: 0 }; },
     async reads() { return {}; },
     async copy(path, target) { writeFileSync(target, JSON.stringify(path.includes('summary') ? f.summary : f.clock)); },
     write(path, raw) { result = raw; return { path }; },
@@ -265,6 +273,7 @@ test('load sampler failure retains the acquired prefix, terminal observation, k6
     return true;
   });
   assert.equal(result.after, after);
+  assert.deepEqual(order, ['CPU before', 'request load stop', 'CPU after', 'load terminal inspect settled']);
   assert.equal(result.command.exit.code, 99);
   assert.equal(result.loadResources, capture);
   assert.deepEqual(result.k6, f.summary);

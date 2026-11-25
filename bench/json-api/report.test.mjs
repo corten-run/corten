@@ -13,7 +13,7 @@ import { result, failedResult } from "./test-fixtures.mjs";
 
 test("a complete negative raw attempt retains all nine apps but no gated comparison", () => {
   for (const profile of descriptor().cases) {
-    const f = failedResult("corten", profile), report = inspectJson(f.summary, { load: f.load, commit: f.summary.commit });
+    const f = failedResult("corten", profile), report = inspectJson(f.summary, { load: f.load });
     assert.equal(report.baseline, false); assert.equal(report.attemptComplete, true, report.warnings.join("\n"));
     assert.equal(report.functionalAttemptComplete, true);
     assert.deepEqual(report.outcomes, descriptor().apps.map((app) => ({ app, outcome: app === "corten" ? "failed" : "passed" })));
@@ -83,9 +83,9 @@ test("negative evidence cannot waive audits, raw completeness, identity, CPU, cl
 
 const base = result(), key = descriptor().cases[0].key, api = descriptor().cases[1].key;
 const copy = () => structuredClone(base.summary);
-const inspect = (s) => inspectJson(s, { load: base.load, commit: "a".repeat(40) });
+const inspect = (s) => inspectJson(s, { load: base.load });
 
-test("strict complete JSON baseline requires all 36 functional, audit and raw timing cells", () => {
+test("complete JSON baseline requires all 36 functional, audit and raw timing cells", () => {
   const report = inspect(copy()); assert.equal(report.baseline, true, report.warnings.join("\n"));
   assert.equal(Object.keys(report.apps).length, 9);
   assert.ok(Object.values(report.apps).every((rows) => Object.keys(rows).length === 4 && Object.values(rows).every((r) => r.complete)));

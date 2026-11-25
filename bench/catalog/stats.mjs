@@ -17,10 +17,26 @@ export const statsInfrastructure = Object.freeze({
   "client-process": "docker stats client process failed",
   "client-stderr": "docker stats client wrote to stderr",
 });
+function displayedMemory(value) {
+  const m = /^\s*(\d+(?:\.(\d+))?)\s*(B|[KMGT]i?B)\s*$/.exec(value);
+  if (!m) throw new Error("invalid Docker memory display");
+  const quantity = Number(m[1]);
+  if (!Number.isFinite(quantity)) throw new Error("non-finite Docker memory quantity");
+  // Docker BytesSize uses %.4g: omitted trailing zeroes do not reduce precision.
+  const magnitude = Math.floor(Math.log10(quantity || 1));
+  const mib = memoryMiB(value), rounding = memoryMiB(`1${m[3]}`) * 10 ** (magnitude - 3) / 2;
+  if (!Number.isFinite(mib) || !Number.isFinite(rounding)) throw new Error("non-finite Docker memory conversion");
+  return { mib, rounding };
+}
 export function parseStatsSample(line) {
   const { Name: name, CPUPerc: cpuDisplay, MemUsage } = JSON.parse(line);
-  const memory = MemUsage.split("/");
-  return { name, cpuDisplay, memory, cpu: parseFloat(cpuDisplay), mem: memoryMiB(memory[0]) };
+  if (typeof cpuDisplay !== "string" || !/^\d+(?:\.\d+)?%$/.test(cpuDisplay)) throw new Error("invalid Docker CPU display");
+  const cpu = Number(cpuDisplay.slice(0, -1));
+  if (!Number.isFinite(cpu)) throw new Error("non-finite Docker CPU display");
+  const memory = typeof MemUsage === "string" ? MemUsage.split("/") : [];
+  if (memory.length !== 2) throw new Error("memory display missing its limit");
+  const usage = displayedMemory(memory[0]), limit = displayedMemory(memory[1]);
+  return { name, cpu, mem: usage.mib, usage, limit };
 }
 export function summarizeSamples(samples) {
   if (!samples.length) throw new Error("docker stats produced no samples");
@@ -103,6 +119,7 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
       clearTimeout(timer);
       terminate();
       await done;
+      // Keep every raw row, including any row rejected by the parser.
       writeFileSync(file, raw);
       if (buffer.length) observed("stats ended with an incomplete JSON record");
       if (errors.length) throw Object.assign(new Error(errors.map((e) => e.message).join("; ")), { errors });

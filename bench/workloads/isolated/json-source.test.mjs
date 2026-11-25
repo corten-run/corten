@@ -8,12 +8,16 @@ import { join, resolve, sep } from "node:path";
 import { mock, test } from "node:test";
 
 const target = new URL("../../json-api/report.mjs", import.meta.url).href;
-const stub = "data:text/javascript,export function inspectJson(){}";
+const stub = "data:text/javascript,export function inspectBoundJson(){}";
 const hooks = registerHooks({ resolve(specifier, context, next) {
   return new URL(specifier, context.parentURL ?? import.meta.url).href === target
     ? { url: stub, shortCircuit: true } : next(specifier, context);
 } });
-mock.module(stub, { exports: { inspectJson: () => ({ attemptComplete: true, outcomes: [] }) } });
+mock.module(stub, { exports: { inspectBoundJson: (summary, { commit, verifyBoundProducer }) => {
+  assert.equal(summary.commit, commit);
+  verifyBoundProducer(summary);
+  return { attemptComplete: true, outcomes: [] };
+} } });
 const { inspectEvidence, verifyJsonProducer } = await import("./evidence.mjs");
 const { producerProvenance } = await import("../../json-api/production.mjs");
 

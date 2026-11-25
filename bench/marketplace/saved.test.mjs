@@ -151,6 +151,36 @@ test("a saved k6 image other than the pin is refused by the pin and hint, and a 
   assert.ok(validateSaved(args), "restored evidence replays");
 });
 
+test("the stats sampler rejects malformed terminal displays and keeps the original rows", async (t) => {
+  const folder = temporary(t);
+  const child = () => {
+    const fake = new EventEmitter();
+    fake.stdout = new PassThrough(); fake.stderr = new PassThrough();
+    fake.kill = () => { setImmediate(() => fake.emit("close", 0)); return true; };
+    return fake;
+  };
+  let fake;
+  const spawn = t.mock.method(childProcess, "spawn", () => fake);
+  syncBuiltinESMExports();
+  try {
+    for (const [i, [cpu, memory, refusal]] of [
+      ["0.00%", "0B / 0B"],
+      ["0.00% invalid", "0B / 0B", /invalid Docker CPU display/],
+      ["0.00%", "0B / 0..0B", /invalid Docker memory display/],
+    ].entries()) {
+      fake = child();
+      const file = join(folder, `row-${i}.log`), sampler = sampleStats(["app"], file, 10);
+      const line = "  " + JSON.stringify({ Name: "app", CPUPerc: cpu, MemUsage: memory }) + " \n";
+      fake.stdout.write(line);
+      if (refusal) {
+        await assert.rejects(sampler.stop(), refusal);
+        assert.throws(() => readFileSync(`${file}.json`), { code: "ENOENT" });
+      } else assert.deepEqual((await sampler.stop()).app, { samples: 1, cpuAvgPct: 0, cpuMaxPct: 0, memAvgMiB: 0, memMaxMiB: 0 });
+      assert.equal(readFileSync(file, "utf8"), line);
+    }
+  } finally { spawn.mock.restore(); syncBuiltinESMExports(); }
+});
+
 test("native replay admits the producer's decimal sum overshoot, not an inconsistent mean", async (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   const s = writeSavedFixture(folder, commit, sourceTree(commit));

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { posix } from "node:path";
-import { memoryMiB, parseStatsSample, summarizeSamples } from "../catalog/stats.mjs";
+import { parseStatsSample, summarizeSamples } from "../catalog/stats.mjs";
 import { records } from "./fixtures.mjs";
 import { admitted } from "./feature-contract.mjs";
 import { qualificationValidator, validateSummary } from "./report.mjs";
@@ -36,17 +36,6 @@ function cpuBudget(c, milliseconds, onlineCpus) {
   // Two truncated wall-clock endpoints, two partial CFS periods, and a
   // conservative whole period per CPU for non-expiring local runtime slices.
   return Math.min(cores * usec, quota * (Math.ceil(usec / period) + 1) + cores * period) + 2;
-}
-function displayedMemory(value) {
-  const m = /^\s*(\d+(?:\.(\d+))?)\s*(B|[KMGT]i?B)\s*$/.exec(value);
-  assert.ok(m, "invalid Docker memory display");
-  const quantity = Number(m[1]);
-  assert.ok(Number.isFinite(quantity), "non-finite Docker memory quantity");
-  // Docker BytesSize uses %.4g: omitted trailing zeroes do not reduce precision.
-  const magnitude = Math.floor(Math.log10(quantity || 1));
-  const mib = memoryMiB(value), rounding = memoryMiB(`1${m[3]}`) * 10 ** (magnitude - 3) / 2;
-  assert.ok(Number.isFinite(mib) && Number.isFinite(rounding), "non-finite Docker memory conversion");
-  return { mib, rounding };
 }
 
 /** Returns the validated summary, or throws MARKETPLACE_EVIDENCE_INVALID (also for missing raw).
@@ -331,13 +320,9 @@ function replay({ folder, round, commit }) {
           const statsText = files.text(`${base}/${phase}-stats.log`);
           assert.ok(statsText.endsWith("\n"), "truncated stats log");
           for (const line of statsText.split("\n").map((s) => s.trim()).filter(Boolean)) {
-            const { name, cpu, mem, cpuDisplay, memory } = parseStatsSample(line);
+            const { name, cpu, mem, usage, limit } = parseStatsSample(line);
             assert.ok(Object.hasOwn(history, name), "unexpected stats participant");
             assert.ok(history[name].length < maxStatsSamples, "stats log exceeds sample bound");
-            assert.match(cpuDisplay, /^\d+(?:\.\d+)?%$/, "invalid Docker CPU display");
-            assert.ok(Number.isFinite(cpu), "non-finite Docker CPU display");
-            assert.equal(memory.length, 2, "memory display missing its limit");
-            const usage = displayedMemory(memory[0]), limit = displayedMemory(memory[1]);
             if (!stop) {
               // Docker reports one logical CPU as 100%, rounded to two decimals.
               // Samples can burst beyond quota; only the whole host is a bound.

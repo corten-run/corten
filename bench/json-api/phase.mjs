@@ -59,11 +59,17 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
     try {
       loadSampler = io.sampleLoad?.(raw.before.participants.load.containerId);
       raw.command = await io.execute({ observeExit: true, onExit: () => loadSampler?.requestStop?.(), stdoutFile: output, stderrFile: log,
-      maxStdoutBytes: config.mode === "fixed" ? captureLimits.bytes : captureLimits.auxiliaryBytes, maxStderrBytes: captureLimits.stderrBytes,
-      timeout: (config.seconds + 25) * 1000 }); }
+        maxStdoutBytes: config.mode === "fixed" ? captureLimits.bytes : captureLimits.auxiliaryBytes, maxStderrBytes: captureLimits.stderrBytes,
+        timeout: (config.seconds + 25) * 1000 });
+    }
     catch (error) { failure = error; raw.command = { exit: error.exit ?? null, clock: error.clock ?? null, ioErrors: error.ioErrors ?? [error.message] }; }
-    finally { await joinSamplers(); }
-    const countersAfter = await io.counters(); raw.after = await io.observe();
+    // Request sampler shutdown now, but don't charge a pending terminal load
+    // inspect (or pipe drain) to the app/upstream CPU window.
+    const joining = joinSamplers();
+    let countersAfter;
+    try { countersAfter = await io.counters(); }
+    finally { await joining; }
+    raw.after = await io.observe();
     if (loadResult && !loadResult.error) {
       try { raw.loadResources = finalizeLoadResourceCapture(loadResult, raw.after.liveness?.load); }
       catch (error) {

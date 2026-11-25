@@ -262,8 +262,10 @@ exact fixed-offer and zero-error checks. Current isolated campaigns require v2 e
 a self-declared v1 schema cannot bypass the producer-to-measured-commit join.
 The current producer binds the load sampler and its replay source to the measured
 commit. That commit cannot fall back to the legacy Docker-stats load policy.
-The standalone `--require-complete` report also reads the measured Git commit in
-the repository it is run from; an unavailable commit refuses strict reporting.
+The standalone `--require-complete` report and `inspectJson(summary, { load, commit })`
+read the measured Git commit in the repository they run from; an unavailable commit
+refuses strict reporting. Report-only inspection without a commit does not consult Git.
+Isolated replay instead checks the producer against the campaign's bound source digests.
 Thresholds, rates, VUs, durations, budgets,
 the full nine-app/four-profile roster and pass rotation are unchanged.
 
