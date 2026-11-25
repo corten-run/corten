@@ -10441,7 +10441,10 @@ rules something out.
     more, and 220 and 219. The control read 2 and 4, and 48 and 27; 134 and 129 fewer, and 136
     and 132; 144 and 96, and 181 and 175; 213 and 209, and 220 and 221. `main` itself counts
     within 22 of what it did at the earlier base on each of these rows, so the costs above
-    stand on this base as counted.
+    stand on this base as counted. The branch merged `main` once more, at `e2d0c464e`, for
+    the rules its cycle run is read by (the merge is `185e1a1b1`): that commit changes nothing
+    under `crates/`, no manifest and no lock file since `df9242b56`, and the two merges hold
+    the same `crates/`, so those counts are of the code as it now is and were not taken again.
 
     Not chosen: leaving each deadline its own timer (the numbers above are against it). A pool
     of timers a thread keeps, lent to whichever request waits (as fast: 17.4% to 18.5% more
@@ -10573,7 +10576,9 @@ rules something out.
     against broken rules on `ca259c467`, results under the tag `evidence/deadline-timer-2`;
     2026-11-24, instructions and allocations a request on `df9242b56` and `2a653b1d0`, with
     `81e77162a` and `ca259c467` as the control, and the tests against broken rules on
-    `2a653b1d0`, results under the tag `evidence/deadline-timer-3`;
+    `2a653b1d0`, results under the tag `evidence/deadline-timer-3`; 2026-11-24, `crates/`,
+    `Cargo.toml` and `Cargo.lock` read as the same git objects in `185e1a1b1` and `2a653b1d0`,
+    and in `e2d0c464e` and `df9242b56`;
     2026-11-24, tokio 1.54.1 (`Cargo.lock`) and tokio 1.44.0 read for the wheel's locks and
     `Sleep::reset`, and hyper 1.12.0 (`Cargo.lock`) for one request at a time.
 
