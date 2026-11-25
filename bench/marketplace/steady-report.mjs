@@ -16,7 +16,7 @@ const header = (s, title) => [`# Marketplace ${title} ${s.name}`, "",
     : `Adapters: ${s.options.apps.join(", ")}, as selected; no timed round's admission was checked.`,
   s.options.group ? `Group ${s.options.group}: its images and container settings.` : "No group: the ungrouped images and container settings, not a group's timed configuration.",
   `Each adapter, source and target ran in a fresh container started by ${startups[s.startup]}; windows are the k6 engine's clock from the start of the load, which follows that first 200.`,
-  `This is not a timed round and ranks nothing: ${s.schema === soakSchema ? "it reports each adapter's memory at the start and end and its p99 by interval as figures, with no criterion for whether they held, and says whether the fixed rate held, whether the app restarted, and any exit, signal or OOM kill of it" : "it gives each adapter's throughput by window and whether the end of the pass stayed within a stated tolerance"}, not how fast it is beside another.`];
+  `This is not a timed round and ranks nothing: ${s.schema === soakSchema ? "it reports, for each cell with a reading, the adapter's memory at the start and end and its p99 by interval as figures, with no criterion for whether they held, whether the fixed rate held, any observed evidence that the app restarted, and the app's observed exit, signal and OOM events that qualify for the cell (below)" : "it gives, for each cell with a reading, the adapter's throughput by window and whether the end of the pass stayed within a stated tolerance"}, not how fast it is beside another.`];
 // What a reading rests on, scoped to the cells with one: a failed cell (one that failed `settings`
 // or `unconfirmed`, say) did not pass these checks, a convergence cell whose tolerance reading is
 // itself "no reading" (hasReading) has nothing they back, and a pass with no reading states none of
@@ -26,8 +26,8 @@ const checksLines = (s) => {
   const convergence = s.schema === convergenceSchema;
   const read = s.cells.filter((c) => (convergence ? hasReading(c) : c.failure === undefined)).length, all = s.cells.length;
   if (read === 0) return [];
-  const without = convergence ? "a cell that failed, or whose tolerance reading gave none, has none" : "a failed cell has none";
-  return [`Container checks, for ${read === all ? "every cell, each with a reading" : `the ${read} of ${all} cells with a reading only; ${without}`}: ${s.measurement.containerChecks}.`];
+  // The saved text names its own scope (cells with a reading); the count says how many that is.
+  return [`Container checks (${read === all ? `every cell has a reading` : `${read} of ${all} cells have a reading`}): ${s.measurement.containerChecks}.`];
 };
 /** A convergence pass as Markdown, with each cell's tolerance reading and windows. It sets no timed warmup. */
 export function convergenceReport(s) {
@@ -54,7 +54,7 @@ export function convergenceReport(s) {
   }
   return lines.join("\n");
 }
-/** A soak as Markdown: memory at the start and end, p99 per interval, any restart, and any exit, signal or OOM kill. */
+/** A soak as Markdown: for each cell with a reading, memory at the start and end, p99 per interval, observed restart evidence, and the app's observed exit, signal and OOM events that qualify for the cell. */
 export function soakReport(s) {
   validateSoak(s);
   const o = s.options;

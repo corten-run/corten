@@ -281,18 +281,21 @@ export function savedOptions(o) {
 /** What each pass says it is, and the clock its windows are on: fixed text a reader requires. */
 export const passScope = Object.freeze({
   convergence: "marketplace-v2 convergence: one closed-loop pass per adapter, source and target, throughput and latency per window; not a timed round or a comparison",
-  soak: "marketplace-v2 soak: one fixed-rate pass per adapter, source and target, memory at the start and end, p99 per interval and restarts; not a timed round or a comparison",
+  soak: "marketplace-v2 soak: one fixed-rate pass per adapter, source and target, memory at the start and end, p99 per interval and observed restart evidence; not a timed round or a comparison",
 });
 export const windowClock = "windows are the k6 engine's clock from the start of the test; a request counts in the window its answer completed in";
 /**
- * What every reading of either kind rests on, saved with the pass (measurement.containerChecks) and
- * printed by both reports, its limit included. Docker's events publisher (moby daemon/events and its
- * pubsub publisher) gives up on an event for a subscriber that is slow to take it and goes on with
- * the stream, so a stream that showed both marker starts and the fence can still have lost an event
+ * What each reading of either kind rests on, saved with the pass (measurement.containerChecks) and
+ * printed by both reports, its limit included. The text names its own scope, cells with a reading,
+ * since a valid save can have none (every cell failed, `settings` say): read alone, it never says
+ * the checks passed for a cell that has no reading. marketplace-convergence/v8 and
+ * marketplace-soak/v10 are new with this text and not on main, so it changed within them.
+ * Docker's events publisher (moby daemon/events and its pubsub publisher) gives up on an event for
+ * a subscriber that is slow to take it and goes on with the stream, so a stream that showed both marker starts and the fence can still have lost an event
  * between them: an update undone before the next inspect, or a restart of the upstream, can have
  * gone unseen. No subscriber can show that every event was delivered, so the stream is detection.
  */
-export const containerChecks = "the app's and the load's settings, and an API cell's upstream's, matched what the pass records at each of Docker's inspects (the app after its cold start, at the launch check and after the load; the load before it started and after it ran; the upstream before the cell, at the launch check and after the load), and Docker's live event stream, from before the launch check to after the last inspect, delivered no update of them, no start, restart, die, kill or OOM of the upstream and, for a convergence cell, no qualifying start, restart, die, kill or OOM of the app: one delivered before the marker's second start or stamped at or before the load finished; a later one is teardown, is not read and stays in events.log; Docker can drop events for a slow subscriber without ending the stream, so this is detection of what the stream delivered, not proof that none happened";
+export const containerChecks = "what each cell with a reading rests on; a cell that failed has no reading, nor has a convergence cell whose tolerance reading gave none, and this says nothing of either: the app's and the load's settings, and an API cell's upstream's, matched what the pass records at each of Docker's inspects (the app after its cold start, at the launch check and after the load; the load before it started and after it ran; the upstream before the cell, at the launch check and after the load), and Docker's live event stream, from before the launch check to after the last inspect, delivered no update of them, no start, restart, die, kill or OOM of the upstream and, for a convergence cell, no qualifying start, restart, die, kill or OOM of the app: one delivered before the marker's second start or stamped at or before the load finished; a later one is teardown, is not read and stays in events.log; Docker can drop events for a slow subscriber without ending the stream, so this is detection of what the stream delivered, not proof that none happened";
 /** The format of a cell's live event stream (steady-run.mjs eventStream): one row per event. */
 export const eventFormat = "{{.Actor.ID}}|{{.Action}}|{{.TimeNano}}";
 /**

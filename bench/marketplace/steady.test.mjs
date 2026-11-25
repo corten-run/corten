@@ -367,7 +367,7 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   assert.match(text, /^\| corten \| fixture \| page \| held \| 50\.0 \| 80\.0 \| \+30\.0 MiB \(60\.0%\) \| 20\.0 \/ 80\.0 \/ 80\.0 \| 0 \| none \| no \|$/m);
   assert.match(text, /those timed round w2 .* admitted, of corten, aspnet/);
   // Memory and p99 are figures; only the fixed rate has a held criterion.
-  assert.match(text, /it reports each adapter's memory at the start and end and its p99 by interval as figures, with no criterion for whether they held, and says whether the fixed rate held, whether the app restarted, and any exit, signal or OOM kill of it/);
+  assert.match(text, /it reports, for each cell with a reading, the adapter's memory at the start and end and its p99 by interval as figures, with no criterion for whether they held, whether the fixed rate held, any observed evidence that the app restarted, and the app's observed exit, signal and OOM events that qualify for the cell \(below\)/);
   assert.match(text, /^Memory and p99 are reported figures, not held or not held: no criterion is applied to them\./m);
   assert.doesNotMatch(text, /memory, tail latency and process held/);
   // The report states both clocks: memory intervals are their own, not the latency intervals.
@@ -458,6 +458,11 @@ test("a report states its container checks only for the cells with a reading, an
   // `unconfirmed`: neither had the checks it would state, so neither report states them.
   const settings = one("convergence", "settings"), unconfirmed = one("soak", "unconfirmed");
   validateConvergence(settings); validateSoak(unconfirmed);
+  // The saved text itself says which cells it describes, so a save whose only cell failed does not
+  // claim, read alone, that its settings matched: it describes only what a cell with a reading rests on.
+  for (const [name, saved] of [["convergence settings", settings], ["soak unconfirmed", unconfirmed]]) {
+    assert.match(saved.measurement.containerChecks, /^what each cell with a reading rests on; a cell that failed has no reading, nor has a convergence cell whose tolerance reading gave none, and this says nothing of either: the app's and the load's settings/, name);
+  }
   for (const [name, text] of [["convergence settings", convergenceReport(settings)], ["soak unconfirmed", soakReport(unconfirmed)]]) {
     assert.doesNotMatch(text, /^Container checks/m, name);
     assert.doesNotMatch(text, /matched what the pass records|delivered no update/, name);
@@ -468,10 +473,25 @@ test("a report states its container checks only for the cells with a reading, an
   const partial = convergencePass(); partial.cells[2] = { app: partial.cells[2].app, source: partial.cells[2].source, target: partial.cells[2].target, verdict: null, failure: "settings" };
   Object.assign(partial.cleanup, { created: 32, removed: 32 });
   validateConvergence(partial);
-  assert.ok(convergenceReport(partial).split("\n").includes(`Container checks, for the 7 of 8 cells with a reading only; a cell that failed, or whose tolerance reading gave none, has none: ${containerChecks}.`));
-  assert.ok(convergenceReport(convergencePass()).split("\n").includes(`Container checks, for every cell, each with a reading: ${containerChecks}.`));
+  assert.ok(convergenceReport(partial).split("\n").includes(`Container checks (7 of 8 cells have a reading): ${containerChecks}.`));
+  assert.ok(convergenceReport(convergencePass()).split("\n").includes(`Container checks (every cell has a reading): ${containerChecks}.`));
 });
 
+test("a soak report's opening promises only what its table reports: observed restart evidence and qualifying events, for cells with a reading", () => {
+  const options = parseSteadyArgs(["soak", "w11", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
+  const failed = savedPass(options, [{ app: "corten", source: "fixture", target: "page", failure: "settings" }]);
+  validateSoak(failed);
+  const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
+  const read = savedPass(options, [{ app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60), tail: 0, unrecorded: 0,
+    requests: 270000, iterations: 270000, latencyMaxMs: 25, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 50 })), before: held, after: held, events: [], arrivals: onSchedule() }) }]);
+  validateSoak(read);
+  for (const text of [soakReport(failed), soakReport(read)]) {
+    const opening = text.split("\n").find((l) => l.startsWith("This is not a timed round"));
+    assert.ok(opening, text);
+    assert.doesNotMatch(opening, /whether the app restarted|any exit, signal or OOM kill/);
+    assert.match(opening, /for each cell with a reading, .*observed evidence that the app restarted.*the app's observed exit, signal and OOM events that qualify for the cell/);
+  }
+});
 test("a convergence cell whose tolerance reading gave none (a zero last-60 s median) is not a reading, so neither report states container checks for it", () => {
   const zeroTail = [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 0, 0, 0, 0];
   const { containerChecks } = convergencePass().measurement;
@@ -492,7 +512,7 @@ test("a convergence cell whose tolerance reading gave none (a zero last-60 s med
   // One such cell among readings: the steady report scopes the line to the 7 cells with a reading,
   // and the timed report still states the checks its readings rest on.
   const oneZero = convergencePass(); oneZero.cells[0] = cellOf("corten", "fixture", "page", zeroTail);
-  assert.deepEqual(checksIn(convergenceReport(oneZero).split("\n")), [`Container checks, for the 7 of 8 cells with a reading only; a cell that failed, or whose tolerance reading gave none, has none: ${containerChecks}.`]);
+  assert.deepEqual(checksIn(convergenceReport(oneZero).split("\n")), [`Container checks (7 of 8 cells have a reading): ${containerChecks}.`]);
   assert.deepEqual(checksIn(convergenceLines(likeRound(90), ["corten", "aspnet"], oneZero)), [`Container checks: ${containerChecks}.`]);
 });
 test("a soak report lists only the observed events that qualify for the cell, never claiming the whole stream", () => {

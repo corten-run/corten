@@ -296,7 +296,10 @@ the round's model as it always has). A
 convergence pass is saved as `marketplace-convergence/v8` and a soak as `marketplace-soak/v10`
 (below). Both save what each reading rests on as fixed text, `measurement.containerChecks`, with the
 event stream's limit stated, and both reports print it for the cells with a reading (none when no
-cell has one); a v7 convergence pass saved no such text
+cell has one). The text names that scope itself (what each cell with a reading rests on; a failed
+cell has no reading), so a save whose every cell failed does not say, read alone, that their
+settings matched. v8 and v10 are new with this text, which changed within them before either
+reached main; a v7 convergence pass saved no such text
 and, like a v9 soak, was described as showing that its settings held through the load, more than
 its event stream can show. A v6 convergence pass checked its containers' settings only at its inspects and read no
 event stream, so a change made during its load and undone before the inspect after it went
@@ -372,12 +375,14 @@ cell's upstream before the cell, at the launch check and after the load), and Do
 delivered no update of those containers, no start, restart, die, kill or OOM of the upstream and,
 for a convergence cell, no qualifying start, restart, die, kill or OOM of the app (one delivered
 before the marker's second start or stamped at or before the load finished; a later one is
-teardown, below, is not read and stays in `events.log`); the stream can drop events for a slow subscriber. Each pass saves that text (`containerChecks`) and
-both reports print it beside the readings, scoped to the cells with one: a failed cell did not pass
+teardown, below, is not read and stays in `events.log`); the stream can drop events for a slow subscriber. Each pass saves that text (`containerChecks`), which names
+that scope itself, and both reports print it beside the readings, with how many cells have one: a failed cell did not pass
 those checks, a convergence cell whose tolerance reading gave none (too few windows, or a zero
 last 60 s median) has no reading for them to back, and a pass with no reading prints none. The load's inspect before it starts is kept as
 `load-container-before.json` before its settings are checked, so a load refused there keeps what
-Docker had too. Then, for a
+Docker had too; an inspect without a container receipt's shape (an `Env` that is not a list of
+strings, no `HostConfig`) keeps a fixed note, the load's ID and the window settings instead, never
+its malformed values, and still fails the cell `settings` with no load started. Then, for a
 convergence cell: the same ID
 and StartedAt, running, not restarted or OOM-killed, `heldThrough`; for a soak: the restart
 evidence and the exit, signal and OOM observations it saves), the cold-start clock and result, the k6 export's metric names and every
@@ -389,9 +394,10 @@ from summary.json alone; the raw files beside it (`app-container.json` and
 role, the upstream's events and the app's, and which of the app's container ID, StartedAt and
 RestartCount differed from the launch check at the end) are what they read.
 
-A soak reports memory at the start and the end (the median sample in the first and last memory
-interval), p99 per latency interval, failed requests (in its intervals and in k6's aggregate),
-whether the app restarted, and, separately, any exit, signal or OOM kill. Memory and p99 are reported figures: no criterion
+For each cell with a reading, a soak reports memory at the start and the end (the median sample in
+the first and last memory interval), p99 per latency interval, failed requests (in its intervals and
+in k6's aggregate), whether it observed evidence that the app restarted, and, separately, the app's
+observed exit, signal and OOM events that qualify for the cell (below). Memory and p99 are reported figures: no criterion
 says whether they held. Only the fixed rate (below) is reported as held or not. Restart events
 come from the cell's live `docker events` stream, filtered to the app, the load, an API cell's
 upstream and a small marker container, started before the load. A retrospective `docker events --since/--until` query replays only what the

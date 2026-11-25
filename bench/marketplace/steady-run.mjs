@@ -563,8 +563,18 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       // The load's receipt, with the window settings containerReceipt does not keep: as this pass
       // requested them, and every value Docker's inspect reports for each (none, one or more).
       const windowKeys = ["WINDOWS", "WINDOW_SECONDS"];
-      const loadReceipt = (info) => ({ ...containerReceipt(info), windowEnv: { requested: Object.fromEntries(windowKeys.map((key) => [key, loadEnv[key]])),
-        observed: Object.fromEntries(windowKeys.map((key) => [key, (Array.isArray(info?.Config?.Env) ? info.Config.Env : []).filter((e) => typeof e === "string" && e.startsWith(`${key}=`)).map((e) => e.slice(key.length + 1))])) } });
+      // An inspect without the shape containerReceipt reads (an Env that is not a list of strings, no
+      // Config or HostConfig) keeps a fixed note, the load's ID when it is one and the window settings
+      // instead, never its malformed values, so writing the receipt cannot replace the settings
+      // check that follows it: that check still refuses such an inspect, `settings`.
+      const loadReceipt = (info) => {
+        let receipt;
+        try { receipt = containerReceipt(info); } catch {
+          receipt = { unreadable: "Docker's inspect of the load does not have the shape of a container receipt", id: typeof info?.Id === "string" && /^[a-f0-9]{64}$/.test(info.Id) ? info.Id : null };
+        }
+        return { ...receipt, windowEnv: { requested: Object.fromEntries(windowKeys.map((key) => [key, loadEnv[key]])),
+          observed: Object.fromEntries(windowKeys.map((key) => [key, (Array.isArray(info?.Config?.Env) ? info.Config.Env : []).filter((e) => typeof e === "string" && e.startsWith(`${key}=`)).map((e) => e.slice(key.length + 1))])) } };
+      };
       k6 = await step("container", () => owned.container(["--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...k6Env,
         k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/window-load.js"], `${runId}-k6`));
       // The live event stream of the app, the load and an API cell's upstream, listening before the

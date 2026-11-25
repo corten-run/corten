@@ -1681,6 +1681,37 @@ test("the load receipt keeps the window settings as requested and as Docker repo
     { requested: { WINDOWS: "8", WINDOW_SECONDS: "15" }, observed: { WINDOWS: ["8"], WINDOW_SECONDS: ["15"] } });
 });
 
+test("a load whose inspect before it starts has no readable environment or host settings fails `settings` with its receipt kept, and starts no load", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t54", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const canary = "canary-value-not-saved";
+  // [name, the change to the load's inspect before it starts, the setting the message names]
+  const cases = [
+    ["env-null", (info) => ({ ...info, Config: { ...info.Config, Env: null } }), "environment"],
+    ["env-string", (info) => ({ ...info, Config: { ...info.Config, Env: `VUS=${canary}` } }), "environment"],
+    ["env-entry", (info) => ({ ...info, Config: { ...info.Config, Env: [...info.Config.Env, null, { canary }] } }), "environment"],
+    // Only the owner labels left (a Config of null fails the ownership check first, `container`).
+    ["config-labels-only", (info) => ({ ...info, Config: { Labels: info.Config.Labels } }), "environment"],
+    ["host-null", (info) => ({ ...info, HostConfig: null }), "CPU quota"],
+    ["mounts-null", (info) => ({ ...info, Mounts: null, Config: { ...info.Config, Env: null } }), "environment"],
+  ];
+  for (const [name, change, what] of cases) {
+    const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), inspected: (info, c, state) => (c.kind === "k6" && state.startIssuedMs === null ? change(info) : info) });
+    const s = await run(fake, options, folder(name));
+    assert.equal(s.cells[0].failure, "settings", `${name}: ${JSON.stringify(s.cells[0])}`);
+    assert.ok(errorsOf(folder(name)).includes(`the load container's ${what} is not the one this pass records`), name);
+    assert.ok(!fake.calls.some((c) => loadStarted(c.args, fake)), `${name}: no load started`);
+    // The receipt is kept, as a fixed note with the load's ID and the window settings, never the malformed values.
+    const text = readFileSync(join(folder(name), "fixture", "corten", "page", "load-container-before.json"), "utf8");
+    assert.ok(!text.includes(canary), name);
+    const receipt = JSON.parse(text);
+    assert.equal(receipt.id, fake.ids["marketplace-test-run-k6"], name);
+    assert.deepEqual(receipt.windowEnv.requested, { WINDOWS: "8", WINDOW_SECONDS: "15" }, name);
+    assert.equal(s.complete, true, name);
+    validateConvergence(s);
+  }
+});
+
 test("the live watcher starts no load on a first marker start the reader would refuse", async (t) => {
   const folder = folderOf(t);
   const app = "a".repeat(64), marker = "b".repeat(64);
@@ -1729,7 +1760,7 @@ test("a cell whose event stream lost an update still has a reading, and its save
     assert.match(checks ?? "", /Docker can drop events for a slow subscriber without ending the stream/, name);
     assert.match(checks, /not proof that none happened/, name);
     const report = steadyReport(s);
-    assert.ok(report.split("\n").includes(`Container checks, for every cell, each with a reading: ${checks}.`), name);
+    assert.ok(report.split("\n").includes(`Container checks (every cell has a reading): ${checks}.`), name);
     // Nothing in the report says the stream showed there was no update, or that it covered the load.
     assert.doesNotMatch(report, /with no update of those containers|so it covered the load|held through the load/, name);
     if (options.kind === "soak") assert.equal(s.cells[0].restarts.eventStream, "none-seen");
@@ -1767,6 +1798,6 @@ test("an app kill delivered after the marker's second start and before the fence
     const checks = s.measurement.containerChecks;
     assert.doesNotMatch(checks, /delivered no update of them and no start, restart, die, kill or OOM of the upstream \(nor, for a convergence cell, of the app\)/, name);
     assert.match(checks, /for a convergence cell, no qualifying start, restart, die, kill or OOM of the app: one delivered before the marker's second start or stamped at or before the load finished; a later one is teardown, is not read and stays in events\.log/, name);
-    assert.ok(steadyReport(s).split("\n").includes(`Container checks, for every cell, each with a reading: ${checks}.`), name);
+    assert.ok(steadyReport(s).split("\n").includes(`Container checks (every cell has a reading): ${checks}.`), name);
   }
 });
