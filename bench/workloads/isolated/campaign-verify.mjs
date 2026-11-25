@@ -12,7 +12,7 @@ import { inspectLifetime, composeHostProof } from "./host-lifetime.mjs";
 import { commandResult, composePhase } from "./composition.mjs";
 import { registrySchema } from "../registry.mjs";
 import { alternateCampaignPlacements } from "./contract.mjs";
-import { udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
+import { terminalClockPolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -163,7 +163,7 @@ export async function validateCampaign(input) {
         }
         const observation = inspectLifetime(recorded.binding, recorded.invocations[commandIndex],
           join(folder, id, entry.path, `command-${result.number}-host`),
-          { campaign: id, command: result.number, pid: result.pid, result: commandResult(result) });
+          { campaign: id, command: result.number, pid: result.pid, result: commandResult(result), phase });
         assert.equal(observation.manifestSha256, result.hostManifestSha256, "host observations differ from journal seal");
         if (hostBefore) assert.equal(observation.context.bootId, hostBefore.bootId);
         if (advanced) {
@@ -181,7 +181,8 @@ export async function validateCampaign(input) {
           if (offline) assert.equal(after.controlApparatus, undefined);
           const settlePath = `${entry.path}/host-after-settled.json`;
           if (subtree.entries.some((e) => e.path === settlePath)) {
-            const settlePolicy = status.executionVersion === 5 || offline ? udevSettlePolicy(group, phase) : null;
+            const settlePolicy = status.executionVersion === 5 || offline
+              ? terminalClockPolicy(recorded.binding, recorded.invocations.at(-1), round, phase) : null;
             const lifetime = hostObservations.at(recorded.results.length - 1);
             assert.ok(settlePolicy && recorded.results.length === recorded.invocations.length && lifetime?.status === "verified"
               && lifetime.cleanupComplete && lifetime.terminalClock, "udev settle lacks an eligible sealed terminal lifetime");

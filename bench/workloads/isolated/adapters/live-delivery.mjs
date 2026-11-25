@@ -82,7 +82,7 @@ function phaseProof(binding, folder, startedAt, actors) {
   const terminal = JSON.parse(readRegular(join(directory, "terminal.json"))), command = Number(/^command-(\d+)-host$/.exec(names[0].path)[1]);
   assert.equal(context.bootId, before.bootId);
   const observation = inspectLifetime(binding, binding.execution.invocation, directory,
-    { campaign, command, pid: context.leaderPid, result: terminal.command });
+    { campaign, command, pid: context.leaderPid, result: terminal.command, phase: "timing" });
   assert.equal(binding.execution.effectiveOptions.build, true);
   const first = observation.samples[0].at, last = observation.samples.at(-1).at, started = clock(startedAt);
   assert.ok(clock(before.at) <= first && first <= started && started <= last && last <= clock(after.at));

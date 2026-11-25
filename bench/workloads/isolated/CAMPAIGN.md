@@ -398,6 +398,10 @@ or campaign readiness. The v2 native adapter/producer integration remains a sepa
 An authenticated monitored or offline-handoff campaign can take one additional host
 observation after official timing or untimed JSON preparation if the first-after
 inventory contains only new sleeping children of the same baseline `systemd-udevd`.
+Capture and replay use the same eligibility check: only the exact bound native
+invocation for the campaign's registered group, round and phase can carry a sealed
+clock. Fixture generators and helpers cannot carry one. The clock is optional;
+without it only the ordinary first-after boundary can prove cleanup.
 The last native command must have a verified sealed terminal lifetime, including
 proof that its accounting scope is empty, before the five-second wait begins. For
 official timing, each worker's Linux start ticks must place its birth strictly after

@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { mock, test } from "node:test";
 import * as evidence from "./evidence.mjs";
 import * as contracts from "./campaign-contract.mjs";
-import { groupNames, nativeArtifactRoot } from "../registry.mjs";
+import { campaignRounds, groupNames, jsonPreparationRound, nativeArtifactRoot, runnerFor } from "../registry.mjs";
 import { fakeChild } from "./test-fixtures/process.mjs";
 import * as audit from "./test-fixtures/campaign-audit.mjs";
 import * as nativeReplay from "./native-replay.mjs";
@@ -64,7 +64,7 @@ function jsonPhase(plan, phase, receiptPath) {
   assert.ok(plan.order.includes("json-api"), "unselected JSON preparation/freshness is forbidden");
   if (receiptPath?.startsWith("/bench/campaign/")) receiptPath = join(root, ...receiptPath.split("/").slice(3));
   const b = structuredClone(plan.bindings.find((b) => b.request.group === "json-api"));
-  b.request.round = phase === "prepare" ? "j34" : "j35";
+  b.request.round = phase === "prepare" ? jsonPreparationRound(plan.round) : campaignRounds(plan.round)["json-api"];
   b.execution.invocation.argv = ["bench/json-api/run.mjs", b.request.round, "--group", "json-api",
     ...(phase === "prepare" ? ["--build", "--check-only"] : ["--receipts", receiptPath])];
   b.validation.artifactRoot = relative(repo, join(temporary, `native-r${round}`, `json-${phase}`)).replaceAll("\\", "/");
@@ -292,6 +292,14 @@ function setupGroup(group, policy) {
   s.plan.bindings = s.plan.bindings.filter((b) => b.request.group === group);
   return s;
 }
+function controlledRound(plan) {
+  plan.round = "r21";
+  for (const binding of plan.bindings) {
+    const { group } = binding.request, { entry, selection } = runnerFor(group);
+    binding.request.round = campaignRounds(plan.round)[group];
+    binding.execution.invocation.argv = [entry, binding.request.round, ...selection];
+  }
+}
 const delivery = (handle) => audit.auditDelivery(JSON.parse(readFileSync(join(handle.directory, "json-audit-subject.json"))).subjectSha256);
 const mixedDelivery = (subjectSha256) => ({ schema: "benchmark-mixed-audit-delivery/v1", subjectSha256,
   review: { reviewer: "independent", reviewedAt: "2026-11-13T12:00:00Z", subjectSha256, findings: [], decision: "approved" },
@@ -339,7 +347,7 @@ async function offlineCampaign(t, group, packets = 2, settle = false) {
     { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024 });
   assert.equal(result.status, 0, result.stderr);
   const { binding, admission } = JSON.parse(result.stdout), s = setupGroup(group);
-  s.plan.round = "r21"; admittedHost = admission.host;
+  controlledRound(s.plan); admittedHost = admission.host;
   const closed = BigInt(admission.closedMonoNs), after = closed + 6n * hourNs;
   if (group === "json-api") {
     offlinePrep = { before: String(closed + 5n * hourNs), after: String(after),
@@ -1304,7 +1312,7 @@ for (const [group, scenario] of [
   const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
     { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024, windowsHide: true });
   assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
-  const proof = JSON.parse(result.stdout), s = setupGroup(group); s.plan.round = "r21"; admittedHost = proof.admission.host;
+  const proof = JSON.parse(result.stdout), s = setupGroup(group); controlledRound(s.plan); admittedHost = proof.admission.host;
   const jsonPreparation = group === "json-api";
   const live = group === "live-delivery";
   const bornDuringTiming = scenario === "worker born during timing";

@@ -73,6 +73,21 @@ for (const group of ["live-delivery", "recoverable-live"]) test(`${group}: dedic
   assert.equal(native.attemptComplete, true); assert.equal(native.status, "failed");
 });
 
+for (const group of ["live-delivery", "recoverable-live"]) test(`terminal clock: ${group} adapter reads an optional same-boot clock without promoting failures`, async (t) => {
+  const f = await fixture(t, group, ({ terminal }) => {
+    terminal.terminalClock = { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" };
+  }, true);
+  const native = await f.inspect();
+  assert.equal(native.status, "failed");
+  assert.equal(native.cleanupComplete, true);
+  assert.ok(native.outcomes.every((r) => r.outcome === "failed"));
+  f.terminal.terminalClock.bootId = "foreign";
+  await f.save(join(f.host, "terminal.json"), f.terminal);
+  const wrongBoot = await f.inspect();
+  assert.equal(wrongBoot.resources, "invalid");
+  assert.equal(wrongBoot.cleanupComplete, false);
+});
+
 for (const [name, mutate] of [
   ["wrong group", (p) => { p.order = ["catalog-page"]; }],
   ["arbitrary subset", (p) => { p.order.push("catalog-page"); p.bindings.push({ request: { group: "catalog-page" } }); }],
