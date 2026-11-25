@@ -236,7 +236,11 @@ jobs:
         if: matrix.app == 'spring'
         run: |
           docker build --target build -t cb-spring-tests bench/fullstack/apps/spring
-          docker run --rm --cpus 2 --memory 2g cb-spring-tests mvn -q -B test
+          # Maven's retries are per request (.mvn/maven.config), so the whole run has a budget too,
+          # and it logs each transfer to name one in flight (#1763). The proof below starts from this
+          # volume, the image's Maven repository plus what these tests fetched, not from Central again.
+          docker run --rm --cpus 2 --memory 2g --mount type=volume,source=cb-spring-m2,target=/root/.m2 \
+            cb-spring-tests timeout --verbose --kill-after=10s 10m mvn -B test
       - name: Probe Spring HTTP disconnect behavior with Reactor Netty
         id: spring_proof
         if: matrix.app == 'spring'
@@ -247,6 +251,7 @@ jobs:
           docker run --rm --cpus 2 --memory 2g \
             --mount "type=bind,source=$PWD/bench/fullstack/apps/spring/transport-proof,target=/proof,readonly" \
               --mount "type=bind,source=$evidence,target=/evidence" \
+              --mount type=volume,source=cb-spring-m2,target=/root/.m2 \
               cb-spring-tests sh -eu -c '
                 # This is the untouched image of package -DskipTests, before adding proof sources.
                 test -f target/test-classes/bench/itempage/MarketplaceDeadlineTest.class

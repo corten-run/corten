@@ -4,8 +4,8 @@ Transport proof for [#1302 Benchmark parity: Spring Boot in approved workload gr
 This is not a marketplace port, a Mixed qualification result, or a deployment
 choice. The original Spring build and benchmark selection still use MVC/Tomcat.
 
-From the repository root on a POSIX host with JDK 27 and Maven (the app image uses
-Maven 3.10), explicitly opt in to both probes:
+From the repository root on a POSIX host with JDK 27, Maven (the app image uses
+Maven 3.10) and `timeout` from coreutils, explicitly opt in to both probes:
 
 ```sh
 spring=bench/fullstack/apps/spring
@@ -15,8 +15,10 @@ sh "$spring/transport-proof/run.sh" "$spring" "$evidence"
 
 Use a new empty evidence directory for each run. The runner refuses a nonempty
 directory before starting either probe and does not remove any existing reports.
+Each Maven run stops after 270 seconds, so with the app's per-request retries
+(`.mvn/maven.config`) both fit hosted CI's 12-minute step and still write their reports.
 
-The timed Dockerfile copies only the ordinary `pom.xml` and `src` and still
+The timed Dockerfile copies only the ordinary `pom.xml`, `.mvn` and `src` and still
 runs `package -DskipTests`. That flag skips execution, not compilation, so **all**
 probe sources live in this separate tree. The runner adds the MVC probe and its
 fixture only to a disposable copy of the real MVC project; the WebFlux POM pins

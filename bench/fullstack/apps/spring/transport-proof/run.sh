@@ -33,13 +33,18 @@ cp "$proof/pom.xml" "$work/webflux/"
 cp -R "$app/.mvn" "$work/webflux/"
 cp -R "$proof/src" "$work/webflux/"
 
+# Each Maven run has a fixed budget (#1763): with .mvn/maven.config's per-request retries it ends
+# well inside hosted CI's 12-minute step, which leaves time to write both reports. Maven logs each
+# transfer, so a run stopped here names the one in flight.
+maven_seconds=270
+
 run_probe() {
     mode=$1
     suite=$2
     shift 2
     project="$work/$mode"
     status=0
-    mvn -B -f "$project/pom.xml" "-Dtest=$suite" -DfailIfNoTests=true test "$@" || status=1
+    timeout --verbose --kill-after=10s "$maven_seconds" mvn -B -f "$project/pom.xml" "-Dtest=$suite" -DfailIfNoTests=true test "$@" || status=1
     java "$proof/SurefireEvidence.java" "$mode" "$project/target/surefire-reports" "$evidence/$mode-surefire.txt" || status=1
     return "$status"
 }

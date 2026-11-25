@@ -300,6 +300,14 @@ const postBuildPrune = (/** @type {string[]} */ commands, /** @type {number} */ 
 // docker-rebuild.mjs instead times the image as written. Only this wrapper is equivalent.
 const nextImageInstall = /^timeout --verbose --kill-after=10s 10m (npm ci --no-audit --no-fund) --fetch-timeout=60000 --loglevel=http$/;
 const nextInstallInputs = ["WORKDIR /app", "ENV NEXT_TELEMETRY_DISABLED=1", "COPY package.json package-lock.json ./"];
+// Spring's image bounds its whole Maven download and logs each transfer (#1763); the recipe runs the
+// same resolution, with -q and without the bound. docker-rebuild.mjs times the image as written.
+const springImageDeps = /^timeout --verbose --kill-after=10s 15m mvn -B dependency:go-offline$/;
+
+/** A Dockerfile command as the recipe runs it, past the image-only wrappers above. */
+const recipeCommandOf = (/** @type {string} */ name, /** @type {string} */ command) =>
+  name === "nextjs" ? command.replace(nextImageInstall, "$1")
+    : name === "spring" && springImageDeps.test(command) ? String(recipes.spring.deps) : command;
 
 function checkNextInstall(/** @type {string[]} */ lines) {
   const install = lines.findIndex((line) => line.startsWith("RUN ") && nextImageInstall.test(line.slice(4)));
@@ -321,6 +329,92 @@ test("Next.js bounds the locked image install before copying app source or build
   assert.throws(() => checkNextInstall(lines.map((line) => line === manifestCopy ? "COPY . ." : line)), /before app source and build/);
   assert.throws(() => checkNextInstall(lines.map((line) => line.replace(/^RUN timeout /, "RUN --mount=type=bind,target=/app timeout "))),
     /exact Next.js image install with no RUN mount/);
+});
+
+// Maven's retries of a 429 or 503 are per request (.mvn/maven.config), and a cold Spring build makes
+// hundreds of them, so every Maven run in the image and in hosted CI also has a total budget that ends
+// inside its enclosing deadline, with time left to report the transfer it stopped on (#1763).
+const springRetries = [
+  "-Daether.transport.http.retryHandler.count=4",
+  "-Daether.transport.http.retryHandler.interval=10000",
+  "-Daether.transport.http.retryHandler.intervalMax=40000",
+];
+const springInstallInputs = ["WORKDIR /src", "COPY pom.xml ./", "COPY .mvn ./.mvn"];
+
+/** Seconds in a timeout(1) duration: a number with an optional s, m or h. */
+function durationSeconds(/** @type {string} */ value) {
+  const match = /^(\d+)([smh]?)$/.exec(value);
+  assert.ok(match, `unexpected duration ${value}`);
+  return Number(match[1]) * ({ "": 1, s: 1, m: 60, h: 3600 })[/** @type {"" | "s" | "m" | "h"} */ (match[2])];
+}
+
+/** The longest a single request can wait between retries under Resolver 2's Apache transport. */
+function springRequestWaitSeconds(/** @type {string[]} */ lines) {
+  const value = (/** @type {string} */ key) => {
+    const line = lines.find((l) => l.startsWith(`-Daether.transport.http.retryHandler.${key}=`));
+    assert.ok(line, `maven.config sets no ${key}`);
+    return Number(line.split("=")[1]);
+  };
+  const [count, interval, max] = [value("count"), value("interval"), value("intervalMax")];
+  // Retry n waits Retry-After, or else n * interval; a wait above intervalMax, or n above count, stops.
+  let linear = 0;
+  for (let n = 1; n <= count && n * interval <= max; n++) linear += n * interval;
+  return Math.max(linear, count * max) / 1000;
+}
+
+function checkSpringInstall(/** @type {string[]} */ lines) {
+  const install = lines.findIndex((line) => line.startsWith("RUN ") && springImageDeps.test(line.slice(4)));
+  assert.ok(install >= 0, "expected the exact bounded Spring dependency download with no RUN mount");
+  assert.equal(lines.filter((line) => /^RUN .*\bdependency:go-offline\b/.test(line)).length, 1);
+  assert.match(lines[0], /^FROM \S+ AS build$/);
+  assert.deepEqual(lines.slice(1, install), springInstallInputs, "expected only the Spring dependency inputs");
+}
+
+test("Spring bounds its Maven downloads inside every enclosing deadline", () => {
+  const spring = join(repo, "bench/fullstack/apps/spring");
+  const lines = instructionsOf(readFileSync(join(spring, "Dockerfile"), "utf8"));
+  checkSpringInstall(lines);
+  assert.throws(() => checkSpringInstall(lines.filter((line) => line !== "COPY .mvn ./.mvn")), /only the Spring dependency inputs/);
+  assert.throws(() => checkSpringInstall(lines.map((line) => line.replace(" 15m mvn ", " 60m mvn "))), /exact bounded Spring/);
+
+  const config = readFileSync(join(spring, ".mvn/maven.config"), "utf8").split("\n").filter(Boolean);
+  assert.deepEqual(config, springRetries, "Spring's Maven retry budget changed");
+  const request = springRequestWaitSeconds(config);
+  assert.equal(request, 160, "one request waits at most 4 * 40 s, or 10 + 20 + 30 + 40 s without Retry-After");
+  assert.equal(springRequestWaitSeconds(["-Daether.transport.http.retryHandler.count=6",
+    "-Daether.transport.http.retryHandler.interval=10000", "-Daether.transport.http.retryHandler.intervalMax=300000"]), 1800);
+
+  // The image build: run.mjs gives each image an hour.
+  const image = durationSeconds("15m") + 10;
+  for (const runner of ["bench/catalog/run.mjs", "bench/marketplace/run.mjs"]) {
+    const build = /await docker\(\["build",[\s\S]*?\{ timeout: (\d+) \* (\d+) \* 1000/.exec(readFileSync(join(repo, runner), "utf8"));
+    assert.ok(build, `${runner}: no image build timeout`);
+    assert.ok(image + 30 * 60 <= Number(build[1]) * Number(build[2]), `${runner}: the bounded download leaves under 30 minutes of its build`);
+  }
+
+  // The transport proof: two Maven runs, each with its own budget, inside the step.
+  const workflow = parseYaml(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
+  const steps = workflow.jobs.parity.steps;
+  const proofStep = steps.find((/** @type {{ id?: string }} */ step) => step.id === "spring_proof");
+  const proof = readFileSync(join(spring, "transport-proof/run.sh"), "utf8");
+  const proofSeconds = Number(/^maven_seconds=(\d+)$/m.exec(proof)?.[1]);
+  const maven = proof.split("\n").filter((line) => /(^|\s)mvn\s/.test(line));
+  assert.deepEqual(maven.map((line) => line.trim().startsWith('timeout --verbose --kill-after=10s "$maven_seconds" mvn -B ')), [true]);
+  assert.equal(proof.split("\n").filter((line) => /^run_probe /.test(line)).length, 2);
+  assert.ok(request < proofSeconds, "one throttled request fits a proof run");
+  assert.ok(2 * (proofSeconds + 10) + 2 * 60 <= proofStep["timeout-minutes"] * 60, "both proof runs and two minutes to report fit the step");
+
+  // The proof starts from the native tests' Maven repository, so it does not fetch theirs again.
+  const testStep = steps.find((/** @type {{ name?: string }} */ step) => step.name === "Test native Spring alert persistence and source boundaries");
+  const volume = "type=volume,source=cb-spring-m2,target=/root/.m2";
+  assert.ok(testStep.run.includes(`--mount ${volume}`) && proofStep.run.includes(`--mount ${volume}`));
+  const tests = /cb-spring-tests timeout --verbose --kill-after=10s (\S+) mvn -B test\n/.exec(testStep.run);
+  assert.ok(tests, "the native Spring tests have a bounded Maven run");
+
+  // The job: at worst three cold image builds (catalog, marketplace, the test stage), the tests and the
+  // proof step, with 20 minutes left of the job for everything else (about five minutes when hosted).
+  const worst = 3 * image + durationSeconds(tests[1]) + 10 + proofStep["timeout-minutes"] * 60;
+  assert.ok(worst + 20 * 60 <= workflow.jobs.parity["timeout-minutes"] * 60, "Spring's bounded Maven runs fit the parity job");
 });
 
 test("only exact production pruning after a build is packaging, never a recipe step", () => {
@@ -357,12 +451,12 @@ test("each recipe runs its Dockerfile's commands, from its image, in its directo
     for (const stage of stages.filter((s) => s.run.some((c) => mine.some((m) => c.includes(m))))) {
       const commands = stage.run.flatMap((c) => c.split(" && ").map((x) => x.trim()));
       for (const [index, command] of commands.entries()) {
-        const recipeCommand = name === "nextjs" ? command.replace(nextImageInstall, "$1") : command;
+        const recipeCommand = recipeCommandOf(name, command);
         assert.ok(mine.includes(recipeCommand) || packaging.some((p) => p.test(command)) || postBuildPrune(commands, index, r.build), `${name}: its Dockerfile runs ${command}, which its recipe does not`);
       }
       if (r.stage) assert.equal(stage.from, "tools", `${name}: its build stage starts from its tools stage`);
     }
-    const run = stages.flatMap((s) => s.run).join(" && ");
+    const run = stages.flatMap((s) => s.run).map((c) => recipeCommandOf(name, c)).join(" && ");
     for (const part of mine) assert.ok(run.includes(part), `${name}: its Dockerfile does not run ${part}`);
     // An app with no build step: its Dockerfile runs nothing after the dependency step, and what
     // that stage sets and fetches is checked as a build stage's is.
