@@ -124,6 +124,11 @@ test("a window where another thread ran more than the clock's ticks is not a cou
   // What the clock runs in the ticks a window can hold is let through, and reported.
   const { window } = await counting("get", 1, { STAND_IN_OTHERS: "600" });
   assert.deepEqual([window.serving, window.others, window.threads], [1_000_600, 600, 1]);
+  // Every other thread's file is read: a third thread's work refuses the window by itself, and
+  // is in the sum when the window is let through.
+  await assert.rejects(counting("get", 1, { STAND_IN_THIRD: "50000" }), /not a count: 2 other threads ran 50243 instructions in a window of \d+\.\d s/);
+  const three = await counting("get", 1, { STAND_IN_OTHERS: "300", STAND_IN_THIRD: "200" });
+  assert.deepEqual([three.window.serving, three.window.others, three.window.threads], [1_000_600, 500, 2]);
 });
 
 test("a dump that callgrind_control did not make the probe write is an error, though the control exits 0", { skip }, async () => {

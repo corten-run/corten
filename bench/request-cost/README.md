@@ -181,12 +181,13 @@ The count is not corrected for it. The line is rendered while these requests are
 part of what serving them cost; how many seconds a window crosses is not its length but where it
 began in a second; and the 600 is this commit's, which a commit to compare could change. So
 `count.mjs` prints the seconds, and two counts are compared as they are when their seconds are
-alike. On the 16-CPU host these were read on, a window lasts 1.0 to 2.6 seconds for the nine
-cases and 0.7 at a depth of 16, and one binary's counts agree closely there: 30 counts of each
-of the 13 rows spanned at most 1 instruction, and 30 of `get`, `post`, `text` and `page` with
-two busy loops on the probe's own CPU spanned at most 1 and read at most 1 more (rustc 1.100.0,
-valgrind 3.24.0). That is that host's, not the method's. On a slower, loaded machine, where
-windows last longer and vary more, the second review of the pull request that added this kit
+alike. On the 16-CPU host these were read on, a window lasts 0.7 to 1.9 seconds for the nine
+cases and 0.7 to 0.8 at a depth of 16, and one binary's counts agree closely there: 30 counts
+of each of the 13 rows spanned at most 1 instruction, and 30 of `get`, `post`, `text` and
+`page` with two busy loops on the probe's own CPU spanned at most 1 and read at most 1 more
+(rustc 1.100.0, valgrind 3.24.0). That is that host's, not the method's. On a slower, loaded
+machine, where windows last longer and vary more, the second review of the pull request that
+added this kit
 ([#2097 Add bench/request-cost: what a request costs the server over a socket, and what an idle connection holds](https://github.com/corten-run/corten/pull/2097))
 read one binary's counts up to 3 apart within one condition (24 and 22 counts each of four
 cases) and up to 4 apart across the two.
@@ -206,10 +207,14 @@ are not in it.
 A run prints no figure, and says why, when the probe did not hold every connection: when it
 closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as
 when it may open fewer files than there are connections and the rest wait in its listen queue.
-A request on such a connection is never answered, and the run fails once nothing has come for
-30 seconds. Corten waits 30 seconds for a connection's next request unless the app says
-otherwise, so a run reads only as many connections as open in that time. How long that takes is
-the machine's: on the 16-CPU host these were read on, 5,000 opened in 0.4 to 1.9 seconds and
+A request on a connection waiting there is not answered while it waits, and such a run ends in
+one of two ways: no answer has come for 30 seconds, or the probe closed connections first,
+since Corten closes the ones it holds at its own 30 seconds and then accepts those that
+waited. Which of the two comes first is a race between those two clocks; either way the run
+exits 1 and prints no figure. Corten waits 30 seconds for a connection's next request unless
+the app says otherwise, so a run reads only as many connections as open in that time. How long
+that takes is the machine's: on the 16-CPU host these were read on, 5,000 opened in 0.4 to 1.9
+seconds and
 100,000 over 16 addresses in 6 to 19, reading 2,641 to 2,645 bytes a connection before any byte
 and 8,421 after one request (on `c9666dc96`). A run of 100,000 started in the minute after
 another one, in the same network namespace, took 58 to 71 seconds to open and was refused (three
@@ -283,6 +288,6 @@ for them.
 | `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
 
 `run.test.mjs` (but its refusals of an option) and `build.test.mjs` need Linux with `sh` and
-`git`, and are skipped elsewhere: on Windows 30 of the 45 tests run. The hosted check runs on
+`git`, and are skipped elsewhere: on Windows 30 of the 46 tests run. The hosted check runs on
 Linux. What no test covers is checked by running the kit: the probe itself, callgrind's own
 dumps, and a real build.

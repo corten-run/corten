@@ -25,7 +25,20 @@ above=$2
 until [ -d "$above" ]; do above=$(dirname "$above"); done
 above=$(cd "$above" && pwd -P)
 case "$above/" in "$root"/*) echo "build.sh: $2 is inside the checkout: give a directory outside it" >&2; exit 2 ;; esac
-if git -C "$above" rev-parse --git-dir > /dev/null 2>&1; then echo "build.sh: $2 is inside a git repository: give a directory outside any" >&2; exit 2; fi
+# git says so for a repository it will read. One it will not read, as another user's (a checkout
+# mounted into a container run as root), it reports as none, so a `.git` entry in the directory
+# or in one above it is a repository as well.
+repository() {
+    git -C "$1" rev-parse --git-dir > /dev/null 2>&1 && return 0
+    at=$1
+    while :; do
+        if [ -e "$at/.git" ] || [ -L "$at/.git" ]; then return 0; fi
+        up=$(dirname "$at")
+        [ "$up" != "$at" ] || return 1
+        at=$up
+    done
+}
+if repository "$above"; then echo "build.sh: $2 is inside a git repository: give a directory outside any" >&2; exit 2; fi
 mkdir -p "$2"
 directory=$(cd "$2" && pwd -P)
 # Nor may the checkout be in what is removed.

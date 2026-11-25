@@ -18,6 +18,7 @@
 // What a test can ask for, each by a variable:
 //   STAND_IN_THREAD=2            the second thread serves, the first runs nothing
 //   STAND_IN_OTHERS=<n>          what the thread that does not serve ran in each part (243)
+//   STAND_IN_THIRD=<n>           a third thread ran n in each part, in a file of its own (`-03`)
 //   STAND_IN_FEWER_MALLOCS=1     a part holds one call to malloc fewer than its requests (16 each)
 //   STAND_IN_NOT_FOUND_FROM=<n>  the server's nth request and those after it are answered 404
 //   STAND_IN_DEAF_AFTER=<n>      after its nth run the control exits 0 and asks for nothing
@@ -76,6 +77,7 @@ function serve() {
     const serves = Number(process.env.STAND_IN_THREAD ?? 1);
     if (out && options.includes("--separate-threads=yes")) {
       for (const thread of [1, 2]) writeFileSync(`${out}${named}-0${thread}`, thread === serves ? profile(thread, serving, mallocs) : profile(thread, thread === 1 ? 0 : others, 0));
+      if (process.env.STAND_IN_THIRD) writeFileSync(`${out}${named}-03`, profile(3, Number(process.env.STAND_IN_THIRD), 0));
     } else if (out) {
       writeFileSync(`${out}${named}`, profile(1, serving + others, mallocs));
     }

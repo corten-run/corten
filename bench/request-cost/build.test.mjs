@@ -73,6 +73,30 @@ test("build.sh refuses a directory inside any git repository, whose probe/ it wo
   }
 });
 
+test("build.sh refuses a directory under a .git entry that git itself does not read as a repository", { skip: skipBuilds }, () => {
+  const stand = standIn();
+  try {
+    // As a repository owned by another user is to git: `rev-parse --git-dir` fails in both.
+    for (const [name, entry] of /** @type {const} */ ([["emptied", "directory"], ["linked", "file"]])) {
+      const other = join(stand.outside, name);
+      mkdirSync(join(other, "probe"), { recursive: true });
+      writeFileSync(join(other, "probe", "kept"), "another checkout's own");
+      if (entry === "directory") mkdirSync(join(other, ".git"));
+      else writeFileSync(join(other, ".git"), "gitdir: /nowhere\n");
+      assert.notEqual(spawnSync("git", ["-C", other, "rev-parse", "--git-dir"]).status, 0, "git reads it as a repository");
+      for (const inside of [other, join(other, "not-made", "deeper")]) {
+        const built = stand.build(inside);
+        assert.equal(built.status, 2, built.stderr);
+        assert.match(built.stderr, /is inside a git repository/);
+      }
+      assert.ok(existsSync(join(other, "probe", "kept")));
+      assert.ok(!existsSync(join(other, "not-made")) && !existsSync(join(other, "work")));
+    }
+  } finally {
+    stand.remove();
+  }
+});
+
 test("build.sh leaves the probe built against the commit's tree at bin/<commit>, and none when a later build of it fails", { skip: skipBuilds }, () => {
   const stand = standIn();
   try {
