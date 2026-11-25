@@ -1755,15 +1755,19 @@ fn a_handler_s_inputs_say_whether_its_page_can_be_kept() {
     {
         <AnonymousInputs as Accepts<Args>>::KEYED
     }
-    assert!(keyed::<()>() && keyed::<(Req,)>() && keyed::<(Option<Req>,)>());
+    assert!(keyed::<()>() && keyed::<(Req,)>());
+    // Corten fills none of its keyed inputs as an `Option`, so an `Option` of one is the app's (#1803).
+    assert!(!keyed::<(Option<Req>,)>() && !keyed::<(Option<crate::Params<caller_url::Catalog>>,)>());
+    // Corten reads a `Form` only as the last argument: one before it is the app's own (#1803).
+    assert!(keyed::<(Req, crate::Form<()>)>() && !keyed::<(crate::Form<()>, Req)>());
     assert!(keyed::<(
         crate::Params<caller_url::Catalog>,
-        crate::Form<()>,
         crate::extract::State<()>,
         crate::Signal,
         http::Method,
         http::Uri,
-        Req
+        Req,
+        crate::Form<()>
     )>());
     assert!(!keyed::<(Req, Device)>() && !keyed::<(Option<Device>,)>(), "an input of the app's own");
     assert!(!keyed::<(crate::Upload<()>, Req)>() && !keyed::<(crate::LiveSince,)>() && !keyed::<(Req, crate::LiveSince)>());

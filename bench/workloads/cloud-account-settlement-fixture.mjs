@@ -82,12 +82,12 @@ serveProviderWorker({
     req.once("error", (error) => {
       if (url.pathname === "/v2/account" && error.code === "ECONNRESET") lastReset = closed;
     });
-    if (mode === "unobserved-close" || mode === "reset-unobserved-close") {
+    if (mode === "unobserved-close" || mode === "reset-unobserved-close" || mode === "catalog-unobserved-close" && url.pathname === "/v2/sizes") {
       // Withhold the proof listener, not native closure: destruction alone must
       // not be sufficient. The counters above still record actual native events.
       const once = req.once.bind(req);
       req.once = (event, listener) => once(event, event === "close" ? (...args) => {
-        if (status !== (mode === "unobserved-close" ? 503 : undefined)) listener(...args);
+        if (status !== ({ "unobserved-close": 503, "catalog-unobserved-close": 200 })[mode]) listener(...args);
       } : listener);
     }
     if (mode === "retry-timer-rollback" && observed.requests === 2) rewindNextSample();

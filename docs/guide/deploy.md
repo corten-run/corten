@@ -390,9 +390,101 @@ it builds has to run on this machine.
 `-p` at a workspace's root, that is the root, not the member's directory, so the command's path
 and the app's own relative paths are from there:
 `corten build -p shop --profile-from sh shop/train.sh`. The copy gets the environment
-`corten build` was given, less
-`HOST` so that it listens on this machine only, on a port nothing else has, and runs the command
-once the copy accepts a connection. When the command ends it stops the copy with `SIGTERM` and waits for it: the copy
+`corten build` was given, less `HOST`, so that a copy that reads it listens on this machine
+only. The build gives the copy a port, and runs the command once a connection to that port is
+accepted.
+
+That port is a free one the build picks and gives the copy in `PORT`, whatever `PORT` holds
+where `corten build` runs: that one is the app's, set for running it, and is not read. An app
+that binds a port of its own and never reads `PORT` (`corten::serve_on` or `serve_wrapped` with
+listeners it bound itself, [Your own listeners](app.md#your-own-listeners)) never listens on a
+port the build picked, so the build is told the app's with `--port`, before `--profile-from`:
+
+```sh
+corten build --port 8443 --profile-from sh train.sh
+```
+
+The copy is then looked for on that port, and it and the command are given it in `PORT`
+(`--port=8443` is the same). `--port` is refused before anything is built when it is not a
+number from 1 to 65535, when it is given twice or without `--profile-from`, and when something
+already listens on the port, at `127.0.0.1` or at `[::1]`, which would answer the wait and the
+command in the copy's place. Nothing is built then, and something is written: the build takes
+its lock on the target directory before it looks at the port, so a refusal for a port something
+listens on leaves `target/corten-profile/lock`, in a target directory it makes when there was
+none. The build cannot tell whose listener that is, so the refusal says
+what to do for each: this app (under `corten dev`, or run another way) or a copy that a
+cancelled build left running is stopped, the copy of a build that is running in another target
+directory is left until that build ends, and anything else is another program that holds the
+port on this machine, which is stopped, or the build is run where the port is free, with
+`--port` checked against the port the app binds. The build looks again before it starts the
+copy, minutes later. A look is a
+connection, and a listener answers one only while its queue of connections it has not accepted
+has room: one that has stopped accepting, with that queue full, passes both looks as a free
+port. Where it holds an address the copy binds, the build then stops after the instrumented
+build, when the copy cannot bind; where it holds the other loopback address alone, the copy
+binds its own and the build goes on. A
+second build in the same target directory is refused for the build that is running, which is
+looked for before the port, so it is not told to stop that build's copy. Without `--port`, an
+app that binds its own port stops the build after a minute, with a line that names the option.
+
+The wait is a TCP connection to `127.0.0.1` or `[::1]` at that port and nothing more. So the
+port may be one that serves HTTPS, and the script then asks over `https://`, where the sample
+above asks over `http://`. The app has to bind the port on a loopback address or on every
+address: bound to another address alone it is not found, and the build stops after a minute
+saying where it looked. The wait is for that one port: an app with several listeners names one
+of them, and its script, which knows the others, waits for each before it sends to it
+(`curl --retry 10 --retry-connrefused` on the first request). And the wait cannot tell whose
+socket accepted: a copy that has exited is not taken for it, but a program that takes the port
+in the moment between the build's last look and the copy's own bind is, and the command's
+requests then go to that program. The copy cannot bind the same address then, unless both
+sockets set `SO_REUSEPORT`, as two instances of one app may: the system then shares the
+command's connections between the two, and the look after the copy (below) stops the build
+only if the other is still listening. That is reasoned from a bind that was measured, and was
+not run through a build. A copy that has
+exited by the time the command ends fails the build, as one that exited while the command ran.
+One that is still running when the command ends (it is still starting, or it does not exit
+when it cannot bind) is stopped like any other, and may exit with a profile of having served
+nothing, so with `--port` the build looks at the port twice more. When the command has ended
+and before the copy is stopped, the build stops if nothing accepts a connection at either
+loopback address of the port: a copy that listens on the port it was named would. After the
+copy has exited, the build stops if something listens there: that is not the copy.
+
+Each of those looks establishes one thing and no more: something accepted a connection on a
+loopback address of the port when the command ended, and nothing listens there once the copy
+has exited. Neither shows that the copy is what answered the command, and no look can, since a
+connection does not say whose socket accepted it. Three timings end with the build succeeding
+and the release built from a profile of a copy the command never reached:
+
+1. Another program takes the named port in that moment, answers the wait and the command, and
+   leaves while the command runs, and the copy, still starting or trying its bind again, binds
+   the port before the command ends. The copy answers the look at the command's end, and
+   nothing listens once it has exited.
+2. A program listens on the other loopback address of the named port, beside a copy bound to
+   its own, answers a command that asks that address (as one that asks `localhost` may), and
+   leaves before the copy has exited. This needs no race with the copy's start: the program
+   may come at any time after the look before the copy starts.
+3. Another program takes the named port in that moment and answers the wait and the command,
+   the copy is still running when the command ends, and the program leaves between the look
+   at the command's end and the copy's exit.
+
+The first two were reproduced, and the command's tests hold them as what a build does today,
+to change when it can tell; the third is reasoned.
+
+Each look can also stop a build it should not. The look at the command's end stops a build
+whose copy served, when the copy's queue of connections it has not accepted is full at that
+instant. The look after the copy stops a build whose profile was good when a program begins to
+listen on the port once the copy has left it (a supervisor starting the app again). And a
+listener on the other loopback address of the named port that is there at a look stops the
+build, at the one after the copy as well, though the copy bound its own address beside it and
+served for the whole run: the build cannot tell that the command never reached that listener,
+and a command that asks `localhost` may have.
+
+An app's own listeners bind the addresses the app chooses, with `HOST` or without: one that
+binds every address (`0.0.0.0:8443`) can be reached from the network while the build runs, and
+a request from outside would enter the profile. An app whose only listener is not a TCP port (a
+Unix socket) has no port to name, and is profiled with the steps by hand (below).
+
+When the command ends the build stops the copy with `SIGTERM` and waits for it: the copy
 writes its profile as it exits, which a Corten app does on `SIGTERM` (Shutdown, in
 [The app](app.md#the-app)), and a copy that is killed writes none. A command that fails stops
 the build, and so does a copy that exits early, does not listen within a minute, is still
@@ -735,7 +827,14 @@ is the ordinary one: Docker 29.9.3 built it without a word about the argument.
 
 The two builds are two lines of one `RUN`. A Cargo argument the app's release needs
 (`--features`, `--bin`) goes on both, before `--profile-from` on the second: on one alone,
-the image with a profile is built with other features than the image without.
+the image with a profile is built with other features than the image without. An app that
+binds a port of its own names it on the second, with `--port 8443` before `--profile-from`
+([A profile-guided build](#a-profile-guided-build)). The `corten` the Dockerfile installs has
+to be a release that has `--port`. One without it builds nothing with the line: where the
+Dockerfile's own check of the command (below) has not refused it first, it refuses `--port`
+as an argument `corten build` does not take, before it builds the app. The fix is to move the
+version on the Dockerfile's install line to a release that has `--port`. Not tried in an image
+build: no release has the option yet.
 
 What the argument asks of the app and its build, which the ordinary build does not:
 
@@ -869,14 +968,16 @@ On a fresh dedicated group host it also limits incoming SSH to the controller's
 authenticated provisioning IPv4 source. Keep that egress for collection and
 cleanup; do not make a separate login during measurement.
 Its cleanup check retains all process observations and exempts only kernel threads
-proved by saved Linux stat flags and matching PID/start identity. Supervised marketplace
-timing and untimed JSON preparation can
+proved by saved Linux stat flags and matching PID/start identity. An authenticated monitored
+or offline-handoff campaign can
 [take one additional cleanup observation](../../bench/workloads/isolated/CAMPAIGN.md#post-command-udev-settle)
-after sealed command termination if every new user-space identity is a proved udev worker.
-Marketplace timing still requires worker birth after the terminal cutoff; JSON preparation
-permits birth after its pre-phase census. The bounded wait, worker exit and ordinary whole-host
-boundary checks must all pass. This cannot repair old evidence or discount activity during
-measurement. This is benchmark-host preparation, not app deployment advice.
+after official timing or untimed JSON preparation, once the last native command's sealed
+lifetime verifies termination and an empty accounting scope, and every new user-space identity
+is a proved udev worker. Timing requires worker birth strictly after the sealed terminal cutoff;
+untimed JSON preparation uses its pre-phase census cutoff instead. The bounded wait, worker exit
+and ordinary whole-host boundary checks must all pass. Replay uses the measured checkout: this
+cannot qualify old evidence that lacks the proof or discount activity during measurement.
+This is benchmark-host preparation, not app deployment advice.
 
 A new benchmark allocation launched from a commit that includes
 [pinned unused-host recovery](../../bench/workloads/CLOUD.md#failed-allocation-retirement)

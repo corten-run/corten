@@ -1,0 +1,1 @@
+- A grouped benchmark launch stopped by a catalog read can release its locks before create, but only after the native request and worker are proved closed. Ambiguous failures still retain custody. [#2036 Marketplace r63 stops before droplet create on a locked catalog request and retains launch custody](https://github.com/corten-run/corten/issues/2036)

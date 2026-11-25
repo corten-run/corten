@@ -699,18 +699,34 @@ test("independent continuation admits two remote-active hosts and collects a fai
     assert.equal(await prepare(denied), 3);
     const deniedApproval = await approve(denied);
     const limit = p.hosts + ".limit";
+    const inventory = fs.readFileSync(p.hosts, "utf8");
+    assert.equal(JSON.parse(inventory).length, 1);
     fs.writeFileSync(limit, "1");
     try { assert.equal(await fleetMain(deniedApproval, p.deps), 2); }
     finally { fs.unlinkSync(limit); }
+    assert.deepEqual(p.output.at(-1).groups, [{ group: denied, outcome: "error", error: "group-operation-failed",
+      uncertain: false, providerDiagnostic: { code: "account-capacity" }, controllerStage: "controller-launch" }]);
     const refused = p.saved(path.join(denied, denied));
-    assert.equal(refused.status, "reserved"); assert.equal(refused.createIntentAt, undefined);
+    assert.equal(refused.status, "reserved"); assert.equal(refused.createIntentAt, undefined); assert.equal(refused.id, undefined);
+    assert.deepEqual(refused.control.ledger, []);
+    const refusedRoot = path.join(p.h.base, denied, denied);
+    assert.ok(!fs.existsSync(path.join(refusedRoot, ".groups-launch.lock")) && !fs.existsSync(path.join(refusedRoot, "groups-r21/operation.lock")));
+    assert.ok(!fs.existsSync(path.join(p.h.base, continuationLock)));
+    assert.equal(fs.readFileSync(p.hosts, "utf8"), inventory);
+    const deniedEvents = p.events().filter((row) => row.group === denied);
+    assert.ok(deniedEvents.some((row) => row.method === "GET" && row.path.startsWith("/v2/droplets?")));
+    assert.ok(deniedEvents.every((row) => row.boundary !== "provider" || row.method === "GET"));
+    assert.ok(!deniedEvents.some((row) => ["ssh", "upload", "monitor"].includes(row.boundary)));
     assert.deepEqual(p.events().filter((row) => row.method === "POST").map(({ group }) => group), [first]);
 
     assert.equal(await prepare(second), 3);
     const secondApproval = await approve(second);
     assert.deepEqual(p.output.at(-1).subject.continuation.peers.map(({ id }) => id), ["101"]);
-    launch(secondApproval);
-    await wait(() => active(second) && handoff());
+    fs.writeFileSync(limit, "2"); // The first host still occupies one slot.
+    try {
+      launch(secondApproval);
+      await wait(() => active(second) && handoff());
+    } finally { fs.unlinkSync(limit); }
     const events = p.events();
     assert.deepEqual(events.filter((row) => row.method === "POST").map(({ group }) => group), [first, second]);
     assert.deepEqual(events.filter((row) => row.boundary === "remote-active").map(({ group, id }) => [group, id]), [[first, "101"], [second, "102"]]);
@@ -1467,27 +1483,31 @@ for (const late of ["provider-create-reappeared", "create-recheck.lock", ".group
 
 // Review round 6, finding 4. A contradicted attempt retired by the pinned route lost its
 // createErrored record, and with it its place in the posted-ID census fence.
+async function retiredContradictedAttempt(t) {
+  const a = await lateCreateAttempt(t, { offline: true });
+  assert.equal(await a.child(), 1, "the errored action and absence settle the attempt");
+  a.provider.droplets = [a.owned()];
+  assert.equal(await a.child(), 3, "the reappeared posted droplet is bound as contradicted");
+  assert.ok(JSON.parse(fs.readFileSync(a.statePath)).createContradicted);
+  const key = path.join(a.p.h.temp, "operator-verified-host-key"), keyBytes = "synthetic operator-verified host key\n";
+  fs.writeFileSync(key, keyBytes);
+  const gitRun = (binary, argv, timeout = 60000, allowFail) => {
+    assert.equal(binary, "git");
+    return argv[0] === "show" ? { status: 0, stdout: fs.readFileSync(path.resolve(argv[1].slice(41)), "utf8").replaceAll("\r\n", "\n") }
+      : a.p.h.run(binary, argv, timeout, allowFail);
+  };
+  const plan = await productionPlan({ round: "r19", stateDir: a.stateRoot, collect: true, unusedBootstrapKnownHosts: key }, { repo: a.p.deps.repo, run: gitRun });
+  assert.equal(plan.subject.recovery.policy, "contradicted-create-posted-droplet-unused-only-no-qualification");
+  fs.unlinkSync(a.locks.batch); fs.unlinkSync(a.locks.outer); // The custody steps for the launch's retained locks.
+  assert.equal(await a.child({ unusedBootstrapKnownHosts: key }, { unusedBootstrapApproval: { reservationSha256: plan.subject.reservationSha256,
+    knownHostsSha256: plan.subject.recovery.knownHostsSha256 } }), 1);
+  const retired = JSON.parse(fs.readFileSync(a.statePath));
+  assert.ok(retired.destroyedAt && retired.createContradicted && !retired.createErrored); assert.equal(a.provider.deletes, 1);
+  return a;
+}
 for (const listed of [true, false]) {
   test(`another group's launch ${listed ? "still fences" : "proceeds beside"} a retired contradicted attempt's posted ID ${listed ? "listed, renamed and untagged" : "that is absent"}`, { timeout: 90000 }, async (t) => {
-    const a = await lateCreateAttempt(t, { offline: true });
-    assert.equal(await a.child(), 1, "the errored action and absence settle the attempt");
-    a.provider.droplets = [a.owned()];
-    assert.equal(await a.child(), 3, "the reappeared posted droplet is bound as contradicted");
-    assert.ok(JSON.parse(fs.readFileSync(a.statePath)).createContradicted);
-    const key = path.join(a.p.h.temp, "operator-verified-host-key"), keyBytes = "synthetic operator-verified host key\n";
-    fs.writeFileSync(key, keyBytes);
-    const gitRun = (binary, argv, timeout = 60000, allowFail) => {
-      assert.equal(binary, "git");
-      return argv[0] === "show" ? { status: 0, stdout: fs.readFileSync(path.resolve(argv[1].slice(41)), "utf8").replaceAll("\r\n", "\n") }
-        : a.p.h.run(binary, argv, timeout, allowFail);
-    };
-    const plan = await productionPlan({ round: "r19", stateDir: a.stateRoot, collect: true, unusedBootstrapKnownHosts: key }, { repo: a.p.deps.repo, run: gitRun });
-    assert.equal(plan.subject.recovery.policy, "contradicted-create-posted-droplet-unused-only-no-qualification");
-    fs.unlinkSync(a.locks.batch); fs.unlinkSync(a.locks.outer); // The custody steps for the launch's retained locks.
-    assert.equal(await a.child({ unusedBootstrapKnownHosts: key }, { unusedBootstrapApproval: { reservationSha256: plan.subject.reservationSha256,
-      knownHostsSha256: plan.subject.recovery.knownHostsSha256 } }), 1);
-    const retired = JSON.parse(fs.readFileSync(a.statePath));
-    assert.ok(retired.destroyedAt && retired.createContradicted && !retired.createErrored); assert.equal(a.provider.deletes, 1);
+    const a = await retiredContradictedAttempt(t);
     const other = groupNames.find((group) => group !== a.group);
     const args = (round) => [round, "--continuation-root", a.p.h.base, "--group", other];
     assert.equal(await fleetMain([...args("r20"), "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context], a.p.deps), 3);
@@ -1503,6 +1523,55 @@ for (const listed of [true, false]) {
       const state = path.join(a.p.h.base, other, other, "groups-r20", "state.json");
       if (fs.existsSync(state)) assert.equal(JSON.parse(fs.readFileSync(state)).createIntentAt, undefined, "no create intent");
     } else assert.equal(a.posts().length, 1, "the other group creates its own host");
+    assert.equal(a.provider.deletes, 1);
+  });
+}
+
+// Issue #2019. The final gate refuses a create beside an earlier posted attempt that holds a
+// launch, operation or recheck lock, retired or not, but admission accepted a retired one: the
+// operator approved a launch the gate was certain to refuse. Admission now applies the gate's
+// custody check to every posted attempt, so the refusal comes before the approval prompt.
+for (const lock of ["launch", "operation", "recheck", null]) {
+  test(`another group's admission ${lock ? `refuses before approval while a retired posted attempt holds its ${lock} lock` : "admits a retired posted attempt that holds no lock"}`, { timeout: 90000 }, async (t) => {
+    const a = await retiredContradictedAttempt(t);
+    const other = groupNames.find((group) => group !== a.group), otherSlot = path.join(a.p.h.base, other);
+    const args = (round) => [round, "--continuation-root", a.p.h.base, "--group", other];
+    const prepare = (failures) => fleetMain([...args("r20"), "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId,
+      "--context", context], a.p.deps, failures);
+    const preview = (failures) => fleetMain([...args("r20"), "--detach", "--print-approval"], a.p.deps, failures);
+    const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+    const held = lock && { launch: a.locks.launch, operation: a.locks.operation, recheck: path.join(a.local, "create-recheck.lock") }[lock];
+    const take = () => fs.writeFileSync(held, `${JSON.stringify({ pid: dead, round: "r19" })}\n`);
+    const refused = async (action) => {
+      const failures = new Map(), before = a.p.output.length;
+      await assert.rejects(action(failures), (error) => /unresolved custody: an earlier provider-errored create still holds a lock/.test(error.message)
+        && /provider-errored create still holds custody/.test(error.cause?.message)
+        && failures.get(error) === "continuation-admission; posted-custody");
+      assert.ok(!a.p.output.slice(before).some((row) => row?.approvalSha256), "no approval prompt");
+      assert.ok(fs.existsSync(held), "the lock is left alone");
+      assert.ok(!fs.existsSync(path.join(otherSlot, "launch-intent.json")), "no launch intent");
+      assert.ok(!fs.existsSync(path.join(otherSlot, other, "groups-r20", "state.json")), "no create intent");
+      assert.ok(!fs.existsSync(path.join(a.p.h.base, continuationLock)), "admission releases the continuation lock");
+      assert.deepEqual(a.posts(), [], "no POST");
+    };
+    if (lock) {
+      // Present at prepare: no reservation is made for the other group.
+      take();
+      await refused(prepare);
+      assert.ok(!fs.existsSync(otherSlot), "no reservation");
+      // Taken after prepare: the approval prompt itself refuses.
+      fs.unlinkSync(held); // Only the test's own synthetic lock; the controller never clears it.
+      assert.equal(await prepare(), 3);
+      take();
+      await refused(preview);
+    } else {
+      assert.equal(await prepare(), 3);
+      assert.equal(await preview(), 3);
+      const approval = a.p.output.at(-1).approvalSha256;
+      assert.deepEqual(a.p.output.at(-1).subject.continuation.postedCreates.map(({ dropletId, contradicted }) => [dropletId, contradicted]), [["123", true]]);
+      await fleetMain([...args("r20"), "--detach", "--approve-reviewed-merged-ready", approval], a.p.deps).catch((error) => error);
+      assert.equal(a.posts().length, 1, "the other group creates its own host");
+    }
     assert.equal(a.provider.deletes, 1);
   });
 }
