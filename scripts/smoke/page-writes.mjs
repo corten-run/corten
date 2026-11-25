@@ -1,4 +1,4 @@
-import { base, skip, check, pollFor, cleanUp, steps, within } from "./helpers.mjs";
+import { base, skip, check, pollFor, cleanUp, steps, within, opened, closeContext } from "./helpers.mjs";
 
 export async function pageWrites(page, browser) {
   // After a write, the page it sends the browser to is fetched whole; when that page's handler
@@ -70,11 +70,13 @@ export async function pageWrites(page, browser) {
    * stand-in fails that write or hands the page its answer (`Since`): no read the page asked after
    * it saw that answer, or that write fail, has a place before it, and a bound on that read counts
    * from that time, not from when a check saw the outcome.
+   * Making the page, setting its route and marking it are each bounded to 5 s (its load has
+   * Playwright's own 30 s), and the page is closed (`closeContext`) if one of them fails.
    * @param {(body: string, writes: number, headers?: Record<string, string>, at?: number) => string} edit @param {(body: string) => string} [before]
    * @param {string} [path]
    */
   const writtenPage = async (edit, before = (body) => body, path = "/smoke/written") => {
-    const context = await browser.newContext();
+    const context = await opened("the write case's context", browser.newContext());
     const seen = {
       written: false,
       fail: false,
@@ -94,47 +96,55 @@ export async function pageWrites(page, browser) {
     };
     // Closed here if the page, its route or its load fails: no case has the page to close yet.
     try {
-      const own = await context.newPage();
-      await own.route(
-        (url) => url.origin === new URL(base).origin && !url.pathname.startsWith("/assets/"),
-        async (route) => {
-          const req = route.request();
-          const mode = req.headers().corten;
-          const write = req.method() === "POST" && ["/smoke/written", "/smoke/written/again"].includes(new URL(req.url()).pathname);
-          if (!write && !(req.resourceType() === "document" || mode === "page" || mode === "nav")) return route.fallback();
-          const at = seen.asked.length;
-          seen.asked.push(`${req.method()} ${new URL(req.url()).pathname} ${mode ?? "-"}`);
-          seen.askedAt.push(Date.now());
-          // Counted as the write is sent, so the writes are numbered in the order the page sent them.
-          if (write) seen.writes += 1;
-          const writes = seen.writes;
-          // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
-          const sent = { ...req.headers(), "accept-encoding": "identity" };
-          if (write && !seen.draws) delete sent.prefer;
-          const res = await route.fetch({ headers: sent });
-          const headers = res.headers();
-          if (write) seen.answered = { ...headers };
-          delete headers["content-encoding"];
-          delete headers["content-length"];
-          const text = await res.text();
-          // A navigation's <main> has no layout to change: only `seen.nav` changes it.
-          const body = mode === "nav" ? seen.nav(text, at) : write || seen.written ? edit(text, writes, write ? headers : undefined, at) : before(text);
-          seen.written ||= write;
-          if (write && seen.fail) {
-            seen.settled[writes] = sinceNow(seen);
-            return route.abort("failed");
-          }
-          if (write) await seen.hold(writes);
-          if (write) seen.settled[writes] = sinceNow(seen);
-          await route.fulfill({ status: write && seen.status ? seen.status : res.status(), headers, body }).catch(() => {});
-          if (write) seen.answers += 1;
-        },
+      const own = await within(5000, "the write case's page was not made within 5 s", context.newPage());
+      await within(
+        5000,
+        "the write case's route was not set within 5 s",
+        own.route(
+          (url) => url.origin === new URL(base).origin && !url.pathname.startsWith("/assets/"),
+          async (route) => {
+            const req = route.request();
+            const mode = req.headers().corten;
+            const write = req.method() === "POST" && ["/smoke/written", "/smoke/written/again"].includes(new URL(req.url()).pathname);
+            if (!write && !(req.resourceType() === "document" || mode === "page" || mode === "nav")) return route.fallback();
+            const at = seen.asked.length;
+            seen.asked.push(`${req.method()} ${new URL(req.url()).pathname} ${mode ?? "-"}`);
+            seen.askedAt.push(Date.now());
+            // Counted as the write is sent, so the writes are numbered in the order the page sent them.
+            if (write) seen.writes += 1;
+            const writes = seen.writes;
+            // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+            const sent = { ...req.headers(), "accept-encoding": "identity" };
+            if (write && !seen.draws) delete sent.prefer;
+            const res = await route.fetch({ headers: sent });
+            const headers = res.headers();
+            if (write) seen.answered = { ...headers };
+            delete headers["content-encoding"];
+            delete headers["content-length"];
+            const text = await res.text();
+            // A navigation's <main> has no layout to change: only `seen.nav` changes it.
+            const body = mode === "nav" ? seen.nav(text, at) : write || seen.written ? edit(text, writes, write ? headers : undefined, at) : before(text);
+            seen.written ||= write;
+            if (write && seen.fail) {
+              seen.settled[writes] = sinceNow(seen);
+              return route.abort("failed");
+            }
+            if (write) await seen.hold(writes);
+            if (write) seen.settled[writes] = sinceNow(seen);
+            await route.fulfill({ status: write && seen.status ? seen.status : res.status(), headers, body }).catch(() => {});
+            if (write) seen.answers += 1;
+          },
+        ),
       );
       await own.goto(`${base}${path}`);
-      await own.evaluate(() => ((/** @type {any} */ (window)).__marker = 1));
+      await within(
+        5000,
+        "the write case's page was not marked within 5 s",
+        own.evaluate(() => ((/** @type {any} */ (window)).__marker = 1)),
+      );
       return { own, seen };
     } catch (error) {
-      await context.close().catch(() => {});
+      await closeContext(context, "the write case's context").catch(() => {});
       throw error;
     }
   };
@@ -188,24 +198,28 @@ export async function pageWrites(page, browser) {
    * Notes, from now on, each mark a case's stand-in put in an answer (`data-smoke-at`, the answer's
    * place in `seen.asked`) the moment the page draws it, so a draw that the next one replaces is
    * seen too: the time of that draw (`Date.now()` in the page), and what the header said had failed
-   * at that moment (its `data-failed`, or null). `drawnBy` reads them.
+   * at that moment (its `data-failed`, or null). `drawnBy` reads them. Set up within 5 s.
    * @param {import("@playwright/test").Page} own
    */
   const watchMarks = (own) =>
-    own.evaluate(() => {
-      /** @type {Record<string, { time: number, failed: string | null }>} */
-      const marks = Object.create(null);
-      (/** @type {any} */ (window)).__marks = marks;
-      const note = () => {
-        const time = Date.now();
-        for (const el of Array.from(document.querySelectorAll("[data-smoke-at]"))) {
-          const at = /** @type {string} */ (el.getAttribute("data-smoke-at"));
-          marks[at] ??= { time, failed: document.querySelector("header")?.getAttribute("data-failed") ?? null };
-        }
-      };
-      note();
-      new MutationObserver(note).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-smoke-at"] });
-    });
+    within(
+      5000,
+      "the page did not start noting its draws within 5 s",
+      own.evaluate(() => {
+        /** @type {Record<string, { time: number, failed: string | null }>} */
+        const marks = Object.create(null);
+        (/** @type {any} */ (window)).__marks = marks;
+        const note = () => {
+          const time = Date.now();
+          for (const el of Array.from(document.querySelectorAll("[data-smoke-at]"))) {
+            const at = /** @type {string} */ (el.getAttribute("data-smoke-at"));
+            marks[at] ??= { time, failed: document.querySelector("header")?.getAttribute("data-failed") ?? null };
+          }
+        };
+        note();
+        new MutationObserver(note).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-smoke-at"] });
+      }),
+    );
   /**
    * The page's record of its draw of the answer to `seen.asked[at]` (`watchMarks`), if the page drew
    * it by `by` (a `Date.now()` time), else null. The draw's own time, recorded by the page as it drew,
@@ -221,14 +235,17 @@ export async function pageWrites(page, browser) {
     return drawn && drawn.time <= by ? drawn : null;
   };
   /**
-   * The place in `seen.asked` of the first read of `/smoke/written/again` from `from.at` on, if it
-   * reached the stand-in within 5 s of `from.time`, else null: a first read asked later fails
-   * however soon the check looks, and the check waits for one only until then.
+   * The place in `seen.asked` of the first read of `/smoke/written/again` from `from` on (at or after
+   * its place, `from.at`, and reaching the stand-in at or after its time, `from.time`), if it reached
+   * the stand-in within 5 s of `from.time`, else null: a first read asked later fails however soon
+   * the check looks, and the check waits for one only until then. Its place alone does not do: a
+   * place taken before the page is asked to do something (let a held body go) lets in a read that
+   * reached the stand-in while that task waited to run, before what the read must follow.
    * @param {{ asked: string[], askedAt: number[] }} seen @param {Since} from
    */
   const readAsked = async (seen, from) => {
     const by = from.time + 5000;
-    const first = () => seen.asked.findIndex((a, i) => i >= from.at && a.startsWith("GET /smoke/written/again"));
+    const first = () => seen.asked.findIndex((a, i) => i >= from.at && seen.askedAt[i] >= from.time && a.startsWith("GET /smoke/written/again"));
     if (first() < 0) await pollFor(Math.max(0, by - Date.now()), async () => first() >= 0);
     const at = first();
     return at >= 0 && seen.askedAt[at] <= by ? at : null;
@@ -239,23 +256,30 @@ export async function pageWrites(page, browser) {
    * again draws the form's <main> over it a second later, which a sampled wait in a loaded browser
    * can miss (#2035), and a brand a later whole read draws is not the write's. Only the write's own
    * page has that <main>. With `inMain`, only an element in <main> must not be busy: a form outside
-   * it whose own write is still out stays busy meanwhile. `writtenSeen` reads it.
+   * it whose own write is still out stays busy meanwhile. `writtenSeen` reads it. Set up within 5 s.
    * @param {import("@playwright/test").Page} own @param {string} [brand] @param {boolean} [inMain]
    */
   const watchWritten = (own, brand, inMain = false) =>
-    own.evaluate(({ brand, inMain }) => {
-      const w = /** @type {any} */ (window);
-      w.__writtenSeen = false;
-      const drawn = () =>
-        !!document.querySelector("main")?.textContent?.includes("Written by the form's own page.") &&
-        !document.querySelector(inMain ? "main[aria-busy], main [aria-busy]" : "[aria-busy]") &&
-        (brand === null || document.querySelector("header span")?.textContent === brand);
-      new MutationObserver((_, observer) => {
-        if (!drawn()) return;
-        w.__writtenSeen = true;
-        observer.disconnect();
-      }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["aria-busy"] });
-    }, { brand: brand ?? null, inMain });
+    within(
+      5000,
+      "the page did not start noting the write's <main> within 5 s",
+      own.evaluate(
+        ({ brand, inMain }) => {
+          const w = /** @type {any} */ (window);
+          w.__writtenSeen = false;
+          const drawn = () =>
+            !!document.querySelector("main")?.textContent?.includes("Written by the form's own page.") &&
+            !document.querySelector(inMain ? "main[aria-busy], main [aria-busy]" : "[aria-busy]") &&
+            (brand === null || document.querySelector("header span")?.textContent === brand);
+          new MutationObserver((_, observer) => {
+            if (!drawn()) return;
+            w.__writtenSeen = true;
+            observer.disconnect();
+          }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["aria-busy"] });
+        },
+        { brand: brand ?? null, inMain },
+      ),
+    );
   /**
    * Whether `watchWritten` saw the write's own page drawn, within 5 s of the call, which a case makes
    * the moment it sees the write sent. @param {import("@playwright/test").Page} own
@@ -535,7 +559,11 @@ export async function pageWrites(page, browser) {
       seen.nav = markNav;
       await watchMarks(own);
       // The page says the write failed in its header, as a toaster in the layout shows it.
-      await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
+      await within(
+        5000,
+        "the page's failure listener was not set within 5 s",
+        own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", ""))),
+      );
       // The write the page's next read of itself follows: the failed one, or the legacy one after it.
       let follows = seen.writes + 1;
       const sent = await pressWrite(own, seen, "main form button");
@@ -573,7 +601,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ sent, failed, legacySent, legacyDrew, again, drawn, drewAgain, kept, arrived, asked: seen.asked, shown }),
       );
     } finally {
-      await own.context().close();
+      await closeContext(own.context(), "the failed write case's context");
     }
   }
   /** Whether the brand comes to read `text`. @param {import("@playwright/test").Page} own @param {string} text */
@@ -659,6 +687,36 @@ export async function pageWrites(page, browser) {
     );
     await own.context().close();
   }
+  /**
+   * When the page noted a held body cut (or given) and the failure shown for it (`__bodyAt`,
+   * `__failedAt`, by its clock), and by when they had to come (`by`): 5 s from the body's release,
+   * by the time the page recorded as it let go (`__releasedAt`), or, while it has not let go, 5 s
+   * from the call. The check looks until `by` and once more after it (each look bounded to 5 s), and
+   * the recorded times decide, so a check that looks late neither passes an outcome that came after
+   * `by` nor fails one that came before it.
+   * @param {import("@playwright/test").Page} own
+   */
+  const bodyOutcome = async (own) => {
+    const start = Date.now();
+    const look = () =>
+      own.evaluate(() => {
+        const state = /** @type {any} */ (window);
+        return {
+          releasedAt: /** @type {number | null} */ (state.__releasedAt ?? null),
+          bodyAt: /** @type {number | null} */ (state.__bodyAt ?? null),
+          failedAt: /** @type {number | null} */ (state.__failedAt ?? null),
+        };
+      });
+    for (;;) {
+      // A look started after `by` sees all the page recorded by then.
+      const lookedAt = Date.now();
+      const now = await within(5000, "the page did not say what became of the body within 5 s", look()).catch(() => null);
+      if (now === null) return { releasedAt: null, bodyAt: null, failedAt: null, by: null };
+      const by = (now.releasedAt ?? start) + 5000;
+      if (now.failedAt !== null || lookedAt > by) return { ...now, by };
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
   // A write's body fails after its headers, optionally after another form's whole page has
   // already drawn over its ledger entry. Keep the first form in an unchanged layout element so
   // its error still bubbles. A poll leaves that failure in view; a link reads the layout anew.
@@ -690,66 +748,95 @@ export async function pageWrites(page, browser) {
       seen.status = status;
       seen.nav = markNav;
       await watchMarks(own);
-      await own.evaluate(({ overlap, status, complete }) => {
-        const state = /** @type {any} */ (window);
-        // The form that sends the first write (the first submitted from here on), noted as it is
-        // submitted, before any handler of the page's.
-        addEventListener("submit", (event) => (state.__heldForm ??= event.target), { capture: true });
-        // Each failure the page says, with what had become of the held body at that moment and
-        // whether it was said on the form that sent the held write, so the check takes a failure as
-        // the body's only if it came after the body was cut (or given), on that form.
-        /** @type {{ status: number, body: string | null, onHeldForm: boolean, target: string }[]} */
-        const errors = [];
-        state.__errors = errors;
-        addEventListener("corten:error", (event) => {
-          const failed = String((/** @type {CustomEvent} */ (event)).detail.status);
-          const target = event.target;
-          errors.push({
-            status: Number(failed),
-            body: state.__bodyAfterHeaders ?? null,
-            onHeldForm: target instanceof HTMLFormElement && target === state.__heldForm,
-            target: target instanceof Element ? `${target.localName}${target.id ? `#${target.id}` : ""}` : target === window ? "window" : String(target),
-          });
-          document.querySelector("header")?.setAttribute("data-failed", failed);
-        });
-        const fetch_ = window.fetch;
-        let cut = false;
-        window.fetch = async function (input, init) {
-          const res = await fetch_.call(this, input, init);
-          if (!cut && init?.method === "POST") {
-            cut = true;
-            /** @template T @param {() => Promise<T>} body */
-            const held = (body) => new Promise((resolve, reject) => {
-              // Noted here alone: the write's headers came and its body was asked for, then cut (or,
-              // complete, given in full), so a write that failed before its headers is not taken for
-              // it. Letting go does not wait for the body: a body that never comes leaves no note.
-              const release = () => {
-                // When it was let go, by the page's clock: the page's next read is counted from it.
-                state.__releasedAt = Date.now();
-                if (!complete) {
-                  state.__bodyAfterHeaders = "cut";
-                  reject(new TypeError("network error"));
-                  return;
-                }
-                body().then((value) => {
-                  state.__bodyAfterHeaders = "completed";
-                  resolve(value);
-                }, reject);
-              };
-              if (overlap) state.__releaseBody = release;
-              else release();
+      await within(
+        5000,
+        "the page's failure and body notes were not set within 5 s",
+        own.evaluate(
+          ({ overlap, status, complete }) => {
+            const state = /** @type {any} */ (window);
+            // The form that sends the first write (the first submitted from here on), noted as it is
+            // submitted, before any handler of the page's.
+            addEventListener("submit", (event) => (state.__heldForm ??= event.target), { capture: true });
+            // Each failure the page says, with what had become of the held body at that moment and
+            // whether it was said on the form that sent the held write, so the check takes a failure as
+            // the body's only if it came after the body was cut (or given), on that form.
+            /** @type {{ status: number, body: string | null, onHeldForm: boolean, target: string, time: number }[]} */
+            const errors = [];
+            state.__errors = errors;
+            addEventListener("corten:error", (event) => {
+              const failed = String((/** @type {CustomEvent} */ (event)).detail.status);
+              const target = event.target;
+              errors.push({
+                status: Number(failed),
+                body: state.__bodyAfterHeaders ?? null,
+                onHeldForm: target instanceof HTMLFormElement && target === state.__heldForm,
+                target: target instanceof Element ? `${target.localName}${target.id ? `#${target.id}` : ""}` : target === window ? "window" : String(target),
+                time: Date.now(),
+              });
+              document.querySelector("header")?.setAttribute("data-failed", failed);
             });
-            if (status === 503) {
-              const body = res.arrayBuffer.bind(res);
-              res.arrayBuffer = () => held(body);
-            } else {
-              const body = res.text.bind(res);
-              res.text = () => held(body);
-            }
-          }
-          return res;
-        };
-      }, { overlap, status, complete });
+            // The moment the expected failure is shown for the body, by the page's clock: the body cut
+            // (or given), the page's first failure the expected one, said after that on the form that
+            // sent the held write, the header saying it and nothing busy. The check compares that
+            // moment with the body's release, however late it looks.
+            const expected = complete ? 503 : 0;
+            const note = complete ? "completed" : "cut";
+            new MutationObserver((_, observer) => {
+              const first = errors[0];
+              const shown =
+                state.__bodyAfterHeaders === note &&
+                first?.status === expected &&
+                first.body === note &&
+                first.onHeldForm &&
+                document.querySelector("header")?.getAttribute("data-failed") === String(expected) &&
+                !document.querySelector("[aria-busy]");
+              if (!shown) return;
+              state.__failedAt = Date.now();
+              observer.disconnect();
+            }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-busy", "data-failed"] });
+            const fetch_ = window.fetch;
+            let cut = false;
+            window.fetch = async function (input, init) {
+              const res = await fetch_.call(this, input, init);
+              if (!cut && init?.method === "POST") {
+                cut = true;
+                /** @template T @param {() => Promise<T>} body */
+                const held = (body) => new Promise((resolve, reject) => {
+                  // Noted here alone: the write's headers came and its body was asked for, then cut (or,
+                  // complete, given in full), so a write that failed before its headers is not taken for
+                  // it. Letting go does not wait for the body: a body that never comes leaves no note.
+                  const release = () => {
+                    // When it was let go, by the page's clock: the page's next read is counted from it.
+                    state.__releasedAt = Date.now();
+                    if (!complete) {
+                      state.__bodyAfterHeaders = "cut";
+                      state.__bodyAt = Date.now();
+                      reject(new TypeError("network error"));
+                      return;
+                    }
+                    body().then((value) => {
+                      state.__bodyAfterHeaders = "completed";
+                      state.__bodyAt = Date.now();
+                      resolve(value);
+                    }, reject);
+                  };
+                  if (overlap) state.__releaseBody = release;
+                  else release();
+                });
+                if (status === 503) {
+                  const body = res.arrayBuffer.bind(res);
+                  res.arrayBuffer = () => held(body);
+                } else {
+                  const body = res.text.bind(res);
+                  res.text = () => held(body);
+                }
+              }
+              return res;
+            };
+          },
+          { overlap, status, complete },
+        ),
+      );
       // The write whose body is cut (or given): the page's next read of itself follows its answer, or,
       // with a second write, the body's release, before which it cannot fail.
       const first = seen.writes + 1;
@@ -777,8 +864,10 @@ export async function pageWrites(page, browser) {
           // Let go in a page task that does not wait for the body, bounded: whether the body came
           // and the failure it brings are what the bounded wait below checks. The page's next read
           // is counted from the release itself: its place among the reads is taken before the page
-          // is asked to let go, and its time is the one the page recorded as it let go, so a read
-          // made while the body was still held is a read before the failure (`nextPollDrawn`).
+          // is asked to let go, and its time is the one the page recorded as it let go, and a read
+          // counts only if it reached the stand-in at or after that time too (`readAsked`), so a
+          // read made while the body was still held, or while the task that lets it go waited to
+          // run, is a read before the failure (`nextPollDrawn`).
           if (drewOver) {
             const at = seen.asked.length;
             const time = await within(
@@ -795,30 +884,13 @@ export async function pageWrites(page, browser) {
           }
         }
       }
-      // The body cut (or given in full) and the failure shown for it, both within 5 s: the page's
-      // first failure must be the expected one, said once the body was cut (or given), not before,
-      // and on the form that sent the held write.
-      const failed = await own
-        .waitForFunction(
-          ({ status, note }) => {
-            const state = /** @type {any} */ (window);
-            const first = /** @type {{ status: number, body: string | null, onHeldForm: boolean }[]} */ (state.__errors)[0];
-            return (
-              state.__bodyAfterHeaders === note &&
-              first?.status === status &&
-              first.body === note &&
-              first.onHeldForm &&
-              document.querySelector("header")?.getAttribute("data-failed") === String(status) &&
-              !document.querySelector("[aria-busy]")
-            );
-          },
-          { status: complete ? 503 : 0, note: complete ? "completed" : "cut" },
-          { timeout: 5000 },
-        )
-        .then(
-          () => true,
-          () => false,
-        );
+      // The body cut (or given in full) and the failure shown for it, both within 5 s of the body's
+      // release, by the times the page recorded for the three (`bodyOutcome`): the page's first
+      // failure must be the expected one, said once the body was cut (or given), not before, and on
+      // the form that sent the held write.
+      const outcome = await bodyOutcome(own);
+      const failed =
+        outcome.by !== null && outcome.bodyAt !== null && outcome.bodyAt <= outcome.by && outcome.failedAt !== null && outcome.failedAt <= outcome.by;
       const { afterHeaders, errors } = await own.evaluate(() => ({
         afterHeaders: /** @type {string | undefined} */ ((/** @type {any} */ (window)).__bodyAfterHeaders) ?? null,
         errors: /** @type {unknown[]} */ ((/** @type {any} */ (window)).__errors),
@@ -833,10 +905,10 @@ export async function pageWrites(page, browser) {
         sent && bodyAsked && drewOver && released && failed && afterHeaders === (complete ? "completed" : "cut") && seen.answers === (overlap ? 2 : 1) &&
           again === "GET /smoke/written/again nav" && drewAgain && kept && arrived && shown.brand === (overlap ? "Poll brand" : "Watchlist, written") &&
           seen.asked.includes("GET /smoke/quoted page"),
-        JSON.stringify({ sent, bodyAsked, drewOver, released, failed, afterHeaders, errors, answers: seen.answers, again, drawn, drewAgain, kept, arrived, asked: seen.asked, shown }),
+        JSON.stringify({ sent, bodyAsked, drewOver, released, failed, outcome, afterHeaders, errors, answers: seen.answers, again, drawn, drewAgain, kept, arrived, asked: seen.asked, shown }),
       );
     } finally {
-      await own.context().close();
+      await closeContext(own.context(), "the cut body case's context");
     }
   }
   // A write whose own page reads itself again (ReadAgain) draws, so the page reads itself whole
@@ -857,7 +929,11 @@ export async function pageWrites(page, browser) {
     const { own, seen } = await writtenPage(counted, undefined, "/smoke/written/again");
     try {
       seen.nav = markNav;
-      await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
+      await within(
+        5000,
+        "the page's failure listener was not set within 5 s",
+        own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", ""))),
+      );
       await watchWritten(own, "Count 1");
       await watchMarks(own);
       const firstWrite = seen.writes + 1;
@@ -920,7 +996,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ sentFirst, drew, wholeBefore, wholeDrawn, sentSecond, failed, again, drawn, drewAgain, kept, arrived, asked: seen.asked, shown }),
       );
     } finally {
-      await own.context().close();
+      await closeContext(own.context(), "the read-again failure case's context");
     }
   }
   const waitingPollName = "a whole poll waiting for its stylesheet does not replace the layout after a write fails";
@@ -960,7 +1036,11 @@ export async function pageWrites(page, browser) {
           await route.fulfill({ contentType: "text/css", body: "" }).catch(() => {});
         }),
       );
-      await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
+      await within(
+        5000,
+        "the page's failure listener was not set within 5 s",
+        own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", ""))),
+      );
       await watchWritten(own, "Watchlist, written");
       await watchMarks(own);
       // The whole poll that reads the page a second after the write's page is drawn asks for the
@@ -995,7 +1075,7 @@ export async function pageWrites(page, browser) {
       release();
       await cleanUp(
         () => within(5000, "the stylesheet case's routes were not removed within 5 s", own.unrouteAll({ behavior: "ignoreErrors" })),
-        () => own.context().close(),
+        () => closeContext(own.context(), "the stylesheet case's context"),
       );
     }
     check(
@@ -1156,13 +1236,18 @@ export async function pageWrites(page, browser) {
     /** @type {() => void} */
     let asked = () => {};
     const waiting = new Promise((resolve) => (asked = () => resolve(true)));
-    // The held script is let go, its route removed and the page closed however the case ends.
+    // The held script is let go, its route removed and the page closed however the case ends, each
+    // bounded, as setting the route is.
     try {
-      await own.route("**/scripts/quoted.js", async (route) => {
-        asked();
-        await held;
-        await route.fallback().catch(() => {});
-      });
+      await within(
+        5000,
+        "the held script's route was not set within 5 s",
+        own.route("**/scripts/quoted.js", async (route) => {
+          asked();
+          await held;
+          await route.fallback().catch(() => {});
+        }),
+      );
       await own.click("main form button");
       const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
       await own.click('main a[href="/smoke/quoted"]');
@@ -1205,7 +1290,7 @@ export async function pageWrites(page, browser) {
       release();
       await cleanUp(
         () => within(5000, "the patch case's routes were not removed within 5 s", own.unrouteAll({ behavior: "ignoreErrors" })),
-        () => own.context().close(),
+        () => closeContext(own.context(), "the patch case's context"),
       );
     }
   }

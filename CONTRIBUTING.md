@@ -412,10 +412,12 @@ shown is not one that kept it. That first read is taken from the moment the stan
 answered) the write it follows, or from a held body's release, not from when the check sees the
 failure, and must reach the stand-in within five seconds of that moment: the stand-in records the
 time of each outcome and request, and the page records the time it let a held body go, so a read
-asked later fails however soon the check looks. The page records, the moment it draws each mark,
-the time and whether the failure was shown; the `<main>` must be drawn within five seconds of the
-read reaching the stand-in by that recorded time, so a check that looks late neither fails a draw
-made in time nor passes one made after. The stand-in and the page record times by the same clock
+asked later fails however soon the check looks. A read counts as after that moment only if it
+reached the stand-in at or after its time, not only after its place among the reads: a read that
+came while the page's task to let the body go waited to run came before the release. The page
+records, the moment it draws each mark, the time and whether the failure was shown; the `<main>`
+must be drawn within five seconds of the read reaching the stand-in by that recorded time, so a
+check that looks late neither fails a draw made in time nor passes one made after. The stand-in and the page record times by the same clock
 (`Date.now()`), since the browser runs on the machine that runs the checks.
 The whole-poll stylesheet case requires its
 write, that write's page, the poll's request for the held stylesheet (within five seconds from
@@ -433,17 +435,23 @@ first write sent, and the second write's own `<main>` and the brand it brought m
 same moment, with nothing in `<main>` busy (the first form, outside it, still waits for its body),
 before the first write's body is let go, in a page task that does not wait for the body, bounded
 to five seconds. The body cut (or given in full) and its failure must then both come within five
-seconds, and the page's first failure must be the one expected, said after the wrapper cut (or
-gave) the body, on the form that sent the held write: each failure the page says is recorded with
-the wrapper's state at that moment and its target, compared with the form noted as it submitted
-that write, so a failure said at the headers, before the body, or said on the window or on another
-form, does not count as the body's.
+seconds of the body's release, by the times the page records as it lets the body go, as the body
+is cut (or given) and as that failure is first shown with nothing busy; the check waits only what
+is left of those five seconds, and a late look neither passes an outcome that came after them nor
+fails one that came in time. The page's first failure must be the one expected, said after the
+wrapper cut (or gave) the body, on the form that sent the held write: each failure the page says
+is recorded with the wrapper's state at that moment and its target, compared with the form noted
+as it submitted that write, so a failure said at the headers, before the body, or said on the
+window or on another form, does not count as the body's.
 These cases, and the check that a write's patch answered before a navigation is
 drawn by that page, close their page in a `finally` too, the latter after letting go of the
 script it holds; one cleanup step that fails does not skip the next, and removing a route is
-bounded to five seconds, so one that never settles does not keep the page open. The page these
-checks make is closed by the helper that makes it if its route or its load fails, before a case
-holds it.
+bounded to five seconds, so one that never settles does not keep the page open. Setting a route,
+starting a page's notes of what it draws and listening for its failures are bounded to five seconds
+each too, and closing a page's context is: if that close is not confirmed in time, each of its
+pages is closed, bounded the same, and the case fails rather than waits. The page these checks make
+is closed by the helper that makes it if making it, its route, its load or its mark fails, each but
+the load (which has Playwright's 30 seconds) bounded to five seconds, before a case holds it.
 That check counts only the
 reads of the page it goes back to, since the page that comes can prefetch the link left under the
 pointer. The check that a page part's answer that asks again takes the place of the page's tag
@@ -454,23 +462,30 @@ asking again from the same address); the check requires an answer that asked, an
 is the server's. The tag the first drawn answer that asks again puts on the page has its address
 moved, the moment it is drawn, to one the server reads the same, and the read after that answer's
 must be made from the moved address: the read is made from the tag on the page, which a script may
-change, not from the answer's own. The case keeps one log of the page's reads of the alerts page
-(each part read, whatever its query, and each read of the page itself), started before the page is
-loaded; the document it loads is told from them by its own request, so a read of the page sent
-before that load ends counts against "read again, not the page". Each part read takes its place
-among the stand-in's answers as it reaches it, and its answer's status line carries that place, so
-the check that the part stops counts only once the first answer to draw `Saved.`, noted the moment
-it is drawn with the time the page drew it, is one that does not ask again, drawn within five
-seconds counted from before the first check's wait for `Saved.`. It then requires no read of the
-page at all in the log after the one whose answer drew it, until 2.2 s after that draw by the time
-the page recorded, not after the check saw it. Its route is set and removed each within five
-seconds, and its route, request listener and init script on the shared page are removed, and its
-observer in the page disconnected, however it ends; the init script then does nothing in the
-document it ran in. The slow part's reads that a case holds unanswered are let go when it ends, a
-wait bounded to five seconds, after which its route is removed (bounded the same) and its page
-closed all the same. The link a failed slow part shows is pressed in the page too;
-the page it opens must commit within five seconds counted from just before the press, a budget
-the press task shares, and have its part read in within five seconds of the check seeing that
+change, not from the answer's own. The read after that answer's is the one the page sent next after
+that answer's own read, by the log below, so a read at another address between the two fails it.
+The case keeps one log of every read of `/alerts` the page sends, whatever its query: each part
+read, each read of the page itself and each hover prefetch (the runtime's fetch of a link under the
+pointer, which reads nothing again: it is named in the details and counted by no check), started
+before the page is loaded; the document it loads is told from them by its own request, so a read
+of the page sent before that load ends counts against "read again, not the page". Each part read
+takes its place among the stand-in's answers as it reaches it, and its answer's status line carries
+that place, so the check that the part stops counts only once the first answer to draw `Saved.`,
+noted the moment it is drawn with the time the page drew it, is one that does not ask again, drawn
+within five seconds counted from before the first check's wait for `Saved.`. It then requires no
+read of the page at all (a hover prefetch aside) in the log after the one whose answer drew it,
+until 2.2 s after that draw by the time the page recorded, not after the check saw it. Its route is
+set and removed each within five seconds, and its route, request listener and init script on the
+shared page are removed, and its observer in the page disconnected, however it ends, adding and
+removing the init script each bounded to five seconds; the init script then does nothing in the
+document it ran in, nor, by a switch the case sets in the page's session storage as it ends and
+clears once the removal is confirmed, in a later one, and the route lets each read through once the
+case is over, so neither acts on later checks if its removal is not confirmed. The slow part's reads
+that a case holds unanswered are let go when it ends, once its route has stopped holding any, a wait
+bounded to five seconds, after which its route is removed (bounded the same) and its page closed all
+the same, as its request listener is removed. The link a failed slow part shows is pressed in the
+page too; the page it opens must commit within five seconds counted from just before the press, a
+budget the press task shares, and have its part read in within five seconds of the check seeing that
 commit.
 
 The account page's posts without JavaScript (the name, the refused name and the picture) each

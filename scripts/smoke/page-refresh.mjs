@@ -33,26 +33,37 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // browser without JavaScript.
     {
       // One log of the page's reads of the alerts page, started before the page is loaded, in the
-      // order the page sent them: each part read (a `corten: action` GET of `/alerts`, whatever its
-      // query) and each read of the page itself (any other GET of `/alerts?saved=`), with when it was
-      // sent (`Date.now()`). The document the case loads is told from them by its own request, and
-      // only what came after it counts, so a read sent before that load ends counts too.
-      /** @type {{ request: import("@playwright/test").Request, time: number, part: boolean }[]} */
+      // order the page sent them: every GET of `/alerts`, whatever its query, with when it was sent
+      // (`Date.now()`) and its kind: a part read (`corten: action`), a hover prefetch (`purpose:
+      // prefetch`, the runtime's fetch of a link under the pointer, which reads nothing again and is
+      // named in the details but counted by no check), or a read of the page itself (any other). The
+      // document the case loads is told from them by its own request, and only what came after it
+      // counts, so a read sent before that load ends counts too.
+      /** @typedef {{ request: import("@playwright/test").Request, time: number, kind: "part" | "prefetch" | "page" }} Read */
+      /** @type {Read[]} */
       const log = [];
       const onPart = (/** @type {import("@playwright/test").Request} */ r) => {
-        if (r.method() !== "GET") return;
-        const u = new URL(r.url());
-        const part = r.headers()["corten"] === "action";
-        if (u.pathname === "/alerts" && (part || u.searchParams.has("saved"))) log.push({ request: r, time: Date.now(), part });
+        if (r.method() !== "GET" || new URL(r.url()).pathname !== "/alerts") return;
+        const headers = r.headers();
+        const kind = headers["corten"] === "action" ? "part" : headers["purpose"] === "prefetch" || headers["sec-purpose"]?.includes("prefetch") ? "prefetch" : "page";
+        log.push({ request: r, time: Date.now(), kind });
       };
       /** The document the case loaded, once it has. @type {import("@playwright/test").Request | null} */
       let initial = null;
       /** The log from after the document the case loaded (all of it if that was not seen). */
       const since = () => log.slice(log.findIndex((e) => e.request === initial) + 1);
-      const parts = () => since().filter((e) => e.part);
-      const whole = () => since().filter((e) => !e.part);
-      /** A logged read, named for a check's detail, with when it was sent from `time`. @param {{ request: import("@playwright/test").Request, time: number, part: boolean }} e @param {number} time */
-      const named = (e, time) => `${e.part ? "part" : "page"} ${new URL(e.request.url()).pathname}${new URL(e.request.url()).search} (+${e.time - time} ms)`;
+      const parts = () => since().filter((e) => e.kind === "part");
+      const whole = () => since().filter((e) => e.kind === "page");
+      const prefetches = () => since().filter((e) => e.kind === "prefetch");
+      /** A logged read's address. @param {Read} e */
+      const address = (e) => new URL(e.request.url()).pathname + new URL(e.request.url()).search;
+      /** A logged read, named for a check's detail, with when it was sent from `time`. @param {Read} e @param {number} time */
+      const named = (e, time) => `${e.kind} ${address(e)} (+${e.time - time} ms)`;
+      /** The read the page sent next after `request`, prefetches aside, if any. @param {import("@playwright/test").Request | undefined} request */
+      const after = (request) => {
+        const at = request === undefined ? -1 : log.findIndex((e) => e.request === request);
+        return at < 0 ? undefined : log.slice(at + 1).find((e) => e.kind !== "prefetch");
+      };
       const url = await pending();
       // The write lands 1.5 s after it is sent and the part is first read 1 s after the page has
       // loaded, so a loaded browser's first read can find it landed, and then no answer asks again
@@ -70,9 +81,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       /** Each of those reads' request, by the same place. @type {import("@playwright/test").Request[]} */
       const answered = [];
       const partReads = (/** @type {URL} */ u) => u.pathname + u.search === from || u.pathname + u.search === movedFrom;
+      /** Set once the case is over: the route lets each read through, whether or not its removal is confirmed. */
+      let over = false;
       const partRead = async (/** @type {import("@playwright/test").Route} */ route) => {
         const request = route.request();
-        if (request.method() !== "GET" || request.headers()["corten"] !== "action") return route.fallback();
+        if (over || request.method() !== "GET" || request.headers()["corten"] !== "action") return route.fallback();
         const at = answers.length;
         const asked = new URL(request.url());
         const address = asked.pathname + asked.search;
@@ -91,10 +104,16 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         answers[at] = { url: address, asks: answer.includes("data-corten-read-again"), standIn };
         await route.fulfill({ status: res.status(), headers, body: marked });
       };
-      /** The init script below, removed with the route and listener. @type {import("@playwright/test").Disposable | undefined} */
+      /** The init script below being added, removed with the route and listener. @type {Promise<import("@playwright/test").Disposable> | undefined} */
       let script;
+      /**
+       * The key in the page's `sessionStorage` that turns the init script off in every document it
+       * runs in from then on: set as the case ends, so the script does nothing even if its removal
+       * is not confirmed, and cleared once it is.
+       */
+      const offKey = "smoke-part-reads-off";
       // The route, the listener, the init script and its observer on the shared page are removed
-      // however the case ends.
+      // however the case ends, each bounded to 5 s, as adding them is.
       try {
         // The page's own tag, as the server drew it, so the check below can tell it from the one an
         // answer put in its place. The first answer the page draws whose tag asks again has that tag
@@ -103,34 +122,44 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         // page draws as `Saved.`, noted the moment it is drawn with the time it was drawn (its
         // `data-smoke-read`, below), so a later answer that draws `Saved.` again before the check
         // looks is not taken for it. Once the case ends (`__smokeOff`) the script does nothing in
-        // the document it ran in.
-        script = await page.addInitScript((movedFrom) => {
-          const w = /** @type {any} */ (window);
-          document.addEventListener(
-            "DOMContentLoaded",
-            () => {
-              if (!w.__smokeOff) w.__pageTag = document.querySelector("main template[data-corten-read-again][data-from]");
-            },
-            { once: true },
-          );
-          if (location.pathname !== "/alerts") return;
-          const observer = new MutationObserver(() => {
-            const status = document.getElementById("alert-status");
-            const read = status?.getAttribute("data-smoke-read");
-            if (w.__smokeOff || !status || read == null) return;
-            if (w.__moved === undefined) {
-              const tag = document.querySelector("main template[data-corten-read-again][data-from]");
-              if (tag && tag !== w.__pageTag) {
-                tag.setAttribute("data-from", movedFrom);
-                w.__moved = read;
-              }
+        // the document it ran in, and nothing in a later one (`offKey`).
+        script = page.addInitScript(
+          ({ movedFrom, offKey }) => {
+            try {
+              if (sessionStorage.getItem(offKey)) return;
+            } catch {
+              return;
             }
-            if (w.__firstSaved === undefined && status.textContent === "Saved.") w.__firstSaved = { read, time: Date.now() };
-            if (w.__moved !== undefined && w.__firstSaved !== undefined) observer.disconnect();
-          });
-          w.__smokeObserver = observer;
-          observer.observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-smoke-read"] });
-        }, movedFrom);
+            const w = /** @type {any} */ (window);
+            document.addEventListener(
+              "DOMContentLoaded",
+              () => {
+                if (!w.__smokeOff) w.__pageTag = document.querySelector("main template[data-corten-read-again][data-from]");
+              },
+              { once: true },
+            );
+            if (location.pathname !== "/alerts") return;
+            const observer = new MutationObserver(() => {
+              const status = document.getElementById("alert-status");
+              const read = status?.getAttribute("data-smoke-read");
+              if (w.__smokeOff || !status || read == null) return;
+              if (w.__moved === undefined) {
+                const tag = document.querySelector("main template[data-corten-read-again][data-from]");
+                if (tag && tag !== w.__pageTag) {
+                  tag.setAttribute("data-from", movedFrom);
+                  w.__moved = read;
+                }
+              }
+              if (w.__firstSaved === undefined && status.textContent === "Saved.") w.__firstSaved = { read, time: Date.now() };
+              if (w.__moved !== undefined && w.__firstSaved !== undefined) observer.disconnect();
+            });
+            w.__smokeObserver = observer;
+            observer.observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-smoke-read"] });
+          },
+          { movedFrom, offKey },
+        );
+        script.catch(() => {});
+        await within(5000, "the case's init script was not added within 5 s", script);
         try {
           // Inside the guard: Playwright registers the handler before it awaits the browser's setup.
           // Bounded, as its removal below is.
@@ -139,7 +168,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           initial = (await page.goto(url))?.request() ?? null;
           const waiting = await saved();
           await page.fill("input[name=above]", "123.45");
-          await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 8));
+          await within(
+            5000,
+            "the page was not marked within 5 s",
+            page.evaluate(() => ((/** @type {any} */ (window)).__marker = 8)),
+          );
           const entries = await page.evaluate(() => history.length);
           // The check that the part stops needs `Saved.` drawn within 5 s from here, the wait below
           // included: by the draw's own time, recorded by the page.
@@ -148,7 +181,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           check(
             "a page's part waiting for a write is read again after a full load, not the page",
             waiting === "Saving..." && (await saved()) === "Saved." && initial !== null && parts().length > 0 && whole().length === 0 && page.url() === url,
-            `${waiting} -> ${await saved()} after ${parts().length} part and ${whole().length} page reads${initial ? "" : " (the document loaded not seen)"}`,
+            `${waiting} -> ${await saved()} after ${parts().length} part and ${whole().length} page reads${whole().length ? ` (${whole().map((e) => address(e)).join(", ")})` : ""}${prefetches().length ? `, and ${prefetches().length} prefetches not counted (${prefetches().map((e) => address(e)).join(", ")})` : ""}${initial ? "" : " (the document loaded not seen)"}`,
           );
           const kept = await page.evaluate(() => ({
             marker: (/** @type {any} */ (window)).__marker,
@@ -160,7 +193,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           // last read's, and not the page's own (whose address is the same here). And the tag on the
           // page is the one its next read is made from: the first drawn answer's, moved to
           // `movedFrom` as it was drawn, sends the read after that answer's to `movedFrom`, where a
-          // read made from the answer's own tag, as it came, would go to `from`.
+          // read made from the answer's own tag, as it came, would go to `from`. The read after is the
+          // one the page sent next after that answer's own read, by the log, prefetches aside: a read
+          // the stand-in did not answer (another address) comes between them too.
           const tagged = await page.evaluate(() => {
             const all = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"));
             const first = (/** @type {any} */ (window)).__pageTag;
@@ -172,7 +207,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             };
           });
           const tags = tagged.tags;
-          const movedRead = tagged.moved === null ? null : (answers[Number(tagged.moved) + 1]?.url ?? null);
+          const next = tagged.moved === null ? undefined : after(answered[Number(tagged.moved)]);
+          const movedRead = next === undefined ? null : `${next.kind === "part" ? "" : `${next.kind} `}${address(next)}`;
           const lastPart = parts().at(-1)?.request.url();
           check(
             "a page part's answer that asks again takes the place of the tag that asked",
@@ -186,7 +222,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           // later read that draws `Saved.` again would hide the read before it). The 2.2 s are
           // counted from that draw, not from when the check saw it, and no read of the page may come
           // after that answer's own read in the log, whatever its address: a read sent between the
-          // draw and the check seeing it counts against it, as does one at the end of the 2.2 s.
+          // draw and the check seeing it counts against it, as does one at the end of the 2.2 s. A
+          // hover prefetch is no read again, and is named but not counted.
           const look = () =>
             page.evaluate(() => /** @type {{ read: string, time: number } | undefined} */ ((/** @type {any} */ (window)).__firstSaved));
           const first =
@@ -196,17 +233,20 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const quiet = !!last && !last.asks;
           if (quiet && drawn) await page.waitForTimeout(Math.max(0, drawn.time + 2200 - Date.now()));
           const terminal = quiet && drawn ? log.findIndex((e) => e.request === answered[Number(drawn.read)]) : -1;
-          const later = terminal < 0 || !drawn ? [] : log.slice(terminal + 1).map((e) => named(e, drawn.time));
+          const afterTerminal = terminal < 0 || !drawn ? [] : log.slice(terminal + 1);
+          const later = afterTerminal.filter((e) => e.kind !== "prefetch").map((e) => named(e, /** @type {{ time: number }} */ (drawn).time));
+          const prefetched = afterTerminal.filter((e) => e.kind === "prefetch").map((e) => named(e, /** @type {{ time: number }} */ (drawn).time));
           check(
             "a page's part stops once its patch no longer asks",
             quiet && terminal >= 0 && later.length === 0,
             quiet
               ? terminal < 0
                 ? `the read whose answer first drew Saved. (${drawn?.read}) is not in the page's reads`
-                : `${later.length} reads after the read whose answer first drew Saved. (${drawn?.read}), to 2.2 s after that draw: ${later.join(", ") || "none"}`
+                : `${later.length} reads after the read whose answer first drew Saved. (${drawn?.read}), to 2.2 s after that draw: ${later.join(", ") || "none"}${prefetched.length ? `; prefetches not counted: ${prefetched.join(", ")}` : ""}`
               : `no answer that does not ask again was the first to draw Saved., within 5 s (${JSON.stringify({ first, answers })})`,
           );
         } finally {
+          over = true;
           await within(5000, "the part route was not removed within 5 s", page.unroute(partReads, partRead));
         }
         if (swaps) {
@@ -230,19 +270,31 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           for (const name of ["a page's part reached by the runtime's navigation is read again, not the page", "navigating away stops a page's part reads"]) skip(name, noSwaps);
         }
       } finally {
+        /** Whether the init script's removal was confirmed. */
+        let removed = false;
         await cleanUp(
           () => page.off("request", onPart),
           () =>
             within(
               5000,
               "the case's observer was not disconnected within 5 s",
-              page.evaluate(() => {
+              page.evaluate((offKey) => {
                 const w = /** @type {any} */ (window);
                 w.__smokeOff = true;
                 w.__smokeObserver?.disconnect();
-              }),
+                sessionStorage.setItem(offKey, "1");
+              }, offKey),
             ),
-          () => script?.dispose(),
+          async () => {
+            if (!script) return;
+            await within(
+              5000,
+              "the case's init script was not removed within 5 s",
+              script.then((s) => s.dispose()),
+            );
+            removed = true;
+          },
+          () => removed && within(5000, "the case's off switch was not cleared within 5 s", page.evaluate((offKey) => sessionStorage.removeItem(offKey), offKey)),
         );
       }
     }

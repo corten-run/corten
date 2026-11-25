@@ -1,4 +1,4 @@
-import { base, engine, skip, check, cleanUp, steps, within } from "./helpers.mjs";
+import { base, engine, skip, check, cleanUp, steps, within, opened, closeContext } from "./helpers.mjs";
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -32,15 +32,19 @@ export async function partReads(page, browser, swaps, noSwaps) {
   // bring it, and neither did one that fails (offline): the part shows the link instead, and the
   // page it opens has the part read in (#1264).
   {
-    const held = await browser.newPage();
-    /** @type {"hold" | "empty" | "abort"} */
+    const held = await opened("the held part's page", browser.newPage());
+    /** How the route answers a read; `closing` once the case ends, when it lets each go at once. @type {"hold" | "empty" | "abort" | "closing"} */
     let answer = "hold";
     let reads = 0;
     /** Lets go of each read the route holds: its request is aborted and its handler returns. @type {(() => Promise<void>)[]} */
     const holds = [];
-    // The held reads are let go, the route removed and the page closed however the case ends. Letting
-    // go, setting the route and removing it are each bounded, so one that never settles does not keep
-    // the route or page.
+    /** The documents the page loads, counted while a client navigation should load none. */
+    let documents = 0;
+    const onDocument = (/** @type {import("@playwright/test").Request} */ r) => r.resourceType() === "document" && documents++;
+    // The held reads are let go, the listener and route removed and the page closed however the case
+    // ends. The route stops holding before the held reads are let go, so none it holds later is left
+    // held. Letting go, setting the route, removing it and closing the page are each bounded, so one
+    // that never settles does not keep the route or page.
     try {
       // The runtime's read of the part is the page's own address, asked with `corten: action`.
       await within(
@@ -49,6 +53,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
         held.route(`${base}/`, (route) => {
           if (route.request().headers().corten !== "action") return route.continue();
           reads++;
+          if (answer === "closing") return route.abort().catch(() => {});
           if (answer === "hold") return new Promise((resolve) => holds.push(() => route.abort().catch(() => {}).finally(resolve)));
           if (answer === "abort") return route.abort("internetdisconnected");
           return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
@@ -68,8 +73,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
       // Busy: the runtime ran and sent the read, which the route holds unanswered.
       check("with JavaScript a slow part waiting says it is on its way and is busy, with no link for it", loaded.line && !loaded.link && loaded.busy === "true" && loaded.failed === null && loaded.reads === 1, JSON.stringify(loaded));
       if (swaps) {
-        let documents = 0;
-        held.on("request", (r) => r.resourceType() === "document" && documents++);
+        held.on("request", onDocument);
         await held.click('header nav a[href="/news"]');
         await held.waitForFunction(() => document.title === "News | Watchlist");
         await held.click('header nav a[href="/"]');
@@ -134,10 +138,12 @@ export async function partReads(page, browser, swaps, noSwaps) {
         `${held.url()}${opened ? (listed ? "" : ", its part not read in within 5 s of its commit") : ", not opened within 5 s of the press"}`,
       );
     } finally {
+      answer = "closing";
       await cleanUp(
+        () => held.off("request", onDocument),
         () => within(5000, "the held reads were not let go within 5 s", Promise.all(holds.splice(0).map((release) => release()))),
         () => within(5000, "the held part's route was not removed within 5 s", held.unrouteAll({ behavior: "ignoreErrors" })),
-        () => held.context().close(),
+        () => closeContext(held.context(), "the held part's context"),
       );
     }
   }

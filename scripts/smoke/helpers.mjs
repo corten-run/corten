@@ -202,6 +202,35 @@ const cleanUp = async (...undo) => {
   if (failed.length) throw failed[0];
 };
 
+/**
+ * `opening` (a context or page being made), within 5 s. One made only after them is closed as it
+ * comes, so a case that gave up on it does not leave it open.
+ * @template {{ close: () => Promise<unknown> }} T @param {string} what @param {Promise<T>} opening @returns {Promise<T>}
+ */
+const opened = (what, opening) =>
+  within(5000, `${what} was not made within 5 s`, opening).catch((error) => {
+    opening.then(
+      (made) => made.close().catch(() => {}),
+      () => {},
+    );
+    throw error;
+  });
+
+/**
+ * Closes `context` within 5 s. If its closing is not confirmed by then, closes each of its pages,
+ * each within 5 s, and rejects all the same: a case that cannot confirm its context closed fails,
+ * rather than waiting on it.
+ * @param {import("@playwright/test").BrowserContext} context @param {string} what
+ */
+const closeContext = async (context, what) => {
+  try {
+    await within(5000, `${what} was not closed within 5 s`, context.close());
+  } catch (error) {
+    await Promise.allSettled(context.pages().map((p) => within(5000, `a page of ${what} was not closed within 5 s`, p.close())));
+    throw error;
+  }
+};
+
 /** What `watchBusy` saw, once the mark has gone. @param {import("@playwright/test").Page} page */
 const busyEnded = (page) =>
   page
@@ -369,4 +398,4 @@ export async function runSmoke(run) {
   process.exit(failures.length ? 1 : 0);
 }
 
-export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, steps, pollFor, cleanUp };
+export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, steps, pollFor, cleanUp, opened, closeContext };
