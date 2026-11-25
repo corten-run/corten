@@ -690,13 +690,20 @@ test("exit-one retirement refuses foreign allocation, remote drift and local rep
     assert.equal(h.saved().deletionIntentAt, undefined);
     assert.equal(h.deletes, 0); assert.equal(h.creates, 0);
   });
-  const { f, preview, retire, knobs } = await handoffFixture(t, { exitOne: true });
+  const { f, preview, retire, knobs, launched } = await handoffFixture(t, { exitOne: true });
   const { h } = f, approved = await preview();
-  knobs.afterIntent = () => { appendFileSync(join(h.local, h.saved().evidence, "run.log"), "late change"); };
+  let held;
+  knobs.afterIntent = () => {
+    held = readFileSync(join(h.local, "operation.lock"));
+    appendFileSync(join(h.local, h.saved().evidence, "run.log"), "late change");
+  };
   await assert.rejects(retire(approved), /extraction/);
   assert.ok(h.saved().deletionIntentAt && !h.saved().destroyedAt);
   assert.equal(h.deletes, 0); assert.equal(h.creates, 0);
-  await assert.rejects(preview(), /extraction changed/);
+  assert.deepEqual(readFileSync(join(h.local, "operation.lock")), held);
+  const calls = launched.length;
+  await assert.rejects(preview(), /competing or retained custody/);
+  assert.equal(launched.length, calls);
 });
 
 test("approved handoff retirement reuses an exact ordinary capture and reconciles only exact absence", async (t) => {
