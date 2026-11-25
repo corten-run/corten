@@ -9349,7 +9349,13 @@ rules something out.
     Revisit-when conditions). The maintainer decided both, the match and the reading made
     whatever one build read, on the first review of
     [#2109 Let a probe read across placements decide a change's cycles, and count the catalog's page and JSON once under such a plan](https://github.com/corten-run/corten/pull/2109),
-    whose description records the answers. Three sentences of item 2 beside them are that pull
+    whose description records the answers
+    ([a comment on it](https://github.com/corten-run/corten/pull/2109#issuecomment-7177590888)
+    of 2026-11-25 (UTC), recorded by that pull request's coordinator, who put each question to
+    the maintainer and decided none, gives both as the maintainer's choices in the words
+    chosen, and three further points as ones the maintainer stated no preference on, the
+    stricter reading standing).
+    Three sentences of item 2 beside them are that pull
     request's reading and not the maintainer's wording. A workload named for a target brings it
     under the case only if its A/A resolves and its bound is under +1%, because that reading is
     what stands in for the image; the pull request's second review finds the condition implied
@@ -10299,7 +10305,9 @@ rules something out.
     spread must match; a run's time across placements falls to a single-build
     run's, so the protocol could be the rule rather than an option; a tool reads the image
     `count.mjs` starts across placements (its binary linked again with a pad, started and
-    counted under the turn protocol), so the catalog's `page` and `json` can be read as a probe
+    counted under the turn protocol;
+    [#2120 Nothing reads the catalog's page or JSON across placements, so a cost only the catalog image shows inside the default band is seen by no reading](https://github.com/corten-run/corten/issues/2120)
+    asks for it), so the catalog's `page` and `json` can be read as a probe
     workload is and need no case of their own; a count taken under that case reads above the
     default band while every probe workload of its plan meets its margin across placements, or
     a later reading finds on either target a cost a change brought in under it, so a probe does
@@ -10706,7 +10714,11 @@ rules something out.
     2,645 bytes a connection between runs: three runs a build, and a rise only when head's
     median is above base's by more than base's three span. No run is taken again for its
     result, as no count or placement of the measured way is; a run the kit refuses gave no
-    figure, so taking it again is not that.
+    figure, so taking it again is not that. The maintainer accepted both figures, this budget
+    and the 2% between releases (Revisit when, below), as proposals on 2026-11-25, told that
+    neither is measured: they are bets still, and the description of
+    [#2116 Name three ways a change around the handler is decided: counted, measured and the trend](https://github.com/corten-run/corten/pull/2116)
+    records the decision.
 
     What is given up: a counted change has no cycles reading. The gate keeps +1% on a workload
     the change touches however flat its instructions, "since a change to the data a request
