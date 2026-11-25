@@ -6,7 +6,7 @@ import { roundName, savedLoadLayout, savedPlacement, selection, terminalUnit, va
 // A disposition of one fenced DELETE, not a diagnostic or permission to retry.
 export const unsentDelete = Object.freeze({ status: 1, stdout: "", stderr: "", deleteNotDispatched: true });
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
-  "account-request", "account-http", "get-request", "get-http", "get-response", "list-request", "list-http", "list-response",
+  "account-request", "account-http", "account-capacity", "get-request", "get-http", "get-response", "list-request", "list-http", "list-response",
   "list-response-shape", "list-response-total", "list-response-id", "list-response-duplicate",
   "list-response-links", "list-response-pages", "list-response-next", "list-response-count", "list-response-bounds",
   "catalog-request", "catalog-http", "catalog-response",
