@@ -29,6 +29,8 @@ builds against.
 
 ### Breaking changes
 
+- **Breaking:** Both `allow_origin` setters refuse at startup what no browser sends (no scheme,
+  a path, `?`, `#`, `file`, `null`), and `https://x:443` matches `https://x` ([#2090 Policy::allow_origin stores any string and compares it to Origin as typed, so a value with no scheme, a path or a default port is a 403 for every write from that site instead of a startup error, while Api::allow_origin checks its value](https://github.com/corten-run/corten/issues/2090)).
 - **Breaking:** Move layout values an app skipped when `req.mode.swaps()` to a `LayoutRead` so
   they are drawn on a write's own whole page. An `Ahead` is for a read the page itself awaits.
   `corten::testing` now sends the whole-page preference for `.mode(Mode::Action)`, so tests that
