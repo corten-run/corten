@@ -699,18 +699,34 @@ test("independent continuation admits two remote-active hosts and collects a fai
     assert.equal(await prepare(denied), 3);
     const deniedApproval = await approve(denied);
     const limit = p.hosts + ".limit";
+    const inventory = fs.readFileSync(p.hosts, "utf8");
+    assert.equal(JSON.parse(inventory).length, 1);
     fs.writeFileSync(limit, "1");
     try { assert.equal(await fleetMain(deniedApproval, p.deps), 2); }
     finally { fs.unlinkSync(limit); }
+    assert.deepEqual(p.output.at(-1).groups, [{ group: denied, outcome: "error", error: "group-operation-failed",
+      uncertain: false, providerDiagnostic: { code: "account-capacity" }, controllerStage: "controller-launch" }]);
     const refused = p.saved(path.join(denied, denied));
-    assert.equal(refused.status, "reserved"); assert.equal(refused.createIntentAt, undefined);
+    assert.equal(refused.status, "reserved"); assert.equal(refused.createIntentAt, undefined); assert.equal(refused.id, undefined);
+    assert.deepEqual(refused.control.ledger, []);
+    const refusedRoot = path.join(p.h.base, denied, denied);
+    assert.ok(!fs.existsSync(path.join(refusedRoot, ".groups-launch.lock")) && !fs.existsSync(path.join(refusedRoot, "groups-r21/operation.lock")));
+    assert.ok(!fs.existsSync(path.join(p.h.base, continuationLock)));
+    assert.equal(fs.readFileSync(p.hosts, "utf8"), inventory);
+    const deniedEvents = p.events().filter((row) => row.group === denied);
+    assert.ok(deniedEvents.some((row) => row.method === "GET" && row.path.startsWith("/v2/droplets?")));
+    assert.ok(deniedEvents.every((row) => row.boundary !== "provider" || row.method === "GET"));
+    assert.ok(!deniedEvents.some((row) => ["ssh", "upload", "monitor"].includes(row.boundary)));
     assert.deepEqual(p.events().filter((row) => row.method === "POST").map(({ group }) => group), [first]);
 
     assert.equal(await prepare(second), 3);
     const secondApproval = await approve(second);
     assert.deepEqual(p.output.at(-1).subject.continuation.peers.map(({ id }) => id), ["101"]);
-    launch(secondApproval);
-    await wait(() => active(second) && handoff());
+    fs.writeFileSync(limit, "2"); // The first host still occupies one slot.
+    try {
+      launch(secondApproval);
+      await wait(() => active(second) && handoff());
+    } finally { fs.unlinkSync(limit); }
     const events = p.events();
     assert.deepEqual(events.filter((row) => row.method === "POST").map(({ group }) => group), [first, second]);
     assert.deepEqual(events.filter((row) => row.boundary === "remote-active").map(({ group, id }) => [group, id]), [[first, "101"], [second, "102"]]);

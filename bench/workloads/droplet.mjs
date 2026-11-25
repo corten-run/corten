@@ -1089,7 +1089,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           const account = JSON.parse((await execute("doctl", ["account", "get", "--output", "json"])).stdout);
           assert.equal(providerAccount(account), state.provider.accountId, "provider account identity changed; preserve uncertainty");
           const limit = (Array.isArray(account) ? account[0] : account)?.droplet_limit;
-          assert.ok(Number.isSafeInteger(limit) && existing.length < limit, "account capacity unavailable");
+          assert.ok(Number.isSafeInteger(limit) && limit >= 0, "account capacity unavailable");
+          if (existing.length >= limit) throw Object.assign(new Error("account capacity unavailable"),
+            { providerDiagnostic: { code: "account-capacity" } });
           if (fleet) {
             const present = existing.filter((d) => fleet.jobs.some((row) => row.name === d.name)).length;
             assert.ok(existing.length + fleet.jobs.length - present <= limit, "account capacity cannot cover the reserved fleet");
