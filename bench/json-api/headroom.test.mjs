@@ -79,10 +79,40 @@ test("the bounds and their sample windows mirror production.mjs", () => {
 });
 
 test("a missing measure is shown as unknown, not as no bound reached", () => {
-  const r = raw({ load: 200 }); delete r.after.liveness.load;
-  const row = phaseHeadroom(r);
-  assert.equal(row.atBound.load, null);
-  assert.match(renderHeadroom({ bounds: headroomBounds, rows: [row], refusedFiles: 0, unavailableRows: 0 }), /\| unknown: load \|/);
+  // An API phase whose upstream counter is missing cannot say whether that bound was reached.
+  const row = phaseHeadroom(raw({ key: "catalog-v1-api-neutral-json", load: 200, upstream: 10 }));
+  assert.deepEqual(row.atBound, { load: false, upstreamSampled: false, upstreamCounted: null });
+  assert.match(renderHeadroom({ bounds: headroomBounds, rows: [row], refusedFiles: 0, unavailableRows: 0 }), /\| unknown: upstreamCounted \|/);
+});
+
+test("a phase with scheduled load resources is unavailable, never judged by its old load samples", () => {
+  const scheduled = Array.from({ length: 60 }, (_, i) => ({ t: t0 + 250 + i * 500, cpu: 399, mem: 40 }));
+  const shapes = [{ samples: scheduled }, scheduled, null, "Zq7canaryValue"];
+  for (const loadResources of shapes) {
+    // Below the bound on raw.samples.load, at the bound on the scheduled stream.
+    const r = { ...raw({ load: 200, loadPeak: 210 }), loadResources };
+    const row = phaseHeadroom(r);
+    assert.deepEqual(row, { identity: row.identity, unavailable: "scheduled load resources: not read by this tool" });
+    const markdown = renderHeadroom({ bounds: headroomBounds, rows: [row], refusedFiles: 0, unavailableRows: 1 });
+    assert.match(markdown, /\| corten \| catalog-v1-fixture-neutral-json \| 1 \| warmup \| scheduled load resources: not read by this tool \|/);
+    assert.ok(!markdown.includes("| none |")); assert.ok(!markdown.includes("Zq7canaryValue"));
+  }
+  // The same phase without the field is read, and is under the bound.
+  assert.equal(phaseHeadroom(raw({ load: 200, loadPeak: 210 })).atBound.load, false);
+});
+
+test("a native load lifetime must be timestamp strings, not values Date.parse would coerce", () => {
+  const iso = new Date(t0 + 100).toISOString();
+  const lifetimes = [[iso], t0 + 100, { iso }, "2026-02-30T12:00:00.000Z", "Zq7canaryValue", undefined];
+  for (const startedAt of lifetimes) {
+    const r = raw(); r.after.liveness.load.startedAt = startedAt;
+    const row = phaseHeadroom(r);
+    assert.deepEqual(row, { identity: row.identity, unavailable: "phase has no timestamped native load lifetime" });
+    assert.ok(!JSON.stringify(row).includes("Zq7canaryValue"));
+  }
+  const nanos = raw(); nanos.after.liveness.load.startedAt = "2026-11-20T12:00:00.123456789Z";
+  nanos.after.liveness.load.finishedAt = new Date(t0 + seconds * 1000 + 700).toISOString().replace("Z", "+00:00");
+  assert.ok(!phaseHeadroom(nanos).unavailable);
 });
 
 test("a timing folder reports only phases of this checkout's matrix at their own path", (t) => {

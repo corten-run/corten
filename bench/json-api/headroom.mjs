@@ -17,6 +17,11 @@
 // counted CPU and capacity are context. Extrapolations are linear from one observation;
 // they are estimates for choosing a setup to measure, not measurements. A saved value
 // of the wrong type makes its row unavailable and is never printed.
+//
+// It reads only the r67-era raw shape, whose generator samples are raw.samples.load.
+// A phase that carries raw.loadResources (scheduled load resources, judged in
+// production.mjs by a replay this tool does not perform) is reported unavailable,
+// never as at or under a bound, whether or not that field is well formed.
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,6 +35,15 @@ const phaseNames = Object.freeze(["warmup", ...phases]);
 const finite = (n) => typeof n === "number" && Number.isFinite(n);
 const positive = (n) => finite(n) && n > 0;
 const count = (n) => Number.isSafeInteger(n) && n >= 0;
+// An RFC3339 timestamp string with a real calendar date, as a millisecond clock; else null.
+const rfc3339 = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d{1,9})?(?:Z|[+-]\d\d:\d\d)$/;
+function timestampMs(value) {
+  const match = typeof value === "string" ? rfc3339.exec(value) : null;
+  const calendar = match ? Date.parse(`${match[1]}Z`) : NaN;
+  if (!finite(calendar) || new Date(calendar).toISOString().slice(0, 19) !== match[1]) return null;
+  const ms = Date.parse(value);
+  return finite(ms) ? ms : null;
+}
 const round = (n, d = 1) => finite(n) ? Number(n.toFixed(d)) : null;
 const within = (samples, from, to) => (Array.isArray(samples) ? samples : []).filter((s) => finite(s?.t) && s.t >= from && s.t <= to);
 // summarizeSamples throws on a non-finite sample; the caller turns that into a fixed reason.
@@ -52,6 +66,7 @@ function identityOf(raw) {
 export function phaseHeadroom(raw) {
   const identity = identityOf(raw);
   if (!identity) return { identity: null, unavailable: "not a phase of this checkout's JSON API matrix" };
+  if (Object.hasOwn(raw, "loadResources")) return { identity, unavailable: "scheduled load resources: not read by this tool" };
   try { return measured(raw, identity); } catch (error) {
     if (error === malformedSample) return { identity, unavailable: "phase has a malformed resource sample in its window" };
     throw error;
@@ -62,10 +77,11 @@ function measured(raw, identity) {
   const durationMs = raw.clock?.k6DurationMs, requests = raw.k6?.metrics?.http_reqs?.count, metrics = raw.k6?.metrics;
   const seconds = positive(durationMs) ? durationMs / 1000 : null;
   const start = raw.command?.clock?.startedAt, end = raw.command?.clock?.finishedAt, life = raw.after?.liveness?.load;
-  const born = Date.parse(life?.startedAt), exited = Date.parse(life?.finishedAt);
+  const born = timestampMs(life?.startedAt), exited = timestampMs(life?.finishedAt);
   const loadQuota = raw.identity.cpus?.load?.quota, appQuota = raw.identity.cpus?.app?.quota;
   if (seconds === null || !count(requests) || !finite(start) || !finite(end) || !positive(loadQuota) || !positive(appQuota))
     return { identity, unavailable: "phase has no measured k6 clock, request count, command clock or CPU budget" };
+  if (born === null || exited === null) return { identity, unavailable: "phase has no timestamped native load lifetime" };
   const failed = metrics.http_req_failed?.passes, dropped = metrics.dropped_iterations?.count, timeouts = metrics.json_timeout?.count;
   if (![failed, dropped, timeouts].every(count)) return { identity, unavailable: "phase has no whole failed, dropped or timeout count" };
   const rps = requests / seconds;
@@ -74,7 +90,7 @@ function measured(raw, identity) {
     return Number.isSafeInteger(c?.before) && Number.isSafeInteger(c?.after) && c.after > c.before ? c.after - c.before : null;
   };
   const appUs = counted("app"), upUs = identity.source === "api" ? counted("upstream") : null;
-  const load = finite(born) && finite(exited) ? stats(within(raw.samples?.load, born, exited)) : null;
+  const load = stats(within(raw.samples?.load, born, exited));
   const upstream = stats(within(raw.samples?.upstream, start, end)), app = stats(within(raw.samples?.app, start, end));
   const loadBoundPct = loadQuota * headroomBounds.loadPctOfQuotaCore, upBound = headroomBounds.upstreamPctOfOneCore;
   const appPct = appUs === null ? null : appUs / (seconds * 1e4), upPct = upUs === null ? null : upUs / (seconds * 1e4);
