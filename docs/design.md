@@ -7702,16 +7702,28 @@ rules something out.
     lookup. It is on unless the app says otherwise, holds at most 32 MiB
     (`App::kept_answers`), and is off under `corten dev`. There the store stands but keeps and
     gives nothing, so the code that decides what a release build keeps still runs, and each
-    `Public` route says in the log whether that build keeps its answer, and if not the first
-    reason that code found, once for each route and verdict
+    `Public` route says in the log whether that build would keep its answer while its store has
+    room, and if not the first reason that code found (a bound of 0 among them), once for each
+    route and verdict
     ([#1801 Nothing tells an author whether a Public page is kept, or why not](https://github.com/corten-run/corten/issues/1801)):
     a page that is not kept looks the same from outside save for a missing `Age`, so without it
-    an author first met the difference in production. The reasons come from the code that decides,
-    not from a second list of its rules, which could drift from what the build does: a refusal in
-    the answer's checks records its reason only under `corten dev`, behind the flag the request's
-    app already carries, and the checks made before the handler run for `corten dev` in a copy
-    of their own, so the one a release build runs is the code it was (a kept page given again, and a `Public`
-    page that is not kept, cost what they did, within 4 instructions a request in `router_cost`).
+    an author first met the difference in production. It says no more than that the answer may be
+    kept: the store under `corten dev` is never full, and a full one keeps only a URL asked for
+    before, so that the answer is kept, or given again, is not promised. It says so only after the
+    body is read as a release build reads it, since a body of an exact size that fails to be read
+    is answered `500` there and not kept. The reasons come from the code that decides, not from a
+    second list of its rules, which could drift from what the build does. That code is compiled
+    twice, the route's and its answer's checks alike (`Keeping` and `Missed::keep`, by a `TELL`
+    parameter): `corten dev`'s copy records each refusal, counts the head of an answer whose
+    locale was chosen late as a release build names it, from a copy, so the answer the app's
+    middleware sees is the one it saw with no store, and leaves an answer it would keep for its
+    body to be read; a release build's copy does none of this. In `router_cost` (callgrind, three
+    rounds each, against `c46092aeb`) a kept page given again costs what it did (14,559.9 to
+    14,560.1 instructions a request), a `Public` page that is not kept 3 more (21,238.0 to
+    21,240.7) and one that is made and stored 32 more (28,589.6 to 28,621.6). The release copy
+    does no more work; with a second copy in the program the compiler no longer inlines putting
+    the kept entry on the answer (about 29 of those 32) and lays out the rest slightly otherwise, and
+    the ways tried to keep one copy as it was cost more than these.
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
     give to anyone is the rule checked when the app compiles, that a `Public` handler takes only

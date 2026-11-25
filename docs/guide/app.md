@@ -1610,9 +1610,9 @@ The reasons come from the code that decides what a release build keeps, which ru
 build counts them), so they cannot say other than that build does. That an answer would be kept
 says it may be, not that it is: the store under `corten dev` holds nothing, so it is never full,
 and a full one keeps the answer for a URL only when that URL was asked for before (below). A
-reason the route's type
-decides (its handler's inputs, an answer that is neither a page nor a whole body, `unstaged`) is
-said for any `GET`; one a middleware decides before the handler (a caller it read, a URL it
+reason the route's type decides (its handler's inputs, an answer that is neither a page nor a
+whole body, `unstaged`) is said for any `GET`; one a middleware decides before the handler (a
+caller it read, a URL it
 changed) or the answer decides, only for a request a kept answer could stand for, one that shows
 nothing about who asks. So open the page signed out, or in a private window: a request
 with a session's cookie, a navigation inside the app, a `HEAD` or a write is its handler's whatever
