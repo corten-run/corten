@@ -118,11 +118,16 @@ this final actual drainage may the entry write the collection manifest.
 An ordinary failed group can also reach this handoff. A clean SSH exit is not a
 drain proof and a verified drain does not make the failed group successful.
 After terminal publication, the campaign's fault line distinguishes revoked
-control (`campaign drain control invalid`), a probe that could not run or refused
-(`campaign drain probe refused`), a reply that failed parsing or verification
-(`campaign drain invalid proof`), and exhausting the wait for registered members
-to disappear (`campaign drain deadline`). No probe output is logged. The older
-`campaign drain` line alone does not identify which check failed.
+control (`campaign drain control invalid`), a reply that failed parsing or
+verification (`campaign drain invalid proof`), and a failed probe. A probe failure
+uses `campaign drain probe` followed by a fixed category: `start`, `deadline`,
+`output limit`, or `exit` (signal or unsuccessful exit). The registered guardian
+remains byte-identical and does not report which internal check refused. A registered
+identity still present remains pending; exhausting the overall wait is still
+`campaign drain deadline`, not the deadline of an individual probe. No probe output is logged.
+The saved [#2051 Marketplace r65 completes timing but the post-terminal drain probe refuses](https://github.com/corten-run/corten/issues/2051)
+predates these categories. Its `campaign drain probe refused` line does not identify
+which check or process failed, and this diagnostic does not qualify that round.
 
 The collector waits for actual local closure plus a two-lease (30-second) embargo,
 then may attempt guarded collection. The embargo is not proof that remote work stopped.

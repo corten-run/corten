@@ -19,7 +19,8 @@ import { recordAttemptSchema } from "./record-attempt.mjs";
 import { inspectNative } from "../workloads/isolated/native-replay.mjs";
 import { sampleStats, summarizeSamples } from "./stats.mjs";
 import { validateSaved } from "./verify.mjs";
-import { k6Image, k6Provenance } from "../load-tool.mjs";
+import { ImagePinRefusal, k6Image, k6Provenance } from "../load-tool.mjs";
+import { inspect } from "node:util";
 import { collectTimedPhase, readFailureClasses, readTimedLoad, verifyTimedPhase } from "./timed.mjs";
 import { composePhase } from "../workloads/isolated/composition.mjs";
 import { latestStableSchema } from "../workloads/latest-stable.mjs";
@@ -774,6 +775,55 @@ test("catalog negative replay binds retained tool images to the checkout of its 
   assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), (e) => e.message.includes(
     `retained upstream image is not this checkout's pin ${upstreamImage}; verify from a checkout of the measured commit ${f.commit}`)
     && !e.message.includes(earlier));
+});
+
+// Each case changes only an image reference: the refusal names the pin and hint, never the saved text.
+const savedImage = "node:SAVED-IMAGE-CANARY";
+const pinRefusal = (tool, pin, commit) => (e) => e instanceof ImagePinRefusal
+  && e.message === `retained ${tool} image is not this checkout's pin ${pin}; verify from a checkout of the measured commit ${commit}`
+  && !inspect(e).includes(savedImage);
+const editTools = (f, edit) => { const tools = structuredClone(f.summary.tools); edit(tools); f.put("tools.json", tools); };
+test("catalog replay refuses a retained tool image other than the pin by the pin and hint, not the saved text", () => {
+  const complete = () => { const f = fixture(); assert.equal(replayCatalog(f.summary, f.reader, f.commit).baseline, true); return f; };
+  let f = complete();
+  f.summary.tools.k6.image = savedImage; f.put("tools.json", f.summary.tools);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), pinRefusal("k6", k6Image, f.commit), "k6 in the summary and its sidecar");
+  f = complete(); editTools(f, (tools) => { tools.k6.image = savedImage; });
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), pinRefusal("k6", k6Image, f.commit), "k6 in the sidecar only");
+  for (const [tool, pin] of [["upstream", upstreamImage], ["checker", checkerImage]]) {
+    f = failedFixture(); assert.equal(replayCatalog(f.summary, f.reader, f.commit).attemptComplete, true);
+    editTools(f, (tools) => { tools[tool].image = savedImage; });
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), pinRefusal(tool, pin, f.commit), `${tool} in a gated attempt's sidecar only`);
+  }
+});
+
+test("catalog replay still refuses a non-pin tool sidecar difference, naming the field and not the saved text", () => {
+  for (const [make, edit, field] of [[fixture, (tools) => { tools.upstream.imageId = savedImage; }, "upstream.imageId"],
+    [fixture, (tools) => { tools.k6.note = savedImage; }, "k6.(unexpected field)"],
+    [fixture, (tools) => { tools.SAVEDKEYCANARY = { image: 1 }; }, "(unexpected field)"],
+    [fixture, (tools) => { tools.k6.SAVEDKEYCANARY = 1; }, "k6.(unexpected field)"],
+    [failedFixture, (tools) => { tools.checker.execution.Cmd = [savedImage]; }, "checker.execution.Cmd"]]) {
+    const f = make(); editTools(f, edit);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), (e) => !(e instanceof ImagePinRefusal)
+      && e.message === `tool observations differ at ${field}` && !inspect(e).includes(savedImage) && !inspect(e).includes("SAVEDKEYCANARY"), field);
+  }
+});
+
+test("catalog verifier passes a pin refusal through with its hint and keeps every other failure generic", () => {
+  const folder = mkdtempSync(join(tmpdir(), "catalog-pin-refusal-"));
+  try {
+    const save = (f) => { for (const [key, value] of f.files) { mkdirSync(dirname(join(folder, key)), { recursive: true }); writeFileSync(join(folder, key), value); } };
+    let f = fixture(); save(f);
+    const input = { folder, round: "c1", commit: f.commit };
+    assert.equal(validateSaved(input).status, "verified");
+    f.summary.tools.k6.image = savedImage; f.put("tools.json", f.summary.tools); f.put("summary.json", f.summary); save(f);
+    const pinned = validateSaved(input);
+    assert.deepEqual(pinned, { status: "invalid", complete: false,
+      errors: [`retained k6 image is not this checkout's pin ${k6Image}; verify from a checkout of the measured commit ${f.commit}`] });
+    assert.ok(!JSON.stringify(pinned).includes(savedImage));
+    f = fixture(); editTools(f, (tools) => { tools.upstream.imageId = savedImage; }); save(f);
+    assert.deepEqual(validateSaved(input), { status: "invalid", complete: false, errors: ["native evidence invalid or contradictory"] });
+  } finally { assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true }); }
 });
 
 const boundaryFile = "fixture/corten/checker.json";
