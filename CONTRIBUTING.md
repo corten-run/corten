@@ -407,14 +407,17 @@ moment, so a brand drawn by a later whole read does not count.
 The checks that a failure stays shown while the page reads itself again require the page's first
 read of itself after the failure to be a navigation whose `<main>` is drawn, which a mark the
 stand-in puts in each navigation's `<main>` shows (a request alone is not a draw), and the failure
-already shown at that draw and still shown 500 ms after it: a poll drawn before the failure was
-shown is not one that kept it. That first read is taken from the moment the stand-in failed (or
+already shown at that draw and still shown when the check looks again 500 ms after it (a later
+look, not a watch through those 500 ms): a poll drawn before the failure was shown is not one that
+kept it. In the cut-body cases the failure shown at that later look must be the body's own (its
+status), so another failure that took its place does not count. That first read is taken from the moment the stand-in failed (or
 answered) the write it follows, or from a held body's release, not from when the check sees the
 failure, and must reach the stand-in within five seconds of that moment: the stand-in records the
 time of each outcome and request, and the page records the time it let a held body go, so a read
 asked later fails however soon the check looks. A read counts as after that moment only if it
-reached the stand-in at or after its time, not only after its place among the reads: a read that
-came while the page's task to let the body go waited to run came before the release. The page
+reached the stand-in after its time, not in the same millisecond, and not only after its place
+among the reads: a read that came while the page's task to let the body go waited to run came
+before the release, and one in the same millisecond may have. The page
 records, the moment it draws each mark, the time and whether the failure was shown; the `<main>`
 must be drawn within five seconds of the read reaching the stand-in by that recorded time, so a
 check that looks late neither fails a draw made in time nor passes one made after. The stand-in and the page record times by the same clock
@@ -436,9 +439,10 @@ same moment, with nothing in `<main>` busy (the first form, outside it, still wa
 before the first write's body is let go, in a page task that does not wait for the body, bounded
 to five seconds. The body cut (or given in full) and its failure must then both come within five
 seconds of the body's release, by the times the page records as it lets the body go, as the body
-is cut (or given) and as that failure is first shown with nothing busy; the check waits only what
-is left of those five seconds, and a late look neither passes an outcome that came after them nor
-fails one that came in time. The page's first failure must be the one expected, said after the
+is cut (or given) and as that failure is first shown with nothing busy; until those five seconds
+are over each look at the page has only what is left of them, then the check looks once more, that
+look bounded to five seconds, so it waits at most five seconds past them, and a late look neither
+passes an outcome that came after them nor fails one that came in time. The page's first failure must be the one expected, said after the
 wrapper cut (or gave) the body, on the form that sent the held write: each failure the page says
 is recorded with the wrapper's state at that moment and its target, compared with the form noted
 as it submitted that write, so a failure said at the headers, before the body, or said on the
@@ -448,10 +452,14 @@ drawn by that page, close their page in a `finally` too, the latter after lettin
 script it holds; one cleanup step that fails does not skip the next, and removing a route is
 bounded to five seconds, so one that never settles does not keep the page open. Setting a route,
 starting a page's notes of what it draws and listening for its failures are bounded to five seconds
-each too. Making a case's context or page and closing its context are bounded to 30 seconds,
-Playwright's own timeout for an action, since a loaded Firefox has taken over five seconds to close
-one: if that close is not confirmed in time, each of its pages is closed, bounded the same, and the
-case fails rather than waits. The page these checks make is closed by the helper that makes it if
+each too, and so is each read of the page (an `evaluate` or a locator's, one made only for a
+check's details included), here and in the page part, slow part and no-JavaScript post cases below,
+so a read the browser never answers does not keep a case from its `finally`. Making a case's
+context or page and closing its context are bounded to 30 seconds, Playwright's own timeout for an
+action, since a loaded Firefox has taken over five seconds to close one. Each case makes its context
+before its page, so it holds the context to close even if making the page never settles, and
+closing one of its pages closes that page alone: if the context's close is not confirmed in time,
+each of its pages is closed, bounded the same, and the case fails rather than waits. The page these checks make is closed by the helper that makes it if
 making it, its route, its load or its mark fails, before a case holds it.
 That check counts only the
 reads of the page it goes back to, since the page that comes can prefetch the link left under the

@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check, within, steps, pollFor, cleanUp } from "./helpers.mjs";
+import { base, shadowing, skip, check, within, readWithin, steps, pollFor, cleanUp } from "./helpers.mjs";
 
 export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
   // A page that waits for a write (ReadAgain) reads itself again until the write is in,
@@ -64,7 +64,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const at = request === undefined ? -1 : log.findIndex((e) => e.request === request);
         return at < 0 ? undefined : log.slice(at + 1).find((e) => e.kind !== "prefetch");
       };
-      const url = await pending();
+      const url = await readWithin("the pending write's page", pending());
       // The write lands 1.5 s after it is sent and the part is first read 1 s after the page has
       // loaded, so a loaded browser's first read can find it landed, and then no answer asks again
       // (#2035). The first read is then answered as the server answers one while the write lands:
@@ -166,28 +166,35 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           await within(5000, "the part route was not set within 5 s", page.route(partReads, partRead));
           page.on("request", onPart);
           initial = (await page.goto(url))?.request() ?? null;
-          const waiting = await saved();
+          const waiting = await readWithin("the status line once the page loaded", saved());
           await page.fill("input[name=above]", "123.45");
           await within(
             5000,
             "the page was not marked within 5 s",
             page.evaluate(() => ((/** @type {any} */ (window)).__marker = 8)),
           );
-          const entries = await page.evaluate(() => history.length);
+          const entries = await readWithin(
+            "the page's history length",
+            page.evaluate(() => history.length),
+          );
           // The check that the part stops needs `Saved.` drawn within 5 s from here, the wait below
           // included: by the draw's own time, recorded by the page.
           const savedBy = Date.now() + 5000;
           await savedSoon();
+          const status = await readWithin("the status line after the wait for Saved.", saved());
           check(
             "a page's part waiting for a write is read again after a full load, not the page",
-            waiting === "Saving..." && (await saved()) === "Saved." && initial !== null && parts().length > 0 && whole().length === 0 && page.url() === url,
-            `${waiting} -> ${await saved()} after ${parts().length} part and ${whole().length} page reads${whole().length ? ` (${whole().map((e) => address(e)).join(", ")})` : ""}${prefetches().length ? `, and ${prefetches().length} prefetches not counted (${prefetches().map((e) => address(e)).join(", ")})` : ""}${initial ? "" : " (the document loaded not seen)"}`,
+            waiting === "Saving..." && status === "Saved." && initial !== null && parts().length > 0 && whole().length === 0 && page.url() === url,
+            `${waiting} -> ${status} after ${parts().length} part and ${whole().length} page reads${whole().length ? ` (${whole().map((e) => address(e)).join(", ")})` : ""}${prefetches().length ? `, and ${prefetches().length} prefetches not counted (${prefetches().map((e) => address(e)).join(", ")})` : ""}${initial ? "" : " (the document loaded not seen)"}`,
           );
-          const kept = await page.evaluate(() => ({
-            marker: (/** @type {any} */ (window)).__marker,
-            entries: history.length,
-            above: /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"))?.value,
-          }));
+          const kept = await readWithin(
+            "what the page kept",
+            page.evaluate(() => ({
+              marker: (/** @type {any} */ (window)).__marker,
+              entries: history.length,
+              above: /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"))?.value,
+            })),
+          );
           check("reading a page's part keeps the document, its history entry and the form", kept.marker === 8 && kept.entries === entries && kept.above === "123.45", JSON.stringify(kept));
           // The part's answer that asked again put its tag in the page's tag's place: one tag, the
           // last read's, and not the page's own (whose address is the same here). And the tag on the
@@ -196,16 +203,19 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           // read made from the answer's own tag, as it came, would go to `from`. The read after is the
           // one the page sent next after that answer's own read, by the log, prefetches aside: a read
           // the stand-in did not answer (another address) comes between them too.
-          const tagged = await page.evaluate(() => {
-            const all = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"));
-            const first = (/** @type {any} */ (window)).__pageTag;
-            return {
-              tags: all.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
-              pageTag: !!first,
-              pageTagGone: !!first && !first.isConnected && !all.includes(first),
-              moved: /** @type {string | undefined} */ ((/** @type {any} */ (window)).__moved) ?? null,
-            };
-          });
+          const tagged = await readWithin(
+            "the page's read-again tags",
+            page.evaluate(() => {
+              const all = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"));
+              const first = (/** @type {any} */ (window)).__pageTag;
+              return {
+                tags: all.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
+                pageTag: !!first,
+                pageTagGone: !!first && !first.isConnected && !all.includes(first),
+                moved: /** @type {string | undefined} */ ((/** @type {any} */ (window)).__moved) ?? null,
+              };
+            }),
+          );
           const tags = tagged.tags;
           const next = tagged.moved === null ? undefined : after(answered[Number(tagged.moved)]);
           const movedRead = next === undefined ? null : `${next.kind === "part" ? "" : `${next.kind} `}${address(next)}`;
@@ -252,15 +262,18 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         if (swaps) {
           const from = parts().length;
           const wholeFrom = whole().length;
-          await go(await pending());
+          /** `go`, within 5 s: the write it waits for lands 1.5 s after it is sent. @param {string} to */
+          const goTo = (to) => within(5000, "the runtime's navigation to a page still saving was not seen within 5 s", go(to));
+          await goTo(await readWithin("the pending write's page", pending()));
           await savedSoon();
+          const reached = await readWithin("the status line after the navigation's wait for Saved.", saved());
           check(
             "a page's part reached by the runtime's navigation is read again, not the page",
-            (await saved()) === "Saved." && parts().length > from && whole().length - wholeFrom === 1,
-            `${await saved()} after ${parts().length - from} part reads, ${whole().length - wholeFrom} page loads (the navigation's)`,
+            reached === "Saved." && parts().length > from && whole().length - wholeFrom === 1,
+            `${reached} after ${parts().length - from} part reads, ${whole().length - wholeFrom} page loads (the navigation's)`,
           );
           // Away before the read: the runtime's navigation leaves the page, and its part is not read.
-          await go(await pending());
+          await goTo(await readWithin("the pending write's page", pending()));
           const left = parts().length;
           await page.click('header a[href="/news"]');
           await page.waitForFunction(() => document.title === "News | Watchlist");

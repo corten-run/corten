@@ -1,4 +1,4 @@
-import { base, skip, check, pollFor, cleanUp, steps, within, opened, closeContext } from "./helpers.mjs";
+import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, opened, closeContext } from "./helpers.mjs";
 
 export async function pageWrites(page, browser) {
   // After a write, the page it sends the browser to is fetched whole; when that page's handler
@@ -237,16 +237,17 @@ export async function pageWrites(page, browser) {
   };
   /**
    * The place in `seen.asked` of the first read of `/smoke/written/again` from `from` on (at or after
-   * its place, `from.at`, and reaching the stand-in at or after its time, `from.time`), if it reached
-   * the stand-in within 5 s of `from.time`, else null: a first read asked later fails however soon
-   * the check looks, and the check waits for one only until then. Its place alone does not do: a
-   * place taken before the page is asked to do something (let a held body go) lets in a read that
-   * reached the stand-in while that task waited to run, before what the read must follow.
+   * its place, `from.at`, and reaching the stand-in after its time, `from.time`, not in the same
+   * millisecond), if it reached the stand-in within 5 s of `from.time`, else null: a first read asked
+   * later fails however soon the check looks, and the check waits for one only until then. Its place
+   * alone does not do: a place taken before the page is asked to do something (let a held body go)
+   * lets in a read that reached the stand-in while that task waited to run, before what the read must
+   * follow, and a read in the same millisecond as that moment may have come before it.
    * @param {{ asked: string[], askedAt: number[] }} seen @param {Since} from
    */
   const readAsked = async (seen, from) => {
     const by = from.time + 5000;
-    const first = () => seen.asked.findIndex((a, i) => i >= from.at && seen.askedAt[i] >= from.time && a.startsWith("GET /smoke/written/again"));
+    const first = () => seen.asked.findIndex((a, i) => i >= from.at && seen.askedAt[i] > from.time && a.startsWith("GET /smoke/written/again"));
     if (first() < 0) await pollFor(Math.max(0, by - Date.now()), async () => first() >= 0);
     const at = first();
     return at >= 0 && seen.askedAt[at] <= by ? at : null;
@@ -593,9 +594,14 @@ export async function pageWrites(page, browser) {
       // that draw.
       const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, seen.settled[follows], "");
       if (drewAgain) await own.waitForTimeout(500);
-      const kept = drewAgain && (await own.evaluate(() => !!document.querySelector("header[data-failed]") && location.pathname === "/smoke/written/again"));
+      const kept =
+        drewAgain &&
+        (await readWithin(
+          "whether the failure was still shown",
+          own.evaluate(() => !!document.querySelector("header[data-failed]") && location.pathname === "/smoke/written/again"),
+        ));
       const arrived = await toQuoted(own);
-      const shown = await shownOf(own);
+      const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         failedName,
         failed && legacyDrew && again === "GET /smoke/written/again nav" && drewAgain && kept && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
@@ -692,9 +698,11 @@ export async function pageWrites(page, browser) {
    * When the page noted a held body cut (or given) and the failure shown for it (`__bodyAt`,
    * `__failedAt`, by its clock), and by when they had to come (`by`): 5 s from the body's release,
    * by the time the page recorded as it let go (`__releasedAt`), or, while it has not let go, 5 s
-   * from the call. The check looks until `by` and once more after it (each look bounded to 5 s), and
-   * the recorded times decide, so a check that looks late neither passes an outcome that came after
-   * `by` nor fails one that came before it.
+   * from the call. Until `by` each look has only what is left before it; then the check looks once
+   * more, that look bounded to 5 s, as one started at or after `by` sees all the page recorded by
+   * then. So it waits at most until 5 s after `by` (5 s from the call, or from a release the page
+   * recorded after it), and the recorded times decide, so a check that looks late neither passes an
+   * outcome that came after `by` nor fails one that came before it.
    * @param {import("@playwright/test").Page} own
    */
   const bodyOutcome = async (own) => {
@@ -708,14 +716,19 @@ export async function pageWrites(page, browser) {
           failedAt: /** @type {number | null} */ (state.__failedAt ?? null),
         };
       });
+    /** By when the outcome had to come, as far as the page has said. */
+    let by = start + 5000;
     for (;;) {
-      // A look started after `by` sees all the page recorded by then.
       const lookedAt = Date.now();
-      const now = await within(5000, "the page did not say what became of the body within 5 s", look()).catch(() => null);
-      if (now === null) return { releasedAt: null, bodyAt: null, failedAt: null, by: null };
-      const by = (now.releasedAt ?? start) + 5000;
-      if (now.failedAt !== null || lookedAt > by) return { ...now, by };
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      const last = lookedAt >= by;
+      const now = await within(last ? 5000 : by - lookedAt, "the page did not say what became of the body in time", look()).catch(() => null);
+      if (now === null) {
+        if (last) return { releasedAt: null, bodyAt: null, failedAt: null, by: null };
+        continue;
+      }
+      by = (now.releasedAt ?? start) + 5000;
+      if (now.failedAt !== null || lookedAt >= by) return { ...now, by };
+      await new Promise((resolve) => setTimeout(resolve, Math.min(50, Math.max(0, by - Date.now()))));
     }
   };
   // A write's body fails after its headers, optionally after another form's whole page has
@@ -892,21 +905,28 @@ export async function pageWrites(page, browser) {
       const outcome = await bodyOutcome(own);
       const failed =
         outcome.by !== null && outcome.bodyAt !== null && outcome.bodyAt <= outcome.by && outcome.failedAt !== null && outcome.failedAt <= outcome.by;
-      const { afterHeaders, errors } = await own.evaluate(() => ({
-        afterHeaders: /** @type {string | undefined} */ ((/** @type {any} */ (window)).__bodyAfterHeaders) ?? null,
-        errors: /** @type {unknown[]} */ ((/** @type {any} */ (window)).__errors),
-      }));
-      const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, overlap ? releasedAt : seen.settled[first], String(complete ? 503 : 0));
+      const { afterHeaders, errors } = await readWithin(
+        "what became of the held body and the page's failures",
+        own.evaluate(() => ({
+          afterHeaders: /** @type {string | undefined} */ ((/** @type {any} */ (window)).__bodyAfterHeaders) ?? null,
+          errors: /** @type {unknown[]} */ ((/** @type {any} */ (window)).__errors),
+        })),
+      );
+      const expected = String(complete ? 503 : 0);
+      const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, overlap ? releasedAt : seen.settled[first], expected);
+      // Looked at again 500 ms after the poll's draw (a later look, not a watch through them): the
+      // failure then shown must still be the body's, not another that took its place.
       if (drewAgain) await own.waitForTimeout(500);
-      const kept = drewAgain && (await own.evaluate(() => !!document.querySelector("header[data-failed]")));
+      const keptAs = drewAgain ? await readWithin("the failure shown 500 ms after the poll", own.evaluate(() => document.querySelector("header")?.getAttribute("data-failed") ?? null)) : null;
+      const kept = keptAs === expected;
       const arrived = await toQuoted(own);
-      const shown = await shownOf(own);
+      const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         cutBodyName,
         sent && bodyAsked && drewOver && released && failed && afterHeaders === (complete ? "completed" : "cut") && seen.answers === (overlap ? 2 : 1) &&
           again === "GET /smoke/written/again nav" && drewAgain && kept && arrived && shown.brand === (overlap ? "Poll brand" : "Watchlist, written") &&
           seen.asked.includes("GET /smoke/quoted page"),
-        JSON.stringify({ sent, bodyAsked, drewOver, released, failed, outcome, afterHeaders, errors, answers: seen.answers, again, drawn, drewAgain, kept, arrived, asked: seen.asked, shown }),
+        JSON.stringify({ sent, bodyAsked, drewOver, released, failed, outcome, afterHeaders, errors, answers: seen.answers, again, drawn, drewAgain, kept, keptAs, arrived, asked: seen.asked, shown }),
       );
     } finally {
       await closeContext(own.context(), "the cut body case's context");
@@ -979,9 +999,14 @@ export async function pageWrites(page, browser) {
       // failure already shown.
       const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, secondWrite === undefined ? undefined : seen.settled[secondWrite], "");
       if (drewAgain) await own.waitForTimeout(500);
-      const kept = drewAgain && (await own.evaluate(() => !!document.querySelector("header[data-failed]") && document.querySelector("header span")?.textContent === "Count 1"));
+      const kept =
+        drewAgain &&
+        (await readWithin(
+          "whether the failure was still shown",
+          own.evaluate(() => !!document.querySelector("header[data-failed]") && document.querySelector("header span")?.textContent === "Count 1"),
+        ));
       const arrived = await toQuoted(own);
-      const shown = await shownOf(own);
+      const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         againName,
         drew &&
@@ -1070,7 +1095,10 @@ export async function pageWrites(page, browser) {
         got.retry = nextAt === null ? undefined : seen.asked[nextAt].split(" ")[2];
         got.drawnNext = nextAt === null ? null : await drawnBy(own, nextAt, from.time + 5000);
         got.drewNext = got.drawnNext?.failed === "";
-        got.kept = await own.evaluate(() => !!document.querySelector("header[data-failed]") && document.querySelector("header span")?.textContent === "Watchlist, written");
+        got.kept = await readWithin(
+          "whether the failure was still shown",
+          own.evaluate(() => !!document.querySelector("header[data-failed]") && document.querySelector("header span")?.textContent === "Watchlist, written"),
+        );
       }
     } finally {
       release();
@@ -1261,7 +1289,7 @@ export async function pageWrites(page, browser) {
           () => true,
           () => false,
         );
-      const shown = await shownOf(own);
+      const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         patchName,
         stalled && seen.answers === 1 && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
@@ -1272,7 +1300,11 @@ export async function pageWrites(page, browser) {
       // /smoke/written count: the pointer left on the link clicked above can make the page that comes
       // prefetch /smoke/quoted, after the navigation's read (#2035).
       const sinceReturn = seen.asked.length;
-      await own.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/written"));
+      await within(
+        5000,
+        "the page was not sent back to /smoke/written within 5 s",
+        own.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/written")),
+      );
       const returned = await own
         .waitForFunction(() => location.pathname === "/smoke/written" && !!document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
           timeout: 5000,

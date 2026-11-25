@@ -1,4 +1,4 @@
-import { base, engine, skip, check, cleanUp, steps, within, opened, closeContext } from "./helpers.mjs";
+import { base, engine, skip, check, cleanUp, steps, within, readWithin, opened, closeContext } from "./helpers.mjs";
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -32,7 +32,13 @@ export async function partReads(page, browser, swaps, noSwaps) {
   // bring it, and neither did one that fails (offline): the part shows the link instead, and the
   // page it opens has the part read in (#1264).
   {
-    const held = await opened("the held part's page", browser.newPage());
+    // Its context is made before its page, so the case holds it to close even if making the page
+    // never settles, and closing a page closes that page alone, not the context it delegates to.
+    const context = await opened("the held part's context", browser.newContext());
+    const held = await opened("the held part's page", context.newPage()).catch(async (error) => {
+      await closeContext(context, "the held part's context").catch(() => {});
+      throw error;
+    });
     /** How the route answers a read; `closing` once the case ends, when it lets each go at once. @type {"hold" | "empty" | "abort" | "closing"} */
     let answer = "hold";
     let reads = 0;
@@ -60,13 +66,17 @@ export async function partReads(page, browser, swaps, noSwaps) {
         }),
       );
       const read = () => held.waitForResponse((r) => r.request().headers().corten === "action", { timeout: 5000 }).catch(() => {});
-      const placeholder = async () => ({
-        reads,
-        busy: await held.getAttribute("#picks", "aria-busy"),
-        failed: await held.getAttribute("#picks", "data-corten-read-failed"),
-        line: await held.isVisible("#picks span"),
-        link: await held.isVisible("#picks a"),
-      });
+      const placeholder = () =>
+        readWithin(
+          "the slow part's state",
+          (async () => ({
+            reads,
+            busy: await held.getAttribute("#picks", "aria-busy"),
+            failed: await held.getAttribute("#picks", "data-corten-read-failed"),
+            line: await held.isVisible("#picks span"),
+            link: await held.isVisible("#picks a"),
+          }))(),
+        );
       await held.goto(`${base}/`);
       await held.waitForSelector('#picks[aria-busy="true"]', { state: "attached", timeout: 5000 }).catch(() => {});
       const loaded = await placeholder();
@@ -143,7 +153,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
         () => held.off("request", onDocument),
         () => within(5000, "the held reads were not let go within 5 s", Promise.all(holds.splice(0).map((release) => release()))),
         () => within(5000, "the held part's route was not removed within 5 s", held.unrouteAll({ behavior: "ignoreErrors" })),
-        () => closeContext(held.context(), "the held part's context"),
+        () => closeContext(context, "the held part's context"),
       );
     }
   }

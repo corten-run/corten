@@ -116,6 +116,13 @@ const within = (ms, what, work) => {
 };
 
 /**
+ * `work`, a read of the page (an `evaluate` or a locator's), within 5 s, or a rejection saying
+ * `what` was not read: a read the browser never answers would otherwise keep a case from its
+ * `finally`. @template T @param {string} what @param {Promise<T>} work @returns {Promise<T>}
+ */
+const readWithin = (what, work) => within(5000, `${what} was not read within 5 s`, work);
+
+/**
  * Work under one budget of `ms` that stops for good. Each step has what is left of the budget; a
  * step that settles after the budget has ended fails as one that ran out, though its result came
  * (a result that arrives late is no result), and once a step fails or runs out (or `end` is
@@ -400,4 +407,4 @@ export async function runSmoke(run) {
   process.exit(failures.length ? 1 : 0);
 }
 
-export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, steps, pollFor, cleanUp, opened, closeContext };
+export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, steps, pollFor, cleanUp, opened, closeContext };

@@ -1,4 +1,4 @@
-import { base, engine, skip, check, steps, within, opened, closeContext } from "./helpers.mjs";
+import { base, engine, skip, check, steps, within, readWithin, opened, closeContext } from "./helpers.mjs";
 
 export async function patchUploads(errors, page, part) {
   const errorsBeforeUpload = errors.length;
@@ -757,26 +757,30 @@ export async function uploads(page, live, errors, signsIn) {
       await plainAccount.fill("main input[name=name]", "Ada");
       const { answer: renamed, missed: renameMissed } = await post(nameButton);
       const at = new URL(plainAccount.url());
+      const backAt = !!renamed && new URL(renamed.url()).search === "?do=name" && renamed.status() === 303 && at.pathname === "/account" && at.search === "";
+      const renamedMain = backAt ? await readWithin("the page the name's post led to", plainAccount.textContent("main")) : null;
       checkPost(
         "without JavaScript the name's urlencoded post goes to do=name and the browser back to the page",
-        !!renamed && new URL(renamed.url()).search === "?do=name" && renamed.status() === 303 && at.pathname === "/account" && at.search === "" && ((await plainAccount.textContent("main")) ?? "").includes("Signed in as Ada."),
+        backAt && (renamedMain ?? "").includes("Signed in as Ada."),
         renamed ? `${renamed.url()} ${renamed.status()} ${plainAccount.url()}` : renameMissed,
       );
       if (!stopped) await plainAccount.fill("main input[name=name]", " ");
       const { answer: refused, missed: refuseMissed } = await post(nameButton);
+      const reason = refused ? await readWithin("the refused name's reason", plainAccount.textContent("#name-result")) : null;
       checkPost(
         "without JavaScript a refused name is the page at its post's address, the reason in it",
-        !!refused && refused.status() === 422 && new URL(plainAccount.url()).search === "?do=name" && (await plainAccount.textContent("#name-result")) === "Choose a name of 1 to 40 characters.",
-        refused ? `${refused.status()} ${plainAccount.url()} ${await plainAccount.textContent("#name-result")}` : refuseMissed,
+        !!refused && refused.status() === 422 && new URL(plainAccount.url()).search === "?do=name" && reason === "Choose a name of 1 to 40 characters.",
+        refused ? `${refused.status()} ${plainAccount.url()} ${reason}` : refuseMissed,
       );
       // From the page drawn at do=name, the picture's form still posts to its own address.
       if (!stopped) await plainAccount.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
       const { answer: uploadedPlain, missed: uploadMissed } = await post("main form[enctype] button");
-      const plainType = uploadedPlain ? ((await uploadedPlain.request().headerValue("content-type")) ?? "") : "";
+      const plainType = uploadedPlain ? ((await readWithin("the picture post's content type", uploadedPlain.request().headerValue("content-type"))) ?? "") : "";
+      const avatar = uploadedPlain ? await readWithin("the picture's result", plainAccount.textContent("#avatar-result")) : null;
       check(
         "without JavaScript the picture's multipart post goes to do=picture, from the page drawn at do=name",
-        !!uploadedPlain && new URL(uploadedPlain.url()).search === "?do=picture" && plainType.startsWith("multipart/form-data") && uploadedPlain.status() === 200 && (await plainAccount.textContent("#avatar-result")) === "Saved card.png as your picture.",
-        uploadedPlain ? `${uploadedPlain.url()} ${plainType} ${uploadedPlain.status()} ${await plainAccount.textContent("#avatar-result")}` : uploadMissed,
+        !!uploadedPlain && new URL(uploadedPlain.url()).search === "?do=picture" && plainType.startsWith("multipart/form-data") && uploadedPlain.status() === 200 && avatar === "Saved card.png as your picture.",
+        uploadedPlain ? `${uploadedPlain.url()} ${plainType} ${uploadedPlain.status()} ${avatar}` : uploadMissed,
       );
     } finally {
       if (noScript) await closeContext(noScript, "the no-JavaScript context");
