@@ -342,20 +342,29 @@ away stops a page's part reads sets its route before it starts the page's write,
 part read of the page it reaches, so the part cannot draw `Saved.` and stop by itself first: it
 requires a read held within five seconds while the page still says `Saving...`, then leaves by a
 link and answers each held read as one that asks again. It requires at least one such answer
-fulfilled, every held read let go that way within five seconds, and no part read in the 2.2 s after
-(the fixture's one-second read-again delay and 1.2 s more). A held read fails it, saying which,
-when its fetch or fulfill fails, when its release does not settle, or when its answer is not a
+received, every held read let go that way within five seconds of its release, and no part read in
+the 2.2 s after (the fixture's one-second read-again delay and 1.2 s more). A held read counts as
+answered only once the browser has finished loading that exact request (Playwright's
+`requestfinished` for it) with the answer its fulfill sent, told by a mark unique to that answer
+(its `smoke-held` header): a fulfill that resolves is not enough, since Playwright's Firefox
+backend drops the browser's refusal of one. A held read fails it, saying which, when its fetch or
+fulfill fails, when the browser fails the read or finishes it without that mark, when its release
+does not settle, or when its answer is not a
 patch whose top-level elements, as the page itself parses them the way the runtime parses a patch
 (a template's `innerHTML`), include the `Saving...` status line and end their read-again tags
 with a `ReadAgain::from` template that waits that one second and whose `data-from`, resolved
 against the base URL of the page it is delivered to (the page the case left for, which the
 runtime's fetch resolves it against), is the held read's own address. Without a held read it
-fails. Its holds are let go and its route removed in a `finally`, each bounded to five seconds. A release
-that runs out before its fulfill is sent aborts its read and settles the route's callback for it
-then; its late fetch, if it ever ends, does not answer the read. A release that runs out after its
-fulfill was sent settles the callback too, but cannot abort the read (Playwright refuses an abort
-once a fulfill is under way), so the fulfill may still answer it: the read's outcome is reported
-as unconfirmed, and the check fails. The check of a navigation
+fails. Its holds are let go and its route removed in a `finally`, each bounded to five seconds. A
+release's five seconds are measured by the monotonic clock (`performance.now()`) from the release,
+and checked once its answer is fetched, again just before its fulfill is sent, and once the browser
+has finished the read, so a timer that runs late does not stretch them: a release past them before
+its fulfill is sent aborts its read, and one whose read the browser finishes past them fails as
+late. A release whose
+five-second timer runs before it has its outcome settles the route's callback then: before its
+fulfill is sent it aborts the read, and its late fetch, if it ever ends, does not answer it; after,
+it cannot abort the read (Playwright refuses an abort once a fulfill is under way), so the fulfill
+may still answer it: the read's outcome is reported as unconfirmed, and the check fails. The check of a navigation
 during a patch's stylesheet load holds the one stylesheet the patch links until the runtime has
 read the navigation's answer, and requires that
 the page did not swap while it was held and that the browser requested it once while it was

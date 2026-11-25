@@ -370,16 +370,25 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           // with the page still saying `Saving...` (within 5 s), the page leaves by a link; then each
           // held read is answered as one that asks again (the server's answer while the write lands),
           // and no part read may come in the `quietFor` after that (the part's `AGAIN_SECONDS` and 1.2 s
-          // more). The check needs at least one held read answered so, its patch fulfilled, and every
-          // held read let go that way within 5 s: a read whose fetch or fulfill fails, whose answer is
-          // no patch drawing `Saving...` with a ReadAgain::from template among its elements that asks
-          // again after `AGAIN_SECONDS` from the held read's own address (parsed by the page as the
-          // runtime parses a patch, resolved against the page it is delivered to, `readAgainFault`),
-          // or whose release does not settle fails it, saying which. A release that runs out before
-          // its fulfill is sent aborts its read and settles its route callback then, and nothing
-          // answers that read after; one that runs out with its fulfill sent cannot take it back, so
-          // it says the read's outcome is unconfirmed, which fails the check too. Without a held read
-          // it fails too, since a part that has stopped says nothing about leaving it.
+          // more). The check needs at least one held read answered so, and every held read let go
+          // that way within 5 s of its release by the monotonic clock (`performance.now()`): a read
+          // counts as answered only once the browser has finished loading that exact request with
+          // the answer its fulfill sent (its `requestfinished`, with the answer's own `smoke-held`
+          // mark), since a fulfill that resolves need not have answered it (Playwright's Firefox
+          // drops the browser's refusal of one). A read whose fetch or fulfill fails, whose answer
+          // the browser fails or does not finish with that mark, whose answer is no patch drawing
+          // `Saving...` with a ReadAgain::from template among its elements that asks again after
+          // `AGAIN_SECONDS` from the held read's own address (parsed by the page as the runtime parses
+          // a patch, resolved against the page it is delivered to, `readAgainFault`), or whose
+          // release does not settle fails it, saying which. The 5 s are checked by that clock once
+          // the answer is fetched, again just before the fulfill is sent, and once the browser has
+          // finished the read, not by whether a timer has run: a release past them before its
+          // fulfill is sent aborts its read (and nothing answers it after), and one whose read the
+          // browser finishes past them fails as late. A release whose 5 s timer runs settles its
+          // route callback then: before its fulfill is sent it aborts the read, and after it cannot
+          // take the fulfill back, so it says the read's outcome is unconfirmed, which fails the
+          // check too. Without a held read it fails too, since a part that has stopped says nothing
+          // about leaving it.
           /** How long no part read may come after the held reads are let go: longer than the part waits to read again. */
           const quietFor = AGAIN_SECONDS * 1000 + 1200;
           /** The address of the page the case leaves, once its write is sent: the route takes no read before. @type {string | null} */
@@ -387,8 +396,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const awayReads = (/** @type {URL} */ u) => awayFrom !== null && u.pathname + u.search === awayFrom;
           /**
            * Lets go of each part read the route holds, answering it as one that asks again, within
-           * 5 s: null once that answer is fulfilled, else what went wrong (the read is then aborted,
-           * unless its fulfill was already sent). Its route callback has settled when this has.
+           * 5 s: null once the browser has finished that read with that answer in time, else what
+           * went wrong (the read is then aborted, unless its fulfill was already sent). Its route
+           * callback has settled when this has.
            * @type {{ release: () => Promise<string | null> }[]}
            */
           const owed = [];
@@ -397,13 +407,50 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const holdPart = (/** @type {import("@playwright/test").Route} */ route) => {
             const request = route.request();
             if (gone || request.method() !== "GET" || request.headers()["corten"] !== "action") return route.fallback();
+            // How the browser ends this read, heard from the moment it is held so its end cannot come
+            // before the check listens: true once it has finished loading an answer, else the
+            // browser's reason it failed.
+            /** @type {() => void} */
+            let unlisten = () => {};
+            /** @type {Promise<true | string>} */
+            const ended = new Promise((resolve) => {
+              const finished = (/** @type {import("@playwright/test").Request} */ r) => {
+                if (r !== request) return;
+                unlisten();
+                resolve(true);
+              };
+              const failed = (/** @type {import("@playwright/test").Request} */ r) => {
+                if (r !== request) return;
+                unlisten();
+                resolve(r.failure()?.errorText ?? "no reason given");
+              };
+              page.on("requestfinished", finished);
+              page.on("requestfailed", failed);
+              unlisten = () => {
+                page.off("requestfinished", finished);
+                page.off("requestfailed", failed);
+              };
+            });
             return new Promise((settle) =>
               owed.push({
                 release: () => {
-                  /** Set once the release has its outcome, in time or not: from then on nothing touches the route. */
+                  /** The release's 5 s, by the monotonic clock: a timer that runs late does not stretch them. */
+                  const deadline = performance.now() + 5000;
+                  const late = () => performance.now() >= deadline;
+                  /** Set once the release's timer has run or it has its outcome: from then on nothing touches the route. */
                   let over = false;
                   /** Set once its fulfill is sent: from then on an abort cannot take the answer back. */
                   let sent = false;
+                  /** Set once the read is aborted, so it is aborted once. */
+                  let aborted = false;
+                  const abort = async () => {
+                    if (aborted) return;
+                    aborted = true;
+                    await route.abort().catch(() => {});
+                  };
+                  // The answer's own mark, so the answer the browser finishes the read with is known
+                  // to be this release's.
+                  const marker = crypto.randomUUID();
                   const reply = async () => {
                     let step = "its fetch";
                     try {
@@ -415,36 +462,54 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                       delete headers["content-length"];
                       const body = await res.text();
                       const landed = body.includes(savedLine) && !body.includes("data-corten-read-again");
-                      // Out of time: the read was aborted, and a late answer is no answer.
-                      if (over) return "its release did not settle within 5 s";
+                      // Out of time: the read is aborted, and a late answer is no answer.
+                      if (over || late()) {
+                        await abort();
+                        return "its 5 s ran out before its fulfill was sent, so its read was aborted";
+                      }
                       const answer = landed ? `${body.replace(savedLine, savingLine)}<template data-corten-read-again="${AGAIN_SECONDS}" data-from="${awayFrom}"></template>` : body;
                       step = "reading its answer in the page";
                       const fault = !res.ok() || !("corten-patch" in headers) ? `its answer was no patch (status ${res.status()}${"corten-patch" in headers ? "" : ", no corten-patch header"})` : await readAgainFault(page, answer, request.url(), savingLine);
-                      if (over) return "its release did not settle within 5 s";
+                      // The last look before the fulfill is sent: past it, the read is answered or not
+                      // by what the browser does.
+                      if (over || late()) {
+                        await abort();
+                        return "its 5 s ran out before its fulfill was sent, so its read was aborted";
+                      }
                       step = "its fulfill";
                       sent = true;
-                      await route.fulfill({ status: res.status(), headers, body: answer });
+                      await route.fulfill({ status: res.status(), headers: { ...headers, "smoke-held": marker }, body: answer });
+                      // A fulfill that resolves need not have answered the read: the browser must
+                      // finish this request, with this answer.
+                      step = "the browser's end of its read";
+                      const end = await ended;
+                      if (end !== true) return `its fulfill was sent but the browser failed the read (${end}), so it was not answered`;
+                      const mark = (await request.response())?.headers()["smoke-held"];
+                      if (mark !== marker) return `the browser finished the read with an answer ${mark === undefined ? "without" : "with another"} smoke-held mark, not its fulfill's`;
+                      if (late()) return "the browser finished the read with its answer only after 5 s, too late to count as answered";
                       return fault;
                     } catch (error) {
                       // The page that sent it has left, or the read was cancelled: it is aborted, and
                       // not counted as answered.
-                      if (!over) await route.abort().catch(() => {});
+                      if (!over) await abort();
                       return `${step} failed: ${String(/** @type {Error} */ (error)?.message ?? error).split("\n")[0]}`;
                     }
                   };
                   return within(5000, "its release did not settle within 5 s", reply())
                     .catch((/** @type {Error} */ error) => {
                       over = true;
-                      // Its fulfill was sent and has not settled: it may still answer the read, and
-                      // an abort now is refused, so what became of the read is not known.
-                      if (sent) return `its fulfill was sent but did not settle within 5 s: whether it answered the read is unconfirmed`;
+                      // Its fulfill was sent, and it or the browser's end of the read has not
+                      // settled: it may still answer the read, and an abort now is refused, so what
+                      // became of the read is not known.
+                      if (sent) return `its fulfill was sent but the browser did not finish the read within 5 s: whether it answered the read is unconfirmed`;
                       // Its fetch or answer never settled: the read is aborted and its callback
                       // settles now, not when (if ever) that work ends.
-                      route.abort().catch(() => {});
+                      abort();
                       return error.message;
                     })
                     .finally(() => {
                       over = true;
+                      unlisten();
                       settle(undefined);
                     });
                 },
