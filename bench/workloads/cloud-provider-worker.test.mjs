@@ -251,6 +251,34 @@ test("supported lifecycle real worker retains one private credential through kno
   });
 });
 
+test("pre-create census worker preserves the census fields, refuses other modes and never retakes", async (t) => {
+  const suffix = account.slice(-2), list = ["compute", "droplet", "list", "--pre-create-census", "--output", "json", ...suffix];
+  await t.test("complete projection", async (t) => {
+    const h = harness(t), name = "corten-bench-groups-r21-0123456789abcdef";
+    const tags = ["corten-bench", "corten-bench-groups", "corten-bench-groups-run-0123456789abcdef"];
+    await h.run(["compute", "droplet", "create", name, "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
+      "--ssh-keys", "42", "--tag-names", tags.join(","), "--wait", "--output", "json", ...suffix]);
+    assert.deepEqual(JSON.parse((await h.run(list)).stdout), { complete: true, rows: [{ id: 123, name, tags,
+      size_slug: "c-8", region: { slug: "sfo3" }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } }] });
+    assert.deepEqual(h.state().calls.filter(({ path }) => path.startsWith("/v2/droplets?")).map(({ path }) => path),
+      ["/v2/droplets?page=1&per_page=200"]);
+  });
+  await t.test("incomplete or malformed reply", async (t) => {
+    for (const mode of ["list-converges", "list-next", "list-shape"]) {
+      const h = harness(t, mode);
+      assert.deepEqual(JSON.parse((await h.run(list)).stdout), { complete: false, rows: [] });
+      assert.equal((await h.run(account)).status, 0, "the same worker can bracket the reply");
+      assert.deepEqual(h.state().calls.map(({ path }) => path), ["/v2/droplets?page=1&per_page=200", "/v2/account"]);
+      await h.run.close();
+    }
+  });
+  await t.test("no create mode", async (t) => {
+    const h = harness(t, "success", undefined, undefined, undefined, null);
+    await assert.rejects(h.run(list));
+    assert.equal(h.state().requests, 0);
+  });
+});
+
 test("provider-errored create crosses real worker IPC with only its exact IDs and leaves the worker usable", async (t) => {
   const h = harness(t, "first-action-errored"), suffix = account.slice(-2);
   const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",

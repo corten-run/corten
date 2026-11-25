@@ -254,6 +254,10 @@ const quarantineJson = (bytes) => {
 // Read-only candidate for an operator who has accounted for the entire local
 // controller tree. Dead lock owners alone do not prove that tree has settled.
 export function unacknowledgedCreateBinding(fleet) {
+  return quarantineBinding(fleet, false);
+}
+
+function quarantineBinding(fleet, report) {
   const { root, manifest, manifestSha256 } = fleet, { round, single } = manifest;
   assert.ok(single, "create quarantine requires an independent attempt");
   const { group } = single, { state, stateRoot, local, stateSha256 } = readGroup(fleet, group);
@@ -276,8 +280,8 @@ export function unacknowledgedCreateBinding(fleet) {
   assert.ok(Number.isFinite(Date.parse(owner.at)) && new Date(owner.at).toISOString() === owner.at
     && Date.parse(owner.at) <= Date.parse(state.createIntentAt), "create quarantine requires original operation custody");
   const dir = join(root, "receipts"); physical(dir);
-  assert.ok(!present(join(dir, quarantineWitnessFile)), quarantineWitnessed);
-  const entries = readdirSync(dir).filter((file) => file !== createQuarantineFile);
+  if (!report) assert.ok(!present(join(dir, quarantineWitnessFile)), quarantineWitnessed);
+  const entries = readdirSync(dir).filter((file) => file !== createQuarantineFile && !(report && file === quarantineWitnessFile));
   assert.equal(entries.length, 1, "create quarantine requires exactly one original detach outcome");
   assert.ok(new RegExp(`^detach-[a-f0-9]{16}-${group}\\.json$`).test(entries[0]), "create quarantine detach outcome name differs");
   const failureBytes = regular(join(dir, entries[0]), 4096), failure = quarantineJson(failureBytes);
@@ -293,13 +297,16 @@ export function unacknowledgedCreateBinding(fleet) {
     failureSha256: digest(failureBytes), batchLockSha256: batch.sha256, launchLockSha256: launch.sha256, operationLockSha256: operation.sha256 };
 }
 
-export function readCreateQuarantine(fleet) {
+export function readCreateQuarantine(fleet, { report = false } = {}) {
   const dir = join(fleet.root, "receipts");
   if (!fleet.manifest.single || !present(dir)) return;
   physical(dir);
-  const path = join(dir, createQuarantineFile);
-  if (!present(path)) return;
-  const bytes = regular(path, 8192), record = quarantineJson(bytes), binding = unacknowledgedCreateBinding(fleet);
+  const path = join(dir, createQuarantineFile), witness = join(dir, quarantineWitnessFile);
+  if (!present(path)) {
+    assert.ok(!present(witness), "create quarantine witness has no quarantine record");
+    return;
+  }
+  const bytes = regular(path, 8192), record = quarantineJson(bytes), binding = quarantineBinding(fleet, report);
   assert.ok(typeof record?.localCustodyProofSha256 === "string" && /^[a-f0-9]{64}$/.test(record.localCustodyProofSha256),
     "operator tree-custody proof digest required");
   assert.ok(isDeepStrictEqual(record, { schema: "benchmark-create-quarantine/v1", binding, localCustodyProofSha256: record.localCustodyProofSha256 }),
@@ -307,8 +314,18 @@ export function readCreateQuarantine(fleet) {
   const { state } = readGroup(fleet, binding.group);
   assert.equal(digest(regular(join(fleet.root, binding.group, `groups-${binding.round}`, "state.json"), 1024 * 1024)), binding.stateSha256,
     "create quarantine state changed");
+  const sha256 = digest(bytes);
+  let witnessSha256;
+  if (present(witness)) {
+    assert.ok(report, quarantineWitnessed);
+    const bytes = regular(witness, 4096), row = quarantineJson(bytes), id = row?.dropletId;
+    assert.ok(typeof id === "string" && /^[1-9]\d{0,15}$/.test(id) && Number.isSafeInteger(Number(id))
+      && isDeepStrictEqual(row, { schema: "benchmark-create-quarantine-witness/v1", quarantineSha256: sha256, dropletId: id }),
+    "create quarantine witness differs");
+    witnessSha256 = digest(bytes);
+  }
   return { round: binding.round, group: binding.group, root: fleet.root, accountId: binding.accountId,
-    sha256: digest(bytes), nameSha256: digest(state.name), tagSha256: digest(state.tag) };
+    sha256, nameSha256: digest(state.name), tagSha256: digest(state.tag), ...(witnessSha256 ? { witnessSha256 } : {}) };
 }
 
 export function recheckCreateQuarantine(root, row, selection) {

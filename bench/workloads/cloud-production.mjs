@@ -404,14 +404,18 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     }
     return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch);
   };
-  const inspectPreCreateInventory = !historicalHostsAbsent ? (rows) => {
-    if (quarantined.length) checkQuarantineCensus(dirname(admission.fleetRoot), quarantined, manifest, rows);
-    historicalHostsAbsent = !rows.some(({ id }) => historicalIds.has(String(id)));
+  const inspectPreCreateInventory = !historicalHostsAbsent ? (rows, complete) => {
+    const listed = rows.some(({ id }) => historicalIds.has(String(id)));
+    if (quarantined.length) {
+      checkQuarantineCensus(dirname(admission.fleetRoot), quarantined, manifest, rows.filter((row) => Object.hasOwn(row, "name")));
+      assert.ok(!listed, "an earlier historical host is listed; preserve reservation");
+    }
+    historicalHostsAbsent = complete && !listed;
   } : undefined;
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
     mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, approvedFleetSha256: plan.subject.fleetSha256, remainingAdmission,
-    inspectPreCreateInventory, singleResponsePreCreate: quarantined.length > 0,
+    inspectPreCreateInventory, quarantinePreCreate: quarantined.length > 0,
     ...(admission ? { checkFleetAdmission, ...(stagedSibling
       ? { remainingPlacement: { region: admission.placement.region, intentSha256: admission.sha256 } } : {}) } : {}),
     ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {

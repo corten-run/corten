@@ -405,6 +405,41 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
           && word(action.resource_type) && word(action.status) && (action.resource_id === null || Number.isSafeInteger(action.resource_id) && action.resource_id >= 0)))
           throw stopped(false, { code });
         value = [{ id: action.id, type: action.type, resource_type: action.resource_type, resource_id: action.resource_id, status: action.status }];
+      } else if (command[2] === "list" && command[3] === "--pre-create-census") {
+        assert.ok(host, "pre-create census is not authorized for this mode");
+        assert.deepEqual(command, ["compute", "droplet", "list", "--pre-create-census", "--output", "json"]);
+        const result = await call("list", "GET", "/v2/droplets?page=1&per_page=200");
+        const batch = result?.droplets, total = result?.meta?.total, links = result?.links, pages = links?.pages;
+        const object = (v) => v && typeof v === "object" && !Array.isArray(v);
+        const text = (v) => typeof v === "string" && v.length > 0 && v.length <= 255;
+        let complete = Array.isArray(batch) && batch.length <= 200 && total === batch.length
+          && (links === undefined || !!object(links)) && (pages === undefined || !!object(pages) && pages.next === undefined);
+        const rows = [], seen = new Set();
+        // Valid sightings survive an incomplete envelope or bad sibling row. An ID
+        // also stands on its own for the historical fence, unlike a name/tag match.
+        for (const d of Array.isArray(batch) ? batch.slice(0, 200) : []) {
+          if (!positive(d?.id)) { complete = false; continue; }
+          if (seen.has(d.id)) complete = false;
+          seen.add(d.id);
+          const row = { id: d.id }; rows.push(row);
+          if (!(text(d.name) && Array.isArray(d.tags) && d.tags.length <= 256 && d.tags.every(text))) {
+            complete = false; continue;
+          }
+          row.name = d.name; row.tags = d.tags;
+          // Preserve exactly the placement and public-address checks used by the
+          // ordinary pre-create census, not the provider's full droplet record.
+          const size = d.size_slug ?? d.size?.slug, region = d.region?.slug, v4 = d.networks?.v4;
+          if (size !== undefined && !text(size) || region !== undefined && !text(region)
+            || v4 !== undefined && !(Array.isArray(v4) && v4.length <= 256 && v4.every((n) => object(n)
+              && text(n.type) && (n.type !== "public" || text(n.ip_address))))) {
+            complete = false; continue;
+          }
+          if (size !== undefined) row.size_slug = size;
+          if (region !== undefined) row.region = { slug: region };
+          if (v4 !== undefined) row.networks = { v4: v4.filter((n) => n.type === "public")
+            .map(({ type, ip_address }) => ({ type, ip_address })) };
+        }
+        value = { complete, rows };
       } else if (command[2] === "list" && command[3] === "--single-response") {
         // Absence proof for a provider-errored create: one response is the whole
         // inventory. Offset pages are not a snapshot, so more than one page, a count

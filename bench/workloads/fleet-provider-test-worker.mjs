@@ -68,6 +68,14 @@ serveProviderWorker({
         }
         return { status: 200, value: { droplets: [{ ...match, name: "renamed", tags: [] }], meta: { total: 1 } } };
       }
+      if (existsSync(hostsPath + ".census-first")) {
+        const rows = JSON.parse(readFileSync(hostsPath + ".census-first", "utf8"));
+        if (firstInventoryPage) {
+          firstInventoryPage = false;
+          return { status: 200, value: rows };
+        }
+        return { status: 200, value: { droplets: [], meta: { total: 0 } } };
+      }
       const droplets = hosts(); return { status: 200, value: { droplets, meta: { total: droplets.length }, links: {} } };
     }
     if (method === "POST" && path === "/v2/droplets") {

@@ -305,14 +305,16 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
     }
   };
   const read = async (fleet, checkout, archives) => {
-    const quarantine = readCreateQuarantine(fleet);
+    const quarantineOptions = { report: !admittedGroup };
+    const quarantine = readCreateQuarantine(fleet, quarantineOptions);
     if (quarantine) {
       const { group, round, accountId } = quarantine, { manifest, manifestSha256 } = fleet;
       assert.ok(!archives && attempts.has(group), "create quarantine is not a retained result");
       needsCensus.add(accountId); quarantinedCreates.push(quarantine);
-      retainedLocks.push(() => assert.deepEqual(readCreateQuarantine(readFleet(fleet.root, round, { priorSelection: true })), quarantine,
-        "create quarantine changed"));
-      attempts.get(group).push({ group, round, commit: manifest.commit, manifestSha256, outcome: "quarantined-create", attemptRoot: fleet.root });
+      retainedLocks.push(() => assert.deepEqual(readCreateQuarantine(readFleet(fleet.root, round, { priorSelection: true }),
+        quarantineOptions), quarantine, "create quarantine changed"));
+      attempts.get(group).push({ group, round, commit: manifest.commit, manifestSha256,
+        outcome: quarantine.witnessSha256 ? "quarantined-create-witnessed" : "quarantined-create", attemptRoot: fleet.root });
       return;
     }
     if (admittedGroup) return readAdmission(fleet, checkout, archives);

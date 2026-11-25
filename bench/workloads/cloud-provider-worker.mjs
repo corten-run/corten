@@ -27,6 +27,10 @@ function action(message, host, catalogCommand) {
     assert.equal(command.length, 6); assert.deepEqual([...command.slice(0, 3), ...command.slice(4)], ["compute", "action", "get", "--output", "json"]);
     assert.match(command[3], /^[1-9]\d*$/); assert.ok(Number.isSafeInteger(Number(command[3])) && Number(command[3]) > 0);
   }
+  else if (command[2] === "list" && command[3] === "--pre-create-census") {
+    assert.ok(host, "pre-create census is not authorized for this mode");
+    assert.deepEqual(command, ["compute", "droplet", "list", "--pre-create-census", "--output", "json"]);
+  }
   else if (command[2] === "list") assert.ok(['["compute","droplet","list","--output","json"]',
     '["compute","droplet","list","--single-response","--output","json"]'].includes(JSON.stringify(command)), "unknown list command");
   else if (command[2] === "get") {
