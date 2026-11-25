@@ -2771,10 +2771,13 @@ mod tests {
                         }
                         hold(&host);
                     }
-                    // A percent-encoded byte there, whole and cut short (`%4` is whole or not
-                    // by the byte that follows it, so only the grammar says which).
+                    // A percent-encoded byte there, whole, with a hex digit of each case in
+                    // each of its two places, and cut short (`%4` is whole or not by the byte
+                    // that follows it, so only the grammar says which).
                     for (encoded, whole) in [
                         (&b"%4a"[..], Some(true)),
+                        (b"%4A", Some(true)),
+                        (b"%aF", Some(true)),
                         (b"%C3%A9", Some(true)),
                         (b"%4", None),
                         (b"%4g", Some(false)),

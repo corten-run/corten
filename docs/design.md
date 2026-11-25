@@ -2570,10 +2570,13 @@ rules something out.
     is not IPv6 or has a zone. It adds work to an unstaged route, so this was read again
     as it was for the host check's 494. The same change stopped searching the headers for `Host`
     where it is the first line, where RFC 9110 (7.2) asks a client to write it, and it reads a
-    `Host` no name holds with one of the two cheapest readers of those counted (below; the other,
-    eight bytes at a look, counted within 11 of it either way): in line where the request is
-    read, the port taken off the value's end and the name read four bytes at a look, with what
-    only a refused request runs held out of line. Counted over a
+    `Host` no name holds with one of the two cheapest readers of those counted (below): in line
+    where the request is read, the port taken off the value's end and the name read four bytes at
+    a look, with what a refused request or a percent-encoded name runs held out of line. The
+    other, eight bytes at a look, counted within 11 of it either way: 91, 82 and 136 a call
+    against four's 93, 74 and 147, for `localhost:8080`, `shop.example` and a name of 33 bytes.
+    Four is kept as the one 8 ahead on one short name, 2 behind on the other, and 11 behind only
+    on the long one; that an app's names are nearer the short two was not surveyed. Counted over a
     socket at `5c7b006dc` (below), each build in turn and main built a second time as the
     control: an unstaged request with `Host` first costs 126 fewer than before in an app that names
     its hosts; one with `Host` second 19 more, and 49 more with it the last of a browser's eight
@@ -2762,7 +2765,8 @@ rules something out.
     twice, for what the read itself costs: 34 and 36 more than main in an app that answers to any
     host with `Host` first, and 235 with it last of eight. Readers of a `Host` no name holds,
     each counted alone (the run of 2,000,000 calls less the run of 1,000,000, a call's
-    instructions for `localhost:8080`, for `shop.example` and for a name of 33 bytes): the
+    instructions for `localhost:8080`, for `shop.example` and for a name of 33 bytes; the
+    earlier head's and the one kept counted twice, the same each time, the others once): the
     earlier head's, the colon searched for from the end and the name a byte at a look, 144, 175
     and 427; the port taken off the end and the name four bytes at a look, which is kept, 93, 74
     and 147; eight at a look 91, 82 and 136; every byte's look joined, with no branch for a byte,
@@ -2772,18 +2776,27 @@ rules something out.
     value, 134, 123 and 203. No control that shares no code with Corten was counted. Names
     an app holds other ways were counted only at `c4c19eee5`, which still scanned the target, each
     build's runs together and not in turn: a name under `localhost`, a listed name and a subdomain
-    of one cost 4 to 51 fewer than on main with `Host` first. Designs of the same change tried
-    before this one, three runs each and the median, the `GET` and the unstaged route: a request the
-    server read known by a thread-local set around the router's call 19,243 and 13,052
-    (uncommitted); by a mark on the request's body 19,215 and 13,023 at `58d81af93`, which a layer
-    of the app's that replaces the body loses; by the mark it has now with the headers searched for
-    `Host` on every request 19,207 and 13,015 at `0b82b0dca`; and with the scan of the
-    request-target this change no longer has, 19,107 and 12,915 at `c4c19eee5`. Tried at
-    `31212aa1d` for an app that answers to any host, counted in turn with it and with main, and not kept:
-    the value read once from its start for every app, with no search for the colon, which took 28 to
-    41 from such an app's request with `Host` first (12,802 and 19,006) and added 23 to 25 to every
-    request of an app that names its hosts, which reads nothing of a name it holds as written
-    (12,894 against 12,869, 19,083 against 19,060); the same read for such an app alone, 13 to 23
+    of one cost 4 to 51 fewer than on main with `Host` first. The counts from here to the end of
+    this entry are by the earlier method, a request counted as the run of 1,240 less the run of
+    240: each is set against the main or the head counted beside it, given here where one was
+    recorded, and not against the counts above. Designs of the same change tried before this one,
+    three runs each and the median, the `GET` and the unstaged route, against main `3aee8a5db`: a
+    request the server read known by a thread-local set around the router's call 19,243 and 13,052
+    (uncommitted), and by a mark on the request's body 19,215 and 13,023 at `58d81af93`, which a
+    layer of the app's that replaces the body loses, main beside these two 19,152 (19,136 to
+    19,153) and 12,966 (12,965 to 12,966); by the mark it has now with the headers searched for
+    `Host` on every request 19,207 and 13,015 at `0b82b0dca`, with no count of main recorded
+    beside it; and with the scan of the request-target this change no longer has, 19,107 and
+    12,915 at `c4c19eee5`, main beside it 19,152 (19,151 to 19,152) and 12,953 (12,952 to 12,965),
+    its unstaged route counting 12,952 to 12,954 in some runs and 12,965 to 12,967 in others.
+    Tried at `31212aa1d` for an app that answers to any host, counted in turn with it and with
+    main `430e1ac1f` (`31212aa1d` then 12,843 and 19,034 against main's 12,666 and 18,850 in such
+    an app with `Host` first, and 12,870 and 19,061 against 12,966 and 19,152 in one that names
+    its hosts), and not kept: the value read once from its start for every app, with no search for
+    the colon, which took 28 to 41 from such an app's request with `Host` first (12,802 against
+    12,843 and 19,006 against 19,034) and added 23 to 25 to every request of an app that names its
+    hosts, which reads nothing of a name it holds as written (12,894 against 12,869, 19,083
+    against 19,060, `31212aa1d` in that count); the same read for such an app alone, 13 to 23
     fewer in one count and none in the next; and the later lines read in turn for `Host` in place of
     the hashed search, which took 70 to 80 from a request with `Host` second and 18 from one with it
     last of eight and added 12 to every request with it first, or, held out of line, added about 80
