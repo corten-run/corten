@@ -10,6 +10,7 @@ import { summarizeSamples } from "../catalog/stats.mjs";
 
 const same = (a, b, message) => assert.ok(isDeepStrictEqual(a, b), message);
 const count = (n) => Number.isSafeInteger(n) && n >= 0;
+const unsetDockerClock = (value) => typeof value === "string" && /^0001-01-01T00:00:00(?:\.0{1,9})?Z$/.test(value);
 export const captureLimits = Object.freeze({ ...streamLimits, stderrBytes: 4 * 2 ** 20, auxiliaryBytes: 2 * 2 ** 20 });
 export const producerSources = Object.freeze(["load.js", "load-outcome.js", "timed-load.js", "fixed-prototype-load.js", "upstream-observer.mjs"]);
 export const legacyProducerSchema = "json-api-producer/v2";
@@ -33,10 +34,11 @@ export function verifyLife(state, receipt, { before, load, code, at }) {
     finishedAt: state.finishedAt, status: created ? "created" : load ? "exited" : "running", running: !load,
     oomKilled: false, dead: false, paused: false, restarting: false, restartCount: 0, exitCode: load && !before ? code : 0, error: "" },
   "timed participant exited/restarted/OOM/error state");
-  if (!created) assert.ok(Date.parse(state.startedAt) <= at, "participant starts after observation");
+  if (created) assert.ok(unsetDockerClock(state.startedAt), "created load start clock must be unset");
+  else assert.ok(Date.parse(state.startedAt) <= at, "participant starts after observation");
   if (load && !before) assert.ok(typeof state.finishedAt === "string" && Number.isFinite(Date.parse(state.finishedAt)) && Date.parse(state.finishedAt) >= Date.parse(state.startedAt)
     && Date.parse(state.finishedAt) <= at, "load finish clock invalid");
-  else timestampNs(state.finishedAt);
+  else assert.ok(unsetDockerClock(state.finishedAt), "created or running participant finish clock must be unset");
 }
 
 export function life(info) {

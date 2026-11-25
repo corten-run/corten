@@ -9,7 +9,7 @@ import { isDeepStrictEqual } from "node:util";
 export const streamLimits = Object.freeze({ bytes: 512 * 2 ** 20, lineBytes: 64 * 2 ** 10, events: 2_000_000, metrics: 128, chunkBytes: 64 * 2 ** 10 });
 export const prototypeSchema = "json-api-fixed-prototype/v1";
 const object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
-const sameKeys = (value, keys) => assert.equal(Object.keys(value).sort().join(","), [...keys].sort().join(","), "event fields differ");
+const sameKeys = (value, keys) => assert.ok(Object.keys(value).sort().join(",") === [...keys].sort().join(","), "event fields differ");
 
 // Parse the exact RFC3339 nanoseconds without passing them through a JS Date double.
 export function timestampNs(value) {
@@ -125,11 +125,12 @@ function replay(limits) {
 export function verifyStreamReceipt(receipt) {
   assert.ok(object(receipt), "complete raw stream receipt required");
   sameKeys(receipt, ["encoding", "bytes", "sha256", "events", "points", "metrics", "firstNs", "lastNs"]);
-  assert.equal(receipt.encoding, "identity", "raw stream receipt encoding differs");
+  assert.ok(receipt.encoding === "identity", "raw stream receipt encoding differs");
   for (const key of ["bytes", "events", "points", "metrics"])
     assert.ok(Number.isSafeInteger(receipt[key]) && receipt[key] > 0, "invalid raw stream receipt counts");
-  assert.match(receipt.sha256 ?? "", /^[a-f0-9]{64}$/, "raw stream receipt hash required");
-  for (const key of ["firstNs", "lastNs"]) assert.match(receipt[key] ?? "", /^\d+$/, "raw stream receipt timestamps required");
+  assert.ok(typeof receipt.sha256 === "string" && /^[a-f0-9]{64}$/.test(receipt.sha256), "raw stream receipt hash required");
+  for (const key of ["firstNs", "lastNs"])
+    assert.ok(typeof receipt[key] === "string" && /^\d+$/.test(receipt[key]), "raw stream receipt timestamps required");
   assert.ok(BigInt(receipt.firstNs) <= BigInt(receipt.lastNs), "raw stream receipt timestamps reversed");
 }
 

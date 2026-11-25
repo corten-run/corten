@@ -159,6 +159,15 @@ function validateRow(row, id, pid) {
   assert.ok([row.usageUsec, row.memoryCurrent, row.inactiveFile].every(natural), "load CPU/memory evidence missing or malformed");
 }
 
+export function loadResourceInterval(previous, row) {
+  same(row.before, previous.before, "load process/cgroup identity changed between acquisitions");
+  assert.ok(clockDelta(previous.begin, row.end) <= edgeNs, "gap in load resource coverage");
+  const elapsedMin = Math.min(row.begin.at - previous.end.at - 1, row.begin.monotonic - previous.end.monotonic);
+  const delta = row.usageUsec - previous.usageUsec;
+  assert.ok(elapsedMin > 0 && delta >= 0, "overlapping load acquisitions or reset CPU counter");
+  return { elapsedMin, delta };
+}
+
 // The plan and terminal Docker lifetime are caller inputs, not inferred from submitted rows.
 export function replayLoadResources(rows, { id, pid, startedAt, finishedAt, memoryBytes, quota, plan }) {
   assert.ok(containerId(id) && positive(pid) && positive(memoryBytes) && positive(quota), "exact load identity and resource budget required");
@@ -179,11 +188,7 @@ export function replayLoadResources(rows, { id, pid, startedAt, finishedAt, memo
     assert.ok(memory > 0 && memory < memoryBytes, "load memory missing/at budget");
     memMaxBytes = Math.max(memMaxBytes, memory);
     if (previous) {
-      same(row.before, previous.before, "load process/cgroup identity changed between acquisitions");
-      assert.ok(clockDelta(previous.begin, row.end) <= edgeNs, "gap in load resource coverage");
-      const elapsedMin = Math.min(row.begin.at - previous.end.at - 1, row.begin.monotonic - previous.end.monotonic);
-      const delta = row.usageUsec - previous.usageUsec;
-      assert.ok(elapsedMin > 0 && delta >= 0, "overlapping load acquisitions or reset CPU counter");
+      const { elapsedMin, delta } = loadResourceInterval(previous, row);
       cpuMaxPctUpper = Math.max(cpuMaxPctUpper, delta / (elapsedMin * 10));
     } else assert.ok(upper - born <= edgeNs, "uncovered load resource start");
     previous = row;

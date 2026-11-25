@@ -143,7 +143,10 @@ includes the complete final millisecond and must fit in Docker's nanosecond
 lifetime, with no grace. Slots start one second after the rounded-up Docker start
 timestamp. Replay derives the schedule from the exact lifetime and requires a
 complete acquisition for each full slot. A final partial slot can contribute a
-sample only if the entire acquisition fits. A process or cgroup disappearance
+sample only if the entire acquisition fits. A successful read that may have
+started before exit but whose bracket crosses it can be omitted only after its
+identity, clocks and CPU counter agree with the preceding read. A read whose
+bracket starts at or after exit fails the phase. A process or cgroup disappearance
 during a read fails the phase, even in the last partial slot. A PID directory
 already absent before any resource read can end sampling only if an exact,
 clean Docker exit for the same start is observed, the final receipt agrees,

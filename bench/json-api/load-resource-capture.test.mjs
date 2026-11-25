@@ -177,10 +177,13 @@ test("a late wake does not acquire or lose an optional slot, but cannot excuse a
 });
 
 test("a successfully read partial slot with a bracket crossing the exact finish is omitted only from that slot", async () => {
+  const participant = { pid: 42, processObject: "1:2", startTicks: "3", groupObject: "4:5",
+    path: `/system.slice/docker-${id}.scope`, mount: "36 27 0:29 / /sys/fs/cgroup rw - cgroup2 cgroup rw", populated: true };
   const f = fixture({ observations: [info("running")], collect({ sequence }, stop) {
     if (sequence === 2) void stop();
-    const at = epoch + 1000 * (sequence + 1);
-    return { sequence, begin: { at }, end: { at } };
+    const monotonic = 1000 * (sequence + 1), at = epoch + monotonic;
+    return { sequence, begin: { at, monotonic }, end: { at, monotonic }, before: participant, after: participant,
+      usageUsec: 1000 * sequence, memoryCurrent: 4096, inactiveFile: 0 };
   } });
   await new Promise(setImmediate);
   const result = await f.capture.stop();
@@ -189,4 +192,19 @@ test("a successfully read partial slot with a bracket crossing the exact finish 
   assert.equal(finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(3001) })).rows.length, 3);
   assert.equal(finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(4000) })).rows.length, 3, "never trim a full slot");
   assert.equal(result.capture.rows.length, 3, "original candidate is not changed");
+  const atExit = structuredClone(result), edge = atExit.capture.rows.at(-1);
+  edge.begin.at += 100; edge.end.at += 100; edge.begin.monotonic += 100; edge.end.monotonic += 100;
+  assert.throws(() => finalizeLoadResourceCapture(atExit, terminal({ finishedAt: stamp(3100) })), /began after container exit/);
+  for (const [fault, edit, message] of [
+    ["wholly after exit", (tail) => { tail.begin.at++; tail.end.at++; tail.begin.monotonic++; tail.end.monotonic++; }, /began after container exit/],
+    ["new cgroup", (tail) => { tail.before.groupObject = "4:6"; }, /identity changed between acquisitions/],
+    ["counter reset", (tail) => { tail.usageUsec = 0; }, /reset CPU counter/],
+    ["clock jump", (tail) => { tail.begin.monotonic += 20; tail.end.monotonic += 20; }, /clock discontinuity/],
+  ]) {
+    const invalid = structuredClone(result), tail = invalid.capture.rows.at(-1);
+    // Separate this sample's identities from earlier rows, keeping its own bracket intact.
+    tail.before = tail.after = { ...tail.before };
+    edit(tail);
+    assert.throws(() => finalizeLoadResourceCapture(invalid, terminal()), message, fault);
+  }
 });

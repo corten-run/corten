@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { timestampNs } from "./fixed-stream.mjs";
-import { acquireLoadResources, LoadProcessAbsentBeforeRead, loadResourceCaptureSchema, loadResourceFirstSlot, loadResourcePeriodMs } from "./load-resource-proof.mjs";
+import { acquireLoadResources, LoadProcessAbsentBeforeRead, loadResourceCaptureSchema, loadResourceFirstSlot, loadResourceInterval, loadResourcePeriodMs } from "./load-resource-proof.mjs";
 
 const maxRows = 360;
 const msNs = (ms) => BigInt(ms) * 1_000_000n;
@@ -90,10 +90,14 @@ export function finalizeLoadResourceCapture({ capture, missed, error }, terminal
   if (missed && (missed.sequence < full || missed.sequence > full + Number(partial) || capture.rows.length !== missed.sequence))
     throw missed.error;
   const tail = capture.rows.at(-1);
-  // A genuine read in the terminal partial slot can round past the recorded
-  // exit. Do not publish that optional read or remove any earlier/full slot.
+  // Only a read that could have begun before exit can be omitted. Its
+  // continuity still matters even when its CPU and memory cannot be used.
   if (partial && capture.rows.length === full + 1 && tail?.sequence === full
-    && tail.begin.at >= slot && tail.end.at < slot + loadResourcePeriodMs && msNs(tail.end.at + 1) > finished)
+    && tail.begin.at >= slot && tail.end.at < slot + loadResourcePeriodMs && msNs(tail.end.at + 1) > finished) {
+    assert.ok(msNs(tail.begin.at) < finished, "load acquisition began after container exit");
+    const previous = capture.rows.at(-2);
+    if (previous) loadResourceInterval(previous, tail);
     return { ...capture, rows: capture.rows.slice(0, -1) };
+  }
   return capture;
 }
