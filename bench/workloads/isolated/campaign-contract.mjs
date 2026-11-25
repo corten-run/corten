@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { alternateCampaignPlacements, bindExecution, clientComparisonRecipe } from "./contract.mjs";
-import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationRound, nativeArtifactRoot } from "../registry.mjs";
+import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationRound, jsonTimingInvocation, nativeArtifactRoot } from "../registry.mjs";
 import { catalogFleetPlacement } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { parseArgs } from "../../json-api/contract.mjs";
@@ -115,7 +115,7 @@ export function jsonPhase(plan, phase, receiptPath) {
   const round = phase === "prepare" ? jsonPreparationRound(plan.round) : binding.request.round;
   if (phase === "timing") assert.equal(typeof receiptPath, "string");
   const invocation = phase === "prepare" ? jsonPreparationInvocation(plan.round)
-    : { executable: "node", argv: ["bench/json-api/run.mjs", round, "--group", "json-api", "--receipts", receiptPath] };
+    : jsonTimingInvocation(round, receiptPath);
   return freeze({ ...binding, request: { ...binding.request, round },
     execution: { ...binding.execution, invocation, effectiveOptions: parseArgs(invocation.argv.slice(1)) },
     validation: { ...binding.validation, artifactRoot: nativeArtifactRoot("json-api", round) } });

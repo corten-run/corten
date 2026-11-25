@@ -61,7 +61,7 @@ export function inspectJson(summary, { load, commit } = {}) {
       assert.ok(summary.tools[tool].image === pin, `wrong ${tool} image reference: not this checkout's pin ${pin}; report from a checkout of ${measured}`);
       verifyImageExecution(summary.toolExecutions?.[tool]);
     }
-    verifyK6Provenance(summary.tools.k6);
+    verifyK6Provenance(summary.tools.k6, { verb: "report", commit: summary.commit });
   });
   const fixtures = {}, functionalVerifiers = {};
   check("fixture set", () => assert.deepEqual(Object.keys(summary.fixtures ?? {}).sort(), Object.keys(payloads).sort()));

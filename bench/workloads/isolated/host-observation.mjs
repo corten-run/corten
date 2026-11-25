@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, readlinkSync, statSync } from "node:fs";
 import os from "node:os";
-import { groupNames } from "../registry.mjs";
+import { isDeepStrictEqual } from "node:util";
+import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationRound, jsonTimingInvocation, runnerFor } from "../registry.mjs";
 import { readApparatus, verifyApparatus } from "./control-stream.mjs";
 
 const udevCgroup = "0::/system.slice/systemd-udevd.service/udev\n";
@@ -166,6 +167,23 @@ export function udevSettlePolicy(group, phase) {
   return null;
 }
 
+// The caller admits the binding before running or replaying the phase. A clock
+// belongs to its exact native command, never to another command in that phase.
+export function terminalClockPolicy(binding, invocation, campaignRound, phase) {
+  const { group, round } = binding.request, policy = udevSettlePolicy(group, phase);
+  if (!policy || !invocation || !isDeepStrictEqual(invocation, binding.execution?.invocation)) return null;
+  const timingRound = campaignRounds(campaignRound)[group];
+  if (policy === "preparation") return round === jsonPreparationRound(campaignRound)
+    && isDeepStrictEqual(invocation, jsonPreparationInvocation(campaignRound)) ? policy : null;
+  if (round !== timingRound || invocation.executable !== "node" || !Array.isArray(invocation.argv)) return null;
+  if (group === "json-api") {
+    const receipt = invocation.argv.at(-1);
+    return typeof receipt === "string" && receipt && isDeepStrictEqual(invocation, jsonTimingInvocation(round, receipt)) ? policy : null;
+  }
+  const { entry, selection } = runnerFor(group), prefix = [entry, round, ...selection];
+  return isDeepStrictEqual(invocation.argv.slice(0, prefix.length), prefix) ? policy : null;
+}
+
 // Only a cohort entirely attributable to the existing daemon earns another
 // read. Untimed preparation can use the baseline cutoff; timing cannot.
 export function udevSettleCandidates(before, after, terminal, policy = "post-terminal", offline = false) {
@@ -204,4 +222,11 @@ export function verifySettledHostBoundary(before, after, settled, terminal, poli
     "udev daemon changed across host settle");
   assert.ok(candidates.workers.every((p) => !sameProcess(p, final.get(p.pid))), "udev worker identity still present");
   return { ...clean, settledUdevWorkers: candidates.workers.map(({ pid, startTicks }) => ({ pid, startTicks })) };
+}
+
+export function verifyLifetimeSettledBoundary({ binding, invocation, round, phase, lifetime, before, after, settled, offline }) {
+  const policy = terminalClockPolicy(binding, invocation, round, phase);
+  assert.ok(policy && lifetime?.status === "verified" && lifetime.cleanupComplete && lifetime.terminalClock,
+    "udev settle lacks an eligible sealed terminal lifetime");
+  return verifySettledHostBoundary(before, after, settled, lifetime.terminalClock, policy, offline);
 }
