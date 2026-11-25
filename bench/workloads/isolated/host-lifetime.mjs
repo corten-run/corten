@@ -547,7 +547,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   });
 }
 
-function processRecordKey(p) {
+export function processRecordKey(p) {
   return sha(serial({ ...processIdentity(p.stat), cgroup: p.cgroup,
     ...(p.executableRef ? { executableRef: p.executableRef, executableIdentity: p.executableIdentity }
       : { executableSha256: p.executableSha256 }), type: p.type }));

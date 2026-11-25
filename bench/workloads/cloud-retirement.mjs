@@ -14,7 +14,7 @@ import { verifyControlSetupQuery } from "./cloud-control-session.mjs";
 import { verifyControlWatcher } from "./isolated/control-admission.mjs";
 import { verifyStreamDrain, verifyStreamSeal } from "./isolated/control-stream.mjs";
 import { storageLimits } from "./isolated/host-durable-writer.mjs";
-import { processIdentity } from "./isolated/host-lifetime.mjs";
+import { processIdentity, processRecordKey } from "./isolated/host-lifetime.mjs";
 import { campaignRounds, jsonPreparationRound, nativeArtifactRoot } from "./registry.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { cancellationState, mixedDigest, mixedWait, originalMixedControls, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
@@ -319,7 +319,9 @@ function exitOneLifetime(directory, state, grouped, campaign, binding, pid, comm
       if (!records.has(key)) {
         const bytes = regular(join(directory, "processes", key + ".json"), Math.min(1024 * 1024, remaining));
         remaining -= bytes.length;
-        const { stat, cgroup } = JSON.parse(bytes);
+        const record = JSON.parse(bytes);
+        assert.ok(processRecordKey(record) === key);
+        const { stat, cgroup } = record;
         const { pid, startTicks } = processIdentity(stat);
         assert.ok(Number.isSafeInteger(pid) && pid > 0 && typeof cgroup === "string");
         records.set(key, { pid, startTicks, cgroup });

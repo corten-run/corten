@@ -16,6 +16,7 @@ import { fleetChildOptions, readFleet, readGroup, verifyFleet } from "./fleet-ve
 import { continuationAdmission, inspectContinuation } from "./group-continuation.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 import { streamLimits } from "./isolated/control-stream.mjs";
+import { processRecordKey } from "./isolated/host-lifetime.mjs";
 
 const round = "r37", campaign = "r37-0123456789abcdef";
 const retiredPid = 2147483647;
@@ -109,14 +110,16 @@ function fixture(t, group, flags = {}) {
     const exit = { terminal: true, code: 1, signal: null, success: false, cancelled: false, forced: false, error: null };
     const parent = "/system.slice/" + saved.unit, path = parent + "/native-0-" + "f".repeat(16);
     const ancestors = [parent, "/system.slice", "/"].map(path => ({ path }));
+    const process = { stat: "2000 (node) S " + [...Array(18).fill("0"), "1234"].join(" "), cgroup: `0::${path}\n` };
+    const processKey = processRecordKey(process);
     const host = {
       "binding.json": { schema: "benchmark-isolated-host-lifetime/v1", campaign: campaignId, group, round: "w78", commit: measured,
         bindingSha256: deploymentSha256(plan.bindings[0]), invocation: plan.bindings[0].execution.invocation, bootId: reg.host.bootId,
         parent, path, command: 0, leaderPid: 2000, leaderIdentity: { pid: 2000, startTicks: "1234", comm: "node" }, ancestors },
       "terminal.json": { terminal: true, attached: true, empty: true, command: exit, bootId: reg.host.bootId, ancestors, samples: 3 },
-      "samples.jsonl": [false, true, false].map((live, at) => ({ at, processes: live ? ["a".repeat(64)] : [],
+      "samples.jsonl": [false, true, false].map((live, at) => ({ at, processes: live ? [processKey] : [],
         groups: [{ path, files: { "cgroup.procs": live ? "2000\n" : "", "cgroup.events": live ? "populated 1\n" : "populated 0\n" } }] })),
-      [`processes/${"a".repeat(64)}.json`]: { stat: "2000 (node) S " + [...Array(18).fill("0"), "1234"].join(" "), cgroup: `0::${path}\n` },
+      [`processes/${processKey}.json`]: process,
     };
     flags.editHost?.(host);
     const inventory = (root) => entries.filter(({ name }) => name.startsWith(root))
@@ -532,7 +535,21 @@ test("exit-one refuses rehashed missing or contradictory host lifetime observati
     ["missing leader start identity", host => { delete host["binding.json"].leaderIdentity; }],
     ["wrong leader start ticks", host => { host["binding.json"].leaderIdentity.startTicks = "9999"; }],
     ["no observed leader", host => { host["samples.jsonl"][1].groups[0].files["cgroup.procs"] = "2001\n"; }],
-    ["leader record outside the command", host => { host[`processes/${"a".repeat(64)}.json`].cgroup = "0::/other\n"; }],
+    ["leader record outside the command", host => {
+      const [key] = host["samples.jsonl"][1].processes;
+      const record = host[`processes/${key}.json`]; delete host[`processes/${key}.json`];
+      record.cgroup = "0::/other\n";
+      const changed = processRecordKey(record);
+      host["samples.jsonl"][1].processes[0] = changed; host[`processes/${changed}.json`] = record;
+    }],
+    ["non-leader record under a stale identity key", host => {
+      const sample = host["samples.jsonl"][1], path = host["binding.json"].path;
+      const stat = (ticks) => "2001 (node) S " + [...Array(18).fill("0"), ticks].join(" ");
+      const record = { stat: stat("2345"), cgroup: `0::${path}\n` };
+      const key = processRecordKey(record);
+      sample.groups[0].files["cgroup.procs"] += "2001\n"; sample.processes.push(key);
+      host[`processes/${key}.json`] = { ...record, stat: stat("4321") };
+    }],
     ["unrelated sample cgroup", host => { host["samples.jsonl"][1].groups[0].path += "-other"; }],
     ["leader listed in two cgroups", host => {
       const sample = host["samples.jsonl"][1], duplicate = structuredClone(sample.groups[0]);
