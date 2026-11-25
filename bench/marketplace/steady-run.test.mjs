@@ -640,7 +640,7 @@ test("an adapter or upstream image ID that is not a canonical Docker ID fails it
   assert.ok(!readFileSync(join(folder("k6"), "summary.json"), "utf8").includes("leaked-canary"));
 });
 
-test("a soak reads restarts from a live event stream only when it shows it covered the load; a clean-looking stream without that leaves the cell unconfirmed", async (t) => {
+test("a soak reads restarts from a live event stream only when it shows the marker's starts around the load; a stream with no app event and without them leaves the cell unconfirmed", async (t) => {
   const folder = folderOf(t);
   const options = parseSteadyArgs(["soak", "t12", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps);
   const soak = async (name, { drop, late, rewrite, spawnEvents, ...extra } = {}) => {
@@ -656,7 +656,7 @@ test("a soak reads restarts from a live event stream only when it shows it cover
   // Covered and clean: the stream showed the marker's start before the load and again after the
   // app's last inspect, with no app event between. It is the live stream, never a --since replay.
   const clean = await soak("clean");
-  assert.deepEqual([clean.r.eventStream, clean.r.events, clean.r.restarted], ["clean", [], false]);
+  assert.deepEqual([clean.r.eventStream, clean.r.events, clean.r.restarted], ["none-seen", [], false]);
   const app = clean.fake.ids["marketplace-test-run-corten"], marker = clean.fake.ids["marketplace-test-run-corten-marker"];
   const load = clean.fake.ids["marketplace-test-run-k6"];
   assert.deepEqual(clean.client.spawned.map((x) => x.args), [["events", "--filter", "type=container", "--filter", `container=${app}`, "--filter", `container=${marker}`, "--filter", `container=${load}`, "--format", eventFormat]]);
@@ -682,7 +682,7 @@ test("a soak reads restarts from a live event stream only when it shows it cover
   assert.match(steadyReport(bounced.s), /\| exit \(die\) at \d+ s \| yes: start at \d+ s after an exit \|$/m);
   // Events are paired by their daemon times, not the order the stream delivered them: a start
   // delivered after a die but stamped at the same time, or earlier, is not a restart. The stream
-  // covered the load and showed both, so the soak reads them as observations and Restarted: no.
+  // bracketed the load and delivered both, so the soak reads them as observations and Restarted: no.
   // Each pair's times are fixed from one clock reading, so the same time is exactly the same.
   const stamped = (state, action, nanos) => { for (const listener of state.listeners) listener(state.app().id, action, String(nanos)); };
   const sameTime = await soak("same-time", { duringLoad: (state) => { const at = BigInt(state.now()) * 1_000_000n; stamped(state, "die", at); stamped(state, "start", at); } });
@@ -714,7 +714,7 @@ test("a soak reads restarts from a live event stream only when it shows it cover
   for (const [name, drop, loads] of [["silent", () => true, false], ["late", markerStart(1), false], ["no-end", markerStart(2), true], ["no-fence", (row) => row.includes("|die|"), true]]) {
     const { s, fake } = await soak(name, { drop });
     assert.equal(s.cells[0].failure, "unconfirmed", name);
-    assert.match(steadyReport(s), /\| no reading: the cell failed \(Docker's event stream for the cell could not be read or did not show it covered the load/, name);
+    assert.match(steadyReport(s), /\| no reading: the cell failed \(Docker's event stream for the cell could not be read, or did not show a marker container's starts before and after the load/, name);
     assert.equal(fake.calls.some((c) => loadStarted(c.args, fake)), loads, `${name}: whether the load ran`);
   }
   // The runner waits for each marker start (readEvents also refuses a saved stream without both).
@@ -925,12 +925,12 @@ test("a soak whose stats or events client overflows keeps its other observations
   assert.equal(s.complete, true, JSON.stringify([s.failures, s.cells]));
   validateSoak(s);
   const [cell] = s.cells;
-  assert.deepEqual(["failure" in cell, cell.memory.unavailable, cell.restarts.eventStream, cell.restarts.restarted], [false, "memory sampling failed", "clean", false]);
+  assert.deepEqual(["failure" in cell, cell.memory.unavailable, cell.restarts.eventStream, cell.restarts.restarted], [false, "memory sampling failed", "none-seen", false]);
   assert.match(errorsOf(folder("stats")), /docker stats wrote a row longer than 1024 bytes, so its memory samples are unavailable/);
   assert.ok(!readFileSync(join(folder("stats"), "summary.json"), "utf8").includes("ssss"));
   assert.equal(s.cleanup.complete, true);
   assert.equal(stats.containers.size, 0);
-  // Events overflow after the marker's first start: the stream does not cover the load, so the cell
+  // Events overflow after the marker's first start: the stream is unavailable, so the cell
   // has no reading, and what overflowed is not kept in the summary.
   const events = fakeDocker({ exportFor: () => soakExport(), clockMs: 1_800_000, loadMs: 50 });
   let overflowed = false;
@@ -1611,7 +1611,7 @@ test("a docker update during the load that is undone before the inspect after it
   assert.equal(clean.cells[0].verdict.withinTolerance, true, JSON.stringify(clean.cells[0]));
   const events = JSON.parse(readFileSync(join(folder("api-held"), "api", "corten", "page", "events.json"), "utf8"));
   assert.deepEqual([events.stream, events.updates, events.upstream, events.restartedSinceLaunch], ["read", [], [], []]);
-  // The same passes with no event stream: nothing shows the settings held through the load, so neither
+  // The same passes with no event stream: no event-stream check of the load at all, so neither
   // kind keeps a reading, and no load starts once the stream has not shown the marker's first start.
   for (const [name, options] of [["unconfirmed-convergence", convergence], ["unconfirmed-soak", soak]]) {
     const fake = passOf(options);
@@ -1655,14 +1655,83 @@ test("a soak's app restarted after the launch check and again during the load is
   validateSoak(read);
 });
 
-test("the load receipt keeps the window settings as requested and as Docker reported them", async (t) => {
+test("the load receipt keeps the window settings as requested and as Docker reported them, before the load starts and after it ran", async (t) => {
   const folder = folderOf(t);
   const options = parseSteadyArgs(["convergence", "t52", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const nine = (info) => ({ ...info, Config: { ...info.Config, Env: info.Config.Env.map((e) => (e === "WINDOWS=8" ? "WINDOWS=9" : e)) } });
+  const observedNine = { requested: { WINDOWS: "8", WINDOW_SECONDS: "15" }, observed: { WINDOWS: ["9"], WINDOW_SECONDS: ["15"] } };
+  // Docker's inspect of the load before it starts reports WINDOWS=9: the cell fails `settings`, no
+  // load starts, and the receipt of that inspect keeps what Docker had.
+  const early = fakeDocker({ exportFor: () => k6Export(flat(8)), inspected: (info, c, state) => (c.kind === "k6" && state.startIssuedMs === null ? nine(info) : info) });
+  const refused = await run(early, options, folder("nine-before"));
+  assert.equal(refused.cells[0].failure, "settings");
+  assert.ok(!early.calls.some((c) => loadStarted(c.args, early)), "no load started");
+  const before = JSON.parse(readFileSync(join(folder("nine-before"), "fixture", "corten", "page", "load-container-before.json"), "utf8"));
+  assert.deepEqual(before.windowEnv, observedNine);
+  assert.equal(before.id, early.ids["marketplace-test-run-k6"]);
   // Docker's inspect of the load after it ran reports WINDOWS=9 for the 8 the pass asked for.
-  const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), inspected: (info, c, state) => (c.kind === "k6" && state.startIssuedMs !== null
-    ? { ...info, Config: { ...info.Config, Env: info.Config.Env.map((e) => (e === "WINDOWS=8" ? "WINDOWS=9" : e)) } } : info) });
+  const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), inspected: (info, c, state) => (c.kind === "k6" && state.startIssuedMs !== null ? nine(info) : info) });
   const s = await run(fake, options, folder("nine"));
   assert.equal(s.cells[0].failure, "settings");
+  assert.ok(fake.calls.some((c) => loadStarted(c.args, fake)), "the load ran");
   const receipt = JSON.parse(readFileSync(join(folder("nine"), "fixture", "corten", "page", "load-container.json"), "utf8"));
-  assert.deepEqual(receipt.windowEnv, { requested: { WINDOWS: "8", WINDOW_SECONDS: "15" }, observed: { WINDOWS: ["9"], WINDOW_SECONDS: ["15"] } });
+  assert.deepEqual(receipt.windowEnv, observedNine);
+  // The inspect before it started matched, and its receipt is kept too.
+  assert.deepEqual(JSON.parse(readFileSync(join(folder("nine"), "fixture", "corten", "page", "load-container-before.json"), "utf8")).windowEnv,
+    { requested: { WINDOWS: "8", WINDOW_SECONDS: "15" }, observed: { WINDOWS: ["8"], WINDOW_SECONDS: ["15"] } });
+});
+
+test("the live watcher starts no load on a first marker start the reader would refuse", async (t) => {
+  const folder = folderOf(t);
+  const app = "a".repeat(64), marker = "b".repeat(64);
+  // A start row whose time is not one, then nothing: marker(1) is never satisfied.
+  for (const nanos of ["not-a-time", "0", "01"]) {
+    const plain = { listeners: [] }, client = eventsClient(plain);
+    const stream = eventStream({ app, marker, file: folder(`bad-${nanos}.log`), spawn: client.spawn, markerMs: 30, graceMs: 5, boundMs: 50 });
+    plain.listeners[0](marker, "start", nanos);
+    await assert.rejects(stream.marker(1), /did not show the marker's start 1 within 30 ms/, nanos);
+    await stream.stop();
+  }
+  // A pass whose first marker start row has no valid time: no load starts, and the cell has no reading.
+  const options = parseSteadyArgs(["convergence", "t53", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const fake = fakeDocker({ exportFor: () => k6Export(flat(8)) });
+  let rewritten = false;
+  const rewrite = (row) => {
+    const [id, action] = row.split("|");
+    if (!rewritten && action === "start" && id === fake.ids["marketplace-test-run-corten-marker"]) { rewritten = true; return [`${id}|start|not-a-time`]; }
+    return [row];
+  };
+  const s = await run(fake, options, folder("malformed-marker"), { spawnEvents: eventsClient(fake, { rewrite }).spawn });
+  assert.ok(rewritten);
+  assert.equal(s.cells[0].failure, "unconfirmed", JSON.stringify(s.cells[0]));
+  assert.ok(!fake.calls.some((c) => loadStarted(c.args, fake)), "no load started");
+  assert.match(errorsOf(folder("malformed-marker")), /docker events did not show the marker's start 1 within 200 ms/);
+});
+
+test("a cell whose event stream lost an update still has a reading, and its saved text and report say the stream can drop events", async (t) => {
+  const folder = folderOf(t);
+  const convergence = parseSteadyArgs(["convergence", "t54", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const soak = parseSteadyArgs(["soak", "t55", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps);
+  for (const [name, options] of [["convergence", convergence], ["soak", soak]]) {
+    // The app is updated during the load and undone before the inspect after it; Docker's stream,
+    // with both marker starts and the fence, drops that update row as it may for a slow subscriber.
+    const fake = fakeDocker({ ...(options.kind === "soak" ? { exportFor: () => soakExport(), clockMs: 1_800_000, loadMs: 50 } : { exportFor: () => k6Export(flat(8)) }),
+      duringLoad: (state) => state.emit(state.ids["marketplace-test-run-corten"], "update") });
+    const client = eventsClient(fake, { drop: (row) => row.includes("|update|") });
+    const s = await sampled(fake, options, folder(name), { env: pinnedEnv, spawnEvents: client.spawn });
+    assert.equal(s.complete, true, name);
+    assert.equal(s.cells[0].failure, undefined, `${name}: ${JSON.stringify(s.cells[0])}`);
+    (options.kind === "soak" ? validateSoak : validateConvergence)(s);
+    const events = JSON.parse(readFileSync(join(folder(name), "fixture", "corten", "page", "events.json"), "utf8"));
+    assert.deepEqual([events.stream, events.updates], ["read", []], `${name}: the update was not observed`);
+    // What the reading rests on is saved with the pass, limit included, and the report prints it.
+    const checks = s.measurement.containerChecks;
+    assert.match(checks ?? "", /Docker can drop events for a slow subscriber without ending the stream/, name);
+    assert.match(checks, /not proof that none happened/, name);
+    const report = steadyReport(s);
+    assert.ok(report.split("\n").includes(`Container checks: ${checks}.`), name);
+    // Nothing in the report says the stream showed there was no update, or that it covered the load.
+    assert.doesNotMatch(report, /with no update of those containers|so it covered the load|held through the load/, name);
+    if (options.kind === "soak") assert.equal(s.cells[0].restarts.eventStream, "none-seen");
+  }
 });

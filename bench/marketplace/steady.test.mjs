@@ -292,7 +292,7 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.options.apps = []; v.images = {}; v.cells = []; }, /at least one of its apps/],
     [(v) => { v.cells[0].latencyMaxMs = 1; }, /latency above k6's aggregate http_req_duration maximum/],
     [(v) => { v.cells[0].latencyMaxMs = null; }, /aggregate latency maximum/],
-    [(v) => { v.schema = "marketplace-convergence/v6"; }, /not a marketplace-convergence\/v7 result/],
+    [(v) => { v.schema = "marketplace-convergence/v7"; }, /not a marketplace-convergence\/v8 result/],
     // v5 saves the host's CPU model only as its digest: a v4-style text field is not read.
     [(v) => { v.host = { ...v.host, cpu: "Synthetic test only" }; delete v.host.cpuModelSha256; }, /the pass's host has fields its schema does not save/],
     [(v) => { v.host.cpuModelSha256 = "Synthetic test only"; }, /the pass's host cpuModelSha256 is not a value it saves/],
@@ -323,7 +323,7 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   assert.equal(cell.memory.samples, 360);
   assert.ok(Math.abs(cell.memory.startMiB - 102.95) < 1e-9 && Math.abs(cell.memory.endMiB - 132.95) < 1e-9 && Math.abs(cell.memory.growthMiB - 30) < 1e-9, JSON.stringify(cell.memory));
   assert.deepEqual(cell.p99, { first: 20, last: 30, max: 30 });
-  assert.deepEqual(cell.restarts, { restarted: false, restartCount: 0, replaced: false, eventStream: "clean", events: [], runningAtEnd: true, oomKilled: false });
+  assert.deepEqual(cell.restarts, { restarted: false, restartCount: 0, replaced: false, eventStream: "none-seen", events: [], runningAtEnd: true, oomKilled: false });
   // An OOM kill and an exit with no start after them: stopped, not restarted.
   const stopped = summarizeSoak({ ...base, after: { ...held, running: false, oomKilled: true }, events: [{ action: "oom", atSeconds: 70 }, { action: "die", atSeconds: 70.1 }] });
   assert.deepEqual(stopped.restarts, { restarted: false, restartCount: 0, replaced: false, eventStream: "seen", events: [{ action: "oom", atSeconds: 70 }, { action: "die", atSeconds: 70.1 }], runningAtEnd: false, oomKilled: true });
@@ -403,6 +403,8 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
     [(v) => { Object.assign(v.cells[0].restarts, { events: [{ action: "restart: x", atSeconds: 5 }], eventStream: "seen", restarted: true }); }, /restarts/],
     [(v) => { v.cells[0].restarts.eventStream = "unavailable"; }, /restarts/],
     [(v) => { v.cells[0].restarts.eventStream = "maybe"; }, /restarts/],
+    // v9's word for an app with no event in its stream, which said more than the stream shows.
+    [(v) => { v.cells[0].restarts.eventStream = "clean"; }, /restarts/],
     [(v) => { v.cells[0].restarts.replaced = true; }, /restart claim contradicts/],
     [(v) => { delete v.cells[0].restarts.replaced; }, /restarts/],
     [(v) => { v.cells[0].requests += 1; v.cells[0].iterations += 1; }, /do not add up/],
@@ -410,6 +412,8 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
     [(v) => { v.cleanup.complete = false; }, /cleanup is not confirmed/],
     [(v) => { delete v.measurement.memoryClock; }, /the pass's CPU settings and measurement has fields/],
     [(v) => { v.measurement.memoryClock = "another clock"; }, /clock of its memory samples/],
+    [(v) => { v.measurement.containerChecks = "the settings held through the load"; }, /a pass states what its container checks observed, and their limit/],
+    [(v) => { delete v.measurement.containerChecks; }, /the pass's CPU settings and measurement has fields/],
     [(v) => { v.options.apps = []; v.cells = []; }, /at least one of its apps/],
     [(v) => { v.cells[0].latencyMaxMs = 1; }, /latency above k6's aggregate/],
     // More failures than requests, or failures outside the windows beyond the requests outside them.
@@ -616,7 +620,7 @@ test("memory that cannot be read leaves the restart, stop and OOM observations i
 test("the timed reporter lists every differing or missing input and never judges the warmup", () => {
   assert.throws(() => convergenceLines(likeRound(), ["corten"], null), /reads a convergence pass/);
   const lines = convergenceLines(likeRound(), ["corten", "aspnet"], convergencePass());
-  assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v7, reading marketplace-tolerance\/v4\), measured at commit `c{40}`\. Host CPU model: compared by its SHA-256, not printed\. One 32-user closed-loop pass .* after the timed round's cold start \(the app created, then started while a sidecar polls the target's path to its first 200\)\.$/);
+  assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v8, reading marketplace-tolerance\/v4\), measured at commit `c{40}`\. Host CPU model: compared by its SHA-256, not printed\. One 32-user closed-loop pass .* after the timed round's cold start \(the app created, then started while a sidecar polls the target's path to its first 200\)\.$/);
   // The API-source cells have readings but are not compared: nothing in the pass shows their requests went through the upstream.
   assert.equal(lines[1], "Coverage: the pass has a reading for 4 of this round's 8 measured adapter, source and target cells (corten fixture page, corten fixture json, aspnet fixture page, aspnet fixture json); not compared, the pass does not record that the requests of these API-source cells reached the upstream: corten api page, corten api json, aspnet api page, aspnet api json.");
   assert.match(lines[2], /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: commit, group, adapter images, .* startup timeout, memory limits, response encoding, .* rotating page locales and a timed warmup with no failed request\. It says nothing about this round's other cells\.$/);
@@ -720,6 +724,7 @@ test("a pass is compared with a round only for the cells it has readings for, an
   assert.ok(!failedLines.slice(0, -1).some((l) => /like-for-like|locale|matched/.test(l)), failedLines.join("\n"));
   assert.equal(failedLines.filter((l) => l.startsWith("Reading: ")).length, 8);
   assert.equal(failedLines.at(-1), judged);
+  assert.ok(!failedLines.some((l) => l.startsWith("Container checks: ")), "no container checks line for a pass with no reading");
   // One failed cell makes coverage partial even with every other cell read, and the failed cell's
   // app is still compared for the cells of it that have a reading.
   const oneFailed = convergencePass(); oneFailed.cells[0] = { app: "corten", source: "fixture", target: "page", failure: "load-exit", verdict: null };
@@ -854,9 +859,9 @@ test("a soak's event stream covers the load only when it shows the marker's star
   assert.deepEqual(readEvents(mark(-1) + mark(2000) + row(app, "kill", 2001) + row(app, "die", 2001), ids).events, []);
   // A response that looks clean but does not show both marker starts (a retrospective query whose
   // buffer no longer held the first, a stream that started late, or one stopped early) does not
-  // cover the load, so it is not read as "no restart".
+  // bracket the load, so it is not read as "no restart".
   for (const text of ["", mark(2000), mark(-1), row(app, "exec_start: true", 1)]) {
-    assert.throws(() => readEvents(text, ids), /^AssertionError \[ERR_ASSERTION\]: the event stream showed [01] of the marker's 2 starts, so it does not cover the load$/, JSON.stringify(text));
+    assert.throws(() => readEvents(text, ids), /^AssertionError \[ERR_ASSERTION\]: the event stream showed [01] of the marker's 2 starts, so it does not bracket the load$/, JSON.stringify(text));
   }
   // Uppercase, so not an action: Docker's actions are lowercase, with underscores or dashes.
   const canary = "leaked_Canary";
@@ -890,7 +895,7 @@ test("a soak's two marker starts must be distinct and bracket the load: one at o
   // A marker action with detail is not a start, in the reader as in the live watcher (markerIs): two
   // `start: canary` rows bracketing the load and a later die show no start at all.
   assert.throws(() => readEvents(row(marker, "start: canary", -1) + row(app, "kill", 900) + row(marker, "start: canary", 1801) + row(marker, "die", 1801.1), ids),
-    /^AssertionError \[ERR_ASSERTION\]: the event stream showed 0 of the marker's 2 starts, so it does not cover the load$/);
+    /^AssertionError \[ERR_ASSERTION\]: the event stream showed 0 of the marker's 2 starts, so it does not bracket the load$/);
   // Nor is a die with detail the fence.
   assert.throws(() => readEvents(start(-1) + start(1801) + row(marker, "die: canary", 1801.1), ids), /not that start's exit stamped later than it/);
   // Without the fence, a marker row after the second start stamped after the load finished, the
@@ -913,7 +918,7 @@ test("a soak's two marker starts must be distinct and bracket the load: one at o
   // The same kill before the real exit is the load's.
   assert.deepEqual(readEvents(start(-1) + start(1801) + kill + row(marker, "die", 1801.1), ids).events, [{ action: "kill", atSeconds: 900 }]);
   const before = /^AssertionError \[ERR_ASSERTION\]: the marker's first start in the event stream is not at or before the load's start, so it does not show the stream was listening when the load began$/;
-  const after = /^AssertionError \[ERR_ASSERTION\]: the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load$/;
+  const after = /^AssertionError \[ERR_ASSERTION\]: the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream ran past the load$/;
   // Two identical pre-load rows and then a die during the load: two starts, but no second witness,
   // and the die would otherwise have been read as past the observation's end.
   assert.throws(() => readEvents(start(-1) + start(-1) + row(app, "die", 900), ids), after);
@@ -930,7 +935,7 @@ test("a soak's two marker starts must be distinct and bracket the load: one at o
   // A stream that was not read gives the cell no reading (the runner fails it unconfirmed), so a
   // soak summary needs readEvents's list: null is refused, never saved as an unestablished claim.
   assert.throws(() => summarizeSoak({ ...base, events: null }), /readEvents's list of the app's events/);
-  assert.deepEqual([summarizeSoak({ ...base, events: [] }).restarts.eventStream, summarizeSoak({ ...base, events: [] }).restarts.restarted], ["clean", false]);
+  assert.deepEqual([summarizeSoak({ ...base, events: [] }).restarts.eventStream, summarizeSoak({ ...base, events: [] }).restarts.restarted], ["none-seen", false]);
   const oom = summarizeSoak({ ...base, events: [{ action: "oom", atSeconds: 70 }], after: { ...held, running: false, oomKilled: true } });
   assert.deepEqual([oom.restarts.eventStream, oom.restarts.restarted, oom.memory.unavailable], ["seen", false, "memory sampling failed"]);
 });
@@ -989,7 +994,7 @@ test("a soak keeps an app event stamped inside the load wherever the stream put 
   // FinishedAt with nanoseconds: a second marker start 0.4 ms before it, in the same millisecond,
   // is not after the load finished; one nanosecond after it is.
   const precise = { ...ids, finishedAt: "2026-11-20T00:30:00.000900000Z" };
-  const after = /^AssertionError \[ERR_ASSERTION\]: the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load$/;
+  const after = /^AssertionError \[ERR_ASSERTION\]: the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream ran past the load$/;
   assert.throws(() => readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 500_000n), precise), after);
   assert.throws(() => readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 900_000n), precise), after);
   assert.deepEqual(readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 900_001n) + fence, precise).events, []);

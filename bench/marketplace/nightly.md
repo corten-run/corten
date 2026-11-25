@@ -115,9 +115,11 @@ are not guaranteed to finish by the morning check.
    change from a saved like-for-like convergence pass, and keep convergence and soak passes out
    of the nightly ([Convergence and soak passes](README.md#convergence-and-soak-passes)).
    The droplet job does not run them. A soak says its fixed rate held only when every interval
-   sustained it, and a restart "no" only when its live event stream showed it covered the load;
-   a report with `--convergence` compares the pass with the round only for the cells the pass
-   has a reading for.
+   sustained it, and a restart "no" only when its live event stream was read with a marker's
+   starts around the load and nothing observed shows a restart; Docker can drop events for a
+   slow subscriber, so the event stream detects an update or restart and cannot show there was
+   none, and both reports say so. A report with `--convergence` compares the pass with the round
+   only for the cells the pass has a reading for.
 4. Dedicated c-8: CPU 0 system, 1 app, 2-3 upstream, 4-7 generator, with recorded quotas and
    disjoint pinning. The single Node upstream can saturate one core despite its two-core
    quota. Report upstream CPU at least 80% and app CPU below 95% as limits, across phases.

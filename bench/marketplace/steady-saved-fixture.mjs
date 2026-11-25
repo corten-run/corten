@@ -1,7 +1,7 @@
 // Synthetic saved convergence and soak passes for validator and report tests only, never benchmark
-// results: every field a convergence v5 or soak v7 summary.json saves, with values that match their saved patterns.
+// results: every field a convergence v8 or soak v10 summary.json saves, with values that match their saved patterns.
 import { cpuSettings } from "./run-contract.mjs";
-import { cellCreates, convergenceSchema, cpuModelDigest, flattenRule, passCreates, passScope, savedOptions, soakMemoryClock, soakSchema, timedStartup, windowClock } from "./steady-contract.mjs";
+import { cellCreates, containerChecks, convergenceSchema, cpuModelDigest, flattenRule, passCreates, passScope, savedOptions, soakMemoryClock, soakSchema, timedStartup, windowClock } from "./steady-contract.mjs";
 
 export const pinnedEnv = Object.freeze({ MARKETPLACE_APP_CPUS: "1", MARKETPLACE_LOAD_CPUS: "4-7", MARKETPLACE_API_CPUS: "2-3" });
 /**
@@ -17,7 +17,7 @@ export function savedPass(options, cells, { commit = "c".repeat(40), host = {}, 
     cleanup: { complete: true, remaining: { containers: [], networks: [] }, created, removed: created, recovered: 0, failures: 0, unacknowledged: [] }, cells, admission: null, startup: timedStartup,
     host: { platform: "linux", release: "6.8.0-test", node: "v26.13.1", docker: "27.5.1", kernel: "6.8.0-test", cpuModelSha256: cpuModelDigest("Synthetic test only"), onlineCpus: "0-7", ...host },
     scope: passScope[kind],
-    measurement: { cpus: cpuSettings(pinnedEnv), appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", clock: windowClock, ...(kind === "soak" ? { memoryClock: soakMemoryClock } : {}), ...measurement },
+    measurement: { cpus: cpuSettings(pinnedEnv), appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", clock: windowClock, containerChecks, ...(kind === "soak" ? { memoryClock: soakMemoryClock } : {}), ...measurement },
     commit, finishedCommit: commit, dirty: false, fixtureSha256: "f".repeat(64),
     images: Object.fromEntries(saved.apps.map((app, i) => [app, `sha256:${(i + 1).toString(16).repeat(64)}`])),
     tools: { upstream: { imageId: `sha256:${"4".repeat(64)}` }, k6: { imageId: `sha256:${"5".repeat(64)}`, version: "2.4.0" }, ...tools }, ...overrides };

@@ -33,11 +33,15 @@ import { groupNames } from "./groups.mjs";
 // any of those containers in that stream fails the cell `settings` even when the inspect after the
 // load shows the recorded settings again; a start, restart, die, kill or OOM of the upstream, or for
 // a convergence cell of the app, fails it `instance-changed`. A cell whose stream is unavailable
-// keeps no reading (`unconfirmed`), since nothing then shows the settings held through the load or,
-// for a soak, that a start of the app seen by inspect was not before the load; a soak saves its
-// stream only as clean or seen.
-export const convergenceSchema = "marketplace-convergence/v7";
-export const soakSchema = "marketplace-soak/v9";
+// keeps no reading (`unconfirmed`).
+// Convergence v8 and soak v10: the same checks, saved for what they observed. Docker's events
+// publisher drops an event for a subscriber that is slow to take it without ending the stream, so a
+// stream with both marker starts and the fence can still have lost an update or restart between
+// them: it detects such an event when it is delivered and cannot show that none happened. Each pass
+// saves what its readings rest on, that limit included (measurement.containerChecks, containerChecks),
+// and a soak saves an app with no event in its stream as "none-seen", not "clean".
+export const convergenceSchema = "marketplace-convergence/v8";
+export const soakSchema = "marketplace-soak/v10";
 // The targets and sources of the timed profiles: a page in rotating locales and locale-neutral JSON,
 // from memory and from the HTTP upstream.
 export const steadyTargets = Object.freeze(["page", "json"]);
@@ -73,7 +77,7 @@ export const failureCodes = Object.freeze({
   "failed-requests": "requests failed, so the cell has no reading",
   "instance-changed": "the app, or an API cell's upstream, stopped, restarted, was replaced, signalled or OOM-killed during the cell, or the load would have run against another instance than the one that served the cold start",
   settings: "a container's image, CPU quota, CPU pinning, memory limit or load settings were not the ones the pass records, or Docker's event stream showed one of them updated during the cell",
-  unconfirmed: "Docker's event stream for the cell could not be read or did not show it covered the load, so nothing shows the app's, the load's and an API cell's upstream's settings and the app's instance held through the load; the cell has no reading",
+  unconfirmed: "Docker's event stream for the cell could not be read, or did not show a marker container's starts before and after the load and the exit after the second, so the cell had no event-stream check for an update or restart of its containers around its load; the cell has no reading",
   unsettled: "a cell's containers were not all removed, or a create was not acknowledged, so no further cell was measured",
   "summary-invalid": "the summary did not validate as a complete pass",
   error: "another error",
@@ -279,6 +283,15 @@ export const passScope = Object.freeze({
   soak: "marketplace-v2 soak: one fixed-rate pass per adapter, source and target, memory at the start and end, p99 per interval and restarts; not a timed round or a comparison",
 });
 export const windowClock = "windows are the k6 engine's clock from the start of the test; a request counts in the window its answer completed in";
+/**
+ * What every reading of either kind rests on, saved with the pass (measurement.containerChecks) and
+ * printed by both reports, its limit included. Docker's events publisher (moby daemon/events and its
+ * pubsub publisher) gives up on an event for a subscriber that is slow to take it and goes on with
+ * the stream, so a stream that showed both marker starts and the fence can still have lost an event
+ * between them: an update undone before the next inspect, or a restart of the upstream, can have
+ * gone unseen. No subscriber can show that every event was delivered, so the stream is detection.
+ */
+export const containerChecks = "the app's and the load's settings, and an API cell's upstream's, matched what the pass records at each of Docker's inspects (the app after its cold start, at the launch check and after the load; the load before it started and after it ran; the upstream before the cell, at the launch check and after the load), and Docker's live event stream, from before the launch check to after the last inspect, delivered no update of them and no start, restart, die, kill or OOM of the upstream (nor, for a convergence cell, of the app); Docker can drop events for a slow subscriber without ending the stream, so this is detection of what the stream delivered, not proof that none happened";
 /** The format of a cell's live event stream (steady-run.mjs eventStream): one row per event. */
 export const eventFormat = "{{.Actor.ID}}|{{.Action}}|{{.TimeNano}}";
 /**
@@ -295,7 +308,7 @@ export const markerIs = (action, name) => typeof action === "string" && action =
  * (`upstream`), and every start, restart, die, kill or OOM of that upstream. Inspect reads a
  * container's settings only at a moment, and `docker update` changes a running container's CPU
  * quota, pinning and memory without a restart, so an update between the launch check and the last
- * inspect that is undone before that inspect is seen only here. The pass never updates a container
+ * inspect that is undone before that inspect can be seen only here, if the stream delivers it. The pass never updates a container
  * and the upstream runs for the whole pass, so each of those rows counts wherever it is in the
  * stream; the runner fails the cell for any of them. The load container's other rows (its own
  * start, attach, die, and the archive-path of the export copied out of it) are read and not kept. `docker events --since/--until` replays only what the daemon still buffers (its last 256
@@ -307,8 +320,11 @@ export const markerIs = (action, name) => typeof action === "string" && action =
  * (`startedAt`, `finishedAt`, Docker's own RFC 3339 text with up to nine fractional digits) and
  * each row's TimeNano, so a marker start earlier in the same millisecond as the load's FinishedAt is
  * not taken for one after it. A stream delivers events in the order the daemon publishes them, so
- * one that shows both marker starts was listening before the load began and had delivered every app event published
- * before the load's end. Two marker start rows alone do not show that: two copies of the first
+ * one that shows both marker starts was listening before the load began and went on past the load's
+ * end. It does not show that every event between them was delivered: Docker's events publisher
+ * drops an event for a subscriber that is slow to take it and goes on (containerChecks), so a lost
+ * update or restart leaves both markers and the fence in place. What it delivers is read; what it
+ * dropped is not seen. Two marker start rows alone do not show even the bracket: two copies of the first
  * start would read as both. So the first two marker starts in the stream are the witnesses, and
  * they must bracket the load on the daemon's clock: the first at or before the load's StartedAt
  * (`startedAt`), the second strictly later than the first (so a distinct row) and strictly after
@@ -321,7 +337,7 @@ export const markerIs = (action, name) => typeof action === "string" && action =
  * second start (and so after the load's FinishedAt), and the runner waits for it before it stops the
  * client. Any other marker row there (a copy of the second start, or a die stamped at or before that
  * start) is not the fence, and the stream is not read. An app event delivered after the second start
- * and before the fence is read like any other. This relies on the client delivering rows in the daemon's order up to the fence; a stream
+ * and before the fence is read like any other. This relies on the client delivering the rows it gets in the daemon's order up to the fence; a stream
  * without the fence is not read at all. The text must be complete lines: one that ends without a
  * newline, or that has a blank line, is not read. Every row must be one of the watched container IDs, an
  * action (a lowercase letter, then lowercase letters, underscores or dashes, optionally followed by
@@ -356,10 +372,9 @@ export function readEvents(text, { app, marker, load = null, upstream = null, st
   const events = [], updates = [], upstreamEvents = [], witnesses = [];
   let unreadable = 0, fence = null;
   for (const row of rows) {
-    const first = row.indexOf("|"), last = row.lastIndexOf("|");
-    const id = row.slice(0, Math.max(first, 0)), action = row.slice(first + 1, Math.max(last, first + 1)), nanos = row.slice(last + 1);
-    if (first <= 0 || last <= first || (id !== marker && !roles.has(id)) || !/^[a-z][a-z_-]{0,31}(: .*)?$/.test(action) || !/^[1-9]\d{0,19}$/.test(nanos)) { unreadable++; continue; }
-    const name = action.split(":", 1)[0], at = BigInt(nanos), role = roles.get(id);
+    const parsed = eventRow(row);
+    if (parsed === null || (parsed.id !== marker && !roles.has(parsed.id))) { unreadable++; continue; }
+    const { id, action, at } = parsed, name = action.split(":", 1)[0], role = roles.get(id);
     // A row naming an event a cell reads (an app's or the upstream's restart-relevant event, or an
     // update of any of them) is read only as that exact word: a `restart: detail` row is not a
     // restart, nor anything else, so it makes the stream unreadable.
@@ -383,12 +398,29 @@ export function readEvents(text, { app, marker, load = null, upstream = null, st
     events.push({ action: name, atSeconds });
   }
   assert.ok(unreadable === 0, `${unreadable} docker events row${unreadable === 1 ? " is" : "s are"} not this cell's app, load, upstream or marker, an action and a time`);
-  assert.ok(witnesses.length >= 2, `the event stream showed ${witnesses.length} of the marker's 2 starts, so it does not cover the load`);
+  assert.ok(witnesses.length >= 2, `the event stream showed ${witnesses.length} of the marker's 2 starts, so it does not bracket the load`);
   const [before, after] = witnesses;
   assert.ok(before <= startNs, "the marker's first start in the event stream is not at or before the load's start, so it does not show the stream was listening when the load began");
-  assert.ok(after > before && after > finishNs, "the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load");
+  assert.ok(after > before && after > finishNs, "the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream ran past the load");
   assert.ok(typeof fence === "bigint" && fence > after && fence > finishNs, "the event stream's next marker row after its second start is not that start's exit stamped later than it, so it does not show the client delivered what came before that start");
   return { events, updates, upstream: upstreamEvents };
+}
+/**
+ * One row of a cell's event stream (eventFormat) as readEvents reads it, or null when it is not one:
+ * a container ID before the first `|`, an action (a lowercase letter, then lowercase letters,
+ * underscores or dashes, optionally followed by ": " and detail) and a time in nanoseconds after the
+ * last. Whether the ID is one the cell watches is the caller's to check. The live watcher
+ * (steady-run.mjs eventStream) counts a marker row only when this reads it, so no load starts on a
+ * row readEvents would refuse.
+ * @returns {{ id: string, action: string, at: bigint } | null}
+ */
+export function eventRow(row) {
+  if (typeof row !== "string") return null;
+  const first = row.indexOf("|"), last = row.lastIndexOf("|");
+  if (first <= 0 || last <= first) return null;
+  const id = row.slice(0, first), action = row.slice(first + 1, last), nanos = row.slice(last + 1);
+  if (!/^[a-z][a-z_-]{0,31}(: .*)?$/.test(action) || !/^[1-9]\d{0,19}$/.test(nanos)) return null;
+  return { id, action, at: BigInt(nanos) };
 }
 const restartActions = Object.freeze(["start", "restart", "die", "oom", "kill"]);
 /**
@@ -695,7 +727,8 @@ function passEvidence(s, schema) {
   optionsEvidence(o, kind);
   assert.equal(o.name, s.name, "the pass's options name another pass");
   const m = s.measurement;
-  fields(m, ["cpus", "appMemoryBytes", "upstreamMemoryBytes", "encoding", "clock", ...(kind === "soak" ? ["memoryClock"] : [])], "the pass's CPU settings and measurement");
+  fields(m, ["cpus", "appMemoryBytes", "upstreamMemoryBytes", "encoding", "clock", "containerChecks", ...(kind === "soak" ? ["memoryClock"] : [])], "the pass's CPU settings and measurement");
+  assert.equal(m.containerChecks, containerChecks, "a pass states what its container checks observed, and their limit");
   const pins = cpuRoles.map((role) => m.cpus?.[role]?.cpuset);
   assert.ok(pins.every((p) => p === null || (typeof p === "string" && /^\d{1,4}(?:-\d{1,4})?(?:,\d{1,4}(?:-\d{1,4})?){0,63}$/.test(p))), "a pass records its CPU settings");
   let cpus;
@@ -879,10 +912,11 @@ function soakMemory(memory, seconds, end) {
  * and reported as observations of their own, not as restarts. `before` and `after`
  * have appInstance's forms, and the app must have been running before the load. `memory` is null
  * when sampling failed. `events` is readEvents's list of the app's events: a cell whose live event
- * stream could not be read or did not show it covered the load keeps no reading (the runner saves it
- * `unconfirmed`), so a soak cell always has one. The stream's state is saved as eventStream: "clean"
- * (no start, restart, die, kill or OOM event) or "seen" (at least one). Memory is independent of the
- * stream: it can be unavailable while the stream and the container states are reported.
+ * stream could not be read or did not show the marker's starts around the load keeps no reading (the
+ * runner saves it `unconfirmed`), so a soak cell always has one. The stream's state is saved as
+ * eventStream: "none-seen" (it delivered no start, restart, die, kill or OOM event of the app, which
+ * does not show there was none: containerChecks) or "seen" (at least one). Memory is independent of
+ * the stream: it can be unavailable while the stream and the container states are reported.
  */
 export function summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory, before, after, events, rate, droppedIterations, failedRequests, arrivals }) {
   assert.ok(Array.isArray(windows) && windows.length >= 2, "a soak has at least two intervals");
@@ -895,7 +929,7 @@ export function summarizeSoak({ windows, tail, unrecorded, requests, iterations,
   // One stamped before the load started is not the load's: the runner fails such a cell instance-changed first.
   assert.ok(events.every((e) => e.atSeconds >= 0), "an app event before the load started is not a soak's observation");
   const restartEvents = events.map((e) => ({ action: e.action, atSeconds: e.atSeconds }));
-  const eventStream = restartEvents.length ? "seen" : "clean";
+  const eventStream = restartEvents.length ? "seen" : "none-seen";
   const replaced = after.id !== before.id || after.startedAt !== before.startedAt;
   const p99 = windows.filter((w) => w.p99 !== null).map((w) => w.p99);
   return { windows, tail, unrecorded, requests, iterations, latencyMaxMs, rate: soakArrivals({ rate, seconds: end, windowSeconds: seconds, requests, droppedIterations, arrivals, completions: windows.map((w) => w.requests) }), memory: soakMemory(memory, seconds, end),
@@ -910,9 +944,10 @@ export function summarizeSoak({ windows, tail, unrecorded, requests, iterations,
  */
 export const restartsSeen = (events) => events.filter((e) => e.action === "restart" || (e.action === "start" && events.some((d) => d.action === "die" && d.atSeconds < e.atSeconds)));
 // The restart claim from its observations: true only on restart evidence (a RestartCount increase,
-// another instance at the end, or restartsSeen), false otherwise; a soak cell always has an event
-// stream that was read and covered the load. A kill, a die with no start after it, an OOM kill and
-// an app not running at the end are observations, not restart evidence.
+// another instance at the end, or restartsSeen), false when none was observed; a soak cell always
+// has an event stream that was read and showed the marker's starts around the load, though it can
+// have dropped an event (containerChecks). A kill, a die with no start after it, an OOM kill and an
+// app not running at the end are observations, not restart evidence.
 function restartClaim(r) {
   return { restarted: r.restartCount > 0 || r.replaced || restartsSeen(r.events).length > 0, ...r };
 }
@@ -942,7 +977,7 @@ function checkSoak(s) {
     assert.equal(c.failed, c.windows.reduce((sum, w) => sum + w.failed, 0), `${cellKey(c)}: failures`);
     const r = c.restarts;
     fields(r, ["restarted", "restartCount", "replaced", "eventStream", "events", "runningAtEnd", "oomKilled"], `${cellKey(c)}: restarts`);
-    assert.ok(nonNegative(r.restartCount) && typeof r.replaced === "boolean" && typeof r.runningAtEnd === "boolean" && typeof r.oomKilled === "boolean" && ["clean", "seen"].includes(r.eventStream)
+    assert.ok(nonNegative(r.restartCount) && typeof r.replaced === "boolean" && typeof r.runningAtEnd === "boolean" && typeof r.oomKilled === "boolean" && ["none-seen", "seen"].includes(r.eventStream)
       && Array.isArray(r.events) && r.events.every((e) => e !== null && typeof e === "object" && Object.keys(e).sort().join() === "action,atSeconds" && restartActions.includes(e.action) && finite(e.atSeconds) && e.atSeconds >= 0), `${cellKey(c)}: restarts`);
     assert.ok((r.eventStream === "seen") === (r.events.length > 0), `${cellKey(c)}: the event stream's state contradicts its events`);
     assert.deepEqual(r, restartClaim({ restartCount: r.restartCount, replaced: r.replaced, eventStream: r.eventStream, events: r.events, runningAtEnd: r.runningAtEnd, oomKilled: r.oomKilled }),
@@ -1101,6 +1136,8 @@ export function convergenceLines(round, apps, convergence) {
         : `The pass is like-for-like ${scope} only, on every input compared for them: ${inputs}. It says nothing about this round's other cells.`);
   }
   lines.push(`Tolerance reading ${flattenRule.name}: ${ruleText}`);
+  // What a reading rests on, its limit included; a pass with no reading for the round has nothing it backs.
+  if (found.some(({ cell }) => cell.failure === undefined)) lines.push(`Container checks: ${c.measurement.containerChecks}.`);
   const unproven = new Set(api.map((a) => a.name));
   for (const { name, cell } of found) lines.push(`Reading: ${name}: ${cell.failure !== undefined ? `no reading, the cell failed (${failureCodes[cell.failure]})` : verdictText(cell.verdict)}${unproven.has(name) ? " (not compared with this round: the pass does not record that this cell's requests reached the upstream)" : ""}.`);
   lines.push(`This report does not establish whether this round's ${warmup}s timed warmup was sufficient: the pass is a screening reading of throughput, and a timed warmup is set only by a separate reviewed change from a saved like-for-like pass.`);

@@ -33,11 +33,14 @@
 // load's own (startedBeforeLoad) fails it too, whether or not its event stream reads.
 // Interval: inspects show the settings only at their moments, so every cell, of either kind, reads a
 // live Docker event stream of its app, its load, its marker and an API cell's upstream from before the
-// launch check to after the last inspect (readEvents): an update of any of them there fails the cell
-// `settings` even if it was undone before the inspect after the load, and a start, restart, die,
-// kill or OOM of the upstream, or of a convergence cell's app, fails it `instance-changed`. A cell
-// whose stream is unavailable keeps no reading (`unconfirmed`): nothing then shows that the settings
-// held through the load or, for a soak, that a start of its app was not before the load.
+// launch check to after the last inspect (readEvents): an update of any of them the stream delivers
+// fails the cell `settings` even if it was undone before the inspect after the load, and a start,
+// restart, die, kill or OOM of the upstream, or of a convergence cell's app, fails it
+// `instance-changed`. Docker can drop events for a slow subscriber without ending the stream, so this
+// detects such an event and cannot show there was none; the pass saves that limit with what it
+// checked (steady-contract.mjs containerChecks). A cell whose stream is unavailable keeps no reading
+// (`unconfirmed`): it then had no event-stream check at all, and for a soak nothing places a start
+// of its app that inspect shows in or before the load.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -56,7 +59,7 @@ import { validateMarketplace } from "./records.mjs";
 import { records } from "./fixtures.mjs";
 import { locales } from "./contract.mjs";
 import { ownedResources, reconcileWindow, runClock } from "./alert-probe-run.mjs";
-import { appBefore, appInstance, appliedSettings, atLaunch, checkFixture, convergenceSchema, cpuModelDigest, eventFormat, failureCodes, flattenPoint, flattenRule, heldThrough, markerIs, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell,
+import { appBefore, appInstance, appliedSettings, atLaunch, checkFixture, containerChecks, convergenceSchema, cpuModelDigest, eventFormat, eventRow, failureCodes, flattenPoint, flattenRule, heldThrough, markerIs, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell,
   savedOptions, savedValue, servedCold, soakMemoryClock, soakSchema, startedBeforeLoad, summarizeSoak, timedStartup, validateConvergence, validateSoak, verdictText, windowClock } from "./steady-contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -208,7 +211,10 @@ export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs 
  * client does, as memorySampler's does, keeps what the stream said in `file` (and its stderr in
  * `file`.stderr), and returns that text, or throws if the client could not run, ended before it was
  * stopped, wrote to stderr or held its pipes. A second stop() returns the first one's result.
- * A marker row counts as a start, or as the fence's die, only by readEvents's own test (markerIs).
+ * A marker row counts as a start, or as the fence's die, only by readEvents's own tests: the row
+ * must read as one (eventRow, so its time is a time) and its action be exactly that word (markerIs).
+ * A marker row that does not read starts nothing, so no load starts on a row readEvents would
+ * refuse; after the second start it is not the fence.
  * Output past `limits` (clientLimits.events) makes the stream unavailable at once: its waits fail,
  * what it read is no longer kept, and it stops itself through the same stop(). Once the stream has
  * failed in any way, no wait succeeds, not even one a row read before the failure satisfied.
@@ -220,7 +226,7 @@ export function eventStream({ app, marker, others = [], file, spawn: run = spawn
     { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   const errors = [], waiting = [];
   const stderr = stderrTail(limits.stderr);
-  // second: the second start's nanoseconds (null when its time is not one); fenced: null until the
+  // second: the second start's nanoseconds (a start counts only when its row reads); fenced: null until the
   // marker's next row after that start decides it, then whether it was that start's later exit.
   // refusal: why a wait fails once the stream has overflowed.
   let chunks = [], buffer = Buffer.alloc(0), bytes = 0, rows = 0, overflowed = false, refusal = null, stderrSeen = false, starts = 0, second = null, fenced = null, stopping = false, closed = false, settled, stream;
@@ -241,10 +247,9 @@ export function eventStream({ app, marker, others = [], file, spawn: run = spawn
       if (++rows > limits.rows) return overflow(`wrote more than ${limits.rows} rows`);
       const line = buffer.subarray(0, end).toString().replace(/\r$/, "");
       if (line.startsWith(`${marker}|`)) {
-        const rest = line.slice(marker.length + 1), cut = rest.lastIndexOf("|"), action = cut < 0 ? rest : rest.slice(0, cut), nanos = cut < 0 ? "" : rest.slice(cut + 1);
-        const at = /^[1-9]\d{0,19}$/.test(nanos) ? BigInt(nanos) : null;
-        if (starts >= 2) fenced ??= markerIs(action, "die") && at !== null && second !== null && at > second;
-        else if (markerIs(action, "start") && ++starts === 2) second = at;
+        const row = eventRow(line);
+        if (starts >= 2) fenced ??= row !== null && markerIs(row.action, "die") && row.at > second;
+        else if (row !== null && markerIs(row.action, "start") && ++starts === 2) second = row.at;
       }
       buffer = buffer.subarray(end + 1);
     }
@@ -409,7 +414,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     startedAt: new Date().toISOString(), finishedAt: null, complete: false, failures: [], cleanup: null, cells: [], admission: null, startup: timedStartup,
     host: { platform: savedValue("platform", platform()), release: savedValue("kernel", release()), node: savedValue("node", process.version), docker: null, kernel: null, cpuModelSha256: null, onlineCpus: null },
     scope: passScope[options.kind],
-    measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", clock: windowClock, ...(convergence ? {} : { memoryClock: soakMemoryClock }) },
+    measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", clock: windowClock, containerChecks, ...(convergence ? {} : { memoryClock: soakMemoryClock }) },
     commit: null, finishedCommit: null, dirty: null, fixtureSha256: null, images: {}, tools: null };
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
   const log = (message) => { const line = `${new Date().toISOString()} ${message}`; print(line); appendFileSync(join(folder, "run.log"), `${line}\n`); };
@@ -524,7 +529,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     let sampler, app, k6, marker, stream;
     // An API cell's load reaches the upstream, so its settings are checked before the cell, at the
     // launch check and after the load, like the app's: `docker update` can change them without a
-    // restart. The event stream shows a change undone between those checks.
+    // restart. A change undone between those checks is seen only if the event stream delivers it.
     const upstreamHeld = async (when) => {
       if (cell.source !== "api") return;
       const info = await step("container", () => owned.inspect(upstreamId));
@@ -562,16 +567,18 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       k6 = await step("container", () => owned.container(["--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...k6Env,
         k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/window-load.js"], `${runId}-k6`));
       // The live event stream of the app, the load and an API cell's upstream, listening before the
-      // launch check: the marker's first start shows it is. Without it nothing would show the
-      // settings held through the load, so no load starts.
+      // launch check: the marker's first start shows it is. Without it the cell would have no
+      // event-stream check of an update or restart during the load, so no load starts.
       marker = await step("container", () => owned.container(["--network", "none", ...cpus.load.args, "--memory", "64m", nodeImage, "true"], `${name}-marker`));
       stream = eventStream({ app, marker, others: [k6, ...(cell.source === "api" ? [upstreamId] : [])], file: join(raw, "events.log"), spawn: spawnEvents, ...eventBounds });
       await step("container", () => owned.start(marker));
       await step("unconfirmed", () => stream.marker(1));
       const phaseStartMs = clock.now();
       if (!convergence) sampler = memorySampler({ ids: [app], file: join(raw, "stats.log"), seconds: seconds + 120, spawn: spawnStats, now: clock.now, ...statsBounds });
-      // The load's settings as Docker applied them, before it starts.
+      // The load's settings as Docker applied them, before it starts. Its receipt is kept before
+      // they are checked, so a refused load's shows what Docker had.
       const created = await step("container", () => owned.inspect(k6));
+      retain(join(raw, "load-container-before.json"), loadReceipt(created));
       await step("settings", () => appliedSettings(created, loadSettings));
       // The last answer before the load starts: the app is still the instance that served the cold
       // probe. A change found here was before the load, so no load starts.
@@ -607,7 +614,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       const after = await step("container", () => owned.inspect(app));
       retain(join(raw, "app-container-after.json"), snapshot(after));
       // The settings at the last inspect: the app's, and an API cell's upstream's. A change undone
-      // before it is the event stream's to show, below.
+      // before it is the event stream's to detect, below, if the stream delivers it.
       await step("settings", () => appliedSettings(after, appSettings));
       await upstreamHeld("after");
       // What Docker's inspect alone shows, which needs no event stream and so is kept whatever the
@@ -619,10 +626,11 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       // A start of the app the inspect shows after the launch check (another ID, StartedAt or
       // RestartCount at the end): a restart, which only the event stream can place in or before the load.
       const restartedSinceLaunch = [end.id !== launched.id && "container ID", end.startedAt !== launched.startedAt && "StartedAt", end.restartCount !== launched.restartCount && "RestartCount"].filter(Boolean);
-      // The marker's second start, after the last inspect, shows the stream had delivered every event
-      // published before it; the fence, its exit, that what the client delivered after that start is
-      // read too. Docker's event times and the load's StartedAt and FinishedAt are all the daemon's
-      // clock, read to the nanosecond; readEvents requires the two marker starts to bracket the load.
+      // The marker's second start, after the last inspect, shows the stream was still running then;
+      // the fence, its exit, that what the client handed over after that start is read too. Neither
+      // shows that Docker delivered every event between them (it can drop one for a slow subscriber).
+      // Docker's event times and the load's StartedAt and FinishedAt are all the daemon's clock, read
+      // to the nanosecond; readEvents requires the two marker starts to bracket the load.
       // A stream that failed, did not show both marker starts and the fence, or has a row that is not
       // this cell's app, load, upstream or marker, an action and a time, is unavailable.
       let read = null, streamError;
@@ -634,10 +642,10 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       retain(join(raw, "events.json"), { stream: read === null ? "unavailable" : "read", ...(read ?? {}), restartedSinceLaunch });
       if (streamError) {
         keep("docker events", streamError);
-        throw coded("unconfirmed", new Error(`Docker's event stream is unavailable (${firstLine(streamError)}), so nothing shows the settings and the app's instance held through the load${restartedSinceLaunch.length
+        throw coded("unconfirmed", new Error(`Docker's event stream is unavailable (${firstLine(streamError)}), so the cell has no event-stream check for an update or restart of its containers around the load${restartedSinceLaunch.length
           ? `; the app's inspect after the load shows another ${restartedSinceLaunch.join(" and ")} than at the launch check, a restart the stream alone could place in or before the load` : ""}`));
       }
-      // Any update of the cell's containers while the stream ran: a setting may have changed during
+      // Any update of the cell's containers the stream delivered: a setting may have changed during
       // the load and been undone before the inspect after it.
       if (read.updates.length) {
         const roles = [...new Set(read.updates.map((u) => u.role))].join(", ");

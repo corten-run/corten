@@ -633,7 +633,9 @@ test("the report states the convergence pass given to it, or that none was provi
   const given = (p) => (round, apps) => convergenceLines(round, apps, p);
   const text = report(s, { convergence: given(pass) });
   assert.doesNotMatch(text, /none provided to this report/);
-  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v7, reading marketplace-tolerance\/v4\), measured at commit `a{40}`/m);
+  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v8, reading marketplace-tolerance\/v4\), measured at commit `a{40}`/m);
+  // What its readings rest on, with the event stream's limit stated.
+  assert.match(text, /^Container checks: .*Docker can drop events for a slow subscriber without ending the stream, so this is detection of what the stream delivered, not proof that none happened\.$/m);
   // Like-for-like for its fixture cells only: an API-source cell is not compared.
   assert.match(text, /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: /m);
   assert.match(text, /^Tolerance reading marketplace-tolerance\/v4: a screening reading of throughput, not a certificate of steady state\./m);
@@ -642,12 +644,12 @@ test("the report states the convergence pass given to it, or that none was provi
   assert.match(text, judged);
   // The timed preamble says ranges "do not establish" a difference, and the closing line says this report does not
   // establish the warmup; every other convergence line is checked for a warmup conclusion.
-  const evidence = (t) => t.split("\n").filter((line) => /^(?:Convergence evidence|Coverage|Tolerance reading|Reading|The pass is)/.test(line)).join("\n");
+  const evidence = (t) => t.split("\n").filter((line) => /^(?:Convergence evidence|Coverage|Tolerance reading|Container checks|Reading|The pass is)/.test(line)).join("\n");
   assert.ok(evidence(text).length > 0);
   assert.doesNotMatch(evidence(text), /reaches|is shorter than|establish|sufficient|long enough to/);
   // Only the convergence lines and the CPU model (not printed with a pass) differ: the timed tables
   // are the same with or without evidence.
-  const strip = (t) => t.replace(/\n\n(?:Convergence evidence|Coverage|Tolerance reading|Reading|The pass is|This report does not establish whether this round|No cell)[^\n]*/g, "");
+  const strip = (t) => t.replace(/\n\n(?:Convergence evidence|Coverage|Tolerance reading|Container checks|Reading|The pass is|This report does not establish whether this round|No cell)[^\n]*/g, "");
   assert.ok(!text.includes(s.host.cpu), "no CPU model text with a pass");
   assert.equal(strip(text).replace(`CPU: ${convergenceHostCpu} (`, `CPU: ${s.host.cpu} (`), strip(none));
   const tampered = structuredClone(pass); tampered.cells[2].verdict.window = 0;

@@ -274,7 +274,7 @@ What the reading does not detect, by construction (each case is pinned in `stead
 the window-to-window spread on the measurement host. A cell with any failed request, in a window or
 in k6's aggregate count (which includes answers completed during the graceful stop), or whose app
 stopped, restarted, was replaced (another container ID or StartedAt) or was OOM-killed, or whose
-event stream did not cover its load (`unconfirmed`, below), gets no reading: the cell is saved with only its failure code, and a complete pass with such cells stays
+event stream could not be read or did not show the marker's starts around its load (`unconfirmed`, below), gets no reading: the cell is saved with only its failure code, and a complete pass with such cells stays
 reportable, each of them reading "no reading" with its code's text. A saved cell that has a reading
 but records a failed request is refused. k6's engine clock is checked as a timed
 phase's is (`validateLoadExecution`). A saved pass is refused if it finished at another commit,
@@ -293,11 +293,14 @@ normalized, at most 256 characters, otherwise null); the text stays in `host.txt
 model is compared with it by the same digest, and neither `steady-report.mjs` nor
 `report.mjs --convergence` prints either text (`report.mjs` without `--convergence` still prints
 the round's model as it always has). A
-convergence pass is saved as `marketplace-convergence/v7` and a soak as `marketplace-soak/v9`
-(below); a v6 convergence pass checked its containers' settings only at its inspects and read no
+convergence pass is saved as `marketplace-convergence/v8` and a soak as `marketplace-soak/v10`
+(below). Both save what each reading rests on as fixed text, `measurement.containerChecks`, with the
+event stream's limit stated, and both reports print it; a v7 convergence pass saved no such text
+and, like a v9 soak, was described as showing that its settings held through the load, more than
+its event stream can show. A v6 convergence pass checked its containers' settings only at its inspects and read no
 event stream, so a change made during its load and undone before the inspect after it went
 unseen, a v5 one did not check its containers' settings or recheck its app just before the load
-(both below), a v4 one saved the model's text, and none of them is read. A value that does not
+(both below), a v4 one saved the model's text, and none of v4 to v7 is read. A value that does not
 match is saved as null (not recorded), or, where the pass depends on it (an image ID, the k6
 version), fails that step. Adapter names (the pass's adapters and those it selected for
 admission) must be ones this checkout's adapter inventory has, and a group one of its groups; the
@@ -352,11 +355,23 @@ shows what Docker had. An inspect shows the settings only at its own moment: a c
 check and undone before the next passes both. So every cell, of either kind, reads a live Docker
 event stream of its app, its load, its marker and an API cell's upstream (below), listening from
 before the launch check to after the inspect after the load. An `update` of any of those containers
-there fails the cell `settings`, even when every inspect agreed, and a start, restart, die, kill or
-OOM of the upstream fails it `instance-changed`. A cell whose stream is unavailable fails
-`unconfirmed` and has no reading, since nothing then shows the settings held through its load; when
-the stream has not shown the marker's first start, no load starts. A cell's reading therefore rests
-on its inspects matching and on a stream that covered its load with no update. Then, for a
+the stream delivers fails the cell `settings`, even when every inspect agreed, and a start, restart,
+die, kill or OOM of the upstream fails it `instance-changed`. The stream detects such an event; it
+cannot show there was none. Docker's events publisher (Moby's `daemon/events` and its pubsub
+publisher) gives up on an event for a subscriber that is slow to take it and goes on with the
+stream, so an update and its reversal can both be lost while both marker starts, the fence and the
+client's exit still arrive, and no subscriber can show that every event was delivered. A cell whose
+stream is unavailable fails `unconfirmed` and has no reading, since it then had no event-stream
+check at all; no load starts until the stream has shown the marker's first start, counted only from
+a row the reader would accept (a container ID, an action and a nanosecond time). A cell's reading
+therefore rests on what was checked: its settings matched at every inspect (the app after its cold
+start, at the launch check and after the load; the load before it started and after it ran; an API
+cell's upstream before the cell, at the launch check and after the load), and Docker's event stream
+delivered no update of those containers and no start, restart, die, kill or OOM of the upstream,
+which can drop events for a slow subscriber. Each pass saves that text (`containerChecks`) and
+both reports print it beside the readings. The load's inspect before it starts is kept as
+`load-container-before.json` before its settings are checked, so a load refused there keeps what
+Docker had too. Then, for a
 convergence cell: the same ID
 and StartedAt, running, not restarted or OOM-killed, `heldThrough`; for a soak: the restart
 evidence and the exit, signal and OOM observations it saves), the cold-start clock and result, the k6 export's metric names and every
@@ -378,7 +393,9 @@ daemon still buffers (its last 256 events), so an empty answer to one would not 
 happened; the pass does not use one. Instead it starts the marker once the stream runs, before the
 load, and again after the app's last inspect: the stream delivers events in the order the daemon
 publishes them, so a stream that shows both marker starts was listening before the load began and
-had delivered every app event published before it ended. The client hands rows over in chunks,
+was still running after it ended. It does not show that every app event between them was
+delivered: the daemon can drop an event for a slow subscriber and go on (above), so an event of
+the app the stream did not deliver is not observed. The client hands rows over in chunks,
 so the runner does not stop it at the second start's row: it reads on until the fence, the
 marker's next row after that start, which must be that start's own exit (its `die`) stamped
 strictly later than the start, and so after the load's FinishedAt. A stream without the fence is
@@ -396,7 +413,7 @@ latest daemon time before the app's last inspect, which has none of its own). Th
 use the full nanoseconds of the load container's StartedAt and FinishedAt and of each event, so a
 marker start earlier in the same millisecond as FinishedAt is not after it. An app event is the
 load's whenever it is stamped at or before FinishedAt, even if the stream delivered it after the
-second marker start (an OOM kill stamped 15 s into the load is seen, never clean); only
+second marker start (an OOM kill stamped 15 s into the load is seen, never `none-seen`); only
 an app event both after the second marker start and stamped after FinishedAt is teardown. A stream is
 unavailable when it failed, did not show both marker starts and the fence within its bound, showed
 another marker row where the fence belongs, had witnesses that do not bracket the load, or had a row
@@ -404,16 +421,19 @@ that was not the app's, the load's, an API cell's upstream's or the marker's ID,
 nanosecond time, or was an app or upstream row naming a start, restart, die, kill or OOM, or any
 row naming an `update`, with anything after that word, or ended with a row that has no newline, or
 had a blank row; none of its rows is then used, and the cell fails `unconfirmed` with no reading.
-A read stream is saved as clean (covering the load, with no start, restart, die, kill or OOM event
-of the app) or seen (with those events). "Restarted" is yes only on restart evidence: a RestartCount increase,
+A read stream is saved as `none-seen` (it delivered no start, restart, die, kill or OOM event of the
+app, which does not show there was none) or `seen` (with those events). "Restarted" is yes only on restart evidence: a RestartCount increase,
 another container ID or StartedAt at the end, a `restart` event, or a `start` of the app stamped
 strictly after a `die` of it (events are paired by their daemon times, never by the order the
-stream delivered them). It is no when there is none: a soak with a reading always had its stream read and
-covering the load (clean or seen), so no restart claim is ever left unestablished. A `kill` is a signal,
+stream delivered them). It is no when none was observed: a soak with a reading always had its stream
+read with the marker's starts around the load (`none-seen` or `seen`), and Docker's inspect after
+the load compares the app's container ID, StartedAt and RestartCount with those before it whatever
+the stream delivered; an exit, signal or OOM event the stream dropped is not listed. A `kill` is a signal,
 which need not stop the app (SIGCONT, for one), a `die` with no start after it is an exit, and an
 `oom` event or an app not running or OOM-killed at the end is what it says: the report lists these
 in their own column, as observations, never as a restart. A soak is saved as
-`marketplace-soak/v9`; a v8 soak read no update of its containers or upstream event and, with its
+`marketplace-soak/v10`; a v9 soak saved an app with no event in its stream as `clean`, saying more
+than the stream shows, a v8 soak read no update of its containers or upstream event and, with its
 stream unavailable, saved its restart claim as not established, a v7 soak did not check its containers' settings, recheck its app just before
 the load or refuse an unterminated or blank event row, a v6 soak paired a start with a die by
 delivery order and saved the CPU model's text, and a v5 soak counted those observations as

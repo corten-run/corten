@@ -24,6 +24,7 @@ export function convergenceReport(s) {
   const lines = [...header(s, "convergence pass"), "",
     `One ${o.vus}-user closed loop of ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s windows.`,
     `Tolerance reading ${flattenRule.name}: ${ruleText}`,
+    `Container checks: ${s.measurement.containerChecks}.`,
     "A cell with any failed request, in a window or in k6's aggregate count (which includes the graceful stop), has no reading.",
     ...(o.sources.includes("api") ? ["An API-source cell's reading is listed, but it is not compared with a timed round (report.mjs --convergence lists it as not compared): a timed round's replay requires the upstream's own answer counts to cover its API requests, and a pass records no such count, so nothing shows that the cell's requests reached the upstream."] : []),
     "", "| Adapter | Source | Target | Reading | Tail req/s | Failed requests |", "|---|---|---|---|---:|---:|"];
@@ -47,6 +48,7 @@ export function soakReport(s) {
   const o = s.options;
   const lines = [...header(s, "soak"), "",
     `A fixed rate of ${o.rate} requests/second asked for, for ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s intervals of the k6 engine's clock. Clocks: ${soakMemoryClock}.`,
+    `Container checks: ${s.measurement.containerChecks}.`,
     "", "| Adapter | Source | Target | Fixed rate | Start MiB | End MiB | Growth | p99 first / last / max ms | Failed requests | Exits, signals, OOM | Restarted |", "|---|---|---|---|---:|---:|---:|---|---:|---|---|"];
   const unmet = s.cells.filter((c) => c.failure === undefined && !c.rate.held), blind = s.cells.filter((c) => c.failure === undefined && c.memory.unavailable !== undefined);
   const mib = (v) => (v === null ? "unavailable" : v.toFixed(1));
@@ -67,7 +69,7 @@ export function soakReport(s) {
   }
   for (const c of unmet) lines.push("", `${c.app} ${c.source} ${c.target}: the fixed ${o.rate} requests/second was not held, so this is not a fixed-rate result: its memory and p99 are under a lower or uneven load.`);
   for (const c of blind) lines.push("", `${c.app} ${c.source} ${c.target}: memory unavailable (${c.memory.unavailable}); its restart, stop and OOM observations are still reported.`);
-  lines.push("", "Memory and p99 are reported figures, not held or not held: no criterion is applied to them. \"Restarted\" is yes only on evidence of a restart: a RestartCount increase, another instance (container ID or StartedAt) at the end, a restart event, or a start of the app stamped by the daemon strictly after an exit (die) of it (events are paired by their times, not the order the stream delivered them); no when there is none. Every cell listed with a reading had Docker's live event stream for its app, load and (for an API cell) upstream, started before the launch check, read in full and showing a marker container's starts before and after the load (so it covered the load), with no update of those containers and no start, stop or signal of the upstream; a cell whose stream could not be read or did not show that has no reading. \"Exits, signals, OOM\" lists every other event the stream showed for the app (a signal is any kill, which need not stop the app) and an app not running or OOM-killed at the end; these are observations, not restarts.");
+  lines.push("", "Memory and p99 are reported figures, not held or not held: no criterion is applied to them. \"Restarted\" is yes only on evidence of a restart: a RestartCount increase, another instance (container ID or StartedAt) at the end, a restart event, or a start of the app stamped by the daemon strictly after an exit (die) of it (events are paired by their times, not the order the stream delivered them); no when none was observed. Every cell listed with a reading had Docker's live event stream for its app, load and (for an API cell) upstream, started before the launch check, read in full and showing a marker container's starts before and after the load, and that stream delivered no update of those containers and no start, stop or signal of the upstream; a cell whose stream could not be read or did not show those starts has no reading. Docker can drop events for a slow subscriber without ending the stream, so an event of the app it did not deliver is not listed: \"Exits, signals, OOM\" lists every other event the stream delivered for the app (a signal is any kill, which need not stop the app) and an app not running or OOM-killed at the end, and \"none\" there means none was observed. These are observations, not restarts.");
   lines.push("", "## Intervals", "");
   for (const c of s.cells) if (c.failure === undefined) lines.push(`${c.app} ${c.source} ${c.target} p99 ms by interval: ${c.windows.map((w) => ms(w.p99)).join(", ")}`, "", `${c.app} ${c.source} ${c.target} arrivals by interval (scheduled): ${c.rate.intervals.map((i) => `${i.arrivals} (${i.scheduled})`).join(", ")}`, "");
   return lines.join("\n");
