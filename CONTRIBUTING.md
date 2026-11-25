@@ -300,15 +300,85 @@ not
 ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
 Rerun it as above.
 
-The watchlist's waiting-submit cases press their buttons in the page (`button.click()`), so
-each submit runs before the test changes the form's values or releases its held answer. A
-loaded browser can acknowledge Playwright's click before dispatching that submit: waiting for
-the answer alone does not prove that the first write used the old values or that the second
-press met it still pending. The cases still wait for their output condition, then check the
-busy mark sampled while the answer was held, the exact sends and the renewed submit key.
-The first request is captured before editing its fields; file output is polled on a timer,
-independent of animation frames. Neither the six-second outcome bound nor the window for
-detecting forbidden sends is extended.
+The watchlist's waiting-submit and submit-key cases press their buttons in the page
+(`button.click()`), so each submit runs before the test changes the form's values, presses
+again or releases its held answer. A loaded browser can acknowledge Playwright's click before
+dispatching that submit: waiting for the answer alone does not prove that the first write used
+the old values or that the second press met it still pending. A press that must meet a request
+still on its way holds that request's answer until the case has made it, never for a fixed time,
+and the cases count their submits, so a press meant to send nothing is seen to have been made.
+The other checks that act while a request is out (a busy mark, a navigation before a write's
+page, a script's `replaceState` during a read) hold it the same way. The busy mark's write check
+sees each post where the page calls `fetch`, since a route hears of a request only some time
+after the browser sends it: it requires the waiting button's post sent only once the held answer
+is drawn, the two posts and their answers in the route's log, and the waiting post's own answer
+drawn within five seconds of the release. The `replaceState` check loads the page with the
+document the server draws for the write's receipt, with its status line and its head's read-again
+tag put in place as the server draws them while the write has not landed, so the page comes in
+waiting whether or not the store had the write by the time the test asked for that document; a
+fixture that draws no page for the write fails the check rather than skipping it. The page is
+loaded after a blank one, and the runtime's reads of a page are recorded from the start of that
+document whatever their address. Its first read of the alerts page is held from before the load,
+so the read held is the first however soon it comes, and it must be the document's first read, at
+the receipt's address. The check requires the navigation reading it to be still on its way when
+the script replaces the address, the replaceState to cancel that navigation, and the held read to
+fail after the replaceState while it is still held (not before it, and not once it is let go); then
+every later read made at its address with only `shown` changed, one of them answered with success,
+`Saved.` drawn in the same document, and the page left at that address. A wait for a request that
+a held answer lets out starts when that answer is let go. The check of a navigation started before
+a write's page comes requires the write's request, the navigation's request read whole and the
+Stocks page drawn in the same document (its title and its watch form in `<main>`), five seconds
+each; each press shares its five seconds with the wait for the request it sends, so a press that
+stalls fails the check too. Without one it fails and does no more work on its page, and the next
+check starts from the News page it left, gone back to within ten seconds. The way back starts once
+the page it is on has loaded (the runtime handles navigations only then), may load the News page in
+full, and ends once that page has loaded; a read of the page that fails while it loads means only
+not yet. A check that stops before its first press never left the page and does not go back. Only a
+page that does not get back stops the smoke, after the check's hold, listeners and the News page's
+route are removed.
+The check that navigating away abandons a held write requires that write to
+fail while it is still held, within five seconds of the page's leaving. The check of a navigation
+during a patch's stylesheet load holds the one stylesheet the patch links until the runtime has
+read the navigation's answer, and requires that
+the page did not swap while it was held and that the browser requested it once while it was
+held. It runs twice: once the load succeeds, and the page swaps in with the area's rules applied,
+the stylesheet requested once in all; once it fails, and the page loads in full, as a navigation
+whose own stylesheet fails does, which may request the stylesheet again. Its steps before the
+stylesheet is let go share 15 seconds, and each arm's steps after it 10. A step that fails, runs
+out of that time or settles only after it fails the check, and no page work starts after it; a
+handle a wait returns is read in a step of its own, so no read of it starts once the time is up.
+Its page is closed however the check ends.
+Only the failed load tells a navigation that shares the load from one that took the patch's link
+for a loaded stylesheet whatever the
+page's handler modules do, since those also hold the swap: with a module held past the
+stylesheet, a runtime that skips the shared load still swaps in styled, but on the failed load it
+swaps in unstyled instead of loading in full.
+The watch form's other presses (watching and unwatching a stock, the submit the network fails
+and the formaction button) are made in the page too, as a loaded Firefox's click on them can miss.
+The two Firefox failures in
+[#2014 Firefox smoke fails a different waiting-submit or template-copy case on two commits that touch neither the runtime nor the watchlist](https://github.com/corten-run/corten/issues/2014)
+each logged only that an expected post was never sent. A loaded Firefox reproduction of those
+cases showed one way that happens: Playwright's click reached the page after it had checked what
+was under its point, the page's live updates had moved the button by then, and the click landed
+on `<main>` or a `<div>` beside it. The CI logs do not show whether that is what happened there.
+The cases still wait for their output condition, then check the busy mark sampled while the
+answer was held, the exact sends and the renewed submit key. The first request is captured
+before editing its fields. An error a case waits for is its form's own. The check of a submit the
+network fails presses its button in the page task that starts listening for the error and its
+six-second timer, so its six seconds start at the press, and its handler fails an error heard
+after them even if the timer has not run yet. The other checks that wait for a form's
+error (the submit that waited for a failed write, the submit keys, the template copies and the
+cut connections) listen from before the press but start their six seconds once the press has
+returned, or, for the held failure, once its answer is let go; a case whose error does not come
+in that time fails and stops, without making its retry. Output is polled on a timer, independent
+of animation frames, and output that comes only after its bound fails the check. The 205 check's
+waiting submit counts by when its request was seen, so one seen after its six seconds fails the
+check whichever of it and the timer is handled first. Each of these checks reads its outcome,
+then removes the listeners, routes and holds it installed however it ends, a press that throws or a
+wait that times out included. The cut-connection and template-copy checks set up inside that guard
+too, so a setup step that fails part way is undone, and each of their removals runs even when
+another fails. Neither the six-second outcome bound nor the window for detecting forbidden sends is
+extended.
 
 The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
 same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a
@@ -461,7 +531,10 @@ establish a general ranking.
       and headers before measuring, and report any failed requests.
 
       Compare the change in **user plus kernel cycles per request within each pair** against
-      the smallest worthwhile reduction, declared before running. Report the number of pairs,
+      the smallest worthwhile reduction, declared before running. A run's plan, with everything
+      item 2 has declared before a run, is declared when it is posted on its pull request or
+      issue, or pushed under a tag, and names the commits it reads (a change's base and head); a
+      plan older than this sentence on `main` is declared as it was. Report the number of pairs,
       best, median and range, and the per-pair changes. Report the user and kernel split and,
       when adding or moving code, user L1 instruction-cache misses per request as diagnostics.
       The counter records perf's running percentage and requires a reported 100% for every
@@ -482,7 +555,8 @@ establish a general ranking.
       its result, and a plan that made +1% decisive before this exception existed stays bound by
       it. This single-build reading and the CPU-win rule above do not decide a touched workload
       whose single-build bound's distance from its threshold is inside its recorded placement
-      spread, or one read across placements; both are decided as described below.
+      spread or, where none applies, the default band, or one read across placements; both are
+      decided as described below.
 
       A negative control whose bound is at or above +1% but under the layout floor that applies
       to it may go ahead when its user instructions pass a screen: the median of the paired
@@ -574,16 +648,25 @@ establish a general ranking.
       and 3 s turns) and the CPU model (each recorded spread names its own: a Xeon Platinum 8358
       for the first run's two, an 8280 for the second's one). A
       run that differs in any has no recorded spread for the workload
-      until a placement run on its setup records one. The test is one: a single-build bound's
+      until a placement run on its setup records one, and is tested until then against the
+      **default band**: from the lowest low end to the highest high end among the spreads the
+      Choice records, as the Choice prints the band on `main` when the plan is declared (-2.98%
+      to +3.33% today), whatever a later run records and whatever reads the workload,
+      `bench/fullstack/count.mjs` as much as a probe. The test is one: a single-build bound's
       distance from its threshold (the bound less +1% for the margin; the bound plus the smallest
-      worthwhile reduction for a CPU-cost win) is **inside** a spread that applies when it is at
-      or above the spread's lowest and at or below its highest, and **outside** otherwise. Inside
+      worthwhile reduction for a CPU-cost win) is **inside** the spread that applies, or the
+      default band where none does, when it is at
+      or above its lowest and at or below its highest, and **outside** otherwise. Inside
       does not decide, a pass as much as a miss, and a win no more than a loss: the pull request
-      reports it as "inside the placement spread: not decided", which does not pass and claims no
+      reports it as "inside the placement spread: not decided" (or "inside the default band"),
+      which does not pass and claims no
       win, and reads the workload across placements in a run whose plan is written before that
-      run. Outside, or with no spread that applies to the run's setup, the single-build bound is
+      run. Outside, the single-build bound is
       the reading by the rules above, binding by policy, not because placement is shown unable to
-      move it. A workload with no single-build bound (a run that failed, too few pairs)
+      move it. Each threshold a plan declared for a workload, its margin and a reduction, is
+      tested on its own distance: one outside stays as one build read it, whatever a placement
+      run then reads, and that run reads only those left inside.
+      A workload with no single-build bound (a run that failed, too few pairs)
       does not pass, as before, and a control the plan declared keeps
       [design Choice 71](docs/design.md#choice-layout-floor)'s rule. Item 2's other requirements
       apply to a run read across placements as to any other: every counter at 100%; the user and
@@ -594,13 +677,14 @@ establish a general ranking.
       1. Placements: each side is compiled once, and its K placements are that build's final link
          run again with one more object, a function of a declared size that nothing calls (a pad),
          placed first in `.text` by `-Wl,--symbol-ordering-file`, so every other function moves by
-         the pad and keeps its order and its neighbours. The plan lists every pad size, spread
-         across the phases of a 64-byte line and a 4 KiB page and up to about 40,000 bytes.
+         the pad and keeps its order and its neighbours. The plan lists every such pad's size,
+         spread across the phases of a 64-byte line and a 4 KiB page and up to about 40,000 bytes.
          Placement i of the change is base with pad p_i against head with pad p_i. Before
          anything is measured, the run records that the link run again without a pad is
          byte-identical to the build's own binary; that each placement has exactly that binary's
          functions and the pad, the pad first, every function moved by exactly the pad's size (so
-         the placement has the line and page phase the plan declared) and every pair of neighbours
+         the placement has the line and page phase the plan declared; with code aligned beyond 16
+         bytes on either side, the fifth point's check instead) and every pair of neighbours
          still next to each other in order; that each placement of one build has a SHA-256 no
          other placement of that build has (base and head at one pad may be one binary, when the
          change compiles to the same code); and that each answers the workload's requests as the unpadded binary does: status, headers but
@@ -609,6 +693,8 @@ establish a general ranking.
          `ETag`). A header value the workload's cost depends on, as `kept`'s depends on `Age`, is
          masked for that comparison only if it can differ between starts, and is then checked
          separately against the value or range the plan states, not accepted as any number.
+         The run also records, from the unpadded link's map, what the fifth point asks of every
+         run, with code aligned beyond 16 bytes or without.
       2. Pairs: R recorded pairs per placement after one that is not, every turn on a freshly
          started build, as above, so a placement and a process start are told apart.
       3. The statistic: per placement, the median of its R per-pair changes in user plus kernel
@@ -631,19 +717,71 @@ establish a general ranking.
          per-pair change B / A - 1 read as A / B - 1), since a list whose placements happened to
          run faster would lower one reading's bound and raise the other's. Its bounds in the two
          readings are what the run can resolve, and its lowest and highest placement median as
-         recorded are the spread the Choice records for the workload. If either bound is at or
+         recorded are the spread the Choice records for the workload, if the plan declares
+         before the run that it records one. If either bound is at or
          above +1%, the workload is **not resolved**, and not resolved does not pass, whatever the
          change's own bound. Only a complete, resolved A/A records or replaces a spread, through a
          pull request that changes the Choice; a run reads the spread recorded in the Choice on
          `main` when its plan is declared, whatever a later run records.
+      5. Nothing about code aligned beyond 16 bytes, which the run records and checks. C code a
+         dependency compiles can align input sections of `.text` to 32 or 64 bytes, and a pad can
+         then move some functions, and the data after `.text`, by other than its size
+         ([design Choice 72](docs/design.md#choice-placement-runs), which has the condition for a
+         pull request with such code whose placement runs predate this point). In every placement
+         run the unpadded link the first point compares with the build's own binary is made with
+         LLD's map (`-Wl,-Map`). Before anything is measured, the run records from that map, and the
+         pull request reports, each input section of `.text` aligned beyond 16 bytes, in order with
+         its alignment, and every symbol the map lists in `.text` from the first of them on (the
+         side's list of functions: the map gives a symbol no type), by symbol, archive and archive
+         member, or object file where it is in no archive, as the map names them, less directories;
+         each side's map is kept with the run's results. A run whose plan was declared before this
+         point was on `main` is read by the rule as it then stood, and any other without that record
+         has no reading across placements. A plan may not build the C code with flags chosen for
+         the measurement that leave no such section, to be read under the first point alone. Where
+         either side has such a section, the rest of this point holds for both, in the change
+         comparison and the A/A; a pilot, an A/A with a plan of its own, is held to it by what its
+         own sides show.
+
+         Every placement then has a second pad, whose size no plan lists: a function nothing calls,
+         aligned to 16 bytes, that the ordering file does not name and the link line gives last, so
+         it is laid last in `.text`. One rule sizes it: `.data`'s offset in a 64-byte line is the
+         unpadded link's plus the first pad's size, mod 64. The run links each placement with second
+         pads of 16, 32, 48 and 64 bytes, keeps the smallest whose map shows `.data` there, and
+         records a line a placement with that size and `.data`'s address.
+
+         Each placement's measured binary is linked with its map, checked against the unpadded
+         link's in place of "every function moved by exactly the pad's size": `.text` begins where
+         it did and holds the first pad's section, of the plan's size, then the unpadded link's
+         input sections in its order, each with its size and alignment, then the second pad's
+         section, of one of the four sizes; in both links every input section begins at the first
+         multiple of its alignment at or after the end of the one before it; every symbol of `.text`
+         is in the same input section in both links, as far from its start; and `.data` is where the
+         rule says. The first point's other checks stand, with both pads among a placement's
+         functions and the first pad first.
+
+         A side with no reading across placements does not pass and shows no win. A side has none,
+         for any workload, in three cases: an input section of its `.text` is aligned beyond 64
+         bytes; an input section whose name begins `.text.` and matches
+         `\.(_R[A-Za-z0-9_.$]+|_ZN[A-Za-z0-9_.$]*17h[0-9a-f]{16}E(\.llvm\.\d+)?)$`, so ends in a
+         Rust-mangled symbol (`_R...`, or the legacy `_ZN...17h<hash>E`), lies at or after the first
+         section aligned beyond 16 bytes, or in another output section (Rust code under a name that
+         is not mangled is not seen); or none of the four sizes puts a placement's `.data` where the
+         rule says. The pads do not vary where a function on a side's list lies in a 64-byte line
+         as they vary the code before it: from the first section aligned to 64 bytes on, a function
+         is in every placement where the side's unpadded link has it, and one listed
+         before that section, or on a side with none, is there or 32 bytes from there. That is a
+         limit of the reading and refuses none: what one such place costs a request no reading says,
+         and each side's list in the pull request shows which functions the limit covers.
 
       The margin stays +1% with no floor: the workload meets it when the change's bound across
       placements is under +1% and its A/A resolves. A placement that fails a check above, or has
       fewer than R valid pairs, leaves its comparison with no bound, which does not pass; no
       placement is rerun, replaced or dropped for its result. A layout floor never applies to a
       workload read across placements. A single-build run stays valid, and binding for each
-      workload its plan read that way whose distance from its threshold is outside the spread, by
-      the test above, or that has no spread that applies (a control
+      workload its plan read that way whose distance from its threshold is outside the spread or
+      the default band, by the test above, or that had no spread that applied under a plan
+      declared before the Choice on `main` gave a default band, which the band does not test
+      (a control
       keeps [design Choice 71](docs/design.md#choice-layout-floor)'s rule): a placement
       run declared after it does not clear such a miss. The benefit side may use the same protocol
       if the plan declares it, with its smallest worthwhile reduction, before the run: a CPU-cost
