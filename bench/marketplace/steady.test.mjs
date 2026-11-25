@@ -292,7 +292,7 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.options.apps = []; v.images = {}; v.cells = []; }, /at least one of its apps/],
     [(v) => { v.cells[0].latencyMaxMs = 1; }, /latency above k6's aggregate http_req_duration maximum/],
     [(v) => { v.cells[0].latencyMaxMs = null; }, /aggregate latency maximum/],
-    [(v) => { v.schema = "marketplace-convergence/v4"; }, /not a marketplace-convergence\/v5 result/],
+    [(v) => { v.schema = "marketplace-convergence/v5"; }, /not a marketplace-convergence\/v6 result/],
     // v5 saves the host's CPU model only as its digest: a v4-style text field is not read.
     [(v) => { v.host = { ...v.host, cpu: "Synthetic test only" }; delete v.host.cpuModelSha256; }, /the pass's host has fields its schema does not save/],
     [(v) => { v.host.cpuModelSha256 = "Synthetic test only"; }, /the pass's host cpuModelSha256 is not a value it saves/],
@@ -616,7 +616,7 @@ test("memory that cannot be read leaves the restart, stop and OOM observations i
 test("the timed reporter lists every differing or missing input and never judges the warmup", () => {
   assert.throws(() => convergenceLines(likeRound(), ["corten"], null), /reads a convergence pass/);
   const lines = convergenceLines(likeRound(), ["corten", "aspnet"], convergencePass());
-  assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v5, reading marketplace-tolerance\/v4\), measured at commit `c{40}`\. Host CPU model: compared by its SHA-256, not printed\. One 32-user closed-loop pass .* after the timed round's cold start \(the app created, then started while a sidecar polls the target's path to its first 200\)\.$/);
+  assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v6, reading marketplace-tolerance\/v4\), measured at commit `c{40}`\. Host CPU model: compared by its SHA-256, not printed\. One 32-user closed-loop pass .* after the timed round's cold start \(the app created, then started while a sidecar polls the target's path to its first 200\)\.$/);
   // The API-source cells have readings but are not compared: nothing in the pass shows their requests went through the upstream.
   assert.equal(lines[1], "Coverage: the pass has a reading for 4 of this round's 8 measured adapter, source and target cells (corten fixture page, corten fixture json, aspnet fixture page, aspnet fixture json); not compared, the pass does not record that the requests of these API-source cells reached the upstream: corten api page, corten api json, aspnet api page, aspnet api json.");
   assert.match(lines[2], /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: commit, group, adapter images, .* startup timeout, memory limits, response encoding, .* rotating page locales and a timed warmup with no failed request\. It says nothing about this round's other cells\.$/);
@@ -1056,4 +1056,25 @@ test("a pass's failure and startup are codes the reader knows, printed as their 
   }
   assert.throws(() => parseSaved("{\"leaked canary\": "), (error) => error.message === "the saved pass is not JSON");
   assert.deepEqual(parseSaved("{\"a\":1}"), { a: 1 });
+});
+
+test("a soak's event stream is read only as complete, nonblank lines, before any restart is claimed", () => {
+  const startedMs = Date.parse("2026-11-20T00:00:00Z"), at = (seconds) => String(BigInt(startedMs + seconds * 1000) * 1_000_000n);
+  const app = "a".repeat(64), marker = "b".repeat(64), ids = { app, marker, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T00:30:00Z" };
+  const row = (id, action, seconds) => `${id}|${action}|${at(seconds)}\n`;
+  const mark = (seconds) => row(marker, "start", seconds) + row(marker, "die", seconds + 0.1);
+  const covered = mark(-1) + row(app, "restart", 900) + mark(2000);
+  // A complete stream reads, and its restart is the load's.
+  assert.deepEqual(readEvents(covered, ids), [{ action: "restart", atSeconds: 900 }]);
+  // A suffix the client was still writing (no newline), even one that would be a whole row: not read.
+  for (const suffix of [`${app}|die|${at(2001)}`, `${app}|kil`, "\r", " "]) {
+    assert.throws(() => readEvents(covered + suffix, ids), /^AssertionError \[ERR_ASSERTION\]: the event stream ends with a row that has no newline, so it is not read$/, JSON.stringify(suffix));
+  }
+  assert.throws(() => readEvents(covered.slice(0, -1), ids), /ends with a row that has no newline/);
+  // A blank complete row, anywhere: not read, and never quoted.
+  for (const [text, n] of [[mark(-1) + "\n" + row(app, "restart", 900) + mark(2000), 1], [covered + "\r\n", 1], [mark(-1) + "\n\n" + mark(2000) + "\n", 3], ["\n" + covered, 1]]) {
+    assert.throws(() => readEvents(text, ids), new RegExp(`^AssertionError \\[ERR_ASSERTION\\]: ${n} docker events rows? (is|are) blank, so the stream is not read$`), JSON.stringify(text.slice(0, 20)));
+  }
+  // An empty stream is still read as one that showed none of the marker's starts.
+  assert.throws(() => readEvents("", ids), /showed 0 of the marker's 2 starts/);
 });

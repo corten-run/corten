@@ -21,6 +21,12 @@
 // message of each failure goes to errors.log and run.log. cleanup.json keeps the first line this
 // runner or its command runner composes for each cleanup failure. Before a pass is saved as
 // complete, the same validator a reader runs is run on it, so a complete pass always reads.
+// Settings: before a cell's reading is kept, its app's and its load's inspect must show the image,
+// CPU quota, CPU pinning, memory limit and load settings the summary records (steady-contract.mjs
+// appliedSettings), as must the upstream's before any cell runs; the load's are checked before it
+// starts and again once it has run. The app is rechecked as the instance that served the cold probe
+// immediately before the load starts (atLaunch), so a change before the load fails the cell
+// `instance-changed` and is never read as one during it.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -39,13 +45,15 @@ import { validateMarketplace } from "./records.mjs";
 import { records } from "./fixtures.mjs";
 import { locales } from "./contract.mjs";
 import { ownedResources, reconcileWindow, runClock } from "./alert-probe-run.mjs";
-import { appBefore, appInstance, checkFixture, convergenceSchema, cpuModelDigest, eventFormat, failureCodes, flattenPoint, flattenRule, heldThrough, markerIs, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell,
+import { appBefore, appInstance, appliedSettings, atLaunch, checkFixture, convergenceSchema, cpuModelDigest, eventFormat, failureCodes, flattenPoint, flattenRule, heldThrough, markerIs, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell,
   savedOptions, savedValue, servedCold, soakMemoryClock, soakSchema, summarizeSoak, timedStartup, validateConvergence, validateSoak, verdictText, windowClock } from "./steady-contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
 const fixtureDir = join(here, "fixtures");
 const containerId = /^[a-f0-9]{64}$/;
+// The load container's memory limit (its --memory 2g).
+const loadMemoryBytes = 2 * 2 ** 30;
 const ansi = /\x1b\[[0-9;]*[A-Za-z]/g;
 // The first line of an error, bounded: what cleanup.json and run.log keep.
 export const firstLine = (error) => String(error?.message ?? error).split("\n", 1)[0].slice(0, 500);
@@ -512,27 +520,43 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       // The instance the load will measure is the one that served the cold probe; otherwise no load starts.
       await step("instance-changed", () => servedCold(served, instance));
       await step("cold-start", () => appBefore(before));
+      // The app the summary describes: its image, CPU quota and pinning, memory and source.
+      await step("settings", () => appliedSettings(before, { role: "app", image: imageId, quota: cpus.app.quota, cpuset: cpus.app.cpuset, memoryBytes: summary.measurement.appMemoryBytes,
+        env: { MARKETPLACE_SOURCE: cell.source, ...(options.group ? { PROFILE: boundedQualificationSettings.nativeProfile, MAX_CONNECTIONS: String(boundedQualificationSettings.maxConnections) } : {}) } }));
       if (!convergence) {
         // The live event stream, listening before the load: the marker's first start shows it is.
         marker = await step("container", () => owned.container(["--network", "none", ...cpus.load.args, "--memory", "64m", nodeImage, "true"], `${name}-marker`));
         stream = eventStream({ app, marker, file: join(raw, "events.log"), spawn: spawnEvents, ...eventBounds });
         try { await owned.start(marker); await stream.marker(1); } catch (e) { streamError = e; }
       }
-      const k6Env = ["-e", `BASE=http://${name}:8080`, "-e", `TARGET=${cell.target}`, ...(cell.target === "page" ? ["-e", "LOCALE=rotating"] : []),
-        "-e", `MODE=${convergence ? "closed" : "fixed"}`, "-e", `WINDOWS=${options.windows}`, "-e", `WINDOW_SECONDS=${options.windowSeconds}`,
-        ...(convergence ? ["-e", `VUS=${options.vus}`] : ["-e", `RATE=${options.rate}`])];
+      // What window-load.js reads (__ENV), each as this pass requests it; null is a setting it does not give.
+      const loadEnv = { BASE: `http://${name}:8080`, TARGET: cell.target, LOCALE: cell.target === "page" ? "rotating" : null, MODE: convergence ? "closed" : "fixed",
+        WINDOWS: String(options.windows), WINDOW_SECONDS: String(options.windowSeconds), VUS: convergence ? String(options.vus) : null, RATE: convergence ? null : String(options.rate) };
+      const k6Env = Object.entries(loadEnv).flatMap(([key, value]) => (value === null ? [] : ["-e", `${key}=${value}`]));
+      const loadSettings = { role: "load", image: summary.tools.k6.imageId, quota: cpus.load.quota, cpuset: cpus.load.cpuset, memoryBytes: loadMemoryBytes, env: loadEnv };
+      // The load's receipt, with the window settings containerReceipt does not keep.
+      const loadReceipt = (info) => ({ ...containerReceipt(info), windowEnv: { WINDOWS: loadEnv.WINDOWS, WINDOW_SECONDS: loadEnv.WINDOW_SECONDS } });
       k6 = await step("container", () => owned.container(["--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...k6Env,
         k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/window-load.js"], `${runId}-k6`));
       const phaseStartMs = clock.now();
       if (!convergence) sampler = memorySampler({ ids: [app], file: join(raw, "stats.log"), seconds: seconds + 120, spawn: spawnStats, now: clock.now, ...statsBounds });
-      await step("container", () => owned.inspect(k6));
+      // The load's settings as Docker applied them, before it starts.
+      const created = await step("container", () => owned.inspect(k6));
+      await step("settings", () => appliedSettings(created, loadSettings));
+      // The last answer before the load starts: the app is still the instance that served the cold
+      // probe. A change found here was before the load, so no load starts.
+      const launch = await step("container", () => owned.inspect(app));
+      retain(join(raw, "app-container-launch.json"), snapshot(launch));
+      await step("instance-changed", () => atLaunch(served, launch));
       // The memory samples' origin, on the same workstation clock as their own stamps (soakMemoryClock).
       const memoryOriginMs = clock.now();
       await step("load-exit", () => owned.docker(["start", "-a", k6], { timeout: (seconds + 60) * 1000, file: join(raw, "load.log") }));
       let stats, statsError;
       if (sampler) { try { stats = await sampler.stop(); } catch (e) { statsError = e; } }
       const loadInfo = await step("container", () => owned.inspect(k6));
-      retain(join(raw, "load-container.json"), containerReceipt(loadInfo));
+      retain(join(raw, "load-container.json"), loadReceipt(loadInfo));
+      // The settings the load ran with, which validateLoadExecution reads (its VUs, mode and rate) as requested.
+      await step("settings", () => appliedSettings(loadInfo, loadSettings));
       if (loadInfo.State.ExitCode !== 0) throw coded("load-exit", new Error("k6 exited with an error"));
       const evidence = await step("load-evidence", async () => {
         let k6Summary;
@@ -579,6 +603,9 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       if (!streamError) { try { events = readEvents(text, { app, marker, startedAt: loadInfo.State.StartedAt, finishedAt: loadInfo.State.FinishedAt }); } catch (e) { streamError = e; } }
       if (streamError) { keep("docker events", streamError); log(`${cell.app} ${cell.source} ${cell.target}: Docker's event stream is unavailable: ${firstLine(streamError)}`); }
       retain(join(raw, "events.json"), events);
+      // An app event stamped before the load started happened after the launch check and before the
+      // load: the load may not have run against the instance that served the cold probe.
+      if (events?.some((e) => e.atSeconds < 0)) throw coded("instance-changed", new Error("the app had a start, restart, die, kill or OOM event stamped before the load started"));
       Object.assign(cell, await step("load-evidence", () => summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory: samples, before: appBefore(before), after: end, events, rate: options.rate,
         droppedIterations: readDropped(k6Summary), failedRequests: load.failed, arrivals })));
       await step("load-evidence", () => reconcileCell(cell));
@@ -704,6 +731,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     });
     retain(join(folder, "upstream-container.json"), containerReceipt(upstreamInfo));
     summary.tools.upstream = { imageId: await step("tools", () => pinned("imageId", upstreamInfo.Image, "the upstream image ID")) };
+    await step("settings", () => appliedSettings(upstreamInfo, { role: "upstream", image: summary.tools.upstream.imageId, quota: cpus.api.quota, cpuset: cpus.api.cpuset, memoryBytes: summary.measurement.upstreamMemoryBytes }));
     await step("upstream", async () => upstreamReady(`${await port(upstreamInfo.Id)}/health`));
     save();
     for (const source of options.sources) for (const app of options.apps) for (const target of options.targets) {
@@ -755,7 +783,11 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     const gone = new Set((cleanup.removed ?? []).map((entry) => entry?.id));
     const accounted = Array.isArray(cleanup.created) && cleanup.created.every((entry) => gone.has(entry?.id));
     if (cleanup.complete === true && !accounted) log("cleanup not confirmed: an acknowledged create is not among the resources removed (cleanup.json)");
-    summary.cleanup = { complete: cleanup.complete === true && accounted, remaining: cleanup.remaining ? { containers: ids(cleanup.remaining.containers), networks: ids(cleanup.remaining.networks) } : null,
+    // And every create Docker did not acknowledge was found and each thing it made removed, or
+    // confirmed absent, by its own ID (ownedResources teardown): otherwise a container may still mount the copy.
+    const attempts = Array.isArray(cleanup.unacknowledged) && cleanup.unacknowledged.every((a) => a?.outcome === "removed");
+    if (cleanup.complete === true && !attempts) log("cleanup not confirmed: a create Docker did not acknowledge was not confirmed removed (cleanup.json)");
+    summary.cleanup = { complete: cleanup.complete === true && accounted && attempts, remaining: cleanup.remaining ? { containers: ids(cleanup.remaining.containers), networks: ids(cleanup.remaining.networks) } : null,
       created: cleanup.created.length, removed: cleanup.removed.length, recovered: cleanup.recovered.length, failures: cleanup.failures.length,
       unacknowledged: cleanup.unacknowledged.map((a) => ({ name: savedValue("runId", a.name), label: savedValue("attemptLabel", a.label), outcome: ["removed", "not removed"].includes(a.outcome) ? a.outcome : "unconfirmed" })) };
     // The fixture copy is removed only once every container that may mount it is confirmed removed;

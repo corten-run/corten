@@ -494,3 +494,50 @@ test("a probe past its budget stops between cases and does not pass", async () =
   assert.equal(contexts, 1);
   assert.ok(result.cases.every((entry) => entry.passed === 0 && entry.failed === 0));
 });
+
+test("what an attempt's label found is removed, or confirmed absent, by its own ID even when the owner-label sweep leaves it out", async () => {
+  for (const kind of ["container", "network"]) {
+    for (const removable of [true, false]) {
+      const at = `${kind} ${removable ? "removed" : "stuck"}`;
+      // The create's answer is lost after the daemon made it, and the owner-label sweep's listing omits it.
+      const docker = fakeDocker({ faults: {
+        [kind === "network" ? "network create" : "create"]: () => "lose",
+        ...(removable ? {} : { [kind === "network" ? "network rm" : "rm"]: () => new Error("Error response from daemon: device or resource busy") }),
+      } });
+      const sweep = `label=${ownerKey}=alert-probe-test`;
+      const omitting = Object.assign(async (args, opts) => ((args[0] === "ps" || args[1] === "ls") && args.includes(sweep) ? "" : docker(args, opts)), { time: docker.time });
+      const owned = ownedResources({ docker: omitting, runId: "alert-probe-test", window: 50, clock: runClock({ now: () => docker.time.t, sleep: async (ms) => { docker.time.t += ms; } }) });
+      await assert.rejects(kind === "network" ? owned.network("alert-probe-test-net") : owned.container(["app"], "alert-probe-test-app"), /lost acknowledgement/);
+      const [made] = (kind === "network" ? docker.networks : docker.containers).keys();
+      const record = await owned.teardown();
+      const [attempt] = record.unacknowledged;
+      assert.deepEqual(attempt.ids, [made], at);
+      // Every removal and lookup of it is by its own ID.
+      assert.ok(docker.calls.some(({ args }) => args.includes(`id=${made}`)), `${at}: looked up by its ID`);
+      if (removable) {
+        assert.equal(attempt.outcome, "removed", at);
+        assert.deepEqual(record.recovered.map((e) => e.id), [made], at);
+        assert.equal(record.complete, true, at);
+        assert.equal(docker.containers.size + docker.networks.size, 0, at);
+      } else {
+        assert.equal(attempt.outcome, "not removed", at);
+        assert.equal(record.complete, false, `${at}: a found ID neither removed nor confirmed absent leaves cleanup incomplete`);
+        assert.ok(record.failures.some((f) => f.resource.includes(attempt.label) && /not each removed or confirmed absent by its own ID/.test(f.error)), at);
+      }
+    }
+  }
+  // Already gone when teardown looks it up by its ID: that is confirmed absence, and complete.
+  const docker = fakeDocker({ faults: { create: () => "lose" } });
+  const sweep = `label=${ownerKey}=alert-probe-test`;
+  let made = null;
+  const vanishing = Object.assign(async (args, opts) => {
+    if (args[0] === "ps" && args.includes(sweep)) { if (made) docker.containers.delete(made); return ""; }
+    return docker(args, opts);
+  }, { time: docker.time });
+  const owned = ownedResources({ docker: vanishing, runId: "alert-probe-test", window: 50, clock: runClock({ now: () => docker.time.t, sleep: async (ms) => { docker.time.t += ms; } }) });
+  await assert.rejects(owned.container(["app"], "alert-probe-test-app"), /lost acknowledgement/);
+  [made] = docker.containers.keys();
+  const record = await owned.teardown();
+  assert.deepEqual([record.unacknowledged[0].outcome, record.complete], ["removed", true]);
+  assert.ok(!docker.calls.some(({ args }) => args[0] === "rm"), "nothing to remove");
+});

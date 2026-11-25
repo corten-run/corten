@@ -17,8 +17,15 @@ import { groupNames } from "./groups.mjs";
 // the host's CPU model is saved only as its SHA-256 (cpuModelSha256, cpuModelDigest), never as text.
 // Soak v7 also counts a start of the app as a restart only after a die stamped strictly earlier,
 // and reads an app row whose action names a restart-relevant event only when it is exactly that word.
-export const convergenceSchema = "marketplace-convergence/v5";
-export const soakSchema = "marketplace-soak/v7";
+// Convergence v6 and soak v8: a measured cell's app, load and the pass's upstream were each inspected
+// with the image, CPU quota, CPU pinning, memory limit and load settings the summary records
+// (appliedSettings; a cell that differs fails `settings`), and its app was rechecked as the instance
+// that served the cold probe immediately before the load started (atLaunch). Soak v8 also reads its
+// event stream only when every row is a complete, nonblank line, and fails a cell `instance-changed`
+// when the app had a restart-relevant event stamped before the load started, so a saved event is
+// never before the load.
+export const convergenceSchema = "marketplace-convergence/v6";
+export const soakSchema = "marketplace-soak/v8";
 // The targets and sources of the timed profiles: a page in rotating locales and locale-neutral JSON,
 // from memory and from the HTTP upstream.
 export const steadyTargets = Object.freeze(["page", "json"]);
@@ -53,6 +60,7 @@ export const failureCodes = Object.freeze({
   "load-evidence": "k6's summary export or engine clock was missing, or its counts did not validate",
   "failed-requests": "requests failed, so the cell has no reading",
   "instance-changed": "the app stopped, restarted, was replaced or was OOM-killed during the pass, or the load would have run against another instance than the one that served the cold start",
+  settings: "a container's image, CPU quota, CPU pinning, memory limit or load settings were not the ones the pass records",
   unsettled: "a cell's containers were not all removed, or a create was not acknowledged, so no further cell was measured",
   "summary-invalid": "the summary did not validate as a complete pass",
   error: "another error",
@@ -293,7 +301,8 @@ export const markerIs = (action, name) => typeof action === "string" && action =
  * client. Any other marker row there (a copy of the second start, or a die stamped at or before that
  * start) is not the fence, and the stream is not read. An app event delivered after the second start
  * and before the fence is read like any other. This relies on the client delivering rows in the daemon's order up to the fence; a stream
- * without the fence is not read at all. Every row must be one of the two container IDs, an action
+ * without the fence is not read at all. The text must be complete lines: one that ends without a
+ * newline, or that has a blank line, is not read. Every row must be one of the two container IDs, an action
  * (lowercase letters and underscores, optionally followed by ": " and detail, as health_status and
  * exec_start are) and a time in nanoseconds; an app row whose action is start, restart, die, kill or
  * oom with detail after it (`restart: x`) is not one, since only the exact word is that event. One
@@ -313,7 +322,12 @@ export function readEvents(text, { app, marker, startedAt, finishedAt } = {}) {
   assert.ok(matches("containerId", app) && matches("containerId", marker) && app !== marker, "the event stream reads an app and a marker by their container IDs");
   const finishNs = dockerNanos(finishedAt);
   assert.ok(finishNs !== null && finishNs >= startNs, "the load container's FinishedAt is not a time at or after its StartedAt");
-  const rows = text.split("\n").map((line) => line.replace(/\r$/, "")).filter((line) => line.length > 0);
+  // Every row is a complete line: a suffix with no newline (a row the client was still writing) or
+  // a blank complete row is not a row of the stream, so the whole observation is unreadable.
+  assert.ok(text === "" || text.endsWith("\n"), "the event stream ends with a row that has no newline, so it is not read");
+  const rows = text === "" ? [] : text.slice(0, -1).split("\n").map((line) => line.replace(/\r$/, ""));
+  const blank = rows.filter((line) => line.length === 0).length;
+  assert.ok(blank === 0, `${blank} docker events row${blank === 1 ? " is" : "s are"} blank, so the stream is not read`);
   const events = [], witnesses = [];
   let unreadable = 0, fence = null;
   for (const row of rows) {
@@ -444,6 +458,44 @@ export function servedCold(served, before) {
   const changed = [served?.id !== before.id && "another container ID", served?.startedAt !== before.startedAt && "another StartedAt",
     served?.restartCount !== before.restartCount && "another RestartCount"].filter(Boolean);
   assert.ok(changed.length === 0, `the app before the load is not the instance that served the cold probe: ${changed.join(", ")}`);
+}
+/**
+ * The app immediately before the load starts (its inspect after the load container was created and
+ * checked, the last Docker answer before `docker start` of the load): still the instance that served
+ * the cold probe (`served`, as servedCold takes it), running and not OOM-killed. A change found here
+ * happened before the load, so the cell fails `instance-changed` and no load starts; a change after
+ * it is the load's, and a convergence cell's heldThrough or a soak's restart claim reads it. The
+ * message names which checks failed, never Docker's values.
+ */
+export function atLaunch(served, info) {
+  const now = appInstance(info, "at the start of");
+  const changed = [served?.id !== now.id && "another container ID", served?.startedAt !== now.startedAt && "another StartedAt",
+    served?.restartCount !== now.restartCount && "another RestartCount", !now.running && "not running", now.oomKilled && "OOM-killed"].filter(Boolean);
+  assert.ok(changed.length === 0, `the app changed after it served the cold probe and before the load started: ${changed.join(", ")}`);
+  return now;
+}
+/**
+ * The settings a pass records for one of its containers (`role`: app, load or upstream), checked
+ * against Docker's inspect of it before any reading from it is kept: its image ID, its CPU quota
+ * (`--cpus`, which Docker applies as NanoCpus, with no CpuQuota of its own), its CPU pinning
+ * (CpusetCpus, empty when not pinned), its memory limit, and each environment setting the pass gave
+ * it (`env`: the key exactly once with that value, or absent where the value is null). Inspect output
+ * that differs, or lacks one of them, describes another container than the summary does. The message
+ * names the role and the setting, both from the checkout, never a value from Docker.
+ */
+export function appliedSettings(info, { role, image, quota, cpuset, memoryBytes, env = {} }) {
+  const host = info?.HostConfig, ok = host !== null && typeof host === "object";
+  const check = (pass, what) => assert.ok(pass, `the ${role} container's ${what} is not the one this pass records`);
+  check(typeof image === "string" && info?.Image === image, "image");
+  check(ok && Number.isSafeInteger(quota) && host.NanoCpus === quota * 1e9 && host.CpuQuota === 0, "CPU quota");
+  check(ok && host.CpusetCpus === (cpuset ?? ""), "CPU pinning (cpuset)");
+  check(ok && Number.isSafeInteger(memoryBytes) && host.Memory === memoryBytes, "memory limit");
+  const entries = info?.Config?.Env;
+  check(Array.isArray(entries) && entries.every((entry) => typeof entry === "string"), "environment");
+  for (const [key, value] of Object.entries(env)) {
+    const found = entries.filter((entry) => entry.startsWith(`${key}=`)).map((entry) => entry.slice(key.length + 1));
+    check(value === null ? found.length === 0 : found.length === 1 && found[0] === value, `${key} setting`);
+  }
 }
 /** The app before the load: a valid snapshot (appInstance) of a running app that was not OOM-killed. */
 export function appBefore(info) {
@@ -797,6 +849,8 @@ export function summarizeSoak({ windows, tail, unrecorded, requests, iterations,
   assert.ok(before.running && !before.oomKilled, "the app was not running, or was OOM-killed, before the load");
   assert.ok(after.restartCount >= before.restartCount, "RestartCount moved backwards");
   assert.ok(events === null || (Array.isArray(events) && events.every((e) => restartActions.includes(e?.action) && finite(e.atSeconds))), "events are readEvents's list or null");
+  // One stamped before the load started is not the load's: the runner fails such a cell instance-changed first.
+  assert.ok(events === null || events.every((e) => e.atSeconds >= 0), "an app event before the load started is not a soak's observation");
   const restartEvents = (events ?? []).map((e) => ({ action: e.action, atSeconds: e.atSeconds }));
   const eventStream = events === null ? "unavailable" : restartEvents.length ? "seen" : "clean";
   const replaced = after.id !== before.id || after.startedAt !== before.startedAt;
@@ -847,7 +901,7 @@ function checkSoak(s) {
     const r = c.restarts;
     fields(r, ["restarted", "restartCount", "replaced", "eventStream", "events", "runningAtEnd", "oomKilled"], `${cellKey(c)}: restarts`);
     assert.ok(nonNegative(r.restartCount) && typeof r.replaced === "boolean" && typeof r.runningAtEnd === "boolean" && typeof r.oomKilled === "boolean" && ["unavailable", "clean", "seen"].includes(r.eventStream)
-      && Array.isArray(r.events) && r.events.every((e) => e !== null && typeof e === "object" && Object.keys(e).sort().join() === "action,atSeconds" && restartActions.includes(e.action) && finite(e.atSeconds)), `${cellKey(c)}: restarts`);
+      && Array.isArray(r.events) && r.events.every((e) => e !== null && typeof e === "object" && Object.keys(e).sort().join() === "action,atSeconds" && restartActions.includes(e.action) && finite(e.atSeconds) && e.atSeconds >= 0), `${cellKey(c)}: restarts`);
     assert.ok((r.eventStream === "seen") === (r.events.length > 0), `${cellKey(c)}: the event stream's state contradicts its events`);
     assert.deepEqual(r, restartClaim({ restartCount: r.restartCount, replaced: r.replaced, eventStream: r.eventStream, events: r.events, runningAtEnd: r.runningAtEnd, oomKilled: r.oomKilled }),
       `${cellKey(c)}: the restart claim contradicts its counters, events and final state`);

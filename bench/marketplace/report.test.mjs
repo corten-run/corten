@@ -633,7 +633,7 @@ test("the report states the convergence pass given to it, or that none was provi
   const given = (p) => (round, apps) => convergenceLines(round, apps, p);
   const text = report(s, { convergence: given(pass) });
   assert.doesNotMatch(text, /none provided to this report/);
-  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v5, reading marketplace-tolerance\/v4\), measured at commit `a{40}`/m);
+  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v6, reading marketplace-tolerance\/v4\), measured at commit `a{40}`/m);
   // Like-for-like for its fixture cells only: an API-source cell is not compared.
   assert.match(text, /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: /m);
   assert.match(text, /^Tolerance reading marketplace-tolerance\/v4: a screening reading of throughput, not a certificate of steady state\./m);

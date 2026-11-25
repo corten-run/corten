@@ -79,9 +79,11 @@ export function runClock({ total = Infinity, reserve = teardownReserve, now = Da
 // proof of ownership. A removal that fails, or an owner that cannot be confirmed, stays pending,
 // is retried once at teardown and fails the teardown. A create that did not return an ID was not
 // acknowledged, whatever its error: an error from the daemon can follow a create it already made.
-// It is looked for at teardown by its attempt label within a bounded window; what it made is removed
-// by label-confirmed ID, and if nothing appears its cleanup is reported unconfirmed and fails the
-// teardown, since Docker may still make it.
+// It is looked for at teardown by its attempt label within a bounded window; each ID that lookup
+// finds is removed, or confirmed absent, by that ID itself after confirming its owner label, whatever
+// the owner-label sweep lists (a listing that leaves a found ID out proves nothing about it), and an
+// ID neither removed nor confirmed absent fails the teardown. If nothing appears its cleanup is
+// reported unconfirmed and fails the teardown, since Docker may still make it.
 // `owner` is the owner label key; each create's attempt label is `${owner}.create`. Cleanup-phase
 // commands are sent with `cleanup: true`, so a runner that refuses new work after an interrupt
 // (bench/catalog/output.mjs commandRunner) still runs them; the probe's own docker ignores it.
@@ -141,7 +143,8 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
   }
   // Whether `id` still exists, from a lookup by that ID (as bench/fullstack/idle-close.mjs present):
   // only an empty answer is absence, and exactly that ID is presence. Any other answer (another
-  // full ID, or several) leaves the removal unconfirmed, a teardown failure, and names neither.
+  // full ID, or several) leaves the removal unconfirmed, a teardown failure; the message names the
+  // ID that was asked for, already validated, and never the one returned.
   const present = async (kind, id) => {
     const found = await list(kind, `id=${id}`);
     if (!found.length) return false;
@@ -206,23 +209,36 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
           await clock.sleep(Math.min(500, last - clock.now()));
         }
       } catch (error) { fail(`unacknowledged creates labelled ${attempt}`, error); }
+      // Each ID an attempt's own label found and not yet removed: removed, or confirmed absent, by
+      // that ID (remove looks it up by ID first), never left to the owner-label sweep's listing.
+      const removed = () => new Set([...record.removed, ...record.recovered].map((entry) => entry.id));
+      const settleFound = async (kind) => {
+        for (const attempt of record.unacknowledged) if (attempt.kind === kind) for (const id of attempt.ids ?? []) {
+          if (removed().has(id)) continue;
+          if (!pending.has(id)) pending.set(id, { kind, id, name: null });
+          await remove(id, { recovered: true });
+        }
+      };
       try {
         for (const id of await list("container", label)) await remove(id, { recovered: !pending.has(id) });
       } catch (error) { fail(`containers labelled ${record.ownerLabel}`, error); }
+      await settleFound("container");
       for (const id of pendingOf("network")) await remove(id);
       try {
         for (const id of await list("network", label)) {
           if (!pending.has(id)) pending.set(id, { kind: "network", id, name: null });
           await remove(id, { recovered: !record.created.some((entry) => entry.id === id) });
         }
+        await settleFound("network");
         record.remaining = { containers: await list("container", label), networks: await list("network", label) };
         assert.deepEqual(record.remaining, { containers: [], networks: [] }, "owned resources survived teardown");
       } catch (error) { fail(`resources labelled ${record.ownerLabel}`, error); }
       // An empty scan does not prove an unacknowledged create will never land; only finding and
-      // removing what it made does.
-      const gone = new Set([...record.removed, ...record.recovered].map((entry) => entry.id));
+      // removing what it made does. Found but not each removed or confirmed absent by its ID: not complete.
+      const gone = removed();
       for (const attempt of record.unacknowledged) {
         attempt.outcome = !attempt.ids ? "unconfirmed" : attempt.ids.every((id) => gone.has(id)) ? "removed" : "not removed";
+        if (attempt.outcome === "not removed") fail(`${attempt.kind} ${attempt.name} (${attempt.label})`, "what its create made was found by its label but not each removed or confirmed absent by its own ID");
         if (!attempt.ids) fail(`${attempt.kind} ${attempt.name} (${attempt.label})`, `its create was not acknowledged and nothing with that label was found in ${searched} ms; Docker may still make it, so its cleanup is unconfirmed`);
       }
       record.complete = record.failures.length === 0;

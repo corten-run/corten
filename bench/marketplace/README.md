@@ -207,8 +207,12 @@ go to `results/convergence/<name>/` and `results/soak/<name>/`, outside Git like
 Every container is read, logged, sampled and removed by the ID Docker printed for it, after its
 owner label is checked; teardown also removes, by ID, anything else carrying the pass's owner label.
 A create whose ID Docker did not return is looked for by its own label for a bounded time; if
-nothing turns up its cleanup is reported unconfirmed and the pass is incomplete. Cleanup is complete
-only when every create Docker acknowledged is among the resources confirmed removed by its ID. A
+nothing turns up its cleanup is reported unconfirmed and the pass is incomplete. Each ID that lookup
+finds is removed, or confirmed absent, by that ID itself (a lookup by the ID, then its owner label
+checked, then removal), whatever the owner-label sweep lists: a listing that leaves it out proves
+nothing about it. Cleanup is complete only when every create Docker acknowledged is among the
+resources confirmed removed by its ID and every ID found by an attempt's label was removed or
+confirmed absent that way; otherwise the fixture copy is kept. A
 create Docker did not acknowledge ends the pass at the step that made it, even when teardown finds
 it by its label and removes it, so the pass is incomplete; the record of it stays in `cleanup.json`
 and in that summary, for diagnosis. A saved pass is refused, whatever its `complete` flag says,
@@ -289,8 +293,9 @@ normalized, at most 256 characters, otherwise null); the text stays in `host.txt
 model is compared with it by the same digest, and neither `steady-report.mjs` nor
 `report.mjs --convergence` prints either text (`report.mjs` without `--convergence` still prints
 the round's model as it always has). A
-convergence pass is saved as `marketplace-convergence/v5` and a soak as `marketplace-soak/v7`
-(below); a v4 convergence pass saved the model's text and is not read. A value that does not
+convergence pass is saved as `marketplace-convergence/v6` and a soak as `marketplace-soak/v8`
+(below); a v5 convergence pass did not check its containers' settings or recheck its app just
+before the load (both below), a v4 one saved the model's text, and neither is read. A value that does not
 match is saved as null (not recorded), or, where the pass depends on it (an image ID, the k6
 version), fails that step. Adapter names (the pass's adapters and those it selected for
 admission) must be ones this checkout's adapter inventory has, and a group one of its groups; the
@@ -311,7 +316,24 @@ before the load, `appInstance` and `appBefore`; a missing counter or malformed t
 either side fails the cell rather than comparing equal. The app before the load must also be the
 instance that served the cold probe: the container ID, StartedAt and RestartCount Docker reported
 once the probe had its first 200 must all be unchanged (`servedCold`), or the cell fails
-`instance-changed` before its marker or load container is created. Then, for a convergence cell: the same ID
+`instance-changed` before its marker or load container is created. The app is inspected once more
+after the load container is created and checked, the last Docker answer before the load starts
+(`atLaunch`, kept as `app-container-launch.json`): another ID, StartedAt or RestartCount, or an app
+not running or OOM-killed, there fails the cell `instance-changed` and no load starts, so a restart
+before the load is never read as one during it. A soak also fails the cell `instance-changed` when its
+event stream shows a start, restart, die, kill or OOM of the app stamped before the load container's
+StartedAt (after that last inspect, before the load), and a saved soak event is never before the
+load. The settings the summary records are checked on Docker's inspect before any reading from a
+container is kept (`appliedSettings`): the upstream's CPU quota (Docker's NanoCpus from `--cpus`,
+with no CpuQuota of its own), CPU pinning (`CpusetCpus`) and memory limit before any cell; for each
+cell the app's image ID, quota, pinning, memory limit and source (with the group's profile and
+connection limit), and the load's image ID, quota, pinning, memory limit and every setting
+`window-load.js` reads (`BASE`, `TARGET`, `LOCALE`, `MODE`, `WINDOWS`, `WINDOW_SECONDS`, and
+`VUS` or `RATE`, each exactly once with the requested value, and the other absent), before the load
+starts and again after it ran, so the VUs and rate `validateLoadExecution` reads are the ones
+requested. A container that differs fails the cell `settings` (the upstream, the pass) with a fixed
+message naming the role and setting, never Docker's value; `load-container.json` also keeps the
+window settings. Then, for a convergence cell: the same ID
 and StartedAt, running, not restarted or OOM-killed, `heldThrough`; for a soak: the restart
 evidence and the exit, signal and OOM observations it saves), the cold-start clock and result, the k6 export's metric names and every
 row of a soak's live Docker event stream, with whether it showed the marker's two starts. A saved
@@ -353,7 +375,7 @@ an app event both after the second marker start and stamped after FinishedAt is 
 as one of three states: unavailable (the stream failed, did not show both marker starts and the
 fence within its bound, showed another marker row where the fence belongs, had witnesses that do not bracket the load, or had a row that was not the app's or the
 marker's ID, an action and a nanosecond time, or was an app row naming a start, restart, die, kill or OOM
-with anything after that word, so none of its rows is used), clean (read, covering the load, with no start, restart, die, kill or OOM event) or seen
+with anything after that word, or ended with a row that has no newline, or had a blank row, so none of its rows is used), clean (read, covering the load, with no start, restart, die, kill or OOM event) or seen
 (with those events). "Restarted" is yes only on restart evidence: a RestartCount increase,
 another container ID or StartedAt at the end, a `restart` event, or a `start` of the app stamped
 strictly after a `die` of it (events are paired by their daemon times, never by the order the
@@ -362,8 +384,10 @@ seen), and not established when there is none and the stream was unavailable. A 
 which need not stop the app (SIGCONT, for one), a `die` with no start after it is an exit, and an
 `oom` event or an app not running or OOM-killed at the end is what it says: the report lists these
 in their own column, as observations, never as a restart. A soak is saved as
-`marketplace-soak/v7`; a v6 soak paired a start with a die by delivery order and saved the CPU
-model's text, and a v5 soak counted those observations as restarts; neither is read. The container states and the memory
+`marketplace-soak/v8`; a v7 soak did not check its containers' settings, recheck its app just before
+the load or refuse an unterminated or blank event row, a v6 soak paired a start with a die by
+delivery order and saved the CPU model's text, and a v5 soak counted those observations as
+restarts; none of them is read. The container states and the memory
 samples are read independently of the stream. What the `docker stats` and `docker events` clients write is bounded (`clientLimits` in
 [steady-run.mjs](steady-run.mjs): bytes read, bytes in one row, rows read, all counted on what the
 client wrote, blank rows and escape sequences included): past a limit that observation is

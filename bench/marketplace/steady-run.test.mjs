@@ -56,7 +56,8 @@ function k6Export(counts, { graceFailed = 0, windowFailed = {}, clockMs = 120_00
 /**
  * A Docker daemon in memory. `exportFor(appName)` gives the k6 summary for the cell whose app has
  * that name; `withhold(name)` makes that create fail after making nothing visible (its container
- * only appears once the pass is over); `failRemove(name)` fails every removal of that container;
+ * only appears once the pass is over); `lose(name)` makes it fail after the daemon made the container
+ * (its acknowledgement lost); `failRemove(name)` fails every removal of that container;
  * `oomOnLoad` marks the app OOM-killed when the load ends; `restartOnLoad` restarts it in place (a
  * docker restart: the same ID and RestartCount, a new StartedAt). Its clock is the runner's
  * (`now`): a load run moves it on by `startupMs` before the container's StartedAt and by `runMs`
@@ -66,9 +67,11 @@ function k6Export(counts, { graceFailed = 0, windowFailed = {}, clockMs = 120_00
  * appends both of the container's streams to it (its stdout alone with `fileStderr: false`) and
  * returns nothing; `combined: false` returns its stdout alone. `probeStderr` is what each cold probe writes to stderr. It publishes container events (start, and the app's oom, die or kill when
  * the load does that to it, or `duringLoad(state)` emits) to every events client listening, as
- * `emit(id, action)`; `inspected(info, container)` may change an inspect answer.
+ * `emit(id, action)`; `inspected(info, container)` may change an inspect answer. An inspect reports
+ * the CPU quota (as NanoCpus), CPU pinning and memory limit the create asked for, as Docker applies
+ * `--cpus`, `--cpuset-cpus` and `--memory`.
  */
-function fakeDocker({ exportFor, withhold = () => false, failRemove = () => false, oomOnLoad = false, restartOnLoad = false, loadMs = 0, clockMs = 120_000, runMs = clockMs, startupMs = 0, override = () => undefined,
+function fakeDocker({ exportFor, withhold = () => false, lose = () => false, failRemove = () => false, oomOnLoad = false, restartOnLoad = false, loadMs = 0, clockMs = 120_000, runMs = clockMs, startupMs = 0, override = () => undefined,
   duringLoad = () => {}, inspected = (info) => info, probeStderr = "" } = {}) {
   const containers = new Map(), networks = new Map(), calls = [], late = [];
   let next = 1;
@@ -77,8 +80,10 @@ function fakeDocker({ exportFor, withhold = () => false, failRemove = () => fals
   const role = (name) => (name.endsWith("-host") ? "host" : name.endsWith("-upstream") ? "upstream" : name.endsWith("-probe") ? "probe" : name.endsWith("-marker") ? "marker" : name.endsWith("-k6-version") ? "version" : name.endsWith("-k6") ? "k6" : "app");
   const matches = (labels, filter) => { const pair = filter.slice("label=".length), at = pair.indexOf("="); return labels[pair.slice(0, at)] === pair.slice(at + 1); };
   const byName = (name) => [...containers.values()].find((c) => c.name === name);
+  const flag = (args, name) => (args.includes(name) ? args[args.indexOf(name) + 1] : null);
+  const bytes = (size) => (size === null ? 0 : Number(size.slice(0, -1)) * { g: 2 ** 30, m: 2 ** 20 }[size.at(-1)]);
   const info = (c) => ({ Id: c.id, Name: `/${c.name}`, Image: c.imageId, RestartCount: 0, Config: { Labels: c.labels, Env: c.args.flatMap((a, i) => (a === "-e" ? [c.args[i + 1]] : [])), Image: c.image, Cmd: null }, State: c.state,
-    HostConfig: { Memory: 0, NanoCpus: 0, CpuPeriod: 0, CpuQuota: 0, CpusetCpus: "", NetworkMode: "bridge", Ulimits: null }, Mounts: [],
+    HostConfig: { Memory: bytes(flag(c.args, "--memory")), NanoCpus: flag(c.args, "--cpus") === null ? 0 : Number(flag(c.args, "--cpus")) * 1e9, CpuPeriod: 0, CpuQuota: 0, CpusetCpus: flag(c.args, "--cpuset-cpus") ?? "", NetworkMode: "bridge", Ulimits: null }, Mounts: [],
     NetworkSettings: { Ports: { "8080/tcp": [{ HostIp: "127.0.0.1", HostPort: "49153" }] } } });
   const get = (cid) => { const c = containers.get(cid); if (!c) throw new Error(`Error: No such container: ${cid}`); return c; };
   const filterOf = (args) => args[args.indexOf("--filter") + 1];
@@ -114,6 +119,7 @@ function fakeDocker({ exportFor, withhold = () => false, failRemove = () => fals
         state.ids[name] = c.id;
         if (withhold(name)) { late.push(c); throw new Error("Error response from daemon: context deadline exceeded"); }
         containers.set(c.id, c);
+        if (lose(name)) throw new Error("Error response from daemon: lost acknowledgement");
         return c.id;
       }
       case "network": {
@@ -1314,4 +1320,147 @@ test("a host's CPU model is saved only as its digest, even in a form a pass once
   const other = convergenceLines({ ...round, host: { ...round.host, cpu: "Synthetic OtherModel 1" } }, ["corten"], s);
   assert.match(other[2], /the host CPU differs/);
   for (const lines of [same, other]) assert.ok(!lines.join("\n").includes("CanaryModel") && !lines.join("\n").includes("OtherModel"), lines.join("\n"));
+});
+
+test("a cell runs only with the settings its summary records: image, CPU quota and pinning, memory and load settings", async (t) => {
+  const folder = folderOf(t);
+  const convergence = parseSteadyArgs(["convergence", "t40", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const soak = parseSteadyArgs(["soak", "t41", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps);
+  const other = `sha256:${"e".repeat(64)}`;
+  const host = (change) => (info) => ({ ...info, HostConfig: { ...info.HostConfig, ...change } });
+  const env = (edit) => (info) => ({ ...info, Config: { ...info.Config, Env: edit(info.Config.Env) } });
+  const set = (key, value) => env((list) => list.map((e) => (e.startsWith(`${key}=`) ? `${key}=${value}` : e)));
+  // [name, the pass, the container role it changes, the change, the setting the message names]
+  const cases = [
+    ["app-image", convergence, "app", (info) => ({ ...info, Image: other }), "app container's image"],
+    ["app-quota", convergence, "app", host({ NanoCpus: 2e9 }), "app container's CPU quota"],
+    ["app-cpu-quota", convergence, "app", host({ CpuQuota: 50_000 }), "app container's CPU quota"],
+    ["app-cpuset", convergence, "app", host({ CpusetCpus: "0" }), "app container's CPU pinning (cpuset)"],
+    ["app-memory", convergence, "app", host({ Memory: 0 }), "app container's memory limit"],
+    ["app-source", convergence, "app", set("MARKETPLACE_SOURCE", "api"), "app container's MARKETPLACE_SOURCE setting"],
+    ["load-image", convergence, "k6", (info) => ({ ...info, Image: other }), "load container's image"],
+    ["load-quota", convergence, "k6", host({ NanoCpus: 8e9 }), "load container's CPU quota"],
+    ["load-cpuset", convergence, "k6", host({ CpusetCpus: "0-7" }), "load container's CPU pinning (cpuset)"],
+    ["load-memory", convergence, "k6", host({ Memory: 2 ** 30 }), "load container's memory limit"],
+    ["load-vus", convergence, "k6", set("VUS", "64"), "load container's VUS setting"],
+    ["load-windows", convergence, "k6", set("WINDOWS", "9"), "load container's WINDOWS setting"],
+    ["load-window-seconds", convergence, "k6", set("WINDOW_SECONDS", "10"), "load container's WINDOW_SECONDS setting"],
+    ["load-target", convergence, "k6", set("TARGET", "json"), "load container's TARGET setting"],
+    ["load-locale", convergence, "k6", env((list) => list.filter((e) => !e.startsWith("LOCALE="))), "load container's LOCALE setting"],
+    ["load-twice", convergence, "k6", env((list) => [...list, "VUS=32"]), "load container's VUS setting"],
+    ["load-rate-given", convergence, "k6", env((list) => [...list, "RATE=150"]), "load container's RATE setting"],
+    ["soak-rate", soak, "k6", set("RATE", "300"), "load container's RATE setting"],
+    ["soak-mode", soak, "k6", set("MODE", "closed"), "load container's MODE setting"],
+  ];
+  for (const [name, options, role, change, what] of cases) {
+    const soakPass = options.kind === "soak";
+    const fake = fakeDocker({ exportFor: soakPass ? () => soakExport() : () => k6Export(flat(8)), ...(soakPass ? { clockMs: 1_800_000, loadMs: 50 } : {}), inspected: (info, c) => (c.kind === role ? change(info) : info) });
+    let tick = 0;
+    const stats = statsClient({ delayMs: 10, rows: (a) => Array.from({ length: 180 }, () => ({ ID: a.at(-1), Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" })) });
+    const s = await run(fake, options, folder(name), { env: pinnedEnv, spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ } });
+    assert.equal(s.cells[0].failure, "settings", `${name}: ${JSON.stringify(s.cells[0])}`);
+    assert.ok(errorsOf(folder(name)).includes(`the ${what} is not the one this pass records`), name);
+    // Refused before the load starts: no load run.
+    assert.ok(!fake.calls.some((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] === fake.ids["marketplace-test-run-k6"]), `${name}: no load ran`);
+    assert.ok(!readFileSync(join(folder(name), "summary.json"), "utf8").includes("e".repeat(64)), name);
+    // The cell's failure is the pass's record: it is complete and reads, with no reading for that cell.
+    assert.equal(s.complete, true, name);
+    (soakPass ? validateSoak : validateConvergence)(s);
+  }
+  // Settings that change only in the load's inspect after it ran are refused as well, before a reading.
+  let ran = false;
+  const after = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => { if (args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-k6"]) ran = true; },
+    inspected: (info, c) => (c.kind === "k6" && ran ? set("VUS", "64")(info) : info) });
+  const late = await run(after, convergence, folder("after"), { env: pinnedEnv });
+  assert.equal(late.cells[0].failure, "settings");
+  assert.ok(errorsOf(folder("after")).includes("the load container's VUS setting is not the one this pass records"));
+  // The upstream's quota, pinning and memory are the pass's too: one that differs ends the pass before any cell.
+  const upstream = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), inspected: (info, c) => (c.kind === "upstream" ? host({ CpusetCpus: "" })(info) : info) }), convergence, folder("upstream"), { env: pinnedEnv });
+  assert.deepEqual([upstream.complete, upstream.failures, upstream.cells], [false, [{ stage: "suite", code: "settings" }], []]);
+  assert.ok(errorsOf(folder("upstream")).includes("the upstream container's CPU pinning (cpuset) is not the one this pass records"));
+  // A pinned pass whose containers have what it records reads, and its load receipt keeps the window settings.
+  const ok = await run(fakeDocker({ exportFor: () => k6Export(flat(8)) }), convergence, folder("ok"), { env: pinnedEnv });
+  assert.equal(ok.complete, true, JSON.stringify(ok.failures));
+  assert.equal(ok.cells[0].verdict.withinTolerance, true);
+  const receipt = JSON.parse(readFileSync(join(folder("ok"), "fixture", "corten", "page", "load-container.json"), "utf8"));
+  assert.deepEqual([receipt.windowEnv, receipt.nanoCpus, receipt.cpuset, receipt.memoryBytes, receipt.env.VUS], [{ WINDOWS: "8", WINDOW_SECONDS: "15" }, 4e9, "4-7", 2 * 2 ** 30, "32"]);
+});
+
+test("the app is rechecked as the instance that served the cold probe immediately before the load: a change there fails the cell, one during the load is the load's", async (t) => {
+  const folder = folderOf(t);
+  const kinds = [
+    ["convergence", parseSteadyArgs(["convergence", "t42", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps), () => k6Export(flat(8)), {}],
+    ["soak", parseSteadyArgs(["soak", "t43", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps), () => soakExport(), { clockMs: 1_800_000, loadMs: 50 }],
+  ];
+  const measure = async (name, options, exportFor, extra) => {
+    const fake = fakeDocker({ exportFor, ...extra });
+    let tick = 0;
+    const stats = statsClient({ delayMs: 10, rows: (a) => Array.from({ length: 180 }, () => ({ ID: a.at(-1), Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" })) });
+    const s = await run(fake, options, folder(name), { spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ } });
+    return { s, fake, loaded: fake.calls.some((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] === fake.ids["marketplace-test-run-k6"]) };
+  };
+  // A restart in place (a new StartedAt, its restart event) once the load container is created: after
+  // the app's snapshot before the load and the soak's first marker start, before the load starts.
+  const gap = (args, state) => {
+    if (args[0] === "create" && args[2] === "marketplace-test-run-k6") {
+      const app = state.app(); state.offset += 1000;
+      app.state = { ...app.state, StartedAt: new Date(state.now()).toISOString() }; state.emit(app.id, "restart");
+    }
+  };
+  for (const [kind, options, exportFor, extra] of kinds) {
+    const { s, loaded } = await measure(`${kind}-gap`, options, exportFor, { ...extra, override: gap });
+    assert.equal(s.cells[0].failure, "instance-changed", `${kind}: ${JSON.stringify(s.cells[0])}`);
+    assert.ok(errorsOf(folder(`${kind}-gap`)).includes("the app changed after it served the cold probe and before the load started: another StartedAt"), kind);
+    assert.equal(loaded, false, `${kind}: no load started`);
+    assert.equal(s.complete, true, kind);
+    (kind === "convergence" ? validateConvergence : validateSoak)(s);
+  }
+  // A restart event stamped after that recheck but before the load's StartedAt is not the load's either.
+  const [, soakOptions, soakFor, soakExtra] = kinds[1];
+  const stamped = await measure("soak-before-start", soakOptions, soakFor, { ...soakExtra, override: (args, state) => {
+    if (args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-k6"]) { state.emit(state.app().id, "restart"); state.offset += 1; }
+  } });
+  assert.equal(stamped.s.cells[0].failure, "instance-changed", JSON.stringify(stamped.s.cells[0]));
+  assert.ok(errorsOf(folder("soak-before-start")).includes("the app had a start, restart, die, kill or OOM event stamped before the load started"));
+  validateSoak(stamped.s);
+  // The same restart during the load: a soak reads it as a restart; a convergence cell has no reading for it.
+  const during = await measure("soak-during", soakOptions, soakFor, { ...soakExtra, restartOnLoad: true });
+  assert.equal(during.s.cells[0].failure, undefined, JSON.stringify(during.s.cells[0]));
+  assert.deepEqual([during.s.cells[0].restarts.restarted, during.s.cells[0].restarts.replaced, during.s.cells[0].restarts.events.map((e) => e.action)], [true, true, ["restart"]]);
+  validateSoak(during.s);
+  const [, convergenceOptions, convergenceFor] = kinds[0];
+  const held = await measure("convergence-during", convergenceOptions, convergenceFor, { restartOnLoad: true });
+  assert.equal(held.loaded, true);
+  assert.equal(held.s.cells[0].failure, "instance-changed");
+  assert.ok(errorsOf(folder("convergence-during")).includes("app container stopped, restarted, was replaced or was OOM-killed during the pass: another StartedAt"));
+});
+
+test("a create whose acknowledgement was lost counts as cleaned up only once what its label found is removed by its own ID; until then the fixture copy is kept", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t44", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  // The load container is made but its create's answer is lost, and the owner-label sweep's listing
+  // leaves it out: only the lookup by its attempt label finds it.
+  const omits = (args) => (args[0] === "ps" && args.includes(`label=${ownerLabelKey}=marketplace-test-run`) ? "" : undefined);
+  const lost = (name) => name === "marketplace-test-run-k6";
+  // Its removal by ID also fails: cleanup is not complete and the copy a container may mount is kept.
+  const stuck = fakeDocker({ exportFor: () => k6Export(flat(8)), lose: lost, override: omits, failRemove: lost });
+  const s = await run(stuck, options, folder("stuck"));
+  assert.equal(s.cells[0].failure, "container");
+  const cleanup = cleanupOf(folder("stuck"));
+  assert.deepEqual(cleanup.unacknowledged.map((a) => [a.name, a.outcome, a.ids?.length]), [["marketplace-test-run-k6", "not removed", 1]]);
+  assert.equal(cleanup.complete, false);
+  assert.ok(cleanup.failures.some((f) => /not each removed or confirmed absent by its own ID/.test(f.error)));
+  assert.equal(s.cleanup.complete, false);
+  assert.ok(existsSync(join(folder("stuck"), "mounted-fixture", "marketplace.json")), "the copy is kept");
+  assert.equal(stuck.containers.size, 1);
+  // Its removal by ID succeeds: it is removed whatever the sweep listed, and only then is the copy removed.
+  const found = fakeDocker({ exportFor: () => k6Export(flat(8)), lose: lost, override: omits });
+  const r = await run(found, options, folder("found"));
+  const record = cleanupOf(folder("found"));
+  assert.deepEqual(record.unacknowledged.map((a) => [a.name, a.outcome]), [["marketplace-test-run-k6", "removed"]]);
+  assert.ok(found.calls.some((c) => c.args[0] === "rm" && c.args.at(-1) === found.ids["marketplace-test-run-k6"]), "removed by its ID");
+  assert.equal(found.containers.size, 0);
+  assert.equal(r.cleanup.complete, true);
+  assert.ok(!existsSync(join(folder("found"), "mounted-fixture")), "the copy is removed once nothing can mount it");
+  assert.equal(r.complete, false, "a create Docker did not acknowledge still ends the pass");
 });
