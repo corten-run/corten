@@ -402,6 +402,9 @@ Capture and replay use the same eligibility check: only the exact bound native
 invocation for the campaign's registered group, round and phase can carry a sealed
 clock. Fixture generators and helpers cannot carry one. The clock is optional;
 without it only the ordinary first-after boundary can prove cleanup.
+Live Delivery and Recoverable Live replay both censuses when a settled census
+is present. Both must match the committed phase seal and the verified lifetime;
+a supplied but invalid settlement cannot fall back to the first census.
 The last native command must have a verified sealed terminal lifetime, including
 proof that its accounting scope is empty, before the five-second wait begins. For
 official timing, each worker's Linux start ticks must place its birth strictly after

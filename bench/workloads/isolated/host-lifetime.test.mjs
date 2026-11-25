@@ -13,8 +13,13 @@ import { browserCpus } from "../../fullstack-browser/contract.mjs";
 import { participantSnapshot, replayExecution } from "../../fullstack-browser/native-execution.mjs";
 import { composeHostProof, inspectLifetime, processIdentity, inspectBrowserParticipants, inspectLiveActors, resolveParticipantExecutables } from "./host-lifetime.mjs";
 import { executableIdentity, executableReference, hashExecutableDescriptor, participantExecutables } from "./participant-executables.mjs";
-import { jsonPhase } from "./campaign-contract.mjs";
+import { jsonPhase, mixedPhase, productionRecipes } from "./campaign-contract.mjs";
+import { clientComparisonRecipe, nativeExecution } from "./contract.mjs";
 import { composePhase } from "./composition.mjs";
+import { terminalClockPolicy } from "./host-observation.mjs";
+import { clientActorCpus, hardeningActorCpus, hardeningCpuGate, liveActorCpus, liveApplication } from "./native-roles.mjs";
+import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
+import { budgets } from "../../hardening/plan.mjs";
 import { comparisonProfile } from "../../client-heavy/contract.mjs";
 import { reserveCompilerTarget, withCompilerTarget } from "../../client-heavy/compiler.mjs";
 
@@ -554,7 +559,38 @@ test("actual inherited controls need no invented cap; terminal observations comp
 const terminalClock = { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" };
 const withClock = ({ terminal }) => { terminal.terminalClock = terminalClock; };
 
-test("terminal clock: r75-shaped client-heavy exit 2 replays without qualifying unproven native output", (t) => {
+const clockCampaignRound = "r21", clockCampaignId = `${clockCampaignRound}-0000000000000001`;
+const clockPhases = [...groupNames.map((group) => [group, "timing"]), ["json-api", "prepare"]];
+for (const [group, phase] of clockPhases) test(`terminal clock writer: ${group}/${phase} emits the clock its lifetime reader verifies`, async (t) => {
+  const round = campaignRounds(clockCampaignRound)[group], commit = "a".repeat(40);
+  const recipe = group === "client-heavy" ? clientComparisonRecipe : productionRecipes[group];
+  const resources = group === "fullstack-browser" ? { browserCpus }
+    : group === "client-heavy" ? { actorCpus: clientActorCpus }
+      : ["live-delivery", "recoverable-live"].includes(group) ? { actorCpus: liveActorCpus, app: liveApplication }
+        : group === "hardening" ? { actorCpus: hardeningActorCpus, budget: budgets().resources } : {};
+  const base = { request: { group, round, commit, recipe }, resources, selection: { apps: selectedApps(group) },
+    validation: { artifactRoot: nativeArtifactRoot(group, round) },
+    sources: { files: [{ path: hardeningCpuGate }] }, execution: nativeExecution(group, round, recipe, "a".repeat(64)) };
+  const plan = { round: clockCampaignRound, bindings: [base] };
+  const bound = group === "json-api" ? jsonPhase(plan, phase, `/bench/campaign/${clockCampaignId}/json-native-audits.json`)
+    : group === "mixed-production" ? mixedPhase(plan, clockCampaignId) : base;
+  const invocation = bound.execution.invocation;
+  const f = await samplingControl(t, undefined, { binding: bound, invocation, phase });
+  const retain = terminalClockPolicy(bound, invocation, clockCampaignRound, phase) !== null;
+  const result = phase === "prepare" ? { ...f.result, success: false, code: 1 }
+    : group === "client-heavy" ? { ...f.result, success: false, code: 2 } : f.result;
+  const observed = await f.finish(result, true, retain);
+  assert.equal(observed.status, "verified");
+  const raw = JSON.parse(readFileSync(join(f.directory, "terminal.json"), "utf8"));
+  assert.ok(raw.terminalClock, "the real lifetime writer omitted the requested terminal clock");
+  const { monoNs, ...clock } = raw.terminalClock;
+  assert.deepEqual(clock, { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100 });
+  assert.match(monoNs, /^[1-9]\d*$/);
+  assert.deepEqual(observed.terminalClock, raw.terminalClock);
+  assert.deepEqual(raw.command, result);
+});
+
+test("terminal clock: r75-shaped client-heavy lifetime replays exit 2 pending parent qualification", (t) => {
   const group = "client-heavy", round = "w75", id = "r75-0123456789abcdef", apps = selectedApps(group);
   const execute = { executable: "node", argv: [runnerFor(group).entry, round, "--out", nativeArtifactRoot(group, round),
     "--profile", comparisonProfile], cwd: "repository-root", shell: false };
@@ -567,6 +603,7 @@ test("terminal clock: r75-shaped client-heavy exit 2 replays without qualifying 
   }, bound, execute, result, "timing", id).observation();
   assert.equal(observed.cleanupComplete, true);
   assert.deepEqual(observed.terminalClock, terminalClock);
+  // A synthetic missing-proof control, not a statement about r75's native captures.
   const native = { status: "blocked", attemptComplete: false, cleanupComplete: false, resources: "blocked",
     outcomes: apps.map((app) => ({ app, outcome: "not-run" })) };
   const composed = composePhase(bound, native, observed, [result]);

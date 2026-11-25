@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
+import { readdirSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -11,7 +12,8 @@ import { campaignSchema, groupCampaignSchema } from "../campaign-contract.mjs";
 import { readRegular, tree } from "../evidence.mjs";
 import { inspectLifetime, inspectLiveActors } from "../host-lifetime.mjs";
 import { nativeControlPartition } from "../native-roles.mjs";
-import { verifyHostBoundary } from "../host-observation.mjs";
+import { verifyOfflineWindow } from "../control-admission.mjs";
+import { verifyHostBoundary, verifyLifetimeSettledBoundary } from "../host-observation.mjs";
 import { liveCaptureSchema, liveContracts } from "../../live.mjs";
 import { negativeRequests } from "../../../live/admission.mjs";
 
@@ -48,6 +50,26 @@ function sourceHashes(files, entry) {
   sha(cargo); sha(lock); return { app, crates, cargo, lock };
 }
 
+function livePhaseSeal(campaignRoot, plan, campaign, binding, phase, snapshot, nativeManifest) {
+  const matches = readdirSync(campaignRoot).filter((name) => /^\d{5}-phase-sealed\.json$/.test(name)).flatMap((name) => {
+    const file = join(campaignRoot, name), bytes = readRegular(file), seal = JSON.parse(bytes);
+    return seal.group === binding.request.group && seal.phase === "timing" ? [{ name, file, bytes, seal }] : [];
+  });
+  assert.equal(matches.length, 1, "settled live phase lacks its unique journal seal");
+  const { name, file, bytes, seal } = matches[0];
+  assert.equal(seal.schema, "benchmark-isolated-campaign-event/v1");
+  assert.equal(seal.kind, "phase-sealed"); assert.equal(seal.sequence, Number(name.slice(0, 5)));
+  assert.equal(seal.campaign, campaign); assert.equal(seal.round, plan.round);
+  assert.equal(seal.campaignSha256, plan.campaignSha256);
+  assert.equal(seal.artifactRoot, binding.validation.artifactRoot);
+  assert.equal(seal.transferDestination, `${basename(phase)}/native`);
+  assert.equal(seal.phaseManifestSha256, snapshot.sha256);
+  assert.equal(seal.nativeManifestSha256, nativeManifest.sha256);
+  const version = seal.status?.executionVersion;
+  assert.ok(version === 5 || version === 6 && plan.schema === groupCampaignSchema, "settled live phase lacks monitored or offline scope");
+  return { file, bytes, offline: version === 6 };
+}
+
 function phaseProof(binding, folder, startedAt, actors) {
   if (basename(folder) !== "native") return null;
   const phase = dirname(folder), campaignRoot = dirname(phase), campaign = basename(campaignRoot), { group, round, commit } = binding.request;
@@ -70,19 +92,41 @@ function phaseProof(binding, folder, startedAt, actors) {
   assert.equal(reservation.id, campaign); assert.equal(reservation.commit, commit);
   assert.equal(reservation.campaignSha256, campaignSha256);
   assert.equal(basename(phase), `${String(index).padStart(2, "0")}-${group}-timing`);
-  const beforeTree = tree(phase), read = (name) => JSON.parse(readRegular(join(phase, name)));
-  assert.ok(isDeepStrictEqual(read("native-manifest.json"), tree(folder)), "native manifest differs");
+  const beforeTree = tree(phase);
+  const read = (name) => {
+    const bytes = readRegular(join(phase, name)), entry = beforeTree.entries.find(({ path }) => path === name);
+    assert.equal(digest(bytes), entry?.sha256, "live boundary record differs from phase snapshot");
+    return JSON.parse(bytes);
+  };
+  const nativeManifest = tree(folder);
+  assert.ok(isDeepStrictEqual(read("native-manifest.json"), nativeManifest), "native manifest differs");
   const before = read("host-before.json"), after = read("host-after.json");
-  verifyHostBoundary(before, after);
+  const hasSettle = beforeTree.entries.some(({ path }) => path === "host-after-settled.json");
+  if (!hasSettle) verifyHostBoundary(before, after);
   // The single fresh host has no participant containers outside the native run.
   assert.deepEqual(before.containers, []); assert.deepEqual(after.containers, []);
   const names = beforeTree.entries.filter((e) => e.type === "directory" && /^command-\d+-host$/.test(e.path));
   assert.equal(names.length, 1, "live phase requires its one exact native command");
-  const directory = join(phase, names[0].path), context = JSON.parse(readRegular(join(directory, "binding.json")));
-  const terminal = JSON.parse(readRegular(join(directory, "terminal.json"))), command = Number(/^command-(\d+)-host$/.exec(names[0].path)[1]);
+  const hostPath = names[0].path, directory = join(phase, hostPath);
+  const context = read(`${hostPath}/binding.json`), terminal = read(`${hostPath}/terminal.json`);
+  const command = Number(/^command-(\d+)-host$/.exec(hostPath)[1]);
   assert.equal(context.bootId, before.bootId);
   const observation = inspectLifetime(binding, binding.execution.invocation, directory,
     { campaign, command, pid: context.leaderPid, result: terminal.command, phase: "timing" });
+  if (hasSettle) {
+    const { file, bytes, offline } = livePhaseSeal(campaignRoot, plan, campaign, binding, phase, beforeTree, nativeManifest);
+    const hostEntries = beforeTree.entries.filter(({ path }) => path === hostPath || path.startsWith(hostPath + "/"))
+      .map((entry) => ({ ...entry, path: entry.path.slice(hostPath.length + 1) }));
+    assert.equal(observation.manifestSha256, deploymentSha256(hostEntries), "live terminal lifetime differs from phase seal");
+    const settled = read("host-after-settled.json");
+    if (offline) {
+      for (const census of [before, after, settled]) assert.equal(census.controlApparatus, undefined);
+      verifyOfflineWindow(read("control-ingress.json"));
+    }
+    verifyLifetimeSettledBoundary({ binding, invocation: binding.execution.invocation, round, phase: "timing",
+      lifetime: observation, before, after, settled, offline });
+    assert.ok(readRegular(file).equals(bytes), "live phase journal seal mutated");
+  }
   assert.equal(binding.execution.effectiveOptions.build, true);
   const first = observation.samples[0].at, last = observation.samples.at(-1).at, started = clock(startedAt);
   assert.ok(clock(before.at) <= first && first <= started && started <= last && last <= clock(after.at));

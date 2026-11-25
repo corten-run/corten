@@ -223,3 +223,10 @@ export function verifySettledHostBoundary(before, after, settled, terminal, poli
   assert.ok(candidates.workers.every((p) => !sameProcess(p, final.get(p.pid))), "udev worker identity still present");
   return { ...clean, settledUdevWorkers: candidates.workers.map(({ pid, startTicks }) => ({ pid, startTicks })) };
 }
+
+export function verifyLifetimeSettledBoundary({ binding, invocation, round, phase, lifetime, before, after, settled, offline }) {
+  const policy = terminalClockPolicy(binding, invocation, round, phase);
+  assert.ok(policy && lifetime?.status === "verified" && lifetime.cleanupComplete && lifetime.terminalClock,
+    "udev settle lacks an eligible sealed terminal lifetime");
+  return verifySettledHostBoundary(before, after, settled, lifetime.terminalClock, policy, offline);
+}

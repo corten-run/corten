@@ -1,10 +1,11 @@
 // Synthetic kernel/native records exercise real replay, not actual OS qualification.
 import assert from "node:assert/strict";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { test } from "node:test";
 import { deploymentSha256 } from "../../deployments.mjs";
-import { groupNames } from "../../registry.mjs";
+import { groupNames, nativeArtifactRoot } from "../../registry.mjs";
+import { registration as controlFixture } from "../../test-fixtures/control-stream-fixture.mjs";
 import { campaignSchema, groupCampaignSchema } from "../campaign-contract.mjs";
 import { tree } from "../evidence.mjs";
 import { composePhase } from "../composition.mjs";
@@ -86,6 +87,99 @@ for (const group of ["live-delivery", "recoverable-live"]) test(`terminal clock:
   const wrongBoot = await f.inspect();
   assert.equal(wrongBoot.resources, "invalid");
   assert.equal(wrongBoot.cleanupComplete, false);
+});
+
+function offlineFence() {
+  const table = { family: "inet", table: "corten_bench_native", chain: "input" };
+  const tcp = { match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 22 } };
+  const syn = { match: { op: "==", left: { "&": [{ payload: { protocol: "tcp", field: "flags" } }, ["fin", "syn", "rst", "ack"]] }, right: "syn" } };
+  const zero = { counter: { packets: 0, bytes: 0 } };
+  return { nftables: [
+    { metainfo: { json_schema_version: 1 } },
+    { table: { family: table.family, name: table.table, handle: 1 } },
+    { chain: { family: table.family, table: table.table, name: table.chain, handle: 2, type: "filter", hook: "input", prio: 10, policy: "accept" } },
+    { rule: { ...table, handle: 3, expr: [tcp, syn, { limit: { rate: 8, burst: 8, per: "minute" } }, zero, { drop: null }] } },
+    { rule: { ...table, handle: 4, expr: [tcp, zero, { drop: null }] } },
+  ] };
+}
+
+for (const [group, offline] of [["live-delivery", false], ["recoverable-live", true]]) test(`sealed settle: ${group} requires eligible and intact first and settled censuses`, async (t) => {
+  let before, after, settled;
+  const f = await fixture(t, group, (row) => {
+    row.binding.validation = { artifactRoot: nativeArtifactRoot(group, "r17") };
+    row.context.bindingSha256 = deploymentSha256(row.binding);
+    const registration = structuredClone(controlFixture);
+    registration.binding.round = "r17"; registration.binding.commit = row.binding.request.commit;
+    const proc = (pid, startTicks, name, parentPid, cgroup, extra) => {
+      const fields = Array(49).fill("0"); fields[0] = parentPid; fields[5] = "4194304"; fields[18] = startTicks;
+      return { pid, startTicks, stat: `${pid} (${name}) S ${fields.join(" ")}\n`, cgroup, ...extra };
+    };
+    const apparatus = [...registration.members, registration.listener].map((p) => proc(p.pid, p.startTicks, "shell", p.parentPid, p.cgroup));
+    const cgroup = "0::/system.slice/systemd-udevd.service/udev\n";
+    const udevExecutable = { path: "/usr/lib/systemd/systemd-udevd", device: "2049", inode: "10" };
+    const daemon = proc(846, "812", "systemd-udevd", 1, cgroup, { udevExecutable });
+    const worker = proc(62274, "10603", "(udev-worker)", 846, cgroup, { udevExecutable });
+    const fields = (uptime, monoNs, ...processes) => ({ ...registration.host, uptime, processes: [...(offline ? [] : apparatus), daemon, ...processes],
+      ...(offline ? { offlineMonoNs: monoNs } : { controlApparatus: { registration,
+        sample: { host: registration.host, monoNs, members: registration.members, listener: registration.listener } } }) });
+    const bootId = registration.host.bootId;
+    row.context.bootId = row.terminal.bootId = bootId;
+    row.terminal.terminalClock = { bootId, uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" };
+    before = Object.assign(row.before, fields("100.00 1000.00\n", "2000000"));
+    after = Object.assign(row.after, fields("106.15 1280.10\n", "5000000", worker), { terminalClock: row.terminal.terminalClock });
+    settled = { ...row.after, ...fields("111.16 1330.20\n", "5015000000") };
+    delete settled.terminalClock;
+  }, true);
+  const settledPath = join(f.phase, "host-after-settled.json"), afterPath = join(f.phase, "host-after.json");
+  const sealPath = join(f.campaignRoot, "00007-phase-sealed.json");
+  const ingressPath = join(f.phase, "control-ingress.json");
+  if (offline) await f.save(ingressPath, { before: offlineFence(), after: offlineFence() });
+  const seal = () => f.save(sealPath, { schema: "benchmark-isolated-campaign-event/v1", kind: "phase-sealed", sequence: 7,
+    campaign: f.context.campaign, round: "r17", campaignSha256: f.campaignPlan.campaignSha256,
+    group, phase: "timing", artifactRoot: f.binding.validation.artifactRoot,
+    transferDestination: `00-${group}-timing/native`, nativeManifestSha256: tree(f.folder).sha256,
+    phaseManifestSha256: tree(f.phase).sha256, status: { executionVersion: offline ? 6 : 5 } });
+  const refuse = async (why) => {
+    const result = await f.inspect();
+    assert.equal(result.resources, "invalid", why);
+    assert.equal(result.cleanupComplete, false, why);
+  };
+
+  await refuse("no settlement must keep the first census strict");
+  await f.save(settledPath, settled);
+  await refuse("no phase seal");
+  await seal();
+  const native = await f.inspect();
+  assert.equal(native.status, "failed", "valid settlement, but targets still failed");
+  assert.equal(native.resources, "verified");
+  assert.equal(native.cleanupComplete, true);
+  assert.ok(native.outcomes.every((r) => r.outcome === "failed"));
+  if (offline) {
+    await f.save(ingressPath, { before: offlineFence(), after: {} });
+    await seal();
+    await refuse("a resealed but invalid offline fence");
+    await f.save(ingressPath, { before: offlineFence(), after: offlineFence() });
+    await seal();
+  }
+  await f.save(settledPath, { ...settled, at: "altered after the phase seal" });
+  await refuse("an altered census cannot use the old seal");
+  await f.save(settledPath, settled);
+  const { terminalClock: _clock, ...withoutClock } = f.terminal;
+  const terminalPath = join(f.host, "terminal.json");
+  await f.save(terminalPath, withoutClock);
+  await seal();
+  await refuse("copying a clock into the first census cannot replace lifetime evidence");
+  await f.save(terminalPath, f.terminal);
+  await f.save(afterPath, { ...after, terminalClock: { ...after.terminalClock, monoNs: "3000000" } });
+  await seal();
+  await refuse("resealing cannot substitute a different terminal clock");
+  await f.save(afterPath, { ...after, processes: before.processes });
+  await f.save(settledPath, { ...settled, bootId: "foreign" });
+  await seal();
+  await refuse("an invalid supplied settlement cannot downgrade to a clean first census");
+  await unlink(settledPath);
+  const ordinary = await f.inspect();
+  assert.equal(ordinary.cleanupComplete, true, "an ordinary clean first census needs no settlement");
 });
 
 for (const [name, mutate] of [

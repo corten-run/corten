@@ -12,7 +12,7 @@ import { inspectLifetime, composeHostProof } from "./host-lifetime.mjs";
 import { commandResult, composePhase } from "./composition.mjs";
 import { registrySchema } from "../registry.mjs";
 import { alternateCampaignPlacements } from "./contract.mjs";
-import { terminalClockPolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
+import { verifyHostBoundary, verifyLifetimeSettledBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -181,15 +181,13 @@ export async function validateCampaign(input) {
           if (offline) assert.equal(after.controlApparatus, undefined);
           const settlePath = `${entry.path}/host-after-settled.json`;
           if (subtree.entries.some((e) => e.path === settlePath)) {
-            const settlePolicy = status.executionVersion === 5 || offline
-              ? terminalClockPolicy(recorded.binding, recorded.invocations.at(-1), round, phase) : null;
-            const lifetime = hostObservations.at(recorded.results.length - 1);
-            assert.ok(settlePolicy && recorded.results.length === recorded.invocations.length && lifetime?.status === "verified"
-              && lifetime.cleanupComplete && lifetime.terminalClock, "udev settle lacks an eligible sealed terminal lifetime");
+            assert.ok((status.executionVersion === 5 || offline) && recorded.results.length === recorded.invocations.length,
+              "udev settle lacks an eligible sealed terminal lifetime");
             settled = read(`${id}/${settlePath}`);
             if (offline) assert.equal(settled.controlApparatus, undefined);
             if (streamSeal) assert.ok(BigInt(settled.controlApparatus.sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
-            boundary = verifySettledHostBoundary(hostBefore, after, settled, lifetime.terminalClock, settlePolicy, offline);
+            boundary = verifyLifetimeSettledBoundary({ binding: recorded.binding, invocation: recorded.invocations.at(-1), round, phase,
+              lifetime: hostObservations.at(recorded.results.length - 1), before: hostBefore, after, settled, offline });
           } else boundary = verifyHostBoundary(hostBefore, after);
         }
         catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
