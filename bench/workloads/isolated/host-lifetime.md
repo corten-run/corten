@@ -236,8 +236,10 @@ during startup: the first writer operation, its allowlisted code (or
 A timed-out wait identifies the active writer stage if one is known. Record,
 directory and final sample closes are distinct from sync. Startup retains the
 writer's first fault even if cleanup later fails. When the supervisor reports
-its setup deadline and interrupts a pending writer, the halt can name the stage
-without waiting for I/O or treating ordinary cancellation as a storage fault.
+its setup deadline as the first interruption of a pending writer, the halt can
+name the stage without waiting for I/O. When attachment is still draining, the
+campaign journals the supervisor outcome without finishing the disposed observer.
+An earlier leader exit or ordinary cancellation is not a writer deadline.
 These labels do not contain exception text, paths or process details. A frame
 limit reports a full queue, not why the writer fell behind. No terminal seal
 is published on this path.

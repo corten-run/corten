@@ -721,7 +721,8 @@ for (const [fault, shutdown = "drained"] of [
   }
 });
 
-for (const kind of ["fault", "fault then cleanup failure", "cancel", "cancel then fault", "deadline", "cancel through deadline", "deadline then cancel"])
+for (const kind of ["fault", "fault then cleanup failure", "cancel", "cancel then fault", "deadline", "cancel through deadline",
+  "deadline then cancel", "exit through deadline", "attachment deadline"])
 test(`actual campaign startup storage: ${kind} preserves only a real writer diagnostic`, { timeout: 15000 }, async (t) => {
   t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
   const s = setupGroup("client-heavy"); s.plan.round = "r21";
@@ -737,7 +738,9 @@ test(`actual campaign startup storage: ${kind} preserves only a real writer diag
   const directory = join(h.directory, "00-client-heavy-timing"), host = join(directory, "command-0-host");
   const sample = join(host, "samples.jsonl");
   const held = !kind.startsWith("fault");
-  const pause = held ? f.pause("open", (path) => path === sample) : null;
+  const attaching = kind === "attachment deadline", earlyExit = kind === "exit through deadline";
+  const pause = attaching ? f.pause("sync", (path) => path.startsWith(join(host, "processes")) && path.endsWith(".json"))
+    : held ? f.pause("open", (path) => path === sample) : null;
   const before = f.before;
   const deadline = kind.includes("deadline"), earlyCancel = kind.startsWith("cancel"), lateCancel = kind === "deadline then cancel";
   if (deadline) t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -761,6 +764,7 @@ test(`actual campaign startup storage: ${kind} preserves only a real writer diag
   try {
     if (pause) await pause.entered;
     if (earlyCancel) parent.abort();
+    if (earlyExit) run.child.emit("exit", 0, null);
     if (deadline) t.mock.timers.tick(30000);
     if (lateCancel) parent.abort();
     await Promise.race([cancelled, advancing.then(() => { throw new Error("startup did not request owned cancellation"); })]);
@@ -769,16 +773,26 @@ test(`actual campaign startup storage: ${kind} preserves only a real writer diag
     assert.throws(() => s.campaign.stop(h), /wait for owned command shutdown/);
     if (!deadline) pause?.release();
     run.child.close(0);
-    assert.match((await advancing)?.message, /lifetime or cleanup unproven/);
+    const error = await advancing;
     const files = readdirSync(h.directory);
-    const exited = JSON.parse(readFileSync(join(h.directory, files.find((name) => name.endsWith("-command-exited.json")))));
+    const exitFile = files.find((name) => name.endsWith("-command-exited.json"));
+    assert.ok(exitFile, "supervisor outcome must be journaled before halt, while attachment I/O is still held");
+    const exited = JSON.parse(readFileSync(join(h.directory, exitFile)));
+    assert.match(error?.message, /lifetime or cleanup unproven/);
     if (!held) assert.equal(exited.error, "native host observation setup failed");
     if (deadline) assert.equal(exited.error, "native host observation setup incomplete");
     assert.equal(exited.cancelled, true); assert.equal(exited.success, false);
     assert.equal(exited.hostManifestSha256, undefined);
     const halted = readFileSync(join(h.directory, files.find((name) => name.endsWith("-halted.json"))), "utf8");
-    const code = deadline && !earlyCancel ? "ETIMEDOUT" : kind.includes("fault") ? "EIO" : undefined;
-    assert.deepEqual(JSON.parse(halted).hostStorageFailure, code ? { operation: "sample-open", code } : undefined);
+    const halt = JSON.parse(halted);
+    assert.ok(exited.sequence < halt.sequence, "the observed command exit precedes the halt");
+    const code = deadline && !earlyCancel && !earlyExit ? "ETIMEDOUT" : kind.includes("fault") ? "EIO" : undefined;
+    assert.deepEqual(halt.hostStorageFailure,
+      code ? { operation: attaching ? "process-record-sync" : "sample-open", code } : undefined);
+    if (attaching) {
+      assert.ok(f.live.size > 0, "the writer still owns the held fsync");
+      assert.equal(f.removed, false);
+    }
     assert.equal(openFaults, code === "EIO" ? 1 : 0);
     assert.equal(cleanupFaults, kind === "fault then cleanup failure" ? 1 : 0);
     if (cleanupFaults) assert.equal(f.removed, false);
@@ -793,6 +807,49 @@ test(`actual campaign startup storage: ${kind} preserves only a real writer diag
     await advancing; await run.setup?.catch(() => {});
     lifetimeRun = null;
   }
+});
+
+test("actual campaign compiler cleanup preserves its wrapped writer fault", { timeout: 15000 }, async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  const s = setupGroup("client-heavy"); s.plan.round = "r21";
+  s.plan.bindings[0].preparation.fixtures = [];
+  const h = await begin(s);
+  t.mock.method(globalThis, "setInterval", () => null);
+  const windows = process.platform === "win32";
+  const f = await samplingControl(t);
+  f.before = (step) => step === "sync" ? null : undefined;
+  await f.finish(); f.removed = false;
+  const target = `${join(repo, s.plan.bindings[0].validation.artifactRoot)}.compiler`;
+  if (windows) {
+    const exec = childProcess.execFileSync;
+    t.mock.method(childProcess, "execFileSync", (file, args, ...rest) => {
+      if (file !== "/bin/mv") return exec(file, args, ...rest);
+      assert.equal(args[0], "-n"); assert.equal(args[2], fs.realpathSync(dirname(target)));
+      renameSync(args[1], target);
+    });
+  }
+  let cleanupFaults = 0;
+  const rmdir = fs.rmdirSync;
+  t.mock.method(fs, "rmdirSync", (path, ...args) => {
+    if (String(path).startsWith(join(fs.realpathSync(dirname(target)), ".compiler-owner-"))) {
+      cleanupFaults++; throw new Error("PRIVATE_COMPILER_CLEANUP");
+    }
+    return rmdir(path, ...args);
+  });
+  syncBuiltinESMExports();
+  const host = join(h.directory, "00-client-heavy-timing/command-0-host");
+  f.before = (step, path) => { if (step === "sync" && path === join(host, "samples.jsonl")) throw ioError(); };
+  const run = lifetimeRun = { started: false, cancels: 0, start() { f.members = []; run.child.close(0); } };
+  try {
+    await assert.rejects(s.campaign.advance(h), (error) => /compiler target cleanup failed/.test(error.message) && error.cause?.code === "EIO");
+    const halted = readdirSync(h.directory).find((name) => name.endsWith("-halted.json"));
+    const saved = readFileSync(join(h.directory, halted), "utf8");
+    assert.deepEqual(JSON.parse(saved).hostStorageFailure, { operation: "sample-sync", code: "EIO" });
+    assert.ok(!/PRIVATE_(?:COMPILER|STORAGE)/.test(saved));
+    assert.equal(run.started, true); assert.equal(cleanupFaults, 1);
+    assert.equal(existsSync(target), true); assert.equal(existsSync(join(host, "terminal.json")), false);
+    assert.equal(s.campaign.status(h).state, "preserved-uncertain");
+  } finally { lifetimeRun = null; }
 });
 
 test("actual campaign attachment gap cancels before native start or interval creation", { timeout: 15000 }, async (t) => {

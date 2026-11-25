@@ -10,7 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { validateCampaign, freeze, jsonPhase, mixedPhase, offlineAuditRemainingMs, verifyOfflineAuditStart } from "./campaign-contract.mjs";
 import { verifyWorkingSources } from "./worker.mjs";
 import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, publishDurable, readRegular, syncDirectory, transferEvidence, tree } from "./evidence.mjs";
-import { supervise } from "./process.mjs";
+import { interruptedByStartupDeadline, supervise } from "./process.mjs";
 import { observeHost, sampleAuditClock, udevSettleCandidates, udevSettleMs, udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
@@ -99,7 +99,8 @@ export function createCampaign({ authorize }) {
     }
     if (expiry) event(c, "offline-audit-expired", expiry);
     else {
-      const storage = c.startupStorageFailure ?? hostStorageFailure(error);
+      const storage = c.startupStorageFailure ?? hostStorageFailure(error)
+        ?? hostStorageFailure(Object.getOwnPropertyDescriptor(error, "cause")?.value);
       event(c, "halted", { error: error.message, ...(storage ? { hostStorageFailure: storage } : {}) });
     }
     save(c, "campaign-result.json", { status: status(c), wholeHostTerminal: "parent-must-observe", deletionAuthorized: false });
@@ -120,8 +121,7 @@ export function createCampaign({ authorize }) {
     const number = c.commandIndex++, path = `${directory}/command-${number}.log`, fd = openSync(join(c.directory, path), "wx", 0o600);
     const hostDirectory = join(c.directory, directory, `command-${number}-host`);
     const startupDiagnostic = trackHostStorageStartup(hostDirectory);
-    let result, observer, hostManifestSha256, pid;
-    let startupInterruptedByCommand = false;
+    let result, observer, hostManifestSha256, pid, attached = false;
     try {
       event(c, "command-intent", { group: binding.request.group, invocation });
       if (compilerTarget) compilerTarget.settled = false;
@@ -131,8 +131,6 @@ export function createCampaign({ authorize }) {
         log(bytes) { let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset, bytes.length - offset); assert.ok(n > 0); offset += n; } },
         async onStart(value, startupSignal) {
           pid = value; event(c, "command-started", { pid });
-          const interrupted = () => { startupInterruptedByCommand = commandSignal.aborted; };
-          startupSignal.addEventListener("abort", interrupted, { once: true });
           try {
             observer = await beginLifetime({ campaign: c.handle.id, binding, invocation,
               directory: hostDirectory, command: number, pid, signal: commandSignal, startupSignal,
@@ -140,25 +138,24 @@ export function createCampaign({ authorize }) {
             startupSignal.throwIfAborted();
             await observer.attach(pid);
             startupSignal.throwIfAborted();
+            attached = true;
           } catch (error) {
             observer?.dispose(); observer = undefined; throw error;
-          } finally { startupSignal.removeEventListener("abort", interrupted); }
+          }
         },
       });
     } finally {
-      // Use the existing supervisor deadline outcome, not elapsed time or a
-      // new timer. An external cancellation is not a writer timeout.
-      const storage = startupDiagnostic(!startupInterruptedByCommand && result?.error === "native host observation setup incomplete");
-      if (!observer && storage) c.startupStorageFailure = storage;
+      const storage = startupDiagnostic(interruptedByStartupDeadline(result));
+      if (!attached && storage) c.startupStorageFailure = storage;
       try { fsyncSync(fd); } finally { closeSync(fd); }
     }
     c.files.push({ path, sha256: digest(readRegular(join(c.directory, path))) });
     const settled = compilerTarget ? () => { compilerTarget.settled = true; } : undefined;
-    if (observer) {
+    if (attached) {
       const manifest = await observer.finish(result, retainTerminalClock, settled); hostManifestSha256 = manifest.sha256;
       for (const file of manifest.entries.filter((e) => e.type === "file")) c.files.push({
         path: `${directory}/command-${number}-host/${file.path}`, sha256: file.sha256 });
-    } else if (result.terminal) settled?.(); // The gate never admitted this child.
+    } else if (result.terminal && !observer) settled?.(); // No live attachment owns setup.
     event(c, "command-exited", { ...result, ...(hostManifestSha256 ? { hostManifestSha256 } : {}) });
     assert.equal(result.terminal, true, "native process is not observed terminal");
     const lifetime = hostManifestSha256 ? inspectLifetime(binding, invocation,
