@@ -20,14 +20,21 @@ registerHooks({
 });
 
 // A k6 engine in memory: the clock and iteration the script reads, the metrics it adds to, and the
-// status each request gets.
+// status each request gets. Each http.get moves the engine clock on by `latencyMs`, as a request
+// that takes that long does, so a test can start a request in one window and complete it in the next.
 function engine() {
-  const k6 = { now: 0, iteration: 0, status: 200, metrics: new Map(), requests: [] };
+  const k6 = { now: 0, iteration: 0, status: 200, latencyMs: 0, metrics: new Map(), requests: [] };
   const metric = (name, type) => { assert.ok(!k6.metrics.has(name), `metric ${name} defined twice`); k6.metrics.set(name, { type, values: [] }); return name; };
   k6.Counter = class { constructor(name) { this.name = metric(name, "counter"); } add(v) { k6.metrics.get(this.name).values.push(v); } };
   k6.Trend = class { constructor(name, isTime) { assert.equal(isTime, true); this.name = metric(name, "trend"); } add(v) { k6.metrics.get(this.name).values.push(v); } };
   k6.http = {
-    get(url, params) { const r = { status: k6.status, timings: { duration: 3 + k6.requests.length }, headers: { "Content-Type": "text/html; charset=utf-8" } }; k6.requests.push({ url, params, ...r }); return r; },
+    get(url, params) {
+      const startedAt = k6.now;
+      k6.now += k6.latencyMs;
+      const r = { status: k6.status, timings: { duration: k6.latencyMs || 3 + k6.requests.length }, headers: { "Content-Type": "text/html; charset=utf-8" } };
+      k6.requests.push({ url, params, startedAt, completedAt: k6.now, ...r });
+      return r;
+    },
     setResponseCallback() {}, expectedStatuses: (...statuses) => statuses,
   };
   k6.check = (response, checks) => Object.values(checks).every((fn) => fn(response));
@@ -80,4 +87,21 @@ test("window-load.js writes the engine clock k6 reports, unrounded, and refuses 
   assert.deepEqual(script.handleSummary({ state: { testRunDurationMs: 40_000.5 } }), { "/tmp/marketplace-clock.json": JSON.stringify({ testRunDurationMs: 40_000.5 }) });
   await assert.rejects(load({ ...closed, MODE: "open" }), /MODE must be fixed or closed/);
   await assert.rejects(load({ ...closed, WINDOWS: "0" }), /WINDOWS and WINDOW_SECONDS must be positive integers/);
+});
+
+test("window-load.js counts a request that starts before a boundary and completes after it in the later window, by its completion", async () => {
+  const { k6, script } = await load(closed);
+  // Each request takes 2 ms of engine clock. One starts 1 ms before the first boundary, one 1 ms
+  // before the end of the last window, and one well inside the first window.
+  k6.latencyMs = 2;
+  for (const [start, status] of [[1000, 200], [14_999, 500], [29_999, 200]]) { k6.now = start; k6.status = status; script.default(); k6.iteration++; }
+  assert.deepEqual(k6.requests.map((r) => [r.startedAt, r.completedAt]), [[1000, 1002], [14_999, 15_001], [29_999, 30_001]]);
+  const count = (name) => (k6.metrics.get(name)?.values ?? []).reduce((a, b) => a + b, 0);
+  // The one started at 14,999 ms completed at 15,001 ms: it counts in window 1, with its failure and
+  // its latency there; the one started at 29,999 ms completed after the last window: the tail.
+  assert.deepEqual([count("window_0_requests"), count("window_1_requests"), count("window_0_failed"), count("window_1_failed"), count("window_tail_requests")], [1, 1, 0, 1, 1]);
+  assert.deepEqual([k6.metrics.get("window_0_duration").values, k6.metrics.get("window_1_duration").values], [[2], [2]]);
+  const read = readWindows(summaryExport(k6, 3), { windows: 2, windowSeconds: 15 });
+  assert.deepEqual(read.windows.map((w) => [w.requests, w.failed]), [[1, 0], [1, 1]]);
+  assert.equal(read.tail, 1);
 });
