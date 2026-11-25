@@ -145,6 +145,9 @@ test("a saved k6 image other than the pin is refused by the pin and hint, and a 
     [(v) => { v.k6.versionOutput = saved; }, "k6.versionOutput"]]) {
     probe("tools.json", edit, (cause) => !(cause instanceof ImagePinRefusal) && cause.message.endsWith(` differs at ${field}`));
   }
+  for (const edit of [(v) => { v.SAVEDKEYCANARY = v.k6; }, (v) => { delete v.checker; v.SAVEDKEYCANARY = {}; }]) {
+    probe("tools.json", edit, (cause) => cause.message === "tools.json has a missing or unexpected tool" && !inspect(cause).includes("SAVEDKEYCANARY"));
+  }
   assert.ok(validateSaved(args), "restored evidence replays");
 });
 

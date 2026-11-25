@@ -14,6 +14,8 @@ import { savedFiles } from "./saved-files.mjs";
 import { assertSameEvidence, verifyK6Provenance } from "../load-tool.mjs";
 
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "invalid receipt timestamp"); return n; };
+const record = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const sameKeys = (v, keys) => Object.keys(v).length === keys.length && keys.every((key) => Object.hasOwn(v, key));
 const exactKeys = (v, keys) => assert.deepEqual(Object.keys(v ?? {}).sort(), [...keys].sort(), "missing/extra raw participants");
 const id = (s) => assert.match(s, /^[a-f0-9]{64}$/);
 const imageId = (s) => assert.ok(typeof s === "string" && /^sha256:[a-f0-9]{64}$/.test(s), "malformed image ID");
@@ -167,7 +169,9 @@ function replay({ folder, round, commit }) {
   pinned(cpu.image, nodeImage);
   mounts(cpu, [["/bench", benchMount], ["/sys/fs/cgroup", "/sys/fs/cgroup"]]);
   assert.deepEqual(cpu.cmd, ["node", "-e", "setInterval(() => {}, 1000)"]);
-  const toolImages = files.json("tools.json"); exactKeys(toolImages, ["upstream", "checker", "k6"]);
+  const toolImages = files.json("tools.json");
+  // Saved keys are not printed: an extra or missing tool is refused without naming it.
+  assert.ok(record(toolImages) && sameKeys(toolImages, ["upstream", "checker", "k6"]), "tools.json has a missing or unexpected tool");
   // Saved tool receipts are refused by field, never printed.
   verifyK6Provenance(s.tools.k6, { verb: "validate", commit });
   for (const field of ["platform", "version", "versionOutput"]) assert.ok(toolImages.k6[field] === s.tools.k6[field], `retained k6 executable probe differs at k6.${field}`);

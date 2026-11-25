@@ -35,23 +35,33 @@ export function assertPinned(image, pin, { tool, verb, commit } = {}) {
 }
 
 const record = (value) => value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
-// Saved keys are named only when they look like a field name.
-const fieldName = (key) => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(key) ? key : "(unnamed field)";
-function differingField(actual, expected, path) {
+// A key is named only when this checkout defines it (`known`): a saved key, however field-like it
+// looks, is saved text. A key one side lacks is an unexpected field; a differing value under a key
+// the checkout does not name is an unnamed field.
+function differingField(actual, expected, path, known) {
   if (record(actual) && record(expected)) {
     for (const key of new Set([...Object.keys(expected), ...Object.keys(actual)])) {
-      const field = path ? `${path}.${fieldName(key)}` : fieldName(key);
-      if (!Object.hasOwn(actual, key) || !Object.hasOwn(expected, key)) return field;
-      if (!isDeepStrictEqual(actual[key], expected[key])) return differingField(actual[key], expected[key], field);
+      const both = Object.hasOwn(actual, key) && Object.hasOwn(expected, key);
+      if (both && isDeepStrictEqual(actual[key], expected[key])) continue;
+      const name = known.has(key) ? key : both ? "(unnamed field)" : "(unexpected field)";
+      const field = path ? `${path}.${name}` : name;
+      return both && known.has(key) ? differingField(actual[key], expected[key], field, known) : field;
     }
   }
   return path || "the whole value";
 }
 
-/** Refuses unless isDeepStrictEqual holds, naming the first differing field rather than diffing either value. */
-export function assertSameEvidence(actual, expected, message, path = "") {
-  if (!isDeepStrictEqual(actual, expected)) assert.fail(`${message} at ${differingField(actual, expected, path)}`);
+/**
+ * Refuses unless isDeepStrictEqual holds, naming the first differing field rather than diffing
+ * either value. `known` lists the key names this checkout defines; only those are printed, so both
+ * operands may be saved evidence.
+ */
+export function assertSameEvidence(actual, expected, message, path = "", known = []) {
+  if (!isDeepStrictEqual(actual, expected)) assert.fail(`${message} at ${differingField(actual, expected, path, new Set(known))}`);
 }
+
+/** The fields of k6Provenance's record, which this checkout defines. */
+export const k6Fields = Object.freeze(["image", "imageId", "repoDigests", "platform", "version", "versionOutput"]);
 
 /** `replay` ({ verb, commit }) adds the measured-checkout hint to a pin refusal. */
 export function verifyK6Provenance(value, replay) {
@@ -62,8 +72,8 @@ export function verifyK6Provenance(value, replay) {
   field(typeof value.imageId === "string" && /^sha256:[a-f0-9]{64}$/.test(value.imageId), "imageId");
   field(Array.isArray(value.repoDigests) && value.repoDigests.includes(k6Image), "repoDigests");
   field(typeof value.versionOutput === "string" && releaseOf(value.versionOutput.trim()) === k6Version, "versionOutput");
-  assertSameEvidence(value, k6Provenance({ Id: value.imageId, RepoDigests: value.repoDigests,
-    Os: "linux", Architecture: "amd64" }, value.versionOutput), "retained k6 provenance differs");
+  const expected = k6Provenance({ Id: value.imageId, RepoDigests: value.repoDigests, Os: "linux", Architecture: "amd64" }, value.versionOutput);
+  assertSameEvidence(value, expected, "retained k6 provenance differs", "", k6Fields);
 }
 
 // The caller's Docker command keeps its timeout, cancellation and logging policy.

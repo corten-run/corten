@@ -799,11 +799,13 @@ test("catalog replay refuses a retained tool image other than the pin by the pin
 
 test("catalog replay still refuses a non-pin tool sidecar difference, naming the field and not the saved text", () => {
   for (const [make, edit, field] of [[fixture, (tools) => { tools.upstream.imageId = savedImage; }, "upstream.imageId"],
-    [fixture, (tools) => { tools.k6.note = savedImage; }, "k6.note"],
+    [fixture, (tools) => { tools.k6.note = savedImage; }, "k6.(unexpected field)"],
+    [fixture, (tools) => { tools.SAVEDKEYCANARY = { image: 1 }; }, "(unexpected field)"],
+    [fixture, (tools) => { tools.k6.SAVEDKEYCANARY = 1; }, "k6.(unexpected field)"],
     [failedFixture, (tools) => { tools.checker.execution.Cmd = [savedImage]; }, "checker.execution.Cmd"]]) {
     const f = make(); editTools(f, edit);
     assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), (e) => !(e instanceof ImagePinRefusal)
-      && e.message === `tool observations differ at ${field}` && !inspect(e).includes(savedImage), field);
+      && e.message === `tool observations differ at ${field}` && !inspect(e).includes(savedImage) && !inspect(e).includes("SAVEDKEYCANARY"), field);
   }
 });
 

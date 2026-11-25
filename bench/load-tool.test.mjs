@@ -68,16 +68,31 @@ test("a saved k6 image other than the pin is refused by the pin and hint, never 
 
 test("a saved k6 provenance that differs other than by its pin is refused naming the field, never the saved text", () => {
   const value = k6Provenance(image, versionOutput), saved = "SAVED-TEXT-CANARY";
-  for (const [change, field] of [[{ extra: saved }, "extra"], [{ [`${saved} key`]: 1 }, "(unnamed field)"],
+  for (const [change, field] of [[{ extra: saved }, "(unexpected field)"], [{ SAVEDKEYCANARY: 1 }, "(unexpected field)"], [{ [`${saved} key`]: 1 }, "(unexpected field)"],
     [{ imageId: saved }, "imageId"], [{ repoDigests: [saved] }, "repoDigests"], [{ versionOutput: `k6 v2.3.0 ${saved}` }, "versionOutput"],
     [{ versionOutput: ` ${versionOutput} ${saved}` }, "versionOutput"], [{ version: `2.4.0 ${saved}` }, "version"]]) {
     assert.throws(() => verifyK6Provenance({ ...value, ...change }, { verb: "verify", commit: "c".repeat(40) }), (e) => !(e instanceof ImagePinRefusal)
       && e.message === `retained k6 provenance differs at ${field}` && !inspect(e).includes(saved), field);
   }
   assertSameEvidence({ a: [1, { b: saved }] }, { a: [1, { b: saved }] }, "unused");
-  assert.throws(() => assertSameEvidence({ a: { b: saved } }, { a: { b: "other" } }, "differs"), (e) => e.message === "differs at a.b" && !inspect(e).includes(saved));
+  assert.throws(() => assertSameEvidence({ a: { b: saved } }, { a: { b: "other" } }, "differs", "", ["a", "b"]), (e) => e.message === "differs at a.b" && !inspect(e).includes(saved));
   assert.throws(() => assertSameEvidence([saved], ["other"], "differs", "list"), (e) => e.message === "differs at list" && !inspect(e).includes(saved));
-  assert.throws(() => assertSameEvidence({ a: undefined }, {}, "differs"), (e) => e.message === "differs at a", "an absent field is not an undefined one");
+  assert.throws(() => assertSameEvidence({ a: undefined }, {}, "differs", "", ["a"]), (e) => e.message === "differs at a", "an absent field is not an undefined one");
+});
+
+test("a saved key is never printed, however field-like, even when both operands are saved", () => {
+  const canary = "SAVEDKEYCANARY";
+  const refused = (actual, expected, at, known = ["tool"]) => assert.throws(() => assertSameEvidence(actual, expected, "differs", "", known),
+    (e) => e.message === `differs at ${at}` && !inspect(e).includes(canary), at);
+  refused({ [canary]: 1 }, {}, "(unexpected field)");
+  refused({}, { [canary]: 1 }, "(unexpected field)", []);
+  refused({ [canary]: 1 }, { [canary]: 2 }, "(unnamed field)");
+  refused({ tool: { [canary]: 1 } }, { tool: { [canary]: 2 } }, "tool.(unnamed field)");
+  refused({ tool: { [canary]: { deeper: 1 } } }, { tool: {} }, "tool.(unexpected field)");
+  refused({ a: { b: 1 } }, { a: { b: 2 } }, "(unnamed field)", []);
+  assertSameEvidence({ [canary]: { b: 1 } }, { [canary]: { b: 1 } }, "unused");
+  const provenance = k6Provenance(image, versionOutput);
+  assert.throws(() => verifyK6Provenance({ ...provenance, [canary]: 1 }), (e) => e.message === "retained k6 provenance differs at (unexpected field)" && !inspect(e).includes(canary));
 });
 
 test("all four suites import the shared pin, and legacy cleanup follows it", () => {
