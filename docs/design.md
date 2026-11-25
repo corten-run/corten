@@ -9267,7 +9267,8 @@ rules something out.
     before `main` gave a band is read without one, so nobody is held to a rule `main` did not
     show them and no reading changes what it decided. The band is the same whatever reads the
     workload, `bench/fullstack/count.mjs` or a probe, so nothing is gained against it by
-    choosing one. The test gives what it gives with a spread of the setup's own. A negative
+    choosing one (but for the catalog's two targets, below). The test gives what it gives with a
+    spread of the setup's own. A negative
     control keeps [design Choice 71](#choice-layout-floor)'s rule. Each threshold a plan
     declared for a workload, its margin and a reduction, is tested on its own distance: one
     outside stays as one build read it, whatever a placement run then reads, and one inside is
@@ -9286,10 +9287,85 @@ rules something out.
     adapted the kit before it, under its evidence tag; on 2026-11-24 no script under `bench/`
     did any of it (`df9242b56`); `bench/placement` now does, for a probe a plan file names, and
     no run has been read from it; and no run has read the image `count.mjs` starts across
-    placements, which that kit does not read either, so the first catalog target the band leaves
-    not decided has that to build. The
+    placements, which that kit does not read either, so a catalog target the band leaves not
+    decided has that to build, unless its plan names a probe workload for it that is read
+    across placements (The catalog's `page` and `json`, below). The
     band is a default by policy, not a bound on what placement moves on a setup nobody has read
     (Stands on, bet).
+
+    The catalog's `page` and `json`. Pull requests (item 2.1) has a change that the catalog's
+    item page or item JSON exercises counted with `bench/fullstack/count.mjs`, targets `page`
+    and `json`: one build of each side, in the image that script starts. Under the default band
+    a count whose bound's distance from its threshold is inside the band is not decided, does
+    not pass and is to be read across placements, and nothing reads that image across
+    placements: `bench/placement` reads a probe Cargo builds, and nothing else in the tree
+    gives a linker the ordering file a placement is made with. A change that touches every
+    request is exercised by both targets. As the rule stood it could meet the margin on them
+    only with a bound under -1.98% on one build of each side, which a change that leaves a
+    request as fast as it was does not reach by what it costs, and nothing else it could run
+    would decide them. The
+    maintainer decided the case on 2026-11-25 (UTC) for the four pull requests then open that
+    touch every request, none merged when this was written
+    ([#2029 Keep one deadline timer for a connection's requests](https://github.com/corten-run/corten/pull/2029),
+    [#2037 Answer 400 to a request HTTP/1.1 does not allow: no Host, two Host lines, a Host that is no host](https://github.com/corten-run/corten/pull/2037),
+    [#2066 Poll a connection's wait for shutdown only when the wait was woken, not at every wake of its task](https://github.com/corten-run/corten/pull/2066)
+    and
+    [#2067 Give an answer that brings none of its scope's header lines all of them in one pass](https://github.com/corten-run/corten/pull/2067);
+    the decision is
+    [a comment on the third](https://github.com/corten-run/corten/pull/2066#issuecomment-7173404420),
+    posted in the same words on the other three), and Pull requests states it as the rule for a
+    plan declared once it is on `main`. The probe decides: the workloads a plan reads across
+    placements on a probe are the reading this Choice takes for a change's cost on a touched
+    workload, each side at K placements with an A/A that says what the run resolves. A count on
+    one build of each side inside the band says where the image's
+    code landed, not what the change costs (The default band, above), and it had no reading
+    across placements to go to. Which plans the case covers, what is still counted and when it
+    is declared, what binds, what a count inside the band is reported as and where a failed
+    count goes are in
+    [Pull requests](../CONTRIBUTING.md#pull-requests) (item 2, with the default band) and are
+    not said again here; these are the reasons. The plan names, for each target the change
+    exercises, the probe workload that runs the changed code that target's request runs, with a
+    reason the review accepts, as a negative control's is. The decision's "on the path the
+    change touches" would by itself be met by a workload that reaches the changed code on
+    another branch than the target's request takes, or runs it once where the request runs it
+    many times, and such a workload says little of what the change costs the target. A workload
+    on that path may be read across placements for the case whatever a single build of it read.
+    The rule leaves a placement run only the thresholds one build read inside, so a change
+    whose probe workloads one build each read outside its spread or the band would have no
+    reading across placements, and its counts inside the band could not pass though nothing
+    about them differs. What that build read still binds, so the reading made for the case
+    decides nothing for the workload (read the other way, it is one of this Choice's
+    Revisit-when conditions). The maintainer decided both, the match and the reading made
+    whatever one build read, on the first review of
+    [#2109 Let a probe read across placements decide a change's cycles, and count the catalog's page and JSON once under such a plan](https://github.com/corten-run/corten/pull/2109),
+    whose description records the answers. Three sentences of item 2 beside them are that pull
+    request's reading and not the maintainer's wording. A workload named for a target brings it
+    under the case only if its A/A resolves and its bound is under +1%, because that reading is
+    what stands in for the image; the pull request's second review finds the condition implied
+    by item 2's rule for any reading across placements. A target with no named workload waits
+    for a plan of the pull request that names one. And a workload named for a target is not
+    replaced after it is read, since a pull request that named workloads until one met the
+    margin would gain by choosing what reads a workload, which the rule that a declaration is
+    never added or changed after a run to clear its result already bars. The count is kept for
+    what a probe is not: it
+    is the only reading of the change in the catalog's own image, and outside the band it binds
+    for the margin as it did, whatever the probe read. It is declared before the plan's first
+    turn and before it is taken, so it is not chosen by its result, and a count an earlier plan
+    of the pull request took is a later plan's too, since a second count could not clear the
+    first and could leave the pull request two binding readings of one target that disagree.
+    A count is not taken again for its result, since one taken until it lands outside the band
+    would be chosen by its result, as a placement run again for its result would be.
+
+    The limit of that case: the catalog's image is never read across placements. A cost that
+    only that image shows, or that it shows more of than the workload named for the target
+    does, and that leaves the count's distance inside the band (for the margin, a bound up to
+    +4.33% today), is seen by no reading, and the change passes with it (Stands on, bet). The
+    case is no wider than its words: the two targets alone; the default band, no spread being
+    recorded for that image; and a target for which the plan names a probe workload read across
+    placements. A change to code that only the catalog's image runs has no such workload until
+    a probe has a request that runs it, and the reading across placements its targets would go
+    to is still to build. A plan declared before the case was on `main` is read by the rule as it
+    then stood; the four pull requests' plans go by the decision as it was posted.
 
     How many placements. A plan declares each workload's K before the run, for at most a 5% chance
     that an A/A of a commit against itself fails one of its two readings, sized from an eligible
@@ -10018,6 +10094,19 @@ rules something out.
     which rests on a report of what a request runs that nothing a run keeps can verify: the
     load, the host and the tool that decide it are an author's to choose with results in hand,
     and the one answer that keeps a reading is a function reported as not run.
+    For the catalog's `page` and `json`: the rule left as it stood, under which a change that
+    touches every request meets the margin on them only where one build of each side reads
+    under the band, the draw this Choice does not gate on; one build of each side deciding the
+    two at any distance, which holds the catalog's image to less than a probe and lets a plan
+    gain by choosing what reads a workload; the two counts dropped under such a plan, which
+    leaves a cost on the catalog's image unread at any size, where a count outside the band
+    still binds; such a change held until a tool reads the image across placements, which
+    holds it for a tool and not for a cost, when a probe workload on its path is read across
+    placements under the rule as it is; the match left at the decision's "on the path the
+    change touches", which a workload that runs the changed code on another branch than the
+    target's request takes would meet; and the case kept from a change whose probe workloads
+    one build each read outside the band, which would hold back the changes whose probe
+    workloads read most clearly.
 
     Stands on: measured (the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
@@ -10079,7 +10168,16 @@ rules something out.
     a line under the pads are its unpadded offset and each multiple of A from it, one behind
     64 and two behind 32 alone, which are the places its side's builds give it until the code
     between it and the aligned section before it changes, so what such a place costs or saves
-    a request belongs to the change that set it for as long as later builds keep it);
+    a request belongs to the change that set it for as long as later builds keep it; a count of
+    one build of each side of the catalog's image inside the default band is a reading
+    placement has been seen to account for, as any single build's is, so it says where the
+    image's code landed, while the change read across placements on the probe workload its
+    plan names for the target is the reading this Choice takes for a change's cost; a workload
+    read across placements for that case after one build read it outside the band clears
+    nothing, that build's reading still binding; and a count declared before the
+    plan's first turn and before it is taken, and taken once for a pull request, is not chosen
+    by its result, nor is a workload named for a target before the run and not replaced after
+    it is read);
     bet
     (moving the whole of the code by declared offsets varies placement about as much as real
     changes do, though a real change moves only the code after it and by sizes no plan chose, so
@@ -10114,9 +10212,15 @@ rules something out.
     offsets stand in for real changes, though a real change also resizes the sections
     between the code and the data, which a pad does not; a spread recorded with one pad,
     and a K sized from an A/A read with one, hold for a run with two, and a spread recorded
-    with two for a run with one; and where a listed function lies in a line, which the pads
+    with two for a run with one; where a listed function lies in a line, which the pads
     leave at one place or at two 32 bytes apart, moves a request's cycles by little beside
-    +1%: no run has measured it);
+    +1%: no run has measured it; and a cost a change adds to the catalog's `page` or `json`
+    that leaves its count inside the default band is one the probe workload its plan names for
+    that target shows across placements too, the match resting on a reason a review read and
+    accepted and no run measured, so that what the catalog's image shows alone, or shows more
+    of than that workload, is small beside +1% or large enough to leave the band: nothing has
+    read a change on a probe and on that image side by side, and no tool reads the image across
+    placements);
     value
     (Fast, and proven fast: a touched
     request's cost is read from the change, not from where one build put it; Verified, not
@@ -10179,7 +10283,13 @@ rules something out.
     run with another kernel or toolchain on an
     otherwise matching setup records a spread wider than the one here, so they belong among what a
     spread must match; a run's time across placements falls to a single-build
-    run's, so the protocol could be the rule rather than an option; or the release binary's own
+    run's, so the protocol could be the rule rather than an option; a tool reads the image
+    `count.mjs` starts across placements (its binary linked again with a pad, started and
+    counted under the turn protocol), so the catalog's `page` and `json` can be read as a probe
+    workload is and need no case of their own; a count taken under that case reads above the
+    default band while every probe workload of its plan meets its margin across placements, or
+    a later reading finds on either target a cost a change brought in under it, so a probe does
+    not stand in for the image; or the release binary's own
     placement is asked to be checked.
 
     Last checked: 2026-11-22 for the source pads of each side of
@@ -10250,7 +10360,11 @@ rules something out.
     cases, and that gated part, which `plan.mjs` sized again at K = 93 from the 30-placement
     A/A, built and turned, 186 placements of `e2d0c464e` against itself, complete, with
     `report.mjs` printing its page again byte for byte, its plan and results at `647f918c1` (tag
-    `evidence/placement-kit-3`).
+    `evidence/placement-kit-3`); 2026-11-25 (UTC), the tree searched for a script that gives a
+    linker an ordering file (`symbol-ordering-file`), `bench/placement/relink.mjs` alone found,
+    which runs a probe's captured link again, and `bench/fullstack/count.mjs` read for what it
+    starts, each app's container from its image, at `1155bfdf8`, with the default band as the
+    maintainer's decision of that day gives it, -2.98% to +3.33%, read at `c6e9be955`.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
