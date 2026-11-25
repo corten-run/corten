@@ -1478,7 +1478,7 @@ impl Applied {
                 return false;
             }
             // What `document` adds to: a document, and a worker's script.
-            if (csp.permissions.is_some() || self.reporting.is_some())
+            if self.adds_to_documents(csp)
                 && (kind.is_some_and(|kind| html(kind.as_bytes()))
                     || res.extensions().get::<crate::pwa::WorkerScript>().is_some())
             {
@@ -1494,6 +1494,13 @@ impl Applied {
         true
     }
 
+    /// Whether [`Applied::document`] has a line to add under `csp`: a feature to deny, or where
+    /// reports go. Read by it and by [`Applied::ready`], which leaves it the answers it adds to.
+    #[inline]
+    fn adds_to_documents(&self, csp: &Csp) -> bool {
+        csp.permissions.is_some() || self.reporting.is_some()
+    }
+
     /// `Permissions-Policy` ([`Feature`]) on a document, an HTML or XML answer that is not one the
     /// runtime swaps in (`corten-page`, `corten-patch`, to its own request): those are drawn into a
     /// page that keeps the policy it loaded with, and a stylesheet, a script or JSON has no features
@@ -1505,7 +1512,7 @@ impl Applied {
     /// `swap`: the request was the runtime's (a navigation or a patch), so its answer may be one
     /// it draws into the page; any other request's answer loads as what it is, whatever it says.
     pub(crate) fn document(&self, res: &mut Response, csp: &Csp, swap: bool) {
-        if csp.permissions.is_none() && self.reporting.is_none() {
+        if !self.adds_to_documents(csp) {
             return;
         }
         let headers = res.headers();

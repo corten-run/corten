@@ -1391,6 +1391,7 @@ paths! {
     LinesClosed = "/closed",
     LinesOpen = "/open",
     LinesArea = "/walled",
+    LinesWalled = "/walled/api",
 }
 
 /// The answer `kind` names ([`lines_answer`]) in an API.
@@ -1414,9 +1415,19 @@ struct AreaAnswer<'a> {
     kind: &'a str,
 }
 
+/// The same in an API inside that area, which sends the area's referrer policy and not the app's.
+#[derive(crate::Route)]
+#[route("/walled/api/{kind}")]
+struct WalledAnswer<'a> {
+    kind: &'a str,
+}
+
 /// Every answer [`lines_answer`] makes.
-const LINES_KINDS: [&str; 44] = [
+const LINES_KINDS: [&str; 47] = [
     "text",
+    "created",
+    "missing",
+    "failed",
     "long",
     "json",
     "png",
@@ -1476,7 +1487,15 @@ fn lines_answer(kind: &str) -> Response {
     let chunks = || futures_util::stream::iter([Ok::<_, std::io::Error>(crate::http::Bytes::from_static(b"a,b\n1,2\n"))]);
     match kind {
         "text" => "ok".into_response(),
+        // A short text with another status, which a stage may come to read.
+        "created" => (StatusCode::CREATED, "made").into_response(),
+        "missing" => (StatusCode::NOT_FOUND, "none").into_response(),
+        "failed" => (StatusCode::INTERNAL_SERVER_ERROR, "down").into_response(),
         "long" => "long ".repeat(400).into_response(),
+        // What a handler's `Json` is, where the build has it.
+        #[cfg(feature = "json")]
+        "json" => crate::Json(vec![7_u32; 800]).into_response(),
+        #[cfg(not(feature = "json"))]
         "json" => ([("content-type", "application/json")], r#"{"a":1}"#.repeat(200)).into_response(),
         "png" => crate::Media::new("image/png", "png").into_response(),
         "svg" => crate::Media::new("image/svg+xml", "<svg/>".repeat(300)).into_response(),
@@ -1585,13 +1604,15 @@ impl crate::Middleware for OneMore {
     }
 }
 
-/// What the area of a [`lines_app`] adds to the app's policy.
+/// What the area of a [`lines_app`] adds to the app's policy: its referrer policy among it, the
+/// one line an API inside the area takes from it.
 fn lines_area_policy(sources: crate::security::Sources) -> crate::security::Sources {
-    sources.script_src("https://js.example").frame_ancestors("https://frames.example")
+    let sources = sources.script_src("https://js.example").frame_ancestors("https://frames.example");
+    sources.referrer(crate::security::Referrer::NoReferrer)
 }
 
-/// Pages, an API, an API another origin may read and an area with its own policy, each with
-/// every answer [`lines_answer`] makes.
+/// Pages, an API, an API another origin may read, an area with its own policy and an API inside
+/// that area, each with every answer [`lines_answer`] makes.
 fn lines_app(policy: crate::security::Policy, dev: bool) -> App {
     let pages = Table::new()
         .route("/", get(|req: Req| async move { req.test_page("Home", html! { <p>"home"</p> }) }))
@@ -1618,6 +1639,7 @@ fn lines_app(policy: crate::security::Policy, dev: bool) -> App {
             api.route::<OpenAnswer>(crate::Methods::reads(get(lines_named))).allow_origin("https://partner.example")
         })
         .area::<LinesArea>(|area| area.route::<AreaAnswer>(crate::Methods::reads(get(lines_named))).policy(lines_area_policy))
+        .api::<LinesWalled>(|api| api.route::<WalledAnswer>(crate::Methods::reads(get(lines_named))))
 }
 
 /// Each policy the answers are compared under: what it is, the policy, and whether its app runs
@@ -1643,6 +1665,7 @@ fn lines_policies() -> Vec<(&'static str, crate::security::Policy, bool)> {
         Feature::WindowManagement,
     ];
     let reports = crate::http::Uri::from_static("https://reports.example/csp");
+    let allowed = || every.into_iter().fold(Policy::new(), Policy::allow_feature);
     vec![
         ("the default policy", Policy::new(), false),
         ("under corten dev", Policy::new(), true),
@@ -1655,8 +1678,10 @@ fn lines_policies() -> Vec<(&'static str, crate::security::Policy, bool)> {
             false,
         ),
         ("framed by itself", Policy::new().frame_ancestors("'self'"), false),
-        ("every feature allowed", every.into_iter().fold(Policy::new(), Policy::allow_feature), false),
+        ("every feature allowed", allowed(), false),
         ("a report endpoint", Policy::new().report_to(&reports), false),
+        // No feature to deny, and still a line of a document's own.
+        ("every feature allowed, and a report endpoint", allowed().report_to(&reports), false),
         ("a referrer policy and popups", Policy::new().referrer(Referrer::SameOrigin).allow_popups(), false),
     ]
 }
@@ -1667,11 +1692,11 @@ fn lines_of(headers: &http::HeaderMap) -> Vec<(String, Vec<u8>)> {
 }
 
 /// [`Applied::ready`](crate::security::Applied::ready) gives an answer exactly what the stages it
-/// stands in for would: under each policy, for an API's answers, a page scope's and an area's
-/// with a policy of its own, every answer [`lines_answer`] makes is either left untouched, or
-/// has the same lines in the same order as the same answer given to `Applied::headers`,
-/// `Applied::document` and `cache::settle`, whatever the request was (its nonce taken or not,
-/// the runtime's or not, whoever asked).
+/// stands in for would: under each policy, for an API's answers, a page scope's, an area's with a
+/// policy of its own and those of an API inside that area, every answer [`lines_answer`] makes is
+/// either left untouched, or has the same lines in the same order as the same answer given to
+/// `Applied::headers`, `Applied::document` and `cache::settle`, whatever the request was (its
+/// nonce taken or not, the runtime's or not, whoever asked).
 #[test]
 fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
     use crate::cache::Seen;
@@ -1683,7 +1708,12 @@ fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
         let applied = Applied::new(policy, "", &[("/walled", &area)]);
         let (walled, _) = applied.csp_for("/walled/text");
         assert!(!Arc::ptr_eq(&walled, &applied.csp), "{name}: the area has a policy of its own");
-        let scopes = [("an API", &*applied.csp, false), ("pages", &*applied.csp, true), ("an area", &*walled, true)];
+        let scopes = [
+            ("an API", &*applied.csp, false),
+            ("pages", &*applied.csp, true),
+            ("an area", &*walled, true),
+            ("an API in the area", &*walled, false),
+        ];
         for (scope, csp, page) in scopes {
             let lines = applied.lines(csp, page);
             // One case of one answer: whether it was given the lines.
@@ -1718,7 +1748,7 @@ fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
                 }
             }
             // The answers the pass is for are given their lines, so it cannot quietly stop.
-            for kind in ["text", "long", "json", "png", "nothing", "teapot", "keyed"] {
+            for kind in ["text", "created", "missing", "failed", "long", "json", "png", "nothing", "teapot", "keyed"] {
                 assert!(ready(kind, false, false, anyone()), "{name}, {scope}: {kind}");
                 // A page's request that took its nonce names it in the policy.
                 assert_eq!(ready(kind, true, false, anyone()), !page, "{name}, {scope}: {kind}, its nonce taken");
@@ -1816,7 +1846,7 @@ async fn an_answer_given_its_scope_s_lines_in_one_pass_is_sent_as_one_each_line_
     ]
     .map(String::from)
     .to_vec();
-    for scope in ["/a", "/closed", "/open", "/walled"] {
+    for scope in ["/a", "/closed", "/open", "/walled", "/walled/api"] {
         paths.extend(LINES_KINDS.iter().map(|kind| format!("{scope}/{kind}")));
     }
     let less = |mut sent: LinesSent| {
