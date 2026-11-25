@@ -296,6 +296,7 @@ test("approved handoff retirement reuses an exact ordinary capture and reconcile
   assert.equal(h.saved().destroyedAt, undefined);
   knobs.failExactRead = false;
   assert.equal(await retire(await preview()), 1);
+  assert.ok(!existsSync(join(h.local, "operation.lock")));
   const reconciliation = launched.slice(calls);
   assert.ok(reconciliation.some(([, a, b, c, id]) => a === "compute" && b === "droplet" && c === "get" && id === saved.id));
   assert.ok(reconciliation.every(([binary, a, b, c]) => binary === "provider" && (a === "account" && b === "get" || a === "compute" && b === "droplet" && c === "get")));
@@ -629,7 +630,10 @@ test("handoff acknowledged DELETE records exact absence only with the receipt an
         appendFileSync(join(h.local, change), "\n");
       };
       await assert.rejects(retire(approved), /failed-native retirement receipt changed|local handoff custody changed/);
-    } else assert.equal(await retire(approved), 1);
+    } else {
+      assert.equal(await retire(approved), 1);
+      assert.ok(!existsSync(join(h.local, "operation.lock")));
+    }
     assert.equal(!!h.saved().destroyedAt, change === undefined);
     assert.equal(h.deletes, 1);
     assert.equal(f.probes, 3);
@@ -651,6 +655,28 @@ test("handoff teardown preserves a lock replaced during provider settlement", as
   assert.equal(h.saved().deletionIntentAt, undefined);
   assert.equal(readFileSync(path, "utf8"), replacement);
   assert.ok(existsSync(moved));
+});
+
+test("handoff teardown retains custody when settled state becomes unavailable", async (t) => {
+  for (const deleteLost of [false, true]) await t.test(deleteLost ? "absence reconciliation" : "first retirement", async (t) => {
+    const { f, knobs, preview, retire } = await handoffFixture(t, { deleteLost });
+    const { h } = f, saved = join(h.temp, "settled-state.json");
+    if (deleteLost) await assert.rejects(retire(await preview()), /acknowledgement lost/);
+    const approved = await preview();
+    let settled = false;
+    knobs.close = () => {
+      delete knobs.close;
+      assert.ok(h.saved().destroyedAt);
+      settled = true;
+      renameSync(h.statePath, saved);
+    };
+    await assert.rejects(retire(approved), /handoff reservation changed or unreadable; preserve custody/);
+    assert.ok(settled);
+    assert.ok(existsSync(join(h.local, "operation.lock")));
+    assert.ok(!existsSync(h.statePath));
+    assert.ok(existsSync(saved));
+    assert.equal(h.deletes, 1);
+  });
 });
 
 test("preplan preview binds preserved wrapper, measured registry and consumed single-child intent", async (t) => {

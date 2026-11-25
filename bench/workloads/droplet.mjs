@@ -775,7 +775,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       }
       finally {
         if (!preserveOperationLock) {
-          assertHandoffLock?.();
+          if (expectedHandoffState !== undefined) assertHandoffState();
+          else assertHandoffLock?.();
           unlinkSync(lock); syncDirectory(local);
         }
       }
