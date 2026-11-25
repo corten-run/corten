@@ -8,8 +8,37 @@ import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 import { scheduledProducerMarker, scheduledProducerSchema } from "./contract.mjs";
 import { legacyProducerSchema, producerProvenance } from "./production.mjs";
 import { inspectJson, producerPolicyAtCommit } from "./report.mjs";
+import { settleJsonRun } from "./run.mjs";
 import { result } from "./test-fixtures.mjs";
 import { timedSummarySchema } from "./timed-outcomes.mjs";
+
+test("terminal receipt ENOSPC cannot skip owned cleanup or disposal", async () => {
+  const events = [], failures = [];
+  const disk = Object.assign(new Error("no space left"), { code: "ENOSPC" });
+  await assert.rejects(settleJsonRun({
+    observeTail() { events.push("tail"); throw disk; },
+    cleanup() { events.push("remove containers", "remove network", "check absence"); },
+    checkProvenance() { events.push("provenance"); },
+    recordFailure(stage, error) { failures.push({ stage, error }); },
+    publish() { events.push("publish"); throw disk; },
+    dispose() { events.push("dispose"); },
+  }), (error) => error === disk);
+  assert.deepEqual(failures, [{ stage: "terminal upstream observation", error: disk }]);
+  assert.deepEqual(events, ["tail", "remove containers", "remove network", "check absence", "provenance", "publish", "dispose"]);
+});
+
+test("terminal provenance failure is recorded after cleanup and before publish", async () => {
+  const events = [], fault = new Error("HEAD changed");
+  await settleJsonRun({
+    observeTail() { events.push("tail"); },
+    cleanup() { events.push("cleanup"); },
+    checkProvenance() { throw fault; },
+    recordFailure(stage, error) { events.push(stage); assert.equal(error, fault); },
+    publish() { events.push("publish"); },
+    dispose() { events.push("dispose"); },
+  });
+  assert.deepEqual(events, ["tail", "cleanup", "tree provenance", "publish", "dispose"]);
+});
 
 test("strict JSON replay reads the producer policy from the exact commit, not the working tree or saved schema", (t) => {
   const root = mkdtempSync(join(tmpdir(), "json-producer-policy-"));

@@ -5,6 +5,7 @@ import { timestampNs } from "./fixed-stream.mjs";
 
 const root = "/sys/fs/cgroup", cgroup2 = 0x63677270;
 export const loadResourcePeriodMs = 1000;
+export const loadResourceClockToleranceMs = 2;
 export const loadResourceCaptureSchema = "json-api-load-resources/v1";
 const edgeNs = 5_000_000_000n;
 const msNs = (ms) => BigInt(ms) * 1_000_000n;
@@ -134,7 +135,7 @@ export function clockDelta(a, b) {
   for (const clock of [a, b]) assert.ok(natural(clock?.at) && Number.isFinite(clock.monotonic) && clock.monotonic >= 0, "load acquisition clock missing");
   const wall = b.at - a.at, monotonic = b.monotonic - a.monotonic;
   // Checks clock consistency, not lifetime or coverage tolerance. Date.now floors to milliseconds.
-  assert.ok(wall >= 0 && monotonic >= 0 && Math.abs(wall - monotonic) <= 2, "load acquisition clock discontinuity");
+  assert.ok(wall >= 0 && monotonic >= 0 && Math.abs(wall - monotonic) <= loadResourceClockToleranceMs, "load acquisition clock discontinuity");
   return msNs(b.at + 1) - msNs(a.at);
 }
 function validateRow(row, id, pid) {

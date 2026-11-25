@@ -9,6 +9,17 @@ import { commands } from "./process.mjs";
 import { startLoadResourceCapture } from "./load-resource-capture.mjs";
 import { describeK6 } from "../load-tool.mjs";
 
+export async function settleJsonRun({ observeTail, cleanup, checkProvenance, recordFailure, publish, dispose }) {
+  try {
+    try { await observeTail(); }
+    catch (error) { recordFailure("terminal upstream observation", error); }
+    finally { await cleanup(); }
+    try { await checkProvenance(); }
+    catch (error) { recordFailure("tree provenance", error); }
+    publish();
+  } finally { dispose(); }
+}
+
 export async function run(args) {
   const here = dirname(fileURLToPath(import.meta.url)), repo = resolve(here, "../..");
   // These legacy selectors cannot pre-filter the registry or its ESM dependencies.
@@ -35,7 +46,8 @@ export async function run(args) {
       aggregates: Object.fromEntries(group.cases.map((p) => [p.key, {}])), projections: Object.fromEntries(group.cases.map((p) => [p.key, outcomes.timedCaseProjection([], options.passes)])) }])) };
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
   const log = (line) => { const text = `${new Date().toISOString()} ${line}`; console.log(text); appendFileSync(join(folder, "run.log"), `${text}\n`); };
-  const fail = (app, key, stage, error) => { summary.failures.push({ app, key, stage, error: error.stack ?? String(error) }); log(`${app ?? "suite"} ${key ?? ""}: ${stage}: ${error.message}`); save(); };
+  const recordFailure = (app, key, stage, error) => summary.failures.push({ app, key, stage, error: error.stack ?? String(error) });
+  const fail = (app, key, stage, error) => { recordFailure(app, key, stage, error); log(`${app ?? "suite"} ${key ?? ""}: ${stage}: ${error.message}`); save(); };
   const cleanupFailure = (resource) => (error) => { summary.cleanupFailures.push({ resource, error: error.message }); };
   const active = new Set(), upstreams = {}, fixtureDirs = {}, mount = ["-v", `${join(repo, "bench")}:/bench:ro`];
   const write = artifacts.writer(folder), loadArtifact = artifacts.reader(folder);
@@ -282,32 +294,42 @@ export async function run(args) {
       || Object.values(summary.apps).every((a) => group.cases.every((p) => a.runs[p.key].length === options.passes
         && a.runs[p.key].every((r) => r.complete && c.phases.every((s) => r.phases[s]?.metrics?.observationComplete)))));
     summary.complete = summary.attemptComplete && summary.checksPassed && Object.values(summary.apps).every((a) => group.cases.every((p) => a.runs[p.key].every((r) => c.phases.every((s) => r.phases[s]?.metrics?.targetOutcome === "passed"))));
-  } catch (error) { fail(null, null, "suite", error); }
+  } catch (error) { recordFailure(null, null, "suite", error); }
   finally {
-    if (Object.keys(upstreams).length === group.payloads.length) try {
-      summary.readTail = write("read-tail.json", { at: Date.now(), reads: Object.fromEntries(await Promise.all(group.payloads.map(async (p) => [p, await apiReads(p)]))) });
-    } catch (error) { summary.attemptComplete = false; fail(null, null, "terminal upstream observation", error); }
-    for (const name of [...active].reverse()) try { await remove(name); } catch (error) { summary.cleanupFailures.push({ resource: name, error: error.message }); }
-    try {
-      if (await docker(["network", "ls", "--filter", `name=^${network}$`, "--format", "{{.ID}}"], { cleanup: true })) {
-        const net = JSON.parse(await docker(["network", "inspect", network], { cleanup: true }))[0]; assert.equal(net.Labels?.[label], runId);
-        await docker(["network", "rm", net.Id], { cleanup: true });
-      }
-    } catch (error) { summary.cleanupFailures.push({ resource: network, error: error.message }); }
-    try {
-      const containers = (await docker(["ps", "-a", "--filter", `label=${label}=${runId}`, "--format", "{{.ID}}"], { cleanup: true })).split("\n").filter(Boolean);
-      const networks = (await docker(["network", "ls", "--filter", `label=${label}=${runId}`, "--format", "{{.ID}}"], { cleanup: true })).split("\n").filter(Boolean);
-      summary.cleanup = write("cleanup.json", { runId, containers, networks });
-      assert.deepEqual(containers, [], "owned containers remain"); assert.deepEqual(networks, [], "owned networks remain");
-    } catch (error) { summary.cleanupFailures.push({ resource: runId, error: error.message }); }
-    try {
-      summary.commitAfter = await command("git", ["rev-parse", "HEAD"], { cleanup: true });
-      summary.dirtyAfter = Boolean(await command("git", ["status", "--porcelain"], { cleanup: true }));
-      assert.equal(summary.commitAfter, summary.commit, "HEAD changed during JSON run"); assert.equal(summary.dirtyAfter, false, "tree dirty after JSON run");
-    } catch (error) { summary.complete = false; fail(null, null, "tree provenance", error); }
-    summary.finishedAt = new Date().toISOString(); summary.attemptComplete &&= !processIO.interrupted && summary.cleanupFailures.length === 0;
-    summary.complete &&= summary.attemptComplete;
-    save(); processIO.dispose();
+    await settleJsonRun({
+      async observeTail() {
+        if (Object.keys(upstreams).length === group.payloads.length)
+          summary.readTail = write("read-tail.json", { at: Date.now(), reads: Object.fromEntries(await Promise.all(group.payloads.map(async (p) => [p, await apiReads(p)]))) });
+      },
+      async cleanup() {
+        for (const name of [...active].reverse()) try { await remove(name); } catch (error) { summary.cleanupFailures.push({ resource: name, error: error.message }); }
+        try {
+          if (await docker(["network", "ls", "--filter", `name=^${network}$`, "--format", "{{.ID}}"], { cleanup: true })) {
+            const net = JSON.parse(await docker(["network", "inspect", network], { cleanup: true }))[0]; assert.equal(net.Labels?.[label], runId);
+            await docker(["network", "rm", net.Id], { cleanup: true });
+          }
+        } catch (error) { summary.cleanupFailures.push({ resource: network, error: error.message }); }
+        try {
+          const containers = (await docker(["ps", "-a", "--filter", `label=${label}=${runId}`, "--format", "{{.ID}}"], { cleanup: true })).split("\n").filter(Boolean);
+          const networks = (await docker(["network", "ls", "--filter", `label=${label}=${runId}`, "--format", "{{.ID}}"], { cleanup: true })).split("\n").filter(Boolean);
+          summary.cleanup = write("cleanup.json", { runId, containers, networks });
+          assert.deepEqual(containers, [], "owned containers remain"); assert.deepEqual(networks, [], "owned networks remain");
+        } catch (error) { summary.cleanupFailures.push({ resource: runId, error: error.message }); }
+      },
+      async checkProvenance() {
+        summary.commitAfter = await command("git", ["rev-parse", "HEAD"], { cleanup: true });
+        summary.dirtyAfter = Boolean(await command("git", ["status", "--porcelain"], { cleanup: true }));
+        assert.equal(summary.commitAfter, summary.commit, "HEAD changed during JSON run"); assert.equal(summary.dirtyAfter, false, "tree dirty after JSON run");
+      },
+      recordFailure: (stage, error) => recordFailure(null, null, stage, error),
+      publish() {
+        summary.finishedAt = new Date().toISOString();
+        summary.attemptComplete &&= !processIO.interrupted && summary.failures.length === 0 && summary.cleanupFailures.length === 0;
+        summary.complete &&= summary.attemptComplete;
+        save();
+      },
+      dispose: processIO.dispose,
+    });
   }
   const report = reporting.inspectJson(summary, { load: loadArtifact });
   writeFileSync(join(folder, "report.md"), reporting.renderJson(report));
