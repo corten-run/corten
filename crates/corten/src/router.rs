@@ -157,19 +157,23 @@ impl<const TELL: bool> Endpoint for Keeping<TELL> {
         // In a full store a URL not asked for before is the handler's as any other request.
         let Some(missed) = asked.missed(&req, self.unkept.clone()) else { return self.inner.call(req) };
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
-        // Under `corten dev`, a future of its own, so a release build's is the one it was.
+        // Under `corten dev`, a future of its own with the same watch and the same return before
+        // `Missed::keep`, so what it says of a drawn key is what a release build does. It watches
+        // the answer through a borrow, a type of its own: sharing the release build's copy of the
+        // watch made the compiler stop inlining it there (`tests/router_cost.rs`).
         if TELL {
-            let signal = req.extensions().get::<crate::Signal>().cloned();
-            let answer = self.inner.call(req);
+            let mut answer = self.inner.call(req);
             return Box::pin(async move {
-                // The route's `Telling` watches for a drawn submit key, and says so before
-                // whatever this finds.
-                let res = answer.await;
+                let (res, drew_key) = crate::form::watched(Pin::new(&mut answer)).await;
                 let res = match here {
                     Some(here) => here.fill(res).await,
                     None => res,
                 };
-                crate::kept::read_to_tell(missed.keep::<true>(res).await, signal).await
+                if drew_key {
+                    missed.drew_key();
+                    return res;
+                }
+                missed.keep::<true>(res).await
             });
         }
         let answer = self.inner.call(req);
@@ -233,21 +237,25 @@ impl Endpoint for Telling {
         let (public, told) = (self.public, self.told.clone());
         let answer = self.inner.call(req);
         Box::pin(async move {
-            // A submit key drawn by the handler makes the answer the request's: `Keeping` sees it
-            // the same way, and gives the answer as it is.
-            let (res, drew_key) = crate::form::watched(answer).await;
+            // A drawn submit key, and each refusal of the answer, the route's `Keeping` found
+            // where a release build's does.
+            let res = answer.await;
             let verdict = match (public, &signal, asked) {
                 (Err(unkept), _, _) => Some(unkept),
                 // An unstaged route's request has no signal, and no answer kept for it.
                 (_, None, _) => Some(Verdict::Unstaged),
                 (_, Some(_), Err(said)) => said,
-                (_, Some(_), Ok(())) if drew_key => Some(Verdict::DrewKey),
                 (_, Some(signal), Ok(())) => Verdict::of(signal),
             };
-            if let Some(verdict) = verdict {
-                verdict.tell(&path, &told);
+            match (verdict, &signal) {
+                (Some(verdict), _) => {
+                    verdict.tell(&path, &told);
+                    res
+                }
+                // One a release build would keep: said as its body is read, where that build reads it.
+                (None, Some(signal)) => crate::kept::tell_read(res, signal, move |verdict| verdict.tell(&path, &told)),
+                (None, None) => res,
             }
-            res
         })
     }
 

@@ -1609,7 +1609,10 @@ The reasons come from the code that decides what a release build keeps, which ru
 `corten dev` with a store that keeps nothing and gives nothing (writes are counted as a release
 build counts them), so they cannot say other than that build does. That an answer would be kept
 says it may be, not that it is: the store under `corten dev` holds nothing, so it is never full,
-and a full one keeps the answer for a URL only when that URL was asked for before (below). A
+and a full one keeps the answer for a URL only when that URL was asked for before (below). It is
+said as the answer's body ends, not before, since a body that fails partway is not kept (a release
+build answers `500` in its place); the body still reaches your middleware and the browser as it
+comes, trailers and all. A
 reason the route's type decides (its handler's inputs, an answer that is neither a page nor a
 whole body, `unstaged`) is said for any `GET`; one a middleware decides before the handler (a
 caller it read, a URL it

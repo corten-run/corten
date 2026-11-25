@@ -2360,10 +2360,20 @@ async fn corten_dev_says_whether_a_public_answer_is_kept_and_why_not() {
         let (_, text) = logged(fresh, "/", &[]).await;
         assert!(text.contains(&format!("corten: / {kept}")), "{headers:?}, then none: {text}");
     }
-    // An app that keeps no answers says so, whatever the route.
-    let off = App::new(Routes::from(routes())).kept_answers(0).dev(true).router();
-    let (_, text) = logged(off, "/", &[]).await;
-    assert!(text.contains(&format!("corten: / {not}the app keeps no answers, since its bound is 0")), "{text}");
+    // An app that keeps no answers says so, whatever the route, of a request a kept answer could
+    // stand for: not of one signed in or a navigation, each asked of a route that has said
+    // nothing yet.
+    let off = || App::new(Routes::from(routes())).kept_answers(0).dev(true).router();
+    for headers in [&[("cookie", "session=1")][..], &[("corten", "page")]] {
+        let fresh = off();
+        let (_, text) = logged(fresh.clone(), "/", headers).await;
+        assert!(text.is_empty(), "kept_answers(0), {headers:?}: {text}");
+        let (_, text) = logged(fresh, "/", &[]).await;
+        assert!(
+            text.contains(&format!("corten: / {not}the app keeps no answers, since its bound is 0")),
+            "{headers:?}, then none: {text}"
+        );
+    }
     for (uri, reason) in [
         ("/both", "it sets a cookie"),
         ("/device", "its handler takes an input the kept answer's key does not cover"),
@@ -2500,6 +2510,201 @@ async fn corten_dev_says_a_body_that_cannot_be_read_is_not_kept() {
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!headers.contains_key(header::AGE));
     }
+}
+
+/// A body of a known size whose frames come in turn: the last waits for `gate`, if it has one,
+/// and the first draws a form's new submit key as it is read, if `draws`.
+struct Frames {
+    frames: std::collections::VecDeque<Result<http_body::Frame<bytes::Bytes>, std::io::Error>>,
+    length: u64,
+    gate: Option<tokio::sync::oneshot::Receiver<()>>,
+    draws: bool,
+}
+
+impl Frames {
+    /// `pieces` of data, then trailers (`Ok`) or a failure (`Err`), if any.
+    fn new(pieces: &[&'static str], end: Option<Result<HeaderMap, ()>>) -> Self {
+        let mut frames: std::collections::VecDeque<_> =
+            pieces.iter().map(|piece| Ok(http_body::Frame::data(bytes::Bytes::from_static(piece.as_bytes())))).collect();
+        match end {
+            Some(Ok(trailers)) => frames.push_back(Ok(http_body::Frame::trailers(trailers))),
+            Some(Err(())) => frames.push_back(Err(std::io::Error::other("the body broke"))),
+            None => {}
+        }
+        let length = pieces.iter().map(|piece| piece.len() as u64).sum();
+        Frames { frames, length, gate: None, draws: false }
+    }
+}
+
+impl http_body::Body for Frames {
+    type Data = bytes::Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<bytes::Bytes>, Self::Error>>> {
+        let this = self.get_mut();
+        if std::mem::take(&mut this.draws) {
+            crate::SubmitKey::field(KeyedWrite::FIELDS.submit).render(&mut String::new());
+        }
+        if this.frames.len() == 1 {
+            if let Some(gate) = &mut this.gate {
+                let _ = std::task::ready!(std::future::Future::poll(std::pin::Pin::new(gate), cx));
+                this.gate = None;
+            }
+        }
+        std::task::Poll::Ready(this.frames.pop_front())
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.length)
+    }
+}
+
+/// A body's data, its trailers and whether it failed, read frame by frame.
+async fn frames_of(mut body: Body) -> (Vec<bytes::Bytes>, Option<HeaderMap>, bool) {
+    let (mut data, mut trailers) = (Vec::new(), None);
+    while let Some(frame) = body.frame().await {
+        let Ok(frame) = frame else { return (data, trailers, true) };
+        match frame.into_data() {
+            Ok(piece) => data.push(piece),
+            Err(frame) => trailers = frame.into_trailers().ok(),
+        }
+    }
+    (data, trailers, false)
+}
+
+/// Under `corten dev` the body of a `Public` answer a release build would keep is not read to
+/// tell: its frames, trailers and failure reach the app's middleware and the client as they do
+/// with no store, as they come, and what a release build does with it is said as it ends. A key a
+/// body draws as it is read is not one a release build's watch sees (it reads the body after its
+/// handler), so neither is it said under `corten dev`.
+#[cfg(feature = "log")]
+#[tokio::test]
+async fn corten_dev_says_what_it_would_keep_as_the_body_is_read() {
+    use crate::route::get as typed;
+    let piece: &'static str = Box::leak("p".repeat(600).into_boxed_str());
+    // A page of `count` pieces of data, then `end`, drawing a key as it is read if `draws`.
+    let body = move |count: usize, end: Option<Result<HeaderMap, ()>>, draws: bool| {
+        move |req: Req| {
+            let frames = Frames { draws, ..Frames::new(&vec![piece; count], end.clone()) };
+            async move {
+                let page = req.test_page_for("Frames", html! { <p>"frames"</p> }).map(|mut page| {
+                    *page.0.body_mut() = Body::new(frames);
+                    page
+                });
+                Public::new(Duration::from_secs(60), page)
+            }
+        }
+    };
+    let mut trailers = HeaderMap::new();
+    trailers.insert("checksum", HeaderValue::from_static("abc"));
+    let routes = move || {
+        Table::new()
+            .route("/fails", typed(body(3, Some(Err(())), false)).0)
+            .route("/trailers", typed(body(2, Some(Ok(trailers.clone())), false)).0)
+            .route("/draws", typed(body(2, None, true)).0)
+    };
+    let lines = Lines(std::sync::Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let text = || String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
+    // Its status and headers, said before its body is read, then its frames, and what was said
+    // once they were read.
+    let answer = |router: Router, uri: &'static str| async move {
+        let res = router.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+        let before = text();
+        let (mut parts, body) = res.into_parts();
+        // Each app's shell has a hash of its own under `corten dev`.
+        parts.headers.remove("corten-shell");
+        let frames = frames_of(body).await;
+        (parts.status, parts.headers, frames, before, text())
+    };
+    for (uri, said) in [
+        ("/fails", "is Public, but a release build does not keep its answer: its body, of a known size, could not be read whole"),
+        ("/trailers", "is Public, and a release build would keep its answer for 60 s"),
+        ("/draws", "is Public, and a release build would keep its answer for 60 s"),
+    ] {
+        let dev = App::new(Routes::from(routes())).dev(true).router();
+        let (status, headers, frames, before, after) = answer(dev, uri).await;
+        assert!(!before.contains("is Public"), "{uri}: nothing said before the body is read: {before}");
+        assert!(after.contains(&format!("corten: {uri} {said}")), "{uri}: {after}");
+        assert_eq!(after.matches("is Public").count(), 1, "{uri}: {after}");
+        let unkept = App::new(Routes::from(routes())).kept_answers(0).dev(true).router();
+        let (no_status, no_headers, no_frames, _, _) = answer(unkept, uri).await;
+        assert_eq!((status, headers, &frames), (no_status, no_headers, &no_frames), "{uri}: as with no store");
+        let pieces = if uri == "/fails" { 3 } else { 2 };
+        assert_eq!(frames.0.len(), pieces, "{uri}: each frame as it came: {frames:?}");
+        assert_eq!(frames.2, uri == "/fails", "{uri}: failing where it failed");
+        assert_eq!(frames.1.is_some(), uri == "/trailers", "{uri}: its trailers kept: {frames:?}");
+    }
+    // A release build reads the body after its handler's watch: a key drawn as it is read is not
+    // seen, and the answer is kept, as `corten dev` said.
+    let release = App::new(Routes::from(routes())).dev(false).router();
+    fetch(&release, "GET", "/draws", &[]).await;
+    assert!(fetch(&release, "GET", "/draws", &[]).await.1.contains_key(header::AGE), "a release build keeps it");
+    // A key the handler drew is seen by the same watch in both builds.
+    let keyed = || {
+        Table::new().route(
+            "/keyed",
+            typed(|req: Req| async move {
+                let form = html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> };
+                Public::new(Duration::from_secs(60), req.test_page_for("Keyed", form))
+            })
+            .0,
+        )
+    };
+    // A refusal is said as the answer leaves the route, before its body is read.
+    let (_, _, _, before, _) = answer(App::new(Routes::from(keyed())).dev(true).router(), "/keyed").await;
+    assert!(
+        before
+            .contains("corten: /keyed is Public, but a release build does not keep its answer: it draws a form's new submit key"),
+        "{before}"
+    );
+    let release = App::new(Routes::from(keyed())).dev(false).router();
+    fetch(&release, "GET", "/keyed", &[]).await;
+    assert!(!fetch(&release, "GET", "/keyed", &[]).await.1.contains_key(header::AGE), "nor does a release build keep it");
+}
+
+/// Under `corten dev` a slow body is not waited for: the answer and its first frame leave before
+/// its last is made, and that a release build would keep it is said once the last is read.
+#[cfg(feature = "log")]
+#[tokio::test]
+async fn corten_dev_does_not_hold_a_slow_body() {
+    use crate::route::get as typed;
+    let piece: &'static str = Box::leak("s".repeat(600).into_boxed_str());
+    let (open, gate) = tokio::sync::oneshot::channel();
+    let gate = std::sync::Arc::new(std::sync::Mutex::new(Some(gate)));
+    let route = typed(move |req: Req| {
+        let gate = gate.lock().unwrap().take();
+        async move {
+            let page = req.test_page_for("Slow", html! { <p>"slow"</p> }).map(|mut page| {
+                *page.0.body_mut() = Body::new(Frames { gate, ..Frames::new(&[piece, piece], None) });
+                page
+            });
+            Public::new(Duration::from_secs(60), page)
+        }
+    });
+    let lines = Lines(std::sync::Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let text = || String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    let dev = App::new(Routes::from(Table::new().route("/slow", route.0))).dev(true).router();
+    let wait = Duration::from_secs(10);
+    let request = Request::get("/slow").body(Body::empty()).unwrap();
+    let res = tokio::time::timeout(wait, dev.oneshot(request)).await.expect("the answer leaves before its body ends").unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let mut body = res.into_body();
+    let first = tokio::time::timeout(wait, body.frame()).await.expect("and its first frame");
+    assert_eq!(first.unwrap().unwrap().into_data().unwrap().len(), 600);
+    assert!(!text().contains("is Public"), "nothing said before the body ends: {}", text());
+    open.send(()).unwrap();
+    let (rest, _, failed) = frames_of(body).await;
+    assert!(rest.len() == 1 && !failed, "{rest:?}");
+    assert!(text().contains("corten: /slow is Public, and a release build would keep its answer for 60 s"), "{}", text());
 }
 
 /// Under `corten dev` the answer the app's middleware sees after its handler is the one it saw

@@ -7716,21 +7716,31 @@ rules something out.
     a page that is not kept looks the same from outside save for a missing `Age`, so without it
     an author first met the difference in production. It says no more than that the answer may be
     kept: the store under `corten dev` is never full, and a full one keeps only a URL asked for
-    before, so that the answer is kept, or given again, is not promised. It says so only after the
-    body is read as a release build reads it, since a body of an exact size that fails to be read
-    is answered `500` there and not kept. The reasons come from the code that decides, not from a
-    second list of its rules, which could drift from what the build does. That code is compiled
-    twice, the route's and its answer's checks alike (`Keeping` and `Missed::keep`, by a `TELL`
-    parameter): `corten dev`'s copy records each refusal, counts the head of an answer whose
-    locale was chosen late as a release build names it, from a copy, so the answer the app's
-    middleware sees is the one it saw with no store, and leaves an answer it would keep for its
-    body to be read; a release build's copy does none of this. In `router_cost` (callgrind, three
-    rounds each, against `c46092aeb`) a kept page given again costs what it did (14,559.9 to
-    14,560.1 instructions a request), a `Public` page that is not kept 3 more (21,238.0 to
-    21,240.7) and one that is made and stored 32 more (28,589.6 to 28,621.6). The release copy
-    does no more work; with a second copy in the program the compiler no longer inlines putting
-    the kept entry on the answer (about 29 of those 32) and lays out the rest slightly otherwise, and
-    the ways tried to keep one copy as it was cost more than these.
+    before, so that the answer is kept, or given again, is not promised. It says so only as the
+    body ends, since a body of an exact size that fails to be read is answered `500` there and
+    not kept; the body is not read to say it, which would hold it from the middleware, drop its
+    trailers and what came before a failure and keep a slow one from the client, but watched as
+    whatever reads it next pulls each frame (one held whole, which a release build takes without
+    reading, at once), and one dropped before its end says nothing. The reasons come from the code
+    that decides, not from a second list of its rules, which could drift from what the build does.
+    That code is compiled twice, the route's and its answer's checks alike (`Keeping` and
+    `Missed::keep`, by a `TELL` parameter): `corten dev`'s copy records each refusal, a drawn
+    submit key at the same watch and the same return as a release build (so a key drawn as the
+    body is read is said by neither), counts the head of an answer whose locale was chosen late as
+    a release build names it, from a copy, so the answer the app's middleware sees is the one it
+    saw with no store, and leaves an answer it would keep for its body to be watched; a release
+    build's copy does none of this. In `router_cost` (callgrind, three rounds each, against
+    `c46092aeb`, rustc 1.100.0) a kept page given again costs what it did (14,559.9 to 14,560.1
+    instructions a request), a `Public` page that is not kept 3 more (21,238.0 to 21,240.7) and
+    one that is made and stored 32 more (28,589.6 to 28,621.6). With rustc 1.99.1 the three are 9,
+    3 and 12 more (14,874.5 to 14,883.7, 21,628.5 to 21,631.1, 28,904.8 to 28,916.3), the kept
+    page's 9 all in `memcmp`, whose count turns on where the bytes it compares lie. The release
+    copy does no more work; with a second copy in the program the compiler no longer inlines
+    putting the kept entry on the answer (about 29 of those 32 under rustc 1.100.0) and lays out
+    the rest slightly otherwise, and the ways tried to keep one copy as it was cost more than
+    these. `corten dev`'s copy watches the handler through a borrow, a type of its own, since
+    sharing the release copy's watch made the compiler stop inlining it there, 23 more on each
+    page not kept or stored.
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
     give to anyone is the rule checked when the app compiles, that a `Public` handler takes only
