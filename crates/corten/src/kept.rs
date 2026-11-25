@@ -1365,7 +1365,9 @@ impl Missed {
     /// `res`, kept when it is the same for everyone and for how long: see the module. `TELL` is
     /// `corten dev`'s copy (`crate::router::Telling`): nothing is kept, and the request is given
     /// what a release build does with its answer instead ([`Verdict`]), with the answer's head
-    /// left as it is. A release build's copy, with `TELL` false, is the code it was.
+    /// left as it is; one a release build would keep is left where that build reads its body,
+    /// for [`read_to_tell`]. A release build's copy, with `TELL` false, is the code it was, but
+    /// for the head's count ([`head_bytes`]).
     pub(crate) async fn keep<const TELL: bool>(mut self, mut res: Response) -> Response {
         let Some(signal) = &self.signal else { return res };
         let Some(answers) = signal.shared().and_then(|shared| shared.kept.as_ref()) else { return res };
@@ -1387,13 +1389,14 @@ impl Missed {
         // A locale negotiated after the page set its headers is named now, so the key below
         // and the header the app sends agree. Under `corten dev` the answer is left as it is (the
         // app names it as the answer leaves, after its middleware, as it did with no store), and
-        // its head is counted as a release build counts it, from a copy named so.
-        let mut named = None;
+        // its head is counted as a release build counts it, from a copy named so: its names and
+        // bytes.
+        let mut named: Option<(usize, usize)> = None;
         if !language && signal.asked_language() {
             if TELL {
                 let mut headers = res.headers().clone();
                 crate::page::add_language(&mut headers);
-                named = Some((headers.keys_len(), head_bytes(&headers)));
+                named = Some((headers.keys_len(), head_bytes(headers.iter())));
             } else {
                 crate::page::add_language(res.headers_mut());
             }
@@ -1420,7 +1423,11 @@ impl Missed {
         if res.headers().contains_key(header::ETAG) {
             unkept!(Verdict::Tagged);
         }
-        if named.map_or_else(|| res.headers().keys_len(), |(names, _)| names) > NAMES {
+        let names = match named {
+            Some((names, _)) if TELL => names,
+            _ => res.headers().keys_len(),
+        };
+        if names > NAMES {
             unkept!(Verdict::Names);
         }
         if self.nonce.as_ref().is_some_and(|slot| slot.taken().is_some()) {
@@ -1438,7 +1445,10 @@ impl Missed {
         if self.told.0.is_some() && length < BODY_FROM {
             unkept!(Verdict::Small(length));
         }
-        let head = named.map_or_else(|| head_bytes(res.headers()), |(_, bytes)| bytes);
+        let head: usize = match named {
+            Some((_, bytes)) if TELL => bytes,
+            _ => head_bytes(res.headers().iter()),
+        };
         // The URL is held once, by the entry: the map holds its hash.
         let sent = self.language.as_ref().filter(|_| language);
         let size = Key::length(self.at.as_str(), self.host.as_ref(), sent) + head + OVERHEAD + length as usize;
@@ -1455,25 +1465,20 @@ impl Missed {
         if !self.written.stands(&answers.0) {
             unkept!(Verdict::Written);
         }
+        // Under `corten dev` none is kept: the answer goes back to be said to be kept where a
+        // release build keeps it, once its body is read ([`read_to_tell`]), and, of a route of
+        // whole bodies, is told so, so it goes on asking.
+        if TELL {
+            self.told.1 = true;
+            let _ = signal.found::<ToRead>().set(ToRead(lifetime));
+            return res;
+        }
         let (mut parts, body) = res.into_parts();
         // Exact size: one held `Bytes`.
-        let body = match crate::body::to_bytes(body, usize::MAX).await {
-            Ok(body) => body,
-            // Under `corten dev` the answer goes on as it was, its body failing as it did.
-            Err(error) if TELL => {
-                Verdict::Unread.found(signal);
-                return Response::from_parts(parts, Body::new(Unread(Some(error), length)));
-            }
+        let Ok(body) = crate::body::to_bytes(body, usize::MAX).await else {
             // A body of an exact size that could not be read: not a page to send as it is.
-            Err(_) => return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR),
+            return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR);
         };
-        // Under `corten dev` none is kept: the route says a release build would keep it here, and,
-        // of a route of whole bodies, is told so, so it goes on asking.
-        if TELL {
-            Verdict::Kept { lifetime }.found(signal);
-            self.told.1 = true;
-            return Response::from_parts(parts, Body::from(body));
-        }
         // A copy of its own length: a page's buffer is sized for the last page rendered and an
         // eighth more, and the bytes made from it would hold all of that for as long as they are
         // kept. Asking the allocator to shrink the buffer instead moves it under jemalloc, the
@@ -1530,9 +1535,39 @@ fn varies(headers: &HeaderMap) -> Option<bool> {
 }
 
 /// The bytes a kept answer's head is counted as: each line's name and value, and what holds it.
+/// One function for both copies of [`Missed::keep`], so the name of a line is read in one place
+/// in the program, as it was: a second place to read it made the compiler stop inlining that
+/// read, and a release build counted 36 instructions more a refused request
+/// (`tests/router_cost.rs`).
 #[inline]
-fn head_bytes(headers: &HeaderMap) -> usize {
-    headers.iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum()
+fn head_bytes(headers: http::header::Iter<'_, HeaderValue>) -> usize {
+    headers.map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum()
+}
+
+/// Under `corten dev`, in the request's signal: its answer is one a release build would keep from
+/// here, for its lifetime, as `corten dev`'s copy of [`Missed::keep`] left it, for
+/// [`read_to_tell`] to say so once its body is read.
+struct ToRead(u64);
+
+/// Under `corten dev`, `res` as `corten dev`'s copy of [`Missed::keep`] left it: one a release
+/// build would keep has its body read as that build reads it before it is said to be kept
+/// ([`Verdict::Kept`]), or, where it could not be read, said so ([`Verdict::Unread`]), the answer
+/// going on as it was, its body failing as it did. Any other is as it was.
+pub(crate) async fn read_to_tell(res: Response, signal: Option<crate::Signal>) -> Response {
+    let Some(signal) = signal else { return res };
+    let Some(&ToRead(lifetime)) = signal.found::<ToRead>().get() else { return res };
+    let (parts, body) = res.into_parts();
+    let length = http_body::Body::size_hint(&body).exact().unwrap_or_default();
+    match crate::body::to_bytes(body, usize::MAX).await {
+        Ok(body) => {
+            Verdict::Kept { lifetime }.found(&signal);
+            Response::from_parts(parts, Body::from(body))
+        }
+        Err(error) => {
+            Verdict::Unread.found(&signal);
+            Response::from_parts(parts, Body::new(Unread(Some(error), length)))
+        }
+    }
 }
 
 /// Under `corten dev`, the body of a size known before it is sent that could not be read whole

@@ -157,6 +157,21 @@ impl<const TELL: bool> Endpoint for Keeping<TELL> {
         // In a full store a URL not asked for before is the handler's as any other request.
         let Some(missed) = asked.missed(&req, self.unkept.clone()) else { return self.inner.call(req) };
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
+        // Under `corten dev`, a future of its own, so a release build's is the one it was.
+        if TELL {
+            let signal = req.extensions().get::<crate::Signal>().cloned();
+            let answer = self.inner.call(req);
+            return Box::pin(async move {
+                // The route's `Telling` watches for a drawn submit key, and says so before
+                // whatever this finds.
+                let res = answer.await;
+                let res = match here {
+                    Some(here) => here.fill(res).await,
+                    None => res,
+                };
+                crate::kept::read_to_tell(missed.keep::<true>(res).await, signal).await
+            });
+        }
         let answer = self.inner.call(req);
         Box::pin(async move {
             // An answer with a form's new submit key is this request's alone. A page's render
@@ -172,7 +187,7 @@ impl<const TELL: bool> Endpoint for Keeping<TELL> {
             if drew_key {
                 return res;
             }
-            missed.keep::<TELL>(res).await
+            missed.keep::<false>(res).await
         })
     }
 
