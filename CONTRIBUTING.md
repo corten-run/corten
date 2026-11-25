@@ -71,8 +71,8 @@ compiler: `npx tsc -p bench/browser/jsconfig.json`.
   in all three).
 - Docker, for the example images the smoke tests run against.
 - For measuring (Pull requests, item 2): valgrind, on Linux or in the `rust:1-trixie`
-  container after `apt-get update && apt-get install -y valgrind`, and for `count.mjs` a Linux
-  host with `perf`, root and cgroup v2. [`bench/request-cost`](bench/request-cost/README.md)
+  container after `apt-get update && apt-get install -y valgrind`, and for
+  `bench/fullstack/count.mjs` a Linux host with `perf`, root and cgroup v2. [`bench/request-cost`](bench/request-cost/README.md)
   lists what it needs beside valgrind.
 
 Use Cargo 1.100 or later when changing Rust dependencies. The checkout's `.cargo/config.toml`
@@ -516,11 +516,12 @@ establish a general ranking.
       request under callgrind (`valgrind --tool=callgrind`). Count a test that sends 1,200
       requests through the router in process with `oneshot` and one that
       sends 200: the difference over 1,000 leaves out startup and setup. Over a real socket,
-      `bench/fullstack/count.mjs` counts with `perf stat`, and
-      [`bench/request-cost`](bench/request-cost/README.md) counts the whole request under
-      callgrind (reading it, the connection and writing the answer, which the in-process test
-      leaves out), with its allocations and the memory an idle connection holds; its page says
-      which of the three to use. A count barely moves with other load
+      `bench/fullstack/count.mjs` counts with `perf stat`, and three count the whole request
+      under callgrind (reading it, the connection and writing the answer, which the in-process
+      test leaves out): `bench/fullstack/cost-by-crate.sh` and `cost-by-default.sh` for
+      card-market's page and JSON, and [`bench/request-cost`](bench/request-cost/README.md) for
+      a small probe built against a named commit, with its allocations and the memory an idle
+      connection holds; its page says which to use. A count barely moves with other load
       on the machine, so it shows a difference of a few percent that times on a laptop or
       Docker Desktop hide. Reading JSON: `read_cost` in `examples/card-market` reads the
       fixture's 500 item API responses once each, and its doc comment gives the command.
