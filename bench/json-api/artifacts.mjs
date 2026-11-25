@@ -28,7 +28,8 @@ export function reader(root) {
     referenceKeys(reference, ["path", "sha256"], "artifact reference must bind path and hash");
     const bytes = readContained(root, reference.path);
     assert.ok(sha256(bytes) === reference.sha256, "raw artifact digest differs");
-    return JSON.parse(bytes.toString("utf8"));
+    try { return JSON.parse(bytes.toString("utf8")); }
+    catch { throw new SyntaxError("invalid raw artifact JSON"); }
   };
   load.stream = (reference) => {
     referenceKeys(reference, ["path", "receipt"], "full raw stream reference required");

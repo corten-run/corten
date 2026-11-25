@@ -1,5 +1,6 @@
 // Focused production v2 review controls. Each test builds at most one synthetic roster.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,12 +28,16 @@ test("saved artifact reference refusals do not reflect keys or digests", async (
   assert.deepEqual(load(good), { ok: true });
   assert.deepEqual(JSON.parse(load.bytes(bytes, 512)), { ok: true });
   const key = "SAVED_ARTIFACT_KEY_CANARY", digest = "f3".repeat(32);
+  const malformed = "SAVED_ARTIFACT_TEXT_CANARY";
+  writeFileSync(join(folder, "invalid.json"), malformed);
+  const invalid = { path: "invalid.json", sha256: createHash("sha256").update(malformed).digest("hex") };
   const stream = { encoding: "identity", bytes: 1, sha256: digest, events: 1, points: 1, metrics: 1, firstNs: "1", lastNs: "1" };
   for (const [label, read, canary, message] of [
     ["JSON key", () => load({ ...good, [key]: true }), key, "artifact reference must bind path and hash"],
     ["byte key", () => load.bytes({ ...bytes, [key]: true }, 512), key, "raw byte reference required"],
     ["stream reference key", () => load.stream({ path: good.path, receipt: stream, [key]: true }), key, "full raw stream reference required"],
     ["JSON digest", () => load({ ...good, sha256: digest }), digest, "raw artifact digest differs"],
+    ["malformed JSON", () => load(invalid), malformed, "invalid raw artifact JSON"],
     ["byte digest", () => load.bytes({ ...bytes, sha256: digest }, 512), digest, "raw byte digest differs"],
     ["stream receipt key", () => load.stream({ path: good.path, receipt: { ...stream, [key]: true } }), key, "event fields differ"],
     ["stream receipt digest", () => load.stream({ path: good.path, receipt: { ...stream, sha256: key } }), key, "raw stream receipt hash required"],

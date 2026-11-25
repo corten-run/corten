@@ -32,7 +32,10 @@ function replay(limits) {
   const line = (buffer) => {
     assert.ok(buffer.length && buffer.length <= limits.lineBytes, "empty/oversize raw event line");
     assert.ok(++lines <= limits.events, "raw event count cap exceeded");
-    const entry = JSON.parse(decoder.decode(buffer));
+    const source = decoder.decode(buffer);
+    let entry;
+    try { entry = JSON.parse(source); }
+    catch { throw new SyntaxError("invalid raw event JSON"); }
     assert.ok(object(entry), "invalid event"); sameKeys(entry, ["type", "metric", "data"]);
     assert.match(entry.metric, /^[a-zA-Z_][a-zA-Z_0-9]{0,127}$/);
     assert.ok(object(entry.data), "invalid event data");
@@ -46,7 +49,7 @@ function replay(limits) {
       metrics.set(entry.metric, { type: data.type, points: 0, sum: 0, min: null, max: null, true: 0, false: 0, firstNs: null, lastNs: null });
       return;
     }
-    assert.equal(entry.type, "Point", "unknown raw output record");
+    assert.ok(entry.type === "Point", "unknown raw output record");
     sameKeys(data, Object.hasOwn(data, "metadata") ? ["time", "value", "tags", "metadata"] : ["time", "value", "tags"]);
     assert.ok(object(data.tags) && Object.values(data.tags).every((v) => typeof v === "string"), "invalid point tags");
     if (Object.hasOwn(data, "metadata")) assert.ok(object(data.metadata) && Object.values(data.metadata).every((v) => typeof v === "string"), "invalid point metadata");
