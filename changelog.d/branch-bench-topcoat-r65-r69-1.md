@@ -1,0 +1,1 @@
+- The matched Topcoat benchmark app sends a typed 503 on deadline and Marketplace errors as HTML or Problem Details, exposes source-independent liveness, refuses unknown hosts, and serves native Marketplace pages with a no-eval script policy. [#1305 Benchmark parity: Topcoat in approved workload groups](https://github.com/corten-run/corten/issues/1305)

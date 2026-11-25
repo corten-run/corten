@@ -45,6 +45,20 @@ beforeEach(() => {
 after(() => { mock.restoreAll(); assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true }); });
 const inspect = () => { save("summary.json", summary); return inspectNative(binding, folder); };
 
+test("dedicated Mixed replay requires the exact Django ASGI flag and rejects a WSGI summary", async () => {
+  const argv = binding.execution.invocation.argv;
+  binding.request.recipe = "mixed-production-django-asgi";
+  assert.equal((await inspect()).status, "invalid");
+  argv.splice(6, 0, "--django-deployment", "django-granian-asgi");
+  const effective = parseArgs(argv.slice(1)); effective.apps = apps;
+  binding.execution.effectiveOptions = effective;
+  assert.equal((await inspect()).status, "invalid");
+  assert.equal(validator.mock.callCount(), 0);
+  summary.options = structuredClone(effective);
+  assert.equal((await inspect()).status, "verified");
+  assert.equal(validator.mock.callCount(), 1);
+});
+
 test("production mixed fixed native API has a complete positive composition path", async () => {
   const result = await inspect(); assert.equal(result.status, "verified"); assert.equal(result.attemptComplete, true);
   assert.equal(result.cleanupComplete, true); assert.equal(result.resources, "verified"); assert.equal(validator.mock.callCount(), 1);

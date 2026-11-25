@@ -4,11 +4,14 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { inspect } from "node:util";
 import { copyEvidence, digest, durable, inside, inspectEvidence, readRegular, tree } from "./evidence.mjs";
 import { catalogResult } from "./test-fixtures/catalog.mjs";
 import { groupDescriptor } from "../../catalog/group.mjs";
 import { cpuSettings, parseArgs } from "../../catalog/contract.mjs";
 import { productionFixture } from "../../json-api/production-fixtures.mjs";
+import { producerProvenance } from "../../json-api/production.mjs";
+import { c16Env, runnerPlacement } from "../../json-api/placement.mjs";
 import { jsonSources, saveJsonFixture } from "./test-fixtures/json.mjs";
 import { marketplaceResult } from "./test-fixtures/marketplace.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
@@ -140,6 +143,41 @@ for (const fault of ["none", "raw hash mismatch", "receipt string"]) {
     if (fault === "raw hash mismatch") fs.writeFileSync(join(root, checked.raw.path), "{}");
     if (fault === "none") assert.equal(inspectEvidence(b, root).baseline, true);
     else assert.throws(() => inspectEvidence(b, root), /strict JSON native attempt incomplete/);
+  });
+}
+test("JSON validator replays a c-16 result only under the binding that requested its layout", async (t) => {
+  const root = temporary(t), fixture = await productionFixture(root, { placement: runnerPlacement(c16Env, 16) }), s = fixture.summary;
+  const pinned = { JSON_API_APP_CPUS: "1", JSON_API_API_CPUS: "2-3", JSON_API_LOAD_CPUS: "4-7" };
+  const bound = (requestedCpuEnv) => ({ request: { group: "json-api", round: s.round, commit: s.commit }, execution: { effectiveOptions: s.options },
+    resources: { expectedCpus: s.measurement.cpus, requestedCpuEnv }, sources: jsonSources(s) });
+  saveJsonFixture(fixture, root);
+  assert.equal(inspectEvidence(bound(c16Env), root).baseline, true);
+  for (const requested of [pinned, null]) assert.throws(() => inspectEvidence(bound(requested), root), /JSON API load layout differs from binding/);
+  // A default result cannot stand in for a c-16 binding either.
+  const plain = temporary(t), other = await productionFixture(plain), o = other.summary;
+  saveJsonFixture(other, plain);
+  assert.throws(() => inspectEvidence({ request: { group: "json-api", round: o.round, commit: o.commit }, execution: { effectiveOptions: o.options },
+    resources: { expectedCpus: o.measurement.cpus, requestedCpuEnv: c16Env }, sources: jsonSources(o) }, plain), /JSON API load layout differs from binding/);
+});
+for (const [fault, canary, message] of [
+  ["schema", "SAVED_SCHEMA_CANARY", "current JSON campaign requires v2 evidence"],
+  ["malformed digest", "SAVED_DIGEST_CANARY", "invalid JSON producer digest: load-resource-proof.mjs"],
+  ["wrong digest", "a1".repeat(32), "JSON producer differs from bound commit: load-resource-proof.mjs"],
+]) {
+  test(`isolated JSON replay refuses a ${fault} without printing saved text`, (t) => {
+    const root = temporary(t), commit = "a".repeat(40), round = "j1";
+    const s = { schema: "json-api-results/v2", round, commit, options: {}, measurement: { cpus: {} },
+      producer: producerProvenance("json-api-producer/v3") };
+    const b = { request: { group: "json-api", round, commit }, execution: { effectiveOptions: s.options },
+      resources: { expectedCpus: s.measurement.cpus }, sources: jsonSources(s) };
+    if (fault === "schema") s.schema = canary;
+    else s.producer.sources["load-resource-proof.mjs"] = canary;
+    fs.writeFileSync(join(root, "summary.json"), JSON.stringify(s));
+    assert.throws(() => inspectEvidence(b, root), (error) => {
+      assert.ok(!inspect(error).includes(canary), "refusal echoes saved text");
+      assert.equal(error.message, message);
+      return true;
+    });
   });
 }
 test("marketplace uses its native schema, exact configuration and full excluded-candidate ledger", (t) => {

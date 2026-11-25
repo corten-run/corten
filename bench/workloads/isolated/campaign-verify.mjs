@@ -6,13 +6,13 @@ import { campaignRounds, exact, groupCampaignSchema, jsonPhase, mixedPhase, vali
 import { digest, inspectEvidence, phaseSnapshot, readRegular, supportedGroups, tree } from "./evidence.mjs";
 import { auditSubject, inspectPreparation, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
-import { replayJournal } from "./campaign-journal.mjs";
+import { readCampaignJournal, replayJournal } from "./campaign-journal.mjs";
 import { executionGroups, inspectNative } from "./native-replay.mjs";
 import { inspectLifetime, composeHostProof } from "./host-lifetime.mjs";
 import { commandResult, composePhase } from "./composition.mjs";
 import { registrySchema } from "../registry.mjs";
 import { alternateCampaignPlacements } from "./contract.mjs";
-import { udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
+import { verifyHostBoundary, verifyLifetimeSettledBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -52,16 +52,8 @@ export async function validateCampaign(input) {
     for (const outcome of status.outcomes) {
       if (!groups.includes(outcome.group)) assert.equal(outcome.outcome, "not-run", "unimplemented group cannot be claimed executed/qualified");
     }
-    const subtree = tree(join(folder, id)), events = subtree.entries.filter((e) => /^\d{5}-[a-z-]+\.json$/.test(e.path));
-    assert.ok(events.length > 0, "durable campaign journal missing");
-    const journal = [];
-    for (const [sequence, entry] of events.entries()) {
-      const event = read(`${id}/${entry.path}`);
-      assert.equal(event.schema, "benchmark-isolated-campaign-event/v1"); assert.equal(event.sequence, sequence);
-      assert.equal(event.campaign, id); assert.equal(event.round, round); assert.equal(event.campaignSha256, plan.campaignSha256);
-      assert.equal(entry.path, `${String(sequence).padStart(5, "0")}-${event.kind}.json`);
-      journal.push(event);
-    }
+    const campaignRoot = join(folder, id), subtree = tree(campaignRoot);
+    const journal = readCampaignJournal(campaignRoot, plan, id, subtree.entries.map(({ path }) => path)).map(({ event }) => event);
     const replay = replayJournal(plan, id, journal, status);
     let controlHost, apparatus, streamSeal, supervisedTerminal, offlineTerminal, offlineBootstrap;
     for (const [epoch, event] of replay.controlAdmissions) {
@@ -100,7 +92,7 @@ export async function validateCampaign(input) {
       offlineTerminal = { ...controlHost, token: replay.controlAdmissions.get("bootstrap").binding.token,
         bootstrapSealSha256: digest(JSON.stringify(offlineBootstrap.seal.ledger)) };
     }
-    const lastEvent = read(`${id}/${events.at(-1).path}`);
+    const lastEvent = journal.at(-1);
     assert.ok(isDeepStrictEqual(lastEvent.status, status), "terminal journal and result disagree");
     const collectionEntry = subtree.entries.find((e) => e.path === "collection-manifest.json");
     if (collectionEntry) {
@@ -163,7 +155,7 @@ export async function validateCampaign(input) {
         }
         const observation = inspectLifetime(recorded.binding, recorded.invocations[commandIndex],
           join(folder, id, entry.path, `command-${result.number}-host`),
-          { campaign: id, command: result.number, pid: result.pid, result: commandResult(result) });
+          { campaign: id, command: result.number, pid: result.pid, result: commandResult(result), phase });
         assert.equal(observation.manifestSha256, result.hostManifestSha256, "host observations differ from journal seal");
         if (hostBefore) assert.equal(observation.context.bootId, hostBefore.bootId);
         if (advanced) {
@@ -181,14 +173,13 @@ export async function validateCampaign(input) {
           if (offline) assert.equal(after.controlApparatus, undefined);
           const settlePath = `${entry.path}/host-after-settled.json`;
           if (subtree.entries.some((e) => e.path === settlePath)) {
-            const settlePolicy = status.executionVersion === 5 || offline ? udevSettlePolicy(group, phase) : null;
-            const lifetime = hostObservations.at(recorded.results.length - 1);
-            assert.ok(settlePolicy && recorded.results.length === recorded.invocations.length && lifetime?.status === "verified"
-              && lifetime.cleanupComplete && lifetime.terminalClock, "udev settle lacks an eligible sealed terminal lifetime");
+            assert.ok((status.executionVersion === 5 || offline) && recorded.results.length === recorded.invocations.length,
+              "udev settle lacks an eligible sealed terminal lifetime");
             settled = read(`${id}/${settlePath}`);
             if (offline) assert.equal(settled.controlApparatus, undefined);
             if (streamSeal) assert.ok(BigInt(settled.controlApparatus.sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
-            boundary = verifySettledHostBoundary(hostBefore, after, settled, lifetime.terminalClock, settlePolicy, offline);
+            boundary = verifyLifetimeSettledBoundary({ binding: recorded.binding, invocation: recorded.invocations.at(-1), round, phase,
+              lifetime: hostObservations.at(recorded.results.length - 1), before: hostBefore, after, settled, offline });
           } else boundary = verifyHostBoundary(hostBefore, after);
         }
         catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
@@ -333,7 +324,8 @@ export async function validateCampaign(input) {
     assert.ok(isDeepStrictEqual(tree(folder), snapshot), "saved campaign mutated during validation");
     const complete = currentExecution && status.state === "finished" && collectionEntry && !replay.incomplete && !replay.pending.length
       && verifiedGroups.length === plan.order.length && verifiedGroups.every((g, i) => g.group === plan.order[i]) && !blockers.length;
-    const loadLayout = groupScoped ? plan.bindings[0].resources.requestedCpuEnv?.CATALOG_LOAD_LAYOUT : undefined;
+    const cpuEnv = groupScoped ? plan.bindings[0].resources.requestedCpuEnv : undefined;
+    const loadLayout = cpuEnv?.CATALOG_LOAD_LAYOUT ?? cpuEnv?.JSON_API_LOAD_LAYOUT;
     const mode = groupScoped ? plan.bindings[0].campaignMode : undefined;
     const placement = alternateCampaignPlacements.includes(mode) ? mode : undefined;
     const common = { schema: groupScoped ? "benchmark-isolated-group-campaign-inspection/v1" : "benchmark-isolated-campaign-inspection/v1", scope: "intrinsic-evidence",
