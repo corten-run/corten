@@ -388,7 +388,9 @@ returns after them, fails the press. A failed press names its step in the check'
 press task not returning in time, failing or finding nothing to press, or what it led to not
 coming in time. The link to `/smoke/quoted` these checks then follow is
 pressed the same way, and that page must come in within five seconds counted from just before the
-press, a budget the press task shares. The page that reads itself again swaps `<main>` about a
+press, a budget the press task shares. It has come only once its own markup is drawn (its
+`<output id="quoted">`, which no other page has), so an empty or other `<main>` at that address
+does not count. The page that reads itself again swaps `<main>` about a
 second after it loads and whenever its answer changes, so a click that found the button (or the
 link) before a swap can reach nothing and send nothing
 ([#2035 Five more Firefox smoke cases fail intermittently under load](https://github.com/corten-run/corten/issues/2035)).
@@ -455,9 +457,10 @@ held write: each failure the page says
 is recorded with the wrapper's state at that moment and its target, compared with the form noted
 as it submitted that write, so a failure said at the headers, before the body, or said on the
 window or on another form, does not count as the body's.
-These cases, and the check that a write's patch answered before a navigation is
-drawn by that page, close their page in a `finally` too, the latter after letting go of the
-script it holds; one cleanup step that fails does not skip the next, and removing a route is
+These cases, the check that a write's patch answered before a navigation is drawn by that page,
+and the two checks of a write's patch to the layout beside another write's own page, close their
+page in a `finally` too, the latter after letting go of the script or write they hold; one cleanup
+step that fails does not skip the next, and removing a route is
 bounded to five seconds, so one that never settles does not keep the page open. Setting a route,
 starting a page's notes of what it draws and listening for its failures are bounded to five seconds
 each too, and so is each read of the page (an `evaluate` or a locator's, one made only for a
@@ -473,8 +476,11 @@ checks make is closed by the helper that makes it if making it, its route, its l
 fails, before a case holds it.
 That check counts only the
 reads of the page it goes back to, since the page that comes can prefetch the link left under the
-pointer. The check that a page part's answer that asks again takes the place of the page's tag
-needs an answer that asks: the write lands 1.5 s after it is sent and the part's first read comes
+pointer, and goes back only once the step before it saw the write answered once with its scripts
+held and the link's page read whole and come: otherwise it fails saying so, since a return that
+reads `<main>` alone shows nothing of a patch never left behind. The check that a page part's
+answer that asks again takes the place of the page's tag needs an answer that asks: the write lands
+1.5 s after it is sent and the part's first read comes
 a second after the page loads, so a loaded browser can find it landed. A first read that finds it
 landed is answered as the server answers one while it lands (its status line saying so, and a tag
 asking again from the same address); the check requires an answer that asked, and every later read
@@ -512,14 +518,19 @@ clears once the removal is confirmed, in a later one, and the route lets each re
 case is over, so neither acts on later checks if its removal is not confirmed. The slow part's reads
 that a case holds unanswered are let go when it ends, once its route has stopped holding any, a wait
 bounded to five seconds, after which its route is removed (bounded the same) and its page closed all
-the same, as its request listener is removed. The link a failed slow part shows is pressed in the
-page too; the page it opens must commit within five seconds counted from just before the press, a
-budget the press task shares, and have its part read in within five seconds of the check seeing that
-commit. The check that a read whose patch leaves the part as it was marks it failed requires that
-load's own read, answered by the route with its empty patch, and that answer received within five
-seconds from just before the load, since a read that fails leaves the same placeholder. It loads a
-fresh page of the same context, whose one document's read is the one it waits for, so a late read
-of an earlier document of the held page is not taken for it.
+the same, as its request listener is removed. The first check of a held slow part looks at it only
+once its load's read has reached the route, waiting up to five seconds for it: Firefox marks the
+part busy as its fetch starts, which can be before the route sees it. The link a failed slow part
+shows is pressed in the page too; the page it opens must commit within five seconds counted from
+just before the press, a budget the press task shares, and have its part read in within five
+seconds of the check seeing that commit. A press that fails names its step: the press task finding
+no link, failing or not returning in time, or the commit not coming in time or its wait failing.
+The check that a read whose patch leaves the part as it was marks it failed requires that load's
+own read, answered by the route with its empty patch, and that answer's headers and its whole body
+received without error (the response finished, and the request did not fail) within five seconds
+from just before the load, since a read that fails, a body cut after its headers included, leaves
+the same placeholder. It loads a fresh page of the same context, whose one document's read is the
+one it waits for, so a late read of an earlier document of the held page is not taken for it.
 
 The account page's posts without JavaScript (the name, the refused name and the picture) each
 press their button only once the page the previous post led to has loaded. That load, the post

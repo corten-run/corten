@@ -86,6 +86,8 @@ export async function partReads(page, browser, swaps, noSwaps) {
         );
       await held.goto(`${base}/`);
       await held.waitForSelector('#picks[aria-busy="true"]', { state: "attached", timeout: 5000 }).catch(() => {});
+      // The part is busy once its fetch starts, which in Firefox can be before the route sees it.
+      for (let waited = 0; reads < 1 && waited < 5000; waited += 100) await held.waitForTimeout(100);
       const loaded = await placeholder();
       // Busy: the runtime ran and sent the read, which the route holds unanswered.
       check("with JavaScript a slow part waiting says it is on its way and is busy, with no link for it", loaded.line && !loaded.link && loaded.busy === "true" && loaded.failed === null && loaded.reads === 1, JSON.stringify(loaded));
@@ -101,9 +103,10 @@ export async function partReads(page, browser, swaps, noSwaps) {
         check("and so does it in a page a client navigation drew", drawn.line && !drawn.link && drawn.busy === "true" && drawn.reads === 2 && documents === 0, JSON.stringify(drawn));
       } else skip("and so does it in a page a client navigation drew", noSwaps);
       // On a fresh page whose route answers each part read with an empty patch: the load's own read
-      // (the page's first part read, the only document it loads), and that exact answer received
-      // within 5 s from just before the load. A read that fails (offline) leaves the same
-      // placeholder, so only a part marked failed after this answer counts.
+      // (the page's first part read, the only document it loads), and that exact answer's headers
+      // and its body both received in full within 5 s from just before the load. A read that fails
+      // (offline, or a body cut after its headers) leaves the same placeholder, so only a part marked
+      // failed after this answer, finished, counts.
       const emptyPage = await opened("the empty patch case's page", context.newPage());
       fresh = emptyPage;
       await within(
@@ -116,10 +119,23 @@ export async function partReads(page, browser, swaps, noSwaps) {
           return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
         }),
       );
+      const emptyBy = performance.now() + 5000;
+      /** The load's read failing, its body cut after its headers included, with why. */
+      const emptyFailed = new Promise((resolve) =>
+        emptyPage.on("requestfailed", (r) => r === emptied[0] && resolve(new Error(r.failure()?.errorText || "the request failed"))),
+      );
       const emptyRead = emptyPage
         .waitForResponse((r) => r.request() === emptied[0], { timeout: 5000 })
         .then(
-          (r) => ({ status: r.status(), patch: r.headers()["corten-patch"] ?? null }),
+          (r) => {
+            const answer = { status: r.status(), patch: r.headers()["corten-patch"] ?? null };
+            // `finished()` gives null once the body came in full; a body cut after its headers fails
+            // the request, which Firefox may report only as `requestfailed`.
+            return within(Math.max(0, emptyBy - performance.now()), "not finished within 5 s of the load", Promise.race([r.finished(), emptyFailed])).then(
+              (error) => ({ ...answer, body: error ? `failed: ${String(error.message ?? error).split("\n")[0]}` : "finished" }),
+              (error) => ({ ...answer, body: String(error?.message ?? error).split("\n")[0] }),
+            );
+          },
           () => null,
         );
       await emptyPage.goto(`${base}/`);
@@ -128,7 +144,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
       const kept = await placeholder(emptyPage);
       check(
         "a read whose patch leaves the part as it was marks it failed, as it did not bring it",
-        emptyAnswer !== null && emptyAnswer.status === 200 && emptyAnswer.patch === "1" && kept.busy === null && kept.failed === "" && !kept.line && kept.link,
+        emptyAnswer !== null && emptyAnswer.status === 200 && emptyAnswer.patch === "1" && emptyAnswer.body === "finished" && kept.busy === null && kept.failed === "" && !kept.line && kept.link,
         JSON.stringify({ emptyAnswer, ...kept }),
       );
       answer = "abort";
@@ -140,30 +156,39 @@ export async function partReads(page, browser, swaps, noSwaps) {
       // page: a loaded Firefox's click can run out of its time before it lands, and then the page never
       // left (#2035). The page it opens commits within 5 s from just before the press: the press task
       // and the wait for the commit share those 5 s, and either one that settles after them fails the
-      // press, as one that never returns does. The page then has its part read in within 5 s of the
-      // check seeing that commit.
+      // press, as one that never returns does. A failed press says which step failed: the press task
+      // finding no link, failing or not returning in time, or the commit not coming in time or its
+      // wait failing. The page then has its part read in within 5 s of the check seeing that commit.
       let linkOpened = false;
       let listed = false;
+      /** Why the link's page did not open, once a step of its press failed. */
+      let notOpened = "the part showed no link to press";
       if (failed.link) {
+        const ranOut = "the 5 s from the press ran out";
         const until = performance.now() + 5000;
-        const press = steps(5000, "the page the link opens did not commit within 5 s of the press");
-        linkOpened = await press
-          .step(() =>
+        const press = steps(5000, ranOut);
+        let pressing = true;
+        try {
+          const found = await press.step(() =>
             held.evaluate(() => {
               const link = /** @type {HTMLAnchorElement | null} */ (document.querySelector("#picks a"));
               link?.click();
               return !!link;
             }),
-          )
-          .then(
-            (pressed) =>
-              pressed &&
-              press.step(() => held.waitForURL((url) => url.search === "?picks=true", { waitUntil: "commit", timeout: Math.max(1, until - performance.now()) })).then(() => true),
-          )
-          .then(
-            (committed) => committed === true,
-            () => false,
           );
+          if (!found) notOpened = "the press task found no link in the part";
+          else {
+            pressing = false;
+            await press.step(() => held.waitForURL((url) => url.search === "?picks=true", { waitUntil: "commit", timeout: Math.max(1, until - performance.now()) }));
+            linkOpened = true;
+          }
+        } catch (error) {
+          const why = press.over || (error instanceof Error ? error.message.split("\n")[0] : String(error));
+          if (pressing) notOpened = why === ranOut ? "the press task did not return within 5 s of the press" : `the press task failed: ${why}`;
+          // The wait's own timeout ends with the same 5 s, so one it reports once they are over ran out too.
+          else if (why === ranOut || performance.now() >= until) notOpened = "the page the link opens did not commit within 5 s of the press";
+          else notOpened = `the wait for the page the link opens to commit failed: ${why}`;
+        }
         listed =
           linkOpened &&
           (await held
@@ -176,7 +201,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
       check(
         "the page it links to has the slow part read in, with JavaScript too",
         linkOpened && listed && new URL(held.url()).search === "?picks=true",
-        `${held.url()}${linkOpened ? (listed ? "" : ", its part not read in within 5 s of its commit") : ", not opened within 5 s of the press"}`,
+        `${held.url()}${linkOpened ? (listed ? "" : ", its part not read in within 5 s of its commit") : `, ${notOpened}`}`,
       );
     } finally {
       answer = "closing";

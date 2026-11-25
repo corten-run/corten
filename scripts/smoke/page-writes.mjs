@@ -383,7 +383,7 @@ export async function pageWrites(page, browser) {
     await own.click('main a[href="/smoke/quoted"]');
     release();
     const arrived = await own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("[aria-busy]"), null, {
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("[aria-busy]"), null, {
         timeout: 5000,
       })
       .then(
@@ -444,7 +444,7 @@ export async function pageWrites(page, browser) {
     await own.click('main a[href="/smoke/quoted"]');
     release();
     const arrived = await own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
         timeout: 5000,
       })
       .then(
@@ -494,7 +494,7 @@ export async function pageWrites(page, browser) {
     const drewFirst = await brandIs("Count 1");
     await own.click('main a[href="/smoke/quoted"]');
     const arrived = await own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
         timeout: 5000,
       })
       .then(
@@ -528,7 +528,7 @@ export async function pageWrites(page, browser) {
     const written = await Promise.race([done, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
     await own.click('main a[href="/smoke/quoted"]');
     const arrived = await own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
         timeout: 5000,
       })
       .then(
@@ -547,8 +547,11 @@ export async function pageWrites(page, browser) {
   /**
    * Follows the link to /smoke/quoted, found and pressed in one page task, and whether that page
    * came in within 5 s counted from just before the press: the press task and the wait share those
-   * 5 s (`pressThen`). A page that reads itself again swaps <main> every second, so a Playwright
-   * click can find the link, then land once it is gone, and the page never leaves (#2035).
+   * 5 s (`pressThen`). It came once its own markup is drawn (its `<output id="quoted">`, which no
+   * other page has) with no form and nothing busy in <main>: the address alone is not the page, and
+   * an empty <main> has no form and nothing busy either. A page that reads itself again swaps <main>
+   * every second, so a Playwright click can find the link, then land once it is gone, and the page
+   * never leaves (#2035).
    * @param {import("@playwright/test").Page} own
    */
   const toQuoted = async (own) =>
@@ -560,7 +563,7 @@ export async function pageWrites(page, browser) {
           return !!link;
         }),
       "link to /smoke/quoted",
-      () => own.evaluate(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]")),
+      () => own.evaluate(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy]")),
       "/smoke/quoted",
     );
   // A write the server applied whose answer the network lost: the page shows the failure in its
@@ -674,20 +677,25 @@ export async function pageWrites(page, browser) {
     let answerFirst = () => {};
     const first = new Promise((resolve) => (answerFirst = () => resolve(undefined)));
     seen.hold = (writes) => (writes === 1 ? first : undefined);
-    await secondForm(own);
-    await own.click("main form button");
-    await own.click("#second-go");
-    const patched = await brandBecomes(own, "Count 2");
-    answerFirst();
-    const drewOver = await brandBecomes(own, "Count 1");
-    const arrived = await toQuoted(own);
-    const shown = await shownOf(own);
-    check(
-      overName,
-      patched && drewOver && arrived.ok && shown.brand === "Count 2" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ patched, drewOver, answers: seen.answers, arrived, asked: seen.asked, shown }),
-    );
-    await own.context().close();
+    // The held write is let go and the page closed (bounded) however the case ends.
+    try {
+      await within(5000, "the second form was not added within 5 s", secondForm(own));
+      await own.click("main form button");
+      await own.click("#second-go");
+      const patched = await brandBecomes(own, "Count 2");
+      answerFirst();
+      const drewOver = await brandBecomes(own, "Count 1");
+      const arrived = await toQuoted(own);
+      const shown = await readWithin("what the page shows after the link", shownOf(own));
+      check(
+        overName,
+        patched && drewOver && arrived.ok && shown.brand === "Count 2" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
+        JSON.stringify({ patched, drewOver, answers: seen.answers, arrived, asked: seen.asked, shown }),
+      );
+    } finally {
+      answerFirst();
+      await closeContext(own.context(), "the patch order case's context");
+    }
   }
   // The other order: the first write's own page draws (count 1), then the second write's patch,
   // made after it, draws the count the server has (2). Nothing is older than what is drawn, so the
@@ -701,20 +709,25 @@ export async function pageWrites(page, browser) {
     let answerSecond = () => {};
     const second = new Promise((resolve) => (answerSecond = () => resolve(undefined)));
     seen.hold = (writes) => (writes === 2 ? second : undefined);
-    await secondForm(own);
-    await own.click("main form button");
-    await own.click("#second-go");
-    const drewFirst = await brandBecomes(own, "Count 1");
-    answerSecond();
-    const patched = await brandBecomes(own, "Count 2");
-    const arrived = await toQuoted(own);
-    const shown = await shownOf(own);
-    check(
-      underName,
-      drewFirst && patched && arrived.ok && shown.brand === "Count 2" && shown.same && seen.asked.includes("GET /smoke/quoted nav"),
-      JSON.stringify({ drewFirst, patched, answers: seen.answers, arrived, asked: seen.asked, shown }),
-    );
-    await own.context().close();
+    // The held write is let go and the page closed (bounded) however the case ends.
+    try {
+      await within(5000, "the second form was not added within 5 s", secondForm(own));
+      await own.click("main form button");
+      await own.click("#second-go");
+      const drewFirst = await brandBecomes(own, "Count 1");
+      answerSecond();
+      const patched = await brandBecomes(own, "Count 2");
+      const arrived = await toQuoted(own);
+      const shown = await readWithin("what the page shows after the link", shownOf(own));
+      check(
+        underName,
+        drewFirst && patched && arrived.ok && shown.brand === "Count 2" && shown.same && seen.asked.includes("GET /smoke/quoted nav"),
+        JSON.stringify({ drewFirst, patched, answers: seen.answers, arrived, asked: seen.asked, shown }),
+      );
+    } finally {
+      answerSecond();
+      await closeContext(own.context(), "the patch order case's context");
+    }
   }
   /**
    * When the page noted a held body cut (or given) and the failure shown for it (`__bodyAt`,
@@ -1233,7 +1246,7 @@ export async function pageWrites(page, browser) {
     const between = await shownOf(own);
     await own.click('main a[href="/smoke/quoted"]');
     const arrived = await own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
         timeout: 5000,
       })
       .then(
@@ -1315,7 +1328,7 @@ export async function pageWrites(page, browser) {
       await own.click('main a[href="/smoke/quoted"]');
       release();
       const arrived = await own
-        .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+        .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
           timeout: 5000,
         })
         .then(
@@ -1331,27 +1344,30 @@ export async function pageWrites(page, browser) {
       // The patch was answered before that page was asked for, so the page's layout drew it: the
       // navigation after reads <main> alone, not the whole page again. Only its reads of
       // /smoke/written count: the pointer left on the link clicked above can make the page that comes
-      // prefetch /smoke/quoted, after the navigation's read (#2035).
-      const sinceReturn = seen.asked.length;
-      await within(
-        5000,
-        "the page was not sent back to /smoke/written within 5 s",
-        own.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/written")),
-      );
-      const returned = await own
-        .waitForFunction(() => location.pathname === "/smoke/written" && !!document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
-          timeout: 5000,
-        })
-        .then(
-          () => true,
-          () => false,
+      // prefetch /smoke/quoted, after the navigation's read (#2035). It needs what the step above
+      // saw: the write answered once with its scripts held, and the link's page read whole and come.
+      // Without them no patch was left behind, and a return that reads <main> alone shows nothing.
+      const returnName = "a write's patch answered before a navigation left it is drawn by that page, and the next navigation reads <main> alone";
+      if (!(stalled && seen.answers === 1 && arrived && seen.asked.includes("GET /smoke/quoted page"))) {
+        check(returnName, false, `no write's patch held and left by a whole navigation before the return: ${JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked })}`);
+      } else {
+        const sinceReturn = seen.asked.length;
+        await within(
+          5000,
+          "the page was not sent back to /smoke/written within 5 s",
+          own.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/written")),
         );
-      const reads = seen.asked.slice(sinceReturn).filter((a) => a.startsWith("GET /smoke/written "));
-      check(
-        "a write's patch answered before a navigation left it is drawn by that page, and the next navigation reads <main> alone",
-        returned && reads.join() === "GET /smoke/written nav",
-        JSON.stringify({ returned, reads, asked: seen.asked }),
-      );
+        const returned = await own
+          .waitForFunction(() => location.pathname === "/smoke/written" && !!document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+            timeout: 5000,
+          })
+          .then(
+            () => true,
+            () => false,
+          );
+        const reads = seen.asked.slice(sinceReturn).filter((a) => a.startsWith("GET /smoke/written "));
+        check(returnName, returned && reads.join() === "GET /smoke/written nav", JSON.stringify({ returned, reads, asked: seen.asked }));
+      }
     } finally {
       release();
       await cleanUp(
