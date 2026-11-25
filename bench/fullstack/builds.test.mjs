@@ -616,7 +616,7 @@ function runsForSpring(/** @type {string | undefined} */ condition) {
     if (condition[i] === "'") quoted = !quoted;
     else if (quoted) continue;
     else if (condition[i] === "(") depth += 1;
-    else if (condition[i] === ")") depth -= 1;
+    else if (condition[i] === ")") { depth -= 1; if (depth < 0) break; }
     else if (depth === 0 && condition.startsWith("||", i)) assert.fail(`cannot tell whether a parity step runs for Spring: if: ${condition}`);
     else if (depth === 0 && condition.startsWith(" && ", i)) { terms.push(condition.slice(from, i)); from = i + 4; }
   }
@@ -646,10 +646,13 @@ const springTestStepName = "Test native Spring alert persistence and source boun
  */
 function springParity(/** @type {string} */ workflowText, /** @type {number} */ imageSeconds) {
   const job = parseYaml(workflowText).jobs.parity;
-  /** @type {{ name?: string, id?: string, if?: string, run: string, "timeout-minutes"?: unknown }[]} */
-  const steps = job.steps.filter((/** @type {{ if?: string, run?: string }} */ step) => step.run && runsForSpring(step.if));
-  const builds = steps.filter((step) => /^node bench\/(catalog|marketplace)\/run\.mjs .*--build\b/.test(step.run));
-  assert.deepEqual(builds.map((step) => step.run.split(" ")[1]).sort(), ["bench/catalog/run.mjs", "bench/marketplace/run.mjs"],
+  // A run step, or an action step with its own timeout (an action with none, such as an upload, runs
+  // inside the time the sum leaves for the rest of the job).
+  /** @type {{ name?: string, id?: string, if?: string, run?: string, "timeout-minutes"?: unknown }[]} */
+  const steps = job.steps.filter((/** @type {{ if?: string, run?: string, "timeout-minutes"?: unknown }} */ step) =>
+    (step.run || step["timeout-minutes"] !== undefined) && runsForSpring(step.if));
+  const builds = steps.filter((step) => /^node bench\/(catalog|marketplace)\/run\.mjs .*--build\b/.test(step.run ?? ""));
+  assert.deepEqual(builds.map((step) => (step.run ?? "").split(" ")[1]).sort(), ["bench/catalog/run.mjs", "bench/marketplace/run.mjs"],
     "the parity job builds Spring's image once in each shared runner");
   for (const step of builds) {
     if (step["timeout-minutes"] !== undefined) assert.ok(imageSeconds <= stepSeconds(step), `${step.name}: its timeout stops before the image's Maven runs can`);
@@ -825,6 +828,9 @@ test("Spring bounds each Maven run inside the image build or step that contains 
   const catalogBuild = "      - name: Build and verify both catalog sources\n        run:";
   const springTestIf = `      - name: ${springTestStepName}\n        if: matrix.app == 'spring'\n`;
   const proofIf = "        id: spring_proof\n        if: matrix.app == 'spring'\n";
+  const parityCheckout = "    steps:\n      - uses: actions/checkout@v7\n      - uses: actions/setup-node@v7\n        with:\n          node-version-file: .node-version\n      - run: npm ci --no-audit --no-fund\n      - run: node bench/catalog/fixtures.mjs\n";
+  const routerIf = "        if: always() && matrix.app == 'react-router' && (steps.marketplace.outcome == 'success' || steps.marketplace.outcome == 'failure')\n";
+  assert.ok(workflowText.split(parityCheckout).length === 2 && workflowText.includes(routerIf), "the parity job's checkout or the React Router probe's condition moved");
   assert.ok(workflowText.includes(catalogBuild) && workflowText.includes(springTestIf) && workflowText.includes(proofIf), "the Catalog build, Spring test or proof step moved");
   // Actions ignores case, so these still run the proof for spring and leave the sum as it is.
   for (const to of ["        id: spring_proof\n        if: matrix.app == 'Spring'\n", "        id: spring_proof\n        if: contains(fromJSON('[\"SPRING\"]'), matrix.app)\n"]) {
@@ -838,6 +844,8 @@ test("Spring bounds each Maven run inside the image build or step that contains 
     [catalogBuild, catalogBuild.replace("\n        run:", "\n        timeout-minutes: 15\n        run:"), /stops before the image's Maven runs can/],
     [catalogBuild, catalogBuild.replace("\n        run:", "\n        if: matrix.app == 'spring' || matrix.app == 'gin'\n        run:"), /cannot tell whether/],
     [catalogBuild, catalogBuild.replace("\n        run:", "\n        if: matrix.app == 'gin' && always() || matrix.app == 'spring'\n        run:"), /cannot tell whether/],
+    [parityCheckout, parityCheckout.replace("@v7\n", "@v7\n        timeout-minutes: 20\n"), /do not cover Spring's/],
+    [routerIf, routerIf.replace("&& (steps.marketplace.outcome == 'success' || steps.marketplace.outcome == 'failure')", "&& )steps.marketplace.outcome == 'success' || steps.marketplace.outcome == 'failure'("), /cannot tell whether/],
     [springTestIf, `      - name: Extra\n        timeout-minutes: 20\n        run: "true"\n${springTestIf}`, /do not cover Spring's/],
   ])) assert.throws(() => springParity(workflowText.replace(from, to), image), refusal, `accepted ${to}`);
 
