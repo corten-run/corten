@@ -407,19 +407,25 @@ moment, so a brand drawn by a later whole read does not count.
 The checks that a failure stays shown while the page reads itself again require the page's first
 read of itself after the failure to be a navigation whose `<main>` is drawn, which a mark the
 stand-in puts in each navigation's `<main>` shows (a request alone is not a draw), and the failure
-still shown 500 ms after that draw. That first read is taken from the moment the stand-in failed
-(or answered) the write it follows, or from just before a held body is let go, not from when the
-check sees the failure, and must reach the stand-in within five seconds of that moment: the
-stand-in records the time of each outcome and request, so a read asked later fails however soon
-the check looks. Its `<main>` must be drawn within five seconds of the read reaching the stand-in,
-or be drawn already when the check first looks, which it does the moment it sees the read asked.
+already shown at that draw and still shown 500 ms after it: a poll drawn before the failure was
+shown is not one that kept it. That first read is taken from the moment the stand-in failed (or
+answered) the write it follows, or from a held body's release, not from when the check sees the
+failure, and must reach the stand-in within five seconds of that moment: the stand-in records the
+time of each outcome and request, and the page records the time it let a held body go, so a read
+asked later fails however soon the check looks. The page records, the moment it draws each mark,
+the time and whether the failure was shown; the `<main>` must be drawn within five seconds of the
+read reaching the stand-in by that recorded time, so a check that looks late neither fails a draw
+made in time nor passes one made after. The stand-in and the page record times by the same clock
+(`Date.now()`), since the browser runs on the machine that runs the checks.
 The whole-poll stylesheet case requires its
 write, that write's page, the poll's request for the held stylesheet (within five seconds from
 just before the press), the failing write and its failure in turn, then the next read after the
 hold is let go asked as a navigation and its answer drawn, which a mark the stand-in puts in each
 navigation's `<main>`
-shows, both within five seconds of the release. It does not make a press once a step before it
-failed, and lets go of the hold, removes its routes and closes its page however it ends. The
+shows, with the failure shown at that draw, both within five seconds of the release by the times
+recorded. It does not make a press once a step before it failed, and lets go of the hold, removes
+its routes and closes its page however it ends, setting and removing its route each bounded to
+five seconds. The
 cut-body cases take a failure as the body's only when the page's own wrapper of that write's
 answer, which runs once its headers came, says it cut (or gave) the body; with a second write,
 that wrapper must be asked for the first write's body within five seconds of the check seeing the
@@ -428,12 +434,16 @@ same moment, with nothing in `<main>` busy (the first form, outside it, still wa
 before the first write's body is let go, in a page task that does not wait for the body, bounded
 to five seconds. The body cut (or given in full) and its failure must then both come within five
 seconds, and the page's first failure must be the one expected, said after the wrapper cut (or
-gave) the body: each failure the page says is recorded with the wrapper's state at that moment, so
-a failure said at the headers, before the body, does not count as the body's.
+gave) the body, on the form that sent the held write: each failure the page says is recorded with
+the wrapper's state at that moment and its target, compared with the form noted as it submitted
+that write, so a failure said at the headers, before the body, or said on the window or on another
+form, does not count as the body's.
 These cases, and the check that a write's patch answered before a navigation is
 drawn by that page, close their page in a `finally` too, the latter after letting go of the
-script it holds; one cleanup step that fails does not skip the next. The page these checks make
-is closed by the helper that makes it if its route or its load fails, before a case holds it.
+script it holds; one cleanup step that fails does not skip the next, and removing a route is
+bounded to five seconds, so one that never settles does not keep the page open. The page these
+checks make is closed by the helper that makes it if its route or its load fails, before a case
+holds it.
 That check counts only the
 reads of the page it goes back to, since the page that comes can prefetch the link left under the
 pointer. The check that a page part's answer that asks again takes the place of the page's tag
@@ -444,16 +454,21 @@ asking again from the same address); the check requires an answer that asked, an
 is the server's. The tag the first drawn answer that asks again puts on the page has its address
 moved, the moment it is drawn, to one the server reads the same, and the read after that answer's
 must be made from the moved address: the read is made from the tag on the page, which a script may
-change, not from the answer's own. Each read takes its place among them as it reaches the
-stand-in, and its answer's status line carries that place, so the check that the part stops starts
-its 2.2 s without reads only once the first answer to draw `Saved.`, noted the moment it is drawn,
-is one that does not ask again, within five seconds counted from before the first check's wait for
-`Saved.`, and requires that no read came after the one whose answer drew it, counted from that
-read rather than from when the check saw the draw. Its route, request listener and init script on
-the shared page are removed, and its observer in the page disconnected, however it ends. The slow
-part's reads that a case holds unanswered are let go when it ends, a wait bounded to five seconds,
-after which its route is removed and its page closed all the same. The link a failed slow part
-shows is pressed in the page too;
+change, not from the answer's own. The case keeps one log of the page's reads of the alerts page
+(each part read, whatever its query, and each read of the page itself), started before the page is
+loaded; the document it loads is told from them by its own request, so a read of the page sent
+before that load ends counts against "read again, not the page". Each part read takes its place
+among the stand-in's answers as it reaches it, and its answer's status line carries that place, so
+the check that the part stops counts only once the first answer to draw `Saved.`, noted the moment
+it is drawn with the time the page drew it, is one that does not ask again, drawn within five
+seconds counted from before the first check's wait for `Saved.`. It then requires no read of the
+page at all in the log after the one whose answer drew it, until 2.2 s after that draw by the time
+the page recorded, not after the check saw it. Its route is set and removed each within five
+seconds, and its route, request listener and init script on the shared page are removed, and its
+observer in the page disconnected, however it ends; the init script then does nothing in the
+document it ran in. The slow part's reads that a case holds unanswered are let go when it ends, a
+wait bounded to five seconds, after which its route is removed (bounded the same) and its page
+closed all the same. The link a failed slow part shows is pressed in the page too;
 the page it opens must commit within five seconds counted from just before the press, a budget
 the press task shares, and have its part read in within five seconds of the check seeing that
 commit.

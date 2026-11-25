@@ -39,16 +39,21 @@ export async function partReads(page, browser, swaps, noSwaps) {
     /** Lets go of each read the route holds: its request is aborted and its handler returns. @type {(() => Promise<void>)[]} */
     const holds = [];
     // The held reads are let go, the route removed and the page closed however the case ends. Letting
-    // go is bounded, so a hold whose abort never settles does not keep the route or page.
+    // go, setting the route and removing it are each bounded, so one that never settles does not keep
+    // the route or page.
     try {
       // The runtime's read of the part is the page's own address, asked with `corten: action`.
-      await held.route(`${base}/`, (route) => {
-        if (route.request().headers().corten !== "action") return route.continue();
-        reads++;
-        if (answer === "hold") return new Promise((resolve) => holds.push(() => route.abort().catch(() => {}).finally(resolve)));
-        if (answer === "abort") return route.abort("internetdisconnected");
-        return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
-      });
+      await within(
+        5000,
+        "the held part's route was not set within 5 s",
+        held.route(`${base}/`, (route) => {
+          if (route.request().headers().corten !== "action") return route.continue();
+          reads++;
+          if (answer === "hold") return new Promise((resolve) => holds.push(() => route.abort().catch(() => {}).finally(resolve)));
+          if (answer === "abort") return route.abort("internetdisconnected");
+          return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
+        }),
+      );
       const read = () => held.waitForResponse((r) => r.request().headers().corten === "action", { timeout: 5000 }).catch(() => {});
       const placeholder = async () => ({
         reads,
@@ -131,7 +136,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
     } finally {
       await cleanUp(
         () => within(5000, "the held reads were not let go within 5 s", Promise.all(holds.splice(0).map((release) => release()))),
-        () => held.unrouteAll({ behavior: "ignoreErrors" }),
+        () => within(5000, "the held part's route was not removed within 5 s", held.unrouteAll({ behavior: "ignoreErrors" })),
         () => held.context().close(),
       );
     }

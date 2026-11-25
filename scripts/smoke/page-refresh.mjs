@@ -32,14 +32,27 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // reached, and the form beside them stays as the user has it. Its head's ReadAgain is for a
     // browser without JavaScript.
     {
-      /** @type {string[]} */
-      const parts = [];
-      /** @type {string[]} */
-      const whole = [];
+      // One log of the page's reads of the alerts page, started before the page is loaded, in the
+      // order the page sent them: each part read (a `corten: action` GET of `/alerts`, whatever its
+      // query) and each read of the page itself (any other GET of `/alerts?saved=`), with when it was
+      // sent (`Date.now()`). The document the case loads is told from them by its own request, and
+      // only what came after it counts, so a read sent before that load ends counts too.
+      /** @type {{ request: import("@playwright/test").Request, time: number, part: boolean }[]} */
+      const log = [];
       const onPart = (/** @type {import("@playwright/test").Request} */ r) => {
-        if (r.method() !== "GET" || !r.url().includes("/alerts?saved=")) return;
-        (r.headers()["corten"] === "action" ? parts : whole).push(r.url());
+        if (r.method() !== "GET") return;
+        const u = new URL(r.url());
+        const part = r.headers()["corten"] === "action";
+        if (u.pathname === "/alerts" && (part || u.searchParams.has("saved"))) log.push({ request: r, time: Date.now(), part });
       };
+      /** The document the case loaded, once it has. @type {import("@playwright/test").Request | null} */
+      let initial = null;
+      /** The log from after the document the case loaded (all of it if that was not seen). */
+      const since = () => log.slice(log.findIndex((e) => e.request === initial) + 1);
+      const parts = () => since().filter((e) => e.part);
+      const whole = () => since().filter((e) => !e.part);
+      /** A logged read, named for a check's detail, with when it was sent from `time`. @param {{ request: import("@playwright/test").Request, time: number, part: boolean }} e @param {number} time */
+      const named = (e, time) => `${e.part ? "part" : "page"} ${new URL(e.request.url()).pathname}${new URL(e.request.url()).search} (+${e.time - time} ms)`;
       const url = await pending();
       // The write lands 1.5 s after it is sent and the part is first read 1 s after the page has
       // loaded, so a loaded browser's first read can find it landed, and then no answer asks again
@@ -54,6 +67,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // which read's answer the page drew last, and which reads came after it.
       /** Each part read in the order it came (its address), then its answer: whether it asked again, and whether the stand-in gave it. @type {{ url: string, asks: boolean, standIn: boolean }[]} */
       const answers = [];
+      /** Each of those reads' request, by the same place. @type {import("@playwright/test").Request[]} */
+      const answered = [];
       const partReads = (/** @type {URL} */ u) => u.pathname + u.search === from || u.pathname + u.search === movedFrom;
       const partRead = async (/** @type {import("@playwright/test").Route} */ route) => {
         const request = route.request();
@@ -62,6 +77,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const asked = new URL(request.url());
         const address = asked.pathname + asked.search;
         answers.push({ url: address, asks: false, standIn: false });
+        answered.push(request);
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
         const headers = res.headers();
@@ -84,18 +100,24 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         // answer put in its place. The first answer the page draws whose tag asks again has that tag
         // moved to `movedFrom` the moment it is drawn, so the check can tell the tag on the page,
         // which a script may change, from the answer's. And the first answer whose status line the
-        // page draws as `Saved.`, noted the moment it is drawn (its `data-smoke-read`, below), so a
-        // later answer that draws `Saved.` again before the check looks is not taken for it.
+        // page draws as `Saved.`, noted the moment it is drawn with the time it was drawn (its
+        // `data-smoke-read`, below), so a later answer that draws `Saved.` again before the check
+        // looks is not taken for it. Once the case ends (`__smokeOff`) the script does nothing in
+        // the document it ran in.
         script = await page.addInitScript((movedFrom) => {
           const w = /** @type {any} */ (window);
-          document.addEventListener("DOMContentLoaded", () => {
-            w.__pageTag = document.querySelector("main template[data-corten-read-again][data-from]");
-          });
+          document.addEventListener(
+            "DOMContentLoaded",
+            () => {
+              if (!w.__smokeOff) w.__pageTag = document.querySelector("main template[data-corten-read-again][data-from]");
+            },
+            { once: true },
+          );
           if (location.pathname !== "/alerts") return;
           const observer = new MutationObserver(() => {
             const status = document.getElementById("alert-status");
             const read = status?.getAttribute("data-smoke-read");
-            if (!status || read == null) return;
+            if (w.__smokeOff || !status || read == null) return;
             if (w.__moved === undefined) {
               const tag = document.querySelector("main template[data-corten-read-again][data-from]");
               if (tag && tag !== w.__pageTag) {
@@ -103,7 +125,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                 w.__moved = read;
               }
             }
-            if (w.__firstSaved === undefined && status.textContent === "Saved.") w.__firstSaved = read;
+            if (w.__firstSaved === undefined && status.textContent === "Saved.") w.__firstSaved = { read, time: Date.now() };
             if (w.__moved !== undefined && w.__firstSaved !== undefined) observer.disconnect();
           });
           w.__smokeObserver = observer;
@@ -111,21 +133,22 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         }, movedFrom);
         try {
           // Inside the guard: Playwright registers the handler before it awaits the browser's setup.
-          await page.route(partReads, partRead);
-          await page.goto(url);
+          // Bounded, as its removal below is.
+          await within(5000, "the part route was not set within 5 s", page.route(partReads, partRead));
           page.on("request", onPart);
+          initial = (await page.goto(url))?.request() ?? null;
           const waiting = await saved();
           await page.fill("input[name=above]", "123.45");
           await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 8));
           const entries = await page.evaluate(() => history.length);
           // The check that the part stops needs `Saved.` drawn within 5 s from here, the wait below
-          // included.
-          const savedBy = performance.now() + 5000;
+          // included: by the draw's own time, recorded by the page.
+          const savedBy = Date.now() + 5000;
           await savedSoon();
           check(
             "a page's part waiting for a write is read again after a full load, not the page",
-            waiting === "Saving..." && (await saved()) === "Saved." && parts.length > 0 && whole.length === 0 && page.url() === url,
-            `${waiting} -> ${await saved()} after ${parts.length} part and ${whole.length} page reads`,
+            waiting === "Saving..." && (await saved()) === "Saved." && initial !== null && parts().length > 0 && whole().length === 0 && page.url() === url,
+            `${waiting} -> ${await saved()} after ${parts().length} part and ${whole().length} page reads${initial ? "" : " (the document loaded not seen)"}`,
           );
           const kept = await page.evaluate(() => ({
             marker: (/** @type {any} */ (window)).__marker,
@@ -150,53 +173,59 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           });
           const tags = tagged.tags;
           const movedRead = tagged.moved === null ? null : (answers[Number(tagged.moved) + 1]?.url ?? null);
+          const lastPart = parts().at(-1)?.request.url();
           check(
             "a page part's answer that asks again takes the place of the tag that asked",
-            answers.some((a) => a.asks) && tags.length === 1 && tags[0] === parts.at(-1) && tagged.pageTag && tagged.pageTagGone && movedRead === movedFrom,
-            `${JSON.stringify({ ...tagged, movedRead, movedFrom, answers })} after ${parts.at(-1)}`,
+            answers.some((a) => a.asks) && tags.length === 1 && tags[0] === lastPart && tagged.pageTag && tagged.pageTagGone && movedRead === movedFrom,
+            `${JSON.stringify({ ...tagged, movedRead, movedFrom, answers })} after ${lastPart}`,
           );
           // Quiet only once an answer that does not ask again has drawn `Saved.`, within 5 s from
-          // before the wait for it above: reads that stopped after an answer that asked again are not
-          // a part that stopped. The answer is the first to draw `Saved.`, noted as it was drawn, not
-          // the one drawn when the check looks (a later read that draws `Saved.` again would hide the
-          // read before it). Quiet is counted from that answer's read, not from when the check saw it
-          // drawn: no part read may come after that read's ordinal, by the end of the 2.2 s (a read
-          // sent between the draw and the check seeing it counts against it), nor any other part read
-          // in those 2.2 s.
-          const drawn = await pollFor(Math.max(0, savedBy - performance.now()), () =>
-            page.evaluate(() => /** @type {string | undefined} */ ((/** @type {any} */ (window)).__firstSaved) ?? undefined),
-          );
-          const last = drawn === null ? null : (answers[Number(drawn)] ?? null);
+          // before the wait for it above, by the time the page recorded as it drew it: reads that
+          // stopped after an answer that asked again are not a part that stopped. The answer is the
+          // first to draw `Saved.`, noted as it was drawn, not the one drawn when the check looks (a
+          // later read that draws `Saved.` again would hide the read before it). The 2.2 s are
+          // counted from that draw, not from when the check saw it, and no read of the page may come
+          // after that answer's own read in the log, whatever its address: a read sent between the
+          // draw and the check seeing it counts against it, as does one at the end of the 2.2 s.
+          const look = () =>
+            page.evaluate(() => /** @type {{ read: string, time: number } | undefined} */ ((/** @type {any} */ (window)).__firstSaved));
+          const first =
+            (await pollFor(Math.max(0, savedBy - Date.now()), look)) ?? (await within(5000, "the page did not say what it drew within 5 s", look()).catch(() => undefined));
+          const drawn = first && first.time <= savedBy ? first : null;
+          const last = drawn === null ? null : (answers[Number(drawn.read)] ?? null);
           const quiet = !!last && !last.asks;
-          const settled = parts.length;
-          if (quiet) await page.waitForTimeout(2200);
-          const later = quiet ? answers.length - (Number(drawn) + 1) : 0;
+          if (quiet && drawn) await page.waitForTimeout(Math.max(0, drawn.time + 2200 - Date.now()));
+          const terminal = quiet && drawn ? log.findIndex((e) => e.request === answered[Number(drawn.read)]) : -1;
+          const later = terminal < 0 || !drawn ? [] : log.slice(terminal + 1).map((e) => named(e, drawn.time));
           check(
             "a page's part stops once its patch no longer asks",
-            quiet && later === 0 && parts.length === settled,
+            quiet && terminal >= 0 && later.length === 0,
             quiet
-              ? `${later} reads after the read whose answer first drew Saved. (${drawn}), ${parts.length - settled} more reads in the 2.2 s`
-              : `no answer that does not ask again was the first to draw Saved., within 5 s (${JSON.stringify({ drawn, answers })})`,
+              ? terminal < 0
+                ? `the read whose answer first drew Saved. (${drawn?.read}) is not in the page's reads`
+                : `${later.length} reads after the read whose answer first drew Saved. (${drawn?.read}), to 2.2 s after that draw: ${later.join(", ") || "none"}`
+              : `no answer that does not ask again was the first to draw Saved., within 5 s (${JSON.stringify({ first, answers })})`,
           );
         } finally {
-          await page.unroute(partReads, partRead);
+          await within(5000, "the part route was not removed within 5 s", page.unroute(partReads, partRead));
         }
         if (swaps) {
-          const from = parts.length;
+          const from = parts().length;
+          const wholeFrom = whole().length;
           await go(await pending());
           await savedSoon();
           check(
             "a page's part reached by the runtime's navigation is read again, not the page",
-            (await saved()) === "Saved." && parts.length > from && whole.length === 1,
-            `${await saved()} after ${parts.length - from} part reads, ${whole.length} page loads (the navigation's)`,
+            (await saved()) === "Saved." && parts().length > from && whole().length - wholeFrom === 1,
+            `${await saved()} after ${parts().length - from} part reads, ${whole().length - wholeFrom} page loads (the navigation's)`,
           );
           // Away before the read: the runtime's navigation leaves the page, and its part is not read.
           await go(await pending());
-          const left = parts.length;
+          const left = parts().length;
           await page.click('header a[href="/news"]');
           await page.waitForFunction(() => document.title === "News | Watchlist");
           await page.waitForTimeout(2200);
-          check("navigating away stops a page's part reads", parts.length === left, `${parts.length - left} more reads`);
+          check("navigating away stops a page's part reads", parts().length === left, `${parts().length - left} more reads`);
         } else {
           for (const name of ["a page's part reached by the runtime's navigation is read again, not the page", "navigating away stops a page's part reads"]) skip(name, noSwaps);
         }
@@ -207,7 +236,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             within(
               5000,
               "the case's observer was not disconnected within 5 s",
-              page.evaluate(() => (/** @type {any} */ (window)).__smokeObserver?.disconnect()),
+              page.evaluate(() => {
+                const w = /** @type {any} */ (window);
+                w.__smokeOff = true;
+                w.__smokeObserver?.disconnect();
+              }),
             ),
           () => script?.dispose(),
         );
