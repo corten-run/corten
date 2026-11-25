@@ -182,7 +182,11 @@ the file, is kept only in `errors.log`. `--minutes`, `--window` (convergence),
 `--interval` (soak), `--vus`, `--rate`, `--targets` and `--sources` change the defaults;
 `--label key=value` (repeatable) adds a label to every container and network the pass creates,
 beside its ownership label. Like a timed round, a pass refuses to start without the current
-generated fixture (`node bench/marketplace/fixtures.mjs`). Results
+generated fixture (`node bench/marketplace/fixtures.mjs`). It reads that fixture once into a copy
+in the pass's own folder (`mounted-fixture`), checks and hashes the copy, and mounts only the copy,
+read-only, for the upstream and every app, so an edit to the original during a pass cannot change
+what a later cell serves; the copy is hashed again before the pass can be complete and removed at
+teardown. A container's log (`cold.log`, `app.log`) keeps its stderr as well as its stdout. Results
 go to `results/convergence/<name>/` and `results/soak/<name>/`, outside Git like other raw output.
 Every container is read, logged, sampled and removed by the ID Docker printed for it, after its
 owner label is checked; teardown also removes, by ID, anything else carrying the pass's owner label.
@@ -308,7 +312,9 @@ strictly later than the start, and so after the load's FinishedAt. A stream with
 unavailable, and so is one whose next marker row there is anything else (a copy of the second
 start, or a `die` stamped after the load finished but at or before that start): the runner does not
 stop at such a row, and the reader does not take it for the fence. An app event the client delivers after the second start and before the fence is
-read like any other. This still relies on the client delivering rows in the daemon's order up to
+read like any other. A marker row is a start, or the fence's `die`, only when its action is exactly
+that word with no detail after it (`markerIs`), in the runner and the reader alike, so a
+`start: detail` row counts as a start in neither. This still relies on the client delivering rows in the daemon's order up to
 the fence. Two start rows alone do not show that (two
 copies of the first would read as both), so the first two marker starts are witnesses that must
 bracket the load on the daemon's clock: the first at or before the load container's StartedAt, the
@@ -325,7 +331,10 @@ marker's ID, an action and a nanosecond time, so none of its rows is used), clea
 (with those events). "Restarted" is yes on any sign of a restart, no only when the stream was
 clean and nothing else showed one, and not established when the stream was unavailable and
 nothing else showed one; the container states and the memory samples are read independently of
-it. Latency intervals start at the k6 engine's start; memory
+it. What the `docker stats` and `docker events` clients write is bounded (`clientLimits` in
+[steady-run.mjs](steady-run.mjs): bytes read, characters in one row, rows read): past a limit that
+observation is unavailable at once, its client is stopped through its own bounded stop, and the
+pass goes on to its teardown as usual; a client's stderr past its limit is not kept. Latency intervals start at the k6 engine's start; memory
 samples are stamped on the workstation clock from the moment the load's `docker start` was issued,
 in intervals of their own of the same length, which lead the latency intervals by the load
 container's startup; restart events use the Docker daemon's clock. The report states both clocks.

@@ -819,6 +819,12 @@ test("a soak's two marker starts must be distinct and bracket the load: one at o
   assert.deepEqual(readEvents(start(-1) + row(marker, "die", -0.9) + row(app, "kill", 900) + start(1801) + row(marker, "die", 1801.1), ids), [{ action: "kill", atSeconds: 900 }]);
   // At the load's start exactly is still before it.
   assert.deepEqual(readEvents(start(0) + start(1801) + row(marker, "die", 1801.1), ids), []);
+  // A marker action with detail is not a start, in the reader as in the live watcher (markerIs): two
+  // `start: canary` rows bracketing the load and a later die show no start at all.
+  assert.throws(() => readEvents(row(marker, "start: canary", -1) + row(app, "kill", 900) + row(marker, "start: canary", 1801) + row(marker, "die", 1801.1), ids),
+    /^AssertionError \[ERR_ASSERTION\]: the event stream showed 0 of the marker's 2 starts, so it does not cover the soak$/);
+  // Nor is a die with detail the fence.
+  assert.throws(() => readEvents(start(-1) + start(1801) + row(marker, "die: canary", 1801.1), ids), /not that start's exit stamped later than it/);
   // Without the fence, a marker row after the second start stamped after the load finished, the
   // stream does not show the client delivered what came before that start: not read.
   const unfenced = /^AssertionError \[ERR_ASSERTION\]: the event stream's next marker row after its second start is not that start's exit stamped later than it, so it does not show the client delivered what came before that start$/;

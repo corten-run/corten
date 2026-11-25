@@ -20,7 +20,7 @@ import { inventory } from "./run-contract.mjs";
 import { groupApps } from "./groups.mjs";
 import { commandRunner } from "../catalog/output.mjs";
 import { parseSteadyArgs } from "./steady-contract.mjs";
-import { runSteady } from "./steady-run.mjs";
+import { combinedRunner, runSteady } from "./steady-run.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -29,6 +29,8 @@ const runId = `marketplace-${options.kind}-${options.name}-${randomBytes(5).toSt
 let interrupted = false;
 const { command, interrupt } = commandRunner({ cwd: repo, interrupted: () => interrupted, interruptMessage: `marketplace ${options.kind} pass interrupted` });
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { interrupted = true; interrupt(); });
+// A container log keeps its stderr as well as its stdout (combinedRunner); every other command is
+// Catalog's runner as it is.
 const summary = await runSteady({ options, folder: join(here, "results", options.kind, options.name), runId,
-  docker: (args, opts) => command("docker", args, opts), git: (args) => command("git", args), interrupted: () => interrupted });
+  docker: combinedRunner(command), git: (args) => command("git", args), interrupted: () => interrupted });
 if (!summary.complete) process.exitCode = 1;

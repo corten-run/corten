@@ -1,14 +1,14 @@
 // steady-run.mjs against a fake Docker and a fake docker stats client, like alert-probe-run.test.mjs:
 // the real runner, ownedResources and k6 readers, with no daemon, k6 or app.
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eventStream, memorySampler, runSteady } from "./steady-run.mjs";
+import { clientLimits, combinedRunner, eventStream, memorySampler, runSteady } from "./steady-run.mjs";
 import { convergenceLines, eventFormat, intervalSchedule, ownerLabelKey, parseSteadyArgs, timedStartup, validateConvergence, validateSoak } from "./steady-contract.mjs";
 import { steadyReport } from "./steady-report.mjs";
 import { resultSchema } from "./run-contract.mjs";
@@ -16,12 +16,19 @@ import { groupApps } from "./groups.mjs";
 import { apps } from "./contract.mjs";
 import { k6Image } from "../load-tool.mjs";
 import { runClock } from "./alert-probe-run.mjs";
+import { commandRunner } from "../catalog/output.mjs";
 
 const commit = "c".repeat(40);
 const k6ImageId = `sha256:${"5".repeat(64)}`, upstreamImageId = `sha256:${"4".repeat(64)}`;
 const appImageId = (image) => `sha256:${createHash("sha256").update(image).digest("hex")}`;
 const quiet = () => {};
 const pinnedEnv = { MARKETPLACE_APP_CPUS: "1", MARKETPLACE_LOAD_CPUS: "4-7", MARKETPLACE_API_CPUS: "2-3" };
+// The fixture a pass copies and mounts: a file of its own, not the checkout's Git-ignored one.
+const fixtureRoot = mkdtempSync(join(tmpdir(), "steady-run-fixture-"));
+after(() => rmSync(fixtureRoot, { recursive: true, force: true }));
+const fixtureFile = join(fixtureRoot, "marketplace.json");
+writeFileSync(fixtureFile, JSON.stringify({ item_1: { id: "item_1" } }));
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 // window-load.js's k6 summary export: `counts` requests per window, each served, plus `graceFailed`
 // requests answered with a failure during the graceful stop and `windowFailed` failures in windows.
@@ -167,7 +174,7 @@ const folderOf = (t) => {
   return (name) => join(root, name);
 };
 const run = (fake, options, folder, extra = {}) => runSteady({ options, folder, runId: "marketplace-test-run", docker: fake.docker, git, env: {}, window: 30, clock: runClock({ now: fake.now }),
-  fixture: () => "f".repeat(64), upstreamReady: async () => {}, print: quiet, spawnEvents: eventsClient(fake).spawn, eventBounds: { markerMs: 200, graceMs: 5, boundMs: 50 }, ...extra });
+  fixture: () => "f".repeat(64), fixtureFile, upstreamReady: async () => {}, print: quiet, spawnEvents: eventsClient(fake).spawn, eventBounds: { markerMs: 200, graceMs: 5, boundMs: 50 }, ...extra });
 // A fixed 150 requests/second soak's k6 export over 30 one-minute intervals, every arrival on schedule.
 const soakExport = (extra = {}) => k6Export(Array(30).fill(150 * 60), { clockMs: 1_800_000, arrivals: intervalSchedule({ rate: 150, seconds: 1800, windowSeconds: 60 }), ...extra });
 const flat = (n, rps = 1000, seconds = 15) => Array(n).fill(rps * seconds);
@@ -768,4 +775,171 @@ test("the event stream settles at its bound when something holds its pipes, and 
   plain.listeners[0](app, "kill", "2"); plain.listeners[0](marker, "start", "3");
   await good.marker(1);
   assert.equal(await good.stop(), `${app}|kill|2\n${marker}|start|3\n`);
+});
+
+test("the live watcher counts a marker start or exit only by the reader's exact action, never one with detail", async (t) => {
+  const folder = folderOf(t);
+  const app = "a".repeat(64), marker = "b".repeat(64);
+  // Two starts with detail: neither is a start, so the watcher never sees the first.
+  const detail = { listeners: [] }, client = eventsClient(detail);
+  const stream = eventStream({ app, marker, file: folder("detail.log"), spawn: client.spawn, markerMs: 30, graceMs: 5, boundMs: 50 });
+  detail.listeners[0](marker, "start: canary", "1"); detail.listeners[0](marker, "start: canary", "2"); detail.listeners[0](marker, "die", "3");
+  await assert.rejects(stream.marker(1), /did not show the marker's start 1 within 30 ms/);
+  await stream.stop();
+  // Two real starts, then a die with detail: that is not the fence.
+  const fenced = { listeners: [] }, other = eventsClient(fenced);
+  const second = eventStream({ app, marker, file: folder("fence.log"), spawn: other.spawn, markerMs: 30, graceMs: 5, boundMs: 50 });
+  fenced.listeners[0](marker, "start", "1"); fenced.listeners[0](marker, "start", "2"); fenced.listeners[0](marker, "die: canary", "3");
+  await second.marker(2);
+  await assert.rejects(second.fence(), /not that start's exit stamped later than it/);
+  await second.stop();
+});
+
+// A client that writes each of `chunks` as it is, one per turn, from the moment it starts, and
+// closes when signalled.
+function rawClient(chunks) {
+  const spawned = [];
+  const spawn = (binary, args) => {
+    const child = new EventEmitter();
+    Object.assign(child, { stdout: new PassThrough(), stderr: new PassThrough(), kills: [], unref() { child.unrefed = true; } });
+    child.kill = (signal = "SIGTERM") => {
+      child.kills.push(signal);
+      if (!child.ended) { child.ended = true; child.stdout.end(); child.stderr.end(); setImmediate(() => child.emit("close", null)); }
+      return true;
+    };
+    let index = 0;
+    const next = () => { if (child.ended || index >= chunks.length) return; child.stdout.write(chunks[index++]); setImmediate(next); };
+    setImmediate(next);
+    spawned.push({ binary, args, child });
+    return child;
+  };
+  return { spawn, spawned };
+}
+const settledTurns = () => new Promise((resolve) => setTimeout(resolve, 30));
+
+test("a stats or events client's output past its limits makes that observation unavailable at once and stops the client through its bounded stop", async (t) => {
+  const folder = folderOf(t);
+  const app = "a".repeat(64), marker = "b".repeat(64);
+  const row = JSON.stringify({ ID: app, Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" });
+  // A grace long enough that the fake client's close, not KILL, follows the TERM it stopped itself with.
+  const bounds = { graceMs: 1000, boundMs: 2000 };
+  // stats: one unterminated row longer than a row may be, more bytes than it may write, and more rows.
+  const cases = [
+    ["line", ["x".repeat(5000)], { line: 1024 }, /^docker stats wrote a row longer than 1024 characters, so its memory samples are unavailable$/],
+    ["bytes", [`${row}\n`, "y".repeat(4096), "z".repeat(4096)], { bytes: 6000 }, /^docker stats wrote more than 6000 bytes, so its memory samples are unavailable$/],
+    ["rows", Array(5).fill(`${row}\n`), { rows: 2 }, /^docker stats wrote more than 2 rows, so its memory samples are unavailable$/],
+  ];
+  for (const [name, chunks, limits, message] of cases) {
+    const client = rawClient(chunks);
+    const sampler = memorySampler({ ids: [app], file: folder(`${name}.log`), seconds: 5, spawn: client.spawn, ...bounds, limits: { ...clientLimits.stats, ...limits } });
+    await settledTurns();
+    // It stopped its client itself, before anything asked it to.
+    assert.deepEqual(client.spawned[0].child.kills, ["SIGTERM"], name);
+    await assert.rejects(sampler.stop(), (error) => { assert.deepEqual(error.errors.map((e) => message.test(e)), [true], `${name}: ${error.message}`); return true; });
+    assert.ok(readFileSync(folder(`${name}.log`)).length <= (limits.bytes ?? 8192), `${name}: what it kept is bounded`);
+  }
+  // stderr past its limit is not kept.
+  const noisy = rawClient([]);
+  const quietSampler = memorySampler({ ids: [app], file: folder("stderr.log"), seconds: 5, spawn: noisy.spawn, ...bounds, limits: { ...clientLimits.stats, stderr: 16 } });
+  noisy.spawned[0].child.stderr.write("e".repeat(1000));
+  await settledTurns();
+  await assert.rejects(quietSampler.stop(), /docker stats wrote to stderr/);
+  assert.equal(readFileSync(folder("stderr.log.stderr"), "utf8"), `${"e".repeat(16)}\n[stderr past its first 16 bytes was not kept]\n`);
+  // events: an unterminated row longer than a row may be fails the marker wait at once (not at its
+  // markerMs) and the stream is unavailable.
+  const events = rawClient([`${marker}|start|1\n`, "q".repeat(5000)]);
+  const stream = eventStream({ app, marker, file: folder("events.log"), spawn: events.spawn, markerMs: 10_000, ...bounds, limits: { ...clientLimits.events, line: 1024 } });
+  await stream.marker(1);
+  const started = Date.now();
+  await assert.rejects(stream.marker(2), /^Error: docker events wrote a row longer than 1024 characters$/);
+  assert.ok(Date.now() - started < 2000, "not left waiting for its markerMs");
+  assert.deepEqual(events.spawned[0].child.kills, ["SIGTERM"]);
+  await assert.rejects(stream.stop(), (error) => { assert.deepEqual(error.errors, ["docker events wrote a row longer than 1024 characters, so the stream is unavailable"]); return true; });
+  for (const [name, chunks, limits] of [["rows", Array(4).fill(`${marker}|start|1\n`), { rows: 3 }], ["bytes", [`${marker}|start|1\n`, "w".repeat(3000), "w".repeat(3000)], { bytes: 4000 }]]) {
+    const client = rawClient(chunks);
+    const s = eventStream({ app, marker, file: folder(`events-${name}.log`), spawn: client.spawn, markerMs: 10_000, ...bounds, limits: { ...clientLimits.events, ...limits } });
+    await settledTurns();
+    assert.deepEqual(client.spawned[0].child.kills, ["SIGTERM"], name);
+    await assert.rejects(s.stop(), new RegExp(`docker events wrote more than ${limits.rows ?? limits.bytes} ${limits.rows ? "rows" : "bytes"}, so the stream is unavailable`), name);
+  }
+});
+
+test("a soak whose stats and events clients overflow keeps its other observations, and its owned resources are still removed", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["soak", "t16", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps);
+  const fake = fakeDocker({ exportFor: () => soakExport(), clockMs: 1_800_000, loadMs: 50 });
+  const s = await run(fake, options, folder("overflow"), { spawnStats: rawClient(["s".repeat(5000)]).spawn, statsBounds: { graceMs: 5, boundMs: 50, limits: { ...clientLimits.stats, line: 1024 } },
+    spawnEvents: rawClient(["e".repeat(5000)]).spawn, eventBounds: { markerMs: 200, graceMs: 5, boundMs: 50, limits: { ...clientLimits.events, line: 1024 } } });
+  assert.equal(s.complete, true, JSON.stringify([s.failures, s.cells]));
+  validateSoak(s);
+  const [cell] = s.cells;
+  assert.deepEqual([cell.memory.unavailable, cell.restarts.eventStream, cell.restarts.restarted], ["memory sampling failed", "unavailable", null]);
+  const errors = errorsOf(folder("overflow"));
+  assert.match(errors, /docker stats wrote a row longer than 1024 characters, so its memory samples are unavailable/);
+  assert.match(errors, /docker events wrote a row longer than 1024 characters/);
+  assert.ok(!readFileSync(join(folder("overflow"), "summary.json"), "utf8").includes("eeee"));
+  assert.equal(s.cleanup.complete, true);
+  assert.equal(fake.containers.size, 0);
+});
+
+test("every container mounts a private copy of the verified fixture, so editing the original during a pass cannot change a later cell", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t17", "--apps", "corten,aspnet", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const original = folder("original.json"), verified = Buffer.from(JSON.stringify({ item_1: { id: "item_1" } }));
+  const suffix = ":/fixtures:ro";
+  // Each create that mounts /fixtures: its name, the mount's source and the hash of the bytes it
+  // would serve. Once the upstream is created, after setup, the original changes on every create.
+  const pass = async (name, change) => {
+    writeFileSync(original, verified);
+    const mounted = [];
+    const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args) => {
+      const spec = args[0] === "create" ? args.find((a) => a.endsWith(suffix)) : undefined;
+      if (spec) {
+        const source = spec.slice(0, -suffix.length);
+        mounted.push({ name: args[2], source, sha: sha256(readFileSync(join(source, "marketplace.json"))) });
+        change(mounted.length);
+      }
+      return undefined;
+    } });
+    const s = await run(fake, options, folder(name), { fixtureFile: original, fixture: sha256 });
+    return { s, mounted, fake };
+  };
+  const { s, mounted, fake } = await pass("edited", (n) => writeFileSync(original, JSON.stringify({ item_1: { id: `changed-${n}` } })));
+  assert.equal(s.complete, true, JSON.stringify([s.failures, s.cells]));
+  assert.equal(s.fixtureSha256, sha256(verified));
+  assert.deepEqual(mounted.map((m) => m.name), ["marketplace-test-run-upstream", "marketplace-test-run-corten", "marketplace-test-run-aspnet"]);
+  for (const m of mounted) assert.deepEqual([m.source, m.sha], [join(folder("edited"), "mounted-fixture"), s.fixtureSha256], m.name);
+  assert.notEqual(sha256(readFileSync(original)), s.fixtureSha256, "the original did change during the pass");
+  assert.ok(!existsSync(join(folder("edited"), "mounted-fixture")), "the copy is removed at teardown");
+  assert.equal(fake.containers.size, 0);
+  // The copy itself changed during the pass: the pass is not complete.
+  const copy = await pass("copy", (n) => { if (n === 2) writeFileSync(join(folder("copy"), "mounted-fixture", "marketplace.json"), "{}"); });
+  assert.deepEqual([copy.s.complete, copy.s.failures], [false, [{ stage: "suite", code: "fixture" }]]);
+  assert.match(errorsOf(folder("copy")), /the mounted fixture copy changed during the pass/);
+  assert.ok(!existsSync(join(folder("copy"), "mounted-fixture")));
+  // A missing original fails before any container.
+  rmSync(original);
+  const missingDocker = fakeDocker({ exportFor: () => k6Export(flat(8)) });
+  const missing = await run(missingDocker, options, folder("missing"), { fixtureFile: original, fixture: undefined });
+  assert.deepEqual([missing.complete, missing.failures], [false, [{ stage: "suite", code: "fixture" }]]);
+  assert.match(errorsOf(folder("missing")), /the marketplace fixture is missing/);
+  assert.ok(!missingDocker.calls.some((c) => c.args[0] === "create"), "no container was created");
+});
+
+test("a container log through the CLI's runner keeps stderr as well as stdout; every other command reaches Catalog's runner unchanged", async (t) => {
+  const { command } = commandRunner({ cwd: process.cwd() });
+  const script = ["-e", "process.stdout.write('out-line\\n'); process.stderr.write('err-line\\n')"];
+  // Catalog's runner itself returns only stdout on success, whatever option it is given.
+  assert.equal(await command(process.execPath, script, { combined: true, timeout: 20_000 }), "out-line");
+  const tmp = mkdtempSync(join(tmpdir(), "steady-combined-"));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  const runner = combinedRunner(command, process.execPath, { tmp });
+  const both = await runner(script, { combined: true, cleanup: true, timeout: 20_000 });
+  assert.ok(both.includes("out-line\n") && both.includes("err-line\n"), JSON.stringify(both));
+  assert.equal(await runner(script, { timeout: 20_000 }), "out-line");
+  assert.deepEqual(readdirSync(tmp), [], "its private output file is removed");
+  const calls = [];
+  const recorded = combinedRunner(async (binary, args, options) => { calls.push([binary, args, options]); return "ok"; });
+  await recorded(["ps", "-q"], { timeout: 5, cleanup: true, file: "load.log" });
+  assert.deepEqual(calls, [["docker", ["ps", "-q"], { timeout: 5, cleanup: true, file: "load.log" }]]);
 });

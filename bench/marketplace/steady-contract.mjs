@@ -246,6 +246,13 @@ export const windowClock = "windows are the k6 engine's clock from the start of 
 /** The format of a soak's live event stream (steady-run.mjs eventStream): one row per event. */
 export const eventFormat = "{{.Actor.ID}}|{{.Action}}|{{.TimeNano}}";
 /**
+ * Whether a marker row's action is exactly `name` ("start" or "die"), with no detail after it. The
+ * live watcher (steady-run.mjs eventStream) and the saved reader (readEvents) both count the marker's
+ * starts and find its fence with this one test, so a row one of them does not count as a start (a
+ * `start: detail`, say) the other does not count either.
+ */
+export const markerIs = (action, name) => typeof action === "string" && action === name;
+/**
  * The restart-relevant events of a soak's app from its live Docker event stream, with their time in
  * seconds from `startedAt` (the load container's StartedAt, on the daemon's clock as the events
  * are). `docker events --since/--until` replays only what the daemon still buffers (its last 256
@@ -299,9 +306,10 @@ export function readEvents(text, { app, marker, startedAt, finishedAt } = {}) {
     const name = action.split(":", 1)[0], at = BigInt(nanos);
     if (id === marker) {
       // The first marker row after the second start decides the fence: the second start's own exit,
-      // stamped later than that start, or nothing (false) whatever comes after it.
-      if (witnesses.length >= 2) fence ??= action === "die" && at > witnesses[1] ? at : false;
-      else if (name === "start") witnesses.push(at);
+      // stamped later than that start, or nothing (false) whatever comes after it. A marker action
+      // with detail is neither a start nor the fence (markerIs).
+      if (witnesses.length >= 2) fence ??= markerIs(action, "die") && at > witnesses[1] ? at : false;
+      else if (markerIs(action, "start")) witnesses.push(at);
       continue;
     }
     if (!restartActions.includes(name)) continue;
