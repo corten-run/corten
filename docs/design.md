@@ -10235,7 +10235,7 @@ rules something out.
     (`0c0c599cb`), `evidence/stage-header-checks-2002` (`2fb31fbaa`) and
     `evidence/placement-sizing-1999` (`912199b97`), and the third and fourth runs' time a
     placement, from the `progress.log`s under the last two (120 placements in 124 minutes 46
-    seconds on the third's API host, 132 a median 101 s apart in the fourth); 2026-11-25,
+    seconds on the third's API host, 132 a median 101 s apart in the fourth); 2026-11-25 (UTC),
     `bench/placement` run as a dry run, read for nothing, on a c-8 (a Xeon Platinum 8358, Linux
     6.12.117, rustc 1.100.0 with LLD 23.1.5): `e2d0c464e` against itself through a pilot part
     and a gated part of 6 placements each, and that commit against head `498291116` linked with
