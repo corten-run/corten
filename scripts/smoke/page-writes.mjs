@@ -372,31 +372,40 @@ export async function pageWrites(page, browser) {
     /** @type {() => void} */
     let asked = () => {};
     const waiting = new Promise((resolve) => (asked = () => resolve(true)));
-    // Held only while the write's page waits for it: the page the user goes to may need it too.
-    await own.route("**/scripts/quoted.js", async (route) => {
-      asked();
-      await held;
-      await route.fallback().catch(() => {});
-    });
-    await own.click("main form button");
-    const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-    await own.click('main a[href="/smoke/quoted"]');
-    release();
-    const arrived = await own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("[aria-busy]"), null, {
-        timeout: 5000,
-      })
-      .then(
-        () => true,
-        () => false,
+    // The held script is let go and the page closed (bounded) however the case ends.
+    try {
+      // Held only while the write's page waits for it: the page the user goes to may need it too.
+      await within(
+        5000,
+        "the held script's route was not set within 5 s",
+        own.route("**/scripts/quoted.js", async (route) => {
+          asked();
+          await held;
+          await route.fallback().catch(() => {});
+        }),
       );
-    const shown = await shownOf(own);
-    check(
-      leftName,
-      stalled && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ stalled, arrived, asked: seen.asked, shown }),
-    );
-    await own.context().close();
+      await own.click("main form button");
+      const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+      await own.click('main a[href="/smoke/quoted"]');
+      release();
+      const arrived = await own
+        .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("[aria-busy]"), null, {
+          timeout: 5000,
+        })
+        .then(
+          () => true,
+          () => false,
+        );
+      const shown = await readWithin("what the page shows after the link", shownOf(own));
+      check(
+        leftName,
+        stalled && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
+        JSON.stringify({ stalled, arrived, asked: seen.asked, shown }),
+      );
+    } finally {
+      release();
+      await closeContext(own.context(), "the left write case's context");
+    }
   }
   // Two writes from two forms, both done on the server, whose own pages are on their way. The
   // second's page comes first and waits for a module; then the first's comes and draws (made before
@@ -422,42 +431,56 @@ export async function pageWrites(page, browser) {
     /** @type {() => void} */
     let asked = () => {};
     const waiting = new Promise((resolve) => (asked = () => resolve(true)));
-    await own.route("**/scripts/quoted.js", async (route) => {
-      asked();
-      await held;
-      await route.fallback().catch(() => {});
-    });
-    await own.evaluate(() =>
-      document.body.insertAdjacentHTML("beforeend", __html('<form id="second-write" method="post" action="/smoke/written" data-patch><button id="second-go">Write</button></form>')),
-    );
-    await own.click("main form button");
-    await own.click("#second-go");
-    // The second write's page has come and waits for the module; then the first's comes and draws.
-    const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-    answerFirst();
-    const drewFirst = await own
-      .waitForFunction(() => document.querySelector("header span")?.textContent === "Count 1" && !!document.querySelector("main p"), null, { timeout: 5000 })
-      .then(
-        () => true,
-        () => false,
+    // The held write and script are let go and the page closed (bounded) however the case ends.
+    try {
+      await within(
+        5000,
+        "the held script's route was not set within 5 s",
+        own.route("**/scripts/quoted.js", async (route) => {
+          asked();
+          await held;
+          await route.fallback().catch(() => {});
+        }),
       );
-    await own.click('main a[href="/smoke/quoted"]');
-    release();
-    const arrived = await own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
-        timeout: 5000,
-      })
-      .then(
-        () => true,
-        () => false,
+      await within(
+        5000,
+        "the second form was not added within 5 s",
+        own.evaluate(() =>
+          document.body.insertAdjacentHTML("beforeend", __html('<form id="second-write" method="post" action="/smoke/written" data-patch><button id="second-go">Write</button></form>')),
+        ),
       );
-    const shown = await shownOf(own);
-    check(
-      bothName,
-      stalled && drewFirst && seen.answers === 2 && arrived && shown.brand === "Count 2" && seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ stalled, drewFirst, answers: seen.answers, arrived, asked: seen.asked, shown }),
-    );
-    await own.context().close();
+      await own.click("main form button");
+      await own.click("#second-go");
+      // The second write's page has come and waits for the module; then the first's comes and draws.
+      const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+      answerFirst();
+      const drewFirst = await own
+        .waitForFunction(() => document.querySelector("header span")?.textContent === "Count 1" && !!document.querySelector("main p"), null, { timeout: 5000 })
+        .then(
+          () => true,
+          () => false,
+        );
+      await own.click('main a[href="/smoke/quoted"]');
+      release();
+      const arrived = await own
+        .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+          timeout: 5000,
+        })
+        .then(
+          () => true,
+          () => false,
+        );
+      const shown = await readWithin("what the page shows after the link", shownOf(own));
+      check(
+        bothName,
+        stalled && drewFirst && seen.answers === 2 && arrived && shown.brand === "Count 2" && seen.asked.includes("GET /smoke/quoted page"),
+        JSON.stringify({ stalled, drewFirst, answers: seen.answers, arrived, asked: seen.asked, shown }),
+      );
+    } finally {
+      answerFirst();
+      release();
+      await closeContext(own.context(), "the two writes case's context");
+    }
   }
   // The other order: two writes from two forms. The first is done on the server but its answer
   // is held; the second's page, made after both writes (count 2), draws. Then the first's comes
@@ -476,9 +499,6 @@ export async function pageWrites(page, browser) {
     let reached = () => {};
     const done = new Promise((resolve) => (reached = () => resolve(true)));
     seen.hold = (writes) => (writes === 1 ? (reached(), first) : undefined);
-    await own.evaluate(() =>
-      document.body.insertAdjacentHTML("beforeend", __html('<form id="second-write" method="post" action="/smoke/written" data-patch><button id="second-go">Write</button></form>')),
-    );
     const brandIs = (/** @type {string} */ text) =>
       own
         .waitForFunction((text) => document.querySelector("header span")?.textContent === text, text, { timeout: 5000 })
@@ -486,28 +506,40 @@ export async function pageWrites(page, browser) {
           () => true,
           () => false,
         );
-    await own.click("main form button");
-    const written = await Promise.race([done, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-    await own.click("#second-go");
-    const drewSecond = await brandIs("Count 2");
-    answerFirst();
-    const drewFirst = await brandIs("Count 1");
-    await own.click('main a[href="/smoke/quoted"]');
-    const arrived = await own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
-        timeout: 5000,
-      })
-      .then(
-        () => true,
-        () => false,
+    // The held write is let go and the page closed (bounded) however the case ends.
+    try {
+      await within(
+        5000,
+        "the second form was not added within 5 s",
+        own.evaluate(() =>
+          document.body.insertAdjacentHTML("beforeend", __html('<form id="second-write" method="post" action="/smoke/written" data-patch><button id="second-go">Write</button></form>')),
+        ),
       );
-    const shown = await shownOf(own);
-    check(
-      laterName,
-      written && drewSecond && drewFirst && arrived && shown.brand === "Count 2" && seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ written, drewSecond, drewFirst, answers: seen.answers, arrived, asked: seen.asked, shown }),
-    );
-    await own.context().close();
+      await own.click("main form button");
+      const written = await Promise.race([done, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+      await own.click("#second-go");
+      const drewSecond = await brandIs("Count 2");
+      answerFirst();
+      const drewFirst = await brandIs("Count 1");
+      await own.click('main a[href="/smoke/quoted"]');
+      const arrived = await own
+        .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+          timeout: 5000,
+        })
+        .then(
+          () => true,
+          () => false,
+        );
+      const shown = await readWithin("what the page shows after the link", shownOf(own));
+      check(
+        laterName,
+        written && drewSecond && drewFirst && arrived && shown.brand === "Count 2" && seen.asked.includes("GET /smoke/quoted page"),
+        JSON.stringify({ written, drewSecond, drewFirst, answers: seen.answers, arrived, asked: seen.asked, shown }),
+      );
+    } finally {
+      answerFirst();
+      await closeContext(own.context(), "the later write case's context");
+    }
   }
   // A write the server has done, whose answer has not come when the user follows a link: the
   // navigation cuts it off, and since the write may have been applied, the next page is read whole
@@ -523,26 +555,31 @@ export async function pageWrites(page, browser) {
     let reached = () => {};
     const done = new Promise((resolve) => (reached = () => resolve(true)));
     seen.hold = () => (reached(), held);
-    await own.click("main form button");
-    // The server has done the write; its answer is held.
-    const written = await Promise.race([done, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-    await own.click('main a[href="/smoke/quoted"]');
-    const arrived = await own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
-        timeout: 5000,
-      })
-      .then(
-        () => true,
-        () => false,
+    // The held write is let go and the page closed (bounded) however the case ends.
+    try {
+      await own.click("main form button");
+      // The server has done the write; its answer is held.
+      const written = await Promise.race([done, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+      await own.click('main a[href="/smoke/quoted"]');
+      const arrived = await own
+        .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+          timeout: 5000,
+        })
+        .then(
+          () => true,
+          () => false,
+        );
+      const shown = await readWithin("what the page shows after the link", shownOf(own));
+      release();
+      check(
+        cutOffName,
+        written && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
+        JSON.stringify({ written, arrived, asked: seen.asked, shown }),
       );
-    const shown = await shownOf(own);
-    release();
-    check(
-      cutOffName,
-      written && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ written, arrived, asked: seen.asked, shown }),
-    );
-    await own.context().close();
+    } finally {
+      release();
+      await closeContext(own.context(), "the cut-off write case's context");
+    }
   }
   /**
    * Follows the link to /smoke/quoted, found and pressed in one page task, and whether that page
@@ -1336,20 +1373,18 @@ export async function pageWrites(page, browser) {
           () => false,
         );
       const shown = await readWithin("what the page shows after the link", shownOf(own));
-      check(
-        patchName,
-        stalled && seen.answers === 1 && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
-        JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked, shown }),
-      );
+      const leftWhole = stalled && seen.answers === 1 && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page");
+      check(patchName, leftWhole, JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked, shown }));
       // The patch was answered before that page was asked for, so the page's layout drew it: the
       // navigation after reads <main> alone, not the whole page again. Only its reads of
       // /smoke/written count: the pointer left on the link clicked above can make the page that comes
-      // prefetch /smoke/quoted, after the navigation's read (#2035). It needs what the step above
-      // saw: the write answered once with its scripts held, and the link's page read whole and come.
-      // Without them no patch was left behind, and a return that reads <main> alone shows nothing.
+      // prefetch /smoke/quoted, after the navigation's read (#2035). It needs all the step above
+      // passed on: the write answered once with its scripts held, the link's page read whole and
+      // come, and what the write changed drawn in the document the page kept. Without them no patch
+      // was left behind and drawn, and a return that reads <main> alone shows nothing.
       const returnName = "a write's patch answered before a navigation left it is drawn by that page, and the next navigation reads <main> alone";
-      if (!(stalled && seen.answers === 1 && arrived && seen.asked.includes("GET /smoke/quoted page"))) {
-        check(returnName, false, `no write's patch held and left by a whole navigation before the return: ${JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked })}`);
+      if (!leftWhole) {
+        check(returnName, false, `no write's patch held, left by a whole navigation and drawn by its page before the return: ${JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked, shown })}`);
       } else {
         const sinceReturn = seen.asked.length;
         await within(

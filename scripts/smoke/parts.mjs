@@ -1,4 +1,4 @@
-import { base, engine, skip, check, cleanUp, steps, within, readWithin, opened, closeContext } from "./helpers.mjs";
+import { base, engine, skip, check, cleanUp, steps, pollFor, within, readWithin, opened, closeContext } from "./helpers.mjs";
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -84,23 +84,33 @@ export async function partReads(page, browser, swaps, noSwaps) {
             link: await on.isVisible("#picks a"),
           }))(),
         );
+      /**
+       * Whether the route has seen `count` part reads within 5 s from now. The part is busy once its
+       * fetch starts, which in Firefox can be before the route sees it. Looked for by the route's own
+       * count, with no call to the browser, so a call that never settles cannot keep the case from
+       * its `finally`; a read the route sees after the 5 s does not count.
+       * @param {number} count
+       */
+      const routeSaw = async (count) => (await pollFor(5000, async () => reads >= count)) === true;
       await held.goto(`${base}/`);
       await held.waitForSelector('#picks[aria-busy="true"]', { state: "attached", timeout: 5000 }).catch(() => {});
-      // The part is busy once its fetch starts, which in Firefox can be before the route sees it.
-      for (let waited = 0; reads < 1 && waited < 5000; waited += 100) await held.waitForTimeout(100);
-      const loaded = await placeholder();
+      const readInTime = await routeSaw(1);
+      const loaded = { ...(await placeholder()), readInTime };
       // Busy: the runtime ran and sent the read, which the route holds unanswered.
-      check("with JavaScript a slow part waiting says it is on its way and is busy, with no link for it", loaded.line && !loaded.link && loaded.busy === "true" && loaded.failed === null && loaded.reads === 1, JSON.stringify(loaded));
+      check(
+        "with JavaScript a slow part waiting says it is on its way and is busy, with no link for it",
+        readInTime && loaded.line && !loaded.link && loaded.busy === "true" && loaded.failed === null && loaded.reads === 1,
+        JSON.stringify(loaded),
+      );
       if (swaps) {
         held.on("request", onDocument);
         await held.click('header nav a[href="/news"]');
         await held.waitForFunction(() => document.title === "News | Watchlist");
         await held.click('header nav a[href="/"]');
         await held.waitForFunction(() => location.pathname === "/" && !!document.querySelector('#picks[aria-busy="true"]'), null, { timeout: 5000 }).catch(() => {});
-        // The part is busy once its fetch starts, which in Firefox can be before the route sees it.
-        for (let waited = 0; reads < 2 && waited < 5000; waited += 100) await held.waitForTimeout(100);
-        const drawn = { ...(await placeholder()), documents };
-        check("and so does it in a page a client navigation drew", drawn.line && !drawn.link && drawn.busy === "true" && drawn.reads === 2 && documents === 0, JSON.stringify(drawn));
+        const readInTime = await routeSaw(2);
+        const drawn = { ...(await placeholder()), documents, readInTime };
+        check("and so does it in a page a client navigation drew", readInTime && drawn.line && !drawn.link && drawn.busy === "true" && drawn.reads === 2 && documents === 0, JSON.stringify(drawn));
       } else skip("and so does it in a page a client navigation drew", noSwaps);
       // On a fresh page whose route answers each part read with an empty patch: the load's own read
       // (the page's first part read, the only document it loads), and that exact answer's headers
@@ -119,7 +129,9 @@ export async function partReads(page, browser, swaps, noSwaps) {
           return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
         }),
       );
-      const emptyBy = performance.now() + 5000;
+      // The 5 s from just before the load, for the answer's body: a result that comes after them,
+      // though it came, is none (`steps`), and none is waited for once they are over.
+      const emptyBody = steps(5000, "not finished within 5 s of the load");
       /** The load's read failing, its body cut after its headers included, with why. */
       const emptyFailed = new Promise((resolve) =>
         emptyPage.on("requestfailed", (r) => r === emptied[0] && resolve(new Error(r.failure()?.errorText || "the request failed"))),
@@ -131,7 +143,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
             const answer = { status: r.status(), patch: r.headers()["corten-patch"] ?? null };
             // `finished()` gives null once the body came in full; a body cut after its headers fails
             // the request, which Firefox may report only as `requestfailed`.
-            return within(Math.max(0, emptyBy - performance.now()), "not finished within 5 s of the load", Promise.race([r.finished(), emptyFailed])).then(
+            return emptyBody.step(() => Promise.race([r.finished(), emptyFailed])).then(
               (error) => ({ ...answer, body: error ? `failed: ${String(error.message ?? error).split("\n")[0]}` : "finished" }),
               (error) => ({ ...answer, body: String(error?.message ?? error).split("\n")[0] }),
             );

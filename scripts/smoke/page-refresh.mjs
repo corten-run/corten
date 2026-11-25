@@ -321,13 +321,73 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             reached === "Saved." && parts().length > from && whole().length - wholeFrom === 1,
             `${reached} after ${parts().length - from} part reads, ${whole().length - wholeFrom} page loads (the navigation's)`,
           );
-          // Away before the read: the runtime's navigation leaves the page, and its part is not read.
-          await goTo(await readWithin("the pending write's page", pending()));
-          const left = parts().length;
-          await page.click('header a[href="/news"]');
-          await page.waitForFunction(() => document.title === "News | Watchlist");
-          await page.waitForTimeout(2200);
-          check("navigating away stops a page's part reads", parts().length === left, `${parts().length - left} more reads`);
+          // Away while the part still owes a read: the runtime's navigation reaches a page still
+          // saving, whose part reads are each held unanswered from then on, so the part cannot draw
+          // its last answer (`Saved.`) and stop on its own before the page leaves. Once the route
+          // holds a read with the page still saying `Saving...` (within 5 s), the page leaves by a
+          // link; then each held read is answered as one that asks again (the server's answer while
+          // the write lands), and no part read may come in the 2.2 s after that. Without a held read
+          // the check fails, since a part that has stopped says nothing about leaving it.
+          const awayUrl = await readWithin("the pending write's page", pending());
+          const awayFrom = new URL(awayUrl).pathname + new URL(awayUrl).search;
+          const awayReads = (/** @type {URL} */ u) => u.pathname + u.search === awayFrom;
+          /** Lets go of each part read the route holds, answering it as one that asks again. @type {(() => Promise<void>)[]} */
+          const owed = [];
+          /** Set once the page has left, or the case ends: the route lets each read through at once. */
+          let gone = false;
+          const holdPart = (/** @type {import("@playwright/test").Route} */ route) => {
+            const request = route.request();
+            if (gone || request.method() !== "GET" || request.headers()["corten"] !== "action") return route.fallback();
+            return new Promise((resolve) =>
+              owed.push(async () => {
+                try {
+                  // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+                  const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
+                  const headers = res.headers();
+                  delete headers["content-encoding"];
+                  delete headers["content-length"];
+                  const body = await res.text();
+                  const asks = body.includes(savedLine) && !body.includes("data-corten-read-again");
+                  await route.fulfill({
+                    status: res.status(),
+                    headers,
+                    body: asks ? `${body.replace(savedLine, savingLine)}<template data-corten-read-again="1" data-from="${awayFrom}"></template>` : body,
+                  });
+                } catch {
+                  // The page that sent it has left, or the read was cancelled: nothing to answer.
+                  await route.abort().catch(() => {});
+                } finally {
+                  resolve(undefined);
+                }
+              }),
+            );
+          };
+          /** Lets go of every read held so far, each within 5 s. */
+          const letGo = () => Promise.allSettled(owed.splice(0).map((go) => within(5000, "a held part read was not let go within 5 s", go())));
+          // The held reads are let go and the route removed (bounded) however the case ends.
+          try {
+            await within(5000, "the leaving case's part route was not set within 5 s", page.route(awayReads, holdPart));
+            await goTo(awayUrl);
+            /** The held reads and the status line, once the route holds one. */
+            const owes = await pollFor(5000, async () => owed.length > 0 && { held: owed.length, status: await page.textContent("#alert-status") });
+            const left = parts().length;
+            await page.click('header a[href="/news"]');
+            await page.waitForFunction(() => document.title === "News | Watchlist");
+            gone = true;
+            await letGo();
+            await page.waitForTimeout(2200);
+            check(
+              "navigating away stops a page's part reads",
+              !!owes && owes.status === "Saving..." && parts().length === left,
+              `${owes ? `${owes.held} part read held unanswered, the page saying ${owes.status}, as it left` : "no part read held within 5 s of reaching the page"}; ${parts().length - left} more reads`,
+            );
+          } finally {
+            gone = true;
+            await cleanUp(
+              () => letGo(),
+              () => within(5000, "the leaving case's part route was not removed within 5 s", page.unroute(awayReads, holdPart)),
+            );
+          }
         } else {
           for (const name of ["a page's part reached by the runtime's navigation is read again, not the page", "navigating away stops a page's part reads"]) skip(name, noSwaps);
         }
