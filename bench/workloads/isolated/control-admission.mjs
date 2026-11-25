@@ -100,14 +100,30 @@ add chain inet ${fenceTable} input { type filter hook input priority 10; policy 
 add rule inet ${fenceTable} input tcp dport 22 tcp flags & (fin | syn | rst | ack) == syn limit rate 8/minute burst 8 packets counter drop
 add rule inet ${fenceTable} input tcp dport 22 counter drop
 `;
-const nft = (args, input = "") => {
+// A refusal names only a fixed fence step and outcome class, never nft's output.
+export function fenceOutcome(result) {
+  if (result.error) return `error=${/^E[A-Z0-9]{1,31}$/.test(result.error.code) ? result.error.code : "unknown"}`;
+  if (result.signal) return `signal=${/^SIG[A-Z0-9]{1,15}$/.test(result.signal) ? result.signal : "unknown"}`;
+  return `exit=${Number.isSafeInteger(result.status) ? result.status : "unknown"}`;
+}
+const nft = (operation, args) => {
+  // No stdin input and no working directory dependency: Node gives a child a
+  // socket for piped stdin, and nft refuses `-f -` on a socket.
   const result = spawnSync("/usr/bin/taskset", ["-c", "0", "/usr/sbin/nft", ...args],
-    { cwd: "/bench", encoding: "utf8", input, timeout: 10000, maxBuffer: 8192,
+    { cwd: "/", encoding: "utf8", input: "", timeout: 10000, maxBuffer: 8192,
       env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" } });
-  assert.ok(!result.error && !result.signal && result.status === 0, "native SSH fence unavailable");
+  assert.ok(!result.error && !result.signal && result.status === 0, `native SSH fence unavailable: ${operation} ${fenceOutcome(result)}`);
   return result.stdout;
 };
-const fenceRead = () => JSON.parse(nft(["-j", "-a", "list", "table", "inet", fenceTable]));
+// A readback that does not parse or verify refuses with its step and class
+// only: parse and assertion messages can quote host output.
+function fenceChecked(step, verify, value) {
+  let checked;
+  try { checked = verify(value); } catch { assert.fail(`native SSH fence unavailable: ${step}`); }
+  return checked;
+}
+const fenceRead = (step) => fenceChecked(`${step} readback invalid`, JSON.parse,
+  nft(`${step} readback`, ["-j", "-a", "list", "table", "inet", fenceTable]));
 export function verifyOfflineFence(sample) {
   assert.deepEqual(Object.keys(sample), ["nftables"]);
   const [meta, ...rules] = sample.nftables;
@@ -149,17 +165,23 @@ export function verifyOfflineWindow(proof) {
   "pre-login probe counters regressed or diverged");
   return { packets: after.packets - before.packets, bytes: after.bytes - before.bytes };
 }
+/** Install the fence as one atomic argv batch and return its verified readback. */
+export function installOfflineFence() {
+  nft("install", [offlineFenceRules]);
+  const before = fenceRead("install");
+  fenceChecked("install readback policy mismatch", verifyOfflineFence, before);
+  return before;
+}
 export function beginOfflineWindow(binding) {
   // Block new SSH input before checking that the preceding guarded epoch
   // drained. On uncertainty leave the fence to systemd's terminal stop hook.
-  nft(["-f", "-"], offlineFenceRules);
-  const before = fenceRead(); verifyOfflineFence(before);
+  const before = installOfflineFence();
   const close = beginControlWindow(binding);
   return () => {
     close();
-    const proof = { before, after: fenceRead() };
-    const ingress = verifyOfflineWindow(proof);
-    nft(["delete", "table", "inet", fenceTable]);
+    const proof = { before, after: fenceRead("close") };
+    const ingress = fenceChecked("close readback policy mismatch", verifyOfflineWindow, proof);
+    nft("remove", ["delete", "table", "inet", fenceTable]);
     return { proof, ingress };
   };
 }

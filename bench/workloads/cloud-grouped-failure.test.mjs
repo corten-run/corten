@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { accountId, archive, commit, context, harness, metadata, syntheticInspection } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, metadata, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { fleetPlan, reservation, tags } from "./cloud-contract.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { digest, extractArchive, treeHash } from "./cloud-local.mjs";
@@ -12,8 +13,10 @@ import { verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { fleetChildOptions, readFleet, readGroup, verifyFleet } from "./fleet-verify.mjs";
+import { continuationAdmission, inspectContinuation } from "./group-continuation.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 import { streamLimits } from "./isolated/control-stream.mjs";
+import { processRecordKey } from "./isolated/host-lifetime.mjs";
 
 const round = "r37", campaign = "r37-0123456789abcdef";
 const retiredPid = 2147483647;
@@ -24,25 +27,29 @@ const canonical = (value) => JSON.stringify(value, (_, v) => v && typeof v === "
   ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]])) : v);
 
 function fixture(t, group, flags = {}) {
-  const json = group === "json-api", { preplan, handoff } = flags;
-  const closed = json || handoff, phase = closed ? "closed" : "invalid";
-  const single = preplan || handoff;
-  const fleetGroup = single ? join(`${group}--${round}`, group) : flags.fleetLayout ? group : undefined;
-  const h = harness(t, { ...flags, round, fleetGroup });
+  const json = group === "json-api", { preplan, handoff, exitOne } = flags;
+  const closed = json || handoff || exitOne, phase = closed ? "closed" : "invalid";
+  const single = preplan || handoff || exitOne;
+  const measured = exitOne ? "7c13920f87b6baa6c7f967027d2eff9358201e4c" : commit;
+  const measuredRound = exitOne ? "r78" : round, campaignId = exitOne ? "r78-0123456789abcdef" : campaign;
+  const fleetGroup = single ? join(exitOne ? group : `${group}--${measuredRound}`, group) : flags.fleetLayout ? group : undefined;
+  const h = harness(t, { ...flags, round: measuredRound, fleetGroup });
   if (fleetGroup) mkdirSync(h.base, { recursive: true });
   h.seed();
   const root = dirname(h.base);
   const region = json ? "blr1" : "sfo3";
-  const child = fleetPlan({ round, commit, token: "a".repeat(16), sshKey: "42", provider: { accountId, context },
+  const child = fleetPlan({ round: measuredRound, commit: measured, token: "a".repeat(16), sshKey: "42", provider: { accountId, context },
     tokens: single ? { [group]: "1".repeat(16) } : Object.fromEntries(h.saved().selection.groups.map(({ group }, index) => [group, String(index).padStart(16, "0")])) },
   "2026-11-21T00:00:00.000Z", "sfo3", { stagedPlacement: !flags.fleetLayout || single,
-    ...(single ? { single: { group, indexSha256: "b".repeat(64), checkout: h.repo } } : {}) });
-  if (fleetGroup) writeFileSync(join(root, `fleet-${round}.json`), JSON.stringify(child));
+    ...(single ? { single: { group, indexSha256: exitOne ? digest("[]") : "b".repeat(64), checkout: h.repo } } : {}) });
+  if (exitOne) writeFileSync(join(dirname(root), "index.json"), "[]");
+  if (fleetGroup) writeFileSync(join(root, `fleet-${measuredRound}.json`), JSON.stringify(child));
   const token = child.jobs.find((j) => j.group === group).token;
-  const saved = { ...h.saved(), ...reservation({ round, commit, token, group, fleet: child,
+  const saved = { ...h.saved(), ...reservation({ round: measuredRound, commit: measured, token, group, fleet: child,
     ...(!fleetGroup ? { remainingPlacement: { region, intentSha256: "a".repeat(64) } } : {}) }), provider: child.provider, status: "running",
-    ...(!flags.legacyKey ? { launchHostKeySha256: digest(establishedKey) } : {}) };
-  const binding = { round, commit, token, helperSha256: guardianSha256 };
+    ...(!flags.legacyKey ? { launchHostKeySha256: digest(establishedKey) } : {}),
+    ...(exitOne ? { bootstrapReady: { observedAt: "2026-11-21T00:00:00.000Z", sha256: digest("started") } } : {}) };
+  const binding = { round: measuredRound, commit: measured, token, helperSha256: guardianSha256 };
   const reg = { ...structuredClone(registration), binding,
     host: { ...registration.host, hostname: flags.foreignHostname ? "different-host" : saved.name } };
   const boot = { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: ["bootstrap"] };
@@ -53,14 +60,17 @@ function fixture(t, group, flags = {}) {
   const sealControl = controlRequest(saved, "ssh", [`root@${saved.ip}`, ":"], 60000, "bootstrap", [intent.invocation]);
   saved.control.ledger.push({ request: sealControl, localTerminal: true, code: 0 });
   h.change((s) => Object.assign(s, saved));
-  h.hosts([{ ...h.host(), name: saved.name, tags: [...tags, saved.tag], region: { slug: saved.host.region } }]);
+  h.hosts([{ ...h.host(), name: saved.name, tags: [...tags, saved.tag], size_slug: saved.host.size, region: { slug: saved.host.region } }]);
   const put = (name, value) => writeFileSync(join(h.local, name), JSON.stringify(value));
   put("monitor-registration.json", reg);
   const closedAtMs = Date.now() - 2 * streamLimits.leaseMs - 1000;
   put("monitor-local-closed.json", { binding, id: reg.id, code: closed ? 0 : 255, signal: null, remoteDrained: false,
     closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs });
+  const seal = exitOne ? JSON.stringify({ schema: "benchmark-control-stream-seal/v1", registration: reg,
+    lease: { id: reg.id, host: reg.host, expiresMonoNs: "4000000" }, sealedMonoNs: "2000000",
+    observations: [{ sequence: 1, monoNs: "1500000", registrationSha256: digest(JSON.stringify(reg)) }] }) : "synthetic seal";
   put(closed ? "monitor-terminal.json" : "monitor-invalid.json", { binding, id: reg.id, ...(closed
-    ? { localClosed: true, remoteDrained: false, nativeTerminal: true, campaign, sealSha256: digest("synthetic seal") }
+    ? { localClosed: true, remoteDrained: false, nativeTerminal: true, campaign: campaignId, sealSha256: digest(seal) }
     : { publicationRevoked: true, remoteTerminal: false }) });
   if (!closed) {
     writeFileSync(join(h.local, "operation.lock"), retainedOperation);
@@ -69,38 +79,111 @@ function fixture(t, group, flags = {}) {
   const sibling = join(h.base, "sibling.lock"); writeFileSync(sibling, "sibling stays locked");
   writeFileSync(join(h.local, "known_hosts"), flags.replaceKey ? "synthetic replacement\n" : establishedKey);
 
-  const mainRoot = json ? "bench/json-api/results/j75" : handoff ? `bench/marketplace/results/${round}` : "bench/fullstack-browser/work/w37";
+  const mainRoot = json ? "bench/json-api/results/j75" : exitOne ? "bench/client-heavy/work/w78"
+    : handoff ? `bench/marketplace/results/${round}` : "bench/fullstack-browser/work/w37";
   const outputRoots = json ? ["bench/json-api/results/j74", mainRoot] : [mainRoot];
-  const plan = { schema: "benchmark-isolated-group-campaign/v1", round, commit, order: [group],
-    bindings: [{ campaignMode: json ? "dedicated-blr1" : "dedicated", request: { group, round: json ? "j75" : handoff ? round : "w37", commit },
-      validation: { artifactRoot: mainRoot } }] };
+  const plan = { schema: "benchmark-isolated-group-campaign/v1", round: measuredRound, commit: measured, order: [group],
+    bindings: [{ campaignMode: json ? "dedicated-blr1" : "dedicated", request: { group, round: json ? "j75" : exitOne ? "w78" : handoff ? round : "w37", commit: measured },
+      validation: { artifactRoot: mainRoot },
+      ...(exitOne ? { preparation: { fixtures: [] }, execution: { invocation: {
+        executable: "node", argv: ["bench/client-heavy/run.mjs", "--out", mainRoot], cwd: "repository-root", shell: false } } } : {}) }] };
   plan.campaignSha256 = deploymentSha256(plan);
-  const attempt = { schema: "benchmark-isolated-campaign-reservation/v1", id: campaign, commit, campaignSha256: plan.campaignSha256 };
-  const status = { schema: "benchmark-isolated-campaign-status/v1", state: closed ? "finished" : "preserved-uncertain", round,
-    campaign, campaignSha256: plan.campaignSha256, controllerReady: false, isolation: "unverified", executionVersion: 5,
-    outcomes: [{ group, outcome: flags.lateSealFailure ? "native-validated" : json ? "failed" : "preserved-uncertain" }],
-    uncollectedNativeRoots: json || flags.lateSealFailure ? [] : [{ group, phase: "timing", artifactRoot: flags.foreignPath ?? mainRoot }] };
+  const nativePayload = "preserved raw failure output\n";
+  const nativeEntries = [{ path: "", type: "directory" }, { path: "failure.txt", type: "file", bytes: nativePayload.length, sha256: digest(nativePayload) }];
+  const nativeManifestSha256 = deploymentSha256(nativeEntries);
+  const attempt = { schema: "benchmark-isolated-campaign-reservation/v1", id: campaignId, commit: measured, campaignSha256: plan.campaignSha256 };
+  const status = { schema: "benchmark-isolated-campaign-status/v1", state: closed ? "finished" : "preserved-uncertain", round: measuredRound,
+    campaign: campaignId, campaignSha256: plan.campaignSha256, controllerReady: false, isolation: "unverified", executionVersion: 5,
+    outcomes: [{ group, outcome: flags.lateSealFailure ? "native-validated" : json || exitOne ? "failed" : "preserved-uncertain",
+      ...(exitOne ? { nativeManifestSha256 } : {}) }],
+    uncollectedNativeRoots: json || flags.lateSealFailure || exitOne && !flags.pending ? [] : [{ group, phase: "timing", artifactRoot: flags.foreignPath ?? mainRoot }],
+    ...(exitOne ? { nextGroup: null } : {}) };
+  const result = { status, wholeHostTerminal: "parent-must-observe", deletionAuthorized: false }, prefix = `campaign/${campaignId}/`;
   const entries = [{ name: "campaign/" }, ...(preplan ? [] : [{ name: "campaign/.host-attempt.json", body: JSON.stringify(attempt) },
-    { name: `campaign/${campaign}/` }, { name: `campaign/${campaign}/plan.json`, body: JSON.stringify(plan) },
-    { name: `campaign/${campaign}/campaign-result.json`, body: JSON.stringify({ status, wholeHostTerminal: "parent-must-observe", deletionAuthorized: false }) },
-    ...(closed ? [{ name: `campaign/${campaign}/control-stream-seal.json`, body: "synthetic seal" }] : [])])];
-  const wrapperFiles = metadata().map((e) => e.name === "exit-code" ? { ...e, body: "2\n" } : e);
-  if (preplan) {
-    const line = remoteFiles(saved)["job.sh"].split("\n").lastIndexOf("bootstrap_stage=native-entry") + 2;
-    wrapperFiles[0].body += `benchmark job failed: stage=native-entry line=${line} exit=2\n`;
+    { name: prefix }, { name: prefix + "plan.json", body: JSON.stringify(plan) },
+    { name: prefix + "campaign-result.json", body: JSON.stringify(result) },
+    ...(closed ? [{ name: prefix + "control-stream-seal.json", body: seal }] : [])])];
+  const wrapperFiles = metadata().map((e) => e.name === "exit-code" ? { ...e, body: exitOne ? `${flags.rawExit ?? 1}\n` : "2\n" } : e);
+  if (exitOne) {
+    const phaseDir = "00-client-heavy-timing/", phaseBinding = { group, phase: "timing", artifactRoot: flags.foreignPath ?? mainRoot };
+    const bootstrap = JSON.stringify({ binding, apparatus: reg });
+    const exit = { terminal: true, code: 1, signal: null, success: false, cancelled: false, forced: false, error: null };
+    const parent = "/system.slice/" + saved.unit, path = parent + "/native-0-" + "f".repeat(16);
+    const ancestors = [parent, "/system.slice", "/"].map(path => ({ path }));
+    const process = { stat: "2000 (node) S " + [...Array(18).fill("0"), "1234"].join(" "), cgroup: `0::${path}\n` };
+    const processKey = processRecordKey(process);
+    const host = {
+      "binding.json": { schema: "benchmark-isolated-host-lifetime/v1", campaign: campaignId, group, round: "w78", commit: measured,
+        bindingSha256: deploymentSha256(plan.bindings[0]), invocation: plan.bindings[0].execution.invocation, bootId: reg.host.bootId,
+        parent, path, command: 0, leaderPid: 2000, leaderIdentity: { pid: 2000, startTicks: "1234", comm: "node" }, ancestors },
+      "terminal.json": { terminal: true, attached: true, empty: true, command: exit, bootId: reg.host.bootId, ancestors, samples: 3 },
+      "samples.jsonl": [false, true, false].map((live, at) => ({ at, processes: live ? [processKey] : [],
+        groups: [{ path, files: { "cgroup.procs": live ? "2000\n" : "", "cgroup.events": live ? "populated 1\n" : "populated 0\n" } }] })),
+      [`processes/${processKey}.json`]: process,
+    };
+    flags.editHost?.(host);
+    const inventory = (root) => entries.filter(({ name }) => name.startsWith(root))
+      .map(({ name, body }) => ({ path: name.slice(root.length).replace(/\/$/, ""), type: name.endsWith("/") ? "directory" : "file",
+        ...(body === undefined ? {} : { bytes: Buffer.byteLength(body), sha256: digest(body) }) }))
+      .sort((a, b) => {
+        const left = a.path.split("/"), right = b.path.split("/");
+        for (let i = 0; i < Math.min(left.length, right.length); i++)
+          if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1;
+        return left.length - right.length;
+      });
+    entries.push(
+      { name: prefix + "control-bootstrap.json", body: bootstrap },
+      { name: prefix + phaseDir }, { name: prefix + phaseDir + "native/" }, { name: prefix + phaseDir + "native/failure.txt", body: nativePayload },
+      { name: prefix + phaseDir + "native-manifest.json", body: JSON.stringify({ entries: nativeEntries, sha256: nativeManifestSha256 }) },
+      { name: prefix + phaseDir + "command-0.log", body: "observed exit\n" },
+      { name: prefix + phaseDir + "command-0-host/" },
+      { name: prefix + phaseDir + "command-0-host/processes/" },
+      ...Object.entries(host).map(([name, value]) => ({ name: prefix + phaseDir + "command-0-host/" + name,
+        body: name.endsWith(".jsonl") ? value.map(row => JSON.stringify(row) + "\n").join("") : JSON.stringify(value) })),
+      { name: prefix + "control-stream-drain.json", body: JSON.stringify({ schema: "benchmark-control-stream-drain/v1", id: reg.id,
+        registrationSha256: digest(JSON.stringify(reg)), host: reg.host, identitiesAbsent: true, monoNs: "2500000",
+        listener: reg.listener, scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] }) });
+    const journal = [["authorized", {}], ["control-admitted", { epoch: "bootstrap", path: "control-bootstrap.json", sha256: digest(bootstrap), binding }],
+      ["started", {}], ["native-output-reserved", phaseBinding],
+      ["command-intent", { group, invocation: plan.bindings[0].execution.invocation }], ["command-started", { pid: 2000 }],
+      ["command-exited", { ...exit,
+        hostManifestSha256: deploymentSha256(inventory(prefix + phaseDir + "command-0-host/")) }],
+      ["phase-sealed", { ...phaseBinding, nativeManifestSha256, phaseManifestSha256: deploymentSha256(inventory(prefix + phaseDir)) }],
+      ["group-finished", { group, outcome: status.outcomes[0].outcome, nativeManifestSha256 }],
+      ["stream-sealed", { path: "control-stream-seal.json", sha256: digest(seal), binding }], ["finished", { status }]];
+    flags.editJournal?.(journal);
+    entries.push(
+      ...journal.map(([kind, detail], sequence) => ({ name: prefix + `${String(sequence).padStart(5, "0")}-${kind}.json`,
+        body: JSON.stringify({ schema: "benchmark-isolated-campaign-event/v1", kind, sequence,
+          campaign: campaignId, round: measuredRound, campaignSha256: plan.campaignSha256,
+          status: kind === "finished" ? status : { ...status, state: "active", nextGroup: sequence < 8 ? group : null,
+            outcomes: sequence < 8 ? [] : status.outcomes, uncollectedNativeRoots: sequence >= 3 && sequence <= 7 ? [phaseBinding] : [] },
+          ...detail }) })));
+    const records = inventory(prefix);
+    if (!flags.noManifest) entries.push({ name: prefix + "collection-manifest.json",
+      body: JSON.stringify({ ...result, manifest: { entries: records, sha256: deploymentSha256(records) } }) });
+    entries.push({ name: "control/" }, { name: "control/stream-terminal.json", body: "{}" });
   }
-  const wrapper = archive([...wrapperFiles, ...entries]); h.setArchive(wrapper);
+  if (preplan || exitOne && !flags.noNativeExitLog) {
+    const line = remoteFiles(saved)["job.sh"].split("\n").lastIndexOf("bootstrap_stage=native-entry") + 2;
+    wrapperFiles[0].body += `benchmark job failed: stage=native-entry line=${line} exit=${exitOne ? 1 : 2}\n`;
+  }
+  // Process-observation filenames are longer than the fixture tar's name field.
+  const members = entries.flatMap((entry) => entry.name.length <= 100 ? [entry] : [
+    { name: "././@LongLink", type: "L", body: entry.name + "\0" }, { ...entry, name: "long-name-member" },
+  ]);
+  const wrapper = archive([...wrapperFiles, ...members]); h.setArchive(wrapper);
   const copy = join(h.temp, "fixture-copy");
   for (const { name, body } of entries) {
     if (name.endsWith("/")) mkdirSync(join(copy, name), { recursive: true });
     else writeFileSync(join(copy, name), body);
   }
   const native = join(copy, "native"); mkdirSync(native);
-  const nativePayload = "preserved raw failure output\n";
   writeFileSync(join(native, "failure.txt"), nativePayload);
   const roots = [{ path: "/bench/campaign", present: true, treeSha256: treeHash(join(copy, "campaign")), nodes: entries.length, bytes: 100 },
     ...outputRoots.map((name, index) => index ? { path: `/bench/repo/${name}`, present: false }
       : { path: `/bench/repo/${name}`, present: true, treeSha256: treeHash(native), nodes: 2, bytes: nativePayload.length }),
+    ...(exitOne ? [{ path: "/bench/control", present: true, treeSha256: treeHash(join(copy, "control")), nodes: 2, bytes: 2 }] : []),
     ...[...wrapperFiles, { name: "results.tgz", body: wrapper }].map(({ name, body }) => {
       const bytes = Buffer.from(body);
       return { path: `/bench/${name}`, present: true, nodes: 1, bytes: bytes.length,
@@ -114,6 +197,7 @@ function fixture(t, group, flags = {}) {
   let probes = 0, custodyDownloads = 0, deleteExpiry;
   const run = (binary, args, ...rest) => {
     const script = args.at(-1);
+    if (exitOne && binary === "git" && args[0] === "rev-parse" && args[1] === "HEAD") return { status: 0, stdout: measured };
     if (preplan && ["ssh", "scp"].includes(binary)) {
       assert.ok(existsSync(join(h.local, "stream-recovery.lock")));
       assert.ok(binary === "ssh" ? script.includes("CORTEN_FAILED_NATIVE_HOST") : args.at(-2).endsWith(":/bench/failed-native-custody.tgz"));
@@ -127,6 +211,20 @@ function fixture(t, group, flags = {}) {
       assert.ok(args.includes("StrictHostKeyChecking=yes"));
       assert.ok(outputRoots.every((root) => script.includes(`/bench/repo/${root}`)));
       assert.ok(script.includes(reg.host.bootId));
+      if (exitOne) {
+        assert.ok(script.includes("v['ExecMainStatus'] == '1'"));
+        assert.ok(script.includes("small('/bench/exit-code', 16) == b'1\\n'"));
+        assert.ok(!script.includes("tarfile.open") && !script.includes("pack.sh;"));
+        flags.checkProbe?.(script);
+        if (flags.activeProof && probes === 2) return { status: 1, stdout: "" };
+        const observed = { schema: "benchmark-failed-native-host/v1", custody: true, historicalAccountingQualified: false,
+          hostId: saved.id, unit: saved.unit, roots: structuredClone(roots), metadataSha256,
+          snapshotSha256: digest(snapshot), archiveSha256: digest(wrapper), observedAtMs: Date.now(),
+          wrapper: { runLog: digest(wrapperFiles[0].body), host: digest(wrapperFiles[1].body) } };
+        flags.alterProof?.(observed, probes);
+        observed.snapshotSha256 = deploymentSha256({ roots: observed.roots, metadataSha256: observed.metadataSha256 });
+        return { status: 0, stdout: JSON.stringify(observed) };
+      }
       if (flags.refuseFirstProbe && probes === 1) {
         const id = rest[3].request.invocation.id;
         return shellTransport({ repo: h.repo, spawn: () => ({ status: 1, stdout: "",
@@ -152,13 +250,14 @@ function fixture(t, group, flags = {}) {
     }
     return h.run(binary, args, ...rest);
   };
-  return { h, root, sibling, wrapper, custody, roots, run, get probes() { return probes; }, get downloads() { return custodyDownloads; },
+  return { h, root, sibling, wrapper, custody, roots, run, measured, measuredRound, get probes() { return probes; }, get downloads() { return custodyDownloads; },
     get deleteExpiry() { return deleteExpiry; }, task: (deps = {}, options) => h.task({ run,
       inspect: () => assert.fail("native replay must not decide custody"), ...deps }, options) };
 }
 
 function singleFixture(t, flags, group) {
   const f = fixture(t, group, flags);
+  const { measured: commit, measuredRound: round } = f;
   const { h, root, wrapper } = f, options = { round, stateDir: h.base, retireFailedNative: true };
   const fleet = readFleet(root, round), child = fleetChildOptions(fleet, group, "detach");
   const job = { action: "detach", stateRoot: child.stateDir, controllerCommit: commit, options: child, fleetSha256: fleet.manifestSha256 };
@@ -206,12 +305,27 @@ function singleFixture(t, flags, group) {
 const preplanFixture = (t, flags) => singleFixture(t, { ...flags, preplan: true }, "fullstack-browser");
 
 async function handoffFixture(t, flags = {}) {
-  const f = singleFixture(t, { ...flags, handoff: true, lateSealFailure: true }, "localized-marketplace");
-  assert.equal(await f.task().collect(), 3);
+  const f = flags.exitOne ? singleFixture(t, flags, "client-heavy")
+    : singleFixture(t, { ...flags, handoff: true, lateSealFailure: true }, "localized-marketplace");
+  const { measured: commit, measuredRound: round } = f;
+  if (flags.exitOne) {
+    if (flags.collectFirst) {
+      let attempts = 0;
+      await assert.rejects(f.task({ inspect: () => { attempts++; throw new Error("synthetic offline replay unavailable"); } }).collect(),
+        /native campaign validation unavailable or invalid/);
+      assert.equal(attempts, 1);
+    } else await f.preserveWrapper();
+  } else assert.equal(await f.task().collect(), 3);
   const { h, repairCommit } = f, args = [round, "--state-dir", h.base, "--retire-failed-native"];
   const launched = [], knobs = {};
   let approval;
   const deps = { repo: h.repo, sleep: async () => {}, inspect: () => assert.fail("handoff retirement cannot validate native timing"),
+    interrupted() {
+      if (knobs.afterIntent && h.saved().deletionIntentAt) {
+        const hook = knobs.afterIntent; delete knobs.afterIntent; hook();
+      }
+      return false;
+    },
     write: (line) => { approval = JSON.parse(line); },
     spawn(binary, argv, options) {
       if (binary === "git") {
@@ -241,7 +355,7 @@ async function handoffFixture(t, flags = {}) {
       parts[parts.length - 1] = options.input.slice(JSON.stringify(request).length)
         .replace(/^set -euo pipefail\n/, "").replace(/\n$/, "");
       const result = f.run(binary, parts, options.timeout);
-      if (f.probes === 3) {
+      if (f.probes === (flags.exitOne ? 2 : 3)) {
         knobs.expire?.();
         knobs.finalFence?.();
       }
@@ -250,22 +364,415 @@ async function handoffFixture(t, flags = {}) {
     providerFactory: ({ createMode }) => Object.assign((argv, timeout, allowFail, expiry) => {
       assert.equal(createMode, null); launched.push(["provider", ...argv]);
       if (knobs.beforeFinalPending && argv[2] === "get" && f.probes === 2) knobs.beforeFinalPending();
-      if (knobs.beforeIntent && argv[2] === "get" && f.probes === 3 && !h.saved().deletionIntentAt) knobs.beforeIntent();
+      if (knobs.beforeIntent && argv[2] === "get" && f.probes === (flags.exitOne ? 2 : 3) && !h.saved().deletionIntentAt) knobs.beforeIntent();
       if (knobs.dispatchAccount && argv[0] === "account" && h.saved().deletionIntentAt) knobs.dispatchAccount();
+      if (argv[0] === "account" && f.probes === 2) knobs.finalAccount?.();
       if (knobs.exactRead && argv[2] === "get" && h.saved().deletionIntentAt) knobs.exactRead();
       if (knobs.failExactRead && argv[2] === "get")
         return { status: 1, providerDiagnostic: { code: "get-http", httpStatus: 500 } };
       if (argv[2] === "delete") {
         assert.ok(Number.isSafeInteger(expiry) && Date.now() < expiry && expiry - Date.now() <= 60000);
         assert.ok(existsSync(join(h.local, "failed-native-host.json")));
+        if (knobs.unsent) return { status: 1, stdout: "", stderr: "", deleteNotDispatched: true };
       }
-      return f.run("doctl", argv, timeout, allowFail, expiry);
+      const result = f.run("doctl", argv, timeout, allowFail, expiry);
+      if (argv[2] === "delete") knobs.afterDelete?.();
+      return result;
     }, { close: async () => { knobs.close?.(); } }),
   };
-  return { f, launched, knobs,
+  return { f, launched, knobs, deps,
     async preview() { assert.equal(await productionMain([...args, "--print-approval"], deps), 3); return approval; },
     retire: (approved) => productionMain([...args, "--approve-reviewed-merged-ready", approved.approvalSha256], deps) };
 }
+
+const probeCodeTest = `
+import ast, contextlib, hashlib, sys
+from types import SimpleNamespace
+source = sys.stdin.read()
+compile(source, 'retirement probe', 'exec')
+method = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == 'accounted_work')
+def opened(path, flags):
+    assert path == '/bench/repo/bench/client-heavy/work' and flags == 3
+    return 42
+def scan(fd):
+    assert fd == 42
+    return contextlib.nullcontext(entries)
+os = SimpleNamespace(O_RDONLY=1, O_DIRECTORY=2, scandir=scan, close=lambda fd: None)
+c = {'roots': ['/bench/campaign', '/bench/repo/bench/client-heavy/work/w78']}
+exec(compile(ast.Module(body=[method], type_ignores=[]), 'work proof', 'exec'))
+def entry(name, directory=True):
+    def is_dir(*, follow_symlinks):
+        assert follow_symlinks is False
+        return directory
+    return SimpleNamespace(name=name, is_dir=is_dir)
+for entries, valid in [([], True), ([entry('w78')], True), ([entry('w78', False)], False),
+        ([entry('w78'), entry('w78.compiler')], False), ([entry('.compiler-owner-leftover')], False)]:
+    try:
+        accounted_work()
+    except AssertionError:
+        assert not valid
+    else:
+        assert valid
+first = source.index('# Read-only: this route')
+last = source.index('# Both the captured paths', first)
+archive = compile(source[first:last], 'archive proof', 'exec')
+c.update(captureSha256='snapshot', fence={}, bounds={'compressed': 16}, archiveSha256=hashlib.sha256(b'original').hexdigest())
+snapshot_sha = 'snapshot'
+inventories = [[{'kind': 'f', 'metadata': [0, 0, 0, 1, 8]}]]
+def consume(path, row, write):
+    assert path == '/bench/results.tgz' and row is inventories[-1][0]
+    write(payload)
+for payload in [b'original', b'modified']:
+    try:
+        exec(archive)
+    except AssertionError:
+        assert payload == b'modified'
+    else:
+        assert payload == b'original'
+`;
+
+test("bound exit one needs new approval, and continuation waits for exact absence", async (t) => {
+  const python = process.platform === "win32" ? "python" : "python3";
+  const available = spawnSync(python, ["--version"], { timeout: 3000, windowsHide: true }).status === 0;
+  if (!available) t.diagnostic("Python unavailable; generated probe source checks skipped");
+  const checkProbe = available ? (script) => {
+    const program = script.split("\n").slice(1, -1).join("\n");
+    const r = spawnSync(python, ["-I", "-c", probeCodeTest], { input: program, encoding: "utf8", timeout: 5000, windowsHide: true });
+    assert.equal(r.status, 0, r.stderr);
+  } : undefined;
+  const { f, preview, retire, knobs, launched } = await handoffFixture(t, { exitOne: true, collectFirst: true, deleteLost: true, checkProbe });
+  const { h } = f, input = { repo: h.repo, inspect: () => assert.fail("retirement cannot replay native timing") };
+  const continuation = dirname(f.root);
+  const admit = () => continuationAdmission(continuation, "client-heavy", input);
+  const report = () => verifyFleet({ root: f.root, round: f.measuredRound, commit: f.measured }, input);
+  const original = readFileSync(h.statePath), extract = join(h.local, h.saved().evidence), originalTree = treeHash(extract);
+  assert.equal(h.saved().validation, undefined);
+  assert.equal(h.saved().deletionIntentAt, undefined);
+  assert.deepEqual(readFileSync(join(h.local, "results.tgz")), f.wrapper);
+  await assert.rejects(admit(), /requires confirmed absence/);
+  const p = await preview();
+  assert.equal(p.recovery.policy, "r78-client-heavy-sealed-exit-one-retirement-only");
+  assert.equal(p.recovery.intent.launch, digest(readFileSync(f.intentPath)));
+  assert.equal(p.reservationSha256, digest(original));
+  assert.deepEqual(launched, []);
+  await assert.rejects(retire(p), /acknowledgement lost/);
+  assert.equal(h.saved().status, "retired");
+  assert.equal(h.saved().destroyedAt, undefined);
+  assert.equal((await report()).groups[0].outcome, "cleanup-pending");
+  await assert.rejects(admit(), /requires confirmed absence/);
+  await assert.rejects(retire(p), /explicit operator-approved exact action required/);
+  const before = launched.length;
+  knobs.failExactRead = true;
+  await assert.rejects(retire(await preview()), /exact host observation failed/);
+  assert.equal(h.saved().destroyedAt, undefined);
+  knobs.failExactRead = false;
+  assert.equal(await retire(await preview()), 1);
+  assert.ok(launched.slice(before).every((row) => row[0] === "provider" && row.includes("get")));
+  const saved = h.saved(), receipt = verifyFailedNativeRetirement(h.local, saved);
+  assert.equal(receipt.schema, "benchmark-failed-native-retirement/v3");
+  assert.equal(receipt.reservationSha256, digest(original));
+  assert.equal(receipt.observation.proof.archiveSha256, saved.archiveSha256);
+  assert.equal(saved.fullGroupQualified, false);
+  assert.ok(saved.destroyedAt && ["validation", "exitCode", "collectedAt", "evidenceOutcome"].every(k => saved[k] === undefined));
+  assert.equal(h.deletes, 1); assert.equal(h.creates, 0);
+  assert.equal(f.probes, 2); assert.equal(f.downloads, 0);
+  assert.deepEqual(readFileSync(join(h.local, "results.tgz")), f.wrapper);
+  assert.equal(treeHash(extract), originalTree);
+  assert.deepEqual(readFileSync(join(h.local, "failed-native-reservation.json")), original);
+  assert.equal((await report()).groups[0].outcome, "native-failed-retired");
+  assert.equal((await admit()).rows.find(r => r.group === "client-heavy").retryable, true);
+  const after = await inspectContinuation(continuation, input);
+  assert.ok(after.report.eligibleToRun.includes("client-heavy"));
+  assert.equal(after.report.publishableBaseline, false);
+});
+
+test("exit-one preview refuses unsafe saved scopes before provider access", async (t) => {
+  for (const [name, flags, refusal] of [
+    ["successful raw exit", { rawExit: 0 }, /failed-native-capture/], ["unknown raw exit", { rawExit: 3 }, /failed-native-capture/],
+    ["native validated", { lateSealFailure: true }, /intrinsically failed/], ["pending root", { pending: true }, /pending native output/],
+    ["unaccounted journal root", { foreignPath: "bench/client-heavy/work/foreign" }, /exit-one command journal/],
+    ["incomplete campaign", { noManifest: true }, /collection-manifest/],
+    ["wrong registered host", { foreignHostname: true }, /registered host differs/],
+    ["unbound known hosts", { legacyKey: true }, /no launch-established host key/],
+    ["unbound native exit", { noNativeExitLog: true }, /source-bound final native-entry failure/],
+  ]) await t.test(name, async (t) => {
+    const { f, preview, launched } = await handoffFixture(t, { exitOne: true, ...flags });
+    await assert.rejects(preview(), refusal);
+    assert.deepEqual(launched, []);
+    assert.equal(f.h.deletes, 0); assert.equal(f.h.creates, 0);
+  });
+  for (const lock of ["operation.lock", "stream-recovery.lock", "audit-delivery.lock", "create-recheck.lock", "../.groups-launch.lock",
+    "../../.fleet-operation.lock", "../../../.continuation-operation.lock"]) await t.test(lock, async (t) => {
+    const { f, preview, launched } = await handoffFixture(t, { exitOne: true });
+    writeFileSync(join(f.h.local, lock), "foreign-live-or-retained\n");
+    await assert.rejects(preview(), /competing or retained custody/);
+    assert.deepEqual(launched, []);
+  });
+});
+
+test("exit-one rejects a rehashed incomplete or contradictory command journal before access", async (t) => {
+  for (const [kind, edit] of [
+    ["no authorization or start", (rows) => rows.splice(0, 3)],
+    ["no command exit", (rows) => rows.splice(6, 1)],
+    ["wrong invocation", (rows) => { rows[4][1].invocation = { command: "wrong" }; }],
+    ["wrong starting PID", (rows) => { rows[5][1].pid++; }],
+    ["unobserved exit", (rows) => { rows[6][1].terminal = false; }],
+    ["contradictory exit", (rows) => { rows[6][1].success = true; }],
+    ["clean exit contradicts sealed command observation", (rows) => { Object.assign(rows[6][1], { code: 0, success: true }); }],
+  ]) await t.test(kind, async (t) => {
+    const { f, preview, launched } = await handoffFixture(t, { exitOne: true, editJournal: edit });
+    await assert.rejects(preview(), /exit-one command journal/);
+    assert.deepEqual(launched, []);
+    assert.equal(f.h.deletes, 0);
+  });
+});
+
+test("exit-one refuses rehashed missing or contradictory host lifetime observations before access", async (t) => {
+  for (const [kind, editHost] of [
+    ["no binding", host => { delete host["binding.json"]; }],
+    ["no samples", host => { delete host["samples.jsonl"]; }],
+    ["unrelated boot", host => { host["terminal.json"].bootId = "f".repeat(36); }],
+    ["missing leader start identity", host => { delete host["binding.json"].leaderIdentity; }],
+    ["wrong leader start ticks", host => { host["binding.json"].leaderIdentity.startTicks = "9999"; }],
+    ["no observed leader", host => { host["samples.jsonl"][1].groups[0].files["cgroup.procs"] = "2001\n"; }],
+    ["leader record outside the command", host => {
+      const [key] = host["samples.jsonl"][1].processes;
+      const record = host[`processes/${key}.json`]; delete host[`processes/${key}.json`];
+      record.cgroup = "0::/other\n";
+      const changed = processRecordKey(record);
+      host["samples.jsonl"][1].processes[0] = changed; host[`processes/${changed}.json`] = record;
+    }],
+    ["non-leader record under a stale identity key", host => {
+      const sample = host["samples.jsonl"][1], path = host["binding.json"].path;
+      const stat = (ticks) => "2001 (node) S " + [...Array(18).fill("0"), ticks].join(" ");
+      const record = { stat: stat("2345"), cgroup: `0::${path}\n` };
+      const key = processRecordKey(record);
+      sample.groups[0].files["cgroup.procs"] += "2001\n"; sample.processes.push(key);
+      host[`processes/${key}.json`] = { ...record, stat: stat("4321") };
+    }],
+    ["unrelated sample cgroup", host => { host["samples.jsonl"][1].groups[0].path += "-other"; }],
+    ["leader listed in two cgroups", host => {
+      const sample = host["samples.jsonl"][1], duplicate = structuredClone(sample.groups[0]);
+      duplicate.path += "/other"; sample.groups.push(duplicate);
+    }],
+    ["malformed reference after a valid leader", host => {
+      host["samples.jsonl"][1].processes.push("../terminal");
+    }],
+  ]) await t.test(kind, async (t) => {
+    const { f, preview, launched } = await handoffFixture(t, { exitOne: true, editHost });
+    await assert.rejects(preview(), /exit-one command journal/);
+    assert.deepEqual(launched, []);
+    assert.equal(f.h.deletes, 0);
+  });
+});
+
+test("exit-one accepts repeated references to the same process across samples", async (t) => {
+  const { preview, launched } = await handoffFixture(t, { exitOne: true, editHost(host) {
+    const samples = host["samples.jsonl"];
+    samples.splice(2, 0, { ...structuredClone(samples[1]), at: 2 });
+    samples[3].at = 3;
+    host["terminal.json"].samples = 4;
+  } });
+  assert.equal((await preview()).recovery.operation, "observe-terminal-and-retire");
+  assert.deepEqual(launched, []);
+});
+
+test("exit-one retains the operation lock when custody changes after DELETE dispatch", async (t) => {
+  for (const mode of ["exact 404", "GET throws", "DELETE throws", "absence-only collect"]) await t.test(mode, async (t) => {
+    const { f, preview, retire, knobs, launched } = await handoffFixture(t,
+      { exitOne: true, deleteLost: mode === "absence-only collect" });
+    const { h } = f;
+    if (mode === "absence-only collect") await assert.rejects(retire(await preview()), /acknowledgement lost/);
+    const approved = await preview(), before = launched.length;
+    let ownedLock;
+    const drift = () => {
+      ownedLock = readFileSync(join(h.local, "operation.lock"));
+      appendFileSync(join(h.local, "results.tgz"), "drift");
+      if (mode.endsWith("throws")) throw new Error("synthetic provider call threw");
+    };
+    if (mode === "DELETE throws") knobs.afterDelete = drift;
+    else knobs.exactRead = drift;
+    await assert.rejects(retire(approved), /local exit-one custody changed|synthetic provider call threw/);
+    assert.equal(h.deletes, 1);
+    assert.ok(h.saved().deletionIntentAt);
+    assert.equal(h.saved().destroyedAt, undefined);
+    assert.deepEqual(readFileSync(join(h.local, "operation.lock")), ownedLock);
+    if (mode === "absence-only collect")
+      assert.ok(launched.slice(before).every((row) => row[0] === "provider" && row.includes("get")));
+  });
+});
+
+test("exit-one retains custody when evidence changes during provider close", async (t) => {
+  for (const mode of ["normal DELETE", "absence-only", "uncertain DELETE", "unsent DELETE"]) await t.test(mode, async (t) => {
+    const { f, preview, retire, knobs, launched } = await handoffFixture(t,
+      { exitOne: true, deleteLost: mode === "uncertain DELETE" || mode === "absence-only" });
+    const { h } = f, lock = join(h.local, "operation.lock");
+    if (mode === "absence-only") await assert.rejects(retire(await preview()), /acknowledgement lost/);
+    const approved = await preview(), before = launched.length;
+    if (mode === "unsent DELETE") knobs.unsent = true;
+    let held, destroyedAtDuringClose;
+    knobs.close = () => {
+      delete knobs.close;
+      held = readFileSync(lock);
+      const saved = h.saved();
+      destroyedAtDuringClose = saved.destroyedAt;
+      const path = mode === "absence-only" ? join(saved.evidence, "run.log")
+        : mode === "uncertain DELETE" ? "failed-native-host.json" : "results.tgz";
+      appendFileSync(join(h.local, path), "close-time drift");
+    };
+    await assert.rejects(retire(approved), mode === "uncertain DELETE" ? /exit-one receipt replaced/ : /custody changed/);
+    assert.ok(held);
+    assert.equal(destroyedAtDuringClose, undefined);
+    assert.equal(h.saved().destroyedAt, undefined);
+    assert.equal(h.deletes, mode === "unsent DELETE" ? 0 : 1);
+    assert.equal(!!h.saved().deletionIntentAt, mode !== "unsent DELETE");
+    assert.deepEqual(readFileSync(lock), held);
+    if (mode === "absence-only")
+      assert.ok(launched.slice(before).every(row => row[0] === "provider" && row.includes("get")));
+    await assert.rejects(preview(), /competing or retained custody/);
+  });
+});
+
+test("exit-one preflight expiry and positively unsent DELETE require a fresh approval and fence", async (t) => {
+  for (const mode of ["preflight expiry", "dispatch-boundary expiry", "worker unsent"]) await t.test(mode, async (t) => {
+    const { f, preview, retire, knobs } = await handoffFixture(t, { exitOne: true });
+    const { h } = f, first = await preview(), now = Date.now;
+    if (mode === "preflight expiry") {
+      let count = 0;
+      knobs.finalAccount = () => { if (++count === 3) Date.now = () => now() + 60000; };
+    } else if (mode === "dispatch-boundary expiry") knobs.afterIntent = () => { Date.now = () => now() + 60000; };
+    else knobs.unsent = true;
+    try { await assert.rejects(retire(first), mode === "preflight expiry" ? /retirement proof expired/ : /DELETE not dispatched/); }
+    finally { Date.now = now; knobs.finalAccount = undefined; knobs.unsent = false; }
+    assert.equal(f.probes, 2);
+    assert.equal(h.deletes, 0);
+    assert.equal(h.saved().status, "running");
+    assert.equal(h.saved().deletionIntentAt, undefined);
+    assert.equal(existsSync(join(h.local, "failed-native-host.json")), false);
+    assert.equal(existsSync(join(h.local, "failed-native-reservation.json")), false);
+    const history = readdirSync(h.local).filter((name) => name.startsWith("failed-native-unsent-"));
+    assert.equal(history.length, mode === "preflight expiry" ? 0 : 2);
+    if (history.length) {
+      const name = history.find((name) => /^failed-native-unsent-[a-f0-9]{64}\.json$/.test(name));
+      const bytes = readFileSync(join(h.local, name)), hash = digest(bytes);
+      assert.equal(name, "failed-native-unsent-" + hash + ".json");
+      assert.equal(digest(readFileSync(join(h.local, "failed-native-unsent-reservation-" + hash + ".json"))),
+        JSON.parse(bytes).reservationSha256);
+    }
+    const next = await preview();
+    assert.equal(next.recovery.operation, "observe-terminal-and-retire");
+    assert.notEqual(next.approvalSha256, first.approvalSha256);
+    await assert.rejects(retire(first), /explicit operator-approved exact action required/);
+    assert.equal(await retire(next), 1);
+    assert.equal(f.probes, 4);
+    assert.equal(h.deletes, 1);
+    assert.deepEqual(readFileSync(join(h.local, "results.tgz")), f.wrapper);
+    assert.equal(verifyFailedNativeRetirement(h.local, h.saved()).schema, "benchmark-failed-native-retirement/v3");
+  });
+});
+
+test("the production child refuses changed exit-one custody after the successor fleet intent", async (t) => {
+  for (const changed of ["receipt", "retained lock", "receipt after child intent", "archive after child intent", "extraction after child intent",
+    "missing binding", "none"]) await t.test(changed, async (t) => {
+    const { f, preview, retire, deps } = await handoffFixture(t, { exitOne: true });
+    assert.equal(await retire(await preview()), 1);
+    const { h, repairCommit } = f, continuation = dirname(f.root), group = "client-heavy", round = "r79";
+    const admitted = await continuationAdmission(continuation, group, { repo: h.repo, inspect: deps.inspect });
+    const root = join(continuation, "client-heavy--r79");
+    mkdirSync(join(root, group), { recursive: true });
+    const manifest = fleetPlan({ round, commit: repairCommit, token: "b".repeat(16), sshKey: "42", provider: { accountId, context },
+      tokens: { [group]: "2".repeat(16) } }, "2026-11-21T00:00:00.000Z", "sfo3", { stagedPlacement: true,
+      single: { group, indexSha256: admitted.indexSha256, checkout: h.repo } });
+    writeFileSync(join(root, "fleet-r79.json"), JSON.stringify(manifest));
+    const fleet = readFleet(root, round), options = fleetChildOptions(fleet, group, "detach");
+    const integrations = { compiler: () => true, roleCheck: async () => [] };
+    const plan = await productionPlan(options, { ...integrations, repo: h.repo, run: async (bin, args) => deps.spawn(bin, args) });
+    if (changed === "missing binding") delete admitted.subject.exitOneRetirements;
+    const subject = { ...f.intent.subject, controllerCommit: repairCommit, stateRoot: root, requestedRoot: root, round,
+      manifestSha256: fleet.manifestSha256, fleet: manifest, continuation: admitted.subject,
+      jobs: [{ group, outcome: "planned", missing: [], options, subject: plan.subject, approvalSha256: plan.approvalSha256 }] };
+    const approvalSha256 = digest(JSON.stringify(subject));
+    writeFileSync(join(root, "launch-intent.json"), JSON.stringify({ ...f.intent, subject, approvalSha256 }));
+    writeFileSync(join(root, ".fleet-operation.lock"), JSON.stringify({ pid: process.pid, approvalSha256 }));
+    writeFileSync(join(continuation, ".continuation-operation.lock"), JSON.stringify({ pid: process.pid, group }));
+    let creates = 0, afterCatalog = 0;
+    const statePath = join(options.stateDir, "groups-r79", "state.json");
+    let changedAfterIntent = false;
+    function interrupted() {
+      if (changed.endsWith("after child intent") && !changedAfterIntent && existsSync(statePath)
+          && JSON.parse(readFileSync(statePath)).createIntentAt) {
+        changedAfterIntent = true;
+        const path = changed.startsWith("receipt") ? "failed-native-host.json"
+          : changed.startsWith("archive") ? "results.tgz" : join(h.saved().evidence, "run.log");
+        appendFileSync(join(h.local, path), "\n");
+      }
+      return false;
+    }
+    const calls = [];
+    const providerFactory = () => Object.assign((argv) => {
+      calls.push(argv);
+      if (argv[0] === "account") {
+        if (afterCatalog && ++afterCatalog === 3) {
+          if (changed === "receipt") appendFileSync(join(h.local, "failed-native-host.json"), "\n");
+          if (changed === "retained lock") writeFileSync(join(h.local, "audit-delivery.lock"), "retained");
+        }
+        return { status: 0, stdout: JSON.stringify({ uuid: userId, droplet_limit: 20 }) };
+      }
+      if (argv[2] === "list") return { status: 0, stdout: "[]" };
+      if (argv[1] === "placement") { afterCatalog = 1; return { status: 0, stdout: JSON.stringify(syntheticPlacement()) }; }
+      assert.equal(argv[2], "create");
+      creates++; throw new Error("synthetic POST reached");
+    }, { close: async () => {} });
+    await assert.rejects(productionMain([round, "--state-dir", options.stateDir, "--detach", "--commit", repairCommit,
+      "--ssh-key", "42", "--account-id", accountId, "--context", context, "--group", group, "--fleet", fleet.path,
+      "--approve-reviewed-merged-ready", plan.approvalSha256], { ...deps, ...integrations, interrupted, providerFactory }),
+    changed === "none" ? /synthetic POST reached/ : /exit-one retirement.*(?:changed or holds custody|not bound)/);
+    assert.ok(afterCatalog >= 3, JSON.stringify(calls));
+    assert.equal(creates, Number(changed === "none"));
+    assert.equal(changedAfterIntent, changed.endsWith("after child intent"));
+    const state = JSON.parse(readFileSync(statePath));
+    assert.equal(!!state.createIntentAt, changed === "none" || changed.endsWith("after child intent"));
+  });
+});
+
+test("exit-one retirement refuses foreign allocation, remote drift and local replacement", async (t) => {
+  for (const [name, flags, error] of [
+    ["archive digest", { alterProof: (p) => { p.archiveSha256 = digest("foreign"); } }, /original remote archive differs/],
+    ["control root", { alterProof: (p) => { p.roots[2].treeSha256 = digest("foreign"); } }, /live control root differs/],
+    ["unpreserved output", { alterProof: (p) => { p.roots[1] = { path: p.roots[1].path, present: false }; } }, /unpreserved live native output/],
+    ["fresh fence metadata", { alterProof: (p, probe) => { if (probe === 2) p.metadataSha256 = digest("changed"); } }, /proof changed/],
+    ["active unit", { activeProof: true }, /control process failed/],
+    ["wrong provider account", { accountId: "different-account" }, /provider account identity changed/],
+    ["foreign exact allocation", {}, /owned droplet|ownership tag/],
+    ["distinct extraction from the same bound archive", {}, /archive|extraction/],
+  ]) await t.test(name, async (t) => {
+    const { f, preview, retire } = await handoffFixture(t, { exitOne: true, ...flags });
+    const { h } = f, extract = join(h.local, h.saved().evidence);
+    if (name === "foreign exact allocation") h.hosts([{ ...h.host(), name: h.saved().name, tags: ["foreign"] }]);
+    if (name === "distinct extraction from the same bound archive") {
+      const path = join(extract, "run.log"), changed = readFileSync(path);
+      changed[0] ^= 1; writeFileSync(path, changed);
+      h.change(s => { s.evidenceSha256 = treeHash(extract); });
+    }
+    await assert.rejects(retire(await preview()), error);
+    assert.equal(h.saved().deletionIntentAt, undefined);
+    assert.equal(h.deletes, 0); assert.equal(h.creates, 0);
+  });
+  const { f, preview, retire, knobs, launched } = await handoffFixture(t, { exitOne: true });
+  const { h } = f, approved = await preview();
+  let held;
+  knobs.afterIntent = () => {
+    held = readFileSync(join(h.local, "operation.lock"));
+    appendFileSync(join(h.local, h.saved().evidence, "run.log"), "late change");
+  };
+  await assert.rejects(retire(approved), /extraction/);
+  assert.ok(h.saved().deletionIntentAt && !h.saved().destroyedAt);
+  assert.equal(h.deletes, 0); assert.equal(h.creates, 0);
+  assert.deepEqual(readFileSync(join(h.local, "operation.lock")), held);
+  const calls = launched.length;
+  await assert.rejects(preview(), /competing or retained custody/);
+  assert.equal(launched.length, calls);
+});
 
 test("approved handoff retirement reuses an exact ordinary capture and reconciles only exact absence", async (t) => {
   const { f, preview, retire, knobs, launched } = await handoffFixture(t, { deleteLost: true });
