@@ -448,10 +448,11 @@ drawn by that page, close their page in a `finally` too, the latter after lettin
 script it holds; one cleanup step that fails does not skip the next, and removing a route is
 bounded to five seconds, so one that never settles does not keep the page open. Setting a route,
 starting a page's notes of what it draws and listening for its failures are bounded to five seconds
-each too, and closing a page's context is: if that close is not confirmed in time, each of its
-pages is closed, bounded the same, and the case fails rather than waits. The page these checks make
-is closed by the helper that makes it if making it, its route, its load or its mark fails, each but
-the load (which has Playwright's 30 seconds) bounded to five seconds, before a case holds it.
+each too. Making a case's context or page and closing its context are bounded to 30 seconds,
+Playwright's own timeout for an action, since a loaded Firefox has taken over five seconds to close
+one: if that close is not confirmed in time, each of its pages is closed, bounded the same, and the
+case fails rather than waits. The page these checks make is closed by the helper that makes it if
+making it, its route, its load or its mark fails, before a case holds it.
 That check counts only the
 reads of the page it goes back to, since the page that comes can prefetch the link left under the
 pointer. The check that a page part's answer that asks again takes the place of the page's tag
@@ -500,7 +501,7 @@ page that loads must be that request's own (the page the last of its redirects b
 that returns only after its post was answered is named as that, not as a press that sent nothing.
 No later post is pressed once one has failed or the check of what it did has, so a post never
 starts from a page other than the one its check names. Their context is closed in a `finally`,
-making, setting up and closing it each bounded to five seconds.
+making it and closing it each bounded to 30 seconds and setting its cookies to five.
 
 The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
 same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a

@@ -70,8 +70,9 @@ export async function pageWrites(page, browser) {
    * stand-in fails that write or hands the page its answer (`Since`): no read the page asked after
    * it saw that answer, or that write fail, has a place before it, and a bound on that read counts
    * from that time, not from when a check saw the outcome.
-   * Making the page, setting its route and marking it are each bounded to 5 s (its load has
-   * Playwright's own 30 s), and the page is closed (`closeContext`) if one of them fails.
+   * Making the context and the page is bounded to 30 s, Playwright's own timeout, as their closing
+   * is (`opened`, `closeContext`); setting its route and marking it are each bounded to 5 s (its
+   * load has Playwright's own 30 s), and the page is closed (`closeContext`) if one of them fails.
    * @param {(body: string, writes: number, headers?: Record<string, string>, at?: number) => string} edit @param {(body: string) => string} [before]
    * @param {string} [path]
    */
@@ -96,7 +97,7 @@ export async function pageWrites(page, browser) {
     };
     // Closed here if the page, its route or its load fails: no case has the page to close yet.
     try {
-      const own = await within(5000, "the write case's page was not made within 5 s", context.newPage());
+      const own = await within(30_000, "the write case's page was not made within 30 s", context.newPage());
       await within(
         5000,
         "the write case's route was not set within 5 s",

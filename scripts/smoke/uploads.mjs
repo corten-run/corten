@@ -667,7 +667,8 @@ export async function uploads(page, live, errors, signsIn) {
     /** @type {import("playwright").BrowserContext | undefined} */
     let noScript;
     // Its context is closed however the case ends, a throw while setting it up or reading an
-    // outcome included; making it, setting it up and closing it are each bounded to 5 s.
+    // outcome included; making it and its page and closing it are each bounded to 30 s, Playwright's
+    // own timeout, and setting its cookies to 5 s.
     try {
       const browser = /** @type {import("playwright").Browser} */ (page.context().browser());
       noScript = await opened("the no-JavaScript context", browser.newContext({ javaScriptEnabled: false }));
@@ -680,7 +681,7 @@ export async function uploads(page, live, errors, signsIn) {
           .cookies()
           .then((cookies) => made.addCookies(cookies)),
       );
-      const plainAccount = await within(5000, "the no-JavaScript page was not made within 5 s", noScript.newPage());
+      const plainAccount = await within(30_000, "the no-JavaScript page was not made within 30 s", noScript.newPage());
       await plainAccount.goto(`${base}/account`);
       /** Why the posts stopped: the step an earlier post missed, or the check that failed, or "" while they go on. */
       let stopped = "";

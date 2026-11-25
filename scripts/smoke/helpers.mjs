@@ -203,12 +203,13 @@ const cleanUp = async (...undo) => {
 };
 
 /**
- * `opening` (a context or page being made), within 5 s. One made only after them is closed as it
- * comes, so a case that gave up on it does not leave it open.
+ * `opening` (a context or page being made), within 30 s, Playwright's own timeout for an action: a
+ * loaded browser can take seconds to start a process for one. One made only after them is closed
+ * as it comes, so a case that gave up on it does not leave it open.
  * @template {{ close: () => Promise<unknown> }} T @param {string} what @param {Promise<T>} opening @returns {Promise<T>}
  */
 const opened = (what, opening) =>
-  within(5000, `${what} was not made within 5 s`, opening).catch((error) => {
+  within(30_000, `${what} was not made within 30 s`, opening).catch((error) => {
     opening.then(
       (made) => made.close().catch(() => {}),
       () => {},
@@ -217,16 +218,17 @@ const opened = (what, opening) =>
   });
 
 /**
- * Closes `context` within 5 s. If its closing is not confirmed by then, closes each of its pages,
- * each within 5 s, and rejects all the same: a case that cannot confirm its context closed fails,
- * rather than waiting on it.
+ * Closes `context` within 30 s, Playwright's own timeout for an action: a loaded Firefox has taken
+ * over 5 s to close one. If its closing is not confirmed by then, closes each of its pages, each
+ * within 30 s, and rejects all the same: a case that cannot confirm its context closed fails, rather
+ * than waiting on it.
  * @param {import("@playwright/test").BrowserContext} context @param {string} what
  */
 const closeContext = async (context, what) => {
   try {
-    await within(5000, `${what} was not closed within 5 s`, context.close());
+    await within(30_000, `${what} was not closed within 30 s`, context.close());
   } catch (error) {
-    await Promise.allSettled(context.pages().map((p) => within(5000, `a page of ${what} was not closed within 5 s`, p.close())));
+    await Promise.allSettled(context.pages().map((p) => within(30_000, `a page of ${what} was not closed within 30 s`, p.close())));
     throw error;
   }
 };
