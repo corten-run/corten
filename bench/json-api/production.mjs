@@ -2,31 +2,43 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import { loadConfig, sha256, timedReceiptSchema, upstreamReadDelta, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
+import { loadConfig, scheduledProducerSchema, sha256, timedReceiptSchema, upstreamReadDelta, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
 import { deriveTimedObservation } from "./timed-outcomes.mjs";
 import { streamLimits, timestampNs } from "./fixed-stream.mjs";
+import { replayScheduledLoadResources } from "./load-resource-proof.mjs";
 import { summarizeSamples } from "../catalog/stats.mjs";
 
 const same = (a, b, message) => assert.ok(isDeepStrictEqual(a, b), message);
 const count = (n) => Number.isSafeInteger(n) && n >= 0;
+const unsetDockerClock = (value) => typeof value === "string" && /^0001-01-01T00:00:00(?:\.0{1,9})?Z$/.test(value);
 export const captureLimits = Object.freeze({ ...streamLimits, stderrBytes: 4 * 2 ** 20, auxiliaryBytes: 2 * 2 ** 20 });
 export const producerSources = Object.freeze(["load.js", "load-outcome.js", "timed-load.js", "fixed-prototype-load.js", "upstream-observer.mjs"]);
-export function producerProvenance() {
-  return { schema: "json-api-producer/v2", fixedOutput: "full-stock-json-stdout", changedGeneratorIO: true, gzip: false,
-    limits: captureLimits, sources: Object.fromEntries(producerSources.map((name) => [name, sha256(readFileSync(new URL(name, import.meta.url)))])) };
+export const legacyProducerSchema = "json-api-producer/v2";
+const scheduledSources = Object.freeze([...producerSources, "run.mjs", "phase.mjs", "process.mjs", "load-resource-capture.mjs", "load-resource-proof.mjs"]);
+export function producerSourceNames(schema) {
+  if (schema === scheduledProducerSchema) return scheduledSources;
+  assert.ok(schema === legacyProducerSchema, "unknown timed producer schema");
+  return producerSources;
 }
-export const verifyProducer = (value) => same(value, producerProvenance(), "timed producer source/I/O/caps differ from verifier");
+export function producerProvenance(schema = legacyProducerSchema) {
+  const names = producerSourceNames(schema);
+  return { schema, fixedOutput: "full-stock-json-stdout", changedGeneratorIO: true, gzip: false,
+    limits: captureLimits, sources: Object.fromEntries(names.map((name) => [name, sha256(readFileSync(new URL(name, import.meta.url)))])) };
+}
+export const verifyProducer = (value) => same(value, producerProvenance(value?.schema ?? null), "timed producer source/I/O/caps differ from verifier");
 
 export function verifyLife(state, receipt, { before, load, code, at }) {
-  assert.ok(Number.isFinite(Date.parse(state?.startedAt)), "participant start clock missing");
+  assert.ok(typeof state?.startedAt === "string" && Number.isFinite(Date.parse(state.startedAt)), "participant start clock missing");
   const created = load && before;
   same(state, { containerId: receipt.containerId, startedAt: state.startedAt,
     finishedAt: state.finishedAt, status: created ? "created" : load ? "exited" : "running", running: !load,
     oomKilled: false, dead: false, paused: false, restarting: false, restartCount: 0, exitCode: load && !before ? code : 0, error: "" },
   "timed participant exited/restarted/OOM/error state");
-  if (!created) assert.ok(Date.parse(state.startedAt) <= at, "participant starts after observation");
-  if (load && !before) assert.ok(Number.isFinite(Date.parse(state.finishedAt)) && Date.parse(state.finishedAt) >= Date.parse(state.startedAt)
+  if (created) assert.ok(unsetDockerClock(state.startedAt), "created load start clock must be unset");
+  else assert.ok(Date.parse(state.startedAt) <= at, "participant starts after observation");
+  if (load && !before) assert.ok(typeof state.finishedAt === "string" && Number.isFinite(Date.parse(state.finishedAt)) && Date.parse(state.finishedAt) >= Date.parse(state.startedAt)
     && Date.parse(state.finishedAt) <= at, "load finish clock invalid");
+  else assert.ok(unsetDockerClock(state.finishedAt), "created or running participant finish clock must be unset");
 }
 
 export function life(info) {
@@ -80,9 +92,11 @@ export function deriveProductionPhase(raw, expected, phase, options, tools, cont
     const c = raw.counters[role];
     assert.ok(count(c.before) && count(c.after) && c.after > c.before, "counted CPU window incomplete");
   }
-  same(Object.keys(raw.samples ?? {}).sort(), ["app", "load", "upstream"], "all apparatus resource samples required");
+  const scheduled = context.producerSchema === scheduledProducerSchema;
+  same(Object.keys(raw.samples ?? {}).sort(), scheduled ? ["app", "upstream"] : ["app", "load", "upstream"], "all apparatus resource samples required");
+  assert.ok(scheduled === Object.hasOwn(raw, "loadResources"), "load resource evidence differs from producer schema");
   const stats = {};
-  for (const role of ["app", "upstream", "load"]) {
+  for (const role of Object.keys(raw.samples)) {
     const all = raw.samples[role]; assert.ok(Array.isArray(all) && all.length > 0, "missing timed resource samples");
     for (const [i, s] of all.entries()) {
       assert.ok(Number.isFinite(s.cpu) && s.cpu >= 0 && Number.isFinite(s.mem) && s.mem >= 0 && count(s.t)
@@ -98,10 +112,14 @@ export function deriveProductionPhase(raw, expected, phase, options, tools, cont
     assert.ok(samples.every((s) => s.mem > 0 && s.mem * 2 ** 20 < budget.memoryBytes), "participant memory missing/at budget");
     stats[role] = summarizeSamples(samples);
   }
+  if (scheduled) stats.load = replayScheduledLoadResources(raw.loadResources, loadLife, {
+    memoryBytes: raw.before.participants.load.memoryBytes, quota: expected.cpus.load.quota,
+  });
   const reasons = [...observed.incompleteReasons];
   if (priorTailUnobserved) reasons.push("prior-phase-application-tail-unobserved");
   // The single-threaded upstream must have headroom below one core, not its two-core quota.
-  if (stats.load.cpuMaxPct >= expected.cpus.load.quota * 80) reasons.push("load-generator-with-added-stock-output-lacks-observed-headroom");
+  if (scheduled ? !stats.load.loadHasHeadroom : stats.load.cpuMaxPct >= expected.cpus.load.quota * 80)
+    reasons.push("load-generator-with-added-stock-output-lacks-observed-headroom");
   if (expected.source === "api" && stats.upstream.cpuMaxPct >= 80) reasons.push("single-process-upstream-lacks-observed-headroom");
   if (expected.source === "api" && (raw.counters.upstream.after - raw.counters.upstream.before) / (raw.clock.k6DurationMs * 10) >= 80)
     reasons.push("counted-single-process-upstream-lacks-observed-headroom");

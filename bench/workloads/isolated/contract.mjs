@@ -15,6 +15,7 @@ import { parseArgs as jsonOptions } from "../../json-api/contract.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { nightly } from "../../marketplace/droplet-contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
+import { djangoAsgi } from "../../mixed-production/source-audit.mjs";
 import { browserContainers, browserCpus, parseOptions as browserOptions, settings as browserSettings } from "../../fullstack-browser/contract.mjs";
 import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
@@ -110,6 +111,7 @@ export const recipes = freeze({
   "marketplace-short-window": ["localized-marketplace"],
   "mixed-measure": ["mixed-production"],
   "mixed-production-measure": ["mixed-production"],
+  [djangoAsgi.recipe]: ["mixed-production"],
   "native-feed-measure": ["live-delivery", "recoverable-live"],
   ...(clientComparisonRecipe ? { [clientComparisonRecipe]: ["client-heavy"] } : {}),
 });
@@ -160,7 +162,10 @@ function reviewDeclaration(review, subjectSha256) {
   return { state: "declared-not-authenticated", declaration: clone(review) };
 }
 
-function native(group, round, recipe, reviewId) {
+const mixedMeasurement = (recipe) => ["mixed-measure", "mixed-production-measure", djangoAsgi.recipe].includes(recipe);
+
+// Pure native command and option derivation, not source or execution admission.
+export function nativeExecution(group, round, recipe, reviewId) {
   const available = Object.fromEntries(selectedApps(group).map((app) => [app, {}]));
   const { entry, selection: flags } = runnerFor(group);
   const base = [round, ...flags], args = [...base], changes = [];
@@ -176,10 +181,12 @@ function native(group, round, recipe, reviewId) {
     effective = parse(args, available);
   } else if (group === "mixed-production") {
     defaults = mixedOptions(base); args.push("--build");
-    if (["mixed-measure", "mixed-production-measure"].includes(recipe)) {
+    if (mixedMeasurement(recipe)) {
+      const profile = recipe === "mixed-measure" ? "defaults" : "matched";
       args.push("--measure");
-      if (recipe === "mixed-production-measure") args.push("--profile", "matched");
-      changes.push({ measure: true, profile: recipe === "mixed-production-measure" ? "matched" : "defaults" });
+      if (profile === "matched") args.push("--profile", profile);
+      if (recipe === djangoAsgi.recipe) args.push("--django-deployment", djangoAsgi.deployment);
+      changes.push({ measure: true, profile, ...(recipe === djangoAsgi.recipe && { djangoDeployment: djangoAsgi.deployment }) });
     }
     effective = mixedOptions(args);
     defaults.apps = [...selectedApps(group)]; effective.apps = [...selectedApps(group)];
@@ -236,9 +243,9 @@ function resources(group, recipe, campaignMode) {
     requiredEvidence: "effective command cgroup cpuset for the browser and driver; Docker and kernel CPU/memory receipts for application and upstream" };
   if (group === "mixed-production") return { functional: { app: { cpu: 1, memoryBytes: 2 ** 30 },
     upstream: { cpu: 2, memoryBytes: 512 * 2 ** 20 }, capture: { cpu: 2, memoryBytes: 2 ** 30 }, pinning: "not available in functional capture" },
-    measurement: ["mixed-measure", "mixed-production-measure"].includes(recipe) ? { cpu: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
+    measurement: mixedMeasurement(recipe) ? { cpu: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
       memoryBytes: { app: 2 ** 30, upstream: 512 * 2 ** 20, qualificationWorker: 2 ** 30, load: 2 ** 31 }, loadSharedMemoryBytes: 512 * 2 ** 20 } : null,
-    requestedCpuEnv: ["mixed-measure", "mixed-production-measure"].includes(recipe) ? { MIXED_PRODUCTION_APP_CPUS: "1", MIXED_PRODUCTION_API_CPUS: "2-3", MIXED_PRODUCTION_LOAD_CPUS: "4-7" } : null,
+    requestedCpuEnv: mixedMeasurement(recipe) ? { MIXED_PRODUCTION_APP_CPUS: "1", MIXED_PRODUCTION_API_CPUS: "2-3", MIXED_PRODUCTION_LOAD_CPUS: "4-7" } : null,
     state: "unknown", requiredEvidence: "separate functional and measured participants, actual runtime limits/cpusets, calibration/headroom and quiet-host observations" };
   const prefix = { "catalog-page": "CATALOG", "json-api": "JSON_API", "localized-marketplace": "MARKETPLACE", "mixed-production": "MIXED_PRODUCTION" }[group];
   if (prefix) {
@@ -299,7 +306,7 @@ function validation(group, rootPath) {
 function build(r, sources, review, campaignMode) {
   const subject = subjectFor(r, sources, campaignMode), subjectSha256 = deploymentSha256(subject);
   const declaredReview = reviewDeclaration(review, subjectSha256);
-  const execution = native(r.group, r.round, r.recipe, subjectSha256);
+  const execution = nativeExecution(r.group, r.round, r.recipe, subjectSha256);
   const checks = validation(r.group, execution.operationalOptions.artifactRoot);
   if (checks.validator?.commitOption) checks.validator.argv.push(checks.validator.commitOption, r.commit);
   const body = { ...subject, subjectSha256, sources, review: declaredReview, execution,

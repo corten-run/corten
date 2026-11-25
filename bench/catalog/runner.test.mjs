@@ -75,6 +75,7 @@ const expectedCommands = {
   },
   parity: {
     PLAYWRIGHT_WITH_DOCKER: [...imageBase, ...dockerBoundary, ...forward("RUNNER_ENVIRONMENT"), "$image"],
+    PLAYWRIGHT_IMAGE: ["$image"],
   },
 };
 // The image's Node is a bounded, best-effort diagnostic: a failed, empty or stalled probe says so
@@ -184,6 +185,35 @@ test("catalog CI takes Chromium from Playwright's image, not the runner's apt mi
     const step = after("parity", parity.at, (candidate) => candidate.name === expected.name, expected.name);
     assert.deepEqual(step, expected);
   }
+});
+
+test("matched Topcoat HTTP and Chromium parity use the built Marketplace bundle after image setup", () => {
+  const { jobs: { parity: { steps } } } = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
+  const marketplace = steps.findIndex((step) => step.id === "marketplace");
+  const image = steps.findIndex((step) => step.name === "Playwright's image");
+  const probes = steps.filter((step) => step.run?.includes("topcoat/tests/check-parity.mjs"));
+  assert.equal(probes.length, 1);
+  const probe = probes[0];
+  assert.ok(marketplace >= 0 && marketplace < image && image < steps.indexOf(probe));
+  assert.equal(steps[marketplace].run, "node bench/marketplace/run.mjs w1 --apps ${{ matrix.app }} --build --check-only");
+  assert.deepEqual(probe, {
+    name: "Test matched Topcoat Marketplace HTTP and Chromium in both sources",
+    if: "matrix.app == 'topcoat'",
+    shell: "bash",
+    "timeout-minutes": 5,
+    run: [
+      'image="${PLAYWRIGHT_IMAGE:?}"',
+      "docker run --rm --network none --entrypoint tar cb-marketplace-topcoat -c -C /app server assets |",
+      '  docker run --rm --init -i --network none --cpus 2 --memory 2g --shm-size 1g \\',
+      '    --user "$(id -u):$(id -g)" -e HOME=/tmp \\',
+      '    --mount "type=bind,source=$PWD,target=/repo,readonly" -w /repo "$image" sh -ec \'',
+      "      mkdir /tmp/topcoat",
+      "      tar -x -C /tmp/topcoat",
+      "      exec node bench/fullstack/apps/topcoat/tests/check-parity.mjs /tmp/topcoat/server --browser",
+      "    '",
+      "",
+    ].join("\n"),
+  });
 });
 
 // The shell tests run workflow steps in bash, as GitHub does, and the probe test also needs GNU
@@ -340,7 +370,7 @@ test("each browser check receives exactly its image command from the image step,
     assert.deepEqual(Object.keys(exported).sort(), Object.keys(expectedCommands[job]).sort(), `${job}: exported names`);
 
     const checks = steps.slice(at + 1).flatMap((step) => (step.run ?? "").split("\n")
-      .filter((line) => line.includes("${PLAYWRIGHT")).map((line) => ({ step, line })));
+      .filter((line) => line.startsWith("${PLAYWRIGHT")).map((line) => ({ step, line })));
     assert.equal(checks.length, job === "harness" ? 2 : 3, `${job}: guarded browser-check lines`);
     for (const { step, line } of checks) {
       const guarded = /^\$\{(PLAYWRIGHT\w*):\?\} (.+)$/.exec(line);

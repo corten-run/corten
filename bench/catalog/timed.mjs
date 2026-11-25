@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { memoryMiB, summarizeSamples } from "./stats.mjs";
+import { parseStatsSample, summarizeSamples } from "./stats.mjs";
 import { leanApps, leanProfile } from "./contract.mjs";
 import { workerAware, workerPhaseSchema, workerCommand, verifyWorkers, workerHeadroom } from "./apparatus.mjs";
 import { observeLoadLimits, verifyLoadLimits } from "./cgroup.mjs";
@@ -46,8 +46,8 @@ const failurePrefix = "catalog_failed_";
 
 export function readFailureClasses(summary, { http_errors: httpErrors, invalid_responses: invalid }) {
   const metric = (name) => summary?.metrics?.[name]?.values ?? summary?.metrics?.[name];
-  const unknown = Object.keys(summary?.metrics ?? {}).filter((key) => key.startsWith(failurePrefix) && !timedFailureClasses.includes(key.slice(failurePrefix.length)));
-  assert.equal(unknown.length, 0, `unknown timed failure class series: ${unknown.join(", ")}`);
+  assert.ok(!Object.keys(summary?.metrics ?? {}).some((key) => key.startsWith(failurePrefix)
+    && !timedFailureClasses.includes(key.slice(failurePrefix.length))), "unknown timed failure class series");
   const present = timedFailureClasses.filter((name) => metric(`catalog_failed_${name}`) !== undefined);
   if (!present.length) return null;
   const classes = Object.fromEntries(timedFailureClasses.map((name) => [name, present.includes(name) ? metric(`catalog_failed_${name}`)?.count : 0]));
@@ -183,10 +183,10 @@ export function verifyTimedPhase(summary, subject, { readJson, readText }, previ
   same(Object.keys(stats.samples).sort(), [...sampled].sort(), "timed sample inventory differs");
   const raw = readText(`${phase}-stats.log`), parsed = Object.fromEntries(sampled.map((name) => [name, []]));
   assert.ok(raw.endsWith("\n"), "timed stats framing incomplete");
-  for (const line of raw.split("\n").filter((s) => s.trim())) {
-    const row = JSON.parse(line); assert.ok(typeof row.Name === "string" && Object.hasOwn(parsed, row.Name), "unknown timed sample");
-    assert.match(row.CPUPerc, /^\d+(?:\.\d+)?%$/, "malformed timed CPU percentage");
-    parsed[row.Name].push({ cpu: parseFloat(row.CPUPerc), mem: memoryMiB(row.MemUsage.split("/")[0]) });
+  for (const line of raw.split("\n").map((s) => s.trim()).filter(Boolean)) {
+    const { name, cpu, mem } = parseStatsSample(line);
+    assert.ok(Object.hasOwn(parsed, name), "unknown timed sample");
+    parsed[name].push({ cpu, mem });
   }
   const derived = {};
   for (const name of sampled) {

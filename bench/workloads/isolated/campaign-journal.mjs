@@ -1,11 +1,51 @@
 import assert from "node:assert/strict";
-import { jsonPhase, mixedPhase, offlineAuditRemainingMs } from "./campaign-contract.mjs";
-import { supportedGroups } from "./evidence.mjs";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { groupCampaignSchema, jsonPhase, mixedPhase, offlineAuditRemainingMs } from "./campaign-contract.mjs";
+import { readRegular, supportedGroups } from "./evidence.mjs";
 import { executionGroups } from "./native-replay.mjs";
 import { liveGroup } from "./native-roles.mjs";
 
+export function readCampaignJournal(root, plan, id, paths = readdirSync(root)) {
+  const names = paths.filter((name) => /^\d{5}-[a-z-]+\.json$/.test(name)).sort();
+  assert.ok(names.length > 0, "durable campaign journal missing");
+  const records = names.map((name, sequence) => {
+    const file = join(root, name), bytes = readRegular(file), event = JSON.parse(bytes);
+    assert.equal(event.schema, "benchmark-isolated-campaign-event/v1"); assert.equal(event.sequence, sequence);
+    assert.equal(event.campaign, id); assert.equal(event.round, plan.round); assert.equal(event.campaignSha256, plan.campaignSha256);
+    assert.equal(name, `${String(sequence).padStart(5, "0")}-${event.kind}.json`);
+    return { file, bytes, event };
+  });
+  return records;
+}
+
+// The producer inspects native output after the phase seal but before group
+// completion. Replay that prefix using the same ordering as a saved campaign.
+export function replaySealedPhase(root, plan, id, group, key) {
+  const records = readCampaignJournal(root, plan, id);
+  const seals = records.filter(({ event }) => event.kind === "phase-sealed" && event.group === group && event.phase === "timing");
+  assert.equal(seals.length, 1, "live phase lacks its unique journal seal");
+  const { status, sequence } = seals[0].event;
+  assert.ok([3, 4, 5, 6].includes(status?.executionVersion), "live phase lacks a supported campaign seal");
+  if (status.executionVersion === 6) assert.equal(plan.schema, groupCampaignSchema);
+  assert.equal(status.state, "active"); assert.equal(status.nextGroup, group);
+  const prefix = records.slice(0, sequence + 1);
+  const events = prefix.map(({ event }) => {
+    const embedded = event.status;
+    assert.equal(embedded.schema, "benchmark-isolated-campaign-status/v1");
+    assert.equal(embedded.campaign, id); assert.equal(embedded.round, plan.round);
+    assert.equal(embedded.campaignSha256, plan.campaignSha256);
+    assert.equal(embedded.executionVersion, status.executionVersion);
+    return event;
+  });
+  const phase = replayJournal(plan, id, events, status, key);
+  return { phase, version: status.executionVersion, verifyUnchanged() {
+    for (const { file, bytes } of prefix) assert.ok(readRegular(file).equals(bytes), "live phase journal mutated");
+  } };
+}
+
 // Recorded authorization/review events constrain order; they confer no authority.
-export function replayJournal(plan, id, events, status) {
+export function replayJournal(plan, id, events, status, throughPhase) {
   const groups = [2, 3, 4, 5, 6].includes(status.executionVersion) ? executionGroups : supportedGroups;
   assert.ok(status.executionVersion === undefined || [2, 3, 4, 5, 6].includes(status.executionVersion));
   const controlAdmissions = new Map();
@@ -100,7 +140,9 @@ export function replayJournal(plan, id, events, status) {
           assert.match(event.nativeManifestSha256 ?? "", /^[a-f0-9]{64}$/);
           if ([2, 3, 4, 5, 6].includes(status.executionVersion)) assert.match(event.phaseManifestSha256 ?? "", /^[a-f0-9]{64}$/);
           phase.phaseManifestSha256 = event.phaseManifestSha256;
-          phase.manifestSha256 = event.nativeManifestSha256; phase.sealed = true; break;
+          phase.manifestSha256 = event.nativeManifestSha256; phase.sealed = true;
+          if (phase.key === throughPhase) return phase;
+          break;
         case "review-needed":
           phaseComplete(); assert.equal(phase.group, "json-api"); assert.equal(phase.phase, "prepare"); assert.equal(review, "none");
           assert.equal(phase.results.length, phase.invocations.length); assert.ok(expectedAuditExit(phase, phase.results.at(-1)));
@@ -178,6 +220,7 @@ export function replayJournal(plan, id, events, status) {
       }
     }
   }
+  assert.equal(throughPhase, undefined, "requested live phase seal missing from journal prefix");
   assert.equal(terminal, true, "terminal journal event missing");
   for (const group of failedGroups) assert.ok(status.outcomes.some((r) => r.group === group &&
     (["failed", "preserved-uncertain"].includes(r.outcome) || blockedOnlyByProbes(r)

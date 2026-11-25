@@ -6,9 +6,8 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSy
 import { join, posix } from "node:path";
 import { durable, readRegular, syncDirectory, tree } from "./evidence.mjs";
 import { hostDurableWriter } from "./host-durable-writer.mjs";
-import { hostTerminalClock } from "./host-observation.mjs";
+import { hostTerminalClock, processIdentity, processRecordKey, terminalClockPolicy } from "./host-observation.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
-import { jsonPreparationInvocation, jsonPreparationRound } from "../registry.mjs";
 import { executableProofFailure, executableProofFailureMessage, executableReference, participantExecutables } from "./participant-executables.mjs";
 import { browserContainers } from "../../fullstack-browser/contract.mjs";
 import { commandCpuSet as boundCommandCpuSet, cpuRanges, cpuSetWithin, liveApplication, liveGroup, nativeControlPartition } from "./native-roles.mjs";
@@ -27,12 +26,7 @@ function observing(operation, action) {
     throw error;
   }
 }
-export function processIdentity(stat) {
-  const match = /^(\d+) \((.*)\) ([A-Za-z]) (.*)$/.exec(stat.trim());
-  assert.ok(match); const rest = match[4].split(" ");
-  assert.match(rest[18] ?? "", /^\d+$/);
-  return { pid: Number(match[1]), startTicks: rest[18], comm: match[2] };
-}
+export { processIdentity, processRecordKey };
 function groupPath(text) {
   const path = /^0::([^\n]+)\n?$/.exec(text)?.[1];
   assert.ok(path && posix.isAbsolute(path) && !path.split("/").includes("..")); return path;
@@ -548,12 +542,6 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   });
 }
 
-function processRecordKey(p) {
-  return sha(serial({ ...processIdentity(p.stat), cgroup: p.cgroup,
-    ...(p.executableRef ? { executableRef: p.executableRef, executableIdentity: p.executableIdentity }
-      : { executableSha256: p.executableSha256 }), type: p.type }));
-}
-
 export function resolveParticipantExecutables(process, proof) {
   if (!Object.hasOwn(process, "executableRef")) return process;
   assert.equal(proof?.schema, "benchmark-participant-executables/v1");
@@ -664,9 +652,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
     leader: [...identities.values()].some((p) => p.pid === context.leaderPid) };
   const complete = Object.values(checks).every(Boolean);
   if (terminal.terminalClock !== undefined) {
-    const jsonPrepare = context.group === "json-api" && context.round === jsonPreparationRound(round)
-      && isDeepStrictEqual(invocation, jsonPreparationInvocation(round)) && isDeepStrictEqual(invocation, binding.execution?.invocation);
-    assert.ok(context.group === "localized-marketplace" || jsonPrepare, "terminal clock not allowed for this invocation");
+    assert.ok(terminalClockPolicy(binding, invocation, round, expected.phase), "terminal clock not allowed for this invocation");
     assert.equal(terminal.terminalClock.bootId, context.bootId);
   }
   return { status: complete ? "verified" : "blocked", cleanupComplete: complete, context,
