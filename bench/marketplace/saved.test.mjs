@@ -399,6 +399,24 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   const cleanStats = JSON.stringify(stats);
   writeFileSync(log, cleanLog); writeFileSync(statsPath, cleanStats);
   assert.equal(validateSaved(args).complete, true, "a stopped phase needs no samples after the app exited");
+  const terminal = { t: Date.parse(raw.app.state.FinishedAt) + 1, cpu: 0, mem: 0 };
+  const withTerminal = structuredClone(stats), appName = raw.app.name;
+  withTerminal.samples[appName].push(terminal);
+  withTerminal.summary[appName] = summarizeSamples(withTerminal.samples[appName]);
+  const terminalLog = (CPUPerc, MemUsage) => cleanLog + JSON.stringify({ Name: appName, CPUPerc, MemUsage }) + "\n";
+  for (const [label, cpu, memory, expected] of [
+    ["accepts a well-formed terminal zero", "0.00%", "0B / 0B"],
+    ["rejects a missing memory limit despite matching samples and aggregate", "0.00%", "0B", /memory display missing its limit/],
+    ["rejects a malformed memory limit despite matching samples and aggregate", "0.00%", "0B / 0..0B", /invalid Docker memory display/],
+    ["rejects garbled CPU text despite matching samples and aggregate", "0.00% invalid", "0B / 0B", /invalid Docker CPU display/],
+  ]) await t.test(label, () => {
+    try {
+      writeFileSync(log, terminalLog(cpu, memory));
+      writeFileSync(statsPath, JSON.stringify(withTerminal));
+      if (expected) assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID" && expected.test(e.cause?.message));
+      else assert.equal(validateSaved(args).complete, true);
+    } finally { writeFileSync(log, cleanLog); writeFileSync(statsPath, cleanStats); }
+  });
   for (const [label, expected, edit] of [
     ["truncated tail with missing summary", /truncated stats log/, () => { writeFileSync(log, cleanLog + '{"Name":'); unlinkSync(statsPath); }],
     ["truncated tail with intact summary", /truncated stats log/, () => writeFileSync(log, cleanLog + '{"Name":')],

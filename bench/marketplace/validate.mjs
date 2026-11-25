@@ -325,14 +325,15 @@ function replay({ folder, round, commit }) {
             const { name, cpu, mem, cpuDisplay, memory } = parseStatsSample(line);
             assert.ok(Object.hasOwn(history, name), "unexpected stats participant");
             assert.ok(history[name].length < maxStatsSamples, "stats log exceeds sample bound");
+            assert.match(cpuDisplay, /^\d+(?:\.\d+)?%$/, "invalid Docker CPU display");
+            assert.equal(memory.length, 2, "memory display missing its limit");
+            const usage = displayedMemory(memory[0]), limit = displayedMemory(memory[1]);
             if (!stop) {
-              assert.match(cpuDisplay, /^\d+(?:\.\d+)?%$/);
               // Docker reports one logical CPU as 100%, rounded to two decimals.
               // Samples can burst beyond quota; only the whole host is a bound.
               assert.ok(Number.isFinite(cpu) && cpu <= onlineCpus.size * 100 + 0.005, "sampled CPU exceeds physical host capacity");
               const c = name === coldApp.name ? raw.app : raw.upstream;
-              assert.equal(memory.length, 2, "memory display missing its limit");
-              const usage = displayedMemory(memory[0]), limit = displayedMemory(memory[1]), expected = c.memoryBytes / 2 ** 20;
+              const expected = c.memoryBytes / 2 ** 20;
               assert.ok(Math.abs(limit.mib - expected) <= limit.rounding + 1e-12, "memory display limit differs from container");
               assert.ok(usage.mib <= expected + usage.rounding + 1e-12, "memory sample exceeds container limit");
             }
