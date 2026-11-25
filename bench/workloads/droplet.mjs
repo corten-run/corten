@@ -14,6 +14,7 @@ import { inspectCampaign } from "./cloud-validation.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
+  handoffLocks, handoffRetirementPolicy, verifyHandoffCustody,
   interruptedFirstUpload, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
   verifyUnusedEvidence, createErroredBytes, createErroredCustody, createErroredReceipt, createErroredRecord, createRecheckLock, pendingCreateErroredReceipt,
   verifyCreateErrored, offlineNeverStarted, createContradiction, contradictionStages, createReappeared, createReappearedWitness, publicationStages } from "./cloud-retirement.mjs";
@@ -56,6 +57,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const base = realpathSync(requested); physical(base);
   const local = join(base, `groups-${options.round}`), statePath = join(local, "state.json"), archive = join(local, "results.tgz");
   const recoveryLock = "stream-recovery.lock", recheckLock = createRecheckLock, groupedPreplan = recoveryApproval?.policy === "grouped-preplan-failure-custody-only";
+  const groupedHandoff = recoveryApproval?.policy === handoffRetirementPolicy;
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
@@ -118,6 +120,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       if (expiry !== undefined) {
         const current = Date.now();
         assert.ok(current < expiry && expiry - current <= 60000, "current retirement proof expired");
+        if (groupedHandoff) handoffLocks(local, true);
       }
       let r;
       const limit = remaining ? Math.min(timeout, remaining()) : timeout;
@@ -889,8 +892,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     }
     return retire("setup-failed", evidence, finishedAtMs);
   };
-  async function retireNativeFailure(controllerCommit, grouped) {
-    const { retirementAllowed } = failedNativeArchive(local, state, grouped);
+  async function captureNativeFailure(controllerCommit, grouped) {
     const originalPath = join(local, "failed-native-reservation.json"), capturePath = join(local, "failed-native-capture.json"),
       custodyArchive = join(local, "failed-native-results.tgz");
     const present = grouped?.preplan ? (path) => lstatSync(path, { throwIfNoEntry: false }) !== undefined : existsSync;
@@ -938,16 +940,30 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         evidence: basename(extracted), evidenceSha256: hash };
       verifyFailedNativeCustody(local, state, capture, grouped); durable(capturePath, `${JSON.stringify(capture, null, 2)}\n`);
     }
+    verifyFailedNativeCustody(local, state, capture, grouped); check();
+    return capture;
+  }
+  async function retireNativeFailure(controllerCommit, grouped, handoff) {
+    let capture;
+    if (handoff) ({ capture, grouped } = verifyHandoffCustody(local, state, handoff));
+    else {
+      const { retirementAllowed } = failedNativeArchive(local, state, grouped);
+      capture = await captureNativeFailure(controllerCommit, grouped);
+      if (!retirementAllowed) return 3; // Ambiguous native outcome: retain both the data and the host.
+    }
     // Local custody verification precedes a fresh, full remote rehash and
     // current-quiescence proof. Neither is historical native qualification.
-    verifyFailedNativeCustody(local, state, capture, grouped); check();
-    if (!retirementAllowed) return 3; // Ambiguous native outcome: retain both the data and the host.
+    check();
+    if (handoff) handoffLocks(local, true);
     const rehashScript = failedNativeScript(state, capture.observation.snapshotSha256, null, grouped), rehashStarted = Date.now();
     const rehashRaw = (await ssh(rehashScript, 11 * 60000)).stdout, rehashFinished = Date.now();
     const rehashObservation = failedNativeObservation(rehashRaw, state, rehashStarted, rehashFinished, grouped);
     const withoutTime = ({ observedAtMs, ...rest }) => rest;
     assert.deepEqual(withoutTime(rehashObservation), withoutTime(capture.observation), "predelete custody differs");
-    verifyFailedNativeCustody(local, state, capture, grouped);
+    if (handoff) {
+      verifyHandoffCustody(local, state, handoff);
+      handoffLocks(local, true);
+    } else verifyFailedNativeCustody(local, state, capture, grouped);
     const receiptPath = join(local, "failed-native-host.json");
     let interruptedReceipt;
     if (existsSync(receiptPath)) {
@@ -966,11 +982,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const confirmation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs, grouped);
     assert.deepEqual(withoutTime(confirmation), withoutTime(capture.observation), "final custody fence differs");
     await own(); check();
+    if (handoff) handoffLocks(local, true);
     // Bound the whole local fence operation, including SSH response delivery.
     // Its start precedes the observation without relying on remote clock skew.
     const deleteProofExpiresAtMs = startedAtMs + 60000;
     assert.ok(Date.now() >= finishedAtMs && Date.now() < deleteProofExpiresAtMs, "current retirement proof expired");
-    const receipt = { schema: "benchmark-failed-native-retirement/v1", capture, confirmation, scriptSha256: digest(script), startedAtMs, finishedAtMs,
+    const receipt = { schema: `benchmark-failed-native-retirement/${handoff ? "v2" : "v1"}`,
+      ...(handoff ? { handoff } : {}), capture, confirmation, scriptSha256: digest(script), startedAtMs, finishedAtMs,
       rehash: { observation: rehashObservation, scriptSha256: digest(rehashScript), startedAtMs: rehashStarted, finishedAtMs: rehashFinished } };
     const bytes = `${JSON.stringify(receipt, null, 2)}\n`;
     if (interruptedReceipt !== undefined) {
@@ -1419,7 +1437,7 @@ else ${pack}; fi` : pack, 11 * 60000);
         assert.ok(recoveryApproval, "source-bound production recovery approval required");
         full(recoveryApproval.controllerCommit, /[a-f0-9]{40}/, "merged repair source required");
         let grouped;
-        if (groupedPreplan) {
+        if (groupedPreplan || groupedHandoff) {
           assert.equal(typeof authorizeRecovery, "function", "locked production recovery approval required");
           const lockedApproval = await authorizeRecovery(); check();
           const { controllerCommit, reservationSha256, ...recovery } = recoveryApproval;
@@ -1429,6 +1447,16 @@ else ${pack}; fi` : pack, 11 * 60000);
           assert.equal(digest(bytes), reservationSha256, "locked recovery reservation changed");
           state = controllerState(JSON.parse(bytes), options.round);
           assert.ok(stagedFleet(state.fleet) && state.fleet.single?.group === state.group, "staged single-group recovery required");
+          if (groupedHandoff) {
+            handoffLocks(local, true);
+            const handoff = { controllerCommit, captureSha256: recovery.captureSha256, launchIntentSha256: recovery.intent.launch };
+            if (state.status !== "retired") return retireNativeFailure(controllerCommit, undefined, handoff);
+            const record = verifyFailedNativeRetirement(local, state);
+            assert.deepEqual(record.handoff, handoff, "approved handoff retirement receipt differs");
+            await confirmDeleted();
+            if (!state.destroyedAt) { state.destroyedAt = new Date().toISOString(); save(); }
+            return 1;
+          }
           grouped = groupedPreplanFailure(local, state);
           assert.equal(grouped.preplan, true);
           if (state.control.monitor.phase === "closed" && [join(local, "operation.lock"), join(base, ".groups-launch.lock")]
