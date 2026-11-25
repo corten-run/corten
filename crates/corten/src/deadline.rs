@@ -58,6 +58,21 @@ thread_local! {
     pub(crate) static TAKEN: Cell<usize> = const { Cell::new(0) };
 }
 
+/// The least of [`NAMES`] as each connection that made a timer found it, which is the first
+/// number any connection of this process was given: read before every number is taken, and the
+/// first to be taken was read before any was.
+#[cfg(test)]
+static FIRST: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// Whether the first number a connection of this process was given is above every value that
+/// says how many of a connection's deadlines have waited, for a test; `None` before any
+/// connection has made a timer.
+#[cfg(test)]
+pub(crate) fn first_number_is_no_state() -> Option<bool> {
+    let first = FIRST.load(Relaxed);
+    (first != u64::MAX).then_some(first > ASKED)
+}
+
 #[cfg(test)]
 impl Drop for Held {
     fn drop(&mut self) {
@@ -174,6 +189,8 @@ fn asked(id: u64) -> Mine {
     let timer = std::panic::catch_unwind(|| Box::pin(tokio::time::sleep(Duration::MAX))).ok().map(Held);
     #[cfg(test)]
     LIVE.with(|live| live.set(live.get() + isize::from(timer.is_some())));
+    #[cfg(test)]
+    FIRST.fetch_min(NAMES.load(Relaxed), Relaxed);
     Mine { id: NAMES.fetch_add(1, Relaxed), timer }
 }
 

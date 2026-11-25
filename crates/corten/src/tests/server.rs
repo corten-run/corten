@@ -2425,6 +2425,28 @@ async fn a_connection_makes_its_timer_only_when_a_second_deadline_waits() {
     assert_eq!(kept, [false, false, true]);
 }
 
+/// The first number a connection is given is none of the values that say how many of a
+/// connection's deadlines have waited. A connection numbered as one of those would be taken for
+/// one that has made no timer, lend none, and make another timer at each later poll in which a
+/// deadline waits. Whichever test's connection took the process's first number, this one reads
+/// what that number was, after a connection of its own has taken one.
+#[tokio::test(start_paused = true)]
+async fn the_first_number_a_connection_is_given_is_none_of_the_states() {
+    use crate::deadline::{first_number_is_no_state, Keeps, Timer};
+    use std::{future::Future, pin::pin, task::Poll};
+    let mut conn = pin!(Keeps::new(std::future::poll_fn(|cx| {
+        let mut timer = pin!(Timer::Unset);
+        assert!(timer.as_mut().poll(Duration::from_secs(30), cx).is_pending());
+        Poll::<()>::Pending
+    })));
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    for _ in 0..2 {
+        assert!(conn.as_mut().poll(&mut cx).is_pending());
+    }
+    assert!(conn.kept_until().is_some(), "the connection has made its timer, so a number has been given");
+    assert_eq!(first_number_is_no_state(), Some(true));
+}
+
 /// A connection that is done in the poll its second deadline waited in makes no timer on its way
 /// out.
 #[tokio::test(start_paused = true)]
