@@ -20,7 +20,6 @@ try {
     "bench/hardening/bounded-requests.mjs",
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",
-    "bench/marketplace/steady-contract.mjs",
     "bench/typescript.mjs",
     "bench/workloads/isolated/native-roles.mjs",
   ]);
