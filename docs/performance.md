@@ -62,8 +62,11 @@ No saved evidence shows that each adapter, the JIT runtimes in particular, had s
 by the end of the 10-second warmup, or that any app's memory and tail latency hold over
 longer runs. The [convergence and soak passes](../bench/marketplace/README.md#convergence-and-soak-passes)
 collect that evidence outside the nightly, and the timed warmup is to be set from a saved
-convergence pass that is like-for-like with the round (same commit, images, CPU settings, host CPU
-and the warmup's 32 users). None has been saved yet, so these results make no claim either way about warmth.
+convergence pass that is like-for-like with the round: the same commit, adapter images, fixture,
+upstream and k6 images, CPU settings, host CPU, kernel and online CPUs, the warmup's 32 users and
+the same cold start. A new commit or a rebuilt image of any measured adapter needs a new pass, as
+does a runtime or framework version change. None has been saved yet, so these results make no claim
+either way about warmth.
 Build times, instructions, bytes and interactive timing are not measured by this suite yet.
 The older measurements below remain historical evidence for their own workloads, not v2
 results. The nonlocalized [catalog](../bench/catalog/README.md) remains an optional, separate

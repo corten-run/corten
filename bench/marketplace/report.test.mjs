@@ -10,7 +10,7 @@ import { apps, locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { aggregate, appStop, cpuSettings, phases, resultSchema, sources, stageAggregate, timedProfilesFor, v4Schema, v5Schema } from "./run-contract.mjs";
 import { report, validateSummary } from "./report.mjs";
-import { convergenceLines, convergenceSchema, flattenPoint, flattenRule, timedWarmupVus } from "./steady-contract.mjs";
+import { convergenceLines, convergenceSchema, flattenPoint, flattenRule, timedStartup, timedWarmupVus } from "./steady-contract.mjs";
 import { compare, comparisonKey } from "./compare.mjs";
 import { groupApps } from "./groups.mjs";
 import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, produceBoundedQualification, qualification, qualificationSettings } from "./feature-contract.mjs";
@@ -612,19 +612,21 @@ test("the report states the convergence pass given to it, or that none was provi
   const none = report(s);
   assert.match(none, /^Convergence evidence: none provided to this report\. Without a saved convergence pass it cannot show that each measured adapter had stopped changing by the end of its 30s warmup/m);
   const windows = (rps) => rps.map((r, index) => ({ index, startSeconds: index * 15, seconds: 15, requests: r * 15, failed: 0, rps: r, p95: 5, p99: 9 }));
-  // Like-for-like with the round: its commit, group, image IDs, CPU settings, host CPU and the timed warmup's users.
+  // Like-for-like with the round: its commit, group, image IDs, fixture, upstream and k6 images, CPU
+  // settings, host CPU, kernel and online CPUs, the timed warmup's users and the same cold start.
   const options = { kind: "convergence", name: "w5", group: "production", apps: ["corten", "aspnet"], sources: ["fixture", "api"], targets: ["page", "json"], minutes: 3, windowSeconds: 15, windows: 12, vus: timedWarmupVus };
   const pass = { schema: convergenceSchema, name: "w5", options, rule: flattenRule, commit: s.commit, dirty: false, complete: true, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z",
-    host: { cpu: s.host.cpu }, measurement: { cpus: s.measurement.cpus }, images: { corten: s.apps.corten.imageId, aspnet: s.apps.aspnet.imageId },
+    host: { cpu: s.host.cpu, kernel: s.host.release, onlineCpus: s.host.onlineCpus }, measurement: { cpus: s.measurement.cpus }, images: { corten: s.apps.corten.imageId, aspnet: s.apps.aspnet.imageId },
+    fixtureSha256: s.fixtureSha256, tools: { upstream: { imageId: s.tools.upstream.imageId }, k6: { imageId: s.tools.k6.imageId } }, startup: timedStartup,
     cells: options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) => {
       const w = windows(app === "aspnet" ? [300, 600, 900, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000] : Array(12).fill(1000));
-      return { app, source, target, windows: w, tail: 0, unrecorded: 0, verdict: flattenPoint(w) };
+      return { app, source, target, windows: w, tail: 0, unrecorded: 0, failedRequests: 0, verdict: flattenPoint(w) };
     }))) };
   const given = (p) => (round, apps) => convergenceLines(round, apps, p);
   const text = report(s, { convergence: given(pass) });
   assert.doesNotMatch(text, /none provided to this report/);
-  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v1, rule marketplace-flatten\/v2\), measured at commit `a{40}`/m);
-  assert.match(text, /^The pass is like-for-like with this round: the same commit, group, images, CPU settings and host CPU, and the timed warmup's 32 users\.$/m);
+  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v1, rule marketplace-flatten\/v3\), measured at commit `a{40}`/m);
+  assert.match(text, /^The pass is like-for-like with this round: the same commit, group, images, fixture, upstream and k6 images, CPU settings, host CPU, kernel and online CPUs, the timed warmup's 32 users and the same cold start before the load\.$/m);
   assert.match(text, /^Flatten: aspnet api json: window 3 \(45 s\)\.$/m);
   assert.match(text, /^The slowest measured adapter flattened at 45 s \(aspnet fixture page\); this round's 30s warmup is shorter than that point\./m);
   // Only the convergence lines differ: the timed tables are the same with or without evidence.
@@ -639,6 +641,9 @@ test("the report states the convergence pass given to it, or that none was provi
   assert.match(other, /^Flatten: aspnet api json: window 3 \(45 s\)\.$/m);
   assert.match(other, /^This pass does not establish this round's 30s warmup\.$/m);
   assert.doesNotMatch(other, /reaches|is shorter than/);
+  // A pass that knows nothing about this round's kernel, or ran on another, is context only too.
+  const otherKernel = structuredClone(pass); otherKernel.host.kernel = "6.8.0-other";
+  assert.match(report(s, { convergence: given(otherKernel) }), /^The pass is not like-for-like with this round, so its flatten times below are context only: the kernel release differs \(pass: 6\.8\.0-other; round: test\)\.$/m);
   // The replay's validateSummary closure must not load steady-contract.mjs: report.mjs imports it only on the --convergence CLI path.
   const source = readFileSync(new URL("./report.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(source, /^import[^\n]*steady-contract/m);

@@ -4,6 +4,7 @@
 // steady-report.mjs and report.mjs read what they saved.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { resultSchema, timedProfilesFor } from "./run-contract.mjs";
 
 export const convergenceSchema = "marketplace-convergence/v1";
 export const soakSchema = "marketplace-soak/v1";
@@ -13,6 +14,11 @@ export const steadyTargets = Object.freeze(["page", "json"]);
 export const steadySources = Object.freeze(["fixture", "api"]);
 // The users the timed warmup phase runs (run.mjs load(): VUS 32 for warmup).
 export const timedWarmupVus = 32;
+// How a pass starts each app, as run.mjs coldStart starts it before a timed warmup: the app is
+// created, a sidecar polls the target's own path (the JSON item, or the first locale's page) from
+// docker start until its first 200, and the load follows. A pass with another startup is not
+// like-for-like with a timed round (unlikeRound).
+export const timedStartup = "marketplace cold start/v1: created app, sidecar polls the target's path from docker start to its first 200, then the load";
 /**
  * The flatten rule. Its spans are in seconds, so the window length (--window) does not change it:
  * h = holdSeconds / window length windows, and the window length must divide holdSeconds. A pass of
@@ -20,27 +26,36 @@ export const timedWarmupVus = 32;
  * 1. Fewer than 2h windows, or fewer than smoothing: never flattened (too-few-windows).
  * 2. tail = median of the last holdSeconds, previous = median of the holdSeconds before them,
  *    head = median of the first holdSeconds. tail = 0: nothing was served (no-throughput).
- * 3. tail > previous * (1 + tolerance): not shown steady at the end (still-rising).
- *    previous or head > tail * (1 + tolerance): not shown steady, slower at the end
+ * 3. previous or head > tail * (1 + tolerance): not shown steady, slower at the end
  *    (slower-at-end). A pass that got slower is never flattened, whatever its last windows do.
  * 4. Each window's smoothed value is the median of three consecutive windows centered on it,
  *    clamped to the pass (the first window uses 0-2, the last n-3..n-1).
- * 5. The steady run is the longest suffix whose smoothed values all lie within
- *    tail * (1 +/- tolerance); the flatten window is its first window whose own throughput does
- *    too. Less than holdSeconds from there to the end: never flattened (short-steady).
+ * 5. The steady run is the longest suffix in which EVERY window's own throughput lies within
+ *    tail * (1 +/- windowTolerance) and every smoothed value within tail * (1 +/- tolerance).
+ * 6. The flatten window is the first window s of that run whose own throughput is within
+ *    tail * (1 +/- tolerance), that leaves at least holdSeconds to the end, and from which the
+ *    throughput does not trend: the least-squares line through windows s..n-1 changes by at most
+ *    tolerance * tail from its first window to its last.
+ * 7. No such window: a run shorter than holdSeconds is not shown steady at the end when
+ *    tail > previous * (1 + tolerance) (still-rising), otherwise steady for too short a time
+ *    (short-steady); a longer run that trends is still-rising when the line goes up and
+ *    slower-at-end when it goes down.
  * The adapter stopped changing at the start of the flatten window. p95 and p99 are kept per window
  * as evidence; the rule reads throughput only, since in a closed loop with a fixed number of users
  * throughput and mean latency move together.
+ * The variation it tolerates in a steady run: any one window up to 10% from the tail median, any
+ * three consecutive windows' median up to 5%, and a drift of up to 5% across the whole run. A
+ * window further off ends the run there, wherever it falls.
  * Why these numbers: 5% is a stated choice, not derived from measured noise. It is wide enough that
  * a window's sampling noise is not read as change, and narrow enough that a runtime still moving by
  * more than a twentieth is not called steady; revisit it once saved passes show the window-to-window
- * spread on the measurement host. The median of three lets one outlier window (a pause, a noisy
- * neighbour) neither start nor end the steady run, while two consecutive outliers still count; a
- * wider median would blur when the change happened. 60 s of steady throughput is the evidence the
- * rule asks for before it names a window, and the same 60 s span is compared with the 60 s before
- * and the first 60 s.
+ * spread on the measurement host. The median of three keeps the run's level within 5% while one
+ * window's own noise may reach twice that; a single window beyond 10% (a pause, a periodic stall)
+ * is not noise the rule hides. The trend check catches a slow climb or decline that stays inside
+ * the bands window by window. 60 s of steady throughput is the evidence the rule asks for before it
+ * names a window.
  */
-export const flattenRule = Object.freeze({ name: "marketplace-flatten/v2", tolerance: 0.05, holdSeconds: 60, smoothing: 3 });
+export const flattenRule = Object.freeze({ name: "marketplace-flatten/v3", tolerance: 0.05, windowTolerance: 0.1, holdSeconds: 60, smoothing: 3 });
 const minConvergenceWindows = 8;
 // The default pass runs the timed warmup's users, so it is like-for-like with a timed round's
 // warmup (convergenceLines). --vus changes it for exploration; such a pass does not establish a
@@ -190,30 +205,38 @@ const median = (values) => {
   const s = [...values].sort((a, b) => a - b), m = s.length >> 1;
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
+// The change from the first to the last value of the least-squares line through equally spaced values.
+const fittedChange = (values) => {
+  const k = values.length, mean = (k - 1) / 2, avg = values.reduce((a, b) => a + b, 0) / k;
+  let num = 0, den = 0;
+  values.forEach((v, i) => { num += (i - mean) * (v - avg); den += (i - mean) ** 2; });
+  return den === 0 ? 0 : (num / den) * (k - 1);
+};
 /**
  * The window each pass stopped getting faster in, by flattenRule (above).
  * @param {{rps: number, startSeconds: number}[]} windows in order
  */
 export function flattenPoint(windows, rule = flattenRule) {
   assert.deepEqual(rule, flattenRule, "only the stated flatten rule is applied");
-  const { tolerance: t, holdSeconds, smoothing } = rule, n = windows.length, rps = windows.map((w) => w.rps);
+  const { tolerance: t, windowTolerance: w, holdSeconds, smoothing } = rule, n = windows.length, rps = windows.map((x) => x.rps);
   assert.ok(rps.every((r) => Number.isFinite(r) && r >= 0), "window throughput must be finite and not negative");
   const size = windows[0]?.seconds;
-  assert.ok(n === 0 || (Number.isSafeInteger(size) && size > 0 && holdSeconds % size === 0 && windows.every((w) => w.seconds === size)), `windows must share one length that divides ${holdSeconds} s`);
+  assert.ok(n === 0 || (Number.isSafeInteger(size) && size > 0 && holdSeconds % size === 0 && windows.every((x) => x.seconds === size)), `windows must share one length that divides ${holdSeconds} s`);
   const h = n ? holdSeconds / size : 1;
   if (n < 2 * h || n < smoothing) return { flattened: false, reason: "too-few-windows" };
   const tail = median(rps.slice(n - h)), previous = median(rps.slice(n - 2 * h, n - h)), head = median(rps.slice(0, h));
   if (tail === 0) return { flattened: false, reason: "no-throughput", tailRps: 0 };
   const evidence = { tailRps: tail, previousRps: previous, headRps: head };
-  if (tail > previous * (1 + t)) return { flattened: false, reason: "still-rising", ...evidence };
   if (previous > tail * (1 + t) || head > tail * (1 + t)) return { flattened: false, reason: "slower-at-end", ...evidence };
-  const within = (r) => r >= tail * (1 - t) && r <= tail * (1 + t);
+  const within = (r, band) => r >= tail * (1 - band) && r <= tail * (1 + band);
   const smoothed = rps.map((_, j) => { const c = Math.min(Math.max(j, 1), n - 2); return median(rps.slice(c - 1, c + 2)); });
-  let start = n;
-  while (start > 0 && within(smoothed[start - 1])) start--;
-  while (start < n && !within(rps[start])) start++;
-  if (n - start < h) return { flattened: false, reason: "short-steady", ...evidence };
-  return { flattened: true, window: start, atSeconds: windows[start].startSeconds, ...evidence };
+  let run = n;
+  while (run > 0 && within(rps[run - 1], w) && within(smoothed[run - 1], t)) run--;
+  for (let s = run; s <= n - h; s++) {
+    if (within(rps[s], t) && Math.abs(fittedChange(rps.slice(s))) <= t * tail) return { flattened: true, window: s, atSeconds: windows[s].startSeconds, ...evidence };
+  }
+  if (n - run < h) return { flattened: false, reason: tail > previous * (1 + t) ? "still-rising" : "short-steady", ...evidence };
+  return { flattened: false, reason: fittedChange(rps.slice(run)) > 0 ? "still-rising" : "slower-at-end", ...evidence };
 }
 
 const cellKey = (c) => `${c.app} ${c.source} ${c.target}`;
@@ -252,12 +275,21 @@ export function validateConvergence(s) {
   assert.deepEqual(Object.keys(s.images ?? {}).sort(), [...s.options.apps].sort(), "a pass records the image ID of every adapter it ran");
   for (const id of Object.values(s.images)) assert.match(id, /^sha256:[a-f0-9]{64}$/, "image IDs are Docker sha256 IDs");
   assert.ok(cpuRoles.every((role) => Number.isFinite(s.measurement?.cpus?.[role]?.quota)), "a pass records its CPU settings");
+  // And the other inputs a timed round records: fixture, upstream and k6 images, kernel, online CPUs, startup.
+  assert.match(s.fixtureSha256 ?? "", /^[a-f0-9]{64}$/, "a pass records its fixture hash");
+  for (const tool of ["upstream", "k6"]) assert.match(s.tools?.[tool]?.imageId ?? "", /^sha256:[a-f0-9]{64}$/, `a pass records its ${tool} image ID`);
+  for (const key of ["kernel", "onlineCpus"]) assert.ok(typeof s.host[key] === "string" && s.host[key].length > 0, `a pass records its host ${key}`);
+  assert.ok(typeof s.startup === "string" && s.startup.length > 0, "a pass records how it started each app");
   for (const c of s.cells) {
     if (c.failure !== undefined) {
       assert.ok(typeof c.failure === "string" && c.failure.length > 0 && c.windows === undefined && c.verdict === null, `${cellKey(c)}: a failed cell keeps its reason and no verdict`);
       continue;
     }
     windowsEvidence(c.windows, s.options.windows, s.options.windowSeconds);
+    // A failed answer can be faster than a served one: a cell with any failure, in a window or in
+    // k6's aggregate (which also counts the graceful stop), has no verdict, so none is saved.
+    assert.ok(c.windows.every((x) => x.failed === 0), `${cellKey(c)}: a cell with failed requests in its windows has no verdict`);
+    assert.equal(c.failedRequests, 0, `${cellKey(c)}: a cell with failed requests in k6's aggregate has no verdict`);
     assert.ok(Number.isSafeInteger(c.tail) && c.tail >= 0 && Number.isSafeInteger(c.unrecorded) && c.unrecorded >= 0, `${cellKey(c)}: tail and unrecorded requests`);
     assert.deepEqual(c.verdict, flattenPoint(c.windows), `${cellKey(c)}: saved verdict differs from the flatten rule`);
   }
@@ -269,8 +301,10 @@ export function validateConvergence(s) {
  * the last interval; p99 is kept per interval; a restart is any RestartCount increase, any start,
  * restart, die or OOM event during the soak, or a container not running at the end.
  */
-export function summarizeSoak({ windows, tail, unrecorded, memory, before, after, events, rate, droppedIterations }) {
+export function summarizeSoak({ windows, tail, unrecorded, memory, before, after, events, rate, droppedIterations, failedRequests }) {
   assert.ok(Number.isSafeInteger(rate) && rate > 0 && Number.isSafeInteger(droppedIterations) && droppedIterations >= 0, "a soak records its requested rate and k6's dropped iterations");
+  // k6's aggregate failures, which also count answers that completed during the graceful stop.
+  assert.ok(Number.isSafeInteger(failedRequests) && failedRequests >= windows.reduce((sum, w) => sum + w.failed, 0), "a soak records k6's aggregate failed requests, at least those in its intervals");
   assert.ok(Array.isArray(windows) && windows.length >= 2, "a soak has at least two intervals");
   const seconds = windows[0].seconds, end = windows.length * seconds;
   assert.ok(Array.isArray(memory) && memory.every((m) => Number.isFinite(m.atSeconds) && Number.isFinite(m.mib) && m.mib > 0), "memory samples need a time and a positive size");
@@ -286,7 +320,7 @@ export function summarizeSoak({ windows, tail, unrecorded, memory, before, after
   // k6 drops an iteration it could not start on time (no free user): then the load was not the fixed rate asked for.
   return { windows, tail, unrecorded, rate: { requested: rate, droppedIterations, met: droppedIterations === 0 }, memory: { samples: memory.length, startMiB, endMiB, growthMiB: endMiB - startMiB, growthPct: (endMiB - startMiB) / startMiB * 100 },
     p99: { first: windows[0].p99, last: windows.at(-1).p99, max: p99.length ? Math.max(...p99) : null },
-    failed: windows.reduce((sum, w) => sum + w.failed, 0),
+    failed: windows.reduce((sum, w) => sum + w.failed, 0), failedRequests,
     restarts: { restarted, restartCount: after.restartCount - before.restartCount, events: restartEvents, runningAtEnd: after.running, oomKilled: after.oomKilled } };
 }
 /** Validates a saved soak. Returns it. */
@@ -300,12 +334,15 @@ export function validateSoak(s) {
     assert.ok(Number.isSafeInteger(m?.samples) && m.samples > 1 && m.startMiB > 0 && m.endMiB > 0 && m.growthMiB === m.endMiB - m.startMiB && m.growthPct === m.growthMiB / m.startMiB * 100, `${cellKey(c)}: memory`);
     assert.deepEqual(c.p99.first, c.windows[0].p99); assert.deepEqual(c.p99.last, c.windows.at(-1).p99);
     assert.equal(c.failed, c.windows.reduce((sum, w) => sum + w.failed, 0), `${cellKey(c)}: failures`);
+    assert.ok(Number.isSafeInteger(c.failedRequests) && c.failedRequests >= c.failed, `${cellKey(c)}: aggregate failures`);
     assert.equal(typeof c.restarts?.restarted, "boolean", `${cellKey(c)}: restarts`);
     assert.ok(c.rate?.requested === s.options.rate && Number.isSafeInteger(c.rate.droppedIterations) && c.rate.droppedIterations >= 0 && c.rate.met === (c.rate.droppedIterations === 0), `${cellKey(c)}: rate`);
   }
   return s;
 }
 
+/** The flatten rule in words, with the variation it tolerates in a steady run. */
+export const ruleText = `an adapter is steady from the first window after which, for at least ${flattenRule.holdSeconds} s to the end of the pass, every window's throughput stays within ${flattenRule.windowTolerance * 100}% of the median of the last ${flattenRule.holdSeconds} s (the tail), every three-window median within ${flattenRule.tolerance * 100}%, and the least-squares line through those windows changes by at most ${flattenRule.tolerance * 100}% of the tail. A pass whose first or second-to-last ${flattenRule.holdSeconds} s ran more than ${flattenRule.tolerance * 100}% faster than the tail is slower at the end and never steady. One window further off than ${flattenRule.windowTolerance * 100}% ends the steady run where it falls. p95 and p99 are evidence, not part of the rule.`;
 /** A verdict in words: the flatten window, or why the pass did not show the adapter steady. */
 export const verdictText = (v) => v.flattened ? `window ${v.window} (${v.atSeconds} s)`
   : { "too-few-windows": "not shown steady: too few windows", "no-throughput": "not shown steady: nothing served at the end", "still-rising": "not shown steady at the end",
@@ -314,12 +351,18 @@ const cpuRoles = ["app", "load", "api"];
 const cpuText = (cpus) => cpuRoles.map((role) => `${role} ${cpus?.[role]?.quota ?? "?"} CPU${cpus?.[role]?.cpuset ? ` on ${cpus[role].cpuset}` : " unpinned"}`).join(", ");
 /**
  * Why a convergence pass is not like-for-like with a timed round, or [] when it is: the same
- * commit, group, image ID for every measured adapter, CPU quotas and pinning, host CPU model, and
- * the timed warmup's users. A round that does not record one of these cannot be matched on it, and
- * a split round ran on several droplets.
+ * commit, group, image ID for every measured adapter, fixture, upstream and k6 images, CPU quotas
+ * and pinning, host CPU model, kernel and online CPUs, the timed warmup's users, the same startup
+ * before the load, and a round whose page warmup rotated locales as the pass does. A value either
+ * side does not record cannot be matched, so it is a difference; a split round ran on several
+ * droplets.
  */
 export function unlikeRound(round, apps, c) {
   const reasons = [], o = c.options;
+  const same = (what, pass, timed) => {
+    if (pass == null || timed == null) reasons.push(`${what} is not recorded on both sides (pass: ${pass ?? "not recorded"}; round: ${timed ?? "not recorded"})`);
+    else if (pass !== timed) reasons.push(`${what} differs (pass: ${pass}; round: ${timed})`);
+  };
   if (round.split) reasons.push("this round was split across droplets, each its own host");
   if (c.commit !== round.commit) reasons.push(`the pass measured commit \`${c.commit}\`, this round \`${round.commit}\``);
   if ((round.options.group ?? null) !== (o.group ?? null)) reasons.push(`the pass ran ${o.group ? `group ${o.group}` : "no group"}, this round ${round.options.group ? `group ${round.options.group}` : "no group"}, so their images and container settings differ`);
@@ -327,11 +370,21 @@ export function unlikeRound(round, apps, c) {
   const unrecorded = images.filter((i) => !i.round || !i.pass).map((i) => i.app), differ = images.filter((i) => i.round && i.pass && i.round !== i.pass).map((i) => i.app);
   if (unrecorded.length) reasons.push(`image IDs are not recorded on both sides for ${unrecorded.join(", ")}`);
   if (differ.length) reasons.push(`the image IDs differ for ${differ.join(", ")}`);
+  same("the fixture SHA-256", c.fixtureSha256, round.fixtureSha256);
+  same("the upstream image ID", c.tools?.upstream?.imageId, round.tools?.upstream?.imageId);
+  same("the k6 image ID", c.tools?.k6?.imageId, round.tools?.k6?.imageId);
   const roundCpus = round.measurement?.cpus, passCpus = c.measurement?.cpus;
   if (!roundCpus || !passCpus || cpuRoles.some((role) => roundCpus[role]?.quota !== passCpus[role]?.quota || (roundCpus[role]?.cpuset ?? null) !== (passCpus[role]?.cpuset ?? null)))
     reasons.push(`the CPU settings differ (pass: ${cpuText(passCpus)}; round: ${cpuText(roundCpus)})`);
   if (!round.host?.cpu || round.host.cpu !== c.host.cpu) reasons.push(`the host CPU differs (pass: ${c.host.cpu}; round: ${round.host?.cpu ?? "not recorded"})`);
+  // run.mjs records the host's os.release(); containers share that kernel, which the pass reads in one.
+  same("the kernel release", c.host.kernel, round.host?.release);
+  same("the online CPU set", c.host.onlineCpus, round.host?.onlineCpus);
   if (o.vus !== timedWarmupVus) reasons.push(`the pass ran ${o.vus} users, the timed warmup ${timedWarmupVus}`);
+  if (c.startup !== timedStartup) reasons.push(`the pass started each app another way than the timed round's cold start (${c.startup ?? "not recorded"})`);
+  // window-load.js rotates locales on pages; a round of an earlier schema warmed one locale per profile.
+  const fixedLocales = o.targets.includes("page") && (!round.schema || timedProfilesFor(round.schema).some((p) => p.target === "page" && p.locale !== "rotating"));
+  if (fixedLocales) reasons.push(`this round's page warmup ${round.schema ? `(${round.schema}) used one locale per profile` : "does not record its locale profiles"}, while the pass rotates locales as ${resultSchema} does`);
   return reasons;
 }
 /**
@@ -348,10 +401,11 @@ export function convergenceLines(round, apps, convergence) {
   const warmup = round.options.warmup;
   assert.ok(convergence != null, "convergenceLines reads a convergence pass");
   const c = validateConvergence(convergence), o = c.options;
-  const lines = [`Convergence evidence: pass ${c.name} (${convergenceSchema}, rule ${flattenRule.name}), measured at commit \`${c.commit}\`. Host CPU: ${c.host.cpu}. One ${o.vus}-user closed-loop pass of ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s windows from the start of the load, after readiness.`];
+  const lines = [`Convergence evidence: pass ${c.name} (${convergenceSchema}, rule ${flattenRule.name}), measured at commit \`${c.commit}\`. Host CPU: ${c.host.cpu}. One ${o.vus}-user closed-loop pass of ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s windows from the start of the load, after ${c.startup === timedStartup ? "the timed round's cold start" : `another startup (${c.startup})`}.`];
   const reasons = unlikeRound(round, apps, c);
   lines.push(reasons.length ? `The pass is not like-for-like with this round, so its flatten times below are context only: ${reasons.join("; ")}.`
-    : `The pass is like-for-like with this round: the same commit, group, images, CPU settings and host CPU, and the timed warmup's ${timedWarmupVus} users.`);
+    : `The pass is like-for-like with this round: the same commit, group, images, fixture, upstream and k6 images, CPU settings, host CPU, kernel and online CPUs, the timed warmup's ${timedWarmupVus} users and the same cold start before the load.`);
+  lines.push(`Flatten rule ${flattenRule.name}: ${ruleText}`);
   const found = [], missing = [];
   for (const app of apps) for (const source of steadySources) for (const target of steadyTargets) {
     const cell = c.cells.find((x) => x.app === app && x.source === source && x.target === target);
@@ -370,7 +424,7 @@ export function convergenceLines(round, apps, convergence) {
     return lines;
   }
   const slowest = verdicts.reduce((x, y) => (y.v.atSeconds > x.v.atSeconds ? y : x));
-  lines.push(`The slowest measured adapter flattened at ${slowest.v.atSeconds} s (${slowest.name}); this round's ${warmup}s warmup ${warmup >= slowest.v.atSeconds ? "reaches" : "is shorter than"} that point. The comparison is by time: the timed warmup runs after a cold start, the convergence pass after one readiness request.`);
+  lines.push(`The slowest measured adapter flattened at ${slowest.v.atSeconds} s (${slowest.name}); this round's ${warmup}s warmup ${warmup >= slowest.v.atSeconds ? "reaches" : "is shorter than"} that point. The comparison is by time from the end of the same cold start.`);
   return lines;
 }
 /**
