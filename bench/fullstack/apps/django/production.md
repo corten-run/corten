@@ -69,3 +69,80 @@ functional-parity evidence, not load/performance evidence. A missing feature
 leaves `eligible: false`; failures are retained and the helper exits nonzero.
 Connection-flood resistance: not measured.
 The baseline image must never be relabeled as the production image, or vice versa.
+
+## Mixed ASGI Candidate
+
+The app-local candidate for [#1304 Benchmark parity: Django in approved workload groups](https://github.com/corten-run/corten/issues/1304)
+is built with `--build-arg PROFILE=matched-asgi`. It inherits the matched image's
+settings (`PROFILE=matched`, including host checks, CSRF, CSP, gzip, WhiteNoise,
+and private/no-store dynamic responses). Its command migrates the same SQLite
+schema and runs `start_mixed_asgi.py`. Granian retains the one worker, native
+HTTP/1 limits, backpressure and runtime-thread settings, but selects ASGI, with
+WebSocket handling disabled and one Granian blocking thread rather than the
+WSGI-only pool of three. Django's sync middleware, rendering and ORM may still
+use Python threads; record actual thread/process counts on the pinned image.
+Default Gunicorn, matched Granian WSGI and the live Uvicorn entry point keep
+their existing commands, settings and routes.
+
+Only the marketplace page/form and marketplace record JSON callbacks differ in
+this URL configuration. An async view awaits one HTTPX read for API mode (none
+for a fixture), forwarding that request's traceparent and validating the
+complete record before use. A worker owns its pool for the ASGI lifespan;
+connections idle for four seconds are not reused. Django handles
+`http.disconnect` and cancels the awaited read, including a held body. There
+are no redirects, retries, early responses, or synthetic request headers. The
+ten-second bound covers the entire HTTP read; a page/form deadline returns a
+native 504 and cannot append an alert. The JSON route retains native JSON
+serialization and its generic 500 for read/parse failures. The page uses the
+same Django template, formatters, ORM and session readback as WSGI. The
+candidate keeps its own render-and-write callback so WSGI's original callback
+and per-request calls remain unchanged. A write already in the synchronous
+ORM is not a rollback-on-disconnect promise.
+
+From this app directory, with the three requirements files installed, run:
+
+```sh
+python -m unittest -v test_mixed_asgi_socket.MixedAsgiSocketTests test_mixed_asgi_socket.SocketTimingTests
+```
+
+The fixture runs both Granian interfaces with temporary databases and real
+sockets. It measures from just before caller shutdown to the first upstream
+EOF/reset on the same monotonic clock: three held-header locale cases and a
+held-body case must close within 500 ms on ASGI and not on WSGI. For the 504
+case, the response and upstream close must both arrive between 9.75 and 10.75
+seconds, with at least nine body writes and no gap over two seconds up to
+closure, so an inactivity-only timeout cannot pass. It also checks native
+security, gzip, CSRF, alert readback, JSON validation, fixture bypass, and
+localized HTML equality apart from the generated CSRF token.
+
+The Catalog workflow's Django cell runs the named tests via `docker exec`
+inside the isolated ASGI image. The image runs its own default command;
+`ShippedAsgiSocketTests` checks cancellation and a migrated alert write against
+that running app on port 8080. These diagnostics do not qualify the Mixed
+workload or replace the browser and native production gates.
+
+Official selection is not wired. A later Mixed-only integration must:
+
+1. Add one fixed, explicitly selected Django deployment for both sources and
+   every stage/pass. In `bench/mixed-production/run.mjs`, pass
+   `PROFILE=matched-asgi` only to the selected Django **build**, from the existing
+   immutable Git archive; keep the runtime feature profile `matched` in both
+   the runner and `measure.mjs`. Do not select it through an unbound image tag.
+2. Bind the deployment ID and build argument separately from the feature
+   profile in the image metadata, `sourceAuditIdentity`/`verifySourceAudit`,
+   and the retained capture and measurement receipts. Extend `verify.mjs` and
+   `execution-evidence.mjs` replay to require the matching image ID, context
+   hash, startup command/settings and deployment for both sources. Bind the
+   selector in the isolated campaign options and its exact-argv replay
+   (`bench/workloads/isolated/campaign-contract.mjs`, `contract.mjs` and
+   `adapters/mixed-production.mjs`), preserving verification of old receipts.
+   Obtain a fresh independent native audit against the candidate's exact
+   committed input manifest and archive.
+3. Give `bench/workloads/deployments.mjs` a separate Mixed-only candidate, for
+   example `django-granian-asgi`, with the Docker build argument, migration and
+   launcher, worker/loop configuration, checked-in settings and dependency
+   sources. Do not rename the existing WSGI representative or the Uvicorn live
+   option. On the pinned Linux image, verify the three original API cancel
+   cells with one request, zero completed, one cancelled and zero pending
+   within the unchanged bound. Then run the full Mixed native/production
+   qualification before timing. The loopback fixture is not that evidence.
