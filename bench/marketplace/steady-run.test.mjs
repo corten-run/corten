@@ -354,9 +354,12 @@ test("a load container that cannot be removed still has its app removed, and no 
 /**
  * A docker events client on the fake daemon: from the moment it is spawned it writes each event the
  * daemon publishes for a container in its filters as `id|action|nanos`, in order, unless
- * `drop(row, index)` withholds it; it closes when signalled unless `holds`.
+ * `drop(row, index)` withholds it; it closes when signalled unless `holds`. A row `late(row)`
+ * picks is held back: once the client has written the marker's second start, it writes nothing for
+ * `lateMs`, then the held rows and every row published meanwhile, in that order, so an event
+ * from the load reaches the reader in a later chunk than that start.
  */
-function eventsClient(fake, { drop = () => false, holds = false } = {}) {
+function eventsClient(fake, { drop = () => false, holds = false, late = () => false, lateMs = 30 } = {}) {
   const spawned = [];
   const spawn = (binary, args) => {
     const child = new EventEmitter();
@@ -367,10 +370,20 @@ function eventsClient(fake, { drop = () => false, holds = false } = {}) {
       return true;
     };
     const ids = args.filter((a) => a.startsWith("container=")).map((a) => a.slice("container=".length));
-    let index = 0;
+    let index = 0, starts = 0, pausing = false;
+    const held = [], queued = [];
+    const write = (row) => { if (!child.ended) child.stdout.write(`${row}\n`); };
     fake.listeners.push((id, action, nanos) => {
       const row = `${id}|${action}|${nanos}`;
-      if (!child.ended && ids.includes(id) && !drop(row, index++)) child.stdout.write(`${row}\n`);
+      if (child.ended || !ids.includes(id) || drop(row, index++)) return;
+      if (late(row)) { held.push(row); return; }
+      if (pausing) { queued.push(row); return; }
+      write(row);
+      // The marker is the second ID the client filters on.
+      if (id === ids[1] && action === "start" && ++starts === 2 && held.length) {
+        pausing = true;
+        setTimeout(() => { for (const r of [...held.splice(0), ...queued.splice(0)]) write(r); pausing = false; }, lateMs);
+      }
     });
     spawned.push({ binary, args, child });
     return child;
@@ -589,10 +602,10 @@ test("an adapter or upstream image ID that is not a canonical Docker ID fails it
 test("a soak reads restarts from a live event stream only when it shows it covered the load; a clean-looking stream without that is not a no", async (t) => {
   const folder = folderOf(t);
   const options = parseSteadyArgs(["soak", "t12", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps);
-  const soak = async (name, { drop, spawnEvents, ...extra } = {}) => {
+  const soak = async (name, { drop, late, spawnEvents, ...extra } = {}) => {
     let tick = 0;
     const fake = fakeDocker({ exportFor: () => soakExport(), clockMs: 1_800_000, loadMs: 50, ...extra });
-    const client = eventsClient(fake, { drop });
+    const client = eventsClient(fake, { drop, late });
     const stats = statsClient({ delayMs: 10, rows: (args) => Array.from({ length: 180 }, () => ({ ID: args.at(-1), Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" })) });
     const s = await run(fake, options, folder(name), { spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ }, spawnEvents: spawnEvents ?? client.spawn });
     assert.equal(s.complete, true, JSON.stringify([s.failures, s.cells]));
@@ -617,10 +630,18 @@ test("a soak reads restarts from a live event stream only when it shows it cover
   // A kill during the load is seen.
   const seen = await soak("seen", { duringLoad: (state) => state.emit(state.app().id, "kill") });
   assert.deepEqual([seen.r.eventStream, seen.r.events.map((e) => e.action), seen.r.restarted], ["seen", ["kill"], true]);
+  // A kill stamped a second before the load finished, delivered in a later chunk than the marker's
+  // second start: the runner reads on to the fence, the marker's exit after that start, so it is
+  // still seen (stopping at that start, as the runner once did, read the stream as clean).
+  const inLoad = (state) => { const nanos = String(BigInt(state.now() - 1000) * 1_000_000n); for (const listener of state.listeners) listener(state.app().id, "kill", nanos); };
+  const delayed = await soak("delayed", { duringLoad: inLoad, late: (row) => row.includes("|kill|") });
+  assert.deepEqual([delayed.r.eventStream, delayed.r.events.map((e) => e.action), delayed.r.restarted], ["seen", ["kill"], true]);
+  const delivered = readFileSync(join(folder("delayed"), "fixture", "corten", "page", "events.log"), "utf8").split("\n");
+  assert.ok(delivered.findIndex((r) => r.includes("|kill|")) > delivered.findLastIndex((r) => r.includes("|start|")), "the kill was delivered after the marker's second start");
   // Streams that look clean (no app event at all) but do not show coverage: nothing delivered, the
   // first marker start missed (listening only after the load began), or the second one missing.
   const nth = (n) => { let starts = 0; return (row) => row.includes("|start|") && ++starts === n; };
-  for (const [name, drop] of [["silent", () => true], ["late", nth(1)], ["no-end", nth(2)]]) {
+  for (const [name, drop] of [["silent", () => true], ["late", nth(1)], ["no-end", nth(2)], ["no-fence", (row) => row.includes("|die|")]]) {
     const { s, r } = await soak(name, { drop });
     assert.deepEqual([r.eventStream, r.events, r.restarted], ["unavailable", [], null], name);
     assert.match(steadyReport(s), /\| not established: the event stream was unavailable or did not cover the load, and nothing else showed a restart \|$/m, name);
@@ -630,6 +651,8 @@ test("a soak reads restarts from a live event stream only when it shows it cover
   assert.match(errorsOf(folder("silent")), /docker events: Error: docker events did not show the marker's start 1 within 200 ms/);
   assert.match(errorsOf(folder("late")), /docker events: Error: docker events did not show the marker's start 1 within 200 ms/);
   assert.match(errorsOf(folder("no-end")), /docker events: Error: docker events did not show the marker's start 2 within 200 ms/);
+  // Both marker starts but no row after the second: the stream is not read as clean.
+  assert.match(errorsOf(folder("no-fence")), /docker events: Error: docker events did not show a marker row after its second start within 200 ms/);
   // A row that is not an action and a time makes the whole stream unavailable, and is not saved.
   const odd = await soak("malformed", { duringLoad: (state) => state.emit(state.app().id, "Leaked Canary") });
   assert.deepEqual([odd.r.eventStream, odd.r.restarted], ["unavailable", null]);

@@ -142,6 +142,15 @@ const maxWindows = 360;
 /** The label steady.mjs owns its containers and networks by (run.mjs uses the same key). */
 export const ownerLabelKey = "run.corten.marketplace";
 /**
+ * The containers and networks a complete pass creates (steady-run.mjs), each once: the host probe,
+ * the k6 version probe, the network and the upstream for the pass, and for each cell the app, its
+ * cold-start sidecar and the k6 load, with a soak's event marker. A measured cell made all of its
+ * own; a failed one stopped at some step, so it made at most that many. A saved reader requires the
+ * count of acknowledged creates to fall within what the cells allow (passEvidence).
+ */
+export const passCreates = 4;
+export const cellCreates = Object.freeze({ convergence: 3, soak: 4 });
+/**
  * The marketplace fixture an app container mounts must be the one fixtures.mjs generates now, as
  * run.mjs requires for a timed round: a stale or missing fixture fails before any container starts.
  * @param {Buffer | null} bytes the fixture file, or null when it does not exist
@@ -253,11 +262,18 @@ export const eventFormat = "{{.Actor.ID}}|{{.Action}}|{{.TimeNano}}";
  * (`startedAt`), the second strictly later than the first (so a distinct row) and strictly after
  * the load's FinishedAt (`finishedAt`). The app's last inspect has no daemon time; the load's
  * FinishedAt is the latest daemon time before it, and the pass starts the marker the second time
- * only once that inspect has returned. Every row must be one of the two container IDs, an action
+ * only once that inspect has returned. Nor does the second start's row alone show that the client
+ * had delivered what came before it: a client can hand the rows over in chunks, and the runner
+ * once stopped reading at that row. So the stream must also show the fence, a later marker row
+ * (its exit) stamped after the load's FinishedAt, which the runner waits for before it stops the
+ * client; an app event delivered after the second start and before the fence is read like any
+ * other. This relies on the client delivering rows in the daemon's order up to the fence; a stream
+ * without the fence is not read at all. Every row must be one of the two container IDs, an action
  * (lowercase letters and underscores, optionally followed by ": " and detail, as health_status and
  * exec_start are) and a time in nanoseconds. One row that is not, fewer than two marker starts, or
  * witnesses that do not bracket the load make the whole observation unreadable: this throws a fixed
- * message (with a count), and the caller saves the stream as unavailable. Returns the app's start,
+ * message (with a count), and the caller saves the stream as unavailable, as it does for a stream
+ * with no fence. Returns the app's start,
  * restart, die, kill and oom events, with no detail, that are before the second marker start or
  * stamped at or before the load's FinishedAt: the stream's order does not decide that an event
  * stamped inside the load is teardown. Only an app event both after the second marker start and
@@ -272,13 +288,18 @@ export function readEvents(text, { app, marker, startedAt, finishedAt } = {}) {
   assert.ok(finishNs !== null && finishNs >= startNs, "the load container's FinishedAt is not a time at or after its StartedAt");
   const rows = text.split("\n").map((line) => line.replace(/\r$/, "")).filter((line) => line.length > 0);
   const events = [], witnesses = [];
-  let unreadable = 0;
+  let unreadable = 0, fence = null;
   for (const row of rows) {
     const first = row.indexOf("|"), last = row.lastIndexOf("|");
     const id = row.slice(0, Math.max(first, 0)), action = row.slice(first + 1, Math.max(last, first + 1)), nanos = row.slice(last + 1);
     if (first <= 0 || last <= first || (id !== app && id !== marker) || !/^[a-z_]{1,32}(: .*)?$/.test(action) || !/^[1-9]\d{0,19}$/.test(nanos)) { unreadable++; continue; }
     const name = action.split(":", 1)[0], at = BigInt(nanos);
-    if (id === marker) { if (name === "start") witnesses.push(at); continue; }
+    if (id === marker) {
+      // The first marker row after the second start, whatever its action, is the fence.
+      if (witnesses.length >= 2) fence ??= at;
+      else if (name === "start") witnesses.push(at);
+      continue;
+    }
     if (!restartActions.includes(name)) continue;
     // Teardown only when both after the second marker start and stamped after the load finished.
     if (witnesses.length >= 2 && at > finishNs) continue;
@@ -289,6 +310,7 @@ export function readEvents(text, { app, marker, startedAt, finishedAt } = {}) {
   const [before, after] = witnesses;
   assert.ok(before <= startNs, "the marker's first start in the event stream is not at or before the load's start, so it does not show the stream was listening when the load began");
   assert.ok(after > before && after > finishNs, "the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load");
+  assert.ok(fence !== null && fence > finishNs, "the event stream shows no marker row after its second start and after the load finished, so it does not show the client delivered what came before that start");
   return events;
 }
 const restartActions = Object.freeze(["start", "restart", "die", "oom", "kill"]);
@@ -500,8 +522,8 @@ function passEvidence(s, schema) {
   assert.equal(s.complete, true, "an incomplete pass is not evidence");
   assert.deepEqual(s.failures, [], "a pass with a suite failure is not evidence");
   // Cleanup must be confirmed: no failure, nothing left with the owner label, every create Docker
-  // acknowledged confirmed removed or recovered, and every create it did not acknowledge found and
-  // removed (cleanup.json keeps the whole record).
+  // acknowledged confirmed removed, and every create it did not acknowledge found and removed
+  // (cleanup.json keeps the whole record).
   const k = s.cleanup;
   assert.ok(k?.complete === true && Array.isArray(k.remaining?.containers) && Array.isArray(k.remaining?.networks) && k.remaining.containers.length === 0 && k.remaining.networks.length === 0
     && Array.isArray(k.unacknowledged) && k.unacknowledged.every((a) => a?.outcome === "removed"), "a pass whose cleanup is not confirmed complete is not evidence");
@@ -509,10 +531,13 @@ function passEvidence(s, schema) {
   fields(k, ["complete", "remaining", "created", "removed", "recovered", "failures", "unacknowledged"], "the pass's cleanup");
   fields(k.remaining, ["containers", "networks"], "the pass's remaining resources");
   assert.ok([k.created, k.removed, k.recovered].every(nonNegative), "the pass's cleanup counts");
-  // Each acknowledged create is one removed or recovered resource, and each unacknowledged one that
-  // was found and removed at least one more (recovered, since it was never acknowledged): fewer
-  // than that means a create's removal was not confirmed, whatever `complete` says.
-  assert.ok(k.removed + k.recovered >= k.created + k.unacknowledged.length, "a pass whose creates were not all confirmed removed or recovered is not evidence");
+  // The identity ownedResources keeps (alert-probe-run.mjs), which the runner checks by ID: an
+  // acknowledged create is removed by its ID, so it is counted as removed, never recovered; a create
+  // Docker did not acknowledge can only be found by its own label and removed as recovered. So
+  // removed equals created (fewer is a removal not confirmed, more is a resource no create made) and
+  // recovered equals the unacknowledged creates, whatever `complete` says.
+  assert.ok(k.removed === k.created, "a pass whose acknowledged creates were not each confirmed removed is not evidence");
+  assert.ok(k.recovered === k.unacknowledged.length, "a pass whose recovered resources are not its unacknowledged creates is not evidence");
   for (const a of k.unacknowledged) { fields(a, ["name", "label", "outcome"], "an unacknowledged create"); nullable("runId", a.name, "an unacknowledged create's name"); nullable("attemptLabel", a.label, "an unacknowledged create's label"); }
   assert.ok(matches("time", s.startedAt) && matches("time", s.finishedAt) && Date.parse(s.finishedAt) >= Date.parse(s.startedAt), "a pass records its window");
   const host = s.host;
@@ -552,6 +577,10 @@ function passEvidence(s, schema) {
   assert.ok(Array.isArray(s.cells) && s.cells.length === o.apps.length * o.sources.length * o.targets.length, "a pass has one cell per adapter, source and target");
   const expected = o.sources.flatMap((source) => o.apps.flatMap((app) => o.targets.map((target) => `${app} ${source} ${target}`)));
   assert.deepEqual(s.cells.map((c) => (typeof c?.app === "string" && typeof c.source === "string" && typeof c.target === "string" ? cellKey(c) : null)), expected, "cells are not the pass's adapters, sources and targets in order");
+  // The creates its cells imply (passCreates, cellCreates): exactly that many when every cell was
+  // measured, and no fewer than the measured cells' and no more than every cell's otherwise.
+  const per = cellCreates[kind], measured = s.cells.filter((c) => c.failure === undefined).length;
+  assert.ok(k.created >= passCreates + measured * per && k.created <= passCreates + s.cells.length * per, "a pass's creates are not the ones its cells imply");
 }
 // A cell that failed keeps its code from failureCodes and nothing it measured.
 function failedCell(c, extra = []) {
@@ -648,17 +677,19 @@ export function intervalSchedule({ rate, seconds, windowSeconds }) {
  * interval boundary the requests completed before it cannot outnumber the iterations started before
  * it; counts that say otherwise (270,000 completions in the first minute when 9,001 iterations had
  * started by then) are refused, whatever their totals. Nor can the backlog grow the other way past
- * what the load can hold: each iteration makes one synchronous request on its own VU, so at every
- * boundary the iterations started but whose request the windows have not counted as completed are
- * at most fixedRateLoad.maxVUs, plus the `unrecorded` requests the graceful stop cut off before
- * their window was counted (reconcileCell bounds those). Counts with every arrival on schedule and
- * no completion in any interval (all of them in the graceful-stop tail) are refused at the first
- * boundary.
+ * what the load can hold: each iteration makes one synchronous request on its own VU, and k6 runs
+ * at most fixedRateLoad.maxVUs of them at once, so at every boundary, the last included, the
+ * iterations started but whose request no interval has counted as completed are at most maxVUs.
+ * That bound is the VUs alone. A request the graceful stop answered (the tail) or cut off before its
+ * window was counted (unrecorded) was in flight at the end of the last interval, so those are among
+ * the outstanding iterations at the last boundary and add no room to it, nor to any earlier one:
+ * work lost at the stop cannot explain a backlog before it. Counts with every arrival on schedule
+ * and no completion in any interval (all of them in the tail, or all unrecorded) are refused at the
+ * first boundary.
  */
-export function soakArrivals({ rate, seconds, windowSeconds, requests, droppedIterations, arrivals, completions, unrecorded }) {
+export function soakArrivals({ rate, seconds, windowSeconds, requests, droppedIterations, arrivals, completions }) {
   assert.ok(Number.isSafeInteger(rate) && rate > 0 && Number.isSafeInteger(seconds) && seconds > 0, "a soak's rate and length");
   assert.ok(Number.isSafeInteger(requests) && requests >= 0 && Number.isSafeInteger(droppedIterations) && droppedIterations >= 0, "k6's requests and dropped iterations");
-  assert.ok(nonNegative(unrecorded) && unrecorded <= requests, "a soak counts the requests the graceful stop left unrecorded");
   const schedule = intervalSchedule({ rate, seconds, windowSeconds });
   assert.ok(Array.isArray(arrivals) && arrivals.length === schedule.length && arrivals.every(nonNegative), "a soak counts the arrivals k6 started in each interval");
   const tick = Math.floor(1e9 / rate), scheduled = Math.floor((seconds * 1e9) / tick) + 1, allowance = rate + 1;
@@ -668,11 +699,10 @@ export function soakArrivals({ rate, seconds, windowSeconds, requests, droppedIt
   assert.ok(Array.isArray(completions) && completions.length === schedule.length && completions.every(nonNegative) && completions.reduce((a, b) => a + b, 0) <= requests,
     "a soak counts the requests completed in each interval, no more than k6's requests");
   let begun = 0, done = 0;
-  const inFlight = fixedRateLoad.maxVUs + unrecorded;
   for (let i = 0; i < schedule.length; i++) {
     begun += arrivals[i]; done += completions[i];
     assert.ok(done <= begun, `more requests completed by the end of interval ${i} than iterations had started by then`);
-    assert.ok(begun - done <= inFlight, `more iterations were outstanding at the end of interval ${i} than the load's ${fixedRateLoad.maxVUs} VUs hold in flight, with ${unrecorded} unrecorded`);
+    assert.ok(begun - done <= fixedRateLoad.maxVUs, `more iterations were outstanding at the end of interval ${i} than the load's ${fixedRateLoad.maxVUs} VUs hold in flight`);
   }
   const shortfall = scheduled - requests - droppedIterations;
   const intervals = schedule.map((expected, index) => ({ index, startSeconds: index * windowSeconds, scheduled: expected, arrivals: arrivals[index], held: Math.abs(arrivals[index] - expected) <= allowance }));
@@ -721,7 +751,7 @@ export function summarizeSoak({ windows, tail, unrecorded, requests, iterations,
   const eventStream = events === null ? "unavailable" : restartEvents.length ? "seen" : "clean";
   const replaced = after.id !== before.id || after.startedAt !== before.startedAt;
   const p99 = windows.filter((w) => w.p99 !== null).map((w) => w.p99);
-  return { windows, tail, unrecorded, requests, iterations, latencyMaxMs, rate: soakArrivals({ rate, seconds: end, windowSeconds: seconds, requests, droppedIterations, arrivals, completions: windows.map((w) => w.requests), unrecorded }), memory: soakMemory(memory, seconds, end),
+  return { windows, tail, unrecorded, requests, iterations, latencyMaxMs, rate: soakArrivals({ rate, seconds: end, windowSeconds: seconds, requests, droppedIterations, arrivals, completions: windows.map((w) => w.requests) }), memory: soakMemory(memory, seconds, end),
     p99: { first: windows[0].p99, last: windows.at(-1).p99, max: p99.length ? Math.max(...p99) : null },
     failed: windows.reduce((sum, w) => sum + w.failed, 0), failedRequests,
     restarts: restartClaim({ restartCount: after.restartCount - before.restartCount, replaced, eventStream, events: restartEvents, runningAtEnd: after.running, oomKilled: after.oomKilled }) };
@@ -767,7 +797,7 @@ function checkSoak(s) {
       && c.rate.intervals.every((i) => i !== null && typeof i === "object" && nonNegative(i.arrivals)), `${cellKey(c)}: rate`);
     // The saved arrivals per interval are the input; everything else in the claim is recomputed from them.
     assert.deepEqual(c.rate, soakArrivals({ rate: s.options.rate, seconds: s.options.windows * s.options.windowSeconds, windowSeconds: s.options.windowSeconds, requests: c.requests,
-      droppedIterations: c.rate.droppedIterations, arrivals: c.rate.intervals.map((i) => i.arrivals), completions: c.windows.map((w) => w.requests), unrecorded: c.unrecorded }), `${cellKey(c)}: the fixed-rate claim contradicts k6's counts and the schedule`);
+      droppedIterations: c.rate.droppedIterations, arrivals: c.rate.intervals.map((i) => i.arrivals), completions: c.windows.map((w) => w.requests) }), `${cellKey(c)}: the fixed-rate claim contradicts k6's counts and the schedule`);
   }
   return s;
 }
@@ -871,7 +901,11 @@ const noReading = (verdict) => !verdict.withinTolerance && (verdict.reason === "
  * missing input listed, and each cell's tolerance reading. Inputs are compared only for the cells
  * with a reading: a pass covering some of them is like-for-like for those alone, and a pass with
  * none is not compared. Only a pass with a reading for every cell is like-for-like with the round
- * as a whole. It never concludes that the round's
+ * as a whole. An API-source cell is never counted as a reading or compared: a timed round's replay
+ * requires the upstream's own answer counts to cover the API requests it served (validate.mjs), and
+ * a pass records no such count, so nothing shows that the cell's requests went through the upstream.
+ * Its tolerance reading is still listed, marked as not compared. Every round's cells include its
+ * API source, so no pass is like-for-like with a round as a whole. It never concludes that the round's
  * warmup was long enough or too short: a timed warmup is set only by a separate reviewed change
  * from a saved like-for-like pass. report.mjs states the case with no pass itself, so a report
  * without one never loads this module.
@@ -886,19 +920,20 @@ export function convergenceLines(round, apps, convergence) {
   assert.ok(Array.isArray(apps) && apps.every((app) => matches("name", app)) && finite(warmup) && warmup >= 0, "convergenceLines reads a validated round's adapters and warmup");
   const c = validateConvergence(convergence), o = c.options;
   const lines = [`Convergence evidence: pass ${c.name} (${convergenceSchema}, reading ${flattenRule.name}), measured at commit \`${c.commit}\`. Host CPU: ${c.host.cpu ?? "not recorded"}. One ${o.vus}-user closed-loop pass of ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s windows from the start of the load, after ${startups[c.startup]}.`];
-  const found = [], read = [], failed = [], none = [], missing = [];
+  const found = [], read = [], failed = [], none = [], api = [], missing = [];
   for (const app of apps) for (const source of steadySources) for (const target of steadyTargets) {
     const name = `${app} ${source} ${target}`, cell = c.cells.find((x) => x.app === app && x.source === source && x.target === target);
     if (!cell) { missing.push(name); continue; }
     found.push({ name, cell });
     // A cell whose tolerance reading is itself "no reading" (a zero last-60 s median) is listed
     // with its explanation below, but it is not coverage and is compared on no input.
-    (cell.failure !== undefined ? failed : noReading(cell.verdict) ? none : read).push({ name, cell });
+    (cell.failure !== undefined ? failed : noReading(cell.verdict) ? none : source === "api" ? api : read).push({ name, cell });
   }
   const total = apps.length * steadySources.length * steadyTargets.length, complete = read.length === total;
   lines.push(complete ? `Coverage: the pass has a reading for every one of this round's ${total} measured adapter, source and target cells.`
-    : `Coverage: the pass has a reading for ${read.length} of this round's ${total} measured adapter, source and target cells${read.length ? ` (${read.map((r) => r.name).join(", ")})` : ""}${failed.length ? `; no reading, the cell failed: ${failed.map((f) => f.name).join(", ")}` : ""}${none.length ? `; no reading, the tolerance reading gave none: ${none.map((f) => f.name).join(", ")}` : ""}${missing.length ? `; no convergence pass for: ${missing.join(", ")}` : ""}.`);
-  if (!read.length) lines.push("No cell of this round has a reading in the pass, so the pass is not compared with this round on any input.");
+    : `Coverage: the pass has a reading for ${read.length} of this round's ${total} measured adapter, source and target cells${read.length ? ` (${read.map((r) => r.name).join(", ")})` : ""}${failed.length ? `; no reading, the cell failed: ${failed.map((f) => f.name).join(", ")}` : ""}${none.length ? `; no reading, the tolerance reading gave none: ${none.map((f) => f.name).join(", ")}` : ""}${api.length ? `; not compared, the pass does not record that the requests of these API-source cells reached the upstream: ${api.map((f) => f.name).join(", ")}` : ""}${missing.length ? `; no convergence pass for: ${missing.join(", ")}` : ""}.`);
+  if (!read.length) lines.push(api.length ? "No cell of this round has a reading in the pass that is compared (an API-source cell's is not), so the pass is not compared with this round on any input."
+    : "No cell of this round has a reading in the pass, so the pass is not compared with this round on any input.");
   else {
     // Inputs are compared for the cells with a reading only, and the statement says which.
     const pages = read.some((r) => r.cell.target === "page");
@@ -910,7 +945,8 @@ export function convergenceLines(round, apps, convergence) {
         : `The pass is like-for-like ${scope} only, on every input compared for them: ${inputs}. It says nothing about this round's other cells.`);
   }
   lines.push(`Tolerance reading ${flattenRule.name}: ${ruleText}`);
-  for (const { name, cell } of found) lines.push(`Reading: ${name}: ${cell.failure !== undefined ? `no reading, the cell failed (${failureCodes[cell.failure]})` : verdictText(cell.verdict)}.`);
+  const unproven = new Set(api.map((a) => a.name));
+  for (const { name, cell } of found) lines.push(`Reading: ${name}: ${cell.failure !== undefined ? `no reading, the cell failed (${failureCodes[cell.failure]})` : verdictText(cell.verdict)}${unproven.has(name) ? " (not compared with this round: the pass does not record that this cell's requests reached the upstream)" : ""}.`);
   lines.push(`This report does not establish whether this round's ${warmup}s timed warmup was sufficient: the pass is a screening reading of throughput, and a timed warmup is set only by a separate reviewed change from a saved like-for-like pass.`);
   return lines;
 }

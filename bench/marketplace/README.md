@@ -188,9 +188,14 @@ Every container is read, logged, sampled and removed by the ID Docker printed fo
 owner label is checked; teardown also removes, by ID, anything else carrying the pass's owner label.
 A create whose ID Docker did not return is looked for by its own label for a bounded time; if
 nothing turns up its cleanup is reported unconfirmed and the pass is incomplete. Cleanup is complete
-only when every create Docker acknowledged is among the resources confirmed removed or recovered;
-a saved pass whose counts show fewer removed and recovered than its acknowledged creates plus its
-found unacknowledged ones is refused, whatever its `complete` flag says. Each cell's
+only when every create Docker acknowledged is among the resources confirmed removed by its ID. A
+saved pass is refused, whatever its `complete` flag says, unless its removed count equals its
+acknowledged creates and its recovered count equals its unacknowledged creates (an acknowledged
+create is removed by its ID; one Docker did not acknowledge can only be found by its label and
+recovered), and unless its acknowledged creates are the ones its cells imply: four for the pass
+(host probe, k6 version probe, network, upstream) and, for each cell, three (app, cold-start
+sidecar, k6) or a soak's four (with the event marker), all of them for a measured cell and at most
+that many for a failed one (`passCreates` and `cellCreates`). Each cell's
 containers are removed before the next cell starts; a cell that leaves one behind ends the pass.
 For the production group's seven candidates a convergence pass is 28 five-minute passes, about
 two and a half hours with container starts, plus image builds (estimated, not measured). A pass
@@ -292,7 +297,12 @@ daemon still buffers (its last 256 events), so an empty answer to one would not 
 happened; the pass does not use one. Instead it starts the marker once the stream runs, before the
 load, and again after the app's last inspect: the stream delivers events in the order the daemon
 publishes them, so a stream that shows both marker starts was listening before the load began and
-had delivered every app event published before it ended. Two start rows alone do not show that (two
+had delivered every app event published before it ended. The client hands rows over in chunks,
+so the runner does not stop it at the second start's row: it reads on until the fence, a later
+marker row (the marker's exit) stamped after the load's FinishedAt, and a stream without the fence
+is unavailable. An app event the client delivers after the second start and before the fence is
+read like any other. This still relies on the client delivering rows in the daemon's order up to
+the fence. Two start rows alone do not show that (two
 copies of the first would read as both), so the first two marker starts are witnesses that must
 bracket the load on the daemon's clock: the first at or before the load container's StartedAt, the
 second strictly later than the first and strictly after the load container's FinishedAt (the
@@ -302,8 +312,8 @@ marker start earlier in the same millisecond as FinishedAt is not after it. An a
 load's whenever it is stamped at or before FinishedAt, even if the stream delivered it after the
 second marker start (an OOM kill stamped 15 s into the load reads as a restart, never clean); only
 an app event both after the second marker start and stamped after FinishedAt is teardown. The stream is saved
-as one of three states: unavailable (the stream failed, did not show both marker starts within its
-bound, had witnesses that do not bracket the load, or had a row that was not the app's or the
+as one of three states: unavailable (the stream failed, did not show both marker starts and the
+fence within its bound, had witnesses that do not bracket the load, or had a row that was not the app's or the
 marker's ID, an action and a nanosecond time, so none of its rows is used), clean (read, covering the load, with no start, restart, die, kill or OOM event) or seen
 (with those events). "Restarted" is yes on any sign of a restart, no only when the stream was
 clean and nothing else showed one, and not established when the stream was unavailable and
@@ -326,10 +336,13 @@ starts, so a soak whose intervals show more requests completed by an interval bo
 iterations started by it (270,000 completed in the first minute when 9,001 had started) is refused,
 whatever its totals, both when it is captured and when a saved one is read. Nor can the backlog
 run the other way: each iteration makes one synchronous request on its own VU, so at every
-boundary the iterations started but not yet counted as completed are at most the load's 1,000 VUs
-(`maxVUs` in `window-load.js`, which `window-load.test.mjs` holds equal to `fixedRateLoad`)
-plus the requests the graceful stop left unrecorded. A soak with every arrival on schedule and no
-request completed in any interval (all of them in the graceful-stop tail) is refused.
+boundary, the last included, the iterations started but not yet counted as completed are at most
+the load's 1,000 VUs (`maxVUs` in `window-load.js`, which `window-load.test.mjs` holds equal to
+`fixedRateLoad`). Requests the graceful stop answered or left unrecorded add no room: they were in
+flight when the last interval ended, so they are among that boundary's outstanding iterations, and
+work lost at the stop cannot explain a backlog in an earlier interval. A soak with every arrival on
+schedule and no request completed in any interval (all of them in the graceful-stop tail, or all
+unrecorded) is refused at the first boundary.
 Otherwise it reports the shortfall, names each interval that did not hold with its arrivals and
 schedule, and does not present the cell as a fixed-rate result. The reader recomputes every
 interval's claim from the saved arrivals, so a saved soak cannot claim an interval held. The counts it prints are k6's own, never the schedule's. Memory is
@@ -344,9 +357,13 @@ rounds it will time. `steady-report.mjs` prints each cell's reading and that the
 warmup. `report.mjs <summary.json> --convergence <pass>/summary.json` first states which of the round's
 measured adapter, source and target cells the pass has a reading for, which failed, which the
 tolerance reading itself gave none for (a zero last-60 s median: listed with that explanation, not
-counted as coverage) and which it lacks, then compares inputs only for the cells with a reading: a pass with a reading for every
-cell can be like-for-like with the round, one with some is at most like-for-like for those cells
-alone (and compares page locales only if one of them is a page), and one with none is compared on
+counted as coverage), which are API-source cells it does not compare and which it lacks, then
+compares inputs only for the cells with a reading. An API-source cell's reading is listed but never
+counted as coverage or compared: a timed round's replay requires the upstream's own answer counts
+to cover the successful API requests (`validate.mjs`), while a pass records no upstream counter,
+so nothing shows that the cell's requests went through the upstream. Every round's cells include
+its API source, so no pass is like-for-like with a round as a whole: one with some readings is at
+most like-for-like for those cells alone (and compares page locales only if one of them is a page), and one with none is compared on
 no input. It prints each cell's reading and lists every input that differs or that either side
 does not record: the commit and group, the image ID of every measured
 adapter, the fixture hash, the upstream and k6 image IDs, the CPU quota and pinning for each role

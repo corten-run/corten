@@ -139,7 +139,9 @@ export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs 
  * A soak's live Docker event stream for its app and a marker container, by their immutable IDs
  * (steady-contract.mjs readEvents says why a live stream and what the marker shows). It runs from
  * before the load to after it. marker(n) waits at most markerMs for the stream to show the marker's
- * nth start, and fails at once if the stream has ended. stop() settles within boundMs whatever the
+ * nth start, and fails at once if the stream has ended; fence() waits the same way for a marker row
+ * after its second start (its exit), so rows the client delivers after that start are read before
+ * the stream is stopped (readEvents requires the fence). stop() settles within boundMs whatever the
  * client does, as memorySampler's does, keeps what the stream said in `file` (and its stderr in
  * `file`.stderr), and returns that text, or throws if the client could not run, ended before it was
  * stopped, wrote to stderr or held its pipes. A second stop() returns the first one's result.
@@ -149,16 +151,17 @@ export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2
   const child = run("docker", ["events", "--filter", "type=container", "--filter", `container=${app}`, "--filter", `container=${marker}`, "--format", eventFormat],
     { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   const errors = [], waiting = [];
-  let text = "", buffer = "", stderr = "", starts = 0, stopping = false, closed = false, settled;
+  let text = "", buffer = "", stderr = "", starts = 0, fenced = false, stopping = false, closed = false, settled;
   const release = (message) => { for (const w of waiting.splice(0)) { clearTimeout(w.timer); w.reject(new Error(message)); } };
   child.stdout.on("data", (chunk) => {
     const data = chunk.toString();
     text += data; buffer += data;
     for (let end; (end = buffer.indexOf("\n")) >= 0;) {
-      if (buffer.slice(0, end).replace(/\r$/, "").startsWith(`${marker}|start|`)) starts++;
+      const line = buffer.slice(0, end).replace(/\r$/, "");
+      if (line.startsWith(`${marker}|`)) { if (starts >= 2) fenced = true; else if (line.startsWith(`${marker}|start|`)) starts++; }
       buffer = buffer.slice(end + 1);
     }
-    for (const w of [...waiting]) if (starts >= w.n) { clearTimeout(w.timer); waiting.splice(waiting.indexOf(w), 1); w.resolve(); }
+    for (const w of [...waiting]) if (w.ready()) { clearTimeout(w.timer); waiting.splice(waiting.indexOf(w), 1); w.resolve(); }
   });
   child.stderr.on("data", (chunk) => { if (!stopping) stderr += chunk.toString(); });
   child.on("error", (error) => { errors.push(`docker events could not run (${typeof error?.code === "string" && /^[A-Z0-9_]{1,32}$/.test(error.code) ? error.code : "error"})`); release("docker events could not run"); });
@@ -168,16 +171,18 @@ export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2
     resolve(true);
   }));
   const signal = (name) => { try { child.kill(name); } catch {} };
+  const wait = (ready, what) => {
+    if (ready()) return Promise.resolve();
+    if (closed || errors.length) return Promise.reject(new Error("docker events stopped before it showed the marker"));
+    return new Promise((resolve, reject) => {
+      const w = { ready, resolve, reject };
+      w.timer = setTimeout(() => { waiting.splice(waiting.indexOf(w), 1); reject(new Error(`docker events did not show ${what} within ${markerMs} ms`)); }, markerMs);
+      waiting.push(w);
+    });
+  };
   return {
-    marker(n) {
-      if (starts >= n) return Promise.resolve();
-      if (closed || errors.length) return Promise.reject(new Error("docker events stopped before it showed the marker"));
-      return new Promise((resolve, reject) => {
-        const w = { n, resolve, reject };
-        w.timer = setTimeout(() => { waiting.splice(waiting.indexOf(w), 1); reject(new Error(`docker events did not show the marker's start ${n} within ${markerMs} ms`)); }, markerMs);
-        waiting.push(w);
-      });
-    },
+    marker: (n) => wait(() => starts >= n, `the marker's start ${n}`),
+    fence: () => wait(() => fenced, "a marker row after its second start"),
     stop() {
       return settled ??= (async () => {
         stopping = true;
@@ -390,7 +395,8 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       // soak's app or marker, an action and a time is saved as unavailable, apart from the memory
       // samples and the container states.
       let events = null, text;
-      if (!streamError) { try { await owned.start(marker); await stream.marker(2); } catch (e) { streamError = e; } }
+      // The fence: a marker row after that start, so what the client delivered after it is read too.
+      if (!streamError) { try { await owned.start(marker); await stream.marker(2); await stream.fence(); } catch (e) { streamError = e; } }
       try { text = await stream.stop(); } catch (e) { streamError ??= e; }
       // Docker's own StartedAt and FinishedAt text, read to the nanosecond as the event times are.
       if (!streamError) { try { events = readEvents(text, { app, marker, startedAt: loadInfo.State.StartedAt, finishedAt: loadInfo.State.FinishedAt }); } catch (e) { streamError = e; } }
@@ -552,11 +558,12 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     // What a saved reader checks before it counts the pass (steady-contract.mjs passEvidence): counts,
     // and the names and labels this pass gave its own creates. cleanup.json keeps the whole record.
     const ids = (list) => (Array.isArray(list) ? list.filter((id) => containerId.test(id)) : []);
-    // Complete only when every acknowledged create is among the resources confirmed removed or
-    // recovered, whatever the record's own flag says.
-    const gone = new Set([...(cleanup.removed ?? []), ...(cleanup.recovered ?? [])].map((entry) => entry?.id));
+    // Complete only when every acknowledged create is among the resources confirmed removed by its
+    // ID, whatever the record's own flag says (a create Docker did not acknowledge is recovered by
+    // its label instead; passEvidence checks the counts of both).
+    const gone = new Set((cleanup.removed ?? []).map((entry) => entry?.id));
     const accounted = Array.isArray(cleanup.created) && cleanup.created.every((entry) => gone.has(entry?.id));
-    if (cleanup.complete === true && !accounted) log("cleanup not confirmed: an acknowledged create is not among the resources removed or recovered (cleanup.json)");
+    if (cleanup.complete === true && !accounted) log("cleanup not confirmed: an acknowledged create is not among the resources removed (cleanup.json)");
     summary.cleanup = { complete: cleanup.complete === true && accounted, remaining: cleanup.remaining ? { containers: ids(cleanup.remaining.containers), networks: ids(cleanup.remaining.networks) } : null,
       created: cleanup.created.length, removed: cleanup.removed.length, recovered: cleanup.recovered.length, failures: cleanup.failures.length,
       unacknowledged: cleanup.unacknowledged.map((a) => ({ name: savedValue("runId", a.name), label: savedValue("attemptLabel", a.label), outcome: ["removed", "not removed"].includes(a.outcome) ? a.outcome : "unconfirmed" })) };

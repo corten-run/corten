@@ -256,11 +256,22 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.cleanup.remaining.containers = ["a".repeat(64)]; }, /cleanup is not confirmed complete/],
     [(v) => { v.cleanup.unacknowledged = [{ name: "x-k6", label: "l", outcome: "unconfirmed" }]; }, /cleanup is not confirmed complete/],
     [(v) => { delete v.cleanup; }, /cleanup is not confirmed complete/],
-    // Complete with acknowledged creates that no count shows removed or recovered.
-    [(v) => { Object.assign(v.cleanup, { created: 6, removed: 0, recovered: 0 }); }, /^Error: a pass whose creates were not all confirmed removed or recovered is not evidence$/],
-    [(v) => { Object.assign(v.cleanup, { created: 6, removed: 5, recovered: 0 }); }, /creates were not all confirmed removed or recovered/],
-    // An unacknowledged create found and removed is one more resource than the acknowledged ones.
-    [(v) => { v.cleanup.unacknowledged = [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }]; }, /creates were not all confirmed removed or recovered/],
+    // Complete, with counts that do not show every acknowledged create removed by its ID: none or
+    // one fewer removed, one counted as recovered instead, or more removed than were created.
+    [(v) => { Object.assign(v.cleanup, { created: 28, removed: 0, recovered: 0 }); }, /^Error: a pass whose acknowledged creates were not each confirmed removed is not evidence$/],
+    [(v) => { Object.assign(v.cleanup, { created: 28, removed: 27, recovered: 0 }); }, /acknowledged creates were not each confirmed removed/],
+    [(v) => { Object.assign(v.cleanup, { created: 28, removed: 27, recovered: 1 }); }, /acknowledged creates were not each confirmed removed/],
+    [(v) => { Object.assign(v.cleanup, { created: 28, removed: 29, recovered: 0 }); }, /acknowledged creates were not each confirmed removed/],
+    // Six created, seven removed, none recovered, and one unacknowledged create marked removed: an
+    // unacknowledged create is accounted only by a recovered resource.
+    [(v) => { Object.assign(v.cleanup, { created: 6, removed: 7, recovered: 0, unacknowledged: [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }] }); }, /acknowledged creates were not each confirmed removed/],
+    [(v) => { v.cleanup.unacknowledged = [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }]; }, /^Error: a pass whose recovered resources are not its unacknowledged creates is not evidence$/],
+    [(v) => { Object.assign(v.cleanup, { created: 28, removed: 28, recovered: 1 }); }, /recovered resources are not its unacknowledged creates/],
+    // Counts that agree with each other but not with the cells: measured cells with no create at all,
+    // or one fewer or more than the eight measured cells and the pass made.
+    [(v) => { Object.assign(v.cleanup, { created: 0, removed: 0, recovered: 0 }); }, /^Error: a pass's creates are not the ones its cells imply$/],
+    [(v) => { Object.assign(v.cleanup, { created: 27, removed: 27 }); }, /creates are not the ones its cells imply/],
+    [(v) => { Object.assign(v.cleanup, { created: 29, removed: 29 }); }, /creates are not the ones its cells imply/],
     [(v) => { v.cells[0].requests += 1; }, /do not add up to k6's request total/],
     [(v) => { v.cells[0].unrecorded = 1; v.cells[0].requests += 1; v.cells[0].iterations += 1; }, /more unrecorded requests than unfinished iterations/],
     [(v) => { delete v.cells[0].iterations; }, /a convergence cell has fields its schema does not save, or lacks one it does/],
@@ -270,8 +281,10 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.cells[0].latencyMaxMs = null; }, /aggregate latency maximum/],
     [(v) => { v.schema = "marketplace-convergence/v3"; }, /not a marketplace-convergence\/v4 result/],
   ]) { const v = structuredClone(s); mutate(v); assert.throws(() => validateConvergence(v), pattern); }
-  // Every acknowledged create removed or recovered, and an unacknowledged one recovered, reads.
-  for (const cleanup of [{ created: 6, removed: 5, recovered: 1 }, { created: 6, removed: 6, recovered: 1, unacknowledged: [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }] }]) {
+  // Every acknowledged create removed (four for the pass and three for each of its eight cells), and
+  // an unacknowledged one recovered, reads.
+  assert.deepEqual([s.cleanup.created, s.cleanup.removed, s.cleanup.recovered], [28, 28, 0]);
+  for (const cleanup of [{ created: 28, removed: 28, recovered: 0 }, { created: 28, removed: 28, recovered: 1, unacknowledged: [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }] }]) {
     const v = structuredClone(s); Object.assign(v.cleanup, cleanup); validateConvergence(v);
   }
   // A complete pass whose cells failed stays reportable: each such cell reads "no reading", with the
@@ -279,6 +292,11 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
   const failed = structuredClone(s);
   failed.cells[2] = { app: failed.cells[2].app, source: failed.cells[2].source, target: failed.cells[2].target, verdict: null, failure: "cold-start" };
   validateConvergence(failed);
+  // A failed cell made at most its three creates, and the seven measured ones made theirs.
+  for (const [created, reads] of [[25, true], [24, false]]) {
+    const v = structuredClone(failed); Object.assign(v.cleanup, { created, removed: created });
+    if (reads) validateConvergence(v); else assert.throws(() => validateConvergence(v), /creates are not the ones its cells imply/);
+  }
   assert.match(convergenceReport(failed), /\| aspnet \| fixture \| page \| no reading: the cell failed \(the app did not start as the timed cold start requires\) \| - \| - \|/);
 });
 
@@ -403,7 +421,7 @@ test("a soak says the fixed rate held only when k6's counts reconcile with the s
   const forged = structuredClone(s); forged.cells[0].rate.held = true;
   assert.throws(() => validateSoak(forged), /fixed-rate claim contradicts/);
   // Within the allowance it held; one arrival beyond it did not; more than the schedule is refused.
-  const rate = { rate: 150, seconds: 1800, windowSeconds: 60, unrecorded: 0 }, oneDropped = onSchedule(); oneDropped[29] -= 1;
+  const rate = { rate: 150, seconds: 1800, windowSeconds: 60 }, oneDropped = onSchedule(); oneDropped[29] -= 1;
   assert.equal(soakArrivals({ ...rate, requests: 270001 - 151, droppedIterations: 0, arrivals: onSchedule(), completions: served(onSchedule(), 270001 - 151) }).held, true);
   assert.equal(soakArrivals({ ...rate, requests: 270001 - 152, droppedIterations: 0, arrivals: onSchedule(), completions: served(onSchedule(), 270001 - 152) }).held, false);
   assert.equal(soakArrivals({ ...rate, requests: 270000, droppedIterations: 1, arrivals: oneDropped, completions: served(oneDropped, 270000) }).held, false);
@@ -427,15 +445,15 @@ test("a soak says held only when every interval sustained the fixed rate, and na
   // All 270,000 requests arrived in the first minute: the totals match the schedule, the later 29
   // intervals are empty, and the rate was not sustained.
   const concentrated = [270001, ...Array(29).fill(0)];
-  const rate = soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, unrecorded: 0, requests: 270000, droppedIterations: 0, arrivals: concentrated, completions: served(concentrated, 270000) });
+  const rate = soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: concentrated, completions: served(concentrated, 270000) });
   assert.deepEqual([rate.shortfall, rate.held], [1, false]);
   assert.deepEqual(rate.intervals.filter((i) => !i.held).map((i) => i.index), Array.from({ length: 30 }, (_, i) => i));
   // One interval short (a minute at half the rate, the next catching up) is named on its own.
   const uneven = onSchedule(); uneven[10] -= 4500; uneven[11] += 4500;
-  assert.deepEqual(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, unrecorded: 0, requests: 270000, droppedIterations: 0, arrivals: uneven, completions: served(uneven, 270000) }).intervals.filter((i) => !i.held).map((i) => i.index), [10, 11]);
+  assert.deepEqual(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: uneven, completions: served(uneven, 270000) }).intervals.filter((i) => !i.held).map((i) => i.index), [10, 11]);
   // Within the allowance of one second's arrivals plus one, an interval held.
   const edge = onSchedule(); edge[3] -= 151; edge[4] += 151;
-  assert.equal(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, unrecorded: 0, requests: 270000, droppedIterations: 0, arrivals: edge, completions: served(edge, 270000) }).held, true);
+  assert.equal(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: edge, completions: served(edge, 270000) }).held, true);
 
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
   const cell = (arrivals) => ({ app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows([270000 / 60, ...Array(29).fill(0)], () => 10, 60),
@@ -463,7 +481,7 @@ test("a soak refuses counts whose requests completed before their iterations sta
   // Every iteration started on schedule (9,001 by the end of the first minute), k6 dropped none, and
   // the totals reconcile, but 270,000 requests completed in the first minute: more than had started.
   const front = [270000, ...Array(29).fill(0)];
-  const counts = { rate: 150, seconds: 1800, windowSeconds: 60, unrecorded: 0, requests: 270000, droppedIterations: 0, arrivals: onSchedule() };
+  const counts = { rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: onSchedule() };
   const order = /^AssertionError \[ERR_ASSERTION\]: more requests completed by the end of interval 0 than iterations had started by then$/;
   assert.throws(() => soakArrivals({ ...counts, completions: front }), order);
   // One completion too many at a later boundary is refused there; exactly as many as started is not.
@@ -486,35 +504,47 @@ test("a soak refuses counts whose requests completed before their iterations sta
 
 test("a soak refuses a backlog of started iterations larger than the load's VUs can hold in flight", () => {
   assert.equal(fixedRateLoad.maxVUs, 1000);
-  const counts = { rate: 150, seconds: 1800, windowSeconds: 60, unrecorded: 0, requests: 270001, droppedIterations: 0, arrivals: onSchedule() };
+  const counts = { rate: 150, seconds: 1800, windowSeconds: 60, requests: 270001, droppedIterations: 0, arrivals: onSchedule() };
   // Every arrival on schedule and no request completed in any interval: all 270,001 in the
   // graceful-stop tail. 9,001 iterations were outstanding at the first boundary, with 1,000 VUs.
   const none = Array(30).fill(0);
-  const backlog = /^AssertionError \[ERR_ASSERTION\]: more iterations were outstanding at the end of interval 0 than the load's 1000 VUs hold in flight, with 0 unrecorded$/;
+  const backlog = /^AssertionError \[ERR_ASSERTION\]: more iterations were outstanding at the end of interval 0 than the load's 1000 VUs hold in flight$/;
   assert.throws(() => soakArrivals({ ...counts, completions: none }), backlog);
   // A realistic lag: 300 requests in flight at every boundary, answered in the next interval, the
   // last 300 in the graceful stop. It holds the rate.
   const lagged = onSchedule().map((n, i) => (i === 0 ? n - 300 : n));
   assert.equal(soakArrivals({ ...counts, completions: lagged }).held, true);
-  // Exactly the VUs outstanding at a boundary is possible; one more is not, unless the graceful stop
-  // left that many requests unrecorded.
+  // Exactly the VUs outstanding at a boundary is possible; one more is not, whatever the graceful
+  // stop later cut off: work lost at the stop does not explain a backlog in an earlier interval.
   const at = (outstanding) => onSchedule().map((n, i) => (i === 4 ? n - outstanding : i === 5 ? n + outstanding : n));
   assert.equal(soakArrivals({ ...counts, completions: at(1000) }).held, true);
-  assert.throws(() => soakArrivals({ ...counts, completions: at(1001) }), /outstanding at the end of interval 4 than the load's 1000 VUs hold in flight, with 0 unrecorded/);
-  assert.equal(soakArrivals({ ...counts, requests: 270001, completions: at(1001), unrecorded: 1 }).held, true);
-  for (const unrecorded of [undefined, -1, 1.5, 270002]) assert.throws(() => soakArrivals({ ...counts, completions: lagged, unrecorded }), /graceful stop left unrecorded/);
+  assert.throws(() => soakArrivals({ ...counts, completions: at(1001) }), /^AssertionError \[ERR_ASSERTION\]: more iterations were outstanding at the end of interval 4 than the load's 1000 VUs hold in flight$/);
+  // At the last boundary too: 1,001 still outstanding when the intervals ended.
+  const last = onSchedule().map((n, i) => (i === 29 ? n - 1001 : n));
+  assert.throws(() => soakArrivals({ ...counts, completions: last }), /outstanding at the end of interval 29 than the load's 1000 VUs hold in flight$/);
+  assert.equal(soakArrivals({ ...counts, completions: onSchedule().map((n, i) => (i === 29 ? n - 1000 : n)) }).held, true);
   // The runner's summary refuses the zero-completion counts, and so does the reader of a saved soak.
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
   const intervals = (completions) => completions.map((n, index) => ({ index, startSeconds: index * 60, seconds: 60, requests: n, failed: 0, rps: n / 60, p95: n ? 10 : null, p99: n ? 20 : null }));
   const soak = (completions, tail) => summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: intervals(completions), tail, unrecorded: 0, requests: 270001, iterations: 270001, latencyMaxMs: 25,
     memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 60 })), before: held, after: held, events: [], arrivals: onSchedule() });
   assert.throws(() => soak(none, 270001), backlog);
+  // The same counts with every request the graceful stop cut off unrecorded instead, and no iteration
+  // finished: 270,001 arrivals, 270,001 unrecorded, no completion in any interval.
+  const unrecordedSoak = () => summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: intervals(none), tail: 0, unrecorded: 270001, requests: 270001, iterations: 0, latencyMaxMs: 25,
+    memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 60 })), before: held, after: held, events: [], arrivals: onSchedule() });
+  assert.throws(unrecordedSoak, backlog);
   const options = parseSteadyArgs(["soak", "w9", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
   const s = savedPass(options, [{ app: "corten", source: "fixture", target: "page", ...soak(lagged, 300) }], { commit: "d".repeat(40) });
   assert.equal(validateSoak(s).cells[0].rate.held, true);
   const forged = structuredClone(s);
   Object.assign(forged.cells[0], { windows: intervals(none), tail: 270001, p99: { first: null, last: null, max: null } });
-  assert.throws(() => validateSoak(forged), /^Error: more iterations were outstanding at the end of interval 0 than the load's 1000 VUs hold in flight, with 0 unrecorded$/);
+  assert.throws(() => validateSoak(forged), /^Error: more iterations were outstanding at the end of interval 0 than the load's 1000 VUs hold in flight$/);
+  // A saved soak with those counts unrecorded: its cell reconciles (270,001 requests, none of them a
+  // finished iteration), and the reader refuses it at the first boundary rather than reading it held.
+  const unrecorded = structuredClone(s);
+  Object.assign(unrecorded.cells[0], { windows: intervals(none), tail: 0, unrecorded: 270001, requests: 270001, iterations: 0, p99: { first: null, last: null, max: null } });
+  assert.throws(() => validateSoak(unrecorded), /^Error: more iterations were outstanding at the end of interval 0 than the load's 1000 VUs hold in flight$/);
 });
 
 test("memory that cannot be read leaves the restart, stop and OOM observations in place", () => {
@@ -544,10 +574,12 @@ test("the timed reporter lists every differing or missing input and never judges
   assert.throws(() => convergenceLines(likeRound(), ["corten"], null), /reads a convergence pass/);
   const lines = convergenceLines(likeRound(), ["corten", "aspnet"], convergencePass());
   assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v4, reading marketplace-tolerance\/v4\), measured at commit `c{40}`\. Host CPU: Synthetic test only\. One 32-user closed-loop pass .* after the timed round's cold start \(the app created, then started while a sidecar polls the target's path to its first 200\)\.$/);
-  assert.equal(lines[1], "Coverage: the pass has a reading for every one of this round's 8 measured adapter, source and target cells.");
-  assert.match(lines[2], /^The pass is like-for-like with this round on every input compared: commit, group, adapter images, .* startup timeout, memory limits, response encoding, .* rotating page locales and a timed warmup with no failed request\.$/);
+  // The API-source cells have readings but are not compared: nothing in the pass shows their requests went through the upstream.
+  assert.equal(lines[1], "Coverage: the pass has a reading for 4 of this round's 8 measured adapter, source and target cells (corten fixture page, corten fixture json, aspnet fixture page, aspnet fixture json); not compared, the pass does not record that the requests of these API-source cells reached the upstream: corten api page, corten api json, aspnet api page, aspnet api json.");
+  assert.match(lines[2], /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: commit, group, adapter images, .* startup timeout, memory limits, response encoding, .* rotating page locales and a timed warmup with no failed request\. It says nothing about this round's other cells\.$/);
+  assert.ok(!lines.some((l) => /like-for-like with this round on every input/.test(l)), "never like-for-like with a round whose API source the pass does not show it exercised");
   assert.match(lines[3], /^Tolerance reading marketplace-tolerance\/v4: a screening reading of throughput, not a certificate of steady state\./);
-  assert.ok(lines.includes("Reading: aspnet api page: within the stated tolerance from the window ending at 90 s."));
+  assert.ok(lines.includes("Reading: aspnet api page: within the stated tolerance from the window ending at 90 s (not compared with this round: the pass does not record that this cell's requests reached the upstream)."));
   assert.ok(lines.includes("Reading: corten fixture json: within the stated tolerance from the window ending at 15 s."));
   const judged = (warmup) => `This report does not establish whether this round's ${warmup}s timed warmup was sufficient: the pass is a screening reading of throughput, and a timed warmup is set only by a separate reviewed change from a saved like-for-like pass.`;
   assert.equal(lines.at(-1), judged(10));
@@ -596,7 +628,7 @@ test("the timed reporter lists every differing or missing input and never judges
   ];
   for (const [round, p, reason] of unlike) {
     const text = convergenceLines(round, ["corten"], p);
-    assert.match(text[2], /^The pass is not like-for-like with this round\. Differing or missing inputs: /);
+    assert.match(text[2], /^The pass is not like-for-like with this round for its 2 cells with a reading\. Differing or missing inputs: /);
     assert.match(text[2], reason);
     assert.ok(text.some((l) => /^Reading: corten fixture page: /.test(l)), "the readings stay listed");
     assert.equal(text.at(-1), judged(90));
@@ -606,8 +638,8 @@ test("the timed reporter lists every differing or missing input and never judges
   assert.ok(unlikeRound(likeRound(90), ["corten"], { ...pass, startup: "another-start/v0" }).includes("the pass started each app another way than the timed round's cold start"));
   const missing = convergenceLines(likeRound(), ["corten", "drogon"], convergencePass());
   // Coverage is stated before any comparison, and inputs are compared for the cells with a reading only.
-  assert.equal(missing[1], "Coverage: the pass has a reading for 4 of this round's 8 measured adapter, source and target cells (corten fixture page, corten fixture json, corten api page, corten api json); no convergence pass for: drogon fixture page, drogon fixture json, drogon api page, drogon api json.");
-  assert.match(missing[2], /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: .* It says nothing about this round's other cells\.$/);
+  assert.equal(missing[1], "Coverage: the pass has a reading for 2 of this round's 8 measured adapter, source and target cells (corten fixture page, corten fixture json); not compared, the pass does not record that the requests of these API-source cells reached the upstream: corten api page, corten api json; no convergence pass for: drogon fixture page, drogon fixture json, drogon api page, drogon api json.");
+  assert.match(missing[2], /^The pass is like-for-like with this round for its 2 cells with a reading only, on every input compared for them: .* It says nothing about this round's other cells\.$/);
   assert.ok(!missing.some((l) => /like-for-like with this round on every input/.test(l)), "never like-for-like with the whole round");
   const fallingOptions = parseSteadyArgs(["convergence", "w3", "--apps", "corten,aspnet", "--minutes", "5"], apps, groupApps);
   const falling = savedPass(fallingOptions, fallingOptions.sources.flatMap((source) => fallingOptions.apps.flatMap((app) => fallingOptions.targets.map((target) =>
@@ -628,8 +660,8 @@ test("a pass is compared with a round only for the cells it has readings for, an
   const jsonOnly = savedPass(jsonOptions, jsonOptions.sources.flatMap((source) => jsonOptions.apps.flatMap((app) => [cellOf(app, source, "json", Array(12).fill(1000))])), { commit: "c".repeat(40) });
   for (const round of [likeRound(90), { ...likeRound(90), schema: v5Schema }]) {
     const lines = convergenceLines(round, ["corten", "aspnet"], jsonOnly);
-    assert.equal(lines[1], "Coverage: the pass has a reading for 4 of this round's 8 measured adapter, source and target cells (corten fixture json, corten api json, aspnet fixture json, aspnet api json); no convergence pass for: corten fixture page, corten api page, aspnet fixture page, aspnet api page.");
-    assert.match(lines[2], /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: .* the cold start before the load, a timed warmup with no failed request\. It says nothing about this round's other cells\.$/);
+    assert.equal(lines[1], "Coverage: the pass has a reading for 2 of this round's 8 measured adapter, source and target cells (corten fixture json, aspnet fixture json); not compared, the pass does not record that the requests of these API-source cells reached the upstream: corten api json, aspnet api json; no convergence pass for: corten fixture page, corten api page, aspnet fixture page, aspnet api page.");
+    assert.match(lines[2], /^The pass is like-for-like with this round for its 2 cells with a reading only, on every input compared for them: .* the cold start before the load, a timed warmup with no failed request\. It says nothing about this round's other cells\.$/);
     assert.ok(!lines.some((l) => /locale/.test(l)), lines.join("\n"));
     assert.ok(!lines.some((l) => /like-for-like with this round on every input/.test(l)));
     assert.equal(lines.at(-1), judged);
@@ -649,29 +681,38 @@ test("a pass is compared with a round only for the cells it has readings for, an
   // app is still compared for the cells of it that have a reading.
   const oneFailed = convergencePass(); oneFailed.cells[0] = { app: "corten", source: "fixture", target: "page", failure: "load-exit", verdict: null };
   const partial = convergenceLines(likeRound(90), ["corten", "aspnet"], oneFailed);
-  assert.match(partial[1], /^Coverage: the pass has a reading for 7 of this round's 8 .*; no reading, the cell failed: corten fixture page\.$/);
-  assert.match(partial[2], /^The pass is like-for-like with this round for its 7 cells with a reading only, on every input compared for them: .*rotating page locales and a timed warmup/);
+  assert.match(partial[1], /^Coverage: the pass has a reading for 3 of this round's 8 .*; no reading, the cell failed: corten fixture page; not compared, .*: corten api page, corten api json, aspnet api page, aspnet api json\.$/);
+  assert.match(partial[2], /^The pass is like-for-like with this round for its 3 cells with a reading only, on every input compared for them: .*rotating page locales and a timed warmup/);
   // A cell whose tolerance reading is itself "no reading" (a zero last-60 s median) keeps its
   // explanation but is not coverage and is compared on no input.
   const zeroTail = [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 0, 0, 0, 0];
   const oneZero = convergencePass(); oneZero.cells[0] = cellOf("corten", "fixture", "page", zeroTail);
   assert.equal(oneZero.cells[0].verdict.reason, "no-throughput");
   const zeroLines = convergenceLines(likeRound(90), ["corten", "aspnet"], oneZero);
-  assert.equal(zeroLines[1], "Coverage: the pass has a reading for 7 of this round's 8 measured adapter, source and target cells (corten fixture json, corten api page, corten api json, aspnet fixture page, aspnet fixture json, aspnet api page, aspnet api json); no reading, the tolerance reading gave none: corten fixture page.");
-  assert.match(zeroLines[2], /^The pass is like-for-like with this round for its 7 cells with a reading only, on every input compared for them: /);
+  assert.equal(zeroLines[1], "Coverage: the pass has a reading for 3 of this round's 8 measured adapter, source and target cells (corten fixture json, aspnet fixture page, aspnet fixture json); no reading, the tolerance reading gave none: corten fixture page; not compared, the pass does not record that the requests of these API-source cells reached the upstream: corten api page, corten api json, aspnet api page, aspnet api json.");
+  assert.match(zeroLines[2], /^The pass is like-for-like with this round for its 3 cells with a reading only, on every input compared for them: /);
   assert.ok(zeroLines.includes("Reading: corten fixture page: no reading: the last 60 s median is zero."));
   // Every page cell without a reading: the pass has no page reading, so page locales are not
   // compared, and a round whose page warmup used one locale per profile is like-for-like for the JSON cells.
   const pagesZero = convergencePass();
   pagesZero.cells = pagesZero.cells.map((c) => (c.target === "page" ? cellOf(c.app, c.source, c.target, zeroTail) : c));
   const pageLines = convergenceLines({ ...likeRound(90), schema: v5Schema }, ["corten", "aspnet"], pagesZero);
-  assert.match(pageLines[1], /^Coverage: the pass has a reading for 4 of this round's 8 .*; no reading, the tolerance reading gave none: corten fixture page, corten api page, aspnet fixture page, aspnet api page\.$/);
-  assert.match(pageLines[2], /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: .* the cold start before the load, a timed warmup with no failed request\. It says nothing about this round's other cells\.$/);
+  assert.match(pageLines[1], /^Coverage: the pass has a reading for 2 of this round's 8 .*; no reading, the tolerance reading gave none: corten fixture page, corten api page, aspnet fixture page, aspnet api page; not compared, .*: corten api json, aspnet api json\.$/);
+  assert.match(pageLines[2], /^The pass is like-for-like with this round for its 2 cells with a reading only, on every input compared for them: .* the cold start before the load, a timed warmup with no failed request\. It says nothing about this round's other cells\.$/);
   // No cell with a reading at all: compared on no input.
   const allZero = convergencePass(); allZero.cells = allZero.cells.map((c) => cellOf(c.app, c.source, c.target, zeroTail));
   const noneLines = convergenceLines(likeRound(90), ["corten", "aspnet"], allZero);
   assert.match(noneLines[1], /^Coverage: the pass has a reading for 0 of this round's 8 measured adapter, source and target cells; no reading, the tolerance reading gave none: /);
   assert.equal(noneLines[2], "No cell of this round has a reading in the pass, so the pass is not compared with this round on any input.");
+  // An API-source pass whose every input matches the round: its readings are listed, but none is
+  // compared, since the pass does not record that its requests reached the upstream.
+  const apiOptions = parseSteadyArgs(["convergence", "w3", "--apps", "corten,aspnet", "--minutes", "3", "--sources", "api"], apps, groupApps);
+  const apiOnly = savedPass(apiOptions, apiOptions.apps.flatMap((app) => apiOptions.targets.map((target) => cellOf(app, "api", target, Array(12).fill(1000)))), { commit: "c".repeat(40) });
+  const apiLines = convergenceLines(likeRound(90), ["corten", "aspnet"], apiOnly);
+  assert.equal(apiLines[1], "Coverage: the pass has a reading for 0 of this round's 8 measured adapter, source and target cells; not compared, the pass does not record that the requests of these API-source cells reached the upstream: corten api page, corten api json, aspnet api page, aspnet api json; no convergence pass for: corten fixture page, corten fixture json, aspnet fixture page, aspnet fixture json.");
+  assert.equal(apiLines[2], "No cell of this round has a reading in the pass that is compared (an API-source cell's is not), so the pass is not compared with this round on any input.");
+  assert.ok(!apiLines.slice(0, -1).some((l) => /like-for-like/.test(l)), apiLines.join("\n"));
+  assert.ok(apiLines.includes("Reading: corten api json: within the stated tolerance from the window ending at 15 s (not compared with this round: the pass does not record that this cell's requests reached the upstream)."));
 });
 
 test("a convergence cell refuses an app that stopped, restarted, was replaced or was OOM-killed", () => {
@@ -766,7 +807,13 @@ test("a soak's two marker starts must be distinct and bracket the load: one at o
   // The real stream: a start before the load, a start after it, each followed by the marker's exit.
   assert.deepEqual(readEvents(start(-1) + row(marker, "die", -0.9) + row(app, "kill", 900) + start(1801) + row(marker, "die", 1801.1), ids), [{ action: "kill", atSeconds: 900 }]);
   // At the load's start exactly is still before it.
-  assert.deepEqual(readEvents(start(0) + start(1801), ids), []);
+  assert.deepEqual(readEvents(start(0) + start(1801) + row(marker, "die", 1801.1), ids), []);
+  // Without the fence, a marker row after the second start stamped after the load finished, the
+  // stream does not show the client delivered what came before that start: not read.
+  const unfenced = /^AssertionError \[ERR_ASSERTION\]: the event stream shows no marker row after its second start and after the load finished, so it does not show the client delivered what came before that start$/;
+  assert.throws(() => readEvents(start(-1) + start(1801), ids), unfenced);
+  assert.throws(() => readEvents(start(-1) + start(1801) + row(app, "kill", 900), ids), unfenced);
+  assert.throws(() => readEvents(start(-1) + start(1801) + row(marker, "die", 1799), ids), unfenced);
   const before = /^AssertionError \[ERR_ASSERTION\]: the marker's first start in the event stream is not at or before the load's start, so it does not show the stream was listening when the load began$/;
   const after = /^AssertionError \[ERR_ASSERTION\]: the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load$/;
   // Two identical pre-load rows and then a die during the load: two starts, but no second witness,
@@ -792,9 +839,11 @@ test("a soak keeps an app event stamped inside the load wherever the stream put 
   const startedAt = "2026-11-20T00:00:00Z", base = BigInt(Date.parse(startedAt)) * 1_000_000n;
   const app = "a".repeat(64), marker = "b".repeat(64), ids = { app, marker, startedAt, finishedAt: "2026-11-20T00:30:00Z" };
   const row = (id, action, nanos) => `${id}|${action}|${base + nanos}\n`, s = 1_000_000_000n;
+  // The fence the stream must show: the marker's exit after its second start.
+  const fence = row(marker, "die", 1802n * s);
   // An OOM kill stamped 15 s into the load, delivered after the second marker start: it is the
   // load's, not teardown, so it is kept and the soak reads restarted, never clean.
-  const late = readEvents(row(marker, "start", -s) + row(marker, "start", 1801n * s) + row(app, "oom", 15n * s) + row(app, "die", 15n * s + 1n), ids);
+  const late = readEvents(row(marker, "start", -s) + row(marker, "start", 1801n * s) + row(app, "oom", 15n * s) + row(app, "die", 15n * s + 1n) + fence, ids);
   assert.deepEqual(late, [{ action: "oom", atSeconds: 15 }, { action: "die", atSeconds: 15.000000001 }]);
   const held = { id: app, startedAt, restartCount: 0, running: true, oomKilled: false };
   const restarts = summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60), tail: 0, unrecorded: 0, requests: 270000, iterations: 270000,
@@ -802,18 +851,21 @@ test("a soak keeps an app event stamped inside the load wherever the stream put 
   assert.deepEqual([restarts.eventStream, restarts.restarted], ["seen", true]);
   // Stamped at the load's FinishedAt exactly is still inside it; one nanosecond later, after the
   // second marker start, is teardown and is left out.
-  assert.deepEqual(readEvents(row(marker, "start", -s) + row(marker, "start", 1801n * s) + row(app, "kill", 1800n * s) + row(app, "die", 1800n * s + 1n), ids), [{ action: "kill", atSeconds: 1800 }]);
+  assert.deepEqual(readEvents(row(marker, "start", -s) + row(marker, "start", 1801n * s) + row(app, "kill", 1800n * s) + row(app, "die", 1800n * s + 1n) + fence, ids), [{ action: "kill", atSeconds: 1800 }]);
   // FinishedAt with nanoseconds: a second marker start 0.4 ms before it, in the same millisecond,
   // is not after the load finished; one nanosecond after it is.
   const precise = { ...ids, finishedAt: "2026-11-20T00:30:00.000900000Z" };
   const after = /^AssertionError \[ERR_ASSERTION\]: the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load$/;
   assert.throws(() => readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 500_000n), precise), after);
   assert.throws(() => readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 900_000n), precise), after);
-  assert.deepEqual(readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 900_001n), precise), []);
+  assert.deepEqual(readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 900_001n) + fence, precise), []);
   // The same at the start: a first marker start 1 ns after a StartedAt with nanoseconds is too late.
   const startPrecise = { ...ids, startedAt: "2026-11-20T00:00:00.000000500Z" };
   assert.throws(() => readEvents(row(marker, "start", 501n) + row(marker, "start", 1801n * s), startPrecise), /first start in the event stream is not at or before the load's start/);
-  assert.deepEqual(readEvents(row(marker, "start", 500n) + row(marker, "start", 1801n * s), startPrecise), []);
+  assert.deepEqual(readEvents(row(marker, "start", 500n) + row(marker, "start", 1801n * s) + fence, startPrecise), []);
+  // The fence is compared to the nanosecond too: a marker row 1 ns before the precise FinishedAt,
+  // though after the second start in the stream, is not it.
+  assert.throws(() => readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 900_001n) + row(marker, "die", 1800n * s + 899_999n), precise), /shows no marker row after its second start and after the load finished/);
 });
 
 test("a saved pass's own text never reaches an error or a report: every field is refused unless it validates", () => {

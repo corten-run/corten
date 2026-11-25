@@ -634,9 +634,10 @@ test("the report states the convergence pass given to it, or that none was provi
   const text = report(s, { convergence: given(pass) });
   assert.doesNotMatch(text, /none provided to this report/);
   assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v4, reading marketplace-tolerance\/v4\), measured at commit `a{40}`/m);
-  assert.match(text, /^The pass is like-for-like with this round on every input compared: /m);
+  // Like-for-like for its fixture cells only: an API-source cell is not compared.
+  assert.match(text, /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: /m);
   assert.match(text, /^Tolerance reading marketplace-tolerance\/v4: a screening reading of throughput, not a certificate of steady state\./m);
-  assert.match(text, /^Reading: aspnet api json: within the stated tolerance from the window ending at 60 s\.$/m);
+  assert.match(text, /^Reading: aspnet api json: within the stated tolerance from the window ending at 60 s \(not compared with this round: the pass does not record that this cell's requests reached the upstream\)\.$/m);
   const judged = /^This report does not establish whether this round's 30s timed warmup was sufficient: the pass is a screening reading of throughput, and a timed warmup is set only by a separate reviewed change from a saved like-for-like pass\.$/m;
   assert.match(text, judged);
   // The timed preamble says ranges "do not establish" a difference, and the closing line says this report does not
@@ -652,14 +653,14 @@ test("the report states the convergence pass given to it, or that none was provi
   // A pass of the same commit is still not like-for-like when its images differ: the difference is listed.
   const rebuilt = structuredClone(pass); rebuilt.images.aspnet = `sha256:${"9".repeat(64)}`;
   const other = report(s, { convergence: given(rebuilt) });
-  assert.match(other, /^The pass is not like-for-like with this round\. Differing or missing inputs: the image IDs differ for aspnet\.$/m);
-  assert.match(other, /^Reading: aspnet api json: within the stated tolerance from the window ending at 60 s\.$/m);
+  assert.match(other, /^The pass is not like-for-like with this round for its 4 cells with a reading\. Differing or missing inputs: the image IDs differ for aspnet\.$/m);
+  assert.match(other, /^Reading: aspnet api json: within the stated tolerance from the window ending at 60 s \(not compared with this round: the pass does not record that this cell's requests reached the upstream\)\.$/m);
   assert.match(other, judged);
   assert.doesNotMatch(evidence(other), /reaches|is shorter than|establish|sufficient|long enough to/);
   // A pass that ran on another kernel lists that too, naming the input and neither value.
   const otherKernel = structuredClone(pass); otherKernel.host.kernel = "6.8.0-canarykernel";
   const kernelText = report(s, { convergence: given(otherKernel) });
-  assert.match(kernelText, /^The pass is not like-for-like with this round\. Differing or missing inputs: the kernel release differs\.$/m);
+  assert.match(kernelText, /^The pass is not like-for-like with this round for its 4 cells with a reading\. Differing or missing inputs: the kernel release differs\.$/m);
   assert.ok(!kernelText.includes("canarykernel"));
   const dir = mkdtempSync(join(tmpdir(), "marketplace-report-")), round = join(dir, "round.json"), file = join(dir, "pass.json");
   try {
@@ -777,7 +778,7 @@ test("report.mjs --convergence prints no text it read from a saved pass or round
     assert.match(optional.stdout, /^Commit: .* CPU: not printed \(not in the form a CPU model is saved in\) \(online CPUs 0-7\)\.$/m);
     // The whole output is the round's report with that CPU text, and the pass's lines.
     assert.equal(optional.stdout, `${report(roundCpu, { convergence: given(pass), hostCpu: () => "not printed (not in the form a CPU model is saved in)" })}\n`);
-    assert.match(optional.stdout, /^The pass is not like-for-like with this round\. Differing or missing inputs: .*the host CPU differs\.$/m);
+    assert.match(optional.stdout, /^The pass is not like-for-like with this round for its 4 cells with a reading\. Differing or missing inputs: .*the host CPU differs\.$/m);
     // The same round with a pass that is refused, a round that is not JSON, and a round that fails
     // validation on a canary value: each a fixed message, with no canary in either stream.
     const passCanary = join(dir, "pass-canary.json"); writeFileSync(passCanary, JSON.stringify(started));
