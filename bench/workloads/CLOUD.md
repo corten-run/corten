@@ -1203,7 +1203,8 @@ failed watcher it requires, on the same boot: the live failure record
 byte-identical to the archived one; that control's result exiting with the
 ledger's code; its watcher unit failed or unloaded, with no main or control PID,
 no queued job, an absent or empty cgroup and its observer gone; the session scope
-from its registration absent or empty; and no process with an identity from that
+from its registration absent or empty, with no process of the query's own inventory
+inside it; and no process with an identity from that
 session's chain or a parent among its PIDs. A process can leave both the scope
 and its parent (for example `systemd-run --scope`, then reparenting to PID 1),
 so every process outside the live query's own set must also have started before
@@ -1225,12 +1226,23 @@ archived failure keeps its previous bytes and schemas, so saved receipts replay
 unchanged. The proof adds no write: the failure, archive and exit stay as they
 were, and it never qualifies the group.
 
-The drain proof is narrow. It can settle only a setup job that failed before it
-started Docker, with the guardian's exact deadline record archived, and that left
-no process running that started during or after the failed session. Once
-`bootstrap_stage=docker-install` installs Docker, `dockerd` and `containerd` keep
-running (the job later also runs `systemctl enable --now docker`), so a failure
-from then on refuses, as does an earlier stage that leaves any process behind. A
+The drain proof is narrow. It can settle only a setup job whose host shows no
+Docker socket or daemon at query time (in practice one that failed before
+`docker-install`), with the guardian's exact deadline record archived, and that
+left no process running that started during or after the failed session.
+`bootstrap_stage=docker-install` starts `dockerd` and `containerd`, and the
+controller keeps polling for the bootstrap marker (about every 30 seconds) while
+the job runs, so a poll whose watcher fails after that point would find both
+daemons older than its fence, which alone would accept them. In drain mode only,
+the host query and the verifier therefore both refuse with
+`Docker or containerd present` when `/run/docker.sock` or
+`/run/containerd/containerd.sock` exists, or when any process's kernel command
+name is `dockerd` or `containerd` or starts with `containerd-` (a shim). The
+query records the two socket observations in the proof as `dockerSockets`. The
+command name is what a process reports, not an identity: this is a conservative
+refusal, not a proof that no daemon held session work, and it also refuses a host
+running Docker for any other reason. A failure before Docker started that leaves
+any process behind refuses too. A
 timer or other short-lived service that happens to run at query time (for example
 `apt-daily` or `fwupd-refresh`, before the job disables them) refuses too. A
 refusal is not retried: the query's refusal is recorded in the ledger, every later

@@ -21,14 +21,16 @@ const guardianLine = (text) => {
   assert.equal(lines.length, 1, text); return lines[0];
 };
 // A synthetic /proc row: stat field 4 is the parent, 9 the flags, 22 the start time.
-function procRow(pid, ppid, cgroup, ticks, flags = 0) {
+function procRow(pid, ppid, cgroup, ticks, flags = 0, comm = "synthetic") {
   const fields = Array(49).fill("0"); fields[0] = String(ppid); fields[5] = String(flags); fields[18] = String(ticks);
-  return { pid, startTicks: String(ticks), cgroup: `0::${cgroup}\n`, stat: `${pid} (synthetic) S ${fields.join(" ")}\n`,
+  return { pid, startTicks: String(ticks), cgroup: `0::${cgroup}\n`, stat: `${pid} (${comm}) S ${fields.join(" ")}\n`,
     executable: { device: "1", inode: String(pid) }, commandSha256: "0".repeat(64) };
 }
+const noDocker = { "/run/docker.sock": false, "/run/containerd/containerd.sock": false };
 
-// A drain fixture holds the first bootstrap session open until its watcher fails.
-function fixture(mode, { drain = false, code = 0 } = {}) {
+// A drain fixture holds the first bootstrap session (and, for a two-session mode, the
+// second) open until its watcher fails.
+function fixture(mode, { drain = false, code = 0, failedRows = [0] } = {}) {
   const state = { ...reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" }),
     id: "123", ip: "192.0.2.10", status: "running", createIntentAt: new Date().toISOString(),
     evidence: "evidence-fixture", extractionAttempts: ["evidence-fixture"], archiveSha256: "a".repeat(64), evidenceSha256: "b".repeat(64),
@@ -39,8 +41,8 @@ function fixture(mode, { drain = false, code = 0 } = {}) {
     if (binary === "scp") request.invocation.requestSha256 = digest("synthetic-sftp-protocol");
     state.control.ledger.push({ request, localTerminal: true, code: 0 });
   }
-  if (drain) { state.control.ledger[0].code = code; state.preBootstrapTerminal = { hostId: state.id, ip: state.ip }; }
-  const failures = drain ? [{ id: state.control.ledger[0].request.invocation.id, failureSha256: digest(deadlineFailure) }] : [];
+  if (drain) { for (const i of failedRows) state.control.ledger[i].code = code; state.preBootstrapTerminal = { hostId: state.id, ip: state.ip }; }
+  const failures = drain ? failedRows.map((i) => ({ id: state.control.ledger[i].request.invocation.id, failureSha256: digest(deadlineFailure) })) : [];
   const script = terminalSetupScript(state, 1, undefined, failures), files = Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
   const expected = { binding: { round: state.round, commit: state.commit, token: state.token, helperSha256: guardianSha256 }, sequence: 2,
     requests: state.control.ledger.map((row) => row.request), queryArgv: ["/usr/bin/python3", "-", state.id, state.unit, JSON.stringify(files), "1"],
@@ -135,6 +137,7 @@ test("a failed bootstrap watcher retires only on a fresh drain proof of its exac
   assert.deepEqual(drained.watcher, { Id: `corten-bench-control-${f.state.token}-${failed}.service`, LoadState: "loaded", ActiveState: "failed",
     MainPID: "0", ControlPID: "0", Job: "" });
   assert.deepEqual(drained.scope.members, []); assert.equal(drained.result.code, 0);
+  assert.deepEqual(f.proof.dockerSockets, noDocker);
   const checked = verifyControlSetupQuery(f.expected, f.proof);
   assert.equal(checked.remoteDrained, false);
   const { local, custody } = custodyFolder(t, f);
@@ -197,6 +200,12 @@ test("the drain proof refuses residual sessions, live or queued watchers, change
     // The query's listener is exempt from the start-time fence: a restarted one (same PID, later
     // start) or a different, older one did not serve the failed session and refuses.
     "setup-drain-listener-restarted": /listener differs from a failed session/, "setup-drain-listener-replaced": /listener differs from a failed session/,
+    // The failed watcher's process still in /proc while systemd reports its unit failed, and
+    // another process left in that unit's cgroup.
+    "setup-drain-observer-alive": /watcher process remains/, "setup-drain-cgroup-populated": /watcher cgroup populated/,
+    // A result that is not an observed exit, and a registration for another invocation or boot.
+    "setup-drain-transport": /command result differs from the ledger/, "setup-drain-registration": /failed session registration differs/,
+    "setup-drain-boot": /failed session boot differs/,
   };
   for (const [mode, reason] of Object.entries(cases)) {
     const f = fixture(mode, { drain: true });
@@ -298,6 +307,57 @@ test("a drained session must fit its original window, a settled unit and the lis
   refuses((p) => restart(p, "900"), /listener differs from a failed session/);
 });
 
+test("the drain verifier refuses another boot, a query inside the failed window, an extra drained field and a live scope member", () => {
+  const f = fixture("setup-drain-normal", { drain: true });
+  const refuses = (mutate, pattern) => { const p = structuredClone(f.proof); mutate(p); assert.throws(() => verifyControlSetupQuery(f.expected, p), pattern, String(pattern)); };
+  const other = "fedcba98-7654-3210-fedc-ba9876543210";
+  refuses((p) => { p.drained[0].registration.host.bootId = other; p.drained[0].registration.first.bootId = other; }, /drained session boot differs/);
+  // A failed window that, with its result, still closes after the query's observation.
+  const now = BigInt(f.proof.observation.monoNs);
+  refuses((p) => { Object.assign(p.drained[0].start, { deadlineMonoNs: String(now + 1n) });
+    Object.assign(p.drained[0].result, { releasedMonoNs: String(now), completedMonoNs: String(now) }); }, /drained session outside its original window/);
+  refuses((p) => { p.drained[0].extra = true; }, /unexpected control record fields/);
+  // A process older than the fence, parented by PID 1, still in the failed session's scope.
+  const scope = f.proof.drained[0].registration.session.scope;
+  refuses((p) => { p.observation.processes.push(procRow(989, 1, scope, 9999)); }, /drained session scope member remains/);
+  refuses((p) => { p.observation.processes.push(procRow(989, 1, `${scope}/child`, 9999)); }, /drained session scope member remains/);
+});
+
+test("the drain proof refuses a Docker or containerd socket or daemon, even one older than the failed session", () => {
+  for (const mode of ["setup-drain-docker-socket", "setup-drain-containerd-socket", "setup-drain-dockerd", "setup-drain-containerd", "setup-drain-containerd-shim"]) {
+    const f = fixture(mode, { drain: true });
+    assert.equal(f.rejected, true, mode); assert.match(f.reason, /^AssertionError: Docker or containerd present$/, mode);
+  }
+  const f = fixture("setup-drain-normal", { drain: true });
+  const check = (mutate) => { const p = structuredClone(f.proof); mutate(p); return verifyControlSetupQuery(f.expected, p); };
+  const refuses = (mutate, pattern = /Docker or containerd present/) => assert.throws(() => check(mutate), pattern, String(pattern));
+  for (const path of Object.keys(noDocker)) refuses((p) => { p.dockerSockets[path] = true; });
+  refuses((p) => { delete p.dockerSockets; }, /unexpected control record fields/);
+  refuses((p) => { p.dockerSockets.extra = false; });
+  // Each daemon starts before the fence (10000), so only this check sees it.
+  for (const comm of ["dockerd", "containerd", "containerd-shim"]) refuses((p) => { p.observation.processes.push(procRow(6, 1, `/system.slice/${comm}.service`, 600, 0, comm)); });
+  check((p) => { p.observation.processes.push(procRow(6, 1, "/system.slice/cron.service", 600, 0, "cron")); });
+});
+
+test("two failed bootstrap sessions drain in ledger order, fenced by the earlier session's first process", () => {
+  const f = fixture("setup-drain-two", { drain: true, failedRows: [0, 1] });
+  assert.equal(f.rejected, false, f.reason); verifyControlSetupQuery(f.expected, f.proof);
+  assert.deepEqual(f.proof.drained.map((entry) => entry.id), f.expected.watcherFailures.map((failure) => failure.id));
+  assert.deepEqual([f.proof.receipts, f.proof.watchers], [[null, null], [null, null]]);
+  const first = (entry) => entry.registration.session.chain.map((p) => BigInt(p.startTicks)).reduce((a, b) => (b < a ? b : a));
+  assert.deepEqual(f.proof.drained.map(first), [10000n, 11000n]);
+  // Failures and drained entries out of ledger order, even when they still pair up, refuse.
+  const expected = structuredClone(f.expected), reordered = structuredClone(f.proof);
+  expected.watcherFailures.reverse(); reordered.drained.reverse();
+  assert.throws(() => verifyControlSetupQuery(expected, reordered), /drained watchers out of ledger order/);
+  // A process that started after the first failed session but before the second refuses.
+  const accepts = (row) => { const p = structuredClone(f.proof); p.observation.processes.push(row); verifyControlSetupQuery(f.expected, p); };
+  assert.throws(() => accepts(procRow(990, 1, "/system.slice/cron.service", 10500)), /process started during or after a failed session/);
+  accepts(procRow(990, 1, "/system.slice/cron.service", 9999));
+  const between = fixture("setup-drain-two-between", { drain: true, failedRows: [0, 1] });
+  assert.equal(between.rejected, true); assert.match(between.reason, /process started during or after a failed session/);
+});
+
 // The drain query is a hand copy of the guardian's setup_query. Derive it from the current
 // guardian function plus only the known drain insertions, so a change to either side fails here.
 const pythonFunction = (source, name) => {
@@ -347,6 +407,7 @@ const drainEdits = [
     for row in rows.values():
         if row["pid"] not in allowed and not kernel_thread(row):
             assert int(row["startTicks"]) < fence, "process started during or after a failed session"
+    sockets = docker_runtime(rows)
     entries, total = [], 0
 `],
   // Six-record custody check for every failed row.
@@ -357,6 +418,8 @@ const drainEdits = [
   // v2 schema with the drained entries.
   [`"benchmark-control-setup-query/v1"`, `"benchmark-control-setup-query/v2"`],
   [`"receipts": receipts, "watchers": watchers, "registration"`, `"receipts": receipts, "watchers": watchers, "drained": drained, "registration"`],
+  // Docker socket observation, refused unless every path is absent.
+  [`"entries": entries, "custody": copied}`, `"entries": entries, "custody": copied, "dockerSockets": sockets}`],
 ];
 
 test("setup_drain_query is the guardian's setup_query with only the known drain insertions", () => {

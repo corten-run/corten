@@ -410,10 +410,13 @@ for (const cancelAtProof of [false, true]) test(cancelAtProof
 
 // The first bootstrap session stays open until its watcher misses its deadline, so the
 // exit archive holds a real watch-failure and no receipt for it.
-for (const mode of ["drained", "lost-acknowledgement", "pending-monitor"]) test({
+for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refused", "invalid-proof"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
+  // The restart recognizes the refused drain query only by its exact drain script digest.
+  refused: "a drain query that exits nonzero refuses, and a restart sends no second query",
+  "invalid-proof": "a drain query that exits zero with unusable proof refuses, and a restart sends no second query",
 }[mode], async (t) => {
   const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
@@ -438,6 +441,11 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor"]) test(
       assert.ok(script.includes("control_namespace['setup_drain_query']") && script.includes("benchmark-failed-setup-host/v3"));
       if (mode === "lost-acknowledgement") return shellTransport({ repo: h.repo, spawn: () => ({ status: 0, stdout: "{}",
         stderr: `CORTEN_CONTROL ${request.invocation.id} ${"a".repeat(64)}\n` }) })(binary, args, timeout, allowFail, expiry, control);
+      if (mode === "refused" || mode === "invalid-proof") {
+        const status = mode === "refused" ? 1 : 0;
+        return shellTransport({ repo: h.repo, spawn: () => ({ status, stdout: '{"setupFailed":false}',
+          stderr: `CORTEN_CONTROL ${request.invocation.id} ${"a".repeat(64)}\nCORTEN_RESULT ${request.invocation.id} ${status}\n` }) })(binary, args, timeout, allowFail, expiry, control);
+      }
     }
     const expected = query && { sequence: request.sequence, requests: s.control.ledger.slice(0, -1).map((r) => r.request),
       binding: { round: s.round, commit, token, helperSha256: guardianSha256 },
@@ -483,6 +491,20 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor"]) test(
     assert.equal(saved.retirement, undefined); assert.equal(saved.deletionIntentAt, undefined); assert.equal(h.deletes, 0);
     await assert.rejects(h.task({ run }).collect(), /ambiguous pre-bootstrap custody/);
     assert.equal(queries, 1); assert.deepEqual(h.saved(), saved); assert.ok(existsSync(lock)); assert.equal(h.deletes, 0);
+    return;
+  }
+  if (mode === "refused" || mode === "invalid-proof") {
+    await assert.rejects(h.task({ run }).collect(), { controllerStage: "setup-host-proof-refused" });
+    const saved = h.saved(), last = saved.control.ledger.at(-1);
+    assert.equal(queries, 1); assert.equal(last.request.epoch, "collection"); assert.equal(last.localTerminal, true);
+    assert.equal(last.code, mode === "refused" ? 1 : 0); assert.equal(last.setupProofRejected, mode === "invalid-proof" ? true : undefined);
+    assert.ok(saved.archiveSha256 && saved.evidenceSha256); assert.equal(saved.status, "starting");
+    assert.equal(saved.retirement, undefined); assert.equal(saved.deletionIntentAt, undefined);
+    assert.equal(existsSync(lock), false); assert.equal(h.deletes, 0);
+    const calls = h.calls.length;
+    await assert.rejects(h.task({ run }).collect(), { controllerStage: "setup-host-proof-refused" });
+    assert.equal(queries, 1); assert.equal(h.calls.length, calls); assert.deepEqual(h.saved(), saved);
+    assert.equal(existsSync(lock), false); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
     return;
   }
   assert.equal(await h.task({ run }).collect(), 1);

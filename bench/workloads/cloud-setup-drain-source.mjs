@@ -6,12 +6,27 @@ export default String.raw`
 
 SETTLED_EVENTS = r"populated 0\n(?:frozen [01]\n)?"
 DRAINED_RECORDS = ("request", "start", "launcher", "registration", "result", "watch-failure")
+DOCKER_SOCKETS = ("/run/docker.sock", "/run/containerd/containerd.sock")
+DOCKER_RUNTIME = "Docker or containerd present"
 
 
 def kernel_thread(row):
     # PF_KTHREAD (stat field 9) under kthreadd in the root cgroup. Userspace cannot become one.
     fields = row["stat"].rsplit(") ", 1)[1].split()
     return (int(fields[6]) & 0x00200000) != 0 and int(fields[1]) == 2 and row["cgroup"] == "0::/\n"
+
+
+def docker_runtime(rows):
+    # bootstrap_stage=docker-install leaves dockerd and containerd running, and a bootstrap
+    # poll can fail its watcher after that, so they predate the fence. The proof cannot see
+    # work a daemon holds for a session, so either socket path, or a dockerd, containerd or
+    # containerd shim process (by its kernel command name), refuses.
+    sockets = {path: pathlib.Path(path).exists() or pathlib.Path(path).is_symlink() for path in DOCKER_SOCKETS}
+    assert not any(sockets.values()), DOCKER_RUNTIME
+    for row in rows.values():
+        name = row["stat"].split(" (", 1)[1].rsplit(") ", 1)[0]
+        assert name not in ("dockerd", "containerd") and not name.startswith("containerd-"), DOCKER_RUNTIME
+    return sockets
 
 
 def setup_drained_session(root, request, failure):
@@ -29,7 +44,8 @@ def setup_drained_session(root, request, failure):
     unit = "corten-bench-control-" + invocation["token"] + "-" + identifier + ".service"
     assert start["unit"] == unit and load(root, "launcher-" + identifier + ".json") == {"unit": unit, "code": 0}
     registration = load(root, "registration-" + identifier + ".json")
-    assert registration["invocation"] == invocation and registration["host"] == host()
+    assert registration["invocation"] == invocation, "failed session registration differs"
+    assert registration["host"] == host(), "failed session boot differs"
     assert time.monotonic_ns() >= int(start["deadlineMonoNs"]), "watcher window still open"
     properties = ["Id", "LoadState", "ActiveState", "MainPID", "ControlPID", "Job"]
     shown = subprocess.run(["/usr/bin/systemctl", "show", unit] + ["--property=" + p for p in properties],
@@ -177,6 +193,7 @@ def setup_drain_query(root, expected):
     for row in rows.values():
         if row["pid"] not in allowed and not kernel_thread(row):
             assert int(row["startTicks"]) < fence, "process started during or after a failed session"
+    sockets = docker_runtime(rows)
     entries, total = [], 0
     for path in sorted(root.iterdir()):
         contents = read(path)
@@ -199,7 +216,7 @@ def setup_drain_query(root, expected):
              "receipts": receipts, "watchers": watchers, "drained": drained, "registration": registration, "start": start, "launcher": launcher,
              "watcher": values, "query": identity(query), "timeout": identity(timeout), "executables": executables,
              "observation": {**host(), "monoNs": str(observed), "processes": sorted(rows.values(), key=lambda p: p["pid"])},
-             "entries": entries, "custody": copied}
+             "entries": entries, "custody": copied, "dockerSockets": sockets}
     assert len(encoded(proof)) <= LIMIT
     return proof
 `;

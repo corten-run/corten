@@ -145,6 +145,9 @@ class Path:
             return cg.endswith(".scope") or any(p["cgroup"] == "0::" + cg + "\n" for p in rows.values())
         return self.value in data or self.value in folders
 
+    def is_symlink(self):
+        return False
+
     def read_text(self, **kwargs):
         assert self.name == "cgroup.events"
         cg = self.value[len("/sys/fs/cgroup"):-len("/cgroup.events")]
@@ -270,18 +273,32 @@ class Child:
                 fields = rows[998]["stat"].split(" ")
                 fields[8] = str(0x00200000)
                 rows[998]["stat"] = " ".join(fields)
+            # Docker after docker-install: a socket, or a daemon older than the failed session.
+            if mode == "setup-drain-docker-socket": data["/run/docker.sock"] = b""
+            if mode == "setup-drain-containerd-socket": data["/run/containerd/containerd.sock"] = b""
+            for pid, name in ((6, "dockerd"), (7, "containerd"), (8, "containerd-shim")):
+                if mode == "setup-drain-" + name:
+                    rows[pid] = row(pid, 1, "/system.slice/" + name + ".service")
+                    rows[pid]["stat"] = rows[pid]["stat"].replace("(no-name-authority)", "(" + name + ")")
+            # The failed watcher's process, or another process in its unit cgroup, remains.
+            if mode == "setup-drain-observer-alive": rows[200] = row(200, 1, "/system.slice/" + list(units)[0])
+            if mode == "setup-drain-cgroup-populated": rows[996] = row(996, 1, "/system.slice/" + list(units)[0])
+            # Two failed sessions: a process that started between the first and the second.
+            if mode == "setup-drain-two-between": rows[990] = row(990, 1, "/system.slice/cron.service", 10500)
             local.pid = query_pid
             query = scope["setup_drain_query"] if "watcherFailures" in argument["expected"] else scope["setup_query"]
             try:
                 with patch.object(scope["os"], "getppid", lambda: timeout_pid), patch.object(sys, "argv", query_argv[1:]):
                     current["proof"] = query(root, argument["expected"])
             except (AssertionError, KeyError) as error:
-                assert mode not in ("setup-normal", "setup-drain-normal", "setup-drain-older", "setup-drain-kthread", "setup-drain-unloaded"), traceback.format_exc()
+                assert mode not in ("setup-normal", "setup-drain-normal", "setup-drain-older", "setup-drain-kthread", "setup-drain-unloaded",
+                                    "setup-drain-two"), traceback.format_exc()
                 current["rejected"] = True
                 current["reason"] = type(error).__name__ + ": " + str(error)
             finally:
                 local.pid = current["guardian"]
-                for pid in (query_pid, timeout_pid, 999, 998, 5): rows.pop(pid, None)
+                for pid in (query_pid, timeout_pid, 999, 998, 996, 990, 5, 6, 7, 8): rows.pop(pid, None)
+                if mode == "setup-drain-observer-alive": rows.pop(200, None)
         rows.pop(self.pid)
         if mode == "disconnect":
             raise scope["subprocess"].TimeoutExpired("synthetic-disconnect", timeout)
@@ -325,7 +342,8 @@ def run(args, **kwargs):
     if "--property=ControlPID" in args:
         # The drain proof's view of a failed watcher unit. Restart=no leaves it failed.
         failed = unit in failed_units
-        active = units[unit] in rows or (failed and mode == "setup-drain-active")
+        # observer-alive: systemd reports the unit failed while its process still shows in /proc.
+        active = units[unit] in rows and mode != "setup-drain-observer-alive" or (failed and mode == "setup-drain-active")
         values = {"Id": unit, "LoadState": "loaded", "ActiveState": "active" if active else "failed" if failed else "inactive",
                   "MainPID": str(units[unit]) if active else "0", "ControlPID": "0", "Job": "42" if mode == "setup-drain-queued" else ""}
         if failed and mode == "setup-drain-controlpid": values["ControlPID"] = "77"
@@ -478,7 +496,9 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
             rows[ancestor]["executable"] = None
             rows[ancestor]["stat"] = rows[ancestor]["stat"].replace(") S ", ") Z ")
         # A drain mode keeps the first session's ancestor until its watcher misses the deadline.
-        drain_hold = step.get("hold", False) if interactive else mode.startswith("setup-drain-") and sequence == 0
+        # A two-session mode also keeps the second (SFTP) session until its watcher misses it.
+        drain_hold = step.get("hold", False) if interactive else mode.startswith("setup-drain-") and (
+            sequence == 0 or sequence == 1 and mode.startswith("setup-drain-two"))
         if mode not in ("ancestor-survives", "ancestor-zombie") and not drain_hold:
             rows.pop(ancestor, None)
         if drain_hold:
@@ -492,6 +512,14 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
             errors.pop()
             if mode == "setup-drain-bytes": data[str(root / ("watch-failure-" + identifier + ".json"))] += b" "
             if mode == "setup-drain-result": del data[str(root / ("result-" + identifier + ".json"))]
+            # A result whose transport is not an observed exit, and a registration for another
+            # invocation or boot.
+            for name, record, change in (("transport", "result", {"transport": "lost"}),
+                                         ("registration", "registration", {"invocation": {**invocation, "deadlineMs": 2000}}),
+                                         ("boot", "registration", {"host": {**boot, "bootId": "fedcba98-7654-3210-fedc-ba9876543210"}})):
+                if mode == "setup-drain-" + name:
+                    record_path = str(root / (record + "-" + identifier + ".json"))
+                    data[record_path] = scope["encoded"]({**json.loads(data[record_path]), **change})
             if mode == "setup-drain-window":
                 # A start record whose deadline is still ahead of the query's clock.
                 start_path = str(root / ("start-" + identifier + ".json"))

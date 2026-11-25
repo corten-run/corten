@@ -131,7 +131,12 @@ const asciiDigest = (value) => createHash("sha256").update(JSON.stringify(value)
   .replace(/[\u007f-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`) + "\n").digest("hex");
 const drainedRecords = ["request", "start", "launcher", "registration", "result", "watch-failure"];
 const drainProofKeys = ["schema", "binding", "requests", "receipts", "watchers", "drained", "registration", "start", "launcher", "watcher",
-  "query", "timeout", "executables", "observation", "entries", "custody"];
+  "query", "timeout", "executables", "observation", "entries", "custody", "dockerSockets"];
+// docker-install leaves dockerd and containerd running before any later bootstrap poll, so
+// they would predate the fence; the proof cannot see work a daemon holds for a session.
+const dockerRuntime = "Docker or containerd present";
+const dockerSockets = { "/run/docker.sock": false, "/run/containerd/containerd.sock": false };
+const dockerCommand = (comm) => comm === "dockerd" || comm === "containerd" || comm.startsWith("containerd-");
 // A failed watcher has no receipt. Its replacement is a later positive observation:
 // the exact recorded result, an inactive watcher unit and no observed process of the
 // session. It is a process observation only (see CLOUD.md for what it cannot see).
@@ -166,6 +171,7 @@ function verifyDrainedSession(invocation, failure, entry, host, listener, map, n
     && (entry.scope.exists === true ? entry.scope.events !== null && settledEvents(entry.scope.events) : entry.scope.exists === false && entry.scope.events === null),
   "drained session scope populated");
   // The query's own later inventory must still show nothing of that session.
+  for (const p of map.values()) assert.ok(!inScope(p, scope), "drained session scope member remains");
   const keys = new Set(chain.map(key)), pids = new Set(chain.map((p) => p.pid));
   for (const p of map.values()) assert.ok(!keys.has(key(p)) && !pids.has(p.parentPid), "drained session process or descendant remains");
   assert.ok(!present(map, registration.observer), "failed watcher process remains");
@@ -257,6 +263,8 @@ export function verifyControlSetupQuery(expected, proof) {
       const kernel = processStat(p.stat).kernelThread && p.parentPid === 2 && p.cgroup === "0::/\n";
       assert.ok(kernel || BigInt(p.startTicks) < fence, "process started during or after a failed session");
     }
+    same(proof.dockerSockets, dockerSockets, dockerRuntime);
+    for (const p of map.values()) assert.ok(!dockerCommand(processStat(p.stat).comm), dockerRuntime);
   }
   assert.ok(Array.isArray(proof.entries) && proof.entries.length <= 32768 && Array.isArray(proof.custody));
   const names = new Set(["helper.py", "binding.json", "mutex"]), entries = new Map();
