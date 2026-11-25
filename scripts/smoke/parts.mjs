@@ -36,13 +36,15 @@ export async function partReads(page, browser, swaps, noSwaps) {
     /** @type {"hold" | "empty" | "abort"} */
     let answer = "hold";
     let reads = 0;
-    // The route is removed and the page closed however the case ends.
+    /** Lets go of each read the route holds: its request is aborted and its handler returns. @type {(() => Promise<void>)[]} */
+    const holds = [];
+    // The held reads are let go, the route removed and the page closed however the case ends.
     try {
       // The runtime's read of the part is the page's own address, asked with `corten: action`.
       await held.route(`${base}/`, (route) => {
         if (route.request().headers().corten !== "action") return route.continue();
         reads++;
-        if (answer === "hold") return new Promise(() => {});
+        if (answer === "hold") return new Promise((resolve) => holds.push(() => route.abort().catch(() => {}).finally(resolve)));
         if (answer === "abort") return route.abort("internetdisconnected");
         return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
       });
@@ -127,6 +129,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
       );
     } finally {
       await cleanUp(
+        () => Promise.all(holds.splice(0).map((release) => release())),
         () => held.unrouteAll({ behavior: "ignoreErrors" }),
         () => held.context().close(),
       );

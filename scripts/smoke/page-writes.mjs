@@ -1,4 +1,4 @@
-import { base, skip, check, pollFor, cleanUp, steps } from "./helpers.mjs";
+import { base, skip, check, pollFor, cleanUp, steps, within } from "./helpers.mjs";
 
 export async function pageWrites(page, browser) {
   // After a write, the page it sends the browser to is fetched whole; when that page's handler
@@ -56,6 +56,9 @@ export async function pageWrites(page, browser) {
    * is a post to `/smoke/written` or, from the page that reads itself again, to its own address.
    * `edit` and `seen.nav` (which changes a navigation's <main>) are given the request's place in
    * `asked` too, for a case to mark what an answer draws (`watchMarks`).
+   * `settled` holds, by each write's number, the length of `asked` the moment the stand-in fails
+   * that write or hands the page its answer: no read the page asked after it saw that answer, or
+   * that write fail, has a place before it.
    * @param {(body: string, writes: number, headers?: Record<string, string>, at?: number) => string} edit @param {(body: string) => string} [before]
    * @param {string} [path]
    */
@@ -70,6 +73,8 @@ export async function pageWrites(page, browser) {
       answers: 0,
       /** @type {string[]} */ asked: [],
       /** @type {Record<string, string>} */ answered: {},
+      /** By write number, the length of `asked` when the stand-in failed or answered it. @type {Record<number, number>} */
+      settled: {},
       /** Changes a navigation's <main>, given the request's place in `asked`. @type {(body: string, at: number) => string} */
       nav: (/** @type {string} */ body, /** @type {number} */ _at) => body,
       /** What a write's answer waits for, by the write's number. @type {(writes: number) => Promise<unknown> | undefined} */
@@ -102,8 +107,12 @@ export async function pageWrites(page, browser) {
           // A navigation's <main> has no layout to change: only `seen.nav` changes it.
           const body = mode === "nav" ? seen.nav(text, at) : write || seen.written ? edit(text, writes, write ? headers : undefined, at) : before(text);
           seen.written ||= write;
-          if (write && seen.fail) return route.abort("failed");
+          if (write && seen.fail) {
+            seen.settled[writes] = seen.asked.length;
+            return route.abort("failed");
+          }
           if (write) await seen.hold(writes);
+          if (write) seen.settled[writes] = seen.asked.length;
           await route.fulfill({ status: write && seen.status ? seen.status : res.status(), headers, body }).catch(() => {});
           if (write) seen.answers += 1;
         },
@@ -200,34 +209,32 @@ export async function pageWrites(page, browser) {
     return at === null ? null : at;
   };
   /**
-   * Notes, from now on, whether the write's own <main> is drawn, the moment it is: a page that reads
-   * itself again draws the form's <main> over it a second later, which a sampled wait in a loaded
-   * browser can miss (#2035). `writtenSeen` reads it, for 5 s.
-   * @param {import("@playwright/test").Page} own
+   * Notes, from now on, whether the write's own <main> is drawn, the moment it is, with no element
+   * busy and, given `brand`, the brand reading `brand` at that same moment: a page that reads itself
+   * again draws the form's <main> over it a second later, which a sampled wait in a loaded browser
+   * can miss (#2035), and a brand a later whole read draws is not the write's. Only the write's own
+   * page has that <main>. `writtenSeen` reads it.
+   * @param {import("@playwright/test").Page} own @param {string} [brand]
    */
-  const watchWritten = (own) =>
-    own.evaluate(() => {
-      const main = /** @type {HTMLElement} */ (document.querySelector("main"));
+  const watchWritten = (own, brand) =>
+    own.evaluate((brand) => {
       const w = /** @type {any} */ (window);
       w.__writtenSeen = false;
+      const drawn = () =>
+        !!document.querySelector("main")?.textContent?.includes("Written by the form's own page.") &&
+        !document.querySelector("[aria-busy]") &&
+        (brand === null || document.querySelector("header span")?.textContent === brand);
       new MutationObserver((_, observer) => {
-        if (!main.textContent?.includes("Written by the form's own page.")) return;
+        if (!drawn()) return;
         w.__writtenSeen = true;
         observer.disconnect();
-      }).observe(main, { childList: true, subtree: true, characterData: true });
-    });
-  /** Whether `watchWritten` saw the write's own <main> drawn, within 5 s. @param {import("@playwright/test").Page} own */
-  const writtenSeen = async (own) => (await pollFor(5000, () => own.evaluate(() => /** @type {boolean} */ ((/** @type {any} */ (window)).__writtenSeen)))) === true;
+      }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["aria-busy"] });
+    }, brand ?? null);
   /**
-   * Whether the brand reads `text` and `watchWritten` saw the write's own <main> drawn, both within
-   * one 5 s from the call, which a case makes the moment it sees the write sent: the brand's wait
-   * does not start a new 5 s for the <main>'s.
-   * @param {import("@playwright/test").Page} own @param {string} text
+   * Whether `watchWritten` saw the write's own page drawn, within 5 s of the call, which a case makes
+   * the moment it sees the write sent. @param {import("@playwright/test").Page} own
    */
-  const writtenDrawn = async (own, text) =>
-    (await pollFor(5000, () =>
-      own.evaluate((text) => document.querySelector("header span")?.textContent === text && /** @type {boolean} */ ((/** @type {any} */ (window)).__writtenSeen), text),
-    )) === true;
+  const writtenSeen = async (own) => (await pollFor(5000, () => own.evaluate(() => /** @type {boolean} */ ((/** @type {any} */ (window)).__writtenSeen)))) === true;
   /**
    * Marks a navigation's <main> with its read's place in `seen.asked` (as `seen.nav`), for
    * `watchMarks` to note the moment it is drawn. @param {string} body @param {number} at
@@ -236,10 +243,14 @@ export async function pageWrites(page, browser) {
   /**
    * The page's first read of itself from `seen.asked[from]` on, asked within 5 s, and whether its
    * answer is drawn within 5 s of the check seeing it asked: the read's own mark (`markNav`, or the
-   * case's mark in a whole page), not a request or a pause, is what shows the poll drew.
-   * @param {import("@playwright/test").Page} own @param {{ asked: string[] }} seen @param {number} from
+   * case's mark in a whole page), not a request or a pause, is what shows the poll drew. `from` is
+   * taken at what the read follows (a write's `settled` place, or before a failure is let happen),
+   * not once the check has seen that in the page, by when the read may already have been asked;
+   * without one (the write never answered) there is no such read.
+   * @param {import("@playwright/test").Page} own @param {{ asked: string[] }} seen @param {number | undefined} from
    */
   const nextPollDrawn = async (own, seen, from) => {
+    if (from === undefined) return { again: null, drewAgain: false };
     const at = await readAsked(seen, from, 5000);
     return { again: at === null ? null : seen.asked[at], drewAgain: at !== null && (await markDrawn(own, at, 5000)) };
   };
@@ -449,6 +460,33 @@ export async function pageWrites(page, browser) {
     );
     await own.context().close();
   }
+  /**
+   * Follows the link to /smoke/quoted, found and pressed in one page task, and whether that page
+   * came in within 5 s counted from just before the press: the press task and the wait share those
+   * 5 s (`pressWrite`). A page that reads itself again swaps <main> every second, so a Playwright
+   * click can find the link, then land once it is gone, and the page never leaves (#2035).
+   * @param {import("@playwright/test").Page} own
+   */
+  const toQuoted = async (own) => {
+    const press = steps(5000, "/smoke/quoted did not come in within 5 s of the press");
+    return press
+      .step(() =>
+        own.evaluate(() => {
+          const link = /** @type {HTMLAnchorElement | null} */ (document.querySelector('main a[href="/smoke/quoted"]'));
+          link?.click();
+          return !!link;
+        }),
+      )
+      .then(
+        (pressed) =>
+          pressed &&
+          press.poll(() => own.evaluate(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"))),
+      )
+      .then(
+        (came) => came === true,
+        () => false,
+      );
+  };
   // A write the server applied whose answer the network lost: the page shows the failure in its
   // layout (as a toaster there does), for the user to send again. The page reading itself again
   // (`ReadAgain`) reads <main> alone and keeps the failure shown, where a whole page, whose header
@@ -469,6 +507,8 @@ export async function pageWrites(page, browser) {
       await watchMarks(own);
       // The page says the write failed in its header, as a toaster in the layout shows it.
       await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
+      // The write the page's next read of itself follows: the failed one, or the legacy one after it.
+      let follows = seen.writes + 1;
       const sent = await pressWrite(own, seen, "main form button");
       const failed =
         sent &&
@@ -486,23 +526,16 @@ export async function pageWrites(page, browser) {
         // Sent within 5 s from just before the press, then its <main> drawn within 5 s of the
         // check seeing it sent.
         await watchWritten(own);
+        follows = seen.writes + 1;
         legacySent = await pressWrite(own, seen, "main form button");
         legacyDrew = legacySent && (await writtenSeen(own)) && "corten-page" in seen.answered;
       }
-      // The page's next read of itself drawn (`nextPollDrawn`), and the failure still shown 500 ms
-      // after that draw.
-      const { again, drewAgain } = await nextPollDrawn(own, seen, seen.asked.length);
+      // The page's first read of itself after the stand-in failed or answered that write, drawn
+      // (`nextPollDrawn`), and the failure still shown 500 ms after that draw.
+      const { again, drewAgain } = await nextPollDrawn(own, seen, seen.settled[follows]);
       if (drewAgain) await own.waitForTimeout(500);
       const kept = drewAgain && (await own.evaluate(() => !!document.querySelector("header[data-failed]") && location.pathname === "/smoke/written/again"));
-      await own.click('main a[href="/smoke/quoted"]');
-      const arrived = await own
-        .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
-          timeout: 5000,
-        })
-        .then(
-          () => true,
-          () => false,
-        );
+      const arrived = await toQuoted(own);
       const shown = await shownOf(own);
       check(
         failedName,
@@ -513,18 +546,6 @@ export async function pageWrites(page, browser) {
       await own.context().close();
     }
   }
-  /** Follows the link to /smoke/quoted, and whether that page came in. @param {import("@playwright/test").Page} own */
-  const toQuoted = async (own) => {
-    await own.click('main a[href="/smoke/quoted"]');
-    return own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
-        timeout: 5000,
-      })
-      .then(
-        () => true,
-        () => false,
-      );
-  };
   /** Whether the brand comes to read `text`. @param {import("@playwright/test").Page} own @param {string} text */
   const brandBecomes = (own, text) =>
     own
@@ -651,10 +672,18 @@ export async function pageWrites(page, browser) {
             /** @template T @param {() => Promise<T>} body */
             const held = (body) => new Promise((resolve, reject) => {
               // Noted here alone: the write's headers came and its body was asked for, then cut (or,
-              // complete, given), so a write that failed before its headers is not taken for it.
+              // complete, given in full), so a write that failed before its headers is not taken for
+              // it. Letting go does not wait for the body: a body that never comes leaves no note.
               const release = () => {
-                state.__bodyAfterHeaders = complete ? "completed" : "cut";
-                return complete ? body().then(resolve, reject) : reject(new TypeError("network error"));
+                if (!complete) {
+                  state.__bodyAfterHeaders = "cut";
+                  reject(new TypeError("network error"));
+                  return;
+                }
+                body().then((value) => {
+                  state.__bodyAfterHeaders = "completed";
+                  resolve(value);
+                }, reject);
               };
               if (overlap) state.__releaseBody = release;
               else release();
@@ -670,10 +699,16 @@ export async function pageWrites(page, browser) {
           return res;
         };
       }, { overlap, status, complete });
+      // The write whose body is cut (or given): the page's next read of itself follows its answer, or,
+      // with a second write, the body's release, before which it cannot fail.
+      const first = seen.writes + 1;
       let sent = await pressWrite(own, seen, overlap ? "#held-write button" : "main form button");
       // With a second write, the first's body is asked for within 5 s of its press being seen sent.
       let bodyAsked = !overlap;
       let drewOver = true;
+      let released = !overlap;
+      /** @type {number | undefined} */
+      let releasedAt;
       if (overlap && sent) {
         bodyAsked = await own.waitForFunction(() => typeof (/** @type {any} */ (window)).__releaseBody === "function", null, { timeout: 5000 }).then(
           () => true,
@@ -684,27 +719,45 @@ export async function pageWrites(page, browser) {
           seen.status = 0;
           sent = await pressWrite(own, seen, "main form button");
           drewOver = sent && (await brandBecomes(own, "Watchlist, written"));
-          await own.evaluate(() => (/** @type {any} */ (window)).__releaseBody());
+          // Let go in a page task that does not wait for the body, bounded: whether the body came
+          // and the failure it brings are what the bounded wait below checks.
+          releasedAt = seen.asked.length;
+          released = await within(
+            5000,
+            "the body was not let go within 5 s",
+            own.evaluate(() => {
+              (/** @type {any} */ (window)).__releaseBody();
+            }),
+          ).then(
+            () => true,
+            () => false,
+          );
         }
       }
+      // The body cut (or given in full) and the failure shown for it, both within 5 s.
       const failed = await own
-        .waitForFunction((status) => document.querySelector("header")?.getAttribute("data-failed") === String(status) && !document.querySelector("[aria-busy]"), complete ? 503 : 0, { timeout: 5000 })
+        .waitForFunction(
+          ({ status, note }) =>
+            (/** @type {any} */ (window)).__bodyAfterHeaders === note && document.querySelector("header")?.getAttribute("data-failed") === String(status) && !document.querySelector("[aria-busy]"),
+          { status: complete ? 503 : 0, note: complete ? "completed" : "cut" },
+          { timeout: 5000 },
+        )
         .then(
           () => true,
           () => false,
         );
       const afterHeaders = await own.evaluate(() => /** @type {string | undefined} */ ((/** @type {any} */ (window)).__bodyAfterHeaders) ?? null);
-      const { again, drewAgain } = await nextPollDrawn(own, seen, seen.asked.length);
+      const { again, drewAgain } = await nextPollDrawn(own, seen, overlap ? releasedAt : seen.settled[first]);
       if (drewAgain) await own.waitForTimeout(500);
       const kept = drewAgain && (await own.evaluate(() => !!document.querySelector("header[data-failed]")));
       const arrived = await toQuoted(own);
       const shown = await shownOf(own);
       check(
         cutBodyName,
-        sent && bodyAsked && drewOver && failed && afterHeaders === (complete ? "completed" : "cut") && seen.answers === (overlap ? 2 : 1) &&
+        sent && bodyAsked && drewOver && released && failed && afterHeaders === (complete ? "completed" : "cut") && seen.answers === (overlap ? 2 : 1) &&
           again === "GET /smoke/written/again nav" && drewAgain && kept && arrived && shown.brand === (overlap ? "Poll brand" : "Watchlist, written") &&
           seen.asked.includes("GET /smoke/quoted page"),
-        JSON.stringify({ sent, bodyAsked, drewOver, failed, afterHeaders, answers: seen.answers, again, drewAgain, kept, arrived, asked: seen.asked, shown }),
+        JSON.stringify({ sent, bodyAsked, drewOver, released, failed, afterHeaders, answers: seen.answers, again, drewAgain, kept, arrived, asked: seen.asked, shown }),
       );
     } finally {
       await own.context().close();
@@ -729,13 +782,16 @@ export async function pageWrites(page, browser) {
     try {
       seen.nav = markNav;
       await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
-      await watchWritten(own);
+      await watchWritten(own, "Count 1");
       await watchMarks(own);
+      const firstWrite = seen.writes + 1;
       const sentFirst = await pressWrite(own, seen, "main form button");
-      const drew = sentFirst && (await writtenDrawn(own, "Count 1"));
-      // Read whole while it reads itself again: the read is asked within 5 s, and its answer drawn
-      // within 5 s of the check seeing it asked, before the second write is clicked.
-      const wholeAt = await readAsked(seen, seen.asked.length, 5000);
+      const drew = sentFirst && (await writtenSeen(own));
+      // Read whole while it reads itself again: the page's first read of itself after the stand-in
+      // answered the write is asked within 5 s, and its answer drawn within 5 s of the check seeing
+      // it asked, before the second write is clicked.
+      const firstSettled = seen.settled[firstWrite];
+      const wholeAt = firstSettled === undefined ? null : await readAsked(seen, firstSettled, 5000);
       const wholeBefore = wholeAt === null ? null : seen.asked[wholeAt];
       const wholeDrawn = wholeAt !== null && (await markDrawn(own, wholeAt, 5000));
       seen.fail = true;
@@ -747,8 +803,11 @@ export async function pageWrites(page, browser) {
       // within 5 s of the click returning.
       let sentSecond = false;
       let failed = false;
+      /** @type {number | undefined} */
+      let secondWrite;
       if (wholeDrawn) {
         const writesBefore = seen.writes;
+        secondWrite = writesBefore + 1;
         const clicked = await own.click("main form button", { timeout: 5000 }).then(
           () => true,
           () => false,
@@ -763,7 +822,8 @@ export async function pageWrites(page, browser) {
               () => false,
             ));
       }
-      const { again, drewAgain } = await nextPollDrawn(own, seen, seen.asked.length);
+      // The page's first read of itself after the stand-in failed the second write.
+      const { again, drewAgain } = await nextPollDrawn(own, seen, secondWrite === undefined ? undefined : seen.settled[secondWrite]);
       if (drewAgain) await own.waitForTimeout(500);
       const kept = drewAgain && (await own.evaluate(() => !!document.querySelector("header[data-failed]") && document.querySelector("header span")?.textContent === "Count 1"));
       const arrived = await toQuoted(own);
@@ -819,13 +879,13 @@ export async function pageWrites(page, browser) {
         await route.fulfill({ contentType: "text/css", body: "" }).catch(() => {});
       });
       await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
-      await watchWritten(own);
+      await watchWritten(own, "Watchlist, written");
       await watchMarks(own);
       // The whole poll that reads the page a second after the write's page is drawn asks for the
       // stylesheet, within 5 s from just before the press.
       const asset = own.waitForRequest("**/assets/smoke-held-poll.css", { timeout: 5000 }).then(() => true, () => false);
       got.sent = await pressWrite(own, seen, "main form button");
-      got.drew = got.sent && (await writtenDrawn(own, "Watchlist, written"));
+      got.drew = got.sent && (await writtenSeen(own));
       got.waiting = await asset;
       if (got.drew && got.waiting) {
         seen.fail = true;

@@ -42,12 +42,21 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       };
       const url = await pending();
       // The page's own tag, as the server drew it, so the check below can tell it from the one an
-      // answer put in its place.
-      await page.addInitScript(() =>
+      // answer put in its place. And the first answer whose status line the page draws as `Saved.`,
+      // noted the moment it is drawn (its `data-smoke-read`, below), so a later answer that draws
+      // `Saved.` again before the check looks is not taken for it.
+      await page.addInitScript(() => {
         document.addEventListener("DOMContentLoaded", () => {
           (/** @type {any} */ (window)).__pageTag = document.querySelector("main template[data-corten-read-again][data-from]");
-        }),
-      );
+        });
+        if (location.pathname !== "/alerts") return;
+        new MutationObserver((_, observer) => {
+          const status = document.getElementById("alert-status");
+          if (status?.textContent !== "Saved." || !status.hasAttribute("data-smoke-read")) return;
+          (/** @type {any} */ (window)).__firstSaved = status.getAttribute("data-smoke-read");
+          observer.disconnect();
+        }).observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-smoke-read"] });
+      });
       // The write lands 1.5 s after it is sent and the part is first read 1 s after the page has
       // loaded, so a loaded browser's first read can find it landed, and then no answer asks again
       // (#2035). The first read is then answered as the server answers one while the write lands:
@@ -80,14 +89,18 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       };
       // The route and the listener on the shared page are removed however the case ends.
       try {
-        await page.route(partReads, partRead);
         try {
+          // Inside the guard: Playwright registers the handler before it awaits the browser's setup.
+          await page.route(partReads, partRead);
           await page.goto(url);
           page.on("request", onPart);
           const waiting = await saved();
           await page.fill("input[name=above]", "123.45");
           await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 8));
           const entries = await page.evaluate(() => history.length);
+          // The check that the part stops needs `Saved.` drawn within 5 s from here, the wait below
+          // included.
+          const savedBy = performance.now() + 5000;
           await savedSoon();
           check(
             "a page's part waiting for a write is read again after a full load, not the page",
@@ -117,16 +130,16 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             answers.some((a) => a.asks) && tags.length === 1 && tags[0] === parts.at(-1) && tagged.pageTag && tagged.pageTagGone,
             `${JSON.stringify({ ...tagged, answers })} after ${parts.at(-1)}`,
           );
-          // Quiet only once an answer that does not ask again has drawn `Saved.`, within 5 s: reads
-          // that stopped after an answer that asked again are not a part that stopped. Quiet is counted
-          // from that answer's read, not from when the check saw it drawn: no part read may come after
-          // that read's ordinal, by the end of the 2.2 s (a read sent between the draw and the check
-          // seeing it counts against it), nor any other part read in those 2.2 s.
-          const drawn = await pollFor(5000, () =>
-            page.evaluate(() => {
-              const status = document.getElementById("alert-status");
-              return status?.textContent === "Saved." ? (status.getAttribute("data-smoke-read") ?? undefined) : undefined;
-            }),
+          // Quiet only once an answer that does not ask again has drawn `Saved.`, within 5 s from
+          // before the wait for it above: reads that stopped after an answer that asked again are not
+          // a part that stopped. The answer is the first to draw `Saved.`, noted as it was drawn, not
+          // the one drawn when the check looks (a later read that draws `Saved.` again would hide the
+          // read before it). Quiet is counted from that answer's read, not from when the check saw it
+          // drawn: no part read may come after that read's ordinal, by the end of the 2.2 s (a read
+          // sent between the draw and the check seeing it counts against it), nor any other part read
+          // in those 2.2 s.
+          const drawn = await pollFor(Math.max(0, savedBy - performance.now()), () =>
+            page.evaluate(() => /** @type {string | undefined} */ ((/** @type {any} */ (window)).__firstSaved) ?? undefined),
           );
           const last = drawn === null ? null : (answers[Number(drawn)] ?? null);
           const quiet = !!last && !last.asks;
@@ -137,8 +150,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             "a page's part stops once its patch no longer asks",
             quiet && later === 0 && parts.length === settled,
             quiet
-              ? `${later} reads after the read whose answer drew Saved. (${drawn}), ${parts.length - settled} more reads in the 2.2 s`
-              : `no answer that does not ask again drew Saved. within 5 s (${JSON.stringify({ drawn, answers })})`,
+              ? `${later} reads after the read whose answer first drew Saved. (${drawn}), ${parts.length - settled} more reads in the 2.2 s`
+              : `no answer that does not ask again was the first to draw Saved., within 5 s (${JSON.stringify({ drawn, answers })})`,
           );
         } finally {
           await page.unroute(partReads, partRead);
