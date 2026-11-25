@@ -10456,7 +10456,78 @@ rules something out.
     out;
     2026-11-25, the runtime's size from `npm run build:js` on `babd52d28` and with this change.
 
-75. <a id="choice-data-address"></a>**A GET `data-patch` form marked `data-address` puts the address it asked for in
+75. <a id="choice-allowed-origin-schemes"></a>**An allowed origin is an `http` or `https` origin
+    as RFC 6454 writes it, or another scheme's `scheme://host[:port]` as its webview or extension
+    sends it.** `Policy::allow_origin` and `Api::allow_origin` read their setting with one parser
+    and keep it as a browser writes `Origin`, which a request's is then compared with as it is.
+    For `http` and `https` that is RFC 6454 section 6.1 and the URL Standard's serializer: the
+    scheme and name lowercased, an address in its standard form, the default port left out.
+    Another scheme has no such form: the URL Standard gives a URL whose scheme it does not know an
+    opaque origin, written `null`. Yet the pages of an app's webview and of a browser extension
+    send their own scheme in `Origin`: `capacitor://localhost` from Capacitor on iOS, which may not
+    serve its pages as `https`, `tauri://localhost` from Tauri on macOS, Linux and iOS,
+    `chrome-extension://<id>` and `moz-extension://<uuid>` from extensions (Firefox's UUID is
+    random per browser instance, so one entry names one install of a Firefox extension, not the
+    extension for every user). So a scheme RFC 3986 allows (a letter, then letters, digits, `+`,
+    `-` and `.`) is kept as `scheme://host[:port]`, lowercased, with any port written, since no
+    default is known for it. The schemes no `Origin` carries refuse to start, naming the scheme
+    and why: a `data:` page sends `null`, and so does a browser's `file:` page, while Electron,
+    which can send `file://` from one, sends it for every local file, so it names no one app (an
+    Electron app that needs an origin registers a standard scheme); a `blob:`, `javascript:` or
+    `about:` document has the origin of the page that made it; and no page is served from `ws`,
+    `wss` or `ftp` (a WebSocket request carries its page's origin), so an entry for one could
+    only be a mistake.
+    For every scheme a user, a path beyond one trailing `/`, a query, a fragment, `*`, a list, an
+    empty host and `null` refuse to start, and a name is ASCII letters, digits, `-`, `_` and `.`:
+    a browser sends a Unicode name in its `xn--` form, and `_` as it is.
+
+    `Policy` takes them too, though there an allowed origin's writes carry the user's cookies: a
+    Capacitor or Tauri app whose pages sign in to the server is the case it serves. The grant is
+    one exact origin the app names, the same an `https` partner gets, and a page cannot send
+    another page's `Origin`, so it reaches only pages served under that origin. A default such as
+    `capacitor://localhost` is every Capacitor app's on iOS; another app sending it holds none of
+    this app's cookies, but an app that wants its own origin sets its own name (Capacitor's
+    `server.hostname`), and an `Api` that needs to tell callers apart does it by their token.
+
+    Not chosen: refusing every scheme but `http` and `https`, which refuses at startup the
+    webview and extension clients an `Api` served before; matching `null`, which every sandboxed
+    frame and a browser's `file:` page sends; keeping `ftp`, `ws` and `wss` as the tuple origins
+    the URL Standard gives them, which no `Origin` ever equals, so the entry is dead and hides a
+    mistyped page origin; and a scheme's own rules (a default port, a host form), which nothing
+    standard gives for these.
+
+    Stands on: platform (Capacitor on iOS serves its pages from `capacitor://localhost` by default,
+    with its configured `server.hostname` in place of `localhost`; Tauri serves them from
+    `tauri://localhost` on macOS, Linux and iOS; Chromium sends `chrome-extension://<id>` on an
+    extension's `POST`; Firefox sends `moz-extension://<uuid>` on an extension's `fetch`, an
+    open privacy bug (Mozilla bug 1405971) whose changes, first omitting `Origin` and then sending
+    `null`, were backed out for breaking CORS, and Firefox 85's `null` from an extension with
+    host permission was a regression fixed for `fetch` in 86 and wholly in 87 (Mozilla bug
+    1685570); MDN says that UUID is generated for every browser instance; Electron sent
+    `Origin: file://` on an XHR from a page loaded from a file (electron/electron issue 6859,
+    2016) and `null` on a `fetch` `POST` (electron/electron issue 7931, 2016), so it may send
+    either; the URL Standard's origin of an unknown scheme is opaque and serializes as `null`, of
+    a `blob:` URL its inner URL's, and of `ws`, `wss` and `ftp` a tuple; RFC 6454 section 6.1
+    writes `http` and `https` origins); bet (a webview's cookies are its own app's, since each
+    app's storage is its own on iOS and Android, so another app sharing the default origin holds
+    none of this app's sessions; not probed here); reasoned (a non-browser client can send any
+    `Origin`, but one that sends none already passes the write check, so allowing an origin
+    grants it nothing more); value (the platform's `Origin` is read as browsers send it, not
+    replaced, Values 2; a mistyped setting is a startup error, not a 403 on every write, Values
+    1).
+
+    Revisit when: Capacitor, Tauri or a browser's extensions start sending `null` or an `https`
+    origin in place of their own scheme, the URL Standard gives these schemes a tuple origin, or an
+    app needs an allowed origin this form refuses.
+
+    Last checked: 2026-11-25, Ionic's CORS guide, Capacitor's configuration reference
+    (`server.hostname`, `iosScheme`), Tauri 2's webview reference, a chromium-extensions thread on
+    a background `POST`'s `Origin`, the URL Standard's origin section (updated 19 November
+    2026), RFC 6454, Mozilla bugs 1405971 (open, last updated November 2026) and 1685570 (fixed
+    for `fetch` in 86 and wholly in 87), electron/electron issues 6859 and 7931 and MDN's
+    `web_accessible_resources` page, read at `49b6e79eb`.
+
+76. <a id="choice-data-address"></a>**A GET `data-patch` form marked `data-address` puts the address it asked for in
     place of the history entry's as its patch is drawn.** A filter or scope that redraws one part
     of a screen with a GET `data-patch` form left the address as it was: a reload and a bookmark
     lost the filter, the page's other forms still carried the old one, and the same form without
@@ -10571,7 +10642,7 @@ rules something out.
     appends, which the guide only asks today; or `replaceState` stops keeping the entry's key or
     stops aborting a navigation under way in one of the engines.
 
-    Last checked: 2026-11-25, the runtime's size with this change merged with main `1155bfdf8` against
+    Last checked: 2026-11-25, the runtime's size with this change merged with main `9e209a32f` against
     that main, and the page's and the patch's bodies on `6ca02c26e`; 2026-11-25, the watchlist smoke on the same
     server in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2, every `data-address`
     check passing in each.
