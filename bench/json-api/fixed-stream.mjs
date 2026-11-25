@@ -9,7 +9,8 @@ import { isDeepStrictEqual } from "node:util";
 export const streamLimits = Object.freeze({ bytes: 512 * 2 ** 20, lineBytes: 64 * 2 ** 10, events: 2_000_000, metrics: 128, chunkBytes: 64 * 2 ** 10 });
 export const prototypeSchema = "json-api-fixed-prototype/v1";
 const object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
-const sameKeys = (value, keys) => assert.ok(Object.keys(value).sort().join(",") === [...keys].sort().join(","), "event fields differ");
+const sameKeys = (value, keys) => assert.ok(Object.keys(value).length === keys.length
+  && keys.every((key) => Object.hasOwn(value, key)), "event fields differ");
 
 // Parse the exact RFC3339 nanoseconds without passing them through a JS Date double.
 export function timestampNs(value) {

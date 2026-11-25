@@ -52,6 +52,17 @@ test("successor review F2: timed replay binds complete stderr bytes", async (t) 
   assert.throws(() => deriveTimedObservation(raw, "fixed", { duration: 1, warmup: 1, rate: 3 }, { stream }), /stderr.*bytes/);
 });
 
+test("raw stream field names cannot stand in for two required fields", (t) => {
+  const file = join(directory(t), "events.jsonl"), f = fixedFixture();
+  writeFileSync(file, f.bytes());
+  assert.equal(readFixedStreamSync(file).receipt.events, f.entries.length);
+  const metric = f.entries.find((entry) => entry.type === "Metric");
+  const { submetrics, thresholds, ...fields } = metric.data;
+  metric.data = { ...fields, "submetrics,thresholds": [submetrics, thresholds] };
+  writeFileSync(file, f.bytes());
+  assert.throws(() => readFixedStreamSync(file), { message: "event fields differ" });
+});
+
 test("successor review F1: fixed percentiles independently match all raw samples", async (t) => {
   const { folder, f } = await portable(t), stream = await readFixedStream(join(folder, "events.jsonl"));
   for (const name of ["p(50)", "p(95)", "p(99)"]) f.summary.metrics.http_req_duration[name] = 0;
