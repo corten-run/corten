@@ -158,7 +158,8 @@ export function hostDurableWriter(directory) {
       assert.equal(finalizing, false); finalizing = true; closing = true;
       if (!error) tail = tail.then(() => timed(async () => {
         operation = "sample-sync"; healthy(); await guardFile(file, join(directory, "samples.jsonl"));
-        await file.sync(); healthy(); await close(file);
+        await file.sync(); healthy();
+        operation = "sample-close"; await close(file);
         operation = "sample-directory-sync"; await syncDirectory(directory); healthy();
         operation = "process-record-verify";
         for (const [key, expected] of records) {

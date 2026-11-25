@@ -99,7 +99,7 @@ export function createCampaign({ authorize }) {
     }
     if (expiry) event(c, "offline-audit-expired", expiry);
     else {
-      const storage = hostStorageFailure(error);
+      const storage = c.startupStorageFailure ?? hostStorageFailure(error);
       event(c, "halted", { error: error.message, ...(storage ? { hostStorageFailure: storage } : {}) });
     }
     save(c, "campaign-result.json", { status: status(c), wholeHostTerminal: "parent-must-observe", deletionAuthorized: false });
@@ -118,7 +118,7 @@ export function createCampaign({ authorize }) {
     const observerStop = new AbortController();
     const commandSignal = signal ? AbortSignal.any([signal, observerStop.signal]) : observerStop.signal;
     const number = c.commandIndex++, path = `${directory}/command-${number}.log`, fd = openSync(join(c.directory, path), "wx", 0o600);
-    let result, observer, hostManifestSha256, pid;
+    let result, observer, hostManifestSha256, pid, startupStorageFailure;
     try {
       event(c, "command-intent", { group: binding.request.group, invocation });
       if (compilerTarget) compilerTarget.settled = false;
@@ -136,6 +136,9 @@ export function createCampaign({ authorize }) {
             await observer.attach(pid);
             startupSignal.throwIfAborted();
           } catch (error) {
+            // Supervision keeps its generic setup error; retain only the writer's
+            // separately branded diagnostic for the failed campaign.
+            startupStorageFailure = hostStorageFailure(error);
             observer?.dispose(); observer = undefined; throw error;
           }
         },
@@ -149,6 +152,8 @@ export function createCampaign({ authorize }) {
         path: `${directory}/command-${number}-host/${file.path}`, sha256: file.sha256 });
     } else if (result.terminal) settled?.(); // The gate never admitted this child.
     event(c, "command-exited", { ...result, ...(hostManifestSha256 ? { hostManifestSha256 } : {}) });
+    // A failed setup has no host manifest and cannot pass the proof gates below.
+    if (startupStorageFailure) c.startupStorageFailure = startupStorageFailure;
     assert.equal(result.terminal, true, "native process is not observed terminal");
     const lifetime = hostManifestSha256 ? inspectLifetime(binding, invocation,
       join(c.directory, directory, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result }) : null;

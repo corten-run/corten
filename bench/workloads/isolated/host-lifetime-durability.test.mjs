@@ -304,6 +304,30 @@ test("timeout rejects proof but owns an unfinished fsync until its actual comple
   assert.deepEqual(f.writer.state().error, { operation: "process-record-sync", code: "ETIMEDOUT" });
 });
 
+test("final sample close timeout identifies close and keeps the fd owned until it settles", { timeout: 5000 }, async (t) => {
+  const f = await storageControl(t);
+  f.writer.enqueue([], "complete sample\n"); await f.writer.drain();
+  const pause = f.pause("close", isSamples);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const finish = f.writer.finish();
+  const failure = assert.rejects(finish, { operation: "sample-close", code: "ETIMEDOUT" });
+  failure.catch(() => {}); // Join the rejection after the held operation is observed.
+  try {
+    await pause.entered;
+    assert.ok(f.trace.some(({ name, phase, path }) => name === "sync" && phase === "end" && isSamples(path)));
+    t.mock.timers.tick(30000);
+    await failure;
+    assert.equal(f.writer.state().pendingOwnership, true);
+    assert.equal(f.writer.state().openFiles, 1);
+    assert.equal(f.live.size, 1);
+  } finally {
+    pause.release(); await f.writer.settled;
+  }
+  assert.equal(f.live.size, 0);
+  assert.equal(f.writer.state().complete, false);
+  assert.deepEqual(f.writer.state().error, { operation: "sample-close", code: "ETIMEDOUT" });
+});
+
 test("startup timeout retains ownership before an outstanding open returns a FileHandle", async (t) => {
   const f = await storageControl(t); f.writer.abort(); await f.writer.settled;
   f.directory = join(f.temporary, "startup"); fs.mkdirSync(f.directory); fs.mkdirSync(join(f.directory, "processes"));

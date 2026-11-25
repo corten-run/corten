@@ -162,7 +162,10 @@ mock.module("./host-lifetime.mjs", { exports: {
     if (!startup) return observer;
     assert.ok(startupSignal instanceof AbortSignal);
     startup.signal = startupSignal; startup.directory = directory; startup.enter();
-    return startup.gate.then(() => { if (startup.failure) throw new Error("PRIVATE_SETUP_FAILURE"); return observer; });
+    return startup.gate.then(() => {
+      if (startup.failure) throw Object.assign(new Error("PRIVATE_SETUP_FAILURE"), { operation: "sample-open", code: "EIO" });
+      return observer;
+    });
   },
   inspectLifetime(binding, invocation, directory, expected) {
     if (lifetimeRun) return actualLifetime.inspectLifetime(binding, invocation, directory, expected);
@@ -718,6 +721,50 @@ for (const [fault, shutdown = "drained"] of [
   }
 });
 
+test("actual campaign startup storage fault preserves only the writer diagnostic after owned shutdown", { timeout: 15000 }, async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  const s = setupGroup("client-heavy"); s.plan.round = "r21";
+  const h = await begin(s), parent = new AbortController();
+  t.mock.method(globalThis, "setInterval", () => null);
+  const f = await samplingControl(t);
+  f.before = (step) => step === "sync" ? null : undefined;
+  await f.finish(); f.removed = false;
+  const run = lifetimeRun = { started: false, cancels: 0 };
+  const cancelled = new Promise((resolve) => { run.cancel = resolve; });
+  run.start = () => run.child.close(0);
+  let openFaults = 0, settled = false;
+  const directory = join(h.directory, "00-client-heavy-timing"), host = join(directory, "command-0-host");
+  f.before = (step, path) => {
+    if (step === "open" && path === join(host, "samples.jsonl")) { openFaults++; throw ioError(); }
+  };
+  const advancing = s.campaign.advance(h, { signal: parent.signal }).then(
+    () => { settled = true; }, (error) => { settled = true; return error; });
+  try {
+    await Promise.race([cancelled, advancing.then(() => { throw new Error("startup did not request owned cancellation"); })]);
+    assert.equal(openFaults, 1); assert.equal(run.started, false); assert.equal(run.cancels, 1);
+    assert.equal(parent.signal.aborted, false); assert.equal(settled, false);
+    assert.throws(() => s.campaign.stop(h), /wait for owned command shutdown/);
+    run.child.close(0);
+    assert.match((await advancing)?.message, /lifetime or cleanup unproven/);
+    const files = readdirSync(h.directory);
+    const exited = JSON.parse(readFileSync(join(h.directory, files.find((name) => name.endsWith("-command-exited.json")))));
+    assert.equal(exited.error, "native host observation setup failed");
+    assert.equal(exited.cancelled, true); assert.equal(exited.success, false);
+    assert.equal(exited.hostManifestSha256, undefined);
+    const halted = readFileSync(join(h.directory, files.find((name) => name.endsWith("-halted.json"))), "utf8");
+    assert.deepEqual(JSON.parse(halted).hostStorageFailure, { operation: "sample-open", code: "EIO" });
+    assert.ok(!halted.includes("PRIVATE_STORAGE_DETAIL"));
+    assert.equal(existsSync(join(host, "terminal.json")), false);
+    assert.equal(existsSync(join(root, ".host-attempt.json")), true);
+    assert.equal(s.campaign.status(h).uncollectedNativeRoots.length, 1);
+    await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, 1);
+  } finally {
+    if (!settled) run.child?.close(0);
+    await advancing;
+    lifetimeRun = null;
+  }
+});
+
 test("actual campaign attachment gap cancels before native start or interval creation", { timeout: 15000 }, async (t) => {
   t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
   const s = setupGroup("client-heavy"); s.plan.round = "r21";
@@ -772,6 +819,10 @@ for (const stop of ["cancel", "close"]) for (const failure of [false, true]) tes
     release(); await rejected;
     assert.equal(owner.attached, 0); assert.equal(owner.disposed, failure ? 0 : 1);
     assert.equal(existsSync(join(owner.directory, "terminal.json")), false);
+    const halted = readdirSync(h.directory).find((name) => name.endsWith("-halted.json"));
+    const saved = readFileSync(join(h.directory, halted), "utf8");
+    assert.equal(JSON.parse(saved).hostStorageFailure, undefined);
+    assert.ok(!saved.includes("PRIVATE_SETUP_FAILURE"));
     const status = s.campaign.status(h);
     assert.equal(status.state, "preserved-uncertain"); assert.equal(status.uncollectedNativeRoots.length, 1);
     assert.equal(calls.length, 1);

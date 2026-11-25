@@ -229,14 +229,15 @@ A timeout cannot cancel an uninterruptible filesystem operation. Its FIFO retain
 ownership until the operation returns and cleanup is attempted; partial files and
 an unproven scope remain retained, with no terminal seal or cleanup claim. Neither
 an empty cgroup nor an eventual successful fsync clears a prior storage failure.
-When a FIFO storage error reaches the campaign halt, the `halted` event also
-keeps `hostStorageFailure`: the first writer operation, its allowlisted code
-(or `unknown`), and, only for a quota refusal, the first exceeded limit
+`halted` events retain `hostStorageFailure` for known FIFO faults, including
+during startup: the first writer operation, its allowlisted code (or
+`unknown`), and, only for a quota refusal, the first exceeded limit
 (`total-bytes`, `queued-bytes`, `queued-frames` or `queued-records`).
-A timed-out wait identifies the active writer stage if one is known. These
-labels do not contain exception text, paths or process details. A frame limit
-reports a full queue, not why the writer fell behind. No terminal seal is
-published on this path.
+A timed-out wait identifies the active writer stage if one is known,
+distinguishing the final sample fsync from closing its descriptor. These labels
+do not contain exception text, paths or process details. A frame limit reports
+a full queue, not why the writer fell behind. No terminal seal is published on
+this path.
 
 Fully observed and flushed cancelled/forced evidence retains the old contract:
 it can be collected as explicitly nonqualifying evidence, never a clean success.
