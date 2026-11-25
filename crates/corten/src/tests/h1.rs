@@ -185,7 +185,8 @@ async fn an_answer_is_hypers_byte_for_byte() {
     let own = Served::start(App::new(routes()), true).await;
     let get = |path: &str| format!("GET {path} HTTP/1.1\r\n{HOST}\r\n");
     let head = |path: &str| format!("HEAD {path} HTTP/1.1\r\n{HOST}\r\n");
-    let chunked = format!("POST /read HTTP/1.1\r\n{HOST}transfer-encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n");
+    let chunked =
+        format!("POST /read HTTP/1.1\r\n{HOST}transfer-encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n");
     let cases: Vec<(&str, String, bool)> = vec![
         ("text", get("/"), false),
         ("json", get("/json"), false),
@@ -201,7 +202,11 @@ async fn an_answer_is_hypers_byte_for_byte() {
         ("405", format!("DELETE / HTTP/1.1\r\n{HOST}\r\n"), false),
         ("a body read", format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello"), false),
         ("a body left", format!("POST /unread HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello"), false),
-        ("a body behind answers", get("/") + &get("/json") + &format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello"), false),
+        (
+            "a body behind answers",
+            get("/") + &get("/json") + &format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello"),
+            false,
+        ),
         ("a chunked body read", chunked, false),
         ("an interim status for an answer", get("/interim"), true),
         ("the handler closes", get("/close"), true),
@@ -211,7 +216,11 @@ async fn an_answer_is_hypers_byte_for_byte() {
         ("HTTP/1.0, a streamed body", "GET /stream HTTP/1.0\r\nconnection: keep-alive\r\n\r\n".into(), true),
         ("HTTP/1.0, HEAD", "HEAD / HTTP/1.0\r\n\r\n".into(), true),
         ("HTTP/1.0, 204", "GET /none HTTP/1.0\r\n\r\n".into(), true),
-        ("a head refused after HTTP/1.0", "GET / HTTP/1.0\r\nconnection: keep-alive\r\n\r\nGET / HTTP/1.1\r\nx : 1\r\n\r\n".into(), true),
+        (
+            "a head refused after HTTP/1.0",
+            "GET / HTTP/1.0\r\nconnection: keep-alive\r\n\r\nGET / HTTP/1.1\r\nx : 1\r\n\r\n".into(),
+            true,
+        ),
         ("the asterisk form", format!("OPTIONS * HTTP/1.1\r\n{HOST}\r\n"), false),
         ("the absolute form", format!("GET http://localhost/json HTTP/1.1\r\n{HOST}\r\n"), false),
         ("empty lines before a request", format!("\r\n\r\n{GET}"), false),
@@ -340,12 +349,18 @@ async fn a_head_over_a_limit_is_refused_as_hyper_refuses_it() {
         let served = Served::start(App::new(routes()).max_request_head(256 * 1024), own).await;
         got.push(served.closed(format!("GET /{} HTTP/1.1\r\n{HOST}\r\n", "x".repeat(70_000))).await);
         assert_eq!(statuses(&got[5]), [414], "own: {own}, a target of 70,000 bytes: {}", got[5]);
-        got.push(served.closed(format!("GET / HTTP/1.1\r\n{HOST}connection: close\r\ncookie: c={}\r\n\r\n", "x".repeat(200_000))).await);
+        got.push(
+            served
+                .closed(format!("GET / HTTP/1.1\r\n{HOST}connection: close\r\ncookie: c={}\r\n\r\n", "x".repeat(200_000)))
+                .await,
+        );
         assert_eq!(statuses(&got[6]), [200], "own: {own}, a head of 200,000 bytes under a raised limit");
         served.stop().await;
 
         let served = Served::start(App::new(routes()).max_request_head(300), own).await;
-        got.push(served.closed(format!("GET / HTTP/1.1\r\n{HOST}connection: close\r\ncookie: c={}\r\n\r\n", "x".repeat(200))).await);
+        got.push(
+            served.closed(format!("GET / HTTP/1.1\r\n{HOST}connection: close\r\ncookie: c={}\r\n\r\n", "x".repeat(200))).await,
+        );
         assert_eq!(statuses(&got[7]), [200], "own: {own}, a head under a lowered limit: {}", got[7]);
         got.push(served.closed(format!("GET / HTTP/1.1\r\n{HOST}cookie: c={}\r\n\r\n", "x".repeat(300))).await);
         assert_eq!(statuses(&got[8]), [431], "own: {own}, a head over a lowered limit: {}", got[8]);
@@ -959,6 +974,48 @@ async fn a_request_that_is_hypers_takes_the_rest_of_its_connection() {
         all.push(got.iter().map(|got| dateless(got)).collect::<Vec<_>>());
     }
     assert_eq!(all[1], all[0]);
+}
+
+/// hyper keeps a connection whose handler left a request's body unread only if the rest of that
+/// body had arrived when the answer was written, so where its reads ended decides whether the
+/// requests behind are answered. Corten's own connection reads less at a time than hyper does (a
+/// head no further than the app's limit, a first read of [`crate::h1::FIRST`] bytes), so the bytes
+/// it hands over can end inside a body that came whole in one write. hyper is given them with
+/// what waits in the socket in the same read, and so keeps the connection where it would have
+/// had it read the stream itself.
+#[tokio::test]
+async fn a_body_left_unread_behind_a_head_that_fills_a_read_keeps_its_connection() {
+    // The app's limit on a head when it is lower than a first read, and a first read.
+    for (limit, read) in [(700, 700), (crate::app::REQUEST_HEAD, crate::h1::FIRST)] {
+        let mut all = Vec::new();
+        for own in BOTH {
+            let served = Served::start(App::new(routes()).max_request_head(limit), own).await;
+            let mut got = Vec::new();
+            // The head ends in the read's last bytes, so the body is cut by the read's end.
+            for ends in [read - 3, read - 1, read] {
+                let head = |framing: &str| {
+                    let padded =
+                        |pad: usize| format!("POST /unread HTTP/1.1\r\n{HOST}{framing}\r\nx-pad: {}\r\n\r\n", "p".repeat(pad));
+                    let head = padded(ends - padded(0).len());
+                    assert_eq!(head.len(), ends);
+                    head
+                };
+                let bodies = [("content-length: 5", "hello"), ("transfer-encoding: chunked", "5\r\nhello\r\n0\r\n\r\n")];
+                for (framing, body) in bodies {
+                    let answers = served.closed(format!("{}{body}{GET}{}", head(framing), last())).await;
+                    assert_eq!(
+                        statuses(&answers),
+                        [200, 200, 200],
+                        "own: {own}, limit {limit}, a head of {ends} bytes: {answers}"
+                    );
+                    got.push(dateless(&answers));
+                }
+            }
+            served.stop().await;
+            all.push(got);
+        }
+        assert_eq!(all[1], all[0], "limit {limit}");
+    }
 }
 
 /// `App::header_timeout` holds on both connections: a head the client does not finish, and a

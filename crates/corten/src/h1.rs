@@ -250,14 +250,18 @@ impl Inbox {
     }
 }
 
-/// What the bytes a connection has read hold next.
-enum Next {
-    /// A request this connection answers.
-    Head(Head),
-    /// Part of a head, or nothing.
-    More,
-    /// A request that is hyper's, with the rest of the connection. Nothing of it has been taken.
+/// Why the bytes a connection has read hold a whole head and no request for it to answer.
+enum Instead {
+    /// The head is refused.
+    Refused(Refusal),
+    /// The request is hyper's, with the rest of the connection. Nothing of it has been taken.
     Hypers,
+}
+
+impl From<Refusal> for Instead {
+    fn from(refusal: Refusal) -> Instead {
+        Instead::Refused(refusal)
+    }
 }
 
 /// One connection's buffers and IO.
@@ -308,11 +312,12 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         }
     }
 
-    /// What the bytes read so far hold: the next request's head, if all of it has arrived.
-    fn parse(&mut self) -> Result<Next, Refusal> {
+    /// What the bytes read so far hold: the next request's head, if all of it has arrived and
+    /// the request is this connection's to answer; `None` while more of it is to come.
+    fn parse(&mut self) -> Result<Option<Head>, Instead> {
         let bytes = self.inbox.data();
         if bytes.is_empty() {
-            return Ok(Next::More);
+            return Ok(None);
         }
         let found = match self.partial {
             Some(had) if !head::may_be_whole(bytes, had) => None,
@@ -321,18 +326,18 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         let Some(scanned) = found else {
             // A head that reaches the limit unfinished is refused without waiting for the rest.
             if bytes.len() >= self.limit {
-                return Err(Refusal::TooLarge);
+                return Err(Refusal::TooLarge.into());
             }
             self.partial = Some(bytes.len());
-            return Ok(Next::More);
+            return Ok(None);
         };
         self.partial = None;
         // Before anything is taken: hyper is given the bytes as they were read.
         if scanned.hypers {
-            return Ok(Next::Hypers);
+            return Err(Instead::Hypers);
         }
         let bytes = self.inbox.take(scanned.len);
-        Ok(Next::Head(head::build(&bytes, scanned, &self.indices, &mut self.cached)?))
+        Ok(Some(head::build(&bytes, scanned, &self.indices, &mut self.cached)?))
     }
 
     /// Writes everything written so far to the IO and flushes it. Pending: the IO has no room,
@@ -640,11 +645,11 @@ where
         }
         let head = loop {
             match conn.parse() {
-                Ok(Next::Head(head)) => break head,
-                Ok(Next::More) => {}
+                Ok(Some(head)) => break head,
+                Ok(None) => {}
                 // The answers before it go first; then the connection is hyper's.
-                Ok(Next::Hypers) => return conn.send().await.is_ok(),
-                Err(refusal) => {
+                Err(Instead::Hypers) => return conn.send().await.is_ok(),
+                Err(Instead::Refused(refusal)) => {
                     conn.refuse(refusal).await;
                     return false;
                 }

@@ -178,10 +178,8 @@ async fn exchange(connect: &tokio::sync::mpsc::UnboundedSender<DuplexStream>, st
     }
     let (before, closed) = receive(&mut client).await;
     let (mut after, mut closed_after) = (String::new(), closed);
-    if !closed && !stream.closes {
-        if client.write_all(last_request(stream.index).as_bytes()).await.is_ok() {
-            (after, closed_after) = receive(&mut client).await;
-        }
+    if !closed && !stream.closes && client.write_all(last_request(stream.index).as_bytes()).await.is_ok() {
+        (after, closed_after) = receive(&mut client).await;
     }
     Outcome { before, closed, after, closed_after }
 }
@@ -327,8 +325,9 @@ fn chance(dice: &mut Dice, in_hundred: usize) -> bool {
     dice.below(100) < in_hundred
 }
 
-const METHODS: &[&str] =
-    &["GET", "GET", "GET", "GET", "GET", "HEAD", "POST", "POST", "PUT", "DELETE", "OPTIONS", "CONNECT", "PURGE", "get", "G(ET", ""];
+const METHODS: &[&str] = &[
+    "GET", "GET", "GET", "GET", "GET", "HEAD", "POST", "POST", "PUT", "DELETE", "OPTIONS", "CONNECT", "PURGE", "get", "G(ET", "",
+];
 const TARGETS: &[&str] = &[
     "/",
     "/",
@@ -353,8 +352,21 @@ const TARGETS: &[&str] = &[
     "",
 ];
 const VERSIONS: &[&str] = &[
-    "HTTP/1.1", "HTTP/1.1", "HTTP/1.1", "HTTP/1.1", "HTTP/1.1", "HTTP/1.1", "HTTP/1.1", "HTTP/1.0", "HTTP/1.0", "HTTP/2.0", "HTTP/1.2",
-    "HTTP/0.9", "http/1.1", "HTTP/1.10", "",
+    "HTTP/1.1",
+    "HTTP/1.1",
+    "HTTP/1.1",
+    "HTTP/1.1",
+    "HTTP/1.1",
+    "HTTP/1.1",
+    "HTTP/1.1",
+    "HTTP/1.0",
+    "HTTP/1.0",
+    "HTTP/2.0",
+    "HTTP/1.2",
+    "HTTP/0.9",
+    "http/1.1",
+    "HTTP/1.10",
+    "",
 ];
 const HOSTS: &[&str] = &[
     "host: localhost",
@@ -795,12 +807,18 @@ fn report(seed: u64, found: &Found) {
 async fn own_and_hyper_answer_every_stream_alike() {
     let found = run(SEED, 0..fixed(&bases()) + IN_SUITE).await;
     report(SEED, &found);
-    assert!(found.failures.is_empty(), "{} of {} streams fail the gate; the first:\n{}", found.failures.len(), found.streams, found.failures[0]);
+    assert!(
+        found.failures.is_empty(),
+        "{} of {} streams fail the gate; the first:\n{}",
+        found.failures.len(),
+        found.streams,
+        found.failures[0]
+    );
     // The list lets through a few streams, not the run.
     assert!(found.listed * 100 < found.streams, "{} of {} streams differ by a listed class", found.listed, found.streams);
     // The run is of streams that reach the app, and that reach the end of what was sent.
     assert!(found.answered * 2 > found.streams, "the app answered in {} of {} streams", found.answered, found.streams);
-    assert!(found.asked * 4 > found.streams,"the last request was sent on {} of {} streams", found.asked, found.streams);
+    assert!(found.asked * 4 > found.streams, "the last request was sent on {} of {} streams", found.asked, found.streams);
 }
 
 /// The gate at the size a pull request reports: `H1_FUZZ_STREAMS` streams made at random (250,000
@@ -843,7 +861,8 @@ fn own_and_hyper_answer_every_stream_of_a_long_run_alike() {
 /// laxer connection is named as one.
 #[test]
 fn the_judge_names_each_kind_of_difference() {
-    let app = |status: u16, body: &str| format!("HTTP/1.1 {status} X\r\nx-content-type-options: nosniff\r\ndate: -\r\n\r\n{body}");
+    let app =
+        |status: u16, body: &str| format!("HTTP/1.1 {status} X\r\nx-content-type-options: nosniff\r\ndate: -\r\n\r\n{body}");
     let refusal = "HTTP/1.1 400 Bad Request\r\nconnection: close\r\ncontent-length: 0\r\ndate: -\r\n\r\n".to_owned();
     let outcome = |before: &str, closed: bool, after: &str| Outcome {
         before: before.to_owned(),
