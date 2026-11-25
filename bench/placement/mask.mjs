@@ -6,9 +6,9 @@
 // plan states, not accepted as any number." So every masked header, with a stated range or
 // without, must be shown to differ between two starts of one binary, and one with a range is then
 // also held to it in every answer. Nothing of a body is masked. A mask is the workload's `mask`
-// in the plan, a list of { "header": name } with an optional "range": [low, high] (numbers). The
-// kit takes a range and no single value: a header that two starts must send differently cannot
-// also be one stated value in every answer.
+// in the plan, a list of { "header": name } with an optional "range": [low, high] (numbers, low
+// under high). The kit takes a range and no single value: a header that two starts must send
+// differently cannot also be one stated value in every answer.
 //   node mask.mjs sed <mask.json>                       the sed script that masks those values
 //   node mask.mjs starts <mask.json> <headers> <headers>  two starts of one binary: exit 1 unless
 //                                                       each masked header was sent once by both
@@ -30,7 +30,7 @@ export function problems(mask) {
     if (seen.has(name)) why.push(`mask: ${name} is named twice`);
     seen.add(name);
     if (Object.keys(m).some((k) => k !== "header" && k !== "range")) why.push(`mask: ${name} has a field other than header and range`);
-    if (m.range !== undefined && (!Array.isArray(m.range) || m.range.length !== 2 || !m.range.every(Number.isFinite) || m.range[0] > m.range[1])) why.push(`mask: ${name}'s range is not [low, high]`);
+    if (m.range !== undefined && (!Array.isArray(m.range) || m.range.length !== 2 || !m.range.every(Number.isFinite) || m.range[0] >= m.range[1])) why.push(`mask: ${name}'s range is not [low, high] with low under high: a header that differs between two starts takes more than one value`);
   }
   return why;
 }
@@ -54,13 +54,18 @@ export function values(headers, name) {
   return out;
 }
 
-/** Two starts of one binary: each masked header, with a stated range or without, differs between them. */
+/**
+ * Two starts of one binary: each masked header, with a stated range or without, differs between
+ * them. "Can differ between starts" is read here as "did differ between the two starts the kit
+ * made", so a header with a range that can differ and did not in these two is refused as well;
+ * whether a range may instead be taken on the plan's word is the rule's to say, not this kit's.
+ */
 export function starts(mask, one, two) {
   const why = [];
   for (const m of mask) {
     const a = values(one, m.header), b = values(two, m.header);
     if (a.length !== 1 || b.length !== 1) why.push(`${m.header}: two starts sent it ${a.length} and ${b.length} times; a masked value is one each start sends once`);
-    else if (a[0] === b[0]) why.push(`${m.header}: two starts of one binary both sent "${a[0]}"; only a value that differs between starts is masked`);
+    else if (a[0] === b[0]) why.push(`${m.header}: two starts of one binary both sent "${a[0]}"; only a value that differs between starts is masked${m.range === undefined ? "" : ". The kit shows that by the two starts it makes and does not take it on the plan's word, so a header with a range that can differ between starts and did not in these two stops the run here. The plan's author can leave it out of the mask, when this workload always sends that value (a placement whose answers then differ in it fails), or ask on the pull request whether the rule lets a range stand on the plan's word, which this kit does not do"}`);
   }
   return why;
 }

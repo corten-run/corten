@@ -10,7 +10,10 @@
 # Cargo.lock beside a copy of the probe (<work dir>/probe), and the plan's build command run there
 # with a copy of wrap/ first on PATH, so the `cc` rustc runs records the probe's final link
 # (link-capture.mjs) and then runs it. The probe's copy, the request script and the expected
-# answer must be, file for file, what plan.mjs listed (plan/inputs.sha256), or nothing is built.
+# answer must be, file for file, what plan.mjs listed (plan/inputs.sha256), with no file or
+# symbolic link more, or nothing is built. Cargo's own config files outside the probe
+# ($CARGO_HOME/config.toml, a .cargo/config.toml above the probe's copy) are not among them:
+# run.sh records which exist.
 # The build's environment is none of the caller's: PATH, HOME, where rustup and cargo keep their
 # files when the caller says, the toolchain, the kit's own three variables and the plan's
 # probe.env, kept as build-<side>.env. A pad of n bytes is one function nothing calls,
@@ -51,10 +54,12 @@ rustc -V
 for d in bin maps pads capture work probe wrap target-base target-head; do rm -rf "${WORK:?}/$d"; done
 mkdir -p "$B/layout" "$M" "$WORK/pads" "$WORK/capture" "$WORK/wrap"
 cp -R "$PROBE" "$WORK/probe"
-# What the plan names by path is what plan.mjs listed when it resolved the plan, and no file more.
+# What the plan names by path is what plan.mjs listed when it resolved the plan, and nothing more:
+# cp -R keeps a symbolic link a link, so everything under the copy that is not a directory (a file,
+# a link, the copy itself when the probe's directory has become a link) must be a listed file.
 [ "$(sha256sum "$WORK/plan/inputs.sha256" | cut -d' ' -f1)" = "$INPUTS_SHA" ] || fail "plan/inputs.sha256 is not the list plan.mjs wrote"
 (cd "$WORK" && sha256sum --quiet -c plan/inputs.sha256) || fail "the probe, the request script or the expected answer is not what plan.mjs resolved (plan/inputs.sha256)"
-[ "$(cd "$WORK" && find probe -type f | LC_ALL=C sort)" = "$(sed -n 's/^[0-9a-f]*  \(probe\/.*\)$/\1/p' "$WORK/plan/inputs.sha256")" ] || fail "the probe's directory holds a file plan.mjs did not list (plan/inputs.sha256)"
+[ "$(cd "$WORK" && find probe ! -type d | LC_ALL=C sort)" = "$(sed -n 's/^[0-9a-f]*  \(probe\/.*\)$/\1/p' "$WORK/plan/inputs.sha256")" ] || fail "the probe's directory holds a file or a symbolic link plan.mjs did not list (plan/inputs.sha256)"
 cp "$KIT/wrap/cc" "$WORK/wrap/cc"; chmod +x "$WORK/wrap/cc"
 : >"$B/sha256.txt"
 

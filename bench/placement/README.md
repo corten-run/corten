@@ -27,7 +27,7 @@ that is not in this table is refused, so a misspelled field is not read as one l
 | `plan` | `1`, the format this kit reads. |
 | `name` | The run's name: lowercase letters, digits and hyphens. |
 | `base`, `head` | The two commits the plan reads, each a full 40-digit id. A plan without them is not declared, and `plan.mjs` refuses it. |
-| `probe.dir` | The probe's crate, a path from the plan file. Its binary is named `probe`, and its `Cargo.toml` takes Corten from `../work/crates/corten`: `build.sh` puts each side's tree at `../work`, and each side's `Cargo.lock` in the crate's copy, so the directory holds none of its own. |
+| `probe.dir` | The probe's crate, a path from the plan file. Its binary is named `probe`, and its `Cargo.toml` takes Corten from `../work/crates/corten`: `build.sh` puts each side's tree at `../work`, and each side's `Cargo.lock` in the crate's copy, so the directory holds none of its own. It holds no symbolic link and is not one: `plan.mjs` refuses a link, since what it points at lies outside what the plan names. |
 | `probe.tree` | The paths of the repository a side is built from (`git archive` of them at its commit); `Cargo.lock` must be among them. |
 | `probe.toolchain` | The Rust toolchain, as `rustup` names it. |
 | `probe.env` | The build's environment, names to text. The build sees these, `PATH`, `HOME`, where `rustup` and `cargo` keep their files, the toolchain and the kit's own three variables, and nothing else of the shell `build.sh` is run from. |
@@ -44,7 +44,7 @@ that is not in this table is refused, so a misspelled field is not read as one l
 | `workloads[].declared` | What the plan says of the workload; the report prints it. |
 | `workloads[].request` | `path`, `headers` (each `"Name: value"`) and optionally `script`, a `wrk` script in place of [`get.lua`](get.lua) that ends with the same `RESULT` line. |
 | `workloads[].status` | The status every compared answer must have. |
-| `workloads[].mask` | The header values masked when two answers are compared: `{ "header": name }`, with `"range": [low, high]` for one the workload's cost depends on. `[]` when none. Every masked header must differ between two starts of the base, and one with a range must also be within it in every answer; a single stated value could not do both, so the kit takes a range alone. |
+| `workloads[].mask` | The header values masked when two answers are compared: `{ "header": name }`, with `"range": [low, high]` for one the workload's cost depends on. `[]` when none. Every masked header must differ between two starts of the base, and one with a range (`low` under `high`) must also be within it in every answer; a single stated value could not do both, so the kit takes a range alone. A header with a range that the two starts send alike stops the run at `verify.sh`: see [what it does not do](#what-it-does-not-do), item 12. |
 | `workloads[].K` | `"pilot"`, the smallest K the sizing check passes from this plan's pilot, or a number from 5 to 254. |
 | `workloads[].sizedFrom` | With a number for K, and only then: which eligible A/A the number was sized from, in words a reader can follow to it (where it is kept, its run, its comparison). The declaration and the report print it. |
 | `workloads[].seed` | The seed of the order its placements run in. |
@@ -100,8 +100,13 @@ A plan in two parts, a pilot and then a gated run whose K the pilot gives:
 
 With a number for K the plan's `sizedFrom` says which A/A it was sized from. When that A/A is
 results of this kit, `--sized-from <results dir>` checks the number: the A/A must be eligible, K
-must pass at that K itself, and the A/A's request, start command, load, mask, probe and request
-script must be this plan's, or `plan.mjs` refuses. Without `--sized-from` nothing checks the
+must pass at that K itself, and the A/A's request, start command, load, mask, build command,
+build's environment, probe and request script must be this plan's, or `plan.mjs` refuses (item 11
+of [what it does not do](#what-it-does-not-do) lists what is not compared). The report takes
+what `plan.mjs` saved of that check (`sized` in `plan/resolved.json`) as written, since the A/A is
+not among a run's results: a reviewer checks it by running the same `node plan.mjs <plan.json>
+gated <workload> <a new directory> --sized-from <the A/A's results>` and comparing the counts it
+prints with the report's. Without `--sized-from` nothing checks the
 number, as when it was sized from an earlier kit's A/A: `report.json` then has `"sized": null`,
 and every reading on the page is followed by "K not checked by the kit", so the page never prints
 a bare pass for a K the kit did not check. Showing that such a K meets the sizing rule is the
@@ -115,16 +120,21 @@ placements of the plan's commits: where the Choice ties a pull request's next pl
 such turn, stop after `build.sh`, which starts nothing.
 
 `sh selftest/selftest.sh <work dir>`, after `build.sh`, shows on that host that a wrong answer, a
-failed request, a placement past its time limit and a second pad of a wrong size each stop what
-they must. Name a case to run it alone (`answers`, `failed`, `limit`, `map`); `map` links and
-starts nothing, the other three start the base's first placement.
+failed request, a placement past its time limit, a second pad of a wrong size, files that are no
+longer what `plan.mjs` listed, a run `run.sh` must refuse and a counter that read zero each stop
+what they must. Name a case to run it alone (`answers`, `failed`, `limit`, `map`, `inputs`,
+`refusals`, `zero`). `map`, `inputs` and `refusals` start no server; `answers`, `failed`, `limit`
+and `zero` start the base's first placement. `inputs`, `refusals` and `zero` run `build.sh` and
+`run.sh` on copies of the plan under `<work dir>/selftest`, so they build nothing and leave the
+work directory's own build and results alone; `zero` puts a stand-in for `perf` that reports 0
+first on `PATH`.
 
 ## What each check proves
 
 | Check | Where | What it shows |
 | --- | --- | --- |
 | The plan names its commits, thresholds and spread | `plan.mjs` | The file can be declared: base and head are full commits, each threshold is read or left, the spread is declared or not, and it has no field the kit does not read. |
-| The files the plan names by path | `plan.mjs`, `build.sh`, `run.sh`, `report.mjs` | The probe that is built, the request script and the expected answer are, file for file, the ones listed when the plan was resolved, and the results keep them. |
+| The files the plan names by path | `plan.mjs`, `build.sh`, `run.sh`, `report.mjs` | The probe that is built, the request script and the expected answer are, file for file, the ones listed when the plan was resolved, with no file or symbolic link more, and the results keep them. |
 | The pad lists | `pads.mjs`, `plan.mjs` | The lists for K follow the fourth point: no size in both, the line phases and page quarters it asks. |
 | One compile a side, the commit's own versions, LLD | `build.sh` | Every binary of a side is one build's link, and no dependency was resolved afresh. |
 | The environment | `build.sh`, `turns.sh`, `verify.sh` | A build and a server see what the plan gives them and not the calling shell's variables (`env -i`); `build-<side>.env` and `verify/server-env.txt` in the results are what they saw. |
@@ -136,11 +146,11 @@ starts nothing, the other three start the base's first placement.
 | The map check | `map.mjs check` | With aligned code, the placement's map against the unpadded link's by LLD's layout rule, in place of "moved by the pad". |
 | Distinct SHA-256s | `build.sh` | No two placements of one build are one binary. |
 | The host and the counters | `run.sh` | The plan's CPU model and CPUs, the CPU model of the A/A a K was checked from, and every counter above zero and at 100% for an attached process, before any turn. |
-| The mask | `verify.sh`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every answer. |
+| The mask | `verify.sh`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every answer. A masked header the two starts send alike stops the run, with a range or without. |
 | Answers | `verify.sh`, `turns.sh` | Each placement answers as its unpadded binary, and a placement's two binaries alike, before its turns. |
 | Turns | `turns.sh` | Every turn on a fresh start on the server's CPU; a failed request, or a counter that is zero or under 100%, fails the placement, and nothing is run again. |
 | The results are the plan's run | `report.mjs` | Refuses results whose plan, pads, order, binaries, records or files named by path are not what the plan gives. |
-| Eligibility and K | `pilot.mjs`, `plan.mjs --sized-from` | The A/A may size a run, on this plan's setup, and the K passes under each model kept, at that K itself. A K nothing checked is said to be unchecked in every reading. |
+| Eligibility and K | `pilot.mjs`, `plan.mjs --sized-from` | The A/A may size a run, on this plan's setup as far as item 11 below compares it, and the K passes under each model kept, at that K itself. A K nothing checked is said to be unchecked in every reading. |
 
 `report.md` states, for each threshold the plan declares, pass, miss, not resolved or no bound, or
 that this run does not read it; both readings of the A/A; the benefit side when one is declared;
@@ -159,7 +169,10 @@ side's aligned sections, its list and the second pads' lines.
    `bench/fullstack/count.mjs` starts.
 5. It cannot see how the C code a side links was built: the plan's `probe.env` and `probe.build`,
    each build's environment and each side's captured link line are in the results for a reviewer
-   to read.
+   to read. Cargo's own config files outside the probe (`$CARGO_HOME/config.toml`, a
+   `.cargo/config.toml` in a directory above the work directory) are read by a build and are in
+   neither that environment nor the list of files: `results/host.txt` names the ones that exist
+   when `run.sh` runs, and the kit checks none of them.
 6. A work directory holds one workload's part and builds its sides itself, so two workloads of a
    plan are two builds of each commit.
 7. It does not check that the host is quiet or that its CPUs are whole cores: `results/host.txt`
@@ -173,12 +186,24 @@ side's aligned sections, its list and the second pads' lines.
     that already holds results; a second run in another work directory or on another host, or
     results thrown away, it cannot see. Running each part once and keeping what it left is the
     author's.
-11. It compares an A/A's setup with a plan's only as far as the two files say: the request, the
-    start command, the load, the mask, the probe and the request script, and the CPU model. The
-    toolchain, the kernel, the host's settings and its neighbours are in `results/host.txt` for a
-    reviewer to compare.
+11. It compares an A/A's setup with a plan's only so far. For a K from the plan's own pilot: the
+    workload, the plan file and the files it names by path, which is everything a plan says, and
+    the CPU model.
+    For a K given as a number, whose A/A may be another plan's: the workload's name, R, the
+    request, the start command, the load, the mask, the build command and the build's
+    environment, the probe's files and the request script, and the CPU model. Not compared for a
+    number, and so a reviewer's to compare from the two plans and `results/host.txt`: the base
+    and the head (an A/A read earlier is on an earlier base by the rule's design, so the base
+    cannot be asked to match), the tree's paths, the toolchain, the pinned CPUs, the status the
+    answers must have, the time limit, the expected answer (an A/A has none), and what no plan
+    says: the kernel, the host's settings and its neighbours.
 12. It shows that a masked header differs between two starts of the base's unpadded binary, not
-    of every binary.
+    of every binary. And it takes "can differ between starts" as "did differ between those two
+    starts": a header with a range that can differ and did not in the two starts the kit made
+    stops the run at `verify.sh`, before any turn, though the rule's own example (`kept` and
+    `Age`) may be such a header. The author can leave it out of the mask when the workload always
+    sends that value; whether a range may stand on the plan's word when two starts agree is a
+    question for the rule, which the kit does not answer.
 13. `report.mjs` takes each recorded turn's counters and `wrk` result from the counts `turns.sh`
     wrote after checking them; it does not read the raw turn logs again.
 
@@ -209,3 +234,13 @@ without a bench host. Two of them read earlier runs' kept files where they are k
 tags `evidence/placement-sizing-1999` (an A/A's counts) and `evidence/placement-aligned-code-6`
 (the maps), which are too large for `bench/`; in a checkout without those tags they fail with the
 `git fetch` that brings them ([`tags.mjs`](tags.mjs)).
+
+Those tests run no shell script, so what `build.sh`, `run.sh`, `verify.sh` and `turns.sh` refuse
+is held by the selftest alone, on a host that has `perf` and `wrk`, and by nothing in
+`npm run check`. The selftest's `inputs` case holds `build.sh`'s three checks of the files named
+by path and `run.sh`'s two, `refusals` holds `run.sh`'s refusal of results already there, of
+binaries built for another part and of another CPU model, and `zero` holds the above-zero test
+of the counters before a run and in a turn. Held by a whole run on a host and by no case: the
+counters at 100% and the refusal of one under it, the answers of every placement against its
+unpadded binary, a masked header that does differ between two starts, and the probe's source
+and each build's environment reaching the results.

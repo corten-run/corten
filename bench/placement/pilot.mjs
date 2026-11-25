@@ -63,8 +63,11 @@ export function sizeByRule(pilot, models, { from = 5, to = 254, each = () => {} 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const [dir, kArg] = process.argv.slice(2);
   if (!dir) { console.error("usage: node pilot.mjs <results dir> [<K>]"); process.exit(2); }
-  const { sizing } = await import("./report.mjs");
-  const s = sizing(dir, kArg === undefined ? undefined : Number(kArg));
-  for (const l of s.lines) console.log(l);
-  process.exit(s.ok ? 0 : 1);
+  // report.mjs imports this file, so it is loaded once this one has been: awaited here, at the
+  // top level, the two would wait for each other and node would end with nothing printed.
+  import("./report.mjs").then(({ sizing }) => {
+    const s = sizing(dir, kArg === undefined ? undefined : Number(kArg));
+    for (const l of s.lines) console.log(l);
+    process.exit(s.ok ? 0 : 1);
+  }).catch((e) => { console.error(`pilot.mjs: ${e.message}`); process.exit(1); });
 }

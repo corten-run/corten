@@ -1,7 +1,7 @@
 #!/bin/sh
-# selftest.sh <work dir> [answers] [failed] [limit] [map]: after build.sh, shows on the host that
-# what must stop a placement does (every case when none is named). It measures nothing and writes
-# under <work dir>/selftest only.
+# selftest.sh <work dir> [answers] [failed] [limit] [map] [inputs] [refusals] [zero]: after
+# build.sh, shows on the host that what must stop a placement, a build or a run does (every case
+# when none is named). It measures nothing and writes under <work dir>/selftest only.
 #   answers   a wrong answer: side B is a stand-in that answers 200 with another body
 #             (wrong.mjs). turns.sh must fail before any turn and leave no counts file.
 #   failed    a failed request: the request is one the probe answers 404, which both binaries
@@ -14,11 +14,26 @@
 #             pad of 8 bytes, which is none of the four sizes, and with each of the four; map.mjs's
 #             check must refuse the 8, pass each size that puts .data where the rule says and
 #             refuse each that does not, at least one. Nothing is started.
+#   inputs    files the plan names by path that are no longer what plan.mjs listed. build.sh, on
+#             a copy of the plan, must build nothing for a probe with a file edited, for one with
+#             a symbolic link added, and for a list edited; run.sh must refuse a list edited after
+#             the build before it makes a results directory, and a probe's copy edited after the
+#             build before any server is started (that last one counts with perf, as every run
+#             does first). Nothing is built, started or turned.
+#   refusals  run.sh, on a copy of the plan, must refuse a work directory that already holds
+#             results, binaries built for another part, and a host whose CPU model is not that of
+#             the A/A the K was checked from. Nothing is started.
+#   zero      a counter that read zero, with a stand-in for perf that reports 0 for every event:
+#             run.sh must end perf-preflight-failed before any server is started, and turns.sh
+#             must fail its first turn and record no row. The turn's load is real; no counter is
+#             read.
+# A copy of the plan is <work dir>/plan with its WORK changed, so the script under test writes
+# under <work dir>/selftest and leaves the work directory's own build and results alone.
 # Prints one line a case and SELFTEST-OK, or stops at the first that does not hold.
 set -u
-[ $# -ge 1 ] && [ -f "$1/plan/resolved.sh" ] || { echo "usage: selftest.sh <work dir> [answers] [failed] [limit] [map]" >&2; exit 2; }
+[ $# -ge 1 ] && [ -f "$1/plan/resolved.sh" ] || { echo "usage: selftest.sh <work dir> [answers] [failed] [limit] [map] [inputs] [refusals] [zero]" >&2; exit 2; }
 . "$1/plan/resolved.sh"; shift
-[ $# -gt 0 ] || set -- answers failed limit map
+[ $# -gt 0 ] || set -- answers failed limit map inputs refusals zero
 B=$WORK/bin; PL=$WORK/plan; out=$WORK/selftest
 rm -rf "${out:?}"; mkdir -p "$out"
 export KIT START EVENTS CPU_SERVER CPU_LOAD WRK_T WRK_C
@@ -29,6 +44,16 @@ run() { # <dir> <path> <status> <binary B> [<time limit>]
     REQ_PATH=$2 STATUS=$3 timeout -k 30 "${5:-120}" taskset -c "$CPU_DRIVER" sh "$KIT/turns.sh" "$1" "$W" 1 "$B/base-p$first" "$4" >"$1.log" 2>&1 </dev/null
 }
 rows() { if [ -f "$1/counts-$W.csv" ]; then echo $(( $(wc -l <"$1/counts-$W.csv") - 1 )); else echo none; fi; }
+copy() { # <dir> [<sed expression>]: a work directory of its own that holds this one's plan
+    rm -rf "$1"; mkdir -p "$1"; cp -R "$PL" "$1/plan"
+    sed -e "s|^WORK=.*|WORK='$1'|" ${2:+-e "$2"} "$PL/resolved.sh" >"$1/plan/resolved.sh"
+}
+built() { ln -s "$B" "$1/bin"; }  # <dir>: the copy reads this work directory's binaries
+refuses() { # <case> <dir> <outcome> <words>: run.sh on the copy must end with that outcome and those words
+    sh "$KIT/run.sh" "$2" >"$2.log" 2>&1 </dev/null; rc=$?
+    [ $rc = 1 ] && grep "^RUN-ENDED $3: " "$2.log" | grep -qF "$4" && [ ! -e "$2/results/verify.log" ] \
+        || { tail -3 "$2.log"; bad "$1: run.sh did not end '$3: ... $4' (exit $rc)"; }
+}
 for case in "$@"; do
     case $case in
     answers)
@@ -74,6 +99,54 @@ for case in "$@"; do
             echo "map: $s-p$first: a second pad of 8 bytes refused ($(grep -o 'a second pad of 8 bytes is not one of[^"]*' "$m/$s-l8.txt" | head -1)); of the four sizes,${fit:- none} put .data where the rule says and passed the map check;$unfit did not and were refused (with ${unfit##* }: $(grep -o '\.data begins[^"]*' "$m/$s-l${unfit##* }.txt" | head -1))"
             rm -f "$m/$s-p$first"-l* "$m/$s"-l*.map
         done ;;
+    inputs)
+        i=$out/inputs; mkdir -p "$i"
+        probe() { rm -rf "$i/probe"; cp -R "$WORK/probe" "$i/probe"; rm -f "$i/probe/Cargo.lock"; }
+        builds() { # <name> <words>: build.sh on the copy must stop with the words and build nothing
+            sh "$KIT/build.sh" "$i/$1" >"$i/$1.log" 2>&1 </dev/null; rc=$?
+            [ $rc = 1 ] && tail -1 "$i/$1.log" | grep -qF "$2" && [ ! -e "$i/$1/target-base" ] && [ ! -e "$i/$1/bin/base" ] \
+                || { tail -3 "$i/$1.log"; bad "inputs: build.sh did not stop at '$2' for a probe $1 (exit $rc)"; }
+        }
+        one=$(sed -n 's/^[0-9a-f]*  probe\/\(.*\)$/\1/p' "$PL/inputs.sha256" | head -1)
+        [ -n "$one" ] || bad "inputs: the plan's list names no file of the probe"
+        probe; echo "edited after plan.mjs" >>"$i/probe/$one"
+        copy "$i/edited" "s|^PROBE=.*|PROBE='$i/probe'|"; builds edited "is not what plan.mjs resolved"
+        probe; ln -s "$PL" "$i/probe/selftest-link"
+        copy "$i/linked" "s|^PROBE=.*|PROBE='$i/probe'|"; builds linked "holds a file or a symbolic link plan.mjs did not list"
+        probe
+        copy "$i/relisted" "s|^PROBE=.*|PROBE='$i/probe'|"; echo "0  probe/selftest-none" >>"$i/relisted/plan/inputs.sha256"; builds relisted "plan/inputs.sha256 is not the list plan.mjs wrote"
+        copy "$i/run-list"; built "$i/run-list"; echo "0  probe/selftest-none" >>"$i/run-list/plan/inputs.sha256"
+        refuses inputs "$i/run-list" refused "plan/inputs.sha256 is not the list plan.mjs wrote"
+        [ ! -e "$i/run-list/results" ] || bad "inputs: run.sh made a results directory for a list that was edited"
+        copy "$i/run-probe"; built "$i/run-probe"; ln -s "$WORK/maps" "$i/run-probe/maps"; ln -s "$WORK/capture" "$i/run-probe/capture"
+        for s in $SIDES; do ln -s "$WORK/build-$s.env" "$i/run-probe/build-$s.env"; done
+        cp -R "$WORK/probe" "$i/run-probe/probe"; echo "edited after build.sh" >>"$i/run-probe/probe/$one"
+        refuses inputs "$i/run-probe" refused "the probe as built, the request script or the expected answer is not what plan.mjs resolved"
+        echo "inputs: build.sh built nothing for a probe with $one edited, with a symbolic link added, and with the list edited; run.sh refused a list edited after the build with no results directory made, and a probe's copy edited after the build before any server was started" ;;
+    refusals)
+        r=$out/refusals; mkdir -p "$r"
+        copy "$r/again"; built "$r/again"; mkdir "$r/again/results"; echo kept >"$r/again/results/run-id"
+        refuses refusals "$r/again" refused "already holds a run's results, and a part is run once"
+        [ "$(ls -A "$r/again/results")" = run-id ] || bad "refusals: run.sh wrote into results it refused"
+        copy "$r/other" "s|^PART=.*|PART='selftest'|"; built "$r/other"
+        refuses refusals "$r/other" refused "not this plan's part selftest"
+        copy "$r/model" "s|^SIZED_MODEL=.*|SIZED_MODEL='a CPU model no host has'|"; built "$r/model"
+        refuses refusals "$r/model" refused "K was checked from an A/A read on 'a CPU model no host has'"
+        [ ! -e "$r/other/results" ] && [ ! -e "$r/model/results" ] || bad "refusals: run.sh made a results directory for a run it refused"
+        echo "refusals: run.sh refused a work directory that holds results, binaries built for another part, and a host of another CPU model than the A/A's, each before it made a results directory" ;;
+    zero)
+        z=$out/zero; mkdir -p "$z/bin"
+        printf '%s\n' '#!/bin/sh' '# A stand-in for perf: runs the command it is given and reports 0 for every event, at 100%.' \
+            '[ "${1:-}" = stat ] || exit 0' 'shift; ev=; to=/dev/stdout' 'while [ $# -gt 0 ]; do' \
+            '    case $1 in -e) ev=$2; shift 2 ;; -o) to=$2; shift 2 ;; -p) shift 2 ;; --) shift; break ;; *) shift ;; esac' 'done' '"$@"' \
+            'for e in $(echo "$ev" | tr "," " "); do echo "0,,$e,1000000000,100.00,,"; done >"$to"' >"$z/bin/perf"
+        chmod +x "$z/bin/perf"
+        copy "$z/work"; built "$z/work"
+        (PATH="$z/bin:$PATH"; refuses zero "$z/work" perf-preflight-failed "each above zero and at 100%") || exit 1
+        (PATH="$z/bin:$PATH"; run "$z/turn" "$REQ_PATH" "$STATUS" "$B/base-p$first"); rc=$?
+        [ $rc != 0 ] && grep -q "unusable counter .* (not a count above zero)" "$z/turn.log" && [ "$(rows "$z/turn")" = 0 ] \
+            || { tail -5 "$z/turn.log"; bad "zero: a counter that read zero did not fail the turn (exit $rc, rows $(rows "$z/turn"))"; }
+        echo "zero: with every counter reported as 0, run.sh ended perf-preflight-failed before any server was started, and a turn failed with no row recorded (exit $rc): $(grep -o -m1 'unusable counter .* (not a count above zero)' "$z/turn.log")" ;;
     *) bad "no case $case" ;;
     esac
 done

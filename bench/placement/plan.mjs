@@ -10,17 +10,19 @@
 // (docs/design.md#choice-placement-runs, "How many placements"); or a number, with the plan's
 // sizedFrom saying which A/A it was sized from. With a number, --sized-from names results of this
 // kit that hold that A/A: the check is made at that K itself and its setup compared with this
-// plan's (the request, the start command, the load, the mask, the probe and the request script).
-// Without it nothing checks the number, and the report says so in every reading.
+// plan's (the request, the start command, the load, the mask, the build command and the build's
+// environment, the probe and the request script). Without it nothing checks the number, and the
+// report says so in every reading.
 // What the plan names by path (the probe's files, the request script, the expected answer) is
 // listed with each file's SHA-256 in <work dir>/plan/inputs.sha256; the list's own SHA-256 is
 // printed with what the plan declares, kept with the results and checked by build.sh, run.sh and
-// report.mjs, since the plan file's SHA-256 covers the paths and not what is at them.
+// report.mjs, since the plan file's SHA-256 covers the paths and not what is at them. A symbolic
+// link in the probe's directory is refused, and so is a probe directory that is itself one.
 // DRYRUN=1 in the environment marks the work directory a dry run, a test of the scripts that is
 // read for nothing, with DRY_K (6) placements, DRY_R (2) pairs and DRY_TURN (1) second turns.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve as path } from "node:path";
 import { fileURLToPath } from "node:url";
 import { problems as maskProblems, sed } from "./mask.mjs";
@@ -149,17 +151,29 @@ export function declaration(r) {
   ];
 }
 
-/** What a workload's A/A is read on beside the host and the probe: what a K given as a number is compared by with the A/A it was sized from. */
-export const setup = (plan, w) => ({ request: w.request, start: w.start ?? plan.probe.start, load: plan.load, mask: w.mask });
+/**
+ * What a workload's A/A is read on beside the host and the probe's files: what a K given as a
+ * number is compared by with the A/A it was sized from. The build command and the build's
+ * environment are among it, since they make the binary as the probe's source does.
+ */
+export const setup = (plan, w) => ({ request: w.request, start: w.start ?? plan.probe.start, load: plan.load, mask: w.mask, build: plan.probe.build, env: Object.fromEntries(Object.entries(plan.probe.env).sort()) });
 
-const under = (dir, at = "") => readdirSync(join(dir, at), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? under(dir, `${at}${e.name}/`) : [`${at}${e.name}`]));
+// Every file under a directory, by its path from it. A symbolic link is refused: the list holds
+// files by what they hold, and what a link points at lies outside what the plan names by path.
+const under = (dir, at = "") => readdirSync(join(dir, at), { withFileTypes: true }).flatMap((e) => {
+  if (e.isDirectory()) return under(dir, `${at}${e.name}/`);
+  if (!e.isFile()) throw new Error(`probe/${at}${e.name}: ${e.isSymbolicLink() ? "a symbolic link" : "neither a file nor a directory"}, which the list of inputs does not take: it lists the probe's files by what they hold, and what a link points at lies outside what the plan names by path. Put the file itself in the probe's directory`);
+  return [`${at}${e.name}`];
+});
 /**
  * What a plan names by path, as a work directory and a results directory hold it: every file of
  * the probe (probe/...), the request script (plan/request.lua) and the expected answer
  * (plan/expect.txt, or null). text: a line a file, "<sha256>  <path>", sorted by path, as
- * `sha256sum -c` reads it; sha256: the SHA-256 of that text.
+ * `sha256sum -c` reads it; sha256: the SHA-256 of that text. A symbolic link in the probe, or a
+ * probe directory that is itself one, is refused.
  */
 export function inputs(probe, script, expect) {
+  if (existsSync(probe) && lstatSync(probe).isSymbolicLink()) throw new Error(`${probe}: the probe's directory is itself a symbolic link, which the list of inputs does not take: name the directory that holds the probe's files`);
   const files = [...(existsSync(probe) ? under(probe).map((f) => [`probe/${f}`, join(probe, f)]) : []), ["plan/request.lua", script], ...(expect ? [["plan/expect.txt", expect]] : [])].sort((a, b) => (a[0] < b[0] ? -1 : 1));
   const odd = files.find(([name]) => !/^[\x21-\x5b\x5d-\x7e]+$/.test(name));
   if (odd) throw new Error(`${odd[0]}: a file's name the list of inputs cannot hold (white space, a backslash or a character outside ASCII)`);

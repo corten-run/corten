@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
@@ -112,6 +112,15 @@ test("the mask: only named headers, each differing between two starts, one with 
   has(stated([{ header: "age", range: [0, 3] }], one.replace("age: 3", "age: soon")), '"soon", not a number from 0 to 3');
   has(stated([{ header: "age", range: [0, 3] }], "HTTP/1.1 200 OK\r\n\r\n"), "sent 0 times, not once");
   has(maskProblems([{ header: "age", range: [3, 0] }]), "range");
+  // A range of one value could never hold a header that two starts send differently.
+  has(maskProblems([{ header: "age", range: [0, 0] }]), "age's range is not [low, high] with low under high");
+  assert.deepEqual(maskProblems([{ header: "age", range: [0, 1] }]), []);
+  // A header with a range that did not differ in these two starts is refused in words that say
+  // what the kit takes "can differ" to mean and what the plan's author can do; one without a
+  // range has nothing more to be told.
+  const [ranged] = starts([{ header: "age", range: [0, 3] }], one, two), [plain] = starts([{ header: "etag" }], one, one);
+  for (const word of ["The kit shows that by the two starts it makes and does not take it on the plan's word", "that can differ between starts and did not in these two stops the run here", "The plan's author can leave it out of the mask", "or ask on the pull request whether the rule lets a range stand on the plan's word"]) assert.ok(ranged.includes(word), word);
+  assert.ok(plain.endsWith("only a value that differs between starts is masked"), plain);
   // One stated value cannot differ between two starts, so the kit takes a range alone.
   has(maskProblems([{ header: "age", value: "3" }]), "a field other than header and range");
   has(maskProblems([{ header: "etag" }, { header: "ETag" }]), "named twice");
@@ -348,6 +357,12 @@ test("a pilot is read for its spread and sizes a K only when it is eligible", ()
   assert.ok(at.counts.every((m) => m.failing === 0 && m.rank === 5));
   assert.ok(at.lines.at(-1).startsWith("K = 5: failing draws of 200000 (seed 1983) against at most 10000:"));
   assert.equal(sizing(pilot, 4).ok, false);
+  // As the command an author runs: the same lines, and exit 0 only when the K passes.
+  const command = (...args) => spawnSync(process.execPath, [join(here, "pilot.mjs"), ...args], { encoding: "utf8" });
+  const ran = command(pilot, "5");
+  assert.deepEqual([ran.status, ran.stdout, ran.stderr], [0, at.lines.join("\n") + "\n", ""]);
+  assert.equal(command(pilot, "4").status, 1);
+  assert.deepEqual([command().status, command().stdout], [2, ""]);
   // An incomplete A/A, and results that are refused, size nothing.
   assert.equal(sizing(results({ part: "pilot", change: even(), touch: (res) => rmSync(join(res, "pilot-plain", "p007"), { recursive: true }) }), 5).ok, false);
   assert.equal(sizing(results({ part: "pilot", touch: (res) => rmSync(join(res, "run-id")) }), 5).ok, false);
@@ -412,12 +427,12 @@ test("--sized-from: each result that does not size this plan's K is refused in i
   delete env.DRYRUN;
   let n = 0;
   // plan.mjs on a plan made here as the results above are, on their probe unless another is given.
-  const resolved = (edit, from, { probe = PROBE, part = "gated" } = {}) => {
+  const resolved = (edit, from, { probe = PROBE, part = "gated", workload = "plain" } = {}) => {
     const dir = join(tmp, `sized-${++n}`);
     mkdirSync(join(dir, "probe", "src"), { recursive: true });
     writeFileSync(join(dir, "probe", "src", "main.rs"), probe);
     writeFileSync(join(dir, "plan.json"), JSON.stringify(plan(numbered(edit)), null, 1));
-    const r = spawnSync(process.execPath, [join(here, "plan.mjs"), join(dir, "plan.json"), ...(part ? [part, "plain", join(dir, "work")] : []), ...(from ? ["--sized-from", from] : [])], { encoding: "utf8", env });
+    const r = spawnSync(process.execPath, [join(here, "plan.mjs"), join(dir, "plan.json"), ...(part ? [part, workload, join(dir, "work")] : []), ...(from ? ["--sized-from", from] : [])], { encoding: "utf8", env });
     return { status: r.status, out: r.stdout, err: r.stderr, written: existsSync(join(dir, "work", "plan")) };
   };
   const refused = (r, word) => { assert.equal(r.status, 1, r.out); assert.ok(r.err.includes(word), `no "${word}" in: ${r.err}`); assert.equal(r.written, false, word); };
@@ -434,6 +449,12 @@ test("--sized-from: each result that does not size this plan's K is refused in i
   refused(resolved(sized, results({ part: "pilot", edit: sized, change: even(), touch: (res) => rmSync(join(res, "pilot-plain", "p007"), { recursive: true }) })), "sizes no K for plain");
   refused(resolved(sized, results({ part: "pilot", edit: sized, touch: (res) => rmSync(join(res, "run-id")) })), "is not a run's results this kit reads");
   refused(resolved(sized, pilot, { part: "pilot" }), "a pilot is sized from nothing");
+  // A pilot of one workload sizes that workload alone, though another of the same plan file is
+  // read on the same files: the plan and its inputs are one, and the workload is not.
+  const two = (p) => { sized(p); p.workloads.push({ ...p.workloads[0], name: "other", seed: p.workloads[0].seed + 1 }); };
+  const ofPlain = results({ part: "pilot", edit: two, change: even() });
+  taken(resolved(two, ofPlain), "gated plain: K = 5 placements (from the pilot, by the sizing rule)");
+  refused(resolved(two, ofPlain, { workload: "other" }), "holds workload plain at R = 2, not other at R = 2");
 
   // A K given as a number: checked at that K itself from an A/A of this kit, on this plan's
   // setup; without one, resolved and said to be unchecked.
@@ -450,6 +471,10 @@ test("--sized-from: each result that does not size this plan's K is refused in i
   setup((p) => { p.probe.start = "$BIN $PORT other"; }, "start differs");
   setup((p) => { p.workloads[0].request.headers = ["Accept-Encoding: gzip"]; }, "request differs");
   setup((p) => { p.workloads[0].mask = [{ header: "etag" }]; }, "mask differs");
+  // The build command and the build's environment make the binary as the probe's source does.
+  setup((p) => { p.probe.build = "cargo build --release --locked"; }, "build differs");
+  setup((p) => { p.probe.env.RUSTFLAGS = "-C target-cpu=native"; }, "env differs");
+  setup((p) => { delete p.probe.env.ZSTD_SYS_USE_PKG_CONFIG; }, "env differs");
   setup(same, "probe or request script differs", PROBE + "// another probe\n");
   setup((p) => { p.load.threads = 4; p.workloads[0].request.path = "/unstaged"; }, "request, load differ");
   // What a plan declares before any part is resolved includes the inputs' digest.
@@ -479,6 +504,44 @@ test("the inputs: every file the plan names by path, listed with its SHA-256 as 
   const locked = spawnSync(process.execPath, [join(here, "plan.mjs"), join(dir, "plan.json"), "gated", "plain", join(dir, "work")], { encoding: "utf8", env });
   assert.equal(locked.status, 1);
   assert.ok(locked.stderr.includes("the probe's directory holds a Cargo.lock"), locked.stderr);
+});
+
+test("the inputs: a file name the list cannot hold and a symbolic link are refused, each in its own words", () => {
+  const dir = join(tmp, "odd"), probe = join(dir, "probe"), script = join(here, "get.lua");
+  mkdirSync(join(probe, "src"), { recursive: true });
+  writeFileSync(join(probe, "src", "main.rs"), PROBE);
+  assert.equal(inputs(probe, script, null).files, 2);
+  // sha256sum reads a line a file, so a name with white space in it has no line.
+  writeFileSync(join(probe, "two words.rs"), PROBE);
+  assert.throws(() => inputs(probe, script, null), /^Error: probe\/two words\.rs: a file's name the list of inputs cannot hold \(white space, a backslash or a character outside ASCII\)$/);
+  rmSync(join(probe, "two words.rs"));
+  // A link is not a file of the probe: what it points at lies outside what the plan names. A
+  // link to a directory is made as a junction where the system asks a right for any other.
+  const link = (target, at, type) => { try { symlinkSync(target, at, type); return true; } catch (e) { if (process.platform === "win32" && e.code === "EPERM") return false; throw e; } };
+  const words = (name) => new RegExp(`^Error: probe/${name}: a symbolic link, which the list of inputs does not take: it lists the probe's files by what they hold`);
+  if (link(join(probe, "src", "main.rs"), join(probe, "build.rs"), "file")) {
+    assert.throws(() => inputs(probe, script, null), words("build\\.rs"));
+    rmSync(join(probe, "build.rs"));
+  }
+  mkdirSync(join(dir, "else"));
+  writeFileSync(join(dir, "else", "config.toml"), "[build]\nrustflags = [\"-C\", \"target-cpu=native\"]\n");
+  symlinkSync(join(dir, "else"), join(probe, ".cargo"), "junction");
+  assert.throws(() => inputs(probe, script, null), words("\\.cargo"));
+  symlinkSync(join(dir, "else"), join(probe, "src", "deep"), "junction");
+  rmSync(join(probe, ".cargo"));
+  assert.throws(() => inputs(probe, script, null), words("src/deep"));
+  rmSync(join(probe, "src", "deep"));
+  assert.equal(inputs(probe, script, null).files, 2);
+  // A probe directory that is itself a link gets one refusal, from plan.mjs, before anything is written.
+  symlinkSync(probe, join(dir, "linked"), "junction");
+  assert.throws(() => inputs(join(dir, "linked"), script, null), /the probe's directory is itself a symbolic link, which the list of inputs does not take/);
+  writeFileSync(join(dir, "plan.json"), JSON.stringify(plan(numbered((p) => { p.probe.dir = "linked"; }))));
+  const env = { ...process.env };
+  delete env.DRYRUN;
+  const r = spawnSync(process.execPath, [join(here, "plan.mjs"), join(dir, "plan.json"), "gated", "plain", join(dir, "work")], { encoding: "utf8", env });
+  assert.equal(r.status, 1);
+  assert.ok(r.stderr.includes("the probe's directory is itself a symbolic link") && r.stderr.trim().split("\n").length === 1, r.stderr);
+  assert.equal(existsSync(join(dir, "work")), false);
 });
 
 test("each threshold the plan declares is stated on its own, and the spread only as the plan declares", () => {
