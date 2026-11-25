@@ -30,6 +30,7 @@ import { deploymentSha256 } from "../deployments.mjs";
 import { isolatedLiveCapture, isolatedLiveLifetime } from "./test-fixtures/live-campaign.mjs";
 import { registration as controlRegistration } from "../test-fixtures/control-stream-fixture.mjs";
 import { streamHash } from "./control-stream.mjs";
+import { supervise } from "./process.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
@@ -39,13 +40,53 @@ let lifetimeRun;
 let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSecondWorker, settleSurvives, settleNativeFails;
 let liveOutput, liveRoundTrip, compilerScratch;
 let auditClock, offlinePrep;
+const liveFixturePid = 42042;
+let liveFixtureSignals;
+const osKill = process.kill.bind(process);
+mock.method(process, "kill", (pid, signal) => {
+  // Keep the fake PID fenced even if a test ends before a pending timer fires.
+  if (!liveFixtureSignals && pid !== liveFixturePid && pid !== -liveFixturePid) return osKill(pid, signal);
+  liveFixtureSignals?.push({ pid, signal });
+  throw new Error("synthetic Live fixture cannot signal an OS process");
+});
+
+function forbidLiveSignals(t) {
+  assert.equal(liveFixtureSignals, undefined);
+  const signals = liveFixtureSignals = [];
+  t.after(() => {
+    liveFixtureSignals = undefined;
+    assert.deepEqual(signals, [], "synthetic Live fixture attempted OS signaling");
+  });
+  return signals;
+}
+
+function liveFixtureChild(run) {
+  let cancelled = false;
+  const child = fakeChild((fake) => { if (!cancelled) run(fake); });
+  child.pid = liveFixturePid;
+  const send = child.send.bind(child);
+  child.send = (message, callback) => {
+    if (message.type !== "cancel") return send(message, callback);
+    if (!cancelled) {
+      cancelled = true;
+      queueMicrotask(() => child.close(null, message.signal));
+    }
+    callback?.(null);
+  };
+  return child;
+}
+
 const hourNs = 3600n * 1000000000n;
 const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true, env: fixtureGitEnv() });
 const sourceStatus = (cwd) => sourceGit(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all");
 mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
   beginControlWindow(binding) {
     assert.equal(binding.round, "r21"); controlWindows.push("open");
-    return () => { assert.ok(existsSync(join(controlWindows.directory, controlWindows.phase ?? "00-client-heavy-timing", "host-after.json"))); controlWindows.push("close"); };
+    liveRoundTrip?.events.push("window-open");
+    return () => {
+      assert.ok(existsSync(join(controlWindows.directory, controlWindows.phase ?? "00-client-heavy-timing", "host-after.json")));
+      controlWindows.push("close"); liveRoundTrip?.events.push("window-close");
+    };
   },
 } });
 const cpu = { app: { cpuset: "1", quota: 1 } };
@@ -127,6 +168,7 @@ mock.module("./host-observation.mjs", { namedExports: {
       const value = udevHost(observations, retainUdev), { capture, offlineClock } = liveRoundTrip;
       value.at = new Date(observations < 3 ? capture.start - 10 : capture.end + (observations === 4 ? 5010 : 5)).toISOString();
       if (retainUdev && offlineClock) value.offlineMonoNs = offlineClock[observations];
+      if (observations === 4) liveRoundTrip.events.push("settled-census");
       return value;
     }
     if (offlinePrep && retainUdev) {
@@ -233,14 +275,14 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
   assert.equal(options.env.GIT_NO_REPLACE_OBJECTS, "1"); assert.equal(options.env.GIT_NO_LAZY_FETCH, "1");
   const invocation = args.slice(1); calls.push(invocation); currentInvocation = invocation;
   assert.ok(!invocation[0].endsWith("report.mjs"), "never run a report against producer tree");
+  if (liveRoundTrip) return liveFixtureChild((child) => {
+    const { capture, output } = liveRoundTrip;
+    assert.deepEqual(invocation, capture.binding.execution.invocation.argv);
+    mkdirSync(dirname(output), { recursive: true }); renameSync(capture.folder, output);
+    child.close(1);
+  });
   const child = fakeChild((child) => {
     if (lifetimeRun) { lifetimeRun.started = true; lifetimeRun.start(); return; }
-    if (liveRoundTrip) {
-      const { capture, output } = liveRoundTrip;
-      assert.deepEqual(invocation, capture.binding.execution.invocation.argv);
-      mkdirSync(dirname(output), { recursive: true }); renameSync(capture.folder, output);
-      child.close(1); return;
-    }
     const native = !invocation[0].endsWith("fixtures.mjs");
     const finish = () => {
       if (compilerScratch) {
@@ -278,7 +320,6 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
     };
     if (mode === "pending") { release = finish; pendingStarted(); } else finish();
   });
-  if (liveRoundTrip) child.pid = 4242;
   if (lifetimeRun) {
     const run = lifetimeRun, send = child.send.bind(child);
     child.pid = 4242; run.child = child;
@@ -513,8 +554,29 @@ test("offline timed phase with zero denied probes remains eligible for ordinary 
   assert.deepEqual(saved.offlineIngress, [{ group: "localized-marketplace", phase: "timing", packets: 0, bytes: 0 }]);
 });
 
+test("isolated Live fixture drains a setup fault without OS signaling", { timeout: 3000 }, async (t) => {
+  const signals = forbidLiveSignals(t);
+  t.mock.property(process, "platform", "linux");
+  const start = t.mock.fn(), child = liveFixtureChild(start);
+  const ipc = t.mock.method(child, "send"), force = t.mock.method(child, "kill");
+  t.mock.method(childProcess, "spawn", () => child);
+  let attachedPid;
+  const result = await supervise({ executable: "node", argv: ["synthetic-live"], shell: false }, {
+    cwd: repo, env: {}, log() {},
+    onStart(pid) { attachedPid = pid; throw new Error("synthetic observer attach fault"); },
+  }, { readyMs: 1000, runMs: 1000, stopMs: 10, killMs: 10 });
+  assert.equal(attachedPid, liveFixturePid);
+  assert.equal(start.mock.callCount(), 0);
+  assert.deepEqual(ipc.mock.calls.map(({ arguments: [message] }) => message), [{ type: "cancel", signal: "SIGTERM" }]);
+  assert.deepEqual(signals, [], "synthetic Live fixture attempted OS signaling");
+  assert.equal(force.mock.callCount(), 0);
+  assert.deepEqual(result, { terminal: true, code: null, signal: "SIGTERM", cancelled: true, forced: false,
+    error: "native host observation setup failed", success: false });
+});
+
 for (const group of ["live-delivery", "recoverable-live"]) for (const offline of [false, true]) {
   test(`isolated Live round trip: ${group} ${offline ? "offline" : "monitored"}`, async (t) => {
+    forbidLiveSignals(t);
     const { campaign, plan } = setupGroup(group), proof = syntheticBootstrap(t);
     plan.round = proof.binding.round;
     const capture = await isolatedLiveCapture(t, group, campaignRounds(plan.round)[group]);
@@ -527,14 +589,17 @@ for (const group of ["live-delivery", "recoverable-live"]) for (const offline of
     settleWorkerTicks = "10601"; settleSurvives = false;
     const boot = offline ? BigInt(proof.admission.closedMonoNs) : 0n;
     const clock = { ...udevClock(), monoNs: String(boot + 4000000n) };
-    const events = [], control = offline ? { ...proof, offlineHandoff: true } : monitoredSettlementControl(proof, liveActorCpus, events);
+    const events = offline ? fakeOfflineFenceCommands(t, proof.binding, 0, 1) : [];
+    const control = offline ? { ...proof, offlineHandoff: true } : monitoredSettlementControl(proof, liveActorCpus, events);
     const offlineClock = offline ? [0n, 0n, 2000000n, 5000000n, 5015000000n].map((offset) => String(boot + offset)) : null;
-    if (offline) fakeOfflineFenceCommands(t, proof.binding, 0, 1);
-    liveRoundTrip = { capture, output, clock, offlineClock, nativeReads: [] };
+    liveRoundTrip = { capture, output, clock, offlineClock, events, nativeReads: [] };
     const handle = await campaign.begin(plan, { stateRoot: "/bench/campaign", control });
     controlWindows.directory = handle.directory; controlWindows.phase = `00-${group}-timing`;
     const status = await campaign.advance(handle);
     assert.equal(status.state, "finished"); assert.equal(status.executionVersion, offline ? 6 : 5);
+    assert.deepEqual(events.filter((kind) => kind !== "check"), offline
+      ? ["-f", "-j", "window-open", "settled-census", "window-close", "-j", "delete"]
+      : ["open", "window-open", "settled-census", "window-close", "close", "seal"], "control window must cover the settled census");
     assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, [{ pid: 62274, startTicks: "10601" }]);
     assert.deepEqual(liveRoundTrip.nativeReads.map(({ status, resources, cleanupComplete }) => [status, resources, cleanupComplete]),
       [["failed", "verified", true]], "synthetic target failures must not prevent a complete, isolated cleanup proof");
@@ -549,7 +614,6 @@ for (const group of ["live-delivery", "recoverable-live"]) for (const offline of
     assert.deepEqual(liveRoundTrip.nativeReads.map(({ resources, cleanupComplete }) => [resources, cleanupComplete]),
       [["verified", true], ["verified", true]], "both live prefix and saved archive must use real isolated replay");
     if (offline) assert.deepEqual(saved.offlineIngress, [{ group, phase: "timing", packets: 0, bytes: 0 }]);
-    else assert.deepEqual(events.filter((kind) => kind !== "check"), ["open", "close", "seal"]);
   });
 }
 
