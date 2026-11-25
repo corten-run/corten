@@ -448,7 +448,7 @@ test("continuation schedules around pinned catalog and retired JSON without repl
     assert.deepEqual([result.round, result.commit, result.campaignCreatedAt, result.baseEffectiveOptions], [round, measuredCommit, date, { fixture: group }]);
   }
   assert.equal(report.groups[0].result.matchesCurrentContract, false);
-  assert.deepEqual(report.groups[0].result.selection, oldCatalog);
+  assert.deepEqual(report.groups[0].result.selection, saved.selection.groups[0]);
   assert.equal(report.groups[0].result.archiveSha256, saved.archiveSha256);
   assert.equal(report.groups[groupNames.indexOf(next)].result.matchesCurrentContract, true);
   assert.equal(report.groups[0].result.appOutcomes.find((app) => app.app === "express").comparisonEligible, false);
