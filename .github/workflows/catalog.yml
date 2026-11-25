@@ -229,6 +229,19 @@ jobs:
       - name: Test matched Leptos marketplace HTTP cells in both sources
         if: matrix.app == 'leptos'
         run: node bench/fullstack/apps/leptos/check-marketplace-production.mjs cb-marketplace-leptos
+      - name: Test matched Topcoat marketplace HTTP cells in both sources
+        if: matrix.app == 'topcoat'
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          node_image='node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067'
+          docker run --rm --network none --entrypoint tar cb-marketplace-topcoat -c -C /app server assets |
+            docker run --rm --init -i --network none --cpus 2 --memory 1g \
+              --mount "type=bind,source=$PWD,target=/repo,readonly" -w /repo "$node_image" sh -ec '
+                mkdir /tmp/topcoat
+                tar -x -C /tmp/topcoat
+                exec node bench/fullstack/apps/topcoat/tests/check-parity.mjs /tmp/topcoat/server
+              '
       - name: Test native Express alert persistence and rejected writes
         if: matrix.app == 'express'
         run: |
