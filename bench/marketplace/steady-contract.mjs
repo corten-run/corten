@@ -30,8 +30,9 @@ import { groupNames } from "./groups.mjs";
 // Convergence v7 and soak v9: both kinds read a live Docker event stream for the app, the load, a
 // marker and an API cell's upstream, from before the launch check to after the last inspect (a
 // convergence pass had none before). Settings are inspected only at moments, so an update event of
-// any of those containers in that stream fails the cell `settings` even when the inspect after the
-// load shows the recorded settings again; a start, restart, die, kill or OOM of the upstream, or for
+// the app, the load or the upstream (not the marker, whose settings no reading rests on) in that
+// stream fails the cell `settings` even when the inspect after the load shows the recorded settings
+// again (readEvents); a start, restart, die, kill or OOM of the upstream, or for
 // a convergence cell of the app, fails it `instance-changed`. A cell whose stream is unavailable
 // keeps no reading (`unconfirmed`).
 // Convergence v8 and soak v10: the same checks, saved for what they observed. Docker's events

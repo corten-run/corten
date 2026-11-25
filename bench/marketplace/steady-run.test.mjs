@@ -1729,7 +1729,7 @@ test("a cell whose event stream lost an update still has a reading, and its save
     assert.match(checks ?? "", /Docker can drop events for a slow subscriber without ending the stream/, name);
     assert.match(checks, /not proof that none happened/, name);
     const report = steadyReport(s);
-    assert.ok(report.split("\n").includes(`Container checks: ${checks}.`), name);
+    assert.ok(report.split("\n").includes(`Container checks, for every cell, each with a reading: ${checks}.`), name);
     // Nothing in the report says the stream showed there was no update, or that it covered the load.
     assert.doesNotMatch(report, /with no update of those containers|so it covered the load|held through the load/, name);
     if (options.kind === "soak") assert.equal(s.cells[0].restarts.eventStream, "none-seen");

@@ -33,8 +33,9 @@
 // load's own (startedBeforeLoad) fails it too, whether or not its event stream reads.
 // Interval: inspects show the settings only at their moments, so every cell, of either kind, reads a
 // live Docker event stream of its app, its load, its marker and an API cell's upstream from before the
-// launch check to after the last inspect (readEvents): an update of any of them the stream delivers
-// fails the cell `settings` even if it was undone before the inspect after the load, and a start,
+// launch check to after the last inspect (readEvents): an update of the app, the load or the upstream
+// (not the marker) the stream delivers fails the cell `settings` even if it was undone before the
+// inspect after the load, and a start,
 // restart, die, kill or OOM of the upstream, or of a convergence cell's app, fails it
 // `instance-changed`. Docker can drop events for a slow subscriber without ending the stream, so this
 // detects such an event and cannot show there was none; the pass saves that limit with what it

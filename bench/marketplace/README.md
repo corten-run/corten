@@ -295,7 +295,8 @@ model is compared with it by the same digest, and neither `steady-report.mjs` no
 the round's model as it always has). A
 convergence pass is saved as `marketplace-convergence/v8` and a soak as `marketplace-soak/v10`
 (below). Both save what each reading rests on as fixed text, `measurement.containerChecks`, with the
-event stream's limit stated, and both reports print it; a v7 convergence pass saved no such text
+event stream's limit stated, and both reports print it for the cells with a reading (none when no
+cell has one); a v7 convergence pass saved no such text
 and, like a v9 soak, was described as showing that its settings held through the load, more than
 its event stream can show. A v6 convergence pass checked its containers' settings only at its inspects and read no
 event stream, so a change made during its load and undone before the inspect after it went
@@ -354,8 +355,9 @@ inspect reported for each (`windowEnv.observed`, none, one or more), so a refuse
 shows what Docker had. An inspect shows the settings only at its own moment: a change made after one
 check and undone before the next passes both. So every cell, of either kind, reads a live Docker
 event stream of its app, its load, its marker and an API cell's upstream (below), listening from
-before the launch check to after the inspect after the load. An `update` of any of those containers
-the stream delivers fails the cell `settings`, even when every inspect agreed, and a start, restart,
+before the launch check to after the inspect after the load. An `update` of the app, the load or an
+API cell's upstream (not the marker) the stream delivers fails the cell `settings`, even when every
+inspect agreed, and a start, restart,
 die, kill or OOM of the upstream fails it `instance-changed`. The stream detects such an event; it
 cannot show there was none. Docker's events publisher (Moby's `daemon/events` and its pubsub
 publisher) gives up on an event for a subscriber that is slow to take it and goes on with the
@@ -369,7 +371,8 @@ start, at the launch check and after the load; the load before it started and af
 cell's upstream before the cell, at the launch check and after the load), and Docker's event stream
 delivered no update of those containers and no start, restart, die, kill or OOM of the upstream,
 which can drop events for a slow subscriber. Each pass saves that text (`containerChecks`) and
-both reports print it beside the readings. The load's inspect before it starts is kept as
+both reports print it beside the readings, scoped to the cells with one: a failed cell did not pass
+those checks, and a pass with no reading prints none. The load's inspect before it starts is kept as
 `load-container-before.json` before its settings are checked, so a load refused there keeps what
 Docker had too. Then, for a
 convergence cell: the same ID

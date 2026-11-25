@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { appBefore, appInstance, checkFixture, cpuModelDigest, cpuModelLimit, fixedRateLoad, convergenceLines, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, intervalSchedule, parseSaved, parseSteadyArgs, readDropped, readEvents, readWindows, ruleText, savedValue, soakArrivals, soakMemoryClock, soakSchema, startedBeforeLoad, summarizeSoak, timedWarmupVus, unlikeRound, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
 import { savedPass } from "./steady-saved-fixture.mjs";
@@ -446,6 +447,43 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   }
   assert.throws(() => summarizeSoak({ rate: 150, windows: long, tail: 0, unrecorded: 0, memory: [], before: held, after: held, events: [], arrivals: onSchedule() }), /dropped iterations/);
   assert.throws(() => steadyReport({ schema: "marketplace-results/v6" }), /not a/);
+});
+
+test("a report states its container checks only for the cells with a reading, and says so, and omits them when it has none", () => {
+  const one = (kind, failure) => {
+    const options = parseSteadyArgs([kind, "w8", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
+    return savedPass(options, [{ app: "corten", source: "fixture", target: "page", ...(kind === "convergence" ? { verdict: null } : {}), failure }]);
+  };
+  // A convergence pass whose only cell failed `settings`, and a soak whose only cell failed
+  // `unconfirmed`: neither had the checks it would state, so neither report states them.
+  const settings = one("convergence", "settings"), unconfirmed = one("soak", "unconfirmed");
+  validateConvergence(settings); validateSoak(unconfirmed);
+  for (const [name, text] of [["convergence settings", convergenceReport(settings)], ["soak unconfirmed", soakReport(unconfirmed)]]) {
+    assert.doesNotMatch(text, /^Container checks/m, name);
+    assert.doesNotMatch(text, /matched what the pass records|delivered no update/, name);
+    assert.doesNotMatch(text, /event stream for its app/, name);
+  }
+  // A pass with one failed cell among readings scopes the line to the cells with a reading.
+  const { containerChecks } = convergencePass().measurement;
+  const partial = convergencePass(); partial.cells[2] = { app: partial.cells[2].app, source: partial.cells[2].source, target: partial.cells[2].target, verdict: null, failure: "settings" };
+  Object.assign(partial.cleanup, { created: 32, removed: 32 });
+  validateConvergence(partial);
+  assert.ok(convergenceReport(partial).split("\n").includes(`Container checks, for the 7 of 8 cells with a reading only; a failed cell has none: ${containerChecks}.`));
+  assert.ok(convergenceReport(convergencePass()).split("\n").includes(`Container checks, for every cell, each with a reading: ${containerChecks}.`));
+});
+
+test("a soak report lists only the observed events that qualify for the cell, never claiming the whole stream", () => {
+  const options = parseSteadyArgs(["soak", "w9", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
+  const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
+  const cell = { app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60), tail: 0, unrecorded: 0,
+    requests: 270000, iterations: 270000, latencyMaxMs: 25, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 50 })), before: held, after: held, events: [], arrivals: onSchedule() }) };
+  const s = savedPass(options, [cell]);
+  validateSoak(s);
+  const text = soakReport(s);
+  // A delivered app signal stamped after the load finished and received after the second marker
+  // start is teardown, which readEvents leaves out: the report does not say it lists every event.
+  assert.doesNotMatch(text, /read in full|every other event the stream delivered/);
+  assert.match(text, /"Exits, signals, OOM" lists the app's observed events that qualify for the cell, excluding teardown \(an event received after the marker's second start and stamped after the load finished\)/);
 });
 
 test("a soak says the fixed rate held only when k6's counts reconcile with the schedule, and never claims more than k6 recorded", () => {
@@ -953,6 +991,12 @@ test("a cell's event stream reports every update of its app, load and upstream, 
   // time; so is one before the load's start (between the launch check and the load).
   assert.deepEqual(read(row(app, "update", 600) + row(app, "update", 601) + row(load, "update", 10) + row(upstream, "update", -0.5)).updates,
     [{ role: "app", atSeconds: 600 }, { role: "app", atSeconds: 601 }, { role: "load", atSeconds: 10 }, { role: "upstream", atSeconds: -0.5 }]);
+  // The marker is not one of them: an update of it between its starts is read and not kept, so the
+  // README names the app, the load and the upstream as the containers whose update fails a cell.
+  assert.deepEqual(read(row(marker, "update", 600)), { events: [], updates: [], upstream: [] });
+  const readme = readFileSync(new URL("./README.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  assert.ok(readme.includes("An `update` of the app, the load or an API cell's upstream (not the marker) the stream delivers fails the cell `settings`"));
+  assert.ok(!readme.includes("An `update` of any of those containers"));
   // The upstream's start, restart, die, kill and oom are kept apart from the app's.
   assert.deepEqual(read(row(upstream, "kill", 300) + row(upstream, "die", 300.1) + row(upstream, "start", 301) + row(app, "kill", 400)),
     { events: [{ action: "kill", atSeconds: 400 }], updates: [], upstream: [{ action: "kill", atSeconds: 300 }, { action: "die", atSeconds: 300.1 }, { action: "start", atSeconds: 301 }] });
