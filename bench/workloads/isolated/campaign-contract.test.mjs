@@ -47,6 +47,28 @@ test("the official r24 mixed timing phase supplies the same measured CPU roles a
   assert.throws(() => nativeControlPartition(missing), /native CPU partition absent/);
   t.diagnostic("official r24/mixed-production: measured app=1 api=2-3 load=4-7; no functional-capture CPU proof");
 });
+test("dedicated Mixed binds its Django ASGI deployment and rejects a rehashed WSGI downgrade", () => {
+  const group = "mixed-production", round = "r25", plan = campaigns.bindGroupCampaign({ group, round, commit });
+  const [binding] = plan.bindings;
+  assert.equal(productionRecipes[group], "mixed-production-measure");
+  assert.equal(binding.request.recipe, "mixed-production-django-asgi");
+  assert.equal(plan.recipes[group], binding.request.recipe);
+  assert.deepEqual(binding.execution.invocation.argv, ["bench/mixed-production/run.mjs", "w25", "--build", "--measure", "--profile", "matched",
+    "--django-deployment", "django-granian-asgi"]);
+  const previous = bindExecution({ ...binding.request, recipe: productionRecipes[group], review: null }, binding.campaignMode);
+  assert.deepEqual(previous.resources, binding.resources);
+  const { djangoDeployment, ...remainingOptions } = binding.execution.effectiveOptions;
+  assert.equal(djangoDeployment, "django-granian-asgi");
+  assert.deepEqual(remainingOptions, previous.execution.effectiveOptions);
+  const phase = mixedPhase(plan, "r25-0123456789abcdef");
+  assert.equal(phase.execution.effectiveOptions.djangoDeployment, djangoDeployment);
+  assert.deepEqual(phase.execution.invocation.argv.slice(-2), ["--native-audits", "/bench/campaign/r25-0123456789abcdef/mixed-native-audits.json"]);
+  validateCampaign(plan);
+  const { campaignSha256, ...body } = plan;
+  const downgraded = { ...body, bindings: [previous], recipes: { ...plan.recipes, [group]: productionRecipes[group] } };
+  assert.notEqual(deploymentSha256(downgraded), campaignSha256);
+  assert.throws(() => validateCampaign({ ...downgraded, campaignSha256: deploymentSha256(downgraded) }), /fixed native bindings/);
+});
 test("captured pre-create worker uses the real committed placements including bounded hardening", async () => {
   const check = (group, mode) => inspectCampaign({ action: "actor-role-preflight", round: "r25", commit, group, mode });
   for (const [group, mode, blockers] of [

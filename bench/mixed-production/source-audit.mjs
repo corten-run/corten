@@ -5,6 +5,7 @@ import { verifyNativeReceipt } from "../json-api/contract.mjs";
 import { sha256 } from "./capture.mjs";
 
 export const djangoAsgi = Object.freeze({
+  recipe: "mixed-production-django-asgi",
   deployment: "django-granian-asgi",
   buildProfile: "matched-asgi",
   command: Object.freeze(["sh", "-c", "python -m django migrate --noinput && exec python start_mixed_asgi.py"]),
