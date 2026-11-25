@@ -574,7 +574,7 @@ test("a soak says the fixed rate held only when k6's counts reconcile with the s
     assert.throws(() => soakArrivals({ ...rate, requests: 270000, droppedIterations: 0, arrivals: onSchedule(), completions }), /^AssertionError \[ERR_ASSERTION\]: a soak counts the requests completed in each interval, no more than k6's requests$/);
 });
 
-test("a soak says held only when every interval sustained the fixed rate, and names those that did not", () => {
+test("a soak says held only when every interval matched its share of the schedule within tolerance, and names those that did not", () => {
   // All 270,000 requests arrived in the first minute: the totals match the schedule, the later 29
   // intervals are empty, and the rate was not sustained.
   const concentrated = [270001, ...Array(29).fill(0)];
