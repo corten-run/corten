@@ -49,8 +49,9 @@ async function vector(folder, change = () => {}, options = {}) {
     s.inventory = ["django"]; s.apps = { django: { image: { id: image } } };
     p.Name = `/${s.runId}-django-${source}`;
     p.Config.Cmd = [...djangoAsgi.command];
+    p.Config.Entrypoint = null;
     p.Config.Env = ["PROFILE=matched", `MARKETPLACE_SOURCE=${source}`, `DJANGO_SETTINGS_MODULE=${djangoAsgi.settings}`];
-    inspectedImage = { ...imageInfo, Config: { ...imageInfo.Config, Cmd: [...djangoAsgi.command] } };
+    inspectedImage = { ...imageInfo, Config: { Cmd: [...djangoAsgi.command], Entrypoint: null } };
   }
   change(p, inspectedImage); let present = false, network = true;
   const docker = async (args) => {
@@ -395,6 +396,22 @@ test("Django ASGI replay checks the shipped command and settings in both sources
     }, { djangoSource: "api" });
     assert.throws(() => replay(folder, s), /execution evidence differs/);
   }));
+  for (const source of ["fixture", "api"]) {
+    await t.test(`${source}: ASGI Cmd hidden behind a WSGI entrypoint`, () => temporary(async (folder) => {
+      const s = await vector(folder, (p, image) => {
+        p.Config.Entrypoint = image.Config.Entrypoint = ["python", "start_matched.py"];
+      }, { djangoSource: source });
+      assert.throws(() => replay(folder, s), /execution evidence differs/);
+    }));
+    await t.test(`${source}: ASGI Cmd digest with WSGI combined digest`, () => temporary(async (folder) => {
+      const s = await vector(folder, (p, image) => {
+        p.Config.Cmd = image.Config.Cmd = ["sh", "-c", "python -m django migrate --noinput && exec python start_matched.py"];
+      }, { djangoSource: source });
+      for (const kind of ["participant-created", "participant-terminal"])
+        mutate(folder, kind, (e) => { e.data.cmdSha256 = hash(JSON.stringify(djangoAsgi.command)); });
+      assert.throws(() => replay(folder, s), /execution evidence differs/);
+    }));
+  }
 });
 
 test("execution contradictions reject recomputed receipt hashes", async (t) => {

@@ -187,6 +187,7 @@ export async function run(args) {
         verifyImageDeployment({ nativeDeployment: image.Config.Labels?.["run.corten.mixed-production.deployment"],
           buildProfile: image.Config.Labels?.["run.corten.mixed-production.build-profile"] }, deployment);
         if (deployment) {
+          assert.ok((image.Config.Entrypoint ?? null) === deployment.entrypoint, "unexpected Django ASGI image entrypoint");
           assert.ok(JSON.stringify(image.Config.Cmd) === JSON.stringify(deployment.command), "unexpected Django ASGI image command");
           assert.ok(image.Config.Env?.includes(`DJANGO_SETTINGS_MODULE=${deployment.settings}`), "unexpected Django ASGI image settings");
         }

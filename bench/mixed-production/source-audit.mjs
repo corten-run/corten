@@ -8,6 +8,7 @@ export const djangoAsgi = Object.freeze({
   recipe: "mixed-production-django-asgi",
   deployment: "django-granian-asgi",
   buildProfile: "matched-asgi",
+  entrypoint: null,
   command: Object.freeze(["sh", "-c", "python -m django migrate --noinput && exec python start_mixed_asgi.py"]),
   settings: "itempage.mixed_asgi_settings",
 });

@@ -360,7 +360,11 @@ export function replayExecution({ manifest, read, summary }) {
       fact(p.entrypointSha256, p.image.entrypointSha256);
       if (expected.cmd === null) fact(p.commandSha256, p.image.commandSha256); else fact(p.cmdSha256, digest(expected.cmd));
       const deployment = context.role === "app" ? nativeDeployment(summary.options, context.app) : null;
-      if (deployment) fact(p.cmdSha256, digest(deployment.command));
+      if (deployment) {
+        fact(p.cmdSha256, digest(deployment.command));
+        fact(p.entrypointSha256, digest(deployment.entrypoint));
+        fact(p.commandSha256, digest({ entrypoint: deployment.entrypoint, cmd: deployment.command }));
+      }
       for (const value of [p.commandSha256, p.cmdSha256, p.entrypointSha256, p.image.commandSha256, p.image.entrypointSha256])
         if (value !== null) assert.match(value, /^[a-f0-9]{64}$/);
       if (p.restartCount === null) { resourceMissing = true; block("native-participant-inspection-incomplete"); }
