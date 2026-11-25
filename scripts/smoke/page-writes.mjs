@@ -623,7 +623,17 @@ export async function pageWrites(page, browser) {
     while (Date.now() < until && !seen.asked.slice(start).some((a) => a.startsWith("GET /smoke/written/again"))) await own.waitForTimeout(50);
     const wholeBefore = seen.asked.slice(start).find((a) => a.startsWith("GET /smoke/written/again")) ?? null;
     seen.fail = true;
-    const sentSecond = await pressWrite(own, seen, "main form button");
+    // Clicked as before, not pressed in one page task (`pressWrite`): that press can come between
+    // the whole read's answer and its draw, which replaces the form while the write is out, and the
+    // runtime then says the write failed on the form it replaced, where the page does not hear it.
+    // That order is a runtime question reported on #2035, not this check's. The click is bounded,
+    // and its write must reach the stand-in within 5 s of it.
+    const writesBefore = seen.writes;
+    const clicked = await own.click("main form button", { timeout: 5000 }).then(
+      () => true,
+      () => false,
+    );
+    const sentSecond = clicked && (await pollFor(5000, async () => seen.writes > writesBefore)) === true;
     const failed =
       sentSecond &&
       (await own

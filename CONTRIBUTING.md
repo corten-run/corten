@@ -386,6 +386,11 @@ within five seconds of its press. That page swaps `<main>` about a second after 
 whenever its answer changes, so a click that found the button before a swap can reach no button
 and send nothing
 ([#2035 Five more Firefox smoke cases fail intermittently under load](https://github.com/corten-run/corten/issues/2035)).
+The second write of the check that a failed write stays shown after the page read itself whole is
+the exception: it is clicked, bounded to five seconds, and must still reach the stand-in within
+five seconds of the click. A press in one page task can come between the whole read's answer and
+its draw, and the runtime then says that write failed on the form the draw replaced, where the
+page does not hear it; that order is a runtime question on the same issue, not this check's.
 A write's own `<main>` they wait for is noted the moment it is drawn, since the page's next read
 draws the form over it a second later. The whole-poll stylesheet case requires its write, that
 write's page, the poll's request for the held stylesheet, the failing write and its failure in
