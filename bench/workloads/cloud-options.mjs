@@ -76,13 +76,16 @@ export function fleetCatalogResult(result) {
   return JSON.parse(result.stdout);
 }
 
+const nativeReplayStages = ["collect-native-replay-start", "collect-native-replay-deadline", "collect-native-replay-interrupted",
+  "collect-native-replay-refused", "collect-native-report-refused", "collect-native-evidence-refused"];
 const controllerStages = ["source-plan", "exact-approval", "remote-main-advertisement", "remote-main-fetch", "remote-main-ancestry",
   "source-recheck", "controller-construction", "controller-launch", "controller-collect", "controller-audit", "controller-cancellation", "controller-retirement", "controller-checkpoint", "provider-settlement",
   "setup-watcher-proof-missing", "setup-host-proof-refused",
   // Refusals whose supported operator route the CLI names (publicError).
-  "offline-never-started", "create-errored-contradicted", "create-contradiction-unpublished"];
-// Collect-time stages that name a route survive the production wrapper's phase mark.
-export const routeStages = ["setup-watcher-proof-missing", "setup-host-proof-refused", "offline-never-started", "create-errored-contradicted", "create-contradiction-unpublished"];
+  "offline-never-started", "create-errored-contradicted", "create-contradiction-unpublished", ...nativeReplayStages];
+// Detailed collect-time stages survive the production wrapper's phase mark.
+export const routeStages = ["setup-watcher-proof-missing", "setup-host-proof-refused", "offline-never-started", "create-errored-contradicted", "create-contradiction-unpublished",
+  ...nativeReplayStages];
 export function controllerFailure(error) {
   const stage = error && typeof error === "object" ? Object.getOwnPropertyDescriptor(error, "controllerStage")?.value : undefined;
   return controllerStages.includes(stage) ? stage : undefined;

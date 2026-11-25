@@ -1,19 +1,67 @@
-// Read-only: never starts a server, Docker, or an external process.
+// Read-only: strict reporting also checks the requested local Git object.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
-import { cpuSettings, descriptor, identity, k6Image, nodeImage, payloads, phases, runtimeContext, schema, sha256, timingPlan, verifyImage, verifyImageExecution, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
+import { cpuSettings, descriptor, identity, k6Image, nodeImage, payloads, phases, runtimeContext, scheduledProducerMarker, scheduledProducerSchema, schema, sha256, timingPlan, verifyImage, verifyImageExecution, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
 import { reader } from "./artifacts.mjs";
 import { functionalVerifier, verifyFunctionalFailure, verifyFunctionalLiveness, verifyAggregates, verifyRun } from "./evidence.mjs";
 import { spread } from "../fullstack/passes.mjs";
 import { verifyK6Provenance } from "../load-tool.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { timedSummarySchema, timedCaseProjection } from "./timed-outcomes.mjs";
-import { verifyProducer } from "./production.mjs";
+import { legacyProducerSchema, producerSourceNames, verifyProducer } from "./production.mjs";
 import { replayTimedRun } from "./evidence.mjs";
 
+function gitAtMeasuredCheckout(repo, args, options) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));
+  return spawnSync("git", ["--no-replace-objects", "-C", repo, ...args], {
+    env: { ...env, GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0" }, windowsHide: true, timeout: 5000,
+    stdio: ["ignore", "pipe", "ignore"], ...options,
+  });
+}
+function requireMeasuredCommit(commit) {
+  assert.ok(typeof commit === "string" && /^[a-f0-9]{40}$/.test(commit), "full measured commit required for strict reporting");
+}
+export function producerPolicyAtCommit(commit, repo = process.cwd()) {
+  requireMeasuredCommit(commit);
+  const result = gitAtMeasuredCheckout(repo, ["ls-tree", "--full-tree", "-z", `${commit}^{commit}`, "--", scheduledProducerMarker],
+    { encoding: "utf8", maxBuffer: 16 * 1024 });
+  assert.ok(result.status === 0 && !result.error, "cannot read strict JSON producer policy at measured commit");
+  if (!result.stdout) return legacyProducerSchema;
+  assert.ok(/^100(?:644|755) blob [a-f0-9]{40}\t/.test(result.stdout) && result.stdout.split("\t")[1] === scheduledProducerMarker + "\0",
+    "invalid committed JSON load sampler marker");
+  return scheduledProducerSchema;
+}
+
+export function verifyProducerAtCommit(producer, commit, repo = process.cwd()) {
+  requireMeasuredCommit(commit);
+  for (const name of producerSourceNames(producer?.schema)) {
+    const result = gitAtMeasuredCheckout(repo, ["cat-file", "blob", `${commit}^{commit}:bench/json-api/${name}`], { maxBuffer: 1024 ** 2 });
+    assert.ok(result.status === 0 && !result.error, `cannot read measured JSON producer file: ${name}`);
+    assert.ok(producer.sources?.[name] === sha256(result.stdout), `JSON producer differs from measured commit: ${name}`);
+  }
+}
+
 export function inspectJson(summary, { load, commit } = {}) {
+  return inspectReport(summary, { load, commit, verifySource: commit === undefined ? undefined : () => {
+    const required = producerPolicyAtCommit(commit);
+    const timed = summary.schema === timedSummarySchema;
+    if (required === scheduledProducerSchema || timed)
+      assert.ok(timed && summary.producer?.schema === required, "JSON producer differs from the measured commit policy");
+    if (timed) verifyProducerAtCommit(summary.producer, commit);
+  } });
+}
+
+// Isolated callers supply their trusted source-binding gate instead of probing local Git.
+export function inspectBoundJson(summary, { load, commit, verifyBoundProducer }) {
+  requireMeasuredCommit(commit);
+  verifyBoundProducer(summary);
+  return inspectReport(summary, { load, commit });
+}
+
+function inspectReport(summary, { load, commit, verifySource }) {
   const timed = summary.schema === timedSummarySchema;
   assert.ok(summary.schema === schema || timed, "not a json-api result schema");
   assert.deepEqual(summary.group, descriptor(), "JSON group contract/selection differs");
@@ -40,6 +88,7 @@ export function inspectJson(summary, { load, commit } = {}) {
     assert.ok(Number.isFinite(Date.parse(summary.startedAt)) && Number.isFinite(Date.parse(summary.finishedAt))
       && Date.parse(summary.finishedAt) >= Date.parse(summary.startedAt), "missing/invalid terminal clock");
   });
+  if (verifySource) check("producer provenance", verifySource);
   check("configuration", () => {
     if (timed) verifyProducer(summary.producer);
     assert.deepEqual(summary.timingPlan, timingPlan(summary.options), "missing/wrong effective timing plan");
@@ -269,7 +318,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       else if (args[i] === "--commit" && commit === undefined && /^[0-9a-f]{40}$/.test(args[i + 1] ?? "")) commit = args[++i];
       else throw new Error(`unknown/duplicate report argument ${args[i]}`);
     }
-    const report = inspectJson(JSON.parse(readFileSync(file, "utf8")), { load: reader(dirname(file)), commit });
+    const summary = JSON.parse(readFileSync(file, "utf8"));
+    const load = reader(dirname(file));
+    const measured = commit ?? summary.commit;
+    if (strict) requireMeasuredCommit(measured);
+    const report = strict ? inspectJson(summary, { load, commit: measured }) : inspectReport(summary, { load, commit });
     console.log(renderJson(report)); if (strict && !report.baseline) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
