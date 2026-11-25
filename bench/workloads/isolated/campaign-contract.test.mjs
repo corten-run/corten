@@ -166,6 +166,11 @@ test("full campaign binds real committed procedures, all groups, exact native de
 });
 test("group campaigns bind the entire exact native group with stable all-group provenance", () => {
   const all = bindCampaign({ round: "r17", commit });
+  const dedicatedRecipes = {
+    ...productionRecipes,
+    "client-heavy": clientComparisonRecipe,
+    "mixed-production": "mixed-production-django-asgi",
+  };
   const expected = {
     "catalog-page": { app: "1", api: "2-3", load: "4-7" },
     "json-api": { app: "1", api: "2-3", load: "4-7" },
@@ -186,9 +191,10 @@ test("group campaigns bind the entire exact native group with stable all-group p
     assert.equal(plan.schema, "benchmark-isolated-group-campaign/v1");
     assert.deepEqual(plan.order, [group]);
     const legacy = all.bindings.find((b) => b.request.group === group);
-    const recipe = group === "client-heavy" ? clientComparisonRecipe : legacy.request.recipe;
+    assert.equal(legacy.request.recipe, productionRecipes[group]);
+    const recipe = dedicatedRecipes[group];
     const dedicated = bindExecution({ ...legacy.request, recipe, review: null }, "dedicated");
-    assert.ok(isDeepStrictEqual(plan.bindings, [dedicated]), "dedicated group binding differs");
+    assert.ok(isDeepStrictEqual(plan.bindings, [dedicated]), `${group}: dedicated group binding differs`);
     assert.equal(dedicated.host.region, providerCreateHost("dedicated").region);
     assert.notEqual(dedicated.subjectSha256, legacy.subjectSha256);
     for (const field of ["procedures", "sourceSha256", "ready", "executionAuthorized"])
