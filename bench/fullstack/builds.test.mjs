@@ -444,35 +444,38 @@ function springRequestWaitSeconds(/** @type {string[]} */ lines) {
   return Math.max(linear, count * max) / 1000;
 }
 
-/** Elements a mirror may have that change nothing but its label: any other (`blocked`, `mirrorOfLayouts`, ...) changes what it does. */
-const mirrorFields = ["id", "name", "mirrorOf", "url"];
-
 /**
- * The mirrors a Maven settings file declares, past XML comments: each one's id, mirrorOf and url,
- * or the names of any other elements it has, so a mirror that is blocked or mirrors only some
- * layouts is not taken for Google's.
+ * Spring's Maven settings past their header (the XML declaration and one comment), byte for byte:
+ * one mirror, of Central only, at Google's URL, and nothing else. Exact text rather than a parse,
+ * so no XML form (a CDATA, a namespace prefix, a space in a tag, an element such as `blocked` or
+ * `mirrorOfLayouts`) can change what Maven does and still pass.
  */
-function mirrorsOf(/** @type {string} */ xml) {
-  const plain = xml.replace(/<!--[\s\S]*?-->/g, "");
-  return [...plain.matchAll(/<mirror>([\s\S]*?)<\/mirror>/g)].map((mirror) => {
-    const other = [...mirror[1].matchAll(/<([A-Za-z][\w.-]*)[\s>/]/g)].map((m) => m[1]).filter((n) => !mirrorFields.includes(n));
-    if (other.length) return { other };
-    return Object.fromEntries(["id", "mirrorOf", "url"]
-      .map((key) => [key, new RegExp(`<${key}>\\s*([^<]*?)\\s*</${key}>`).exec(mirror[1])?.[1]]));
-  });
-}
+const springSettingsBody = `<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 https://maven.apache.org/xsd/settings-1.2.0.xsd">
+  <mirrors>
+    <mirror>
+      <id>${springMirror.id}</id>
+      <name>Google's mirror of Maven Central</name>
+      <mirrorOf>${springMirror.mirrorOf}</mirrorOf>
+      <url>${springMirror.url}</url>
+    </mirror>
+  </mirrors>
+</settings>
+`;
 
 /**
  * Spring's .mvn: maven.config's lines exactly (retries, the app's settings and strict checksums),
- * and settings that declare one mirror, of Central only, at Google's URL, and nothing else, such
- * as a profile adding a repository or a proxy.
+ * and settings that are an XML declaration, one comment that holds no markup, then exactly
+ * `springSettingsBody`: one mirror, of Central only, at Google's URL, and nothing else.
  */
 function checkSpringMaven(/** @type {string[]} */ config, /** @type {string} */ settings) {
   assert.deepEqual(config, springConfig, "Spring's maven.config changed: its retries, its settings or its strict checksums");
-  assert.deepEqual(mirrorsOf(settings), [springMirror], "Spring's Maven reaches Central other than through Google's mirror alone");
-  const rest = settings.replace(/<!--[\s\S]*?-->/g, "").replace(/<\?xml[^>]*\?>/, "").replace(/<mirrors>[\s\S]*<\/mirrors>/, "")
-    .replace(/<settings\b[^>]*>/, "").replace("</settings>", "");
-  assert.equal(rest.trim(), "", "Spring's Maven settings declare more than its mirror");
+  const text = settings.replace(/\r/g, "");
+  const head = /^<\?xml version="1\.0" encoding="UTF-8"\?>\n<!--([^<>]*)-->\n/.exec(text);
+  assert.ok(head && !head[1].includes("--"), "Spring's Maven settings do not start with their declaration and one plain comment");
+  assert.equal(text.slice(head[0].length), springSettingsBody,
+    "Spring's Maven reaches Central other than through Google's mirror alone, or its settings declare more than its mirror");
 }
 
 function checkSpringInstall(/** @type {string[]} */ lines) {
@@ -931,12 +934,16 @@ test("Spring reaches Central only through Google's mirror, and fails a checksum 
     [mirror, `<!-- ${mirror} -->`],
     ["</mirrors>", "</mirrors>\n  <profiles><profile><id>more</id><repositories><repository><id>more</id><url>https://example.com/maven2/</url></repository></repositories></profile></profiles>"],
     ["</mirrors>", "</mirrors>\n  <proxies><proxy><host>proxy.example.com</host></proxy></proxies>"],
+    ["<name>Google's mirror of Maven Central</name>", "<name><![CDATA[<!--]]></name><blocked>true</blocked><!-- end -->"],
+    ["<mirror>", "<mirror >"],
+    ["<mirrorOf>central</mirrorOf>", "<mirrorOf>central</mirrorOf>\n      <s:blocked xmlns:s=\"http://maven.apache.org/SETTINGS/1.2.0\">true</s:blocked>"],
+    ["<mirrors>", "<mirrors>\n    <!-- <mirror> -->"],
     ["<mirrorOf>central</mirrorOf>", "<mirrorOf>central</mirrorOf>\n      <blocked>true</blocked>"],
     ["<mirrorOf>central</mirrorOf>", "<mirrorOf>central</mirrorOf>\n      <mirrorOfLayouts>!default</mirrorOfLayouts>"],
     ["<mirrorOf>central</mirrorOf>", "<mirrorOf>central</mirrorOf>\n      <layout>legacy</layout>"],
   ])) {
     assert.ok(settings.includes(from), `Spring's Maven settings no longer have ${from.trim()}`);
-    assert.throws(() => checkSpringMaven(lines(config), settings.replace(from, to)), /through Google's mirror alone|more than its mirror/, `accepted ${to.trim()}`);
+    assert.throws(() => checkSpringMaven(lines(config), settings.replace(from, to)), /through Google's mirror alone|declaration and one plain comment/, `accepted ${to.trim()}`);
   }
   for (const [from, to] of /** @type {[string, string][]} */ ([
     ["--strict-checksums\n", ""],
