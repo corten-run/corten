@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticInspection } from "./cloud-fixtures.mjs";
 import { fleetPlan, reservation, tags } from "./cloud-contract.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { digest, extractArchive, treeHash } from "./cloud-local.mjs";
-import { productionPlan } from "./cloud-production.mjs";
+import { productionMain, productionPlan } from "./cloud-production.mjs";
 import { remoteFiles } from "./cloud-remote.mjs";
 import { verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
@@ -24,17 +24,19 @@ const canonical = (value) => JSON.stringify(value, (_, v) => v && typeof v === "
   ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]])) : v);
 
 function fixture(t, group, flags = {}) {
-  const json = group === "json-api", phase = json ? "closed" : "invalid", { preplan } = flags;
-  const fleetGroup = preplan ? join(`${group}--${round}`, group) : flags.fleetLayout ? group : undefined;
+  const json = group === "json-api", { preplan, handoff } = flags;
+  const closed = json || handoff, phase = closed ? "closed" : "invalid";
+  const single = preplan || handoff;
+  const fleetGroup = single ? join(`${group}--${round}`, group) : flags.fleetLayout ? group : undefined;
   const h = harness(t, { ...flags, round, fleetGroup });
   if (fleetGroup) mkdirSync(h.base, { recursive: true });
   h.seed();
   const root = dirname(h.base);
   const region = json ? "blr1" : "sfo3";
   const child = fleetPlan({ round, commit, token: "a".repeat(16), sshKey: "42", provider: { accountId, context },
-    tokens: preplan ? { [group]: "1".repeat(16) } : Object.fromEntries(h.saved().selection.groups.map(({ group }, index) => [group, String(index).padStart(16, "0")])) },
-  "2026-11-21T00:00:00.000Z", "sfo3", { stagedPlacement: !flags.fleetLayout || preplan,
-    ...(preplan ? { single: { group, indexSha256: "b".repeat(64), checkout: h.repo } } : {}) });
+    tokens: single ? { [group]: "1".repeat(16) } : Object.fromEntries(h.saved().selection.groups.map(({ group }, index) => [group, String(index).padStart(16, "0")])) },
+  "2026-11-21T00:00:00.000Z", "sfo3", { stagedPlacement: !flags.fleetLayout || single,
+    ...(single ? { single: { group, indexSha256: "b".repeat(64), checkout: h.repo } } : {}) });
   if (fleetGroup) writeFileSync(join(root, `fleet-${round}.json`), JSON.stringify(child));
   const token = child.jobs.find((j) => j.group === group).token;
   const saved = { ...h.saved(), ...reservation({ round, commit, token, group, fleet: child,
@@ -55,33 +57,33 @@ function fixture(t, group, flags = {}) {
   const put = (name, value) => writeFileSync(join(h.local, name), JSON.stringify(value));
   put("monitor-registration.json", reg);
   const closedAtMs = Date.now() - 2 * streamLimits.leaseMs - 1000;
-  put("monitor-local-closed.json", { binding, id: reg.id, code: json ? 0 : 255, signal: null, remoteDrained: false,
+  put("monitor-local-closed.json", { binding, id: reg.id, code: closed ? 0 : 255, signal: null, remoteDrained: false,
     closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs });
-  put(json ? "monitor-terminal.json" : "monitor-invalid.json", { binding, id: reg.id, ...(json
+  put(closed ? "monitor-terminal.json" : "monitor-invalid.json", { binding, id: reg.id, ...(closed
     ? { localClosed: true, remoteDrained: false, nativeTerminal: true, campaign, sealSha256: digest("synthetic seal") }
     : { publicationRevoked: true, remoteTerminal: false }) });
-  if (!json) {
+  if (!closed) {
     writeFileSync(join(h.local, "operation.lock"), retainedOperation);
     writeFileSync(join(h.base, ".groups-launch.lock"), flags.foreignLock ? "{}" : retainedLaunch);
   }
   const sibling = join(h.base, "sibling.lock"); writeFileSync(sibling, "sibling stays locked");
   writeFileSync(join(h.local, "known_hosts"), flags.replaceKey ? "synthetic replacement\n" : establishedKey);
 
-  const mainRoot = json ? "bench/json-api/results/j75" : "bench/fullstack-browser/work/w37";
+  const mainRoot = json ? "bench/json-api/results/j75" : handoff ? `bench/marketplace/results/${round}` : "bench/fullstack-browser/work/w37";
   const outputRoots = json ? ["bench/json-api/results/j74", mainRoot] : [mainRoot];
   const plan = { schema: "benchmark-isolated-group-campaign/v1", round, commit, order: [group],
-    bindings: [{ campaignMode: json ? "dedicated-blr1" : "dedicated", request: { group, round: json ? "j75" : "w37", commit },
+    bindings: [{ campaignMode: json ? "dedicated-blr1" : "dedicated", request: { group, round: json ? "j75" : handoff ? round : "w37", commit },
       validation: { artifactRoot: mainRoot } }] };
   plan.campaignSha256 = deploymentSha256(plan);
   const attempt = { schema: "benchmark-isolated-campaign-reservation/v1", id: campaign, commit, campaignSha256: plan.campaignSha256 };
-  const status = { schema: "benchmark-isolated-campaign-status/v1", state: json ? "finished" : "preserved-uncertain", round,
+  const status = { schema: "benchmark-isolated-campaign-status/v1", state: closed ? "finished" : "preserved-uncertain", round,
     campaign, campaignSha256: plan.campaignSha256, controllerReady: false, isolation: "unverified", executionVersion: 5,
     outcomes: [{ group, outcome: flags.lateSealFailure ? "native-validated" : json ? "failed" : "preserved-uncertain" }],
     uncollectedNativeRoots: json || flags.lateSealFailure ? [] : [{ group, phase: "timing", artifactRoot: flags.foreignPath ?? mainRoot }] };
   const entries = [{ name: "campaign/" }, ...(preplan ? [] : [{ name: "campaign/.host-attempt.json", body: JSON.stringify(attempt) },
     { name: `campaign/${campaign}/` }, { name: `campaign/${campaign}/plan.json`, body: JSON.stringify(plan) },
     { name: `campaign/${campaign}/campaign-result.json`, body: JSON.stringify({ status, wholeHostTerminal: "parent-must-observe", deletionAuthorized: false }) },
-    ...(json ? [{ name: `campaign/${campaign}/control-stream-seal.json`, body: "synthetic seal" }] : [])])];
+    ...(closed ? [{ name: `campaign/${campaign}/control-stream-seal.json`, body: "synthetic seal" }] : [])])];
   const wrapperFiles = metadata().map((e) => e.name === "exit-code" ? { ...e, body: "2\n" } : e);
   if (preplan) {
     const line = remoteFiles(saved)["job.sh"].split("\n").lastIndexOf("bootstrap_stage=native-entry") + 2;
@@ -132,7 +134,8 @@ function fixture(t, group, flags = {}) {
       }
       if (flags.busyFence && probes === 3) return { status: 1, stdout: "" };
       return { status: 0, stdout: JSON.stringify({ schema: "benchmark-failed-native-host/v1", custody: true,
-        historicalAccountingQualified: false, hostId: saved.id, unit: saved.unit, roots, metadataSha256,
+        historicalAccountingQualified: false, hostId: saved.id, unit: saved.unit, roots,
+        metadataSha256: flags.rehashDrift && probes === 2 ? digest("synthetic changed inventory") : metadataSha256,
         snapshotSha256: digest(snapshot), archiveSha256: digest(custody), observedAtMs: Date.now() }) };
     }
     if (binary === "scp" && args.at(-2).endsWith(":/bench/failed-native-custody.tgz")) {
@@ -149,13 +152,13 @@ function fixture(t, group, flags = {}) {
     }
     return h.run(binary, args, ...rest);
   };
-  return { h, root, sibling, wrapper, custody, roots, get probes() { return probes; }, get downloads() { return custodyDownloads; },
+  return { h, root, sibling, wrapper, custody, roots, run, get probes() { return probes; }, get downloads() { return custodyDownloads; },
     get deleteExpiry() { return deleteExpiry; }, task: (deps = {}, options) => h.task({ run,
       inspect: () => assert.fail("native replay must not decide custody"), ...deps }, options) };
 }
 
-async function preplanFixture(t, flags) {
-  const group = "fullstack-browser", f = fixture(t, group, { ...flags, preplan: true });
+function singleFixture(t, flags, group) {
+  const f = fixture(t, group, flags);
   const { h, root, wrapper } = f, options = { round, stateDir: h.base, retireFailedNative: true };
   const fleet = readFleet(root, round), child = fleetChildOptions(fleet, group, "detach");
   const job = { action: "detach", stateRoot: child.stateDir, controllerCommit: commit, options: child, fleetSha256: fleet.manifestSha256 };
@@ -197,8 +200,484 @@ async function preplanFixture(t, flags) {
       return current.subject;
     } }, { ...options, collect: undefined }).retireFailedNative();
   return { ...f, get probes() { return f.probes; }, get downloads() { return f.downloads; }, get deleteExpiry() { return f.deleteExpiry; },
-    intent, intentPath, preview, preserveWrapper, retire };
+    intent, intentPath, preview, preserveWrapper, retire, repairCommit };
 }
+
+const preplanFixture = (t, flags) => singleFixture(t, { ...flags, preplan: true }, "fullstack-browser");
+
+async function handoffFixture(t, flags = {}) {
+  const f = singleFixture(t, { ...flags, handoff: true, lateSealFailure: true }, "localized-marketplace");
+  assert.equal(await f.task().collect(), 3);
+  const { h, repairCommit } = f, args = [round, "--state-dir", h.base, "--retire-failed-native"];
+  const launched = [], knobs = {};
+  let approval;
+  const deps = { repo: h.repo, sleep: async () => {}, inspect: () => assert.fail("handoff retirement cannot validate native timing"),
+    write: (line) => { approval = JSON.parse(line); },
+    spawn(binary, argv, options) {
+      if (binary === "git") {
+        const [verb, name, subject] = argv;
+        if (verb === "rev-parse") return { status: 0, stdout: name === "HEAD" ? repairCommit : h.repo };
+        if (verb === "ls-remote") return { status: 0, stdout: `${repairCommit}\trefs/heads/main\n` };
+        if (verb === "merge-base" && subject === repairCommit && knobs.unmerged) return { status: 1, stdout: "" };
+        if (verb === "show") {
+          const [source, file] = name.split(":");
+          assert.ok([commit, repairCommit].includes(source));
+          let stdout = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8").replaceAll("\r\n", "\n");
+          if (source === commit && file.endsWith("/registry.mjs") && knobs.sourceDrift) stdout += "\n// changed measured registry\n";
+          if (source === repairCommit && knobs.lockedDrift && existsSync(join(h.local, "operation.lock"))) {
+            knobs.lockedDrift = false;
+            writeFileSync(f.intentPath, readFileSync(f.intentPath, "utf8") + "\n");
+          }
+          return { status: 0, stdout };
+        }
+        assert.ok(["cat-file", "merge-base", "status", "fetch"].includes(verb));
+        return { status: 0, stdout: "" };
+      }
+      launched.push([binary]);
+      assert.equal(binary, "ssh", "handoff recovery must not transfer or repack");
+      assert.ok(existsSync(join(h.local, "operation.lock")));
+      const request = h.saved().control.ledger.at(-1).request, id = request.invocation.id;
+      const parts = [...argv];
+      parts[parts.length - 1] = options.input.slice(JSON.stringify(request).length)
+        .replace(/^set -euo pipefail\n/, "").replace(/\n$/, "");
+      const result = f.run(binary, parts, options.timeout);
+      if (f.probes === 3) {
+        knobs.expire?.();
+        knobs.finalFence?.();
+      }
+      return { ...result, stderr: `CORTEN_CONTROL ${id} ${"a".repeat(64)}\nCORTEN_RESULT ${id} ${result.status}\n` };
+    },
+    providerFactory: ({ createMode }) => Object.assign((argv, timeout, allowFail, expiry) => {
+      assert.equal(createMode, null); launched.push(["provider", ...argv]);
+      if (knobs.beforeFinalPending && argv[2] === "get" && f.probes === 2) knobs.beforeFinalPending();
+      if (knobs.beforeIntent && argv[2] === "get" && f.probes === 3 && !h.saved().deletionIntentAt) knobs.beforeIntent();
+      if (knobs.dispatchAccount && argv[0] === "account" && h.saved().deletionIntentAt) knobs.dispatchAccount();
+      if (knobs.exactRead && argv[2] === "get" && h.saved().deletionIntentAt) knobs.exactRead();
+      if (knobs.failExactRead && argv[2] === "get")
+        return { status: 1, providerDiagnostic: { code: "get-http", httpStatus: 500 } };
+      if (argv[2] === "delete") {
+        assert.ok(Number.isSafeInteger(expiry) && Date.now() < expiry && expiry - Date.now() <= 60000);
+        assert.ok(existsSync(join(h.local, "failed-native-host.json")));
+      }
+      return f.run("doctl", argv, timeout, allowFail, expiry);
+    }, { close: async () => { knobs.close?.(); } }),
+  };
+  return { f, launched, knobs,
+    async preview() { assert.equal(await productionMain([...args, "--print-approval"], deps), 3); return approval; },
+    retire: (approved) => productionMain([...args, "--approve-reviewed-merged-ready", approved.approvalSha256], deps) };
+}
+
+test("approved handoff retirement reuses an exact ordinary capture and reconciles only exact absence", async (t) => {
+  const { f, preview, retire, knobs, launched } = await handoffFixture(t, { deleteLost: true });
+  const { h } = f, held = ["results.tgz", "failed-native-results.tgz", "failed-native-reservation.json", "failed-native-capture.json"]
+    .map(name => [join(h.local, name), readFileSync(join(h.local, name))]);
+  assert.equal(f.probes, 1); assert.equal(f.downloads, 1); assert.equal(h.deletes, 0);
+  const p = await preview();
+  assert.equal(p.controllerCommit, f.repairCommit);
+  assert.equal(p.recovery.captureControllerCommit, commit);
+  assert.equal(p.recovery.captureSha256, digest(held.at(-1)[1]));
+  assert.deepEqual(p.recovery.provider, { accountId, context });
+  assert.equal(p.recovery.hostId, h.saved().id);
+  assert.deepEqual(launched, []);
+  await assert.rejects(retire(p), /acknowledgement lost/);
+  const saved = h.saved(), receipt = verifyFailedNativeRetirement(h.local, saved);
+  assert.equal(receipt.handoff.controllerCommit, f.repairCommit);
+  assert.equal(receipt.handoff.captureSha256, p.recovery.captureSha256);
+  assert.equal(receipt.handoff.launchIntentSha256, p.recovery.intent.launch);
+  assert.equal(receipt.capture.controllerCommit, commit);
+  assert.equal(saved.status, "retired"); assert.equal(saved.destroyedAt, undefined);
+  assert.equal(saved.fullGroupQualified, false);
+  assert.ok(["validation", "exitCode", "collectedAt", "evidenceOutcome"].every(k => saved[k] === undefined));
+  assert.equal(f.probes, 3); assert.equal(f.downloads, 1); assert.equal(h.deletes, 1);
+  for (const [path, bytes] of held) assert.deepEqual(readFileSync(path), bytes);
+  const calls = launched.length;
+  knobs.failExactRead = true;
+  await assert.rejects(retire(await preview()), /exact host observation failed/);
+  assert.equal(h.saved().destroyedAt, undefined);
+  knobs.failExactRead = false;
+  assert.equal(await retire(await preview()), 1);
+  assert.ok(!existsSync(join(h.local, "operation.lock")));
+  const reconciliation = launched.slice(calls);
+  assert.ok(reconciliation.some(([, a, b, c, id]) => a === "compute" && b === "droplet" && c === "get" && id === saved.id));
+  assert.ok(reconciliation.every(([binary, a, b, c]) => binary === "provider" && (a === "account" && b === "get" || a === "compute" && b === "droplet" && c === "get")));
+  assert.ok(h.saved().destroyedAt); assert.equal(h.deletes, 1); assert.equal(f.probes, 3);
+  const fleet = await verifyFleet({ root: f.root, round, commit },
+    { inspect: () => assert.fail("handoff retirement is not a benchmark result") });
+  assert.equal(fleet.error, undefined);
+  assert.equal(fleet.groups[0].outcome, "native-failed-retired"); assert.equal(fleet.publishableBaseline, false);
+  const receiptPath = join(h.local, "failed-native-host.json"), bytes = readFileSync(receiptPath), finalState = h.saved();
+  for (const tamper of [proof => { proof.capture.scriptSha256 = "e".repeat(64); },
+    proof => { proof.rehash.scriptSha256 = "e".repeat(64); }, proof => { proof.scriptSha256 = "e".repeat(64); }]) {
+    const proof = JSON.parse(bytes); tamper(proof);
+    const changed = JSON.stringify(proof);
+    writeFileSync(receiptPath, changed);
+    assert.throws(() => verifyFailedNativeRetirement(h.local, { ...finalState,
+      retirement: { ...finalState.retirement, evidenceSha256: digest(changed) } }), /capture|script/);
+  }
+  writeFileSync(receiptPath, bytes);
+  writeFileSync(f.intentPath, readFileSync(f.intentPath, "utf8") + "\n");
+  assert.throws(() => verifyFailedNativeRetirement(h.local, finalState), /handoff launch intent changed/);
+});
+
+test("handoff approval refuses missing, mismatched or mutated capture evidence before host access", async (t) => {
+  const { f, preview, retire, launched } = await handoffFixture(t);
+  const { h } = f, approval = await preview();
+  for (const [name, error] of [
+    ["failed-native-reservation.json", /failed-native-reservation/],
+    ["failed-native-capture.json", /failed-native-capture/],
+  ]) {
+    const path = join(h.local, name), bytes = readFileSync(path);
+    unlinkSync(path);
+    await assert.rejects(preview(), error);
+    writeFileSync(path, bytes);
+  }
+  const path = join(h.local, "failed-native-capture.json"), bytes = readFileSync(path);
+  for (const [key, value, error] of [
+    ["controllerCommit", f.repairCommit, /capture must come from the measured controller/],
+    ["scriptSha256", "e".repeat(64), /original handoff capture script changed/],
+  ]) {
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(bytes), [key]: value }));
+    await assert.rejects(preview(), error);
+  }
+  writeFileSync(path, Buffer.concat([bytes, Buffer.from("\n")]));
+  await assert.rejects(retire(approval), /operator-approved exact action/);
+  writeFileSync(path, bytes);
+  for (const [name, error] of [["results.tgz", /original failed archive changed/],
+    ["failed-native-results.tgz", /custody archive changed/]]) {
+    const archivePath = join(h.local, name), original = readFileSync(archivePath);
+    unlinkSync(archivePath);
+    await assert.rejects(retire(approval), { code: "ENOENT" });
+    writeFileSync(archivePath, "synthetic tamper");
+    await assert.rejects(retire(approval), error);
+    writeFileSync(archivePath, original);
+  }
+  assert.deepEqual(launched, []);
+  assert.equal(h.saved().deletionIntentAt, undefined); assert.equal(f.probes, 1); assert.equal(f.downloads, 1);
+});
+
+test("handoff refuses retained locks, foreclosure, unmerged source and locked approval drift", async (t) => {
+  const { f, knobs, preview, retire, launched } = await handoffFixture(t);
+  const { h } = f, approval = await preview();
+  for (const path of [join(h.local, "operation.lock"), join(h.local, "stream-recovery.lock"), join(h.local, "audit-delivery.lock"),
+    join(h.base, ".groups-launch.lock"), join(f.root, ".fleet-operation.lock"),
+    join(dirname(f.root), ".continuation-operation.lock")]) {
+    writeFileSync(path, retainedOperation);
+    await assert.rejects(retire(approval), /competing or retained custody/);
+    assert.equal(readFileSync(path, "utf8"), retainedOperation);
+    unlinkSync(path);
+  }
+  for (const name of ["monitor-invalid.json", "state.json.revoked-dead.tmp", "failed-native-host.json"]) {
+    const path = join(h.local, name);
+    writeFileSync(path, "{}");
+    await assert.rejects(preview(), /foreclosed|unsettled/);
+    unlinkSync(path);
+  }
+  knobs.sourceDrift = true;
+  await assert.rejects(retire(approval), /measured group layout or remote job differs/);
+  knobs.sourceDrift = false; knobs.unmerged = true;
+  await assert.rejects(retire(approval), /control process failed/);
+  knobs.unmerged = false; knobs.lockedDrift = true;
+  await assert.rejects(retire(approval), /locked action changed after approval/);
+  assert.deepEqual(launched, []);
+  assert.equal(h.saved().deletionIntentAt, undefined); assert.equal(h.deletes, 0);
+});
+
+test("handoff refuses changed remote custody, a busy guest, or an expired final proof without DELETE", async (t) => {
+  const changed = await handoffFixture(t, { rehashDrift: true });
+  await assert.rejects(changed.retire(await changed.preview()), /predelete custody differs/);
+  assert.equal(changed.f.probes, 2); assert.equal(changed.f.h.deletes, 0);
+  assert.equal(changed.f.h.saved().deletionIntentAt, undefined);
+  const busy = await handoffFixture(t, { busyFence: true });
+  await assert.rejects(busy.retire(await busy.preview()), /control process failed/);
+  assert.equal(busy.f.probes, 3); assert.equal(busy.f.h.deletes, 0);
+  assert.equal(busy.f.h.saved().deletionIntentAt, undefined);
+  const expiry = await handoffFixture(t);
+  const approved = await expiry.preview(), realNow = Date.now;
+  let offset = 0;
+  const clock = t.mock.method(Date, "now", () => realNow() + offset);
+  expiry.knobs.expire = () => { offset = 60001; };
+  try { await assert.rejects(expiry.retire(approved), /current retirement proof expired/); }
+  finally { clock.mock.restore(); }
+  assert.equal(expiry.f.probes, 3); assert.equal(expiry.f.h.deletes, 0);
+  assert.equal(expiry.f.h.saved().deletionIntentAt, undefined);
+});
+
+test("handoff refuses a byte-only capture change during the final fence before intent", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t);
+  const { h } = f, path = join(h.local, "failed-native-capture.json"), approved = await preview();
+  const changed = Buffer.concat([readFileSync(path), Buffer.from("\n")]);
+  knobs.finalFence = () => appendFileSync(path, "\n");
+  const error = await retire(approved).catch(e => e);
+  assert.equal(h.deletes, 0);
+  assert.equal(h.saved().deletionIntentAt, undefined);
+  assert.ok(!existsSync(join(h.local, "failed-native-host.json")));
+  assert.deepEqual(readFileSync(path), changed);
+  assert.equal(f.probes, 3);
+  assert.match(error?.message ?? "", /approved original handoff capture changed/);
+});
+
+test("handoff refuses to overwrite unexpected state at final SSH acknowledgement", async (t) => {
+  for (const kind of ["bad-json", "byte-drift", "missing", "unreadable", "same-byte replacement"]) await t.test(kind, async (t) => {
+    const { f, knobs, preview, retire } = await handoffFixture(t);
+    const { h } = f, path = h.statePath, approved = await preview();
+    const moved = join(h.temp, "prior-pending-state");
+    let expected, changedInode;
+    knobs.finalFence = () => {
+      const pending = readFileSync(path);
+      assert.equal(JSON.parse(pending).control.ledger.at(-1).localTerminal, false);
+      if (kind === "bad-json") writeFileSync(path, expected = Buffer.from("{"));
+      else if (kind === "byte-drift") {
+        expected = Buffer.concat([pending, Buffer.from("\n")]);
+        appendFileSync(path, "\n");
+      }
+      else {
+        renameSync(path, moved);
+        if (kind === "unreadable") mkdirSync(path);
+        if (kind === "same-byte replacement") {
+          writeFileSync(path, expected = pending, { flag: "wx" });
+          changedInode = lstatSync(path, { bigint: true }).ino;
+          assert.notEqual(changedInode, lstatSync(moved, { bigint: true }).ino);
+        }
+      }
+    };
+    const error = await retire(approved).catch(e => e);
+    assert.equal(f.probes, 3);
+    assert.equal(h.deletes, 0);
+    if (kind === "missing") assert.ok(!existsSync(path));
+    else if (kind === "unreadable") assert.ok(lstatSync(path).isDirectory());
+    else assert.deepEqual(readFileSync(path), expected);
+    if (changedInode !== undefined) assert.equal(lstatSync(path, { bigint: true }).ino, changedInode);
+    assert.ok(!existsSync(`${path}.tmp`), "must refuse before staging the acknowledgement");
+    assert.ok(!existsSync(join(h.local, "failed-native-host.json")));
+    assert.ok(existsSync(join(h.local, "operation.lock")), "keep custody of the unacknowledged command");
+    assert.match(error?.message ?? "", /handoff reservation changed or unreadable/);
+  });
+});
+
+test("handoff refuses state drift before writing the final SSH pending row", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t);
+  const { h } = f, path = h.statePath, approved = await preview();
+  let expected;
+  knobs.beforeFinalPending = () => {
+    delete knobs.beforeFinalPending;
+    const settled = readFileSync(path);
+    assert.equal(JSON.parse(settled).control.ledger.at(-1).localTerminal, true);
+    expected = Buffer.concat([settled, Buffer.from("\n")]);
+    appendFileSync(path, "\n");
+  };
+  const error = await retire(approved).catch(e => e);
+  assert.deepEqual({ probes: f.probes, deletes: h.deletes }, { probes: 2, deletes: 0 });
+  assert.deepEqual(readFileSync(path), expected);
+  assert.ok(!existsSync(`${path}.tmp`));
+  assert.ok(!existsSync(join(h.local, "failed-native-host.json")));
+  assert.ok(existsSync(join(h.local, "operation.lock")));
+  assert.match(error?.message ?? "", /handoff reservation changed or unreadable/);
+});
+
+test("handoff refuses a same-byte state replacement at intent, dispatch or absence settlement", async (t) => {
+  for (const phase of ["intent", "dispatch", "acknowledged DELETE", "lost-ack retry"]) await t.test(phase, async (t) => {
+    const lost = phase === "lost-ack retry";
+    const { f, knobs, preview, retire } = await handoffFixture(t, { deleteLost: lost });
+    const { h } = f, path = h.statePath, moved = join(h.temp, "prior-state");
+    const beforeIntent = phase === "intent", beforeDispatch = phase === "dispatch";
+    if (lost) await assert.rejects(retire(await preview()), /acknowledgement lost/);
+    const approved = await preview();
+    let expected, inode;
+    const hook = beforeIntent ? "beforeIntent" : beforeDispatch ? "dispatchAccount" : "exactRead";
+    const replace = () => {
+      expected = readFileSync(path);
+      renameSync(path, moved);
+      writeFileSync(path, expected, { flag: "wx" });
+      inode = lstatSync(path, { bigint: true }).ino;
+      assert.notEqual(inode, lstatSync(moved, { bigint: true }).ino);
+    };
+    knobs[hook] = () => {
+      delete knobs[hook];
+      // Cross the account-return checkpoint and change the file after the
+      // preliminary dispatch check, just before production worker dispatch.
+      if (beforeDispatch) setImmediate(() => setImmediate(() => setImmediate(replace)));
+      else replace();
+    };
+    const error = await retire(approved).catch(e => e);
+    assert.equal(f.probes, 3);
+    assert.equal(h.deletes, beforeIntent || beforeDispatch ? 0 : 1);
+    assert.equal(h.saved().destroyedAt, undefined);
+    assert.equal(!!h.saved().deletionIntentAt, !beforeIntent);
+    assert.deepEqual(readFileSync(path), expected);
+    assert.equal(lstatSync(path, { bigint: true }).ino, inode);
+    assert.ok(!existsSync(`${path}.tmp`));
+    assert.ok(existsSync(join(h.local, "operation.lock")));
+    assert.match(error?.message ?? "", /handoff reservation changed or unreadable/);
+  });
+});
+
+test("handoff refuses a same-byte operation lock replacement during the final fence and preserves it", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t);
+  const { h } = f, path = join(h.local, "operation.lock"), moved = join(h.temp, "moved-operation-lock"), approved = await preview();
+  let replacement;
+  knobs.finalFence = () => {
+    renameSync(path, moved);
+    writeFileSync(path, readFileSync(moved), { flag: "wx" });
+    replacement = lstatSync(path, { bigint: true });
+    assert.notEqual(replacement.ino, lstatSync(moved, { bigint: true }).ino);
+  };
+  const error = await retire(approved).catch(e => e);
+  assert.deepEqual({ deletes: h.deletes, intent: !!h.saved().deletionIntentAt, replacementKept: existsSync(path) },
+    { deletes: 0, intent: false, replacementKept: true });
+  assert.ok(!existsSync(join(h.local, "failed-native-host.json")));
+  assert.equal(lstatSync(path, { bigint: true }).ino, replacement.ino);
+  assert.deepEqual(readFileSync(path), readFileSync(moved));
+  assert.equal(f.probes, 3);
+  assert.match(error?.message ?? "", /handoff operation lock changed/);
+});
+
+test("handoff refuses capture drift across the last production dispatch checkpoint", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t);
+  const { h } = f, path = join(h.local, "failed-native-capture.json"), approved = await preview();
+  knobs.dispatchAccount = () => {
+    delete knobs.dispatchAccount;
+    // The account-return checkpoint crosses two turns. Mutate in the next
+    // turn, after the controller's local check but before worker dispatch.
+    setImmediate(() => setImmediate(() => setImmediate(() => appendFileSync(path, "\n"))));
+  };
+  await assert.rejects(retire(approved), /approved original handoff capture changed/);
+  assert.equal(h.deletes, 0);
+  assert.ok(h.saved().deletionIntentAt, "the already written intent is retained");
+  assert.equal(h.saved().destroyedAt, undefined);
+  assert.equal(f.probes, 3);
+});
+
+test("handoff refuses a custody archive append during the final account check", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t);
+  const { h } = f, path = join(h.local, "failed-native-results.tgz"), approved = await preview();
+  knobs.dispatchAccount = () => {
+    delete knobs.dispatchAccount;
+    appendFileSync(path, "x");
+  };
+  const error = await retire(approved).catch(e => e);
+  assert.deepEqual({ deletes: h.deletes, destroyed: !!h.saved().destroyedAt }, { deletes: 0, destroyed: false });
+  assert.ok(h.saved().deletionIntentAt);
+  assert.match(error?.message ?? "", /local handoff custody changed/);
+});
+
+test("handoff refuses same-length writes, same-byte replacements and metadata drift in verified local custody", async (t) => {
+  const flip = (path) => {
+    const bytes = readFileSync(path);
+    bytes[0] ^= 1;
+    writeFileSync(path, bytes);
+    assert.equal(lstatSync(path).size, bytes.length);
+  };
+  for (const kind of ["custody archive same length", "custody archive replacement", "original archive metadata", "reservation preimage replacement",
+    "original extraction same length", "custody extraction same length"]) await t.test(kind, async (t) => {
+    const { f, knobs, preview, retire } = await handoffFixture(t);
+    const { h } = f, approved = await preview();
+    const capture = JSON.parse(readFileSync(join(h.local, "failed-native-capture.json")));
+    const change = () => {
+      if (kind === "custody archive same length") {
+        flip(join(h.local, "failed-native-results.tgz"));
+      } else if (kind === "original archive metadata") {
+        const path = join(h.local, "results.tgz"), mtime = lstatSync(path).mtimeMs;
+        utimesSync(path, new Date(), new Date(mtime - 120000));
+      } else if (kind === "original extraction same length") {
+        flip(join(h.local, h.saved().evidence, "campaign", campaign, "plan.json"));
+      } else if (kind === "custody extraction same length") {
+        flip(join(h.local, capture.evidence, "campaign", "root-1", "failure.txt"));
+      } else {
+        const path = join(h.local, kind === "custody archive replacement" ? "failed-native-results.tgz" : "failed-native-reservation.json");
+        const moved = join(h.temp, "replaced-evidence");
+        renameSync(path, moved);
+        writeFileSync(path, readFileSync(moved), { flag: "wx" });
+        assert.notEqual(lstatSync(path, { bigint: true }).ino, lstatSync(moved, { bigint: true }).ino);
+      }
+    };
+    if (kind === "original extraction same length") knobs.finalFence = change;
+    else {
+      knobs.dispatchAccount = () => {
+        delete knobs.dispatchAccount;
+        // Change after the controller's preliminary dispatch check.
+        setImmediate(() => setImmediate(() => setImmediate(change)));
+      };
+    }
+    await assert.rejects(retire(approved), /local handoff custody changed/);
+    assert.equal(h.deletes, 0);
+    assert.equal(h.saved().destroyedAt, undefined);
+    assert.equal(!!h.saved().deletionIntentAt, kind !== "original extraction same length");
+    assert.equal(existsSync(join(h.local, "failed-native-host.json")), kind !== "original extraction same length");
+  });
+});
+
+test("handoff lost-ack retry refuses a capture append during exact absence", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t, { deleteLost: true });
+  const { h } = f, path = join(h.local, "failed-native-capture.json");
+  await assert.rejects(retire(await preview()), /acknowledgement lost/);
+  const approved = await preview();
+  knobs.exactRead = () => {
+    delete knobs.exactRead;
+    appendFileSync(path, "\n");
+  };
+  const error = await retire(approved).catch(e => e);
+  assert.deepEqual({ deletes: h.deletes, destroyed: !!h.saved().destroyedAt }, { deletes: 1, destroyed: false });
+  assert.match(error?.message ?? "", /approved original handoff capture changed/);
+});
+
+test("handoff acknowledged DELETE records exact absence only with the receipt and custody intact", async (t) => {
+  for (const change of [undefined, "failed-native-host.json", "failed-native-results.tgz"]) await t.test(change ?? "intact", async (t) => {
+    const { f, knobs, preview, retire } = await handoffFixture(t);
+    const { h } = f, approved = await preview();
+    if (change) {
+      knobs.exactRead = () => {
+        delete knobs.exactRead;
+        appendFileSync(join(h.local, change), "\n");
+      };
+      await assert.rejects(retire(approved), /failed-native retirement receipt changed|local handoff custody changed/);
+    } else {
+      assert.equal(await retire(approved), 1);
+      assert.ok(!existsSync(join(h.local, "operation.lock")));
+    }
+    assert.equal(!!h.saved().destroyedAt, change === undefined);
+    assert.equal(h.deletes, 1);
+    assert.equal(f.probes, 3);
+    assert.equal(f.downloads, 1);
+  });
+});
+
+test("handoff teardown preserves a lock replaced during provider settlement", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t, { busyFence: true });
+  const { h } = f, path = join(h.local, "operation.lock"), moved = join(h.temp, "settling-operation-lock"), approved = await preview();
+  const replacement = "synthetic replacement lock\n";
+  knobs.close = () => {
+    delete knobs.close;
+    renameSync(path, moved);
+    writeFileSync(path, replacement, { flag: "wx" });
+  };
+  await assert.rejects(retire(approved), /handoff operation lock changed/);
+  assert.equal(h.deletes, 0);
+  assert.equal(h.saved().deletionIntentAt, undefined);
+  assert.equal(readFileSync(path, "utf8"), replacement);
+  assert.ok(existsSync(moved));
+});
+
+test("handoff teardown retains custody when settled state becomes unavailable", async (t) => {
+  for (const deleteLost of [false, true]) await t.test(deleteLost ? "absence reconciliation" : "first retirement", async (t) => {
+    const { f, knobs, preview, retire } = await handoffFixture(t, { deleteLost });
+    const { h } = f, saved = join(h.temp, "settled-state.json");
+    if (deleteLost) await assert.rejects(retire(await preview()), /acknowledgement lost/);
+    const approved = await preview();
+    let settled = false;
+    knobs.close = () => {
+      delete knobs.close;
+      assert.ok(h.saved().destroyedAt);
+      settled = true;
+      renameSync(h.statePath, saved);
+    };
+    await assert.rejects(retire(approved), /handoff reservation changed or unreadable; preserve custody/);
+    assert.ok(settled);
+    assert.ok(existsSync(join(h.local, "operation.lock")));
+    assert.ok(!existsSync(h.statePath));
+    assert.ok(existsSync(saved));
+    assert.equal(h.deletes, 1);
+  });
+});
 
 test("preplan preview binds preserved wrapper, measured registry and consumed single-child intent", async (t) => {
   const f = await preplanFixture(t);

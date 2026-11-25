@@ -51,6 +51,23 @@ export const groups = freeze({
 });
 
 export const groupNames = Object.freeze(Object.keys(groups));
+const runners = Object.freeze({
+  "catalog-page": ["bench/catalog/run.mjs", "--group", "catalog-page"],
+  "json-api": ["bench/json-api/run.mjs", "--group", "json-api"],
+  "localized-marketplace": ["bench/marketplace/run.mjs", "--group", "localized-marketplace"],
+  "mixed-production": ["bench/mixed-production/run.mjs"],
+  "fullstack-browser": ["bench/fullstack-browser/run.mjs"],
+  "client-heavy": ["bench/client-heavy/run.mjs"],
+  "live-delivery": ["bench/live/run.mjs", "--group", "live-delivery"],
+  "recoverable-live": ["bench/recoverable-live/run.mjs"],
+  hardening: ["bench/hardening/run.mjs"],
+});
+export function runnerFor(group) {
+  definition(group);
+  const [entry, ...selection] = runners[group];
+  return { entry, selection };
+}
+
 export function campaignRounds(round) {
   assert.equal(typeof round, "string"); assert.match(round, /^r[1-9]\d*$/);
   const n = Number(round.slice(1));
@@ -62,6 +79,9 @@ export function campaignRounds(round) {
 export const jsonPreparationRound = (round) => `j${2 * Number(round.slice(1))}`;
 export const jsonPreparationInvocation = (round) => ({
   executable: "node", argv: ["bench/json-api/run.mjs", jsonPreparationRound(round), "--group", "json-api", "--build", "--check-only"],
+});
+export const jsonTimingInvocation = (round, receiptPath) => ({
+  executable: "node", argv: ["bench/json-api/run.mjs", round, "--group", "json-api", "--receipts", receiptPath],
 });
 export function nativeArtifactRoot(group, round) {
   const directory = group === "catalog-page" ? "catalog" : group === "localized-marketplace" ? "marketplace" : group;

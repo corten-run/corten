@@ -243,9 +243,9 @@ jobs:
           -v "$PWD/bench/fullstack/apps/aspnet:/src" -w /src
           mcr.microsoft.com/dotnet/sdk:11.0.100
           dotnet test tests/Marketplace.Tests.csproj -c Release
-      # Chromium for this and the two browser checks after it comes from Playwright's image, as in the
-      # harness job (#2011), with the same trust in it; each starts its app containers through the
-      # runner's Docker.
+      # Chromium for the compiled-app browser checks comes from Playwright's image, as in the
+      # harness job (#2011), with the same trust in it. The checks that start app containers
+      # need the runner's Docker; the matched Topcoat probe runs its binary on local loopback.
       - name: Playwright's image
         if: contains(fromJSON('["gin","drogon","topcoat","leptos"]'), matrix.app)
         run: |
@@ -259,7 +259,24 @@ jobs:
           fi
           echo "Node on the runner $(node --version), in $image $image_node"
           run="docker run --rm --network host --ipc host --user $(id -u):$(id -g) -e HOME=/tmp -v $PWD:$PWD -w $PWD"
+          echo "PLAYWRIGHT_IMAGE=$image" >> "$GITHUB_ENV"
           echo "PLAYWRIGHT_WITH_DOCKER=$run --group-add $(stat -c %g /var/run/docker.sock) -v /tmp:/tmp -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock -e RUNNER_ENVIRONMENT $image" >> "$GITHUB_ENV"
+      # Use the release binary and assets from the Marketplace check-only build above. Both
+      # matched sources and Chromium run in the same isolated loopback namespace, with no socket mount.
+      - name: Test matched Topcoat Marketplace HTTP and Chromium in both sources
+        if: matrix.app == 'topcoat'
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          image="${PLAYWRIGHT_IMAGE:?}"
+          docker run --rm --network none --entrypoint tar cb-marketplace-topcoat -c -C /app server assets |
+            docker run --rm --init -i --network none --cpus 2 --memory 2g --shm-size 1g \
+              --user "$(id -u):$(id -g)" -e HOME=/tmp \
+              --mount "type=bind,source=$PWD,target=/repo,readonly" -w /repo "$image" sh -ec '
+                mkdir /tmp/topcoat
+                tar -x -C /tmp/topcoat
+                exec node bench/fullstack/apps/topcoat/tests/check-parity.mjs /tmp/topcoat/server --browser
+              '
       - name: Test native compiled alert forms and independent readback
         if: contains(fromJSON('["gin","drogon","topcoat","leptos"]'), matrix.app)
         run: ${PLAYWRIGHT_WITH_DOCKER:?} node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}
