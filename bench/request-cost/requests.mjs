@@ -1,4 +1,5 @@
-// The requests the kit sends, and how a connection's bytes are split into answers.
+// The requests the kit sends, the answer each must get, and how a connection's bytes are split
+// into answers.
 
 /** The header lines a browser sends with a navigation (Firefox 140's). */
 const BROWSER = [
@@ -15,34 +16,55 @@ const get = (path, more = []) => (port) => Buffer.from([`GET ${path} HTTP/1.1`, 
 const post = (path, type, body) => (port) =>
   Buffer.from([`POST ${path} HTTP/1.1`, `Host: localhost:${port}`, `Content-Type: ${type}`, `Content-Length: ${body.length}`, "", body].join("\r\n"), "latin1");
 
+/** The probe's page as it is sent uncompressed: from its doctype to its last row, 119 and 7 times 119. */
+const PAGE = /^<!DOCTYPE html>.*<td>119<\/td><td>A row of the page, about as long as a row of a listing is<\/td><td>833<\/td><\/tr><\/table><\/main><\/body><\/html>$/s;
+/** A body compressed with zstd begins with a frame's four magic bytes. */
+const ZSTD = /^\x28\xb5\x2f\xfd/;
+
 /**
- * Each case: the probe's configuration that answers it, and its request for a port.
- * @type {Record<string, { configuration: "api" | "pages", request: (port: number) => Buffer }>}
+ * Each case: the probe's configuration that answers it, its request for a port, and the answer
+ * it must get: the body (as Latin-1 text, the whole of it or what it matches) and the
+ * `Content-Encoding`, none unless given.
+ * @type {Record<string, { configuration: "api" | "pages", request: (port: number) => Buffer, body: string | RegExp, encoding?: string }>}
  */
 export const cases = {
   // A staged route in an API: typed query parameters in, a short String out.
-  get: { configuration: "api", request: get("/baseline11?a=1&b=2") },
-  post: { configuration: "api", request: post("/baseline11?a=1&b=2", "text/plain", "20") },
+  get: { configuration: "api", request: get("/baseline11?a=1&b=2"), body: "3" },
+  post: { configuration: "api", request: post("/baseline11?a=1&b=2", "text/plain", "20"), body: "23" },
   // The same GET from a route that says `unstaged`, and the shortest unstaged answer.
-  unstaged: { configuration: "api", request: get("/unstaged11?a=1&b=2") },
-  pipeline: { configuration: "api", request: get("/pipeline") },
+  unstaged: { configuration: "api", request: get("/unstaged11?a=1&b=2"), body: "3" },
+  pipeline: { configuration: "api", request: get("/pipeline"), body: "ok" },
   // In an app without an API: a short text answer and a page.
-  text: { configuration: "pages", request: get("/text") },
-  page: { configuration: "pages", request: get("/page") },
+  text: { configuration: "pages", request: get("/text"), body: "ok" },
+  page: { configuration: "pages", request: get("/page"), body: PAGE },
   // The same with a browser's header lines: the page is compressed, the short answers are not.
-  "get-browser": { configuration: "api", request: get("/baseline11?a=1&b=2", BROWSER) },
-  "text-browser": { configuration: "pages", request: get("/text", BROWSER) },
-  "page-browser": { configuration: "pages", request: get("/page", BROWSER) },
+  "get-browser": { configuration: "api", request: get("/baseline11?a=1&b=2", BROWSER), body: "3" },
+  "text-browser": { configuration: "pages", request: get("/text", BROWSER), body: "ok" },
+  "page-browser": { configuration: "pages", request: get("/page", BROWSER), body: ZSTD, encoding: "zstd" },
 };
-
-/** The cases counted 16 deep, where a client writes its requests without waiting for answers. */
-export const deep = ["pipeline", "get", "unstaged", "text"];
 
 /** The cases a list names, or an error naming the one that is not a case. @param {string} list */
 export function named(list) {
   const names = list.split(",");
   for (const name of names) if (!Object.hasOwn(cases, name)) throw new Error(`no case ${JSON.stringify(name)}; the cases are ${Object.keys(cases).join(", ")}`);
   return names;
+}
+
+/**
+ * What is wrong with an answer to a case, or null when it is the answer the case must get: a
+ * 200, the case's encoding and no other, and the case's body.
+ * @param {string} name @param {Buffer} answer @returns {string | null}
+ */
+export function unexpected(name, answer) {
+  const { body, encoding } = /** @type {typeof cases[string]} */ (cases[name]);
+  const end = answer.indexOf("\r\n\r\n");
+  const head = answer.latin1Slice(0, end);
+  if (!head.startsWith("HTTP/1.1 200 ")) return `not a 200: ${head.split("\r\n")[0]}`;
+  const coded = /^content-encoding:[ \t]*(\S*)[ \t]*$/im.exec(head)?.[1];
+  if (coded !== encoding) return `Content-Encoding ${coded ?? "none"}, not ${encoding ?? "none"}`;
+  const sent = answer.latin1Slice(end + 4);
+  if (typeof body === "string" ? sent !== body : !body.test(sent)) return `not the body of ${name}: ${JSON.stringify(sent.slice(0, 80))}`;
+  return null;
 }
 
 /** Splits the bytes a connection reads into answers, each a head and a body of its Content-Length. */
@@ -75,10 +97,4 @@ export function masked(answer) {
   const end = answer.indexOf("\r\n\r\n");
   const head = answer.latin1Slice(0, end).replace(/^(date|etag): .*$/gim, "$1: -");
   return Buffer.concat([Buffer.from(head, "latin1"), answer.subarray(end)]);
-}
-
-/** The middle of an odd number of counts, the upper of the two middle ones of an even number. @param {number[]} counts */
-export function median(counts) {
-  const ordered = [...counts].sort((a, b) => a - b);
-  return /** @type {number} */ (ordered[Math.floor(ordered.length / 2)]);
 }

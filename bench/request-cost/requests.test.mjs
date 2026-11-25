@@ -1,9 +1,9 @@
 // node --test bench/request-cost/requests.test.mjs
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Answers, cases, deep, masked, median, named } from "./requests.mjs";
+import { Answers, cases, masked, named, unexpected } from "./requests.mjs";
 
-const answer = (/** @type {string} */ body, more = "") => Buffer.from(`HTTP/1.1 200 OK\r\ncontent-length: ${Buffer.byteLength(body)}\r\n${more}\r\n${body}`, "latin1");
+const answer = (/** @type {string} */ body, more = "", status = "200 OK") => Buffer.from(`HTTP/1.1 ${status}\r\ncontent-length: ${Buffer.byteLength(body, "latin1")}\r\n${more}\r\n${body}`, "latin1");
 
 test("a connection's bytes are split into answers wherever a read ends", () => {
   const two = Buffer.concat([answer("3"), answer("ok")]);
@@ -39,26 +39,54 @@ test("masking replaces the date and the tag and nothing else", () => {
   assert.equal(String(masked(body)), String(body));
 });
 
-test("each case is one whole request to its port", () => {
-  for (const [name, { request }] of Object.entries(cases)) {
-    const text = request(8123).latin1Slice();
-    assert.match(text, /^(GET|POST) \/\S* HTTP\/1\.1\r\nHost: localhost:8123\r\n/, name);
-    const [head, body] = /** @type {[string, string]} */ (text.split("\r\n\r\n"));
-    const length = /^Content-Length: (\d+)$/m.exec(head);
-    assert.equal(body.length, length ? Number(length[1]) : 0, name);
-  }
-  const lines = (/** @type {string} */ name) => /** @type {typeof cases[string]} */ (cases[name]).request(8080).latin1Slice().split("\r\n").length;
-  assert.equal(lines("get-browser"), lines("get") + 7);
+test("each case is its request, byte for byte, to its configuration", () => {
+  const host = "Host: localhost:8123\r\n";
+  const browser =
+    "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0\r\n" +
+    "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n" +
+    "Accept-Language: en-US,en;q=0.5\r\n" +
+    "Accept-Encoding: gzip, deflate, br, zstd\r\n" +
+    "Sec-Fetch-Dest: document\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Site: none\r\n";
+  const expected = {
+    get: ["api", `GET /baseline11?a=1&b=2 HTTP/1.1\r\n${host}\r\n`],
+    post: ["api", `POST /baseline11?a=1&b=2 HTTP/1.1\r\n${host}Content-Type: text/plain\r\nContent-Length: 2\r\n\r\n20`],
+    unstaged: ["api", `GET /unstaged11?a=1&b=2 HTTP/1.1\r\n${host}\r\n`],
+    pipeline: ["api", `GET /pipeline HTTP/1.1\r\n${host}\r\n`],
+    text: ["pages", `GET /text HTTP/1.1\r\n${host}\r\n`],
+    page: ["pages", `GET /page HTTP/1.1\r\n${host}\r\n`],
+    "get-browser": ["api", `GET /baseline11?a=1&b=2 HTTP/1.1\r\n${host}${browser}\r\n`],
+    "text-browser": ["pages", `GET /text HTTP/1.1\r\n${host}${browser}\r\n`],
+    "page-browser": ["pages", `GET /page HTTP/1.1\r\n${host}${browser}\r\n`],
+  };
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(cases).map(([name, { configuration, request }]) => [name, [configuration, request(8123).latin1Slice()]])),
+    expected,
+  );
 });
 
 test("a list of cases is refused when it names one that is not a case", () => {
   assert.deepEqual(named("get,page-browser"), ["get", "page-browser"]);
-  assert.deepEqual(named(deep.join(",")), deep);
   assert.throws(() => named("get,pages"), /no case "pages"/);
   assert.throws(() => named("toString"), /no case "toString"/);
 });
 
-test("the median of three counts is the middle one", () => {
-  assert.equal(median([19175, 19169, 19171]), 19171);
-  assert.equal(median([5]), 5);
+test("an answer is the case's only as a 200 with the case's body and encoding", () => {
+  const row = (/** @type {number} */ n) => `<tr><td>${n}</td><td>A row of the page, about as long as a row of a listing is</td><td>${n * 7}</td></tr>`;
+  const page = `<!DOCTYPE html><html lang="en"><head></head><body><main><h1>Items</h1><table>${row(118)}${row(119)}</table></main></body></html>`;
+  const zstd = "\x28\xb5\x2f\xfd\x00\x58";
+  for (const [name, body] of Object.entries({ get: "3", post: "23", unstaged: "3", pipeline: "ok", text: "ok", page, "get-browser": "3", "text-browser": "ok" })) {
+    assert.equal(unexpected(name, answer(body)), null, name);
+    assert.match(String(unexpected(name, answer(body, "", "404 Not Found"))), /^not a 200: HTTP\/1\.1 404 Not Found$/, name);
+    assert.match(String(unexpected(name, answer(body, "", "2000 OK"))), /^not a 200/, name);
+    assert.match(String(unexpected(name, answer(body, "Content-Encoding: zstd\r\n"))), /^Content-Encoding zstd, not none$/, name);
+    assert.match(String(unexpected(name, answer(`${body} `))), /^not the body of /, name);
+  }
+  assert.equal(unexpected("page-browser", answer(zstd, "content-encoding: zstd\r\n")), null);
+  assert.match(String(unexpected("page-browser", answer(zstd))), /^Content-Encoding none, not zstd$/);
+  assert.match(String(unexpected("page-browser", answer(zstd, "content-encoding: br\r\n"))), /^Content-Encoding br, not zstd$/);
+  assert.match(String(unexpected("page-browser", answer(page, "content-encoding: zstd\r\n"))), /^not the body of page-browser/);
+  // The sum, not a digit of it, and the page to its last row.
+  assert.match(String(unexpected("post", answer("3"))), /^not the body of post: "3"$/);
+  assert.match(String(unexpected("page", answer(page.replace(row(119), "")))), /^not the body of page/);
+  assert.match(String(unexpected("page", answer(`<html>${page}`))), /^not the body of page/);
 });

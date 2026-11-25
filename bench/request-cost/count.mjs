@@ -8,28 +8,26 @@
 //        node count.mjs <probe binary> --answers <directory> [--cases ...] [--cpu 0] [--port 8080]
 //          each case's answer as sent, its Date and ETag masked, to compare two builds' bytes
 //
-// A count is two runs of the probe under callgrind, one answering 240 requests and one 1,240, on
-// one connection, each request written after the answer before it (or `--depth` at a time): the
-// difference over 1,000 leaves out startup, the connection and shutdown. `--allocations` profiles
-// one run's 1,000 requests after 240 that are not recorded.
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// A count is one run of the probe under callgrind: 240 requests on one connection, then the 1,000
+// that are counted on the same connection, each written after the answer before it (or `--depth`
+// at a time), with a callgrind dump before those 1,000 and one after. The count is what the
+// serving thread ran between the two dumps, over the requests (`counted` in probe.mjs).
+// `--allocations` reads the calls into the allocator from the same kind of dump.
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { allocatorCalls } from "./allocations.mjs";
-import { send, sent, start } from "./probe.mjs";
-import { cases, median, named } from "./requests.mjs";
-
-const FEW = 240;
-const MANY = 1240;
+import { allocatorCalls, instructions } from "./allocations.mjs";
+import { COUNTED, WARM, each, median, sent } from "./figures.mjs";
+import { Connection, counted, send, start } from "./probe.mjs";
+import { cases, named } from "./requests.mjs";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     cases: { type: "string", default: Object.keys(cases).join(",") },
     depth: { type: "string", default: "1" },
-    reps: { type: "string", default: "3" },
+    reps: { type: "string" },
     cpu: { type: "string", default: "0" },
     port: { type: "string", default: "8080" },
     allocations: { type: "boolean", default: false },
@@ -44,80 +42,53 @@ const whole = (/** @type {string} */ name, /** @type {string} */ text) => {
 };
 const names = named(values.cases);
 const depth = whole("depth", values.depth);
-const reps = whole("reps", values.reps);
+// The 240 requests before the counted ones are written `depth` at a time too: above 240 none would be.
+if (depth > WARM) throw new Error(`--depth takes at most ${WARM}`);
+if (values.reps !== undefined && (values.allocations || values.answers !== undefined)) throw new Error("--reps is for instruction counts: --allocations and --answers read one run");
+if (values.answers !== undefined && depth !== 1) throw new Error("--answers sends its requests one at a time: it takes no --depth");
+const reps = whole("reps", values.reps ?? "3");
 const port = whole("port", values.port);
 const cpu = values.cpu;
-const configuration = (/** @type {string} */ name) => /** @type {typeof cases[string]} */ (cases[name]).configuration;
 
 const scratch = mkdtempSync(join(tmpdir(), "request-cost-"));
 try {
   if (values.answers !== undefined) await answers(values.answers);
   else if (values.allocations) await allocations();
-  else await instructions();
+  else await count();
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
 
-/** Instructions the probe runs from start to stop when it answers `count` requests of a case. */
-async function run(/** @type {string} */ name, /** @type {number} */ count) {
-  const probe = await start(binary, configuration(name), { cpu, port, callgrind: { out: join(scratch, "count.callgrind") } });
-  try {
-    await send(name, port, count, depth);
-  } catch (error) {
-    await probe.stop().catch(() => {});
-    throw error;
-  }
-  return probe.stop();
-}
-
-async function instructions() {
+async function count() {
   const row = (/** @type {(string | number)[]} */ [name, ...numbers]) => String(name).padEnd(14) + numbers.slice(0, 3).map((n) => String(n).padStart(10)).join("") + "  " + numbers.slice(3).join(" ");
   console.log(row(["case", "median", "least", "most", "counts"]));
-  const requests = sent(MANY, depth) - sent(FEW, depth);
   for (const name of names) {
     const counts = [];
-    for (let rep = 0; rep < reps; rep += 1) {
-      const few = await run(name, FEW);
-      const many = await run(name, MANY);
-      counts.push(Math.round((many - few) / requests));
-    }
+    for (let rep = 0; rep < reps; rep += 1) counts.push(Math.round(each(instructions(await counted(binary, name, { cpu, port, depth, scratch })), depth)));
     console.log(row([name, median(counts), Math.min(...counts), Math.max(...counts), ...counts]));
   }
 }
 
 async function allocations() {
-  const requests = sent(1000, depth);
+  const two = (/** @type {number} */ count) => each(count, depth).toFixed(2);
   console.log("case".padEnd(14) + "allocations".padStart(12) + "frees".padStart(10) + "  calls");
   for (const name of names) {
-    const out = join(scratch, "profile.callgrind");
-    const probe = await start(binary, configuration(name), {
-      cpu,
-      port,
-      callgrind: { out, options: ["--instr-atstart=no", "--compress-strings=no", "--compress-pos=no"] },
-    });
-    try {
-      await send(name, port, FEW, depth);
-      execFileSync("callgrind_control", ["-i", "on", String(probe.pid)], { stdio: "ignore" });
-      await send(name, port, 1000, depth);
-      execFileSync("callgrind_control", ["-i", "off", String(probe.pid)], { stdio: "ignore" });
-    } catch (error) {
-      await probe.stop().catch(() => {});
-      throw error;
-    }
-    await probe.stop();
-    const found = allocatorCalls(readFileSync(out, "latin1"));
-    const each = (/** @type {number} */ count) => (count / requests).toFixed(2);
-    const calls = Object.entries(found.calls).sort().map(([call, count]) => `${call}=${each(count)}`).join(" ");
-    console.log(name.padEnd(14) + each(found.allocations).padStart(12) + each(found.frees).padStart(10) + "  " + calls);
+    const found = allocatorCalls(await counted(binary, name, { cpu, port, depth, scratch }));
+    // Every case allocates for each request: fewer means the profile is not of the requests.
+    if (found.allocations < sent(COUNTED, depth)) throw new Error(`${name}: the profile holds ${found.allocations} allocations for ${sent(COUNTED, depth)} requests`);
+    const calls = Object.entries(found.calls).sort().map(([call, count]) => `${call}=${two(count)}`).join(" ");
+    console.log(name.padEnd(14) + two(found.allocations).padStart(12) + two(found.frees).padStart(10) + "  " + calls);
   }
 }
 
 async function answers(/** @type {string} */ directory) {
   mkdirSync(directory, { recursive: true });
   for (const name of names) {
-    const probe = await start(binary, configuration(name), { cpu, port });
+    const probe = await start(binary, /** @type {typeof cases[string]} */ (cases[name]).configuration, { cpu, port });
     try {
-      writeFileSync(join(directory, `${name}.http`), await send(name, port, 3));
+      const connection = await Connection.open(port);
+      writeFileSync(join(directory, `${name}.http`), await send(connection, name, 3));
+      await connection.close();
     } finally {
       await probe.stop();
     }
