@@ -2,13 +2,14 @@ FROM maven:3.10-eclipse-temurin-27@sha256:a83dca2f65c72ace081f55a63231adbd6d8874
 WORKDIR /src
 COPY pom.xml ./
 # .mvn/maven.config retries each 429 or 503 from Maven Central a bounded number of times (#1763).
-# This bounds the whole download, inside the image build's hour, and logs each transfer so a
-# stopped build names the one in flight. It changes how dependencies are fetched, never which.
+# Each Maven run below also has a total bound, inside the image build's hour, and logs each
+# transfer so a stopped build names the one in flight. It changes how dependencies are fetched,
+# never which; package fetches nothing once go-offline has run.
 COPY .mvn ./.mvn
 RUN timeout --verbose --kill-after=10s 15m mvn -B dependency:go-offline
 COPY src ./src
 ADD --checksum=sha256:a0abb04f2f45a1f89d1d4844023245537e5e6014c87b144553e0607b4cc32130 https://unpkg.com/htmx.org@4.0.1/dist/htmx.min.js src/main/resources/static/htmx.min.js
-RUN mvn -q -B package -DskipTests
+RUN timeout --verbose --kill-after=10s 3m mvn -B package -DskipTests
 
 FROM eclipse-temurin:27-jre@sha256:8f8cfda6393f63a029dbe83ceda4c19a31d268184662e96d9641f57afdaf870b
 WORKDIR /app

@@ -2235,15 +2235,20 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     [#1763 Catalog CI: Spring image build could not resolve the pinned Maven parent POM](https://github.com/corten-run/corten/issues/1763),
     Spring's Maven retries a 429 or 503 from Maven Central up to four times, waiting 10, 20, 30
     and 40 seconds or the registry's Retry-After up to 40 seconds, and a retryable I/O error up
-    to four times (`apps/spring/.mvn/maven.config`); its image also bounds the whole dependency
-    download at 15 minutes and logs each transfer. That changes Spring's build-cost inputs when a
-    download fails transiently, not its dependency pins or what it downloads, and implies no
-    measured speedup. Hosted CI still downloads Spring's dependencies from Central on each run:
-    both shared runners (`bench/catalog/run.mjs`, `bench/marketplace/run.mjs`) build images with
-    a plain `docker build` that imports and exports no layer cache, so a cache across runs would
-    need a cache option in a build command the official groups also run, and a builder that can
-    export one (Docker's default builder can only with the containerd image store). Within one
-    CI job, the transport proof reuses the Maven repository of the Spring tests before it.
+    to four times (`apps/spring/.mvn/maven.config`). Its image also bounds each Maven run, the
+    dependency download at 15 minutes and `package` (which fetches nothing after it) at 3, and
+    runs both without `-q`, so a successful image build also logs differently: each transfer and
+    Maven's progress. That changes Spring's build-cost inputs, its retries when a download fails
+    transiently and what a successful build logs, not its dependency pins, what it downloads or
+    the jar it builds; its performance effect was not measured. Hosted CI still downloads Spring's
+    dependencies from Central on each run: both shared runners (`bench/catalog/run.mjs`,
+    `bench/marketplace/run.mjs`) build with a plain `docker build` that imports and exports no
+    layer cache. A CI-only Buildx invocation could keep a cache across runs on a separate
+    cache-capable builder without changing the official commands. We decline that as a tradeoff:
+    it adds a second builder and a cache store to CI, its cache would serve only that
+    invocation's build while the runners' builds stay cold, and the bounded retries already
+    address the throttling that issue reported. Within one CI job, the transport proof reuses the
+    Maven repository of the Spring tests before it.
     The rebuild keeps each tool's cache, which favors the tools
     that keep one; a Docker build without a cache mount starts each rebuild without it. Each
     rebuild runs in a new container, so a build server (.NET's, Gradle-style daemons) does not

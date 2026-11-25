@@ -234,6 +234,8 @@ jobs:
             test_mixed_asgi_socket.MixedAsgiSocketTests test_mixed_asgi_socket.SocketTimingTests
       - name: Test native Spring alert persistence and source boundaries
         if: matrix.app == 'spring'
+        # The test-stage build's Maven runs (Dockerfile), the tests below, and room to pull images.
+        timeout-minutes: 30
         run: |
           docker build --target build -t cb-spring-tests bench/fullstack/apps/spring
           # Maven's retries are per request (.mvn/maven.config), so the whole run has a budget too,
