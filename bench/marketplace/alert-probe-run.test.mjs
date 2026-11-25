@@ -182,6 +182,35 @@ test("a failed removal stays pending, is retried and fails the teardown", async 
   checkCalls(stuck);
 });
 
+test("only an empty lookup by ID is absence: another full ID leaves the removal unconfirmed and fails the teardown", async () => {
+  for (const kind of ["container", "network"]) {
+    const docker = fakeDocker(), other = randomBytes(32).toString("hex");
+    let target = null;
+    // A daemon that answers the lookup by the target's own ID with another valid ID.
+    const lying = Object.assign(async (args, opts) => (target && args.includes(`id=${target}`) ? other : docker(args, opts)), { time: docker.time });
+    const owned = ownedResources({ docker: lying, runId: "alert-probe-test", window: 50, clock: runClock({ now: () => docker.time.t, sleep: async (ms) => { docker.time.t += ms; } }) });
+    target = kind === "network" ? await owned.network("alert-probe-test-net") : await owned.container(["app"], "alert-probe-test-app");
+    assert.equal(await owned.remove(target), false, kind);
+    assert.ok(owned.has(target), `${kind}: still pending`);
+    assert.ok((kind === "network" ? docker.networks : docker.containers).has(target), `${kind}: nothing was removed`);
+    assert.ok(!docker.calls.some(({ args }) => args.includes("rm")), `${kind}: no removal was sent`);
+    assert.deepEqual(owned.record.removed, []);
+    assert.equal(owned.record.failures[0].error, `a docker ${kind} lookup by ID ${target} returned another object; its removal is unconfirmed`);
+    assert.ok(!JSON.stringify(owned.record).includes(other), "the other ID is not kept");
+    const record = await owned.teardown();
+    assert.equal(record.complete, false, `${kind}: the teardown fails`);
+  }
+  // Positive: a resource already gone answers the lookup with nothing, and that is absence.
+  const docker = fakeDocker();
+  const owned = ownedResources({ docker, runId: "alert-probe-test", window: 50, clock: runClock({ now: () => docker.time.t, sleep: async (ms) => { docker.time.t += ms; } }) });
+  const id = await owned.container(["app"], "alert-probe-test-app");
+  docker.containers.delete(id);
+  assert.equal(await owned.remove(id), true);
+  assert.deepEqual(owned.record.removed.map((e) => e.id), [id]);
+  assert.deepEqual(owned.record.failures, []);
+  assert.equal((await owned.teardown()).complete, true);
+});
+
 test("a resource Docker made before its create failed is recovered by its owner label", async (t) => {
   for (const [faults, registered, recovered] of [
     [{ "network create": () => "lose" }, [], ["network"]],

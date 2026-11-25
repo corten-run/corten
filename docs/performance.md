@@ -153,7 +153,7 @@ Feature contract: marketplace-production/v1. Popular and performance-oriented ca
 
 Warning: Short 15s phase windows (10s warmup): variability and sampling limits matter; not comparable to manual 60s phases with 30s warmup.
 
-Convergence evidence: none provided to this report. This report does not establish whether this round's 10s timed warmup was sufficient; a convergence pass (steady.mjs) would add a screening reading of throughput, not that conclusion.
+Convergence evidence: none provided to this report (it was run without --convergence), which does not say whether a pass exists. This report does not establish whether this round's 10s timed warmup was sufficient; a convergence pass (steady.mjs) would add a screening reading of throughput, not that conclusion.
 
 ### en-US
 

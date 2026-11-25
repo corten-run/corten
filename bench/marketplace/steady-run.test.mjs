@@ -112,7 +112,9 @@ function fakeDocker({ exportFor, withhold = () => false, failRemove = () => fals
       case "container": { assert.equal(rest[0], "inspect"); const c = get(rest[1]); return JSON.stringify([inspected(info(c), c, state)]); }
       case "ps": { const f = filterOf(args); return [...containers.values()].filter((c) => (f.startsWith("id=") ? c.id === f.slice(3) : matches(c.labels, f))).map((c) => c.id).join("\n"); }
       case "start": {
-        if (rest[0] !== "-a") { const c = get(rest[0]); c.state = { Running: c.kind !== "marker", OOMKilled: false, ExitCode: 0, StartedAt: iso() }; state.emit(c.id, "start"); if (c.kind === "marker") state.emit(c.id, "die"); return c.id; }
+        // A marker start moves the clock on a millisecond, as Docker's own calls take time: a real
+        // second start is strictly after the load's FinishedAt, which readEvents requires.
+        if (rest[0] !== "-a") { const c = get(rest[0]); if (c.kind === "marker") state.offset += 1; c.state = { Running: c.kind !== "marker", OOMKilled: false, ExitCode: 0, StartedAt: iso() }; state.emit(c.id, "start"); if (c.kind === "marker") state.emit(c.id, "die"); return c.id; }
         const c = get(rest[1]);
         if (c.kind === "host") { c.state = { Running: false, OOMKilled: false, ExitCode: 0, StartedAt: iso() }; return "6.8.0-test\nmodel name\t: Synthetic CPU\n0-7"; }
         if (c.kind === "version") { assert.deepEqual(c.args.slice(-2), [k6ImageId, "version"]); c.state = { Running: false, OOMKilled: false, ExitCode: 0, StartedAt: iso() }; return "k6 v2.4.0 (commit/0000000, go1.24, linux/amd64)"; }

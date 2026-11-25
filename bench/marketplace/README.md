@@ -287,10 +287,14 @@ daemon still buffers (its last 256 events), so an empty answer to one would not 
 happened; the pass does not use one. Instead it starts the marker once the stream runs, before the
 load, and again after the app's last inspect: the stream delivers events in the order the daemon
 publishes them, so a stream that shows both marker starts was listening before the load began and
-had delivered every app event published before it ended. The stream is saved as one of three
-states: unavailable (the stream failed, did not show both marker starts within its bound, or had a
-row that was not the app's or the marker's ID, an action and a nanosecond time, so none of its rows
-is used), clean (read, covering the load, with no start, restart, die, kill or OOM event) or seen
+had delivered every app event published before it ended. Two start rows alone do not show that (two
+copies of the first would read as both), so the first two marker starts are witnesses that must
+bracket the load on the daemon's clock: the first at or before the load container's StartedAt, the
+second strictly later than the first and strictly after the load container's FinishedAt (the
+latest daemon time before the app's last inspect, which has none of its own). The stream is saved
+as one of three states: unavailable (the stream failed, did not show both marker starts within its
+bound, had witnesses that do not bracket the load, or had a row that was not the app's or the
+marker's ID, an action and a nanosecond time, so none of its rows is used), clean (read, covering the load, with no start, restart, die, kill or OOM event) or seen
 (with those events). "Restarted" is yes on any sign of a restart, no only when the stream was
 clean and nothing else showed one, and not established when the stream was unavailable and
 nothing else showed one; the container states and the memory samples are read independently of
@@ -307,6 +311,10 @@ iteration, its recorded requests fall short of the schedule by at most one secon
 the boundary slot (the allowance for an iteration the engine's stop cut off), and every interval's
 arrivals are within that same allowance of its share of the schedule. A soak whose 270,000
 requests all arrived in its first minute did not hold the rate, even though its totals match.
+Arrivals and completions are on the same engine clock, and a request completes after its iteration
+starts, so a soak whose intervals show more requests completed by an interval boundary than
+iterations started by it (270,000 completed in the first minute when 9,001 had started) is refused,
+whatever its totals, both when it is captured and when a saved one is read.
 Otherwise it reports the shortfall, names each interval that did not hold with its arrivals and
 schedule, and does not present the cell as a fixed-rate result. The reader recomputes every
 interval's claim from the saved arrivals, so a saved soak cannot claim an interval held. The counts it prints are k6's own, never the schedule's. Memory is
@@ -319,8 +327,9 @@ No report concludes that a timed warmup is long enough. A timed warmup is set on
 reviewed change to the droplet contract, made from a saved pass that is like-for-like with the
 rounds it will time. `steady-report.mjs` prints each cell's reading and that the pass sets no
 warmup. `report.mjs <summary.json> --convergence <pass>/summary.json` first states which of the round's
-measured adapter, source and target cells the pass has a reading for, which failed and which it
-lacks, then compares inputs only for the cells with a reading: a pass with a reading for every
+measured adapter, source and target cells the pass has a reading for, which failed, which the
+tolerance reading itself gave none for (a zero last-60 s median: listed with that explanation, not
+counted as coverage) and which it lacks, then compares inputs only for the cells with a reading: a pass with a reading for every
 cell can be like-for-like with the round, one with some is at most like-for-like for those cells
 alone (and compares page locales only if one of them is a page), and one with none is compared on
 no input. It prints each cell's reading and lists every input that differs or that either side
@@ -331,11 +340,14 @@ startup timeout, the app and upstream memory limits, the response encoding, the 
 users, the cold start before the load, a page warmup that rotated locales (results schema v6), and
 a timed warmup with no failed request (a round whose warmup had failures is not comparable).
 With `--convergence` nothing read from either file reaches the output unless it validated: the
-round's CPU model prints only in the form a pass saves a CPU model in, and a round that is not
+round's CPU model prints only in the form a pass saves a CPU model in; each adapter is named by
+this checkout's label, not the round's saved one (an adapter the checkout does not name gets a
+fixed text); the round's two saved limits (upstream and CPU window) print only when they are this
+checkout's text, otherwise a fixed sentence says they are not printed; and a round that is not
 JSON or does not validate is refused with a fixed message (the report without `--convergence`
-prints the reason, and its output is unchanged).
-`--vus` other than 32 is for exploration. Without `--convergence` the report says no convergence
-pass was provided to it. No convergence pass has been saved for any round, so nothing here says
+prints the reason). `--vus` other than 32 is for exploration. Without `--convergence` the
+report gains one line, saying no convergence pass was provided to it (it was run without one,
+which does not say whether one exists); its other output is unchanged. No convergence pass has been saved for any round, so nothing here says
 whether any adapter is warm after 10 seconds.
 
 ### Splitting a round across droplets
@@ -537,7 +549,9 @@ ordinary. A create that returns no ID, whatever its error (a daemon error can fo
 the daemon already made), is looked for by a label of its own for up to 10 seconds at teardown,
 each lookup cut to the time left; if nothing appears, its cleanup is reported unconfirmed and
 the run fails, since Docker may still make it. A failed lookup is reported and does not stop
-the sweep by the owner label.
+the sweep by the owner label. Before removing a container or network the runner looks it up by
+its own ID: only an empty answer counts as already gone, and any other answer (another full ID)
+leaves its removal unconfirmed and fails the teardown, as `bench/fullstack/idle-close.mjs` does.
 `--deadline` bounds the whole run: work stops starting two minutes before it, leaving that
 time for the app logs, removal and `cleanup.json`. Catalog Contract runs it for React Router
 at 10 iterations per source, including after a failed marketplace gate that built the image,

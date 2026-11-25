@@ -244,31 +244,41 @@ export const eventFormat = "{{.Actor.ID}}|{{.Action}}|{{.TimeNano}}";
  * The pass starts the marker once the stream runs, before the load, and again after the app's last
  * inspect. A stream delivers events in the order the daemon publishes them, so one that shows both
  * marker starts was listening before the load began and had delivered every app event published
- * before the load's end. Every row must be one of the two container IDs, an action (lowercase
- * letters and underscores, optionally followed by ": " and detail, as health_status and exec_start
- * are) and a time in nanoseconds. One row that is not, or fewer than two marker starts, makes the
- * whole observation unreadable: this throws a fixed message with a count, and the caller saves the
- * stream as unavailable. Returns the app's start, restart, die, kill and oom events before the
- * second marker start, with no detail.
+ * before the load's end. Two marker start rows alone do not show that: two copies of the first
+ * start would read as both. So the first two marker starts in the stream are the witnesses, and
+ * they must bracket the load on the daemon's clock: the first at or before the load's StartedAt
+ * (`startedMs`), the second strictly later than the first (so a distinct row) and strictly after
+ * the load's FinishedAt (`finishedMs`). The app's last inspect has no daemon time; the load's
+ * FinishedAt is the latest daemon time before it, and the pass starts the marker the second time
+ * only once that inspect has returned. Every row must be one of the two container IDs, an action
+ * (lowercase letters and underscores, optionally followed by ": " and detail, as health_status and
+ * exec_start are) and a time in nanoseconds. One row that is not, fewer than two marker starts, or
+ * witnesses that do not bracket the load make the whole observation unreadable: this throws a fixed
+ * message (with a count), and the caller saves the stream as unavailable. Returns the app's start,
+ * restart, die, kill and oom events before the second marker start, with no detail.
  */
-export function readEvents(text, startedMs, { app, marker } = {}) {
+export function readEvents(text, startedMs, { app, marker, finishedMs } = {}) {
   assert.ok(typeof text === "string", "docker events returned no text");
   assert.ok(Number.isFinite(startedMs), "the load container's StartedAt is not a time");
   assert.ok(matches("containerId", app) && matches("containerId", marker) && app !== marker, "the event stream reads an app and a marker by their container IDs");
+  assert.ok(Number.isSafeInteger(startedMs) && Number.isSafeInteger(finishedMs) && finishedMs >= startedMs, "the load container's FinishedAt is not a time at or after its StartedAt");
   const rows = text.split("\n").map((line) => line.replace(/\r$/, "")).filter((line) => line.length > 0);
-  const events = [];
-  let unreadable = 0, markers = 0;
+  const events = [], witnesses = [];
+  let unreadable = 0;
   for (const row of rows) {
     const first = row.indexOf("|"), last = row.lastIndexOf("|");
     const id = row.slice(0, Math.max(first, 0)), action = row.slice(first + 1, Math.max(last, first + 1)), nanos = row.slice(last + 1);
     if (first <= 0 || last <= first || (id !== app && id !== marker) || !/^[a-z_]{1,32}(: .*)?$/.test(action) || !/^[1-9]\d{0,19}$/.test(nanos)) { unreadable++; continue; }
     const name = action.split(":", 1)[0];
-    if (id === marker) { if (name === "start") markers++; continue; }
+    if (id === marker) { if (name === "start") witnesses.push(BigInt(nanos)); continue; }
     // After the second marker start: past the end of the observation (teardown).
-    if (markers < 2 && restartActions.includes(name)) events.push({ action: name, atSeconds: (Number(nanos) / 1e6 - startedMs) / 1000 });
+    if (witnesses.length < 2 && restartActions.includes(name)) events.push({ action: name, atSeconds: (Number(nanos) / 1e6 - startedMs) / 1000 });
   }
   assert.ok(unreadable === 0, `${unreadable} docker events row${unreadable === 1 ? " is" : "s are"} not this soak's app or marker, an action and a time`);
-  assert.ok(markers >= 2, `the event stream showed ${markers} of the marker's 2 starts, so it does not cover the soak`);
+  assert.ok(witnesses.length >= 2, `the event stream showed ${witnesses.length} of the marker's 2 starts, so it does not cover the soak`);
+  const [before, after] = witnesses, ns = (ms) => BigInt(ms) * 1_000_000n;
+  assert.ok(before <= ns(startedMs), "the marker's first start in the event stream is not at or before the load's start, so it does not show the stream was listening when the load began");
+  assert.ok(after > before && after > ns(finishedMs), "the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load");
   return events;
 }
 const restartActions = Object.freeze(["start", "restart", "die", "oom", "kill"]);
@@ -601,8 +611,13 @@ export function intervalSchedule({ rate, seconds, windowSeconds }) {
  * allowance, and every interval's arrivals are within the allowance of that interval's schedule
  * (intervalSchedule): 270,000 requests that all arrived in the first minute of a 30-minute soak at
  * 150 requests/second did not hold it. The counts reported are k6's; the schedule is only compared.
+ * `completions` are the requests the windows counted, each in the interval it completed in, on the
+ * same engine clock as the arrivals. A request completes after its iteration starts, so at every
+ * interval boundary the requests completed before it cannot outnumber the iterations started before
+ * it; counts that say otherwise (270,000 completions in the first minute when 9,001 iterations had
+ * started by then) are refused, whatever their totals.
  */
-export function soakArrivals({ rate, seconds, windowSeconds, requests, droppedIterations, arrivals }) {
+export function soakArrivals({ rate, seconds, windowSeconds, requests, droppedIterations, arrivals, completions }) {
   assert.ok(Number.isSafeInteger(rate) && rate > 0 && Number.isSafeInteger(seconds) && seconds > 0, "a soak's rate and length");
   assert.ok(Number.isSafeInteger(requests) && requests >= 0 && Number.isSafeInteger(droppedIterations) && droppedIterations >= 0, "k6's requests and dropped iterations");
   const schedule = intervalSchedule({ rate, seconds, windowSeconds });
@@ -611,6 +626,13 @@ export function soakArrivals({ rate, seconds, windowSeconds, requests, droppedIt
   const started = arrivals.reduce((a, b) => a + b, 0);
   assert.ok(requests + droppedIterations <= scheduled, "k6 recorded more requests and dropped iterations than the fixed rate schedules");
   assert.ok(started + droppedIterations <= scheduled && requests <= started, "the arrivals per interval do not reconcile with k6's requests, its drops and the schedule");
+  assert.ok(Array.isArray(completions) && completions.length === schedule.length && completions.every(nonNegative) && completions.reduce((a, b) => a + b, 0) <= requests,
+    "a soak counts the requests completed in each interval, no more than k6's requests");
+  let begun = 0, done = 0;
+  for (let i = 0; i < schedule.length; i++) {
+    begun += arrivals[i]; done += completions[i];
+    assert.ok(done <= begun, `more requests completed by the end of interval ${i} than iterations had started by then`);
+  }
   const shortfall = scheduled - requests - droppedIterations;
   const intervals = schedule.map((expected, index) => ({ index, startSeconds: index * windowSeconds, scheduled: expected, arrivals: arrivals[index], held: Math.abs(arrivals[index] - expected) <= allowance }));
   return { requested: rate, seconds, scheduled, requests, droppedIterations, shortfall, allowance, intervals, held: droppedIterations === 0 && shortfall <= allowance && intervals.every((i) => i.held) };
@@ -658,7 +680,7 @@ export function summarizeSoak({ windows, tail, unrecorded, requests, iterations,
   const eventStream = events === null ? "unavailable" : restartEvents.length ? "seen" : "clean";
   const replaced = after.id !== before.id || after.startedAt !== before.startedAt;
   const p99 = windows.filter((w) => w.p99 !== null).map((w) => w.p99);
-  return { windows, tail, unrecorded, requests, iterations, latencyMaxMs, rate: soakArrivals({ rate, seconds: end, windowSeconds: seconds, requests, droppedIterations, arrivals }), memory: soakMemory(memory, seconds, end),
+  return { windows, tail, unrecorded, requests, iterations, latencyMaxMs, rate: soakArrivals({ rate, seconds: end, windowSeconds: seconds, requests, droppedIterations, arrivals, completions: windows.map((w) => w.requests) }), memory: soakMemory(memory, seconds, end),
     p99: { first: windows[0].p99, last: windows.at(-1).p99, max: p99.length ? Math.max(...p99) : null },
     failed: windows.reduce((sum, w) => sum + w.failed, 0), failedRequests,
     restarts: restartClaim({ restartCount: after.restartCount - before.restartCount, replaced, eventStream, events: restartEvents, runningAtEnd: after.running, oomKilled: after.oomKilled }) };
@@ -704,7 +726,7 @@ function checkSoak(s) {
       && c.rate.intervals.every((i) => i !== null && typeof i === "object" && nonNegative(i.arrivals)), `${cellKey(c)}: rate`);
     // The saved arrivals per interval are the input; everything else in the claim is recomputed from them.
     assert.deepEqual(c.rate, soakArrivals({ rate: s.options.rate, seconds: s.options.windows * s.options.windowSeconds, windowSeconds: s.options.windowSeconds, requests: c.requests,
-      droppedIterations: c.rate.droppedIterations, arrivals: c.rate.intervals.map((i) => i.arrivals) }), `${cellKey(c)}: the fixed-rate claim contradicts k6's counts and the schedule`);
+      droppedIterations: c.rate.droppedIterations, arrivals: c.rate.intervals.map((i) => i.arrivals), completions: c.windows.map((w) => w.requests) }), `${cellKey(c)}: the fixed-rate claim contradicts k6's counts and the schedule`);
   }
   return s;
 }
@@ -799,6 +821,8 @@ export function unlikeRound(round, apps, c, { pages = c.options.targets.includes
   return reasons;
 }
 const readable = (schema) => { try { timedProfilesFor(schema); return true; } catch { return false; } };
+// The tolerance reading's own "no reading" outcomes (flattenPoint steps 1 and 2).
+const noReading = (verdict) => !verdict.withinTolerance && (verdict.reason === "too-few-windows" || verdict.reason === "no-throughput");
 /**
  * What the timed reporter says about a convergence pass it was given (#1851): which pass, which of
  * the round's measured adapter, source and target cells it has a reading for (stated before any
@@ -821,16 +845,18 @@ export function convergenceLines(round, apps, convergence) {
   assert.ok(Array.isArray(apps) && apps.every((app) => matches("name", app)) && finite(warmup) && warmup >= 0, "convergenceLines reads a validated round's adapters and warmup");
   const c = validateConvergence(convergence), o = c.options;
   const lines = [`Convergence evidence: pass ${c.name} (${convergenceSchema}, reading ${flattenRule.name}), measured at commit \`${c.commit}\`. Host CPU: ${c.host.cpu ?? "not recorded"}. One ${o.vus}-user closed-loop pass of ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s windows from the start of the load, after ${startups[c.startup]}.`];
-  const found = [], read = [], failed = [], missing = [];
+  const found = [], read = [], failed = [], none = [], missing = [];
   for (const app of apps) for (const source of steadySources) for (const target of steadyTargets) {
     const name = `${app} ${source} ${target}`, cell = c.cells.find((x) => x.app === app && x.source === source && x.target === target);
     if (!cell) { missing.push(name); continue; }
     found.push({ name, cell });
-    (cell.failure === undefined ? read : failed).push({ name, cell });
+    // A cell whose tolerance reading is itself "no reading" (a zero last-60 s median) is listed
+    // with its explanation below, but it is not coverage and is compared on no input.
+    (cell.failure !== undefined ? failed : noReading(cell.verdict) ? none : read).push({ name, cell });
   }
   const total = apps.length * steadySources.length * steadyTargets.length, complete = read.length === total;
   lines.push(complete ? `Coverage: the pass has a reading for every one of this round's ${total} measured adapter, source and target cells.`
-    : `Coverage: the pass has a reading for ${read.length} of this round's ${total} measured adapter, source and target cells${read.length ? ` (${read.map((r) => r.name).join(", ")})` : ""}${failed.length ? `; no reading, the cell failed: ${failed.map((f) => f.name).join(", ")}` : ""}${missing.length ? `; no convergence pass for: ${missing.join(", ")}` : ""}.`);
+    : `Coverage: the pass has a reading for ${read.length} of this round's ${total} measured adapter, source and target cells${read.length ? ` (${read.map((r) => r.name).join(", ")})` : ""}${failed.length ? `; no reading, the cell failed: ${failed.map((f) => f.name).join(", ")}` : ""}${none.length ? `; no reading, the tolerance reading gave none: ${none.map((f) => f.name).join(", ")}` : ""}${missing.length ? `; no convergence pass for: ${missing.join(", ")}` : ""}.`);
   if (!read.length) lines.push("No cell of this round has a reading in the pass, so the pass is not compared with this round on any input.");
   else {
     // Inputs are compared for the cells with a reading only, and the statement says which.

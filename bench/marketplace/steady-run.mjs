@@ -386,14 +386,14 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       const samples = statsError ? null : (stats?.samples?.[app] ?? []).map((s) => ({ atSeconds: (s.t - memoryOriginMs) / 1000, mib: s.mem }));
       const end = await step("container", () => appInstance(after, "after"));
       // The marker's second start, after the app's last inspect, shows the stream had delivered every
-      // app event published before it. Docker's event times and StartedAt are both the daemon's
-      // clock. A stream that failed, did not show both marker starts or has a row that is not this
+      // app event published before it. Docker's event times and the load's StartedAt and FinishedAt
+      // are all the daemon's clock; readEvents requires the two marker starts to bracket the load. A stream that failed, did not show both marker starts or has a row that is not this
       // soak's app or marker, an action and a time is saved as unavailable, apart from the memory
       // samples and the container states.
       let events = null, text;
       if (!streamError) { try { await owned.start(marker); await stream.marker(2); } catch (e) { streamError = e; } }
       try { text = await stream.stop(); } catch (e) { streamError ??= e; }
-      if (!streamError) { try { events = readEvents(text, startedMs, { app, marker }); } catch (e) { streamError = e; } }
+      if (!streamError) { try { events = readEvents(text, startedMs, { app, marker, finishedMs: Date.parse(loadInfo.State.FinishedAt) }); } catch (e) { streamError = e; } }
       if (streamError) { keep("docker events", streamError); log(`${cell.app} ${cell.source} ${cell.target}: Docker's event stream is unavailable: ${firstLine(streamError)}`); }
       retain(join(raw, "events.json"), events);
       Object.assign(cell, await step("load-evidence", () => summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory: samples, before: appBefore(before), after: end, events, rate: options.rate,

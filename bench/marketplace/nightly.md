@@ -109,8 +109,9 @@ are not guaranteed to finish by the morning check.
    defaults. Publish medians and min/max, not unsupported small-difference claims. Nothing
    saved shows each adapter at steady state after the 10-second warmup, and a convergence pass
    cannot establish that either: it is a screening reading of throughput within a stated
-   tolerance, not a certificate of steady state. A report without `--convergence` says none was
-   provided to it. Change the warmup only by a separate reviewed
+   tolerance, not a certificate of steady state. A report without `--convergence` gains one
+   line saying none was provided to it, which does not say none exists; its other output is
+   unchanged. Change the warmup only by a separate reviewed
    change from a saved like-for-like convergence pass, and keep convergence and soak passes out
    of the nightly ([Convergence and soak passes](README.md#convergence-and-soak-passes)).
    The droplet job does not run them. A soak says its fixed rate held only when every interval

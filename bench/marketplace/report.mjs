@@ -8,7 +8,7 @@ import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupApps } from "./groups.mjs";
 import { admitted, boundedFeatureProfile, boundedQualificationSettings, featureProfile, qualificationSettings, validateActiveQualification, validateQualification } from "./feature-contract.mjs";
-import { aggregateCold, cpuSettings, loadPhases, parsePart, phases, readableSchemas, resultSchema, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfilesFor, v3Schema, v5Schema } from "./run-contract.mjs";
+import { aggregateCold, cpuSettings, inventory, loadPhases, parsePart, phases, readableSchemas, resultSchema, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfilesFor, v3Schema, v5Schema } from "./run-contract.mjs";
 import { betweenDroplets, cleanOutcome, differText, outcomeFields, subjectMetrics } from "./split.mjs";
 import { maxStatsSamples } from "./raw-contract.mjs";
 const finite = (n, min = 0) => assert.ok(Number.isFinite(n) && n >= min, "missing/invalid measurement");
@@ -231,12 +231,27 @@ export function validateSummary(s) {
   return s;
 }
 /**
+ * The limits run.mjs states in every round it saves (measurement.upstream and cpuWindow), as this
+ * checkout writes them. report.test.mjs checks that run.mjs still writes these exact strings.
+ */
+export const checkoutLimits = Object.freeze({
+  upstream: "single Node process, even with a two-CPU quota; high upstream CPU can limit API-mode throughput; closed-loop VUs alone do not prove app saturation",
+  cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU",
+});
+/** An adapter's label as this checkout defines it (run-contract.mjs inventory), or a fixed text for one it does not name. */
+export function checkoutLabel(app) {
+  return Object.hasOwn(inventory, app) && typeof inventory[app].label === "string" ? inventory[app].label : "an adapter this checkout does not name";
+}
+/**
  * A validated round as Markdown. `convergence(round, apps)` returns the lines stating a saved
  * convergence pass (steady-contract.mjs convergenceLines); without it the report says none was
- * provided to it (#1851). The CLI loads steady-contract.mjs only for --convergence, so validating
- * or reporting a round without a pass never imports it. `hostCpu` prints a host's CPU model; the
- * --convergence CLI passes one that prints only a model of the form a pass saves (savedText), and
- * the default prints it as saved.
+ * provided to it (#1851): that one line is the only change to the default output. The CLI loads
+ * steady-contract.mjs only for --convergence, so validating or reporting a round without a pass
+ * never imports it. `hostCpu` prints a host's CPU model; the --convergence CLI passes one that
+ * prints only a model of the form a pass saves (savedText), and the default prints it as saved.
+ * With a pass, saved text the validator checks only for being nonempty is not printed: each
+ * adapter's label is this checkout's (checkoutLabel), and each saved limit prints only when it is
+ * this checkout's text (checkoutLimits), otherwise a fixed sentence says it is not printed.
  * @param {object} s a saved round
  * @param {{convergence?: ((round: object, apps: string[]) => string[]) | null, hostCpu?: (cpu: string) => string}} [options]
  */
@@ -265,6 +280,8 @@ export function report(s, { convergence = null, hostCpu = (text) => text } = {})
     "A stage marked (stopped: n of 3 passes) is also the app's outcome: its container exited or was OOM-killed during a load phase (warmup included), and the line below the table says when. That profile's later phases and passes were not run, so the stage's numbers come from the n passes before the stop, or none. A 200 of the wrong content type, an app that stopped during its cold start or before a phase began, or an upstream error fails the run instead."];
   const cell = (r, digits = 2) => `${r.median.toFixed(digits)} [${r.min.toFixed(digits)}-${r.max.toFixed(digits)}]`;
   const label = (v) => v.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
+  const checkout = convergence !== null;
+  const appLabel = (app, a) => label(checkout ? checkoutLabel(app) : a.label);
   if (s.options.group) {
     lines.push("", `Feature contract: ${s.measurement.featureProfile}. Popular and performance-oriented candidate cohorts are deduplicated; candidates are not a current speed ranking. ETag/conditional GET and downstream readiness are not required by this workload, and are not claimed equivalent. Logging remains native, not normalized.`);
     if (s.measurement.featureProfile === boundedFeatureProfile) lines.push("", "Connection-flood resistance: not measured.",
@@ -283,7 +300,7 @@ export function report(s, { convergence = null, hostCpu = (text) => text } = {})
   if (Object.values(s.measurement.cpus).some((c) => !c.cpuset)) warnings.push("CPU quotas without disjoint pinning do not prove CPU isolation.");
   for (const warning of warnings) lines.push("", `Warning: ${warning}`);
   const convergenceText = convergence ? convergence(s, apps)
-    : [`Convergence evidence: none provided to this report. This report does not establish whether this round's ${s.options.warmup}s timed warmup was sufficient; a convergence pass (steady.mjs) would add a screening reading of throughput, not that conclusion.`];
+    : [`Convergence evidence: none provided to this report (it was run without --convergence), which does not say whether a pass exists. This report does not establish whether this round's ${s.options.warmup}s timed warmup was sufficient; a convergence pass (steady.mjs) would add a screening reading of throughput, not that conclusion.`];
   for (const line of convergenceText) lines.push("", line);
   // The rows of every table: a split round's, each droplet's Corten and its admitted candidates,
   // each beside its own Corten (#816); otherwise the measured adapters, in the group's order.
@@ -298,17 +315,17 @@ export function report(s, { convergence = null, hostCpu = (text) => text } = {})
       lines.push("", `### ${source === "fixture" ? "Memory source" : "HTTP source"}`);
       lines.push("", "#### Cold start", "", "Docker-host container StartedAt to first complete HTTP 200, before readiness/warmup; not process-exec or browser-interactive time.", "",
         `| Framework |${split ? " Droplet |" : ""} First 200 from container start ms | Successful request ms |`, `|---|${split ? "---|" : ""}---:|---:|`);
-      for (const { a, droplet } of rows) {
+      for (const { app, a, droplet } of rows) {
         const runs = a.runs[key], cold = aggregateCold(runs);
         const mark = stoppedMark(runs.length, 3);
-        lines.push(`| ${label(a.label)}${mark} |${droplet ? ` ${droplet} |` : ""} ${cell(cold.first200MsFromContainerStart)} | ${cell(cold.successfulRequestMs)} |`);
+        lines.push(`| ${appLabel(app, a)}${mark} |${droplet ? ` ${droplet} |` : ""} ${cell(cold.first200MsFromContainerStart)} | ${cell(cold.successfulRequestMs)} |`);
       }
       for (const { app, a, at } of rows) for (const r of a.runs[key]) if (r.warmup?.appOutcome) lines.push("", `App outcome in warmup (not measured): ${app}${at} ${key} pass ${r.pass}: ${outcomeText(r.warmup)}.`);
       for (const phase of phases) {
         lines.push("", `#### ${phase === "fixed" ? `Fixed ${s.options.rate} req/s` : `${phase === "sat64" ? 64 : 256}-user closed loop`}`, "",
           `| Framework |${split ? " Droplet |" : ""} req/s | p50 ms | p95 ms | p99 ms | CPU % | CPU us/request | Steady MiB | Peak MiB | Requests/CPU-second | Failed % |${split ? " req/s ratio to Corten | CPU us/request ratio to Corten |" : ""}`,
           `|---|${split ? "---|" : ""}---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|${split ? "---:|---:|" : ""}`);
-        for (const { a, droplet, corten } of rows) {
+        for (const { app, a, droplet, corten } of rows) {
           const p = a.phases[key][phase];
           const mark = (p.appOutcomes ? ` * (${p.appOutcomes} of ${p.passes} passes)` : "") + (p.stopped ? stoppedMark(p.passes, p.asked) : "");
           const metrics = ["rps", "p50", "p95", "p99", "cpuAvgPct", "cpuPerRequestUsec", "memAvgMiB", "memMaxMiB", "perCpuSecond"];
@@ -317,7 +334,7 @@ export function report(s, { convergence = null, hostCpu = (text) => text } = {})
           // number is not a median of three passes, so a ratio with it on either side is "-".
           const c = corten?.phases[key][phase];
           const ratios = !corten ? "" : ["rps", "cpuPerRequestUsec"].map((m) => ` ${p.passes && c.passes && !p.stopped && !c.stopped ? (p[m].median / c[m].median).toFixed(2) : "-"} |`).join("");
-          lines.push(`| ${label(a.label)}${mark} |${droplet ? ` ${droplet} |` : ""} ${p.passes ? `${metrics.map((metric) => cell(p[metric])).join(" | ")} | ${cell(failed)}` : Array(metrics.length + 1).fill("-").join(" | ")} |${ratios}`);
+          lines.push(`| ${appLabel(app, a)}${mark} |${droplet ? ` ${droplet} |` : ""} ${p.passes ? `${metrics.map((metric) => cell(p[metric])).join(" | ")} | ${cell(failed)}` : Array(metrics.length + 1).fill("-").join(" | ")} |${ratios}`);
         }
         for (const { app, a, at } of rows) {
           const p = a.phases[key][phase];
@@ -333,7 +350,9 @@ export function report(s, { convergence = null, hostCpu = (text) => text } = {})
       }
     }
   }
-  lines.push("", "## Limits", "", s.measurement.upstream, s.measurement.cpuWindow);
+  const limit = (key, what) => (!checkout || s.measurement[key] === checkoutLimits[key] ? s.measurement[key]
+    : `This round's saved ${what} limit is not this checkout's text, so it is not printed here; report.mjs without --convergence prints it.`);
+  lines.push("", "## Limits", "", limit("upstream", "upstream"), limit("cpuWindow", "CPU window"));
   return lines.join("\n") + "\n";
 }
 // A split round's droplets, and how Corten's own numbers differ between them (#816).

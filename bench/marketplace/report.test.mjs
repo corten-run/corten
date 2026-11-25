@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { apps, locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { aggregate, appStop, cpuSettings, phases, resultSchema, sources, stageAggregate, timedProfilesFor, v4Schema, v5Schema } from "./run-contract.mjs";
-import { report, validateSummary } from "./report.mjs";
+import { checkoutLabel, checkoutLimits, report, validateSummary } from "./report.mjs";
 import { convergenceLines, flattenPoint, parseSteadyArgs } from "./steady-contract.mjs";
 import { savedPass } from "./steady-saved-fixture.mjs";
 import { compare, comparisonKey } from "./compare.mjs";
@@ -203,7 +203,7 @@ test("r20 still validates and renders its actual per-locale measurements", () =>
   // The saved report, plus only the statement that no convergence pass was provided to it (#1851).
   const original = saved("report.md").replaceAll("\r\n", "\n"), at = original.indexOf("\n\n## ", original.indexOf("Warning: Short 15s phase windows"));
   assert.ok(at > 0);
-  assert.equal(report(s), `${original.slice(0, at)}\n\nConvergence evidence: none provided to this report. This report does not establish whether this round's 10s timed warmup was sufficient; a convergence pass (steady.mjs) would add a screening reading of throughput, not that conclusion.${original.slice(at)}`);
+  assert.equal(report(s), `${original.slice(0, at)}\n\nConvergence evidence: none provided to this report (it was run without --convergence), which does not say whether a pass exists. This report does not establish whether this round's 10s timed warmup was sufficient; a convergence pass (steady.mjs) would add a screening reading of throughput, not that conclusion.${original.slice(at)}`);
   // The regression key produced by the v5 reader for this saved round.
   assert.equal(comparisonKey(s), "ac1de5eaa9eabbfd993d3dc68eab0526eed883f240a2aac9cf2988e759b3d853");
   const next = grouped("production", "r21");
@@ -606,6 +606,9 @@ test("a v3 baseline compares with a v4 round, and a stop in the v4 round is a ne
 
 test("the report states the convergence pass given to it, or that none was provided", async () => {
   const s = grouped("production", "r21");
+  // This checkout's labels and limits, which the --convergence path prints (the synthetic ones would differ).
+  for (const app of Object.keys(s.apps)) s.apps[app].label = checkoutLabel(app);
+  Object.assign(s.measurement, checkoutLimits);
   // Pinned, as an official round is: an unpinned round records no CPU placement to match.
   s.measurement.cpus = cpuSettings({ MARKETPLACE_APP_CPUS: "1", MARKETPLACE_LOAD_CPUS: "4-7", MARKETPLACE_API_CPUS: "2-3" });
   // A kernel release of the form a pass saves (savedText), so the two can match.
@@ -615,7 +618,7 @@ test("the report states the convergence pass given to it, or that none was provi
   for (const app of ["nextjs", "fastapi", "express", "topcoat", "leptos"]) Object.assign(s.apps[app], { runs: {}, phases: {} }).qualification.api = produceBoundedQualification(probes, "api");
   validateSummary(s);
   const none = report(s);
-  assert.match(none, /^Convergence evidence: none provided to this report\. This report does not establish whether this round's 30s timed warmup was sufficient; a convergence pass \(steady\.mjs\) would add a screening reading of throughput, not that conclusion\.$/m);
+  assert.match(none, /^Convergence evidence: none provided to this report \(it was run without --convergence\), which does not say whether a pass exists\. This report does not establish whether this round's 30s timed warmup was sufficient; a convergence pass \(steady\.mjs\) would add a screening reading of throughput, not that conclusion\.$/m);
   assert.doesNotMatch(none, /cannot show|may include warming/);
   const windows = (rps) => rps.map((r, index) => ({ index, startSeconds: index * 15, seconds: 15, requests: r * 15, failed: 0, rps: r, p95: 5, p99: 9 }));
   // Like-for-like with the round on every compared input.
@@ -790,5 +793,48 @@ test("report.mjs --convergence prints no text it read from a saved pass or round
     const reason = run(JSON.stringify(badOnline), passFile, false);
     assert.notEqual(reason.status, 0);
     assert.ok(reason.stderr.includes(canary), "the default path's error is unchanged");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("report.mjs --convergence prints this checkout's adapter labels and limits, never a round's saved text for them", () => {
+  const s = grouped("production", "r21");
+  s.measurement.cpus = cpuSettings({ MARKETPLACE_APP_CPUS: "1", MARKETPLACE_LOAD_CPUS: "4-7", MARKETPLACE_API_CPUS: "2-3" });
+  s.host.release = "6.8.0-test";
+  const probes = boundedQualificationProbes("api"); delete probes.page.headers["content-security-policy"];
+  for (const app of ["nextjs", "fastapi", "express", "topcoat", "leptos"]) Object.assign(s.apps[app], { runs: {}, phases: {} }).qualification.api = produceBoundedQualification(probes, "api");
+  // The validator checks a label and these limits only for being nonempty strings.
+  const canary = "leaked-canary";
+  s.apps.corten.label = `Corten <${canary}>`; s.apps.aspnet.label = canary;
+  s.measurement.upstream = `upstream ${canary}`; s.measurement.cpuWindow = `window ${canary}`;
+  validateSummary(s);
+  const windows = Array.from({ length: 12 }, (_, index) => ({ index, startSeconds: index * 15, seconds: 15, requests: 15000, failed: 0, rps: 1000, p95: 5, p99: 9 }));
+  const options = { ...parseSteadyArgs(["convergence", "w7", "--group", "production", "--minutes", "3"], apps, groupApps), apps: ["corten", "aspnet"] };
+  const pass = savedPass(options, options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) =>
+    ({ app, source, target, windows, tail: 0, unrecorded: 0, requests: 180000, iterations: 180000, latencyMaxMs: 10, failedRequests: 0, verdict: flattenPoint(windows) })))), { commit: s.commit });
+  const given = (round, list) => convergenceLines(round, list, pass);
+  // The default report is unchanged: it prints the saved text.
+  const plain = report(s);
+  for (const text of [`| Corten <${canary}> |`, `| ${canary} |`, `upstream ${canary}`, `window ${canary}`]) assert.ok(plain.includes(text), text);
+  const text = report(s, { convergence: given });
+  assert.ok(!text.includes("canary"), text);
+  for (const app of ["corten", "aspnet"]) assert.ok(text.includes(`\n| ${checkoutLabel(app)} |`), app);
+  assert.ok(text.endsWith("## Limits\n\nThis round's saved upstream limit is not this checkout's text, so it is not printed here; report.mjs without --convergence prints it.\nThis round's saved CPU window limit is not this checkout's text, so it is not printed here; report.mjs without --convergence prints it.\n"), text.slice(-400));
+  // A round whose limits are this checkout's text prints them on both paths.
+  const same = structuredClone(s); Object.assign(same.measurement, checkoutLimits);
+  assert.ok(report(same, { convergence: given }).endsWith(`## Limits\n\n${checkoutLimits.upstream}\n${checkoutLimits.cpuWindow}\n`));
+  // checkoutLimits is what run.mjs writes into every round.
+  const runSource = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+  for (const [key, value] of Object.entries(checkoutLimits)) assert.ok(runSource.includes(`${key}: ${JSON.stringify(value)}`), key);
+  // An adapter this checkout does not name gets a fixed text, never the name or an inherited property.
+  for (const name of ["not-an-adapter", "__proto__", "constructor", canary]) assert.equal(checkoutLabel(name), "an adapter this checkout does not name");
+  assert.ok(checkoutLabel("corten").startsWith("Corten "), checkoutLabel("corten"));
+  // Through the CLI, end to end.
+  const dir = mkdtempSync(join(tmpdir(), "marketplace-report-")), roundFile = join(dir, "round.json"), passFile = join(dir, "pass.json");
+  try {
+    writeFileSync(roundFile, JSON.stringify(s)); writeFileSync(passFile, JSON.stringify(pass));
+    const cli = spawnSync(process.execPath, [fileURLToPath(new URL("./report.mjs", import.meta.url)), roundFile, "--convergence", passFile], { encoding: "utf8" });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.ok(!cli.stdout.includes("canary") && !cli.stderr.includes("canary"), cli.stdout);
+    assert.equal(cli.stdout, `${report(s, { convergence: given })}\n`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

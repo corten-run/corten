@@ -139,15 +139,24 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
     pending.set(id, { kind, id, name }); record.created.push({ kind, id, name, label });
     return id;
   }
+  // Whether `id` still exists, from a lookup by that ID (as bench/fullstack/idle-close.mjs present):
+  // only an empty answer is absence, and exactly that ID is presence. Any other answer (another
+  // full ID, or several) leaves the removal unconfirmed, a teardown failure, and names neither.
+  const present = async (kind, id) => {
+    const found = await list(kind, `id=${id}`);
+    if (!found.length) return false;
+    if (found.length !== 1 || found[0] !== id) throw new Error(`a docker ${kind} lookup by ID ${id} returned another object; its removal is unconfirmed`);
+    return true;
+  };
   async function remove(id, { recovered = false } = {}) {
     const entry = pending.get(id) ?? { kind: "container", id, name: null };
     try {
       if (entry.kind === "network") {
-        if ((await list("network", `id=${id}`)).includes(id)) {
+        if (await present("network", id)) {
           confirm("network", dockerJson(await clean(["network", "inspect", id]), "docker network inspect")[0], id);
           same(await clean(["network", "rm", id]), id, `docker network rm did not confirm ${id}`);
         }
-      } else if ((await list("container", `id=${id}`)).includes(id)) {
+      } else if (await present("container", id)) {
         await inspect(clean, id);
         same(await clean(["rm", "-f", "-v", id]), id, `docker rm did not confirm ${id}`);
       }
