@@ -306,6 +306,7 @@ test("semver snapshot pins same-read library bytes before actual worker executio
 test("only named replay dependencies extend the worker source budget", { timeout: 15000 }, async (t) => {
   const paths = validationPaths.filter((path) => path === "bench/catalog/cgroup.mjs" || path === "bench/typescript.mjs" || path === "bench/fullstack/edge.mjs"
     || path === "bench/fullstack-browser/document-navigation.mjs"
+    || path === "bench/json-api/load-resource-proof.mjs"
     || path === "bench/workloads/isolated/native-roles.mjs" || /^bench\/hardening\/(?:bounded-requests\.mjs$|dependency-recovery-)/.test(path));
   assert.deepEqual(paths, [
     "bench/catalog/cgroup.mjs",
@@ -314,6 +315,7 @@ test("only named replay dependencies extend the worker source budget", { timeout
     "bench/hardening/bounded-requests.mjs",
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",
+    "bench/json-api/load-resource-proof.mjs",
     "bench/typescript.mjs",
     "bench/workloads/isolated/native-roles.mjs",
   ]);
@@ -322,10 +324,10 @@ test("only named replay dependencies extend the worker source budget", { timeout
   const task = validationTask(h.input, { snapshot, WorkerClass: class extends Worker {
     constructor(entry, options) {
       // Inject below the exact parent manifest check to exercise the worker's own bound. The
-      // fixture never imports document-navigation, so only its named slot, not a generic extra
+      // fixture never imports the JSON proof, so only its named slot, not a generic extra
       // one, keeps an unused path in its place from fitting.
       options.workerData.sources = options.workerData.sources.map((row) =>
-        row.path === "bench/fullstack-browser/document-navigation.mjs" ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
+        row.path === "bench/json-api/load-resource-proof.mjs" ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
       super(entry, options);
     }
   } });
@@ -437,6 +439,38 @@ test("evidence commit cannot select historical code; absent closure and changed 
   // Existing module captured its original commit. That graph still exists and
   // package pin failure is independent of the missing current HEAD member.
   await assert.rejects(h.inspect(h.input), { message: "native campaign validation unavailable or invalid; evidence/host preserved" });
+});
+
+test("native replay timeout has a fixed stage and retains custody if the worker does not settle", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let stops = 0, retains = 0, unreferences = 0;
+  const pending = inspectCampaign({}, { start: () => ({
+    result: new Promise(() => {}), stop: () => stops++, unref: () => unreferences++,
+  }), preserveLock: () => retains++ });
+  const rejected = assert.rejects(pending, {
+    message: "native campaign validation unavailable or invalid; evidence/host preserved",
+    controllerStage: "collect-native-replay-deadline",
+  });
+  t.mock.timers.tick(validationLimit + 1);
+  assert.equal(stops, 1);
+  assert.equal(retains, 0);
+  t.mock.timers.tick(validationStopLimit);
+  await rejected;
+  assert.equal(retains, 1);
+  assert.equal(unreferences, 1);
+});
+
+test("native replay startup, interruption and worker refusal have closed stages", async () => {
+  const raw = Object.assign(new Error("PRIVATE_EVIDENCE_VALUE"), { controllerStage: "collect-native-replay-deadline" });
+  const message = "native campaign validation unavailable or invalid; evidence/host preserved";
+  await assert.rejects(inspectCampaign({}, { start: () => { throw raw; } }),
+    { message, controllerStage: "collect-native-replay-start" });
+  await assert.rejects(inspectCampaign({}, { start: () => ({ result: Promise.reject(raw) }) }),
+    { message, controllerStage: "collect-native-replay-refused" });
+  let started = false;
+  await assert.rejects(inspectCampaign({}, { interrupted: () => true, start: () => { started = true; } }),
+    { message, controllerStage: "collect-native-replay-interrupted" });
+  assert.equal(started, false);
 });
 
 test("cancellation retains the lock if stopping a real-worker adapter is unconfirmed", { timeout: 15000 }, async (t) => {

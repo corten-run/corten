@@ -9,11 +9,12 @@ import { isDeepStrictEqual } from "node:util";
 export const streamLimits = Object.freeze({ bytes: 512 * 2 ** 20, lineBytes: 64 * 2 ** 10, events: 2_000_000, metrics: 128, chunkBytes: 64 * 2 ** 10 });
 export const prototypeSchema = "json-api-fixed-prototype/v1";
 const object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
-const sameKeys = (value, keys) => assert.equal(Object.keys(value).sort().join(","), [...keys].sort().join(","), "event fields differ");
+const sameKeys = (value, keys) => assert.ok(Object.keys(value).length === keys.length
+  && keys.every((key) => Object.hasOwn(value, key)), "event fields differ");
 
 // Parse the exact RFC3339 nanoseconds without passing them through a JS Date double.
 export function timestampNs(value) {
-  const match = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$/.exec(value ?? "");
+  const match = typeof value === "string" && /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$/.exec(value);
   assert.ok(match, "RFC3339 nanosecond event timestamp required");
   const calendar = Date.parse(`${match[1]}Z`), ms = Date.parse(`${match[1]}${match[3]}`);
   assert.ok(Number.isFinite(ms) && Number.isFinite(calendar) && new Date(calendar).toISOString().slice(0, 19) === match[1], "invalid calendar timestamp");
@@ -31,7 +32,10 @@ function replay(limits) {
   const line = (buffer) => {
     assert.ok(buffer.length && buffer.length <= limits.lineBytes, "empty/oversize raw event line");
     assert.ok(++lines <= limits.events, "raw event count cap exceeded");
-    const entry = JSON.parse(decoder.decode(buffer));
+    const source = decoder.decode(buffer);
+    let entry;
+    try { entry = JSON.parse(source); }
+    catch { throw new SyntaxError("invalid raw event JSON"); }
     assert.ok(object(entry), "invalid event"); sameKeys(entry, ["type", "metric", "data"]);
     assert.match(entry.metric, /^[a-zA-Z_][a-zA-Z_0-9]{0,127}$/);
     assert.ok(object(entry.data), "invalid event data");
@@ -45,7 +49,7 @@ function replay(limits) {
       metrics.set(entry.metric, { type: data.type, points: 0, sum: 0, min: null, max: null, true: 0, false: 0, firstNs: null, lastNs: null });
       return;
     }
-    assert.equal(entry.type, "Point", "unknown raw output record");
+    assert.ok(entry.type === "Point", "unknown raw output record");
     sameKeys(data, Object.hasOwn(data, "metadata") ? ["time", "value", "tags", "metadata"] : ["time", "value", "tags"]);
     assert.ok(object(data.tags) && Object.values(data.tags).every((v) => typeof v === "string"), "invalid point tags");
     if (Object.hasOwn(data, "metadata")) assert.ok(object(data.metadata) && Object.values(data.metadata).every((v) => typeof v === "string"), "invalid point metadata");
@@ -125,11 +129,12 @@ function replay(limits) {
 export function verifyStreamReceipt(receipt) {
   assert.ok(object(receipt), "complete raw stream receipt required");
   sameKeys(receipt, ["encoding", "bytes", "sha256", "events", "points", "metrics", "firstNs", "lastNs"]);
-  assert.equal(receipt.encoding, "identity", "raw stream receipt encoding differs");
+  assert.ok(receipt.encoding === "identity", "raw stream receipt encoding differs");
   for (const key of ["bytes", "events", "points", "metrics"])
     assert.ok(Number.isSafeInteger(receipt[key]) && receipt[key] > 0, "invalid raw stream receipt counts");
-  assert.match(receipt.sha256 ?? "", /^[a-f0-9]{64}$/, "raw stream receipt hash required");
-  for (const key of ["firstNs", "lastNs"]) assert.match(receipt[key] ?? "", /^\d+$/, "raw stream receipt timestamps required");
+  assert.ok(typeof receipt.sha256 === "string" && /^[a-f0-9]{64}$/.test(receipt.sha256), "raw stream receipt hash required");
+  for (const key of ["firstNs", "lastNs"])
+    assert.ok(typeof receipt[key] === "string" && /^\d+$/.test(receipt[key]), "raw stream receipt timestamps required");
   assert.ok(BigInt(receipt.firstNs) <= BigInt(receipt.lastNs), "raw stream receipt timestamps reversed");
 }
 

@@ -11,7 +11,7 @@ import { validateCampaign, freeze, jsonPhase, mixedPhase, offlineAuditRemainingM
 import { verifyWorkingSources } from "./worker.mjs";
 import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, publishDurable, readRegular, syncDirectory, transferEvidence, tree } from "./evidence.mjs";
 import { supervise } from "./process.mjs";
-import { observeHost, sampleAuditClock, udevSettleCandidates, udevSettleMs, udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
+import { observeHost, sampleAuditClock, terminalClockPolicy, udevSettleCandidates, udevSettleMs, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
 import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
@@ -108,7 +108,7 @@ export function createCampaign({ authorize }) {
       throw error;
     } finally { c.busy = false; }
   }
-  async function command(c, binding, invocation, directory, signal, retainTerminalClock, compilerTarget) {
+  async function command(c, binding, invocation, directory, phase, signal, retainTerminalClock, compilerTarget) {
     c.stream?.check();
     own(c.handle); verifyWorkingSources(c.plan.bindings[0]);
     const observerStop = new AbortController();
@@ -147,7 +147,7 @@ export function createCampaign({ authorize }) {
     event(c, "command-exited", { ...result, ...(hostManifestSha256 ? { hostManifestSha256 } : {}) });
     assert.equal(result.terminal, true, "native process is not observed terminal");
     const lifetime = hostManifestSha256 ? inspectLifetime(binding, invocation,
-      join(c.directory, directory, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result }) : null;
+      join(c.directory, directory, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result, phase }) : null;
     if (lifetime) assert.equal(lifetime.manifestSha256, hostManifestSha256, "command lifetime seal differs");
     // A drained cancellation may be collected, never advanced or qualified. All
     // other commands require complete actual lifetime proof before another spawn.
@@ -172,7 +172,8 @@ export function createCampaign({ authorize }) {
       c.stream?.open(cpus, roles);
     }
     const closeControlWindow = c.offlineHandoff ? beginOfflineWindow(c.control) : c.control ? beginControlWindow(c.control) : null;
-    const settlePolicy = c.stream || c.offlineHandoff ? udevSettlePolicy(binding.request.group, phaseName) : null;
+    const settlePolicy = c.stream || c.offlineHandoff
+      ? terminalClockPolicy(binding, binding.execution.invocation, c.plan.round, phaseName) : null;
     const retainUdev = settlePolicy !== null;
     const before = observeHost(c.stream?.registration, retainUdev, c.offlineHandoff); save(c, `${relative}/host-before.json`, before);
     if (c.stream || c.offlineHandoff) verifyHostBoundary(before, before);
@@ -187,7 +188,7 @@ export function createCampaign({ authorize }) {
         mkdirSync(dirname(target), { recursive: true }); physical(dirname(target));
         compilerTarget = { ...reserveCompilerTarget(target), settled: true };
       }
-      try { result = await command(c, binding, invocation, relative, signal, retainUdev && native, compilerTarget); }
+      try { result = await command(c, binding, invocation, relative, phaseName, signal, retainUdev && native, compilerTarget); }
       catch (error) { problem = error; throw error; }
       finally {
         try { if (compilerTarget) await compilerTarget.close(compilerTarget.settled); }
@@ -369,7 +370,7 @@ export function createCampaign({ authorize }) {
           if (hostManifestSha256) {
             const invocation = [...effective.preparation.fixtures, effective.execution.invocation][p.commands.length - 1];
             const observation = inspectLifetime(effective, invocation,
-              join(c.directory, p.relative, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result });
+              join(c.directory, p.relative, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result, phase: "timing" });
             assert.equal(observation.manifestSha256, hostManifestSha256);
             host = composeHostProof(effective, native, observation);
           }

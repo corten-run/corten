@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import test from "node:test";
+import { inspect } from "node:util";
 import { loadConfig } from "./contract.mjs";
 import { fixedFixture } from "./fixed-test-fixtures.mjs";
 import { readFixedStream } from "./fixed-stream.mjs";
@@ -39,6 +40,18 @@ test("normal99 closed failures retain exhaustive counts, not a fatal or qualifie
     assert.equal(observed.targetOutcome, null); assert.equal(observed.comparisonEligible, null);
   }
 });
+
+for (const [field, edit, message] of [
+  ["schema", (raw, value) => { raw.schema = value; }, "versioned timed JSON phase required"],
+  ["phase", (raw, value) => { raw.phase = value; }, "timed phase differs"],
+  ["clock schema", (raw, value) => { raw.clock.schema = value; }, "closed timed native clock schema differs"],
+]) {
+  test(`saved phase ${field} is refused without reflecting it`, () => {
+    const raw = closedFixture(), canary = "SAVED_PHASE_CANARY";
+    edit(raw, canary);
+    assert.throws(() => deriveTimedObservation(raw, "sat64", options), (error) => error.message === message && !inspect(error).includes(canary));
+  });
+}
 
 test("ordinary late fixed starts retain observed extent; no new zero-nanosecond or nominal+one gate", async (t) => {
   for (const count of [3, 4, 5]) {
