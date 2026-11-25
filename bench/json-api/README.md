@@ -265,6 +265,9 @@ a timing schedule executed or admit a baseline.
 Client timeouts do not observe app-handler completion: their classification is retained,
 but attribution remains incomplete, as do later phases with an unresolved server tail.
 No quiet interval or favorable counter count is taken as a server-drain proof.
+A structured k6 `Request Failed` warning counts against observed timeouts only when
+its error is `request timeout` or Go's `Get "<HTTP(S) URL>": request timeout` form.
+Neither form changes the status or threshold checks, and rejection messages omit the target.
 
 Fixed nominal arrivals, all observed starts/offers and observed endpoint variation remain
 separate. A late ordinary start is not rejected at zero nanoseconds or nominal-plus-N.
