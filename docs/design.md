@@ -10521,8 +10521,8 @@ rules something out.
     comes would draw the patch without its address; and a hook for a script to replace the
     address, a second way to do what the mark does, with URLs written in scripts (README Value 5).
 
-    What it costs: the runtime every page loads is 539 bytes larger raw (45,676 to 46,215), 244
-    with gzip (16,389 to 16,633) and 210 with brotli (14,796 to 15,006), paid once a release by
+    What it costs: the runtime every page loads is 550 bytes larger raw (46,502 to 47,052), 227
+    with gzip (16,718 to 16,945) and 197 with brotli (15,106 to 15,303), paid once a release by
     every user. A `data-patch` submit reads one attribute; only a marked GET captures its visit,
     compares it where it could draw and builds an address. A patch tracks whether it placed every
     element as it walks them, without a separate scan, and a page drawn or a navigation taken
@@ -10549,8 +10549,8 @@ rules something out.
     appends, which the guide only asks today; or `replaceState` stops keeping the entry's key or
     stops aborting a navigation under way in one of the engines.
 
-    Last checked: 2026-11-25, the runtime's size on `6ca02c26e` against main `0bcae7047`, and the
-    page's and the patch's bodies on the same commit; 2026-11-25, the watchlist smoke on the same
+    Last checked: 2026-11-25, the runtime's size with this change merged with main `1155bfdf8` against
+    that main, and the page's and the patch's bodies on `6ca02c26e`; 2026-11-25, the watchlist smoke on the same
     server in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2, every `data-address`
     check passing in each.
 
