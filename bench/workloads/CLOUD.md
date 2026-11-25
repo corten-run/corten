@@ -1163,8 +1163,26 @@ observations or a running unit preserves the host. Fleet output reports
 without another DELETE. Native-started jobs use the separate collection and
 custody paths above. No retirement path can delete a running benchmark.
 
-For failure before monitor registration, `setup-watcher-proof-missing` means
-the preserved archive already records a watcher failure. `setup-host-proof-refused`
+For failure before monitor registration, an archived
+`control/watch-failure-<id>.json` is never a receipt. When each archived failure
+names exactly one settled bootstrap control in the saved ledger, and the archive
+holds no receipt for it, the terminal host query also runs a separate fixed drain
+proof (`cloud-setup-drain-source.mjs`) after the guardian, in its namespace. For
+each failed watcher it requires, on the same boot: the live failure record
+byte-identical to the archived one; that control's result exiting with the
+ledger's code; its watcher unit failed or unloaded, with no main or control PID,
+no queued job, an absent or empty cgroup and its observer gone; the session scope
+from its registration absent or empty; and no process with an identity from that
+session's chain or a parent among its PIDs. Every check of the ordinary query
+still applies, including the exact custody inventory, so a stream or unknown
+control file still refuses. Its receipt is `benchmark-failed-setup-retirement/v3`
+(host observation `benchmark-failed-setup-host/v3`, control proof
+`benchmark-control-setup-query/v2`). A query with no archived failure keeps its
+previous bytes and schemas, so saved receipts replay unchanged. The proof adds no
+write: the failure, archive and exit stay as they were, and it never qualifies
+the group. `setup-watcher-proof-missing` means an archived failure names an unknown
+or non-bootstrap control, or sits beside its own receipt; collection stops before
+any query. `setup-host-proof-refused`
 means the registered terminal host query had an acknowledged nonzero exit, or
 exited zero but returned unusable proof. In the latter case the ledger retains
 code zero and records the proof rejection separately. Neither is a retirement receipt. Do not repeat collection to try

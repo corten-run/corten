@@ -13,6 +13,7 @@ import { campaignOutcome, controllerState, parseDropletArgs } from "./cloud-opti
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { digest } from "./cloud-local.mjs";
 import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
+import setupDrainSource from "./cloud-setup-drain-source.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
 
 const at = "2026-11-14T00:00:00.000Z";
@@ -407,15 +408,110 @@ for (const cancelAtProof of [false, true]) test(cancelAtProof
   }
 });
 
+// The first bootstrap session stays open until its watcher misses its deadline, so the
+// exit archive holds a real watch-failure and no receipt for it.
+for (const mode of ["drained", "lost-acknowledgement", "pending-monitor"]) test({
+  drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
+  "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
+  "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
+}[mode], async (t) => {
+  const { h, options, fleet } = configured(t);
+  options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
+  const kernel = spawn(process.platform === "win32" ? "python" : "python3",
+    ["-I", fileURLToPath(new URL("./test-fixtures/control-session-kernel.py", import.meta.url)), "setup-fleet"],
+    { timeout: 25000, killSignal: "SIGKILL", windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+  const lines = createInterface({ input: kernel.stdout })[Symbol.asyncIterator]();
+  let stderr = ""; kernel.stderr.on("data", (part) => { stderr = (stderr + part).slice(-4096); });
+  const closed = new Promise((resolve) => { kernel.on("error", (e) => resolve(String(e))); kernel.on("close", resolve); });
+  t.after(async () => { kernel.stdin.end(); assert.equal(await closed, 0, stderr); });
+  const token = fleet.jobs[1].token;
+  kernel.stdin.write(JSON.stringify({ mode: "setup-fleet", token, source: guardianSource, drainSource: setupDrainSource }) + "\n");
+  let failed, queries = 0;
+  const run = async (binary, args, timeout, allowFail, expiry, control) => {
+    if (!control) return h.run(binary, args, timeout, allowFail);
+    const s = h.saved(), script = args.at(-1), request = control.request;
+    const exitArchive = request.epoch === "bootstrap" && script === bootstrapReadScript;
+    const pack = exitArchive || script === "timeout 600 /bin/bash /bench/pack.sh";
+    const query = script.includes("<<'CORTEN_FAILED_SETUP_HOST'");
+    if (query) {
+      queries++;
+      assert.ok(script.includes("control_namespace['setup_drain_query']") && script.includes("benchmark-failed-setup-host/v3"));
+      if (mode === "lost-acknowledgement") return shellTransport({ repo: h.repo, spawn: () => ({ status: 0, stdout: "{}",
+        stderr: `CORTEN_CONTROL ${request.invocation.id} ${"a".repeat(64)}\n` }) })(binary, args, timeout, allowFail, expiry, control);
+    }
+    const expected = query && { sequence: request.sequence, requests: s.control.ledger.slice(0, -1).map((r) => r.request),
+      binding: { round: s.round, commit, token, helperSha256: guardianSha256 },
+      queryArgv: ["/usr/bin/python3", "-", s.id, s.unit, JSON.stringify(Object.fromEntries(Object.entries(remoteFiles(s)).map(([k, v]) => [k, digest(v)]))), "1"],
+      watcherFailures: [{ id: failed.id, code: s.control.ledger[0].code, failureSha256: digest(failed.bytes) }] };
+    const result = query ? null : await h.run(binary, args, timeout, allowFail);
+    if (exitArchive) {
+      assert.equal(s.preBootstrapTerminal, undefined); assert.equal(result.status, 3); assert.equal(h.deletes, 0);
+      h.flags.active = false;
+    }
+    kernel.stdin.write(JSON.stringify({ request, payload: binary === "ssh" ? `set -euo pipefail\n${script}\n` : "synthetic SFTP",
+      pack, hold: request.sequence === 0, code: result?.status ?? 0, ...(query ? { expected } : {}) }) + "\n");
+    const line = await lines.next(); assert.equal(line.done, false, stderr);
+    const reply = JSON.parse(line.value);
+    if (exitArchive) {
+      const names = Object.keys(reply.custody).filter((name) => name.startsWith("watch-failure-"));
+      assert.equal(names.length, 1);
+      failed = { id: names[0].slice("watch-failure-".length, -".json".length), bytes: Buffer.from(reply.custody[names[0]], "hex") };
+      assert.equal(failed.id, s.control.ledger[0].request.invocation.id); assert.equal(reply.custody[`receipt-${failed.id}.json`], undefined);
+      h.setArchive(archive([...metadata().slice(1),
+        { name: "run.log", body: "benchmark job failed: stage=ssh-ingress-verification line=129 exit=1\n" }, { name: "control/" },
+        ...Object.entries(reply.custody).map(([k, v]) => ({ name: "control/" + k, body: Buffer.from(v, "hex") }))]));
+    }
+    if (query) return { status: 0, stdout: JSON.stringify({ schema: "benchmark-failed-setup-host/v3", hostId: s.id, unit: s.unit,
+      setupFailed: true, exitCode: 1, observedAtMs: Date.now(), control: reply.proof }) };
+    return result;
+  };
+  await assert.rejects(h.task({ run }, options).launch(), /ended before common bootstrap admission/);
+  assert.ok(h.saved().preBootstrapTerminal); assert.deepEqual(h.saved().control.sealed, []);
+  assert.equal(h.saved().control.monitor.phase, "pending"); assert.ok(failed);
+  const lock = join(h.local, "operation.lock");
+  if (mode === "pending-monitor") {
+    writeFileSync(join(h.local, "monitor-registration.json"), "{}");
+    await assert.rejects(h.task({ run }).collect(), /ambiguous pre-bootstrap custody/);
+    assert.equal(queries, 0); assert.equal(h.deletes, 0); assert.equal(h.saved().archiveSha256, undefined);
+    assert.equal(h.saved().retirement, undefined); assert.equal(h.saved().deletionIntentAt, undefined);
+    return;
+  }
+  if (mode === "lost-acknowledgement") {
+    await assert.rejects(h.task({ run }).collect(), /remote control completion uncertain/);
+    const saved = h.saved();
+    assert.equal(queries, 1); assert.equal(saved.control.ledger.at(-1).localTerminal, false); assert.ok(existsSync(lock));
+    assert.equal(saved.retirement, undefined); assert.equal(saved.deletionIntentAt, undefined); assert.equal(h.deletes, 0);
+    await assert.rejects(h.task({ run }).collect(), /ambiguous pre-bootstrap custody/);
+    assert.equal(queries, 1); assert.deepEqual(h.saved(), saved); assert.ok(existsSync(lock)); assert.equal(h.deletes, 0);
+    return;
+  }
+  assert.equal(await h.task({ run }).collect(), 1);
+  const s = h.saved(), record = JSON.parse(readFileSync(join(h.local, "failed-setup-host.json")));
+  assert.equal(s.status, "retired"); assert.equal(s.retirement.kind, "setup-failed"); assert.ok(s.destroyedAt);
+  assert.equal(record.schema, "benchmark-failed-setup-retirement/v3"); assert.equal(record.observation.control.drained[0].id, failed.id);
+  assert.equal(s.validation, undefined); assert.equal(s.collectedAt, undefined);
+  // The original failure, archive and exit stay as they were; no receipt is filled in.
+  const custody = join(h.local, s.evidence, "control");
+  assert.deepEqual(readFileSync(join(custody, `watch-failure-${failed.id}.json`)), failed.bytes);
+  assert.equal(existsSync(join(custody, `receipt-${failed.id}.json`)), false);
+  assert.equal(readFileSync(join(h.local, s.evidence, "exit-code"), "utf8"), "1\n");
+  assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(h.inspections, 0);
+  assert.equal(await h.task({ run }).collect(), 1);
+  assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(h.creates, 1); assert.equal(h.inspections, 0);
+});
+
 test("failed pre-registration cleanup preserves the archive and stops on missing proof, including on restart", async (t) => {
-  for (const mode of ["cancelled-proof", "invalid-proof", "refused", "lost-result", "archived-watcher"]) {
+  for (const mode of ["cancelled-proof", "invalid-proof", "refused", "lost-result", "archived-watcher", "archived-watcher-receipt"]) {
     const cancelled = mode === "cancelled-proof";
     const { h, options } = configured(t);
     h.flags.hook = (bin, a) => { if (bin === "ssh" && a.at(-1).startsWith("systemctl show") && h.units === 1) h.flags.active = false; };
     await assert.rejects(h.task({}, options).launch(), /ended before common bootstrap/);
     h.flags.hook = undefined;
-    const entries = metadata(), first = h.saved().control.ledger[0].request.invocation.id;
-    if (mode === "archived-watcher") entries.push({ name: "control/" }, { name: `control/watch-failure-${first}.json`, body: '{"helperLine":342}\n' });
+    const entries = metadata(), first = h.saved().control.ledger[0].request.invocation.id, watcher = mode.startsWith("archived-watcher");
+    // A failure outside the settled bootstrap ledger, or beside its own receipt, never selects the drain proof.
+    if (mode === "archived-watcher") entries.push({ name: "control/" }, { name: `control/watch-failure-${"f".repeat(32)}.json`, body: '{"helperLine":342}\n' });
+    if (mode === "archived-watcher-receipt") entries.push({ name: "control/" }, { name: `control/watch-failure-${first}.json`, body: '{"helperLine":342}\n' },
+      { name: `control/receipt-${first}.json`, body: "{}\n" });
     const bytes = archive(entries); h.setArchive(bytes);
     let queries = 0;
     const run = (bin, args, timeout, allowFail, expiry, control) => {
@@ -427,12 +523,12 @@ test("failed pre-registration cleanup preserves the archive and stops on missing
       return shellTransport({ repo: h.repo, spawn: () => ({ status, stdout: '{"setupFailed":false}', stderr: ack
         + (mode === "lost-result" ? "" : `CORTEN_RESULT ${id} ${status}\n`) }) })(bin, args, timeout, allowFail, expiry, control);
     };
-    const refusal = mode === "archived-watcher" ? "setup-watcher-proof-missing" : "setup-host-proof-refused";
+    const refusal = watcher ? "setup-watcher-proof-missing" : "setup-host-proof-refused";
     await assert.rejects(h.task({ run }).collect(), cancelled ? /cancelled/ : mode === "lost-result" ? /remote control completion uncertain/ : { controllerStage: refusal });
     const saved = h.saved(), last = saved.control.ledger.at(-1), lock = join(h.local, "operation.lock");
     const lockHeld = existsSync(lock);
-    assert.equal(queries, mode === "archived-watcher" ? 0 : 1);
-    if (mode !== "archived-watcher") {
+    assert.equal(queries, watcher ? 0 : 1);
+    if (!watcher) {
       assert.equal(last.localTerminal, mode !== "lost-result");
       assert.equal(last.code, cancelled || mode === "invalid-proof" ? 0 : mode === "refused" ? 1 : undefined);
       assert.equal(last.setupProofRejected, mode === "invalid-proof" ? true : undefined);

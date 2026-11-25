@@ -16,7 +16,7 @@ import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-s
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
   handoffLocks, handoffRetirementPolicy, pinHandoffRetirement, verifyHandoffCustody,
-  interruptedFirstUpload, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
+  interruptedFirstUpload, settledBootstrap, setupWatcherFailures, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
   verifyUnusedEvidence, createErroredBytes, createErroredCustody, createErroredReceipt, createErroredRecord, createRecheckLock, pendingCreateErroredReceipt,
   verifyCreateErrored, offlineNeverStarted, createContradiction, contradictionStages, createReappeared, createReappearedWitness, publicationStages } from "./cloud-retirement.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
@@ -831,7 +831,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const setup = kind === "setup-failed";
     const record = JSON.parse(bytes), raw = JSON.stringify(record.observation);
     if (!setup) return verifyUnusedEvidence(record, state);
-    const expected = setupEvidence(raw, state, terminalSetupScript(state, setupExit(), state.control ? record.observation.control.requests.length - 1 : undefined), setupExit(), record.startedAtMs, record.finishedAtMs, local);
+    // The preserved archive selects the schema: v3 only beside an archived watcher failure.
+    const exit = setupExit(), failures = state.control ? setupWatcherFailures(state, local) : [];
+    const expected = setupEvidence(raw, state, terminalSetupScript(state, exit, state.control ? record.observation.control.requests.length - 1 : undefined, failures), exit, record.startedAtMs, record.finishedAtMs, local);
     assert.deepEqual(record, expected, "retirement evidence differs");
   };
   const verifyRetirement = () => {
@@ -940,23 +942,25 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   const refuseSetup = (stage) => { throw Object.assign(new Error(stage), { controllerStage: stage }); };
   const checkSetupCustody = (exit) => {
-    const custody = join(local, state.evidence, "control");
-    if (existsSync(custody) && readdirSync(custody).some((name) => /^watch-failure-[a-f0-9]{32}\.json$/.test(name)))
-      refuseSetup("setup-watcher-proof-missing");
+    // An archived watcher failure is never a receipt. It selects the separate drain
+    // proof only when every failure names a settled bootstrap row without a receipt.
+    let failures;
+    try { failures = setupWatcherFailures(state, local); } catch { refuseSetup("setup-watcher-proof-missing"); }
     // An acknowledged refusal is not a missing result. Do not append more
     // controls on restart or treat the refusal as permission to retire.
     const rows = state.control.ledger, last = rows.at(-1);
     if (last?.setupProofRejected) refuseSetup("setup-host-proof-refused");
     if (last?.localTerminal && last.code > 0 && last.code < 255 && last.request.epoch === "collection"
       && last.request.invocation.channel === "ssh"
-      && last.request.invocation.requestSha256 === digest(`set -euo pipefail\n${terminalSetupScript(state, exit, rows.length - 1)}\n`))
+      && last.request.invocation.requestSha256 === digest(`set -euo pipefail\n${terminalSetupScript(state, exit, rows.length - 1, failures)}\n`))
       refuseSetup("setup-host-proof-refused");
+    return failures;
   };
   const retireFailedSetup = async () => {
     assert.ok(["starting", "running"].includes(state.status) && !preserveOperationLock, "uncertain work cannot use setup retirement");
     const exit = setupExit(), beforeEntry = !!state.preBootstrapTerminal;
-    if (beforeEntry) checkSetupCustody(exit);
-    const script = terminalSetupScript(state, exit), startedAtMs = Date.now();
+    const failures = beforeEntry ? checkSetupCustody(exit) : state.control ? setupWatcherFailures(state, local) : [];
+    const script = terminalSetupScript(state, exit, undefined, failures), startedAtMs = Date.now();
     const sequence = state.control?.ledger.length;
     const result = await ssh(script, 30000, beforeEntry).catch((error) => {
       // The SSH checkpoint may abort after saving the exit but before handing
