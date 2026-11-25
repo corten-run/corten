@@ -139,6 +139,12 @@ impl<S: Send + Sync, T: serde::de::DeserializeOwned + Send> crate::extract::From
     }
 }
 
+/// The JSON validation test's route.
+#[cfg(feature = "json")]
+paths! {
+    ApiSignUp = "/api/sign-up",
+}
+
 paths! {
     ApiRoot = "/api",
     ApiMissing = "/api/missing",
@@ -147,7 +153,6 @@ paths! {
     ApiSlow = "/api/slow",
     ApiPost = "/api/post",
     ApiRates = "/api/rates",
-    ApiSignUp = "/api/sign-up",
     ApiItems = "/api/items",
     PayApi = "/pay/api",
     PayApiGo = "/pay/api/go",

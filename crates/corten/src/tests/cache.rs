@@ -2586,8 +2586,10 @@ async fn a_handler_s_own_plain_text_failure_page_keeps_what_a_middleware_wrote()
 
 /// Staged middleware that writes who is asking, by the request's cookie, as plain text on a failure
 /// that has no body, reading no caller.
+#[cfg(feature = "json")]
 struct NamesTheFailure;
 
+#[cfg(feature = "json")]
 impl crate::Middleware for NamesTheFailure {
     async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
         let cookie = req.headers().get(header::COOKIE).and_then(|cookie| cookie.to_str().ok()).unwrap_or("");
@@ -6140,6 +6142,7 @@ async fn an_answer_whose_body_fails_after_the_cache_rules_is_never_kept() {
         .api::<ApiItems>(|items| items.route::<ApiItem>(crate::Methods::reads(get(|| async { "item" }))))
         .middleware((CdnRecaches(Some("public, max-age=60")), RelaysAnotherApp(other)))
         .router();
+    #[cfg_attr(not(feature = "compress"), allow(unused_mut))]
     let mut cases = vec![("tagged", "/page", &[("if-none-match", "W/\"0000000000000000\"")][..])];
     #[cfg(feature = "compress")]
     cases.push(("compressed", "/api/items/7", &[("accept-encoding", "gzip"), ("accept", "application/json")][..]));

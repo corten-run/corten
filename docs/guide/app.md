@@ -1284,8 +1284,8 @@ caching it says, and it and a `NoStore` one (a `NoStore<Relay>`'s upstream heade
 any `*-cache-control` header and the other caching headers a CDN reads first that
 [Caching](#caching) lists (`Surrogate-Control`, `Edge-Control`, ...), so no shared cache hands one
 visitor's cookie or one-time answer to another. One that sets a cookie carries that with it, as a
-staged answer does: another app of Corten's that relays it inline and takes the cookie off still
-sends it as that visitor's ([Caching](#caching)).
+staged answer does: another app of Corten's whose staged middleware relays it inline and takes
+the cookie off still sends it as that visitor's ([Caching](#caching)).
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
