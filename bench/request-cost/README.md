@@ -53,19 +53,22 @@ added:
 apt-get update && apt-get install -y valgrind libjemalloc2 pkg-config libzstd-dev
 ```
 
-Build the probe against each commit to compare, each into a directory of its own outside the
-checkout, from a checkout that has the commit:
+Build the probe against each commit to compare, one after another in one directory outside the
+checkout, from a checkout that has the commits:
 
 ```sh
 sh bench/request-cost/build.sh <commit> <directory>
 ```
 
 [`build.sh`](build.sh) puts the commit's `crates`, `docs`, `README.md`, `Cargo.toml` and
-`Cargo.lock` at `<directory>/work` and a copy of the probe beside it with that `Cargo.lock`, and
-builds `<directory>/target/release/probe` with the repository's release profile. The probe's
-source is this checkout's, the same for every commit: only Corten and its locked crates differ.
+`Cargo.lock` at `<directory>/work` and a copy of the probe beside it with that `Cargo.lock`,
+builds it with the repository's release profile and leaves the binary at
+`<directory>/bin/<commit>`. The probe's source is this checkout's, the same for every commit:
+only Corten and its locked crates differ. The directory is the same for every commit because
+where a probe is built changes its count (the first point under
+[What a count is not](#what-a-count-is-not)).
 
-Then, with `<probe>` for that binary and `<cpu>` for a CPU the server is held to:
+Then, with `<probe>` for one of those binaries and `<cpu>` for a CPU the server is held to:
 
 ```sh
 node bench/request-cost/count.mjs <probe> --cpu <cpu> --answers <directory>/answers
@@ -83,8 +86,9 @@ node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent
 2. The second and third lines print, for each case, the median, least and most of three counts
    (`--reps`) and the counts themselves, in instructions a request.
 3. `--allocations` prints allocations and frees a request, and the calls they are made of.
-4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`). For 100,000,
-   give `--addresses 4` or more and let both processes open that many files (`ulimit -n`).
+4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`). One client
+   address has ports for about 28,000: for more, `--addresses` spreads them over that many
+   loopback addresses, and both processes must be allowed that many open files (`ulimit -n`).
 
 `--cases` takes a list of cases, and `--port` (8080 by default) the port the probe listens on,
 for two runs side by side on CPUs of their own.
@@ -119,8 +123,12 @@ start when jemalloc is not the allocator in use.
 1. Not a property of Corten alone. The count is of this probe's binary. The same request to the
    same commit costs a different number of instructions in a program with other routes, or one
    that also serves TLS, because the compiler lays out and inlines the connection's and the
-   router's code by everything that uses it. Compare two commits counted with this probe;
-   never a count from here with a count of another program.
+   router's code by everything that uses it. Where the probe is built counts too: `c9666dc96`
+   built in two directories whose names differ counted 18,970 and 19,002 instructions for
+   `get`, each the same on every repeat, and two commits with the same crates built in one
+   directory gave the same binary, byte for byte. Compare two commits counted with this probe
+   and built in one directory; never a count from here with a count of another program, or with
+   one built somewhere else.
 2. Not time or cycles, and not the kernel's work: see the table above.
 3. Not HTTP/2, TLS, a streamed or chunked answer, or a request body longer than two bytes: the
    probe serves none, and the client reads answers by their `Content-Length`.

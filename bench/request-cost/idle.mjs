@@ -67,7 +67,8 @@ try {
   const held = [];
   const began = performance.now();
   for (let at = 0; at < connections; at += 1) {
-    const connection = await Connection.open(port, `127.0.0.${1 + (at % addresses)}`);
+    // An address is bound only to spread the connections: a bound client opens them more slowly.
+    const connection = await Connection.open(port, addresses > 1 ? `127.0.0.${1 + (at % addresses)}` : undefined);
     if (!values.silent) {
       for (let sent = 0; sent < requests; sent += 1) {
         connection.write(bytes);
