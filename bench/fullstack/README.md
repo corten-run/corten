@@ -2234,8 +2234,9 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     package registries at the time. Since
     [#1763 Catalog CI: Spring image build could not resolve the pinned Maven parent POM](https://github.com/corten-run/corten/issues/1763),
     Spring's Maven retries a 429 or 503 from Maven Central up to four times, waiting 10, 20, 30 and
-    40 seconds or the registry's Retry-After up to 40 seconds, and a retryable I/O error up to four
-    times (`apps/spring/.mvn/maven.config`); one request waits at most 160 seconds between its
+    40 seconds or the registry's Retry-After up to 40 seconds (a longer Retry-After ends the retries
+    at once; it is not shortened to 40), and a retryable I/O error up to four times
+    (`apps/spring/.mvn/maven.config`); one request waits at most 160 seconds between its
     retries. Its image also bounds each Maven run, the dependency download at 15 minutes and
     `package` at 3, and runs both without `-q`, so a successful image build also logs differently:
     each transfer and Maven's progress. `package` stays online. Two cold local builds saw it make

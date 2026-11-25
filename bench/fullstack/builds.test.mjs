@@ -476,11 +476,12 @@ function springProof(/** @type {string} */ script) {
   return { runs: springProofProbes.length, bound: durationSeconds(bound[1]), seconds: durationSeconds(bound[1]) + durationSeconds(run[1]) };
 }
 
-/** The proof step runs Maven only through the proof script, never directly. */
+/** The proof step runs Maven only through the proof script, never directly, and runs that script once. */
 function checkSpringProofStep(/** @type {{ run: string }} */ step) {
   const commands = shellCommandsOf(step.run);
   assert.equal(wordCount(step.run, "mvn"), 0, "the proof step runs Maven outside the proof script");
-  assert.ok(commands.includes("exec sh /proof/run.sh /src /evidence"), "the proof step runs the proof script");
+  assert.deepEqual(commands.filter((command) => wordCount(command, "run.sh") > 0), ["exec sh /proof/run.sh /src /evidence"],
+    "the proof step runs the proof script exactly once");
 }
 
 /** Whether a runner builds images in one docker build call, bounded by its contract's imageBuildTimeoutMs. */
@@ -588,6 +589,10 @@ test("Spring's Maven bound checks refuse a zero, an unbounded or extra run, a bo
   for (const extra of ["mvn -B verify", "\"mvn\" -B verify"]) {
     assert.throws(() => checkSpringProofStep(springSteps(workflow.replace(proofExec, `                ${extra}\n${proofExec}`)).proofStep),
       /outside the proof script/, `accepted ${extra}`);
+  }
+  for (const extra of ["sh /proof/run.sh /src /evidence-2", "\"sh\" \"/proof/run.sh\" /src /evidence-2"]) {
+    assert.throws(() => checkSpringProofStep(springSteps(workflow.replace(proofExec, `                ${extra}\n${proofExec}`)).proofStep),
+      /exactly once/, `accepted ${extra}`);
   }
 
   const script = readFileSync(join(spring, "transport-proof/run.sh"), "utf8").replace(/\r/g, "");
