@@ -18,7 +18,13 @@ const plainly = (route) => ({ ...route.request().headers(), "accept-encoding": "
  * `abandoned` first starts a navigation to `/alerts` whose section stylesheet never loads, which
  * the read of `to` abandons before the press. `action` draws the form in its place
  * with another `action`; `pressed` presses the form in its place (its write held) before the first fails.
- * @typedef {{ name: string, to: string, start: "link" | "script" | "write", fails: "after" | "before", at: "successor" | "document", abandoned?: boolean, action?: boolean, pressed?: boolean }} Case
+ * `own` answers the first write with its own whole page while the read is on its way, and presses
+ * the form that page drew; that second write is the one that fails. `outside` presses a form outside
+ * `<main>` instead: one added to the body, which the read does not draw over, so its failure is heard
+ * on it while the read is still held; one added to the layout's header while the read is the whole
+ * page; or one in the layout's element that is the page's (the sector nav), drawn again without its
+ * `page` mark as a patch may draw it. The last two are held until the read has drawn.
+ * @typedef {{ name: string, to: string, start: "link" | "script" | "write", fails: "after" | "before", at: "successor" | "document" | "sent", abandoned?: boolean, action?: boolean, pressed?: boolean, own?: boolean, outside?: "body" | "header" | "part" }} Case
  */
 
 /**
@@ -28,9 +34,16 @@ const plainly = (route) => ({ ...route.request().headers(), "accept-encoding": "
  * has sent nothing since; the document does otherwise, a page with a form of the same id included.
  * A failure that comes while the read is still on its way is said once the read has drawn, so the
  * draw does not take it away; one that comes after a navigation was abandoned for the read is said
- * at once, while what the abandoned one waited for is still held. Each case holds the read and the
- * write at the route until the case has made the press and the read has drawn (or the write has
- * failed), never for a fixed time, presses in the page, and runs under one deadline.
+ * at once, while what the abandoned one waited for is still held. A failure said once the read has
+ * drawn comes after the navigation's own scroll, so a handler that scrolls keeps its place. A form
+ * outside `<main>`, which the read does not draw over, hears its failure while the read is held;
+ * one the read may draw over (in the layout while the whole page is read, or in the layout's element
+ * that is the page's, marked or not) hears it once the read has drawn. A
+ * write's own page drawn while a read of another address is on its way is still the page pressed,
+ * whatever the address shows: a form pressed there is not one the read's page succeeds. Each case
+ * holds the read and the write at the route until the case has made the press and the read has
+ * drawn (or the write has failed), never for a fixed time, presses in the page, and runs under one
+ * deadline.
  * @param {import("@playwright/test").Browser} browser
  */
 export async function writeFailures(browser) {
@@ -72,8 +85,43 @@ export async function writeFailures(browser) {
       at: "successor",
       abandoned: true,
     },
+    {
+      // WebKit changes the address when a navigation starts (any browser does for back and
+      // forward): the write's own page, drawn while the read of another address is on its way, is
+      // still the page that was pressed.
+      name: "a write that fails, sent from a write's own page drawn while a navigation to another address with a form of the same id was on its way, says so on the document, not on that form",
+      to: "/?again=1",
+      start: "script",
+      fails: "after",
+      at: "document",
+      own: true,
+    },
+    {
+      name: "a write that fails from a form outside <main> while a navigation is on its way says so at once, on that form",
+      to: "/alerts",
+      start: "link",
+      fails: "before",
+      at: "sent",
+      outside: "body",
+    },
+    {
+      name: "a write that fails from a form in the layout while the whole page read is on its way says so on that form after the draw",
+      to: "/",
+      start: "write",
+      fails: "before",
+      at: "sent",
+      outside: "header",
+    },
+    {
+      name: "a write that fails from a form in the layout's page part a patch drew without its mark, while a navigation is on its way, says so after the draw",
+      to: "/alerts",
+      start: "link",
+      fails: "before",
+      at: "document",
+      outside: "part",
+    },
   ];
-  for (const { name, to, start, fails, at, abandoned, action, pressed } of cases) {
+  for (const { name, to, start, fails, at, abandoned, action, pressed, own, outside } of cases) {
     const whole = start === "write";
     /** @type {() => void} */
     let releaseRead = () => {};
@@ -150,8 +198,10 @@ export async function writeFailures(browser) {
           );
         }
         // The whole page read is the one a write's redirect sends the page on: the first post is
-        // answered with Corten's redirect to the page itself; the next post fails once let go. A
-        // post from the form in its place is held until the case ends.
+        // answered with Corten's redirect to the page itself, or (`own`) with the write's own page,
+        // the page itself read whole; the next post fails once let go. A post from the form in its
+        // place is held until the case ends.
+        const first = whole || !!own;
         let posts = 0;
         /** @type {() => void} */
         let postHeard = () => {};
@@ -163,7 +213,12 @@ export async function writeFailures(browser) {
           p.route("**/watch", async (route) => {
             posts += 1;
             if (whole && posts === 1) return route.fulfill({ status: 200, headers: { "corten-location": "/" }, body: "" }).catch(() => {});
-            if (posts > (whole ? 2 : 1)) {
+            if (own && posts === 1) {
+              const answer = await context.request.get(`${base}/`, { headers: { corten: "page", "accept-encoding": "identity" } });
+              const headers = Object.fromEntries(Object.entries(answer.headers()).filter(([key]) => !["content-length", "content-encoding"].includes(key)));
+              return route.fulfill({ status: answer.status(), headers, body: await answer.text() }).catch(() => {});
+            }
+            if (posts > (first ? 2 : 1)) {
               laterHeard();
               await caseEnded;
               return route.abort("failed").catch(() => {});
@@ -178,9 +233,29 @@ export async function writeFailures(browser) {
         // form that sent it, the form with its id in the page then (the one in its place), another
         // element, or the document. The form's `<select name="id">` shadows its `id`.
         await run.step(() =>
-          p.evaluate(() => {
+          p.evaluate((outside) => {
             const state = /** @type {any} */ (window);
-            state.__sent = document.getElementById("watch-form");
+            if (outside) {
+              // A form outside `<main>`, sending to the same place: in the body, in the layout's
+              // header, or in the layout's element that is the page's, which is then drawn again
+              // without its `page` mark, as a patch with other markup draws it.
+              const form = document.createElement("form");
+              form.id = "outside-form";
+              form.method = "post";
+              form.action = "/watch";
+              form.setAttribute("data-patch", "");
+              form.append(document.createElement("button"));
+              if (outside === "body") document.body.append(form);
+              else if (outside === "header") /** @type {HTMLElement} */ (document.querySelector("body > header")).append(form);
+              else {
+                const part = /** @type {HTMLElement} */ (document.querySelector("nav[data-corten-page]"));
+                part.append(form);
+                const fresh = /** @type {HTMLElement} */ (part.cloneNode(true));
+                fresh.removeAttribute("data-corten-page");
+                part.replaceWith(fresh);
+              }
+            }
+            state.__sent = document.getElementById(outside ? "outside-form" : "watch-form");
             /** @type {Map<Event, string>} */
             const events = new Map();
             state.__events = events;
@@ -197,12 +272,21 @@ export async function writeFailures(browser) {
                       ? "form in its place"
                       : "another element";
               events.set(event, `${where}, status ${/** @type {CustomEvent} */ (event).detail.status}`);
+              // A handler that scrolls the page keeps its scroll: the navigation's own scroll (to
+              // the top, after its draw) came first. Made tall enough to scroll through the CSSOM,
+              // which the CSP allows.
+              document.documentElement.style.minHeight = "10000px";
+              scrollTo(0, 2000);
+              state.__scrolled = scrollY;
             };
             state.__sent.addEventListener("corten:error", note);
             addEventListener("corten:error", note);
-          }),
+          }, outside ?? null),
         );
-        const press = () => p.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#watch-form button")).click());
+        /** @param {string} id */
+        const pressOn = (id) => p.evaluate((id) => /** @type {HTMLButtonElement} */ (document.querySelector(`#${id} button`)).click(), id);
+        // The press that meets the read; a whole read's own first press is on the watch form.
+        const press = () => pressOn(outside ? "outside-form" : "watch-form");
         /** @param {string} to */
         const follow = (to) => p.evaluate((to) => /** @type {HTMLAnchorElement} */ (document.querySelector(`header a[href="${to}"]`)).click(), to);
         if (abandoned) {
@@ -219,13 +303,29 @@ export async function writeFailures(browser) {
           stage = "the write sent";
           await run.step(() => postHeld);
         } else {
-          if (whole) await run.step(press);
+          if (whole) await run.step(() => pressOn("watch-form"));
           else if (start === "link") await run.step(() => follow(to));
           else await run.step(() => p.evaluate((to) => void (/** @type {any} */ (window)).navigation.navigate(to).finished.catch(() => {}), to));
           stage = "the read asked for";
           await run.step(() => readHeld);
           // The press meets the read still on its way, on the form it will draw over.
           await run.step(press);
+          if (own) {
+            // The write's own page is drawn, the read still on its way; the user presses the form it drew.
+            stage = "the write's own page drawn";
+            await run.step(() =>
+              p.waitForFunction(
+                () => {
+                  const w = /** @type {any} */ (window);
+                  const form = document.getElementById("watch-form");
+                  return !!form && form !== w.__sent && !w.__sent.hasAttribute("aria-busy") && !form.hasAttribute("aria-busy") && !!w.navigation.transition;
+                },
+                null,
+                { timeout: 10_000, polling: 50 },
+              ),
+            );
+            await run.step(press);
+          }
           stage = "the write sent";
           await run.step(() => postHeld);
         }
@@ -259,6 +359,17 @@ export async function writeFailures(browser) {
           failPost();
           stage = "the write ended";
           await run.step(() => p.waitForFunction(() => !(/** @type {any} */ (window)).__sent.hasAttribute("aria-busy"), null, { timeout: 10_000, polling: 50 }));
+          if (outside === "body") {
+            // Heard with the read still held: nothing the read draws can take it away.
+            stage = "the failure heard while the read is held";
+            await run.step(() => p.waitForFunction(() => (/** @type {any} */ (window)).__events.size > 0, null, { timeout: 5_000, polling: 50 }));
+          } else if (outside) {
+            // Not heard with the read held: a failure said at once is said as the submit ends, before
+            // its form is no longer busy.
+            stage = "the failure held while the read is held";
+            const early = await run.step(() => p.evaluate(() => (/** @type {any} */ (window)).__events.size));
+            if (early) throw new Error(`heard ${early} with the read held`);
+          }
           releaseRead();
           await drawn();
         }
@@ -279,18 +390,23 @@ export async function writeFailures(browser) {
         seen = await run.step(() =>
           p.evaluate(() => {
             const note = document.querySelector("#watch-form [role=alert]");
-            return { heard: [.../** @type {any} */ (window).__events.values()], note: note ? !(/** @type {HTMLElement} */ (note).hidden) : null };
+            const w = /** @type {any} */ (window);
+            return {
+              heard: [...w.__events.values()],
+              note: note ? !(/** @type {HTMLElement} */ (note).hidden) : null,
+              scrolled: w.__scrolled > 0 && scrollY === w.__scrolled,
+            };
           }),
         );
       } catch (error) {
         seen = { ...seen, stopped: run.over || String(error), stage };
       }
       const heard = /** @type {string[] | undefined} */ (seen.heard) ?? [];
-      const wanted = at === "successor" ? "form in its place, status 0" : "document, status 0";
+      const wanted = at === "successor" ? "form in its place, status 0" : at === "sent" ? "sent form, connected=true, status 0" : "document, status 0";
       // The page `/alerts` draws has no watch form; the others draw one, whose note stays hidden
       // unless it heard the failure.
       const note = at === "successor" ? true : to === "/alerts" ? null : false;
-      check(name, !seen.stopped && heard.length === 1 && heard[0] === wanted && seen.note === note, JSON.stringify(seen));
+      check(name, !seen.stopped && heard.length === 1 && heard[0] === wanted && seen.note === note && (outside === "body" || seen.scrolled === true), JSON.stringify(seen));
     } finally {
       await cleanUp(
         () => releaseRead(),

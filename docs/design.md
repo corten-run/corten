@@ -10312,10 +10312,17 @@ rules something out.
     A failure that came just before a navigation drew was heard, and the draw then took away what
     its handler showed.
 
-    So a failure waits while a navigation is on its way: a count of them, each counted until it
-    ends or is abandoned, whichever comes first, and what waits runs in a task of its own once
-    none is left, after the navigation's own focus reset and scroll, and only then picks where the
-    event goes. An abandoned navigation draws nothing (it checks its signal before each draw), but
+    So a failure waits while a navigation is on its way: each is counted until it ends or is
+    abandoned, whichever comes first (one abandoned before it starts at once), and what waits
+    runs in a task of its own once none is left, after the navigation's own focus reset and
+    scroll, and only then picks where the event goes. A form no navigation on its way can draw
+    over does not wait: one outside `<main>` and the layout's elements that are the page's (in a
+    layout header, or a dialog there), while none of them reads the whole page, which a
+    navigation after a write does. Its `aria-busy` is gone as its write ends, and waiting for a
+    navigation that cannot touch it would only say the failure later. The page's elements are
+    known by their `page` mark and by every `id` one has had, since a navigation draws the one
+    with the `id` and a patch may have drawn it again without the mark. An abandoned navigation
+    draws nothing (it checks its signal before each draw), but
     what it awaits may never end: in this rule's first form, a section stylesheet that never
     loaded kept such a navigation counted, and held every later failure behind it. A navigation
     that is not abandoned and hangs (an answer or a stylesheet that never comes) holds the failure
@@ -10325,10 +10332,15 @@ rules something out.
     draws only an answer that changed, which can still draw over a note the failure put in
     `<main>`, as before. The event goes to the form that sent it while that is in the page. Else
     to its verified successor: the form with its `id` now, marked `data-patch`, with the same
-    `action` and `method`, drawn with no page at another address (`pageKey`) since the press,
-    which a count of turns taken at each draw of `<main>` tells, and that has sent no submit
-    itself. A `<main>` a `GET` `data-patch` form's answer draws at the same address is the same
-    page: it takes no turn, and the form it draws is a successor by the same rules. Anything else
+    `action` and `method`, drawn with no navigation to another address (`pageKey`) since the
+    press, and that has sent no submit itself. A count of turns tells the address: a navigation
+    takes one when it draws a page for another address than the last one drawn, read from the
+    address it drew (its URL, or the redirect target its address took), not from `location`. A
+    browser that changes the address as a navigation starts (WebKit; every browser for back and
+    forward) shows the new address while `<main>` still shows the page being left. A page a
+    submit's answer draws (a `GET` `data-patch` form's `<main>`, a write's own page) is the page
+    on screen: it takes no turn and leaves that address as it is, and the form it draws is a
+    successor by the same rules. Anything else
     goes to the document, which `on:document:corten:error` and corten-ui's `Toaster` hear. A successor is the read's markup, with the submit key the server drew, so a
     retry from it is a new submission (the guide says so). A submit that waited for a write's
     answer is still sent from the form with its `id` after an answer that drew; that is not a
@@ -10338,15 +10350,19 @@ rules something out.
     both draw `id="approve"`: a navigation from order A to order B on its way when A's form is
     sent would run B's handler on A's failure, which can quiet the toaster or send the wrong
     action again; so can a form of another part that took the `id`, or one the user has sent
-    since. Not chosen either: holding a read's draw while a write of a form it would draw over is
-    out, which would make a navigation wait as long as the write; the event on the old form and
+    since. Not chosen: a turn read from `location` at each draw of `<main>`, this change's second
+    form. While a navigation to B was on its way in a browser that changes the address at once, a
+    write's own page drawn then took B's turn, a write pressed on it was counted on B, and B's
+    form with the same `id` and `action` heard that write's failure. Not chosen either: holding a
+    read's draw while a write of a form it would draw over is out, which would make a navigation
+    wait as long as the write; the event on the old form and
     again on the page, two events for one failure; or carrying the failed form's submit key into
     its successor, a second change to what a read draws.
 
-    Stands on: measured (the runtime grows by 481 bytes, 208 gzipped, from 45,676 and 16,389 on
-    `babd52d28`, main's runtime, unchanged on main since: one build of each, as the build is the
-    same each time); platform (an event dispatched on a node outside the document travels
-    through its detached ancestors only: the first five smoke cases in
+    Stands on: measured (the runtime grows by 796 bytes, 325 gzipped, from 45,676 and 16,389 on
+    `babd52d28`, main's runtime, unchanged on main since, to 46,472 and 16,714: one build of
+    each, as the build is the same each time); platform (an event dispatched on a node outside
+    the document travels through its detached ancestors only: the first five smoke cases in
     `scripts/smoke/write-failures.mjs`, a navigation to the same page, one to another page, a
     write's whole page read, and one to another address that draws a form with the same `id`,
     each drawn before the write fails, and a navigation to the same page that draws after it
@@ -10354,12 +10370,30 @@ rules something out.
     of `babd52d28`, heard the failure only on the detached form, or on the form the draw then
     replaced); measured (the ninth case, a navigation abandoned while its section stylesheet
     loads for one to the same page that draws, heard nothing within 5 s of the failure with the
-    runtime of `4752cff6d`, one run in each of the three browsers; with this change, five runs of
-    each of the nine cases in each of the three each heard it once, where the case says; and with
-    one rule taken out at a time, one run in each of the three, only that rule's cases failed: the
-    count let go on abort the ninth, the same `action` and a successor that has sent nothing
-    each its own case, and the wait while a navigation is on its way both cases where the write
-    fails before the draw); reasoned (a form with the same `id`, `action` and `method`, drawn at
+    runtime of `4752cff6d`, one run in each of the three browsers; with one rule taken out at a
+    time from the runtime of `a919f7e71`, one run in each of the three, only that rule's cases
+    failed: the count let go on abort the ninth, the same `action` and a successor that has sent
+    nothing each its own case, and the wait while a navigation is on its way both cases where the
+    write fails before the draw); platform (WebKit 27.2 changes the address as a navigation
+    starts; Chromium 159 and Firefox 159 wait for the answer, `precommitHandler`: the tenth case,
+    a write sent from a write's own page drawn while a navigation to another address with a form
+    of the same `id` is on its way, heard the failure on that address's form in WebKit and on the
+    document in the other two with the runtime of `a919f7e71`, one run in each); measured (with
+    this change, five runs of each of the thirteen cases in each of the three heard it once, where
+    the case says; with one new rule taken out at a time, one run in each of the three, only that
+    rule's cases failed, in all three unless named: the turn read from `location`, the tenth in
+    WebKit; a form outside `<main>` said at once, the eleventh, which heard nothing within 5 s
+    with the read held; the wait while a whole page is on its way, the twelfth, and a page's part
+    known by an `id` it had, the thirteenth, each heard with the read held; and what waits run
+    in a task rather than at once, the four cases where the write fails before the draw, whose
+    handler's scroll the navigation's own scroll then undid. The `page` mark has no case of its
+    own: an element marked when the page loads or a navigation draws is known by its `id` too.
+    The count released at once for a navigation abandoned before it starts has no case: two
+    navigations started in one task, a microtask apart, or a link's and a script's, never started
+    a visit with its signal aborted in Chromium or WebKit, and Firefox was not tried); reasoned
+    (what waits runs after the navigation's own focus reset, which no case checks: the browser
+    skips its reset, and the runtime its own, when the focus moved while the navigation was on its
+    way, so a handler's focus stands either way); reasoned (a form with the same `id`, `action` and `method`, drawn at
     the address of the press and not sent since, is the one the user sees in place of the form
     that sent it; a form of another page or one used since may stand for another record, and the
     document, which every page has, is then the only place that is surely this write's);
@@ -10373,13 +10407,15 @@ rules something out.
     retry from a successor must be the same submission (its key carried over); a read of the page
     again is seen to draw over a failure's note; the runtime comes to hold back a read that has
     started while a write is out; a navigation is seen to hang long enough that a failure held
-    behind it goes unsaid while the user acts on the page; or a standard gives an event on a
-    removed element a way to reach the document.
+    behind it goes unsaid while the user acts on the page; a navigation that does not read the
+    whole page comes to draw over an element outside `<main>` and the page's parts; or a standard
+    gives an event on a removed element a way to reach the document.
 
     Last checked: 2026-11-25, Playwright 1.65.1's Chromium 159.0.8154.6, Firefox 159.0 and WebKit
-    27.2, the nine smoke cases in `scripts/smoke/write-failures.mjs`, the first five failing with
-    the runtime of `babd52d28`, the ninth with that of `4752cff6d`, and each of the other new
-    ones with its rule taken out;
+    27.2, the thirteen smoke cases in `scripts/smoke/write-failures.mjs`, the first five failing
+    with the runtime of `babd52d28`, the ninth with that of `4752cff6d`, the tenth (in WebKit)
+    and the eleventh with that of `a919f7e71`, and each of the other new ones with its rule taken
+    out;
     2026-11-25, the runtime's size from `npm run build:js` on `babd52d28` and with this change.
 
 ## Rules
