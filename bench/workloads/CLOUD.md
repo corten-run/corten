@@ -1276,12 +1276,18 @@ custody, competing or retained locks, and unexplained prior retirement traces
 are refusals, not grounds to take over, recapture or repack.
 
 The action uses the existing fresh full rehash, final quiescence and ownership
-fences, and bounded DELETE. It records the merged repair commit separately from
-the unchanged original capture. If DELETE was uncertain and the operation lock
-was released cleanly, take a new preview at the same repair commit. With the
-recorded deletion intent it can only verify exact authenticated absence. It
-cannot repeat DELETE, qualify the group, promote the wrapper exit, or publish
-the native output.
+fences, and bounded DELETE. Before intent and dispatch it rechecks the held
+lock, verified custody file identities, both extraction inventories, and the
+approved capture and retirement receipt. These checks read metadata and small
+records, not archive or extraction payloads, inside the same proof deadline.
+It records the merged repair commit separately from the unchanged original
+capture. If DELETE was uncertain and the operation lock was released cleanly,
+take a new preview at the same repair commit. With a recorded deletion intent,
+the action can only verify exact authenticated absence. It rechecks local
+custody under the held lock after that observation, before recording completion,
+whether DELETE was acknowledged or this is an absence-only retry. It cannot
+repeat DELETE, qualify the group, promote the wrapper exit, or publish the
+native output.
 
 ### Earlier Failed Native Migrations
 

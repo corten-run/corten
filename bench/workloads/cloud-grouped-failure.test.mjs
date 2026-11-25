@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticInspection } from "./cloud-fixtures.mjs";
@@ -250,6 +250,7 @@ async function handoffFixture(t, flags = {}) {
     providerFactory: ({ createMode }) => Object.assign((argv, timeout, allowFail, expiry) => {
       assert.equal(createMode, null); launched.push(["provider", ...argv]);
       if (argv[0] === "account" && h.saved().deletionIntentAt) knobs.dispatchAccount?.();
+      if (argv[2] === "get" && h.saved().deletionIntentAt) knobs.exactRead?.();
       if (knobs.failExactRead && argv[2] === "get")
         return { status: 1, providerDiagnostic: { code: "get-http", httpStatus: 500 } };
       if (argv[2] === "delete") {
@@ -446,6 +447,97 @@ test("handoff refuses capture drift across the last production dispatch checkpoi
   assert.ok(h.saved().deletionIntentAt, "the already written intent is retained");
   assert.equal(h.saved().destroyedAt, undefined);
   assert.equal(f.probes, 3);
+});
+
+test("handoff refuses a custody archive append during the final account check", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t);
+  const { h } = f, path = join(h.local, "failed-native-results.tgz"), approved = await preview();
+  knobs.dispatchAccount = () => {
+    delete knobs.dispatchAccount;
+    appendFileSync(path, "x");
+  };
+  const error = await retire(approved).catch(e => e);
+  assert.deepEqual({ deletes: h.deletes, destroyed: !!h.saved().destroyedAt }, { deletes: 0, destroyed: false });
+  assert.ok(h.saved().deletionIntentAt);
+  assert.match(error?.message ?? "", /local handoff custody changed/);
+});
+
+test("handoff refuses same-length writes, same-byte replacements and metadata drift in verified local custody", async (t) => {
+  const flip = (path) => {
+    const bytes = readFileSync(path);
+    bytes[0] ^= 1;
+    writeFileSync(path, bytes);
+    assert.equal(lstatSync(path).size, bytes.length);
+  };
+  for (const kind of ["custody archive same length", "custody archive replacement", "original archive metadata", "reservation preimage replacement",
+    "original extraction same length", "custody extraction same length"]) await t.test(kind, async (t) => {
+    const { f, knobs, preview, retire } = await handoffFixture(t);
+    const { h } = f, approved = await preview();
+    const capture = JSON.parse(readFileSync(join(h.local, "failed-native-capture.json")));
+    const change = () => {
+      if (kind === "custody archive same length") {
+        flip(join(h.local, "failed-native-results.tgz"));
+      } else if (kind === "original archive metadata") {
+        const path = join(h.local, "results.tgz"), mtime = lstatSync(path).mtimeMs;
+        utimesSync(path, new Date(), new Date(mtime - 120000));
+      } else if (kind === "original extraction same length") {
+        flip(join(h.local, h.saved().evidence, "campaign", campaign, "plan.json"));
+      } else if (kind === "custody extraction same length") {
+        flip(join(h.local, capture.evidence, "campaign", "root-1", "failure.txt"));
+      } else {
+        const path = join(h.local, kind === "custody archive replacement" ? "failed-native-results.tgz" : "failed-native-reservation.json");
+        const moved = join(h.temp, "replaced-evidence");
+        renameSync(path, moved);
+        writeFileSync(path, readFileSync(moved), { flag: "wx" });
+        assert.notEqual(lstatSync(path, { bigint: true }).ino, lstatSync(moved, { bigint: true }).ino);
+      }
+    };
+    if (kind === "original extraction same length") knobs.finalFence = change;
+    else {
+      knobs.dispatchAccount = () => {
+        delete knobs.dispatchAccount;
+        // Change after the controller's preliminary dispatch check.
+        setImmediate(() => setImmediate(() => setImmediate(change)));
+      };
+    }
+    await assert.rejects(retire(approved), /local handoff custody changed/);
+    assert.equal(h.deletes, 0);
+    assert.equal(h.saved().destroyedAt, undefined);
+    assert.equal(!!h.saved().deletionIntentAt, kind !== "original extraction same length");
+    assert.equal(existsSync(join(h.local, "failed-native-host.json")), kind !== "original extraction same length");
+  });
+});
+
+test("handoff lost-ack retry refuses a capture append during exact absence", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t, { deleteLost: true });
+  const { h } = f, path = join(h.local, "failed-native-capture.json");
+  await assert.rejects(retire(await preview()), /acknowledgement lost/);
+  const approved = await preview();
+  knobs.exactRead = () => {
+    delete knobs.exactRead;
+    appendFileSync(path, "\n");
+  };
+  const error = await retire(approved).catch(e => e);
+  assert.deepEqual({ deletes: h.deletes, destroyed: !!h.saved().destroyedAt }, { deletes: 1, destroyed: false });
+  assert.match(error?.message ?? "", /approved original handoff capture changed/);
+});
+
+test("handoff acknowledged DELETE records exact absence only with the receipt and custody intact", async (t) => {
+  for (const change of [undefined, "failed-native-host.json", "failed-native-results.tgz"]) await t.test(change ?? "intact", async (t) => {
+    const { f, knobs, preview, retire } = await handoffFixture(t);
+    const { h } = f, approved = await preview();
+    if (change) {
+      knobs.exactRead = () => {
+        delete knobs.exactRead;
+        appendFileSync(join(h.local, change), "\n");
+      };
+      await assert.rejects(retire(approved), /failed-native retirement receipt changed|local handoff custody changed/);
+    } else assert.equal(await retire(approved), 1);
+    assert.equal(!!h.saved().destroyedAt, change === undefined);
+    assert.equal(h.deletes, 1);
+    assert.equal(f.probes, 3);
+    assert.equal(f.downloads, 1);
+  });
 });
 
 test("handoff teardown preserves a lock replaced during provider settlement", async (t) => {
