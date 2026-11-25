@@ -111,6 +111,7 @@ function restRequest({ method, path, credential, body, timeout, readDeadline = I
     let settled = false, informationSeen = false, connectEntered = false, sendEntered = false, req, timer, cancellation, failureDetail = "internal-refusal";
     const account = method === "GET" && path === "/v2/account";
     const readCode = account ? "account-request" : catalog ? "catalog-request" : undefined;
+    const diagnosticCode = method === "POST" && path === "/v2/droplets" ? "create-request" : readCode;
     const started = now(), expires = Math.min(started + timeout, readDeadline);
     if (readCode && !(started < expires)) {
       reject(stopped(true, { code: readCode, detail: "deadline" })); return;
@@ -133,7 +134,7 @@ function restRequest({ method, path, credential, body, timeout, readDeadline = I
       settled = true; clearTimeout(timer); clearInterval(cancellation); resources.notify.delete(closed);
       const { detail, result, reset } = outcome;
       if (detail) {
-        const error = stopped(true, readCode ? { code: readCode, detail } : undefined);
+        const error = stopped(true, diagnosticCode ? { code: diagnosticCode, detail } : undefined);
         if (deleteProofExpiresAtMs !== undefined && method === "DELETE" && !sendEntered && !record.responseSeen
           && (!connectEntered || req instanceof ClientRequest && req.destroyed && !req.headersSent)) unsentDeletes.add(error);
         if (proof) closedReads.set(error, { at: lastTime, reset });
@@ -347,8 +348,8 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       catch (error) {
         if (reportUnsent && unsentDeletes.has(error)) throw error;
         const observedRead = phase === "account" || phase === "catalog";
-        const diagnostic = observedRead ? providerFailure(error) : undefined;
-        const failure = stopped(true, observedRead && diagnostic?.code === `${phase}-request` ? diagnostic : undefined);
+        const diagnostic = observedRead || phase === "create" ? providerFailure(error) : undefined;
+        const failure = stopped(true, diagnostic?.code === `${phase}-request` ? diagnostic : undefined);
         if (observedRead && closedReads.has(error)) closedReads.set(failure, closedReads.get(error));
         throw failure;
       }

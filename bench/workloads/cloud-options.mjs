@@ -20,6 +20,8 @@ const providerDetails = {
   "account-request": ["internal-refusal", "connect", "send", "request-error", "response-error", "response-aborted",
     "response-status", "body-limit", "invalid-json", "deadline", "cancelled"],
   "catalog-request": [...catalogClosureDetails, "internal-refusal", "connect", "send", "response-status", "body-limit", "deadline", "cancelled"],
+  "create-request": ["internal-refusal", "connect", "send", "request-error", "response-error", "response-aborted",
+    "response-status", "body-limit", "invalid-json", "deadline", "cancelled"],
   "create-link-href": ["non-string", "malformed-uri", "credentials-or-fragment", "foreign-origin",
     "semantically-same-canonical-uri", "query-or-trailing-slash", "wrong-action-or-resource"],
   "list-response-count": ["terminal-count-mismatch", "total-changed"],

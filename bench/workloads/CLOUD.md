@@ -371,6 +371,12 @@ mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
 mutation, permit a retry or authorize cleanup; saved reservations, launch intents
 and the existing settlement/lock rules remain authoritative.
 
+`create-request` records a finite local transport reason when available, such as
+`request-error`, `response-aborted`, `invalid-json` or `deadline`. A broken response
+or a missing response is still an uncertain POST: the controller does not infer
+that it was unsent, release custody or submit it again. Older receipts that lack
+a detail do not establish any of those reasons.
+
 `account-capacity` is a code-only launch refusal: the complete census for the
 verified account reached or exceeded its valid droplet limit. The direct CLI and
 grouped receipt expose neither the limit nor the inventory. This guard stops
