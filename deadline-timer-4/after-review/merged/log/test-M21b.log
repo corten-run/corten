@@ -1,0 +1,28 @@
+   Compiling corten-run v0.2.0 (/src/crates/corten)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.54s
+     Running unittests src/lib.rs (/target/debug/build/corten-run/03072fc088ecfe1b/out/corten-03072fc088ecfe1b)
+
+running 78 tests
+test app::tests::a_connection_has_the_longer_of_the_grace_and_its_requests_deadline ... ok
+test tests::layout::layout_reads::a_forwarded_write_uses_the_inner_layout_deadline_for_a_page_from_middleware ... ok
+test tests::layout::layout_reads::the_error_page_for_a_4xx_waits_no_later_than_the_deadline ... ok
+test tests::layout::layout_reads::a_page_middleware_makes_for_a_write_is_filled_within_the_deadline_and_its_failure_gets_the_error_page ... ok
+test tests::layout::layout_reads::a_write_forwarded_to_a_fallback_uses_an_earlier_inner_layout_deadline ... ok
+test form::upload::tests::a_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413 ... ok
+test tests::layout::layout_reads::copied_extensions_do_not_cap_an_independent_writes_layout_deadline ... ok
+test form::upload::tests::a_body_bytes_up_to_reads_past_at_the_deadline_is_the_clients_408 ... ok
+test tests::layout::layout_reads::a_write_forwarded_to_a_fallback_without_a_deadline_can_time_out_in_the_outer_app ... ok
+test form::upload::tests::a_chunked_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413 ... ok
+test tests::server::a_connection_done_where_its_second_deadline_waited_makes_no_timer ... ok
+test tests::server::a_connect_answered_with_success_has_no_body ... ok
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... ok
+test tests::server::a_connection_polled_inside_anothers_poll_keeps_its_own_timer ... ok
+test form::upload::tests::a_body_read_past_its_limit_at_the_deadline_is_the_413 ... ok
+test tests::server::a_connection_whose_poll_panics_has_its_timer_back ... ok
+test tests::server::a_connect_answered_chunked_is_sent_without_transfer_encoding ... ok
+test form::upload::tests::a_stalled_upload_at_the_default_deadline_is_the_clients_408 ... ok
+fatal runtime error: thread local panicked on drop, aborting
+error: test failed, to rerun pass `-p corten-run --lib`
+
+Caused by:
+  process didn't exit successfully: `/target/debug/build/corten-run/03072fc088ecfe1b/out/corten-03072fc088ecfe1b 'tests::server' deadline` (signal: 6, SIGABRT: process abort signal)

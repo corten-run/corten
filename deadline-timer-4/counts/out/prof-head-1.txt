@@ -1,0 +1,12 @@
+prof-other3 default head r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+prof-other3 default head r1 | get                20815     20815     20815  20815 | 16.000, 16.000 | 1.027
+prof-row9 default head r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+prof-row9 default head r1 | get                20846     20846     20846  20846 | 16.000, 16.000 | 1.031
+prof-row1 default head r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+prof-row1 default head r1 | get                20621     20621     20621  20621 | 16.000, 16.000 | 1.026
+prof-other3 percore-by-hand head r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+prof-other3 percore-by-hand head r1 | get                20173     20173     20173  20173 | 15.999, 15.999 | 1.000
+prof-row9 percore-by-hand head r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+prof-row9 percore-by-hand head r1 | get                20199     20199     20199  20199 | 16.000, 16.000 | 1.000
+prof-row1 percore-by-hand head r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+prof-row1 percore-by-hand head r1 | get                19989     19989     19989  19989 | 16.000, 16.000 | 1.000

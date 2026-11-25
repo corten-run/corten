@@ -1,0 +1,17 @@
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+cargo 1.100.0 (3acc79c0c 2026-11-05)
+Version: 5.3.0-3
+      4 8bcda78b82dff1a5f76cd1353b77e967
+      4 e26639fe04a78d7f6b3659ee66c8e243
+built base: version = "1.12.0" version = "1.54.1"  sha256 08b75ba506765cd4 image e79397baf5fd 04:10:28
+built oldbase: version = "1.12.0" version = "1.54.1"  sha256 b0537b6d5bc66ab4 image 17b7db1f68da 04:11:23
+built old: version = "1.12.0" version = "1.54.1"  sha256 cbfb0dff31f3041b image 57db65677673 04:11:23
+built head: version = "1.12.0" version = "1.54.1"  sha256 196d19a338a2a13d image 5a08fa1cc910 04:11:24
+lock of head: the base's
+lock of old: the base's
+lock of oldbase: the base's
+t48:base e79397baf5fd
+t48:head 5a08fa1cc910
+t48:old 57db65677673
+t48:oldbase 17b7db1f68da
+# BUILD-DONE 04:11:24

@@ -1,0 +1,8 @@
+quietgap default soon2 r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+quietgap default soon2 r1 | sdelay1            30340     30302     30551  30340 30302 30551 | 14.000, 14.000 14.000 14.000 | 5.200 5.133 5.400
+slowwait default soon2 r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+slowwait default soon2 r1 | sdelay2500         34128     33915     34299  34128 34299 33915 | 14.000, 14.000 14.000 14.000 | 6.625 6.625 6.500
+quietgap percore-by-hand soon2 r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+quietgap percore-by-hand soon2 r1 | sdelay1            28634     28613     29001  28634 29001 28613 | 14.000, 14.000 14.200 13.800 | 5.200 5.200 5.200
+slowwait percore-by-hand soon2 r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+slowwait percore-by-hand soon2 r1 | sdelay2500         32458     32456     33165  32458 33165 32456 | 14.000, 14.250 14.000 14.000 | 6.500 6.625 6.625

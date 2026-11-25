@@ -1,0 +1,8 @@
+busy-waits default base r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+busy-waits default base r1 | sdelay1            25231     25228     25235  25231 25228 25235 | 14.000, 14.000 14.000 14.000 | 3.055 3.060 3.060
+busy-quiet default base r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+busy-quiet default base r1 | get                20681     20679     20694  20681 20694 20679 | 16.000, 16.000 16.000 16.000 | 1.030 1.040 1.030
+busy-waits percore-by-hand base r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+busy-waits percore-by-hand base r1 | sdelay1            24010     23995     24019  24010 23995 24019 | 14.000, 14.005 14.000 13.995 | 3.000 3.010 3.010
+busy-quiet percore-by-hand base r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+busy-quiet percore-by-hand base r1 | get                20053     20051     20056  20053 20051 20056 | 15.990, 15.985 16.010 15.990 | 1.000 1.000 1.000

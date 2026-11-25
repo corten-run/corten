@@ -1,0 +1,36 @@
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                19988     19988     19988  19988 | 16.000, 16.000 | 1.000
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+sdelay1            23681     23681     23681  23681 | 14.000, 14.000 | 3.016
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                19998     19998     19998  19998 | 16.000, 16.000 | 1.000
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+sdelay1            23803     23803     23803  23803 | 14.000, 14.000 | 3.012
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                19990     19990     19990  19990 | 16.000, 16.000 | 1.000
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+sdelay1            23707     23707     23707  23707 | 14.000, 14.000 | 3.006
+== get, single-threaded: a = head, b = out8
+ b less a        a        b  function
+     +8.0    386.0    394.0  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt:
+     +6.0     15.0     21.0  core::ptr::drop_glue::<..>
+     -4.2                    (all others)
+     +9.8  19987.7  19997.5  total
+== sdelay1, single-threaded: a = head, b = out8
+ b less a        a        b  function
+    +89.0    565.0    654.0  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt:
+    +24.0    102.0    126.0  <..>::poll
+    +11.0     35.0     46.0  core::ptr::drop_glue::<..>
+     -2.1                    (all others)
+   +121.9  23680.7  23802.6  total
+== get, single-threaded: a = head, b = rq1
+ b less a        a        b  function
+     +4.0    341.0    345.0  corten::page::run::<corten::page::within_deadline<..>::{closure#0}, corten::page::errors_rendered<..>::{closur
+     -1.8                    (all others)
+     +2.2  19987.7  19989.9  total
+== sdelay1, single-threaded: a = head, b = rq1
+ b less a        a        b  function
+    +18.0      0.0     18.0  corten::deadline::marked
+    +17.0    565.0    582.0  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt:
+     -8.8                    (all others)
+    +26.2  23680.7  23706.8  total

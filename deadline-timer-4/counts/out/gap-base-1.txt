@@ -1,0 +1,8 @@
+gapw default base r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+gapw default base r1 | sdelay1            25253     25244     25255  25255 25244 25253 | 14.000, 14.000 14.000 14.000 | 3.070 3.065 3.075
+longw default base r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+longw default base r1 | sdelay150          26418     26410     26427  26418 26427 26410 | 14.000, 14.000 14.000 14.000 | 4.035 4.040 4.030
+gapw percore-by-hand base r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+gapw percore-by-hand base r1 | sdelay1            24030     24014     24034  24014 24030 24034 | 13.995, 13.995 14.015 13.985 | 2.995 3.010 3.020
+longw percore-by-hand base r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+longw percore-by-hand base r1 | sdelay150          25286     25278     25288  25288 25278 25286 | 14.010, 14.010 14.010 13.995 | 4.030 4.020 4.030

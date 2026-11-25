@@ -1,0 +1,6 @@
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends libzstd1 libjemalloc2 && rm -rf /var/lib/apt/lists/*
+ENV LD_PRELOAD=libjemalloc.so.2
+ENV MALLOC_CONF=background_thread:true,tcache_max:65536
+ENV HOST=0.0.0.0
+CMD ["/server"]

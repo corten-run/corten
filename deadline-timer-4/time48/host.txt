@@ -1,0 +1,19 @@
+7.0.0-44-generic
+48
+Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+cargo 1.100.0 (3acc79c0c 2026-11-05)
+Version: 5.3.0-3
+08b75ba506765cd4  bin/base
+196d19a338a2a13d  bin/head
+cbfb0dff31f3041b  bin/old
+b0537b6d5bc66ab4  bin/oldbase
+httparena-gcannon:gap aaf274feca3d
+t48:base e79397baf5fd
+t48:head 5a08fa1cc910
+t48:old 57db65677673
+t48:oldbase 17b7db1f68da
+HttpArena 3388e4586647ad7d9fd09faec3363f078ded0a9e
+wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer
+perf version 7.0.14
+Wed Nov 25 04:16:58 UTC 2026

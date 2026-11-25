@@ -1,0 +1,950 @@
+### c48 r1 1 base one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   95.10ms   85.20ms   127.70ms   147.70ms    1.96s
+
+  3351519 requests in 10.00s, 3351519 responses
+  Throughput: 335.00K req/s
+  Bandwidth:  124.92MB/s
+  Status codes: 2xx=3351519, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3351519 / 3351519 responses (100.0%)
+### c48 r1 2 head one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   78.06ms   74.50ms   93.40ms   108.00ms    1.07s
+
+  4172491 requests in 10.00s, 4172491 responses
+  Throughput: 417.07K req/s
+  Bandwidth:  155.52MB/s
+  Status codes: 2xx=4172491, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4172491 / 4172491 responses (100.0%)
+### c48 r1 3 old one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   78.03ms   76.10ms   94.20ms   108.10ms   125.80ms
+
+  4145437 requests in 10.01s, 4145437 responses
+  Throughput: 414.20K req/s
+  Bandwidth:  154.45MB/s
+  Status codes: 2xx=4145437, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4145437 / 4145437 responses (100.0%)
+### c48 r1 4 oldbase one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   93.07ms   88.10ms   125.60ms   139.80ms   161.70ms
+
+  3452861 requests in 10.00s, 3452861 responses
+  Throughput: 345.13K req/s
+  Bandwidth:  128.69MB/s
+  Status codes: 2xx=3452861, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3452861 / 3452861 responses (100.0%)
+### c48 r1 5 base2 one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   93.00ms   86.50ms   124.10ms   138.80ms    1.89s
+
+  3492426 requests in 10.00s, 3492426 responses
+  Throughput: 349.09K req/s
+  Bandwidth:  130.17MB/s
+  Status codes: 2xx=3492426, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3492426 / 3492426 responses (100.0%)
+### c48 r2 1 base2 one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   93.40ms   83.80ms   125.90ms   144.60ms    1.92s
+
+  3417726 requests in 10.00s, 3417726 responses
+  Throughput: 341.63K req/s
+  Bandwidth:  127.39MB/s
+  Status codes: 2xx=3417726, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3417726 / 3417726 responses (100.0%)
+### c48 r2 2 oldbase one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   93.53ms   85.20ms   126.30ms   144.90ms    1.89s
+
+  3416761 requests in 10.00s, 3416761 responses
+  Throughput: 341.53K req/s
+  Bandwidth:  127.35MB/s
+  Status codes: 2xx=3416761, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3416761 / 3416761 responses (100.0%)
+### c48 r2 3 old one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   81.73ms   83.60ms   99.80ms   113.30ms   128.60ms
+
+  3950418 requests in 10.01s, 3950418 responses
+  Throughput: 394.84K req/s
+  Bandwidth:  147.23MB/s
+  Status codes: 2xx=3950418, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3950418 / 3950418 responses (100.0%)
+### c48 r2 4 head one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   76.95ms   73.60ms   94.40ms   109.30ms   138.00ms
+
+  4194761 requests in 10.00s, 4194761 responses
+  Throughput: 419.28K req/s
+  Bandwidth:  156.34MB/s
+  Status codes: 2xx=4194761, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4194761 / 4194761 responses (100.0%)
+### c48 r2 5 base one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   91.75ms   85.50ms   122.70ms   137.60ms    1.04s
+
+  3539443 requests in 10.01s, 3539443 responses
+  Throughput: 353.75K req/s
+  Bandwidth:  131.91MB/s
+  Status codes: 2xx=3539443, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3539443 / 3539443 responses (100.0%)
+### c48 r3 1 base one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   96.71ms   89.90ms   128.40ms   143.80ms    1.88s
+
+  3375928 requests in 10.00s, 3375928 responses
+  Throughput: 337.43K req/s
+  Bandwidth:  125.82MB/s
+  Status codes: 2xx=3375928, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3375928 / 3375928 responses (100.0%)
+### c48 r3 2 head one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   76.12ms   70.90ms   89.30ms   107.80ms    1.90s
+
+  4200236 requests in 10.00s, 4200236 responses
+  Throughput: 419.83K req/s
+  Bandwidth:  156.55MB/s
+  Status codes: 2xx=4200236, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4200236 / 4200236 responses (100.0%)
+### c48 r3 3 old one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   80.06ms   76.90ms   96.30ms   110.70ms    1.85s
+
+  4095465 requests in 10.01s, 4095465 responses
+  Throughput: 409.31K req/s
+  Bandwidth:  152.63MB/s
+  Status codes: 2xx=4095465, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4095465 / 4095465 responses (100.0%)
+### c48 r3 4 oldbase one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   92.87ms   86.60ms   123.90ms   138.20ms    1.07s
+
+  3495678 requests in 10.00s, 3495678 responses
+  Throughput: 349.40K req/s
+  Bandwidth:  130.29MB/s
+  Status codes: 2xx=3495678, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3495678 / 3495678 responses (100.0%)
+### c48 r3 5 base2 one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   90.51ms   86.90ms   123.00ms   137.10ms   147.40ms
+
+  3534036 requests in 10.00s, 3534036 responses
+  Throughput: 353.24K req/s
+  Bandwidth:  131.72MB/s
+  Status codes: 2xx=3534036, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3534036 / 3534036 responses (100.0%)
+### c48 r4 1 base2 one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   92.90ms   84.40ms   127.60ms   146.50ms    1.91s
+
+  3435514 requests in 10.00s, 3435514 responses
+  Throughput: 343.38K req/s
+  Bandwidth:  128.04MB/s
+  Status codes: 2xx=3435514, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3435514 / 3435514 responses (100.0%)
+### c48 r4 2 oldbase one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   95.21ms   90.30ms   129.00ms   143.40ms   155.50ms
+
+  3369260 requests in 10.00s, 3369260 responses
+  Throughput: 336.79K req/s
+  Bandwidth:  125.58MB/s
+  Status codes: 2xx=3369260, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3369260 / 3369260 responses (100.0%)
+### c48 r4 3 old one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   78.47ms   74.90ms   94.20ms   109.00ms    1.06s
+
+  4142091 requests in 10.00s, 4142091 responses
+  Throughput: 414.04K req/s
+  Bandwidth:  154.39MB/s
+  Status codes: 2xx=4142091, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4142091 / 4142091 responses (100.0%)
+### c48 r4 4 head one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   82.19ms   83.30ms   98.60ms   112.20ms    1.85s
+
+  3962489 requests in 10.00s, 3962489 responses
+  Throughput: 396.09K req/s
+  Bandwidth:  147.70MB/s
+  Status codes: 2xx=3962489, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3962489 / 3962489 responses (100.0%)
+### c48 r4 5 base one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   92.98ms   83.80ms   125.10ms   144.10ms    1.92s
+
+  3431144 requests in 10.00s, 3431144 responses
+  Throughput: 342.96K req/s
+  Bandwidth:  127.89MB/s
+  Status codes: 2xx=3431144, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3431144 / 3431144 responses (100.0%)
+### c48 r5 1 base one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   92.67ms   84.70ms   126.20ms   145.10ms    1.87s
+
+  3445309 requests in 10.00s, 3445309 responses
+  Throughput: 344.37K req/s
+  Bandwidth:  128.41MB/s
+  Status codes: 2xx=3445309, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3445309 / 3445309 responses (100.0%)
+### c48 r5 2 head one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   76.36ms   72.50ms   85.10ms   100.60ms    1.06s
+
+  4287579 requests in 10.01s, 4287579 responses
+  Throughput: 428.54K req/s
+  Bandwidth:  159.80MB/s
+  Status codes: 2xx=4287579, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4287579 / 4287579 responses (100.0%)
+### c48 r5 3 old one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   79.74ms   80.40ms   97.80ms   111.30ms   122.70ms
+
+  4029236 requests in 10.00s, 4029236 responses
+  Throughput: 402.73K req/s
+  Bandwidth:  150.17MB/s
+  Status codes: 2xx=4029236, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4029236 / 4029236 responses (100.0%)
+### c48 r5 4 oldbase one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   92.35ms   84.70ms   126.30ms   144.80ms    1.09s
+
+  3459152 requests in 10.00s, 3459152 responses
+  Throughput: 345.76K req/s
+  Bandwidth:  128.93MB/s
+  Status codes: 2xx=3459152, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3459152 / 3459152 responses (100.0%)
+### c48 r5 5 base2 one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   94.45ms   88.00ms   126.50ms   142.00ms    1.04s
+
+  3446158 requests in 10.00s, 3446158 responses
+  Throughput: 344.46K req/s
+  Bandwidth:  128.45MB/s
+  Status codes: 2xx=3446158, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3446158 / 3446158 responses (100.0%)
+### c48 r6 1 base2 one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   91.77ms   87.50ms   124.10ms   138.30ms   151.70ms
+
+  3497442 requests in 10.00s, 3497442 responses
+  Throughput: 349.60K req/s
+  Bandwidth:  130.36MB/s
+  Status codes: 2xx=3497442, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3497442 / 3497442 responses (100.0%)
+### c48 r6 2 oldbase one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   93.89ms   84.20ms   125.40ms   144.50ms    1.94s
+
+  3400173 requests in 10.00s, 3400173 responses
+  Throughput: 339.86K req/s
+  Bandwidth:  126.73MB/s
+  Status codes: 2xx=3400173, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3400173 / 3400173 responses (100.0%)
+### c48 r6 3 old one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   78.56ms   76.60ms   95.40ms   109.10ms   125.60ms
+
+  4114880 requests in 10.00s, 4114880 responses
+  Throughput: 411.43K req/s
+  Bandwidth:  153.42MB/s
+  Status codes: 2xx=4114880, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4114880 / 4114880 responses (100.0%)
+### c48 r6 4 head one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   78.79ms   75.30ms   92.50ms   106.70ms    1.83s
+
+  4124052 requests in 10.00s, 4124052 responses
+  Throughput: 412.22K req/s
+  Bandwidth:  153.71MB/s
+  Status codes: 2xx=4124052, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4124052 / 4124052 responses (100.0%)
+### c48 r6 5 base one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   92.94ms   87.70ms   123.70ms   138.40ms    1.06s
+
+  3486452 requests in 10.01s, 3486452 responses
+  Throughput: 348.47K req/s
+  Bandwidth:  129.94MB/s
+  Status codes: 2xx=3486452, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3486452 / 3486452 responses (100.0%)
+### c48 r7 1 base one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   94.53ms   84.90ms   126.70ms   147.10ms    1.94s
+
+  3369959 requests in 10.00s, 3369959 responses
+  Throughput: 336.84K req/s
+  Bandwidth:  125.60MB/s
+  Status codes: 2xx=3369959, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3369959 / 3369959 responses (100.0%)
+### c48 r7 2 head one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   80.65ms   83.40ms   98.30ms   111.20ms   122.70ms
+
+  3986158 requests in 10.01s, 3986158 responses
+  Throughput: 398.39K req/s
+  Bandwidth:  148.55MB/s
+  Status codes: 2xx=3986158, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3986158 / 3986158 responses (100.0%)
+### c48 r7 3 old one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   77.40ms   73.00ms   95.10ms   112.20ms    1.85s
+
+  4132393 requests in 10.00s, 4132393 responses
+  Throughput: 413.06K req/s
+  Bandwidth:  154.03MB/s
+  Status codes: 2xx=4132393, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4132393 / 4132393 responses (100.0%)
+### c48 r7 4 oldbase one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   92.09ms   87.40ms   125.50ms   139.50ms   151.80ms
+
+  3473849 requests in 10.00s, 3473849 responses
+  Throughput: 347.24K req/s
+  Bandwidth:  129.48MB/s
+  Status codes: 2xx=3473849, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3473849 / 3473849 responses (100.0%)
+### c48 r7 5 base2 one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   97.06ms   87.60ms   131.80ms   151.80ms    1.93s
+
+  3289508 requests in 10.00s, 3289508 responses
+  Throughput: 328.80K req/s
+  Bandwidth:  122.60MB/s
+  Status codes: 2xx=3289508, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3289508 / 3289508 responses (100.0%)
+### c48 r8 1 base2 one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   95.02ms   87.60ms   126.30ms   141.40ms    1.86s
+
+  3437466 requests in 10.00s, 3437466 responses
+  Throughput: 343.60K req/s
+  Bandwidth:  128.12MB/s
+  Status codes: 2xx=3437466, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3437466 / 3437466 responses (100.0%)
+### c48 r8 2 oldbase one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   94.23ms   89.80ms   128.20ms   143.70ms   156.50ms
+
+  3393705 requests in 10.00s, 3393705 responses
+  Throughput: 339.21K req/s
+  Bandwidth:  126.49MB/s
+  Status codes: 2xx=3393705, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3393705 / 3393705 responses (100.0%)
+### c48 r8 3 old one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   77.06ms   74.60ms   95.20ms   109.10ms   121.10ms
+
+  4171868 requests in 10.01s, 4171868 responses
+  Throughput: 416.89K req/s
+  Bandwidth:  155.45MB/s
+  Status codes: 2xx=4171868, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4171868 / 4171868 responses (100.0%)
+### c48 r8 4 head one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   80.45ms   81.50ms   97.00ms   112.70ms    1.87s
+
+  3974138 requests in 10.00s, 3974138 responses
+  Throughput: 397.25K req/s
+  Bandwidth:  148.13MB/s
+  Status codes: 2xx=3974138, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3974138 / 3974138 responses (100.0%)
+### c48 r8 5 base one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   94.90ms   88.60ms   127.60ms   142.60ms    1.07s
+
+  3427805 requests in 10.01s, 3427805 responses
+  Throughput: 342.60K req/s
+  Bandwidth:  127.75MB/s
+  Status codes: 2xx=3427805, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3427805 / 3427805 responses (100.0%)
+### c48 r9 1 base one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   93.96ms   85.70ms   126.40ms   145.00ms    1.90s
+
+  3400732 requests in 10.00s, 3400732 responses
+  Throughput: 339.91K req/s
+  Bandwidth:  126.75MB/s
+  Status codes: 2xx=3400732, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3400732 / 3400732 responses (100.0%)
+### c48 r9 2 head one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   79.27ms   75.50ms   93.90ms   109.50ms    1.08s
+
+  4113689 requests in 10.01s, 4113689 responses
+  Throughput: 411.16K req/s
+  Bandwidth:  153.32MB/s
+  Status codes: 2xx=4113689, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4113689 / 4113689 responses (100.0%)
+### c48 r9 3 old one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   77.22ms   73.20ms   94.30ms   111.20ms    1.86s
+
+  4134110 requests in 10.00s, 4134110 responses
+  Throughput: 413.22K req/s
+  Bandwidth:  154.08MB/s
+  Status codes: 2xx=4134110, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4134110 / 4134110 responses (100.0%)
+### c48 r9 4 oldbase one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   91.72ms   86.00ms   121.40ms   136.00ms    1.07s
+
+  3549789 requests in 10.00s, 3549789 responses
+  Throughput: 354.80K req/s
+  Bandwidth:  132.30MB/s
+  Status codes: 2xx=3549789, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3549789 / 3549789 responses (100.0%)
+### c48 r9 5 base2 one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   92.10ms   84.20ms   124.80ms   143.30ms    1.82s
+
+  3468936 requests in 10.01s, 3468936 responses
+  Throughput: 346.72K req/s
+  Bandwidth:  129.29MB/s
+  Status codes: 2xx=3468936, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3468936 / 3468936 responses (100.0%)
+### c48 r10 1 base2 one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   91.35ms   86.20ms   122.60ms   136.90ms   152.70ms
+
+  3520426 requests in 10.00s, 3520426 responses
+  Throughput: 351.89K req/s
+  Bandwidth:  131.21MB/s
+  Status codes: 2xx=3520426, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3520426 / 3520426 responses (100.0%)
+### c48 r10 2 oldbase one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   96.02ms   87.00ms   129.10ms   148.70ms    1.93s
+
+  3320745 requests in 10.00s, 3320745 responses
+  Throughput: 331.92K req/s
+  Bandwidth:  123.77MB/s
+  Status codes: 2xx=3320745, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3320745 / 3320745 responses (100.0%)
+### c48 r10 3 old one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   78.92ms   75.10ms   92.70ms   107.50ms    1.12s
+
+  4136926 requests in 10.00s, 4136926 responses
+  Throughput: 413.52K req/s
+  Bandwidth:  154.20MB/s
+  Status codes: 2xx=4136926, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4136926 / 4136926 responses (100.0%)
+### c48 r10 4 head one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   80.56ms   80.80ms   96.80ms   110.30ms    1.09s
+
+  4036340 requests in 10.00s, 4036340 responses
+  Throughput: 403.44K req/s
+  Bandwidth:  150.44MB/s
+  Status codes: 2xx=4036340, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 4036340 / 4036340 responses (100.0%)
+### c48 r10 5 base one
+gcannon v0.10.0
+  Target:    localhost:8080/
+  Threads:   24
+  Conns:     32000 (1333/thread)
+  Pipeline:  1
+  Req/conn:  unlimited (keep-alive)
+  Expected:  200
+  Duration:  10s
+
+
+  Thread Stats   Avg      p50      p90      p99    p99.9
+    Latency   91.80ms   87.80ms   124.40ms   138.20ms   148.30ms
+
+  3484786 requests in 10.01s, 3484786 responses
+  Throughput: 348.30K req/s
+  Bandwidth:  129.88MB/s
+  Status codes: 2xx=3484786, 3xx=0, 4xx=0, 5xx=0
+  Latency samples: 3484786 / 3484786 responses (100.0%)

@@ -1,0 +1,32 @@
+# p4 03:24:10 load 1.10 10 s, 1024 connections, /sdelay/1, order: base head soon
+p4.f1	base	243816.23	4.07ms	4.88ms	none
+p4.f1	head	234715.89	4.31ms	4.95ms	none
+p4.f1	soon	247833.27	4.05ms	4.87ms	none
+p4.f2	base	237037.22	4.14ms	5.11ms	none
+p4.f2	head	242267.40	4.11ms	4.93ms	none
+p4.f2	soon	249531.09	3.97ms	4.90ms	none
+p4.f3	base	235460.21	4.18ms	4.99ms	none
+p4.f3	head	236288.50	4.23ms	4.91ms	none
+p4.f3	soon	247407.11	4.02ms	4.90ms	none
+p4.f4	base	241546.67	4.12ms	4.94ms	none
+p4.f4	head	240062.24	4.12ms	4.91ms	none
+p4.f4	soon	242626.57	4.05ms	5.02ms	none
+p4.f5	base	245214.45	4.04ms	4.94ms	none
+p4.f5	head	250936.20	4.04ms	4.84ms	none
+p4.f5	soon	245762.09	4.06ms	4.87ms	none
+p4.b1	soon	243278.72	4.07ms	5.04ms	none
+p4.b1	head	244226.28	4.10ms	4.82ms	none
+p4.b1	base	245111.66	4.07ms	4.82ms	none
+p4.b2	soon	252245.55	4.00ms	4.84ms	none
+p4.b2	head	245074.47	4.05ms	5.05ms	none
+p4.b2	base	238033.74	4.16ms	5.47ms	none
+p4.b3	soon	241168.99	4.19ms	4.94ms	none
+p4.b3	head	240710.75	4.15ms	4.87ms	none
+p4.b3	base	243774.34	4.07ms	4.82ms	none
+p4.b4	soon	247210.44	4.10ms	4.84ms	none
+p4.b4	head	241394.65	4.28ms	5.05ms	none
+p4.b4	base	240277.07	4.15ms	4.94ms	none
+p4.b5	soon	252361.06	3.89ms	4.85ms	none
+p4.b5	head	250481.89	4.06ms	4.80ms	none
+p4.b5	base	244322.23	4.10ms	4.87ms	none
+# p4 DONE 03:29:43

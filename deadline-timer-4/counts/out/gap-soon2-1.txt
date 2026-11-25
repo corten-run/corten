@@ -1,0 +1,8 @@
+gapw default soon2 r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+gapw default soon2 r1 | sdelay1            25337     25332     25341  25337 25341 25332 | 14.000, 14.000 14.000 14.000 | 3.245 3.250 3.245
+longw default soon2 r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+longw default soon2 r1 | sdelay150          26265     26258     26271  26258 26271 26265 | 14.000, 14.000 14.000 14.000 | 3.980 4.005 3.990
+gapw percore-by-hand soon2 r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+gapw percore-by-hand soon2 r1 | sdelay1            24222     24210     24241  24241 24210 24222 | 13.990, 13.990 13.990 14.000 | 3.215 3.190 3.205
+longw percore-by-hand soon2 r1 | case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+longw percore-by-hand soon2 r1 | sdelay150          25223     25219     25231  25231 25223 25219 | 14.000, 13.985 14.000 14.005 | 3.975 3.970 3.970

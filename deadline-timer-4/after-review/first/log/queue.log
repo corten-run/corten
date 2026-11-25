@@ -1,0 +1,30 @@
+== idle base rc=0 13:35:47
+== clean rc=0: test result: ok. 75 passed; 0 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.54s  13:36:22
+M10: applied to crates/corten/src/deadline.rs
+== M10 rc=101: test result: FAILED. 74 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.52s error: test failed, to rerun pass `-p corten-run --lib`  13:36:49
+test result: FAILED. 74 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.52s
+test tests::server::two_deadlines_in_one_poll_of_a_new_connection_do_not_take_another_connections_timer ... FAILED
+thread 'tests::server::two_deadlines_in_one_poll_of_a_new_connection_do_not_take_another_connections_timer' (432) panicked at crates/corten/src/tests/server.rs:2822:9:
+M14: applied to crates/corten/src/deadline.rs
+== idle head rc=0 13:37:05
+== M14 rc=0: test result: ok. 75 passed; 0 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.57s  13:37:20
+M18: applied to crates/corten/src/deadline.rs
+== M18 rc=101: test result: FAILED. 74 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.58s error: test failed, to rerun pass `-p corten-run --lib`  13:37:53
+test result: FAILED. 74 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.58s
+test tests::server::a_deadline_of_the_longest_duration_sets_the_connections_timer_30_years_off ... FAILED
+thread 'tests::server::a_deadline_of_the_longest_duration_sets_the_connections_timer_30_years_off' (349) panicked at /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/time/instant.rs:161:27:
+M21a: applied to crates/corten/src/deadline.rs
+== M21a rc=0: test result: ok. 75 passed; 0 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.52s  13:38:31
+M21b: applied to crates/corten/src/deadline.rs
+== M21b rc=101: error: test failed, to rerun pass `-p corten-run --lib`   process didn't exit successfully: `/target/debug/build/corten-run/03072fc088ecfe1b/out/corten-03072fc088ecfe1b 'tests::server' deadline` (signal: 6, SIGABRT: process abort signal)  13:38:56
+fatal runtime error: thread local panicked on drop, aborting
+M22: applied to crates/corten/src/deadline.rs
+== M22 rc=101: test result: FAILED. 74 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.52s error: test failed, to rerun pass `-p corten-run --lib`  13:39:32
+test result: FAILED. 74 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.52s
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... FAILED
+thread 'tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits' (342) panicked at crates/corten/src/tests/server.rs:2425:5:
+M27: applied to crates/corten/src/app.rs
+== M27 rc=0: test result: ok. 75 passed; 0 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.51s  13:40:22
+# TESTS-DONE 13:40:22
+carried 4 items, 49 lines
+# QUEUE-DONE 14:03:22

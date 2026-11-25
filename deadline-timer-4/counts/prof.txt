@@ -1,0 +1,87 @@
+== other3 default: a = base, b = head
+ b less a        a        b  function
+   +386.0      0.0    386.0  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<t
+   -369.0    369.0      0.0  <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::
+    +75.6    121.9    197.5  <tokio::runtime::time::Driver>::park_internal
+    +43.2    122.7    165.9  <tokio::runtime::time::handle::Handle>::process_at_time
+    +38.4    108.6    147.0  <std::sys::pal::unix::time::Timespec>::sub_timespec
+    -31.0    372.0    341.0  corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closur
+    +17.7     96.5    114.2  <std::sys::pal::unix::time::Timespec>::now
+    +16.0      0.0     16.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+    +15.0      0.0     15.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+    +14.9     97.7    112.7  <tokio::runtime::io::driver::Driver>::turn
+    -14.0     14.0      0.0  core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box
+    +11.0     60.3     71.3  clock_gettime@@GLIBC_2.17
+     +6.5    446.2    452.6  tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{clo
+     +5.0                    (all others)
+   +215.4  20599.3  20814.7  total
+== other3 percore-by-hand: a = base, b = head
+ b less a        a        b  function
+   +385.8      0.0    385.8  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<t
+   -368.8    368.8      0.0  <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::
+    +71.2    120.8    192.0  <tokio::runtime::time::Driver>::park_internal
+    +40.3    121.3    161.6  <tokio::runtime::time::handle::Handle>::process_at_time
+    +36.3     71.8    108.1  <std::sys::pal::unix::time::Timespec>::sub_timespec
+    -31.0    372.0    341.0  corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closur
+    +16.1     63.9     80.0  <std::sys::pal::unix::time::Timespec>::now
+    +16.0      0.0     16.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+    +15.0      0.0     15.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+    +14.1     96.9    111.0  <tokio::runtime::io::driver::Driver>::turn
+    -14.0     14.0      0.0  core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box
+    +10.0     40.0     50.0  clock_gettime@@GLIBC_2.17
+     +5.0                    (all others)
+   +195.9  19976.9  20172.8  total
+== row9 default: a = base, b = head
+ b less a        a        b  function
+   +411.0      0.0    411.0  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<t
+   -369.0    369.0      0.0  <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::
+    +74.8    123.5    198.2  <tokio::runtime::time::Driver>::park_internal
+    +42.3    124.3    166.6  <tokio::runtime::time::handle::Handle>::process_at_time
+    +37.8    109.5    147.3  <std::sys::pal::unix::time::Timespec>::sub_timespec
+    -31.0    372.0    341.0  corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closur
+    +17.1     97.3    114.4  <std::sys::pal::unix::time::Timespec>::now
+    +16.0      0.0     16.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+    +15.0      0.0     15.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+    +14.5     98.4    113.0  <tokio::runtime::io::driver::Driver>::turn
+    -14.0     14.0      0.0  core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box
+    +10.7     60.8     71.5  clock_gettime@@GLIBC_2.17
+     +4.3    449.5    453.9  tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{clo
+     -2.5                    (all others)
+   +227.0  20619.2  20846.2  total
+== row9 percore-by-hand: a = base, b = head
+ b less a        a        b  function
+   +411.0      0.0    411.0  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<t
+   -369.0    369.0      0.0  <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::
+    +71.0    121.0    192.0  <tokio::runtime::time::Driver>::park_internal
+    +39.8    121.7    161.5  <tokio::runtime::time::handle::Handle>::process_at_time
+    +36.0     72.0    108.0  <std::sys::pal::unix::time::Timespec>::sub_timespec
+    -31.0    372.0    341.0  corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closur
+    +16.0     64.0     80.0  <std::sys::pal::unix::time::Timespec>::now
+    +16.0      0.0     16.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+    +15.0      0.0     15.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+    -14.0     14.0      0.0  core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box
+    +14.0     97.0    111.0  <tokio::runtime::io::driver::Driver>::turn
+    +10.0     40.0     50.0  clock_gettime@@GLIBC_2.17
+     +2.9                    (all others)
+   +217.7  19981.8  20199.5  total
+== row1 default: a = base, b = head
+ b less a        a        b  function
+   +386.0      0.0    386.0  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<t
+   -369.0    369.0      0.0  <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::
+    -31.0    372.0    341.0  corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closur
+    +16.0      0.0     16.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+    +15.0      0.0     15.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+    -14.0     14.0      0.0  core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box
+     +6.0    446.6    452.5  tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{clo
+    +12.6                    (all others)
+    +21.5  20599.7  20621.2  total
+== row1 percore-by-hand: a = base, b = head
+ b less a        a        b  function
+   +386.0      0.0    386.0  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<t
+   -369.0    369.0      0.0  <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::
+    -31.0    372.0    341.0  corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closur
+    +16.0      0.0     16.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+    +15.0      0.0     15.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+    -14.0     14.0      0.0  core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box
+     +3.4                    (all others)
+     +6.4  19982.7  19989.1  total

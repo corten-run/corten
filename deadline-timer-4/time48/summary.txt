@@ -1,0 +1,748 @@
+
+================ a10: 10 rounds, 50 runs, 0 failed, threads 31
+
+  a10 one: requests a second; noise bar 5.23% (base2 over base +0.49% (-5.23% to +2.37%), 6 up 4 down of 10)
+    base     median 353056 (346612 to 357948)
+    head     median 400814 (393162 to 414012)  over base +14.37% (+11.39% to +16.97%), 10 up 0 down of 10  RESOLVED
+    old      median 397387 (368907 to 413770)  over base +12.45% (+4.52% to +19.19%), 10 up 0 down of 10  RESOLVED
+    oldbase  median 351051 (334758 to 356012)  over base -0.62% (-5.16% to +2.42%), 4 up 6 down of 10  not resolved
+    base2    median 352730 (339218 to 359102)
+    old over oldbase   +13.00% (+10.20% to +16.38%), 10 up 0 down of 10  RESOLVED
+    head over old      +1.03% (-2.49% to +6.57%), 7 up 3 down of 10  not resolved
+
+  a10 one: p50 ms; noise bar 6.89% (base2 over base -0.11% (-2.63% to +6.89%), 5 up 5 down of 10)
+    base     median 92.550 (90.000 to 95.100)
+    head     median 80.750 (78.000 to 81.900)  over base -13.21% (-15.77% to -10.44%), 0 up 10 down of 10  RESOLVED
+    old      median 81.150 (77.800 to 87.700)  over base -12.13% (-16.88% to -4.78%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 93.150 (90.200 to 97.900)  over base +1.02% (-2.94% to +7.56%), 6 up 4 down of 10  not resolved
+    base2    median 92.900 (90.400 to 96.200)
+    old over oldbase   -12.59% (-14.98% to -10.42%), 0 up 10 down of 10  RESOLVED
+    head over old      -1.09% (-6.73% to +3.47%), 4 up 6 down of 10  not resolved
+
+  a10 one: p99 ms; noise bar 5.51% (base2 over base -0.81% (-2.82% to +5.51%), 4 up 6 down of 10)
+    base     median 176.950 (173.100 to 180.900)
+    head     median 152.500 (147.200 to 159.700)  over base -13.68% (-17.12% to -7.74%), 0 up 10 down of 10  RESOLVED
+    old      median 153.700 (148.600 to 167.600)  over base -13.03% (-17.86% to -3.18%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 176.250 (173.000 to 186.700)  over base -0.03% (-3.54% to +7.86%), 5 up 5 down of 10  not resolved
+    base2    median 176.350 (172.600 to 183.700)
+    old over oldbase   -12.58% (-16.59% to -10.23%), 0 up 10 down of 10  RESOLVED
+    head over old      -1.55% (-6.66% to +2.04%), 3 up 7 down of 10  not resolved
+
+  a10 one: CPU us a request; noise bar 9.15% (base2 over base -1.72% (-8.67% to +9.15%), 3 up 7 down of 10)
+    base     median 61.31 (59.67 to 66.21)
+    head     median 55.16 (49.43 to 56.55)  over base -12.26% (-22.03% to -5.77%), 0 up 10 down of 10  RESOLVED
+    old      median 55.33 (50.20 to 58.80)  over base -14.55% (-18.68% to -4.63%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 64.34 (60.12 to 67.67)  over base +0.28% (-8.35% to +13.41%), 5 up 5 down of 10  not resolved
+    base2    median 61.31 (59.16 to 66.46)
+    old over oldbase   -16.33% (-17.04% to -6.67%), 0 up 10 down of 10  RESOLVED
+    head over old      -0.91% (-12.53% to +12.65%), 3 up 6 down of 10  not resolved
+
+  a10 one: cycles a request; noise bar 9.78% (base2 over base -1.25% (-9.00% to +9.78%), 3 up 7 down of 10)
+    base     median 187455 (184043 to 202199)
+    head     median 169279 (152790 to 173042)  over base -11.93% (-22.13% to -6.32%), 0 up 10 down of 10  RESOLVED
+    old      median 169949 (154037 to 177920)  over base -14.64% (-18.43% to -5.85%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 195963 (184239 to 206672)  over base +0.60% (-8.35% to +11.98%), 5 up 5 down of 10  not resolved
+    base2    median 186725 (181989 to 204276)
+    old over oldbase   -16.41% (-16.71% to -6.47%), 0 up 10 down of 10  RESOLVED
+    head over old      -0.64% (-11.63% to +12.34%), 3 up 7 down of 10  not resolved
+
+  a10 one: instructions a request; noise bar 10.27% (base2 over base -0.48% (-9.67% to +10.27%), 3 up 7 down of 10)
+    base     median 67784 (66966 to 73934)
+    head     median 65590 (59751 to 65955)  over base -6.66% (-17.91% to -2.36%), 0 up 10 down of 10  not resolved
+    old      median 65617 (59650 to 66387)  over base -9.99% (-12.26% to -1.13%), 0 up 10 down of 10  not resolved
+    oldbase  median 70851 (67459 to 74629)  over base +0.99% (-8.60% to +11.23%), 7 up 3 down of 10  not resolved
+    base2    median 67300 (66785 to 74256)
+    old over oldbase   -11.24% (-11.70% to -1.78%), 0 up 10 down of 10  RESOLVED
+    head over old      -0.04% (-9.57% to +10.56%), 4 up 6 down of 10  not resolved
+
+================ a40: 10 rounds, 50 runs, 0 failed, threads 31
+
+  a40 one: requests a second; noise bar 2.79% (base2 over base +0.79% (-2.71% to +2.79%), 6 up 4 down of 10)
+    base     median 345921 (340241 to 351511)
+    head     median 391881 (387183 to 396692)  over base +12.98% (+10.15% to +15.39%), 10 up 0 down of 10  RESOLVED
+    old      median 392683 (385662 to 400692)  over base +14.02% (+11.65% to +15.38%), 10 up 0 down of 10  RESOLVED
+    oldbase  median 347782 (344478 to 351867)  over base +0.17% (-1.76% to +2.58%), 7 up 3 down of 10  not resolved
+    base2    median 347286 (341157 to 350582)
+    old over oldbase   +13.20% (+11.24% to +15.09%), 10 up 0 down of 10  RESOLVED
+    head over old      +0.25% (-3.37% to +1.18%), 6 up 4 down of 10  not resolved
+
+  a40 one: p50 ms; noise bar 2.78% (base2 over base -0.95% (-2.59% to +2.78%), 4 up 6 down of 10)
+    base     median 94.700 (93.200 to 96.500)
+    head     median 82.600 (81.500 to 84.400)  over base -12.62% (-15.02% to -9.44%), 0 up 10 down of 10  RESOLVED
+    old      median 82.300 (80.500 to 84.400)  over base -13.46% (-14.29% to -10.44%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 94.150 (92.900 to 95.300)  over base -0.32% (-3.32% to +1.82%), 3 up 7 down of 10  not resolved
+    base2    median 94.100 (93.300 to 96.100)
+    old over oldbase   -12.72% (-14.56% to -10.40%), 0 up 10 down of 10  RESOLVED
+    head over old      +0.01% (-1.69% to +4.84%), 5 up 5 down of 10  not resolved
+
+  a40 one: p99 ms; noise bar 2.24% (base2 over base -0.87% (-2.22% to +2.24%), 4 up 6 down of 10)
+    base     median 177.700 (174.000 to 180.300)
+    head     median 155.750 (153.300 to 158.200)  over base -12.59% (-14.64% to -9.20%), 0 up 10 down of 10  RESOLVED
+    old      median 154.600 (151.600 to 158.500)  over base -12.95% (-14.20% to -10.52%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 176.700 (174.600 to 178.500)  over base -0.81% (-2.72% to +1.31%), 4 up 6 down of 10  not resolved
+    base2    median 177.350 (175.600 to 179.500)
+    old over oldbase   -12.60% (-14.12% to -9.92%), 0 up 10 down of 10  RESOLVED
+    head over old      +0.25% (-1.41% to +4.22%), 5 up 4 down of 10  not resolved
+
+  a40 one: CPU us a request; noise bar 3.95% (base2 over base -0.87% (-3.95% to +3.89%), 2 up 8 down of 10)
+    base     median 58.33 (56.80 to 59.27)
+    head     median 48.52 (47.74 to 50.35)  over base -16.53% (-19.24% to -13.76%), 0 up 10 down of 10  RESOLVED
+    old      median 48.71 (47.43 to 50.42)  over base -17.23% (-18.44% to -12.25%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 57.20 (56.28 to 58.67)  over base -2.32% (-4.00% to +2.92%), 3 up 7 down of 10  not resolved
+    base2    median 57.50 (56.70 to 59.01)
+    old over oldbase   -15.21% (-18.41% to -13.12%), 0 up 10 down of 10  RESOLVED
+    head over old      -0.57% (-2.66% to +5.06%), 5 up 5 down of 10  not resolved
+
+  a40 one: cycles a request; noise bar 3.95% (base2 over base -0.90% (-3.95% to +3.53%), 3 up 7 down of 10)
+    base     median 178070 (173572 to 181091)
+    head     median 148788 (146376 to 153246)  over base -16.16% (-18.67% to -14.03%), 0 up 10 down of 10  RESOLVED
+    old      median 149124 (146131 to 154216)  over base -17.04% (-18.32% to -12.16%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 174280 (172377 to 179642)  over base -2.23% (-4.11% to +2.54%), 3 up 7 down of 10  not resolved
+    base2    median 175715 (173184 to 179704)
+    old over oldbase   -14.70% (-18.19% to -13.17%), 0 up 10 down of 10  RESOLVED
+    head over old      -0.58% (-2.59% to +4.00%), 5 up 5 down of 10  not resolved
+
+  a40 one: instructions a request; noise bar 2.92% (base2 over base -1.00% (-2.92% to +2.43%), 4 up 6 down of 10)
+    base     median 64634 (62930 to 64976)
+    head     median 57394 (56566 to 58268)  over base -10.36% (-12.80% to -7.47%), 0 up 10 down of 10  RESOLVED
+    old      median 56667 (56586 to 58278)  over base -12.22% (-12.79% to -7.52%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 63267 (62952 to 65013)  over base -2.20% (-3.11% to +3.31%), 3 up 7 down of 10  not resolved
+    base2    median 63441 (62921 to 65083)
+    old over oldbase   -10.21% (-12.72% to -7.94%), 0 up 10 down of 10  RESOLVED
+    head over old      +0.01% (-2.69% to +2.82%), 6 up 4 down of 10  not resolved
+
+================ b1024: 10 rounds, 50 runs, 0 failed, threads 31
+
+  b1024 one: requests a second; noise bar 0.50% (base2 over base +0.07% (-0.50% to +0.50%), 6 up 4 down of 10)
+    base     median 86277 (85831 to 86582)
+    head     median 85956 (85608 to 86269)  over base -0.33% (-0.86% to +0.47%), 2 up 8 down of 10  not resolved
+    old      median 85806 (85278 to 86521)  over base -0.62% (-1.19% to +0.44%), 3 up 7 down of 10  not resolved
+    oldbase  median 86291 (85798 to 86448)  over base -0.03% (-0.63% to +0.72%), 4 up 6 down of 10  not resolved
+    base2    median 86303 (85845 to 86501)
+    old over oldbase   -0.57% (-1.02% to +0.38%), 2 up 8 down of 10  not resolved
+    head over old      +0.11% (-0.59% to +0.73%), 7 up 3 down of 10  not resolved
+
+  b1024 one: p50 ms; noise bar 0.85% (base2 over base +0.00% (-0.85% to +0.85%), 1 up 1 down of 10)
+    base     median 11.800 (11.700 to 11.800)
+    head     median 11.800 (11.800 to 11.900)  over base +0.00% (+0.00% to +0.85%), 4 up 0 down of 10  not resolved
+    old      median 11.800 (11.800 to 11.900)  over base +0.42% (+0.00% to +1.71%), 5 up 0 down of 10  not resolved
+    oldbase  median 11.800 (11.700 to 11.800)  over base +0.00% (-0.85% to +0.85%), 2 up 2 down of 10  not resolved
+    base2    median 11.800 (11.700 to 11.800)
+    old over oldbase   +0.42% (+0.00% to +1.71%), 5 up 0 down of 10  not resolved
+    head over old      +0.00% (-0.84% to +0.85%), 1 up 3 down of 10  not resolved
+
+  b1024 one: p99 ms; noise bar 4.90% (base2 over base -0.36% (-4.90% to +0.74%), 3 up 5 down of 10)
+    base     median 13.750 (13.600 to 14.300)
+    head     median 13.550 (13.500 to 13.700)  over base -1.46% (-4.90% to +0.74%), 1 up 8 down of 10  not resolved
+    old      median 13.650 (13.300 to 14.400)  over base +0.00% (-5.59% to +4.41%), 4 up 4 down of 10  not resolved
+    oldbase  median 13.700 (13.500 to 14.100)  over base +0.00% (-5.59% to +2.94%), 4 up 4 down of 10  not resolved
+    base2    median 13.700 (13.500 to 13.900)
+    old over oldbase   +0.00% (-2.92% to +4.41%), 3 up 4 down of 10  not resolved
+    head over old      -0.37% (-6.25% to +2.26%), 2 up 5 down of 10  not resolved
+
+  b1024 one: CPU us a request; noise bar 3.73% (base2 over base -0.19% (-3.73% to +3.20%), 5 up 5 down of 10)
+    base     median 44.33 (43.08 to 45.81)
+    head     median 33.95 (33.35 to 34.14)  over base -23.54% (-25.47% to -20.89%), 0 up 10 down of 10  RESOLVED
+    old      median 33.93 (33.13 to 34.19)  over base -23.36% (-26.85% to -20.64%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 44.34 (43.12 to 45.26)  over base -0.05% (-3.89% to +3.88%), 5 up 5 down of 10  not resolved
+    base2    median 44.20 (43.34 to 44.68)
+    old over oldbase   -23.63% (-26.76% to -21.66%), 0 up 10 down of 10  RESOLVED
+    head over old      -0.32% (-2.46% to +3.02%), 4 up 6 down of 10  not resolved
+
+================ b8192: 10 rounds, 50 runs, 0 failed, threads 31
+
+  b8192 one: requests a second; noise bar 4.85% (base2 over base -0.34% (-3.68% to +4.85%), 5 up 5 down of 10)
+    base     median 411007 (401493 to 417499)
+    head     median 533045 (521767 to 554620)  over base +31.36% (+27.57% to +33.80%), 10 up 0 down of 10  RESOLVED
+    old      median 523191 (519398 to 548161)  over base +29.59% (+25.05% to +34.03%), 10 up 0 down of 10  RESOLVED
+    oldbase  median 408395 (403490 to 412315)  over base -0.37% (-2.44% to +2.61%), 4 up 6 down of 10  not resolved
+    base2    median 409797 (396447 to 431192)
+    old over oldbase   +28.50% (+26.66% to +34.72%), 10 up 0 down of 10  RESOLVED
+    head over old      +1.21% (-4.82% to +6.23%), 7 up 3 down of 10  not resolved
+
+  b8192 one: p50 ms; noise bar 5.08% (base2 over base +0.25% (-5.08% to +3.55%), 5 up 4 down of 10)
+    base     median 19.700 (19.400 to 20.200)
+    head     median 15.100 (14.500 to 15.500)  over base -24.43% (-25.37% to -21.72%), 0 up 10 down of 10  RESOLVED
+    old      median 15.400 (14.700 to 15.500)  over base -23.13% (-25.76% to -20.10%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 19.850 (19.600 to 20.100)  over base +0.25% (-2.97% to +2.58%), 5 up 4 down of 10  not resolved
+    base2    median 19.750 (18.700 to 20.400)
+    old over oldbase   -22.36% (-26.37% to -21.32%), 0 up 10 down of 10  RESOLVED
+    head over old      -1.31% (-6.45% to +5.44%), 2 up 7 down of 10  not resolved
+
+  b8192 one: p99 ms; noise bar 5.41% (base2 over base +0.19% (-4.23% to +5.41%), 5 up 5 down of 10)
+    base     median 26.050 (25.700 to 26.900)
+    head     median 19.850 (19.300 to 20.200)  over base -24.57% (-26.49% to -22.61%), 0 up 10 down of 10  RESOLVED
+    old      median 20.000 (19.400 to 20.300)  over base -24.43% (-25.75% to -21.92%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 26.250 (26.000 to 26.600)  over base +0.96% (-2.97% to +2.31%), 6 up 4 down of 10  not resolved
+    base2    median 26.200 (24.900 to 27.300)
+    old over oldbase   -23.71% (-26.69% to -22.22%), 0 up 10 down of 10  RESOLVED
+    head over old      -1.00% (-3.50% to +4.12%), 2 up 7 down of 10  not resolved
+
+  b8192 one: CPU us a request; noise bar 4.49% (base2 over base +0.19% (-4.49% to +3.33%), 5 up 5 down of 10)
+    base     median 53.42 (52.60 to 54.10)
+    head     median 40.31 (38.85 to 41.25)  over base -24.86% (-26.14% to -23.12%), 0 up 10 down of 10  RESOLVED
+    old      median 40.67 (39.10 to 41.47)  over base -24.02% (-27.26% to -21.16%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 53.48 (52.76 to 54.32)  over base +0.01% (-1.84% to +2.49%), 5 up 5 down of 10  not resolved
+    base2    median 53.50 (51.02 to 54.97)
+    old over oldbase   -23.95% (-26.53% to -22.44%), 0 up 10 down of 10  RESOLVED
+    head over old      -1.16% (-6.32% to +5.50%), 2 up 8 down of 10  not resolved
+
+================ c4: 10 rounds, 50 runs, 0 failed, threads 11
+
+  c4 one: requests a second; noise bar 4.15% (base2 over base +0.05% (-4.15% to +2.97%), 5 up 5 down of 10)
+    base     median 150623 (148258 to 155342)
+    head     median 151952 (149109 to 154947)  over base +0.90% (-3.66% to +3.71%), 7 up 3 down of 10  not resolved
+    old      median 151058 (150224 to 153447)  over base +0.41% (-2.62% to +2.70%), 7 up 3 down of 10  not resolved
+    oldbase  median 151052 (149319 to 157203)  over base +0.02% (-1.79% to +4.23%), 5 up 5 down of 10  not resolved
+    base2    median 150603 (148893 to 155289)
+    old over oldbase   -0.15% (-3.17% to +2.47%), 5 up 5 down of 10  not resolved
+    head over old      -0.02% (-1.14% to +2.65%), 5 up 5 down of 10  not resolved
+
+  c4 one: p50 ms; noise bar 3.42% (base2 over base +0.40% (-1.83% to +3.42%), 6 up 3 down of 10)
+    base     median 274.800 (266.400 to 284.500)
+    head     median 272.900 (267.700 to 278.400)  over base -1.23% (-3.97% to +2.33%), 1 up 9 down of 10  not resolved
+    old      median 273.150 (266.200 to 276.700)  over base -1.03% (-3.87% to +3.49%), 1 up 9 down of 10  not resolved
+    oldbase  median 274.850 (268.300 to 283.200)  over base -1.00% (-2.99% to +6.31%), 2 up 8 down of 10  not resolved
+    base2    median 276.650 (272.600 to 283.600)
+    old over oldbase   -0.14% (-3.79% to +1.71%), 3 up 6 down of 10  not resolved
+    head over old      -0.02% (-1.12% to +1.63%), 5 up 5 down of 10  not resolved
+
+  c4 one: p99 ms; noise bar 8.15% (base2 over base -3.24% (-8.15% to +7.52%), 2 up 7 down of 10)
+    base     median 618.300 (571.600 to 672.500)
+    head     median 628.350 (572.100 to 649.700)  over base -3.06% (-11.95% to +12.44%), 3 up 7 down of 10  not resolved
+    old      median 630.350 (593.000 to 638.700)  over base +1.04% (-8.63% to +11.16%), 6 up 4 down of 10  not resolved
+    oldbase  median 629.300 (559.500 to 658.400)  over base +1.74% (-13.37% to +8.06%), 5 up 5 down of 10  not resolved
+    base2    median 615.950 (568.800 to 632.500)
+    old over oldbase   +0.41% (-8.52% to +12.67%), 6 up 4 down of 10  not resolved
+    head over old      +0.32% (-7.94% to +5.08%), 5 up 5 down of 10  not resolved
+
+  c4 one: CPU us a request; noise bar 8.05% (base2 over base +0.38% (-6.20% to +8.05%), 6 up 4 down of 10)
+    base     median 29.23 (28.82 to 30.99)
+    head     median 29.13 (28.64 to 30.89)  over base -0.78% (-5.23% to +5.90%), 3 up 7 down of 10  not resolved
+    old      median 29.03 (28.65 to 29.15)  over base -0.94% (-6.13% to +0.38%), 1 up 8 down of 10  not resolved
+    oldbase  median 29.21 (28.57 to 31.91)  over base +0.07% (-6.78% to +9.47%), 5 up 5 down of 10  not resolved
+    base2    median 29.36 (28.81 to 31.25)
+    old over oldbase   -0.44% (-8.65% to +1.40%), 4 up 6 down of 10  not resolved
+    head over old      +0.43% (-0.86% to +6.26%), 6 up 4 down of 10  not resolved
+
+================ c16: 10 rounds, 50 runs, 0 failed, threads 23
+
+  c16 one: requests a second; noise bar 9.35% (base2 over base +0.78% (-5.58% to +9.35%), 5 up 5 down of 10)
+    base     median 362797 (337077 to 378702)
+    head     median 388346 (369552 to 408867)  over base +6.30% (+3.19% to +21.01%), 10 up 0 down of 10  not resolved
+    old      median 389081 (368324 to 417082)  over base +7.89% (+1.71% to +23.73%), 10 up 0 down of 10  not resolved
+    oldbase  median 363622 (343992 to 390604)  over base +2.22% (-5.96% to +9.03%), 6 up 4 down of 10  not resolved
+    base2    median 361934 (353262 to 382008)
+    old over oldbase   +8.30% (-1.75% to +17.31%), 7 up 3 down of 10  not resolved
+    head over old      -1.43% (-5.09% to +11.01%), 4 up 6 down of 10  not resolved
+
+  c16 one: p50 ms; noise bar 9.86% (base2 over base -1.56% (-9.86% to +6.04%), 3 up 7 down of 10)
+    base     median 93.400 (88.600 to 101.400)
+    head     median 86.550 (81.300 to 91.100)  over base -6.93% (-19.82% to -3.13%), 0 up 10 down of 10  not resolved
+    old      median 84.800 (79.600 to 90.300)  over base -7.32% (-21.50% to -3.32%), 0 up 10 down of 10  not resolved
+    oldbase  median 92.450 (85.200 to 99.100)  over base -2.94% (-8.35% to +7.61%), 4 up 6 down of 10  not resolved
+    base2    median 92.200 (87.300 to 94.800)
+    old over oldbase   -8.90% (-16.55% to +1.81%), 3 up 7 down of 10  not resolved
+    head over old      +2.19% (-9.24% to +6.29%), 6 up 4 down of 10  not resolved
+
+  c16 one: p99 ms; noise bar 9.79% (base2 over base -0.83% (-9.23% to +9.79%), 4 up 6 down of 10)
+    base     median 179.600 (168.500 to 196.000)
+    head     median 166.700 (156.000 to 177.200)  over base -6.01% (-19.18% to -2.61%), 0 up 10 down of 10  not resolved
+    old      median 169.600 (153.000 to 175.900)  over base -7.33% (-21.94% to +0.36%), 1 up 9 down of 10  not resolved
+    oldbase  median 177.750 (163.600 to 192.900)  over base -2.18% (-8.98% to +8.90%), 4 up 6 down of 10  not resolved
+    base2    median 179.750 (165.800 to 189.500)
+    old over oldbase   -6.98% (-16.90% to +4.02%), 3 up 7 down of 10  not resolved
+    head over old      +1.30% (-11.31% to +5.86%), 5 up 5 down of 10  not resolved
+
+  c16 one: CPU us a request; noise bar 10.71% (base2 over base -3.86% (-10.71% to +0.92%), 2 up 8 down of 10)
+    base     median 46.42 (44.31 to 50.45)
+    head     median 43.28 (38.29 to 45.26)  over base -8.23% (-18.43% to -2.35%), 0 up 10 down of 10  not resolved
+    old      median 42.08 (39.79 to 44.71)  over base -7.90% (-20.95% to -3.27%), 0 up 10 down of 10  not resolved
+    oldbase  median 45.39 (41.49 to 48.95)  over base -2.16% (-11.19% to +10.47%), 2 up 8 down of 10  not resolved
+    base2    median 44.11 (43.07 to 46.79)
+    old over oldbase   -4.09% (-15.20% to +0.53%), 2 up 8 down of 10  not resolved
+    head over old      +2.80% (-11.26% to +9.10%), 6 up 4 down of 10  not resolved
+
+================ c48: 10 rounds, 50 runs, 0 failed, threads 55
+
+  c48 one: requests a second; noise bar 4.68% (base2 over base +0.40% (-3.34% to +4.68%), 8 up 2 down of 10)
+    base     median 342776 (335152 to 353591)
+    head     median 411682 (396249 to 428330)  over base +18.52% (+15.49% to +24.50%), 10 up 0 down of 10  RESOLVED
+    old      median 413325 (394647 to 416770)  over base +20.96% (+11.61% to +23.56%), 10 up 0 down of 10  RESOLVED
+    oldbase  median 343481 (332074 to 354979)  over base -0.25% (-4.61% to +4.38%), 5 up 5 down of 10  not resolved
+    base2    median 345582 (328951 to 353404)
+    old over oldbase   +19.45% (+15.50% to +24.58%), 10 up 0 down of 10  RESOLVED
+    head over old      -0.19% (-4.64% to +6.31%), 5 up 5 down of 10  not resolved
+
+  c48 one: p50 ms; noise bar 3.90% (base2 over base -0.68% (-3.34% to +3.90%), 4 up 6 down of 10)
+    base     median 85.600 (83.800 to 89.900)
+    head     median 75.400 (70.900 to 83.400)  over base -12.23% (-21.13% to -0.60%), 0 up 10 down of 10  RESOLVED
+    old      median 75.600 (73.000 to 83.600)  over base -13.34% (-15.80% to -2.22%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 86.800 (84.200 to 90.300)  over base +0.18% (-3.99% to +7.76%), 5 up 4 down of 10  not resolved
+    base2    median 86.700 (83.800 to 88.000)
+    old over oldbase   -13.65% (-17.05% to -1.88%), 0 up 10 down of 10  RESOLVED
+    head over old      +0.72% (-11.96% to +14.25%), 5 up 5 down of 10  not resolved
+
+  c48 one: p99 ms; noise bar 6.03% (base2 over base -0.89% (-6.03% to +5.09%), 3 up 7 down of 10)
+    base     median 143.950 (137.600 to 147.700)
+    head     median 109.400 (100.600 to 112.700)  over base -23.65% (-30.67% to -20.19%), 0 up 10 down of 10  RESOLVED
+    old      median 109.900 (107.500 to 113.300)  over base -23.30% (-26.81% to -17.66%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 143.550 (136.000 to 148.700)  over base -0.35% (-6.21% to +7.60%), 4 up 6 down of 10  not resolved
+    base2    median 141.700 (136.900 to 151.800)
+    old over oldbase   -22.91% (-27.71% to -18.24%), 0 up 10 down of 10  RESOLVED
+    head over old      -1.21% (-9.61% to +3.30%), 3 up 7 down of 10  not resolved
+
+  c48 one: CPU us a request; noise bar 9.53% (base2 over base +0.22% (-4.49% to +9.53%), 6 up 4 down of 10)
+    base     median 65.09 (62.04 to 69.67)
+    head     median 48.28 (43.90 to 51.00)  over base -25.72% (-36.99% to -17.94%), 0 up 10 down of 10  RESOLVED
+    old      median 48.39 (44.87 to 50.56)  over base -27.85% (-29.82% to -20.25%), 0 up 10 down of 10  RESOLVED
+    oldbase  median 66.63 (62.37 to 69.50)  over base +1.14% (-4.79% to +11.83%), 6 up 4 down of 10  not resolved
+    base2    median 66.73 (61.82 to 68.23)
+    old over oldbase   -28.42% (-33.59% to -19.70%), 0 up 10 down of 10  RESOLVED
+    head over old      -1.50% (-10.54% to +11.92%), 4 up 6 down of 10  not resolved
+
+================ f10: 10 rounds, 50 runs, 0 failed, threads 77
+
+  f10 one: requests a second; noise bar 1.43% (base2 over base -0.06% (-1.41% to +1.43%), 5 up 5 down of 10)
+    base     median 581370 (577933 to 586944)
+    head     median 578122 (574534 to 584648)  over base -0.63% (-1.55% to -0.03%), 0 up 10 down of 10  not resolved
+    old      median 580108 (577050 to 584573)  over base -0.35% (-1.31% to +0.85%), 2 up 8 down of 10  not resolved
+    oldbase  median 582103 (578818 to 584600)  over base -0.28% (-0.73% to +1.08%), 4 up 6 down of 10  not resolved
+    base2    median 581817 (576782 to 589017)
+    old over oldbase   -0.28% (-1.29% to +0.42%), 4 up 6 down of 10  not resolved
+    head over old      -0.54% (-0.89% to +1.29%), 2 up 8 down of 10  not resolved
+
+  f10 one: p50 ms; noise bar 1.61% (base2 over base +0.45% (-1.61% to +0.92%), 6 up 4 down of 10)
+    base     median 55.150 (54.600 to 55.800)
+    head     median 55.400 (55.100 to 56.300)  over base +0.27% (-0.90% to +2.75%), 7 up 2 down of 10  not resolved
+    old      median 55.450 (54.800 to 55.900)  over base +0.18% (-0.54% to +1.64%), 5 up 4 down of 10  not resolved
+    oldbase  median 55.050 (54.600 to 55.500)  over base -0.09% (-1.97% to +0.54%), 4 up 5 down of 10  not resolved
+    base2    median 55.150 (54.600 to 55.900)
+    old over oldbase   +0.72% (-0.72% to +1.65%), 8 up 2 down of 10  not resolved
+    head over old      +0.27% (-1.43% to +1.63%), 6 up 4 down of 10  not resolved
+
+  f10 one: p99 ms; noise bar 18.12% (base2 over base +4.32% (-18.12% to +15.46%), 7 up 3 down of 10)
+    base     median 65.000 (61.000 to 74.500)
+    head     median 67.900 (60.400 to 73.600)  over base +2.82% (-18.93% to +17.57%), 8 up 2 down of 10  not resolved
+    old      median 64.300 (61.200 to 70.900)  over base +0.80% (-13.83% to +16.23%), 6 up 4 down of 10  not resolved
+    oldbase  median 67.050 (61.600 to 72.500)  over base +2.62% (-9.28% to +11.97%), 6 up 4 down of 10  not resolved
+    base2    median 66.850 (60.300 to 73.400)
+    old over oldbase   -1.59% (-10.80% to +4.81%), 4 up 6 down of 10  not resolved
+    head over old      +2.70% (-11.99% to +20.26%), 6 up 4 down of 10  not resolved
+
+  f10 one: CPU us a request; noise bar 1.28% (base2 over base +0.08% (-1.28% to +1.15%), 6 up 4 down of 10)
+    base     median 41.30 (40.89 to 41.54)
+    head     median 41.47 (41.18 to 41.89)  over base +0.52% (-0.26% to +1.81%), 9 up 1 down of 10  not resolved
+    old      median 41.34 (41.07 to 41.59)  over base +0.41% (-0.77% to +1.35%), 6 up 4 down of 10  not resolved
+    oldbase  median 41.22 (41.05 to 41.59)  over base +0.36% (-1.18% to +0.90%), 6 up 4 down of 10  not resolved
+    base2    median 41.30 (40.85 to 41.71)
+    old over oldbase   +0.13% (-0.63% to +1.04%), 5 up 5 down of 10  not resolved
+    head over old      +0.36% (-0.84% to +1.12%), 8 up 2 down of 10  not resolved
+
+================ d64: 10 rounds, 80 runs, 0 failed, threads 31
+
+  d64 quiet: requests a second; noise bar 6.25% (base2 over base +1.89% (-6.15% to +6.25%), 8 up 2 down of 10)
+    base     median 371738 (354377 to 381878)
+    head     median 378794 (356307 to 391182)  over base +1.69% (-3.05% to +5.29%), 9 up 1 down of 10  not resolved
+    old      median 381683 (353340 to 396592)  over base +2.43% (-5.31% to +7.96%), 7 up 3 down of 10  not resolved
+    base2    median 379314 (357939 to 385925)
+    head over old      -0.95% (-6.59% to +7.13%), 3 up 7 down of 10  not resolved
+
+  d64 quiet: p50 ms; noise bar 8.90% (base2 over base +0.31% (-3.07% to +8.90%), 5 up 4 down of 10)
+    base     median 0.160 (0.146 to 0.163)
+    head     median 0.158 (0.146 to 0.162)  over base -0.94% (-3.75% to +2.53%), 3 up 6 down of 10  not resolved
+    old      median 0.160 (0.155 to 0.163)  over base +0.00% (-3.13% to +6.16%), 4 up 3 down of 10  not resolved
+    base2    median 0.160 (0.158 to 0.162)
+    head over old      -1.56% (-5.81% to +4.52%), 2 up 8 down of 10  not resolved
+
+  d64 quiet: p99 ms; noise bar 95.41% (base2 over base -20.04% (-58.13% to +95.41%), 1 up 9 down of 10)
+    base     median 0.516 (0.327 to 0.855)
+    head     median 0.487 (0.322 to 0.767)  over base -4.24% (-31.17% to +36.89%), 3 up 7 down of 10  not resolved
+    old      median 0.344 (0.308 to 0.700)  over base -28.55% (-63.98% to +102.90%), 3 up 7 down of 10  not resolved
+    base2    median 0.350 (0.329 to 0.639)
+    head over old      +30.39% (-39.43% to +149.03%), 6 up 4 down of 10  not resolved
+
+  d64 quiet: CPU us a request; noise bar 9.83% (base2 over base -0.24% (-2.86% to +9.83%), 5 up 5 down of 10)
+    base     median 31.02 (29.00 to 31.80)
+    head     median 30.91 (29.28 to 31.43)  over base +0.11% (-4.59% to +2.92%), 5 up 5 down of 10  not resolved
+    old      median 31.14 (30.33 to 31.52)  over base +1.41% (-2.94% to +8.17%), 7 up 3 down of 10  not resolved
+    base2    median 31.02 (30.82 to 31.85)
+    head over old      -0.72% (-6.66% to +3.63%), 4 up 6 down of 10  not resolved
+
+  d64 quiet: cycles a request; noise bar 4.35% (base2 over base -0.18% (-1.80% to +4.35%), 5 up 5 down of 10)
+    base     median 88087 (86096 to 89847)
+    head     median 88182 (85088 to 89033)  over base +0.15% (-3.53% to +2.10%), 5 up 5 down of 10  not resolved
+    old      median 88662 (86899 to 89797)  over base +1.20% (-2.10% to +3.01%), 7 up 3 down of 10  not resolved
+    base2    median 88240 (87810 to 89840)
+    head over old      -0.38% (-5.20% to +2.46%), 5 up 5 down of 10  not resolved
+
+  d64 quiet: instructions a request; noise bar 4.44% (base2 over base +0.01% (-4.44% to +0.41%), 5 up 4 down of 10)
+    base     median 44390 (44212 to 46391)
+    head     median 44383 (44317 to 46788)  over base +0.02% (-0.26% to +0.86%), 7 up 2 down of 10  not resolved
+    old      median 44391 (44274 to 44567)  over base -0.03% (-4.56% to +0.80%), 4 up 6 down of 10  not resolved
+    base2    median 44382 (44324 to 44547)
+    head over old      -0.04% (-0.48% to +5.68%), 5 up 5 down of 10  not resolved
+
+  d64 wait: requests a second; noise bar 6.64% (base2 over base +0.88% (-3.48% to +6.64%), 8 up 2 down of 10)
+    base     median 369984 (360709 to 385901)
+    head     median 370186 (342008 to 380346)  over base -0.66% (-5.34% to +2.55%), 4 up 6 down of 10  not resolved
+    old      median 370793 (357176 to 392134)  over base +0.53% (-6.28% to +7.93%), 6 up 4 down of 10  not resolved
+    base2    median 374208 (365505 to 386487)
+    head over old      -0.72% (-9.56% to +6.49%), 5 up 5 down of 10  not resolved
+
+  d64 wait: p50 ms; noise bar 8.33% (base2 over base +0.31% (-1.89% to +8.33%), 5 up 4 down of 10)
+    base     median 0.159 (0.144 to 0.163)
+    head     median 0.163 (0.154 to 0.166)  over base +2.21% (+0.00% to +6.94%), 9 up 0 down of 10  not resolved
+    old      median 0.163 (0.155 to 0.165)  over base +1.57% (-3.73% to +12.50%), 7 up 3 down of 10  not resolved
+    base2    median 0.160 (0.156 to 0.164)
+    head over old      -0.30% (-4.94% to +4.52%), 4 up 5 down of 10  not resolved
+
+  d64 wait: p99 ms; noise bar 58.44% (base2 over base -16.72% (-58.44% to +32.51%), 3 up 7 down of 10)
+    base     median 0.471 (0.323 to 0.900)
+    head     median 0.359 (0.341 to 0.953)  over base -13.09% (-48.57% to +43.03%), 3 up 7 down of 10  not resolved
+    old      median 0.388 (0.331 to 0.662)  over base -8.17% (-62.78% to +71.19%), 5 up 5 down of 10  not resolved
+    base2    median 0.370 (0.330 to 0.564)
+    head over old      +1.06% (-45.32% to +184.48%), 5 up 5 down of 10  not resolved
+
+  d64 wait: CPU us a request; noise bar 13.06% (base2 over base +0.43% (-1.56% to +13.06%), 5 up 5 down of 10)
+    base     median 31.13 (27.48 to 31.66)
+    head     median 31.13 (29.19 to 31.91)  over base +0.86% (-2.15% to +6.22%), 7 up 3 down of 10  not resolved
+    old      median 31.30 (30.41 to 31.79)  over base +0.65% (-3.95% to +15.36%), 7 up 3 down of 10  not resolved
+    base2    median 31.05 (30.82 to 31.60)
+    head over old      -0.57% (-7.92% to +4.93%), 4 up 6 down of 10  not resolved
+
+  d64 wait: cycles a request; noise bar 5.14% (base2 over base +0.22% (-1.31% to +5.14%), 6 up 4 down of 10)
+    base     median 88510 (83957 to 89790)
+    head     median 88911 (86261 to 89953)  over base +0.62% (-0.91% to +2.74%), 7 up 3 down of 10  not resolved
+    old      median 89120 (87591 to 89808)  over base +0.95% (-2.45% to +6.75%), 6 up 4 down of 10  not resolved
+    base2    median 88461 (87885 to 89176)
+    head over old      -0.48% (-3.75% to +2.70%), 4 up 6 down of 10  not resolved
+
+  d64 wait: instructions a request; noise bar 6.92% (base2 over base -0.14% (-6.92% to +0.19%), 3 up 7 down of 10)
+    base     median 44366 (44249 to 47565)
+    head     median 44436 (44286 to 46196)  over base +0.07% (-2.88% to +0.55%), 5 up 5 down of 10  not resolved
+    old      median 44395 (44352 to 44571)  over base +0.22% (-6.75% to +0.40%), 7 up 3 down of 10  not resolved
+    base2    median 44312 (44210 to 44416)
+    head over old      -0.02% (-0.54% to +4.15%), 5 up 5 down of 10  not resolved
+
+  d64 wait over quiet: requests a second; noise bar of the excess 13.00%
+    base     wait/quiet +0.05% (-4.44% to +7.23%), 5 up 5 down of 10
+    head     wait/quiet -2.23% (-10.78% to +4.64%), 3 up 7 down of 10   excess over base -1.95% (-7.92% to +4.67%), 2 up 8 down of 10  not resolved
+    old      wait/quiet -3.12% (-6.64% to +10.98%), 2 up 8 down of 10   excess over base -1.64% (-12.93% to +13.97%), 2 up 8 down of 10  not resolved
+    base2    wait/quiet -0.85% (-4.22% to +7.98%), 4 up 6 down of 10
+
+  d64 wait over quiet: p50 ms; noise bar of the excess 3.80%
+    base     wait/quiet -0.93% (-1.85% to +1.90%), 4 up 6 down of 10
+    head     wait/quiet +3.49% (+0.00% to +5.73%), 9 up 0 down of 10   excess over base +3.79% (-1.86% to +6.94%), 8 up 2 down of 10  not resolved
+    old      wait/quiet +1.56% (-4.91% to +5.81%), 7 up 3 down of 10   excess over base +2.84% (-3.73% to +5.97%), 6 up 4 down of 10  not resolved
+    base2    wait/quiet +0.63% (-2.47% to +2.50%), 7 up 3 down of 10
+
+  d64 wait over quiet: p99 ms; noise bar of the excess 143.87%
+    base     wait/quiet +0.13% (-50.34% to +102.75%), 5 up 5 down of 10
+    head     wait/quiet -5.56% (-46.61% to +43.48%), 5 up 5 down of 10   excess over base -6.93% (-53.65% to +65.27%), 4 up 6 down of 10  not resolved
+    old      wait/quiet +6.61% (-52.57% to +100.61%), 7 up 3 down of 10   excess over base +16.85% (-73.82% to +279.44%), 7 up 3 down of 10  not resolved
+    base2    wait/quiet +4.14% (-48.36% to +68.86%), 6 up 4 down of 10
+
+  d64 wait over quiet: CPU us a request; noise bar of the excess 2.95%
+    base     wait/quiet +0.56% (-5.24% to +3.91%), 7 up 3 down of 10
+    head     wait/quiet +1.56% (-1.59% to +5.42%), 6 up 3 down of 10   excess over base +1.27% (-2.71% to +5.22%), 7 up 3 down of 10  not resolved
+    old      wait/quiet -0.33% (-1.74% to +4.81%), 4 up 6 down of 10   excess over base -0.26% (-5.44% to +6.64%), 5 up 5 down of 10  not resolved
+    base2    wait/quiet +0.05% (-2.45% to +1.84%), 5 up 3 down of 10
+
+  d64 wait over quiet: cycles a request; noise bar of the excess 2.76%
+    base     wait/quiet +0.34% (-2.48% to +3.04%), 6 up 4 down of 10
+    head     wait/quiet +0.84% (-1.25% to +4.45%), 8 up 2 down of 10   excess over base +0.70% (-1.88% to +4.60%), 7 up 3 down of 10  not resolved
+    old      wait/quiet +0.11% (-0.89% to +3.35%), 6 up 4 down of 10   excess over base -0.07% (-3.62% to +3.63%), 5 up 5 down of 10  not resolved
+    base2    wait/quiet +0.03% (-1.74% to +1.31%), 5 up 5 down of 10
+
+  d64 wait over quiet: instructions a request; noise bar of the excess 2.60%
+    base     wait/quiet +0.06% (-0.51% to +2.53%), 6 up 4 down of 10
+    head     wait/quiet +0.08% (-1.27% to +0.44%), 6 up 4 down of 10   excess over base -0.12% (-3.70% to +0.81%), 4 up 6 down of 10  not resolved
+    old      wait/quiet -0.02% (-0.19% to +0.48%), 4 up 6 down of 10   excess over base -0.03% (-2.29% to +0.58%), 4 up 6 down of 10  not resolved
+    base2    wait/quiet -0.16% (-0.57% to +0.20%), 2 up 8 down of 10
+
+================ d1024: 10 rounds, 80 runs, 0 failed, threads 31
+
+  d1024 quiet: requests a second; noise bar 3.31% (base2 over base +1.58% (-2.89% to +3.31%), 7 up 3 down of 10)
+    base     median 871652 (863792 to 891745)
+    head     median 878176 (867796 to 893915)  over base +0.72% (-1.50% to +3.49%), 6 up 4 down of 10  not resolved
+    old      median 882500 (868587 to 890289)  over base +0.77% (-0.16% to +2.39%), 9 up 1 down of 10  not resolved
+    base2    median 885285 (865939 to 896407)
+    head over old      -0.68% (-1.59% to +2.10%), 3 up 7 down of 10  not resolved
+
+  d1024 quiet: p50 ms; noise bar 3.81% (base2 over base -1.85% (-3.70% to +3.81%), 1 up 8 down of 10)
+    base     median 1.080 (1.050 to 1.090)
+    head     median 1.070 (1.050 to 1.080)  over base -0.93% (-3.67% to +1.90%), 2 up 6 down of 10  not resolved
+    old      median 1.060 (1.050 to 1.080)  over base -0.93% (-2.78% to +0.95%), 1 up 8 down of 10  not resolved
+    base2    median 1.060 (1.040 to 1.090)
+    head over old      +0.94% (-1.87% to +1.90%), 7 up 3 down of 10  not resolved
+
+  d1024 quiet: p99 ms; noise bar 4.70% (base2 over base -2.04% (-4.70% to +3.85%), 3 up 7 down of 10)
+    base     median 2.945 (2.860 to 2.980)
+    head     median 2.910 (2.850 to 2.950)  over base -0.85% (-3.39% to +1.40%), 2 up 6 down of 10  not resolved
+    old      median 2.905 (2.850 to 2.950)  over base -0.85% (-3.38% to +0.68%), 1 up 8 down of 10  not resolved
+    base2    median 2.890 (2.840 to 2.970)
+    head over old      +0.17% (-2.40% to +2.10%), 5 up 4 down of 10  not resolved
+
+  d1024 quiet: CPU us a request; noise bar 3.17% (base2 over base -1.41% (-3.17% to +2.67%), 3 up 7 down of 10)
+    base     median 27.53 (26.93 to 27.87)
+    head     median 27.34 (26.91 to 27.72)  over base -0.51% (-3.44% to +1.56%), 4 up 6 down of 10  not resolved
+    old      median 27.19 (27.00 to 27.70)  over base -0.82% (-2.13% to +0.26%), 3 up 7 down of 10  not resolved
+    base2    median 27.16 (26.80 to 27.65)
+    head over old      +0.77% (-1.97% to +2.06%), 7 up 3 down of 10  not resolved
+
+  d1024 quiet: cycles a request; noise bar 2.88% (base2 over base -1.04% (-2.88% to +1.89%), 3 up 7 down of 10)
+    base     median 80268 (78787 to 81139)
+    head     median 79800 (78733 to 80604)  over base -0.29% (-2.97% to +1.21%), 4 up 6 down of 10  not resolved
+    old      median 79430 (78858 to 80558)  over base -0.45% (-2.13% to +0.23%), 3 up 7 down of 10  not resolved
+    base2    median 79298 (78336 to 80274)
+    head over old      +0.43% (-1.08% to +1.59%), 7 up 3 down of 10  not resolved
+
+  d1024 quiet: instructions a request; noise bar 0.18% (base2 over base +0.00% (-0.18% to +0.16%), 5 up 5 down of 10)
+    base     median 40660 (40615 to 40726)
+    head     median 40694 (40631 to 40709)  over base +0.08% (-0.14% to +0.21%), 8 up 2 down of 10  not resolved
+    old      median 40659 (40595 to 40724)  over base -0.02% (-0.15% to +0.16%), 3 up 7 down of 10  not resolved
+    base2    median 40656 (40597 to 40697)
+    head over old      +0.08% (-0.12% to +0.24%), 7 up 3 down of 10  not resolved
+
+  d1024 wait: requests a second; noise bar 4.22% (base2 over base +0.13% (-3.19% to +4.22%), 6 up 4 down of 10)
+    base     median 872300 (845866 to 885714)
+    head     median 869519 (867793 to 884418)  over base -0.28% (-1.41% to +2.88%), 3 up 7 down of 10  not resolved
+    old      median 877888 (860941 to 890376)  over base +0.45% (-2.80% to +3.81%), 7 up 3 down of 10  not resolved
+    base2    median 871615 (857429 to 892394)
+    head over old      -0.84% (-2.54% to +1.43%), 3 up 7 down of 10  not resolved
+
+  d1024 wait: p50 ms; noise bar 4.50% (base2 over base -0.46% (-4.50% to +3.77%), 3 up 5 down of 10)
+    base     median 1.080 (1.060 to 1.110)
+    head     median 1.080 (1.060 to 1.090)  over base +0.00% (-2.70% to +1.89%), 3 up 2 down of 10  not resolved
+    old      median 1.070 (1.050 to 1.090)  over base -0.92% (-3.60% to +2.83%), 2 up 6 down of 10  not resolved
+    base2    median 1.075 (1.050 to 1.100)
+    head over old      +0.93% (-0.93% to +2.86%), 7 up 2 down of 10  not resolved
+
+  d1024 wait: p99 ms; noise bar 3.92% (base2 over base -0.51% (-3.92% to +3.79%), 4 up 6 down of 10)
+    base     median 2.935 (2.900 to 3.060)
+    head     median 2.945 (2.910 to 2.970)  over base +0.17% (-3.27% to +1.72%), 5 up 3 down of 10  not resolved
+    old      median 2.925 (2.890 to 2.980)  over base -0.34% (-3.92% to +2.76%), 4 up 5 down of 10  not resolved
+    base2    median 2.940 (2.860 to 3.010)
+    head over old      +0.68% (-1.68% to +2.77%), 7 up 3 down of 10  not resolved
+
+  d1024 wait: CPU us a request; noise bar 4.60% (base2 over base -0.20% (-4.60% to +3.17%), 4 up 6 down of 10)
+    base     median 27.53 (27.11 to 28.49)
+    head     median 27.63 (27.14 to 27.73)  over base +0.27% (-3.05% to +1.40%), 7 up 3 down of 10  not resolved
+    old      median 27.34 (26.95 to 27.97)  over base -0.62% (-4.14% to +3.17%), 3 up 7 down of 10  not resolved
+    base2    median 27.52 (26.91 to 27.97)
+    head over old      +0.95% (-1.72% to +2.45%), 7 up 3 down of 10  not resolved
+
+  d1024 wait: cycles a request; noise bar 4.79% (base2 over base -0.12% (-4.79% to +2.77%), 5 up 5 down of 10)
+    base     median 80219 (79138 to 82865)
+    head     median 80570 (79451 to 81046)  over base +0.29% (-2.77% to +1.30%), 8 up 2 down of 10  not resolved
+    old      median 79835 (78772 to 81336)  over base -0.56% (-3.98% to +2.78%), 3 up 7 down of 10  not resolved
+    base2    median 80119 (78736 to 81511)
+    head over old      +0.81% (-1.43% to +2.40%), 7 up 3 down of 10  not resolved
+
+  d1024 wait: instructions a request; noise bar 0.25% (base2 over base -0.00% (-0.25% to +0.19%), 5 up 5 down of 10)
+    base     median 40679 (40625 to 40775)
+    head     median 40696 (40611 to 40737)  over base +0.01% (-0.14% to +0.23%), 7 up 3 down of 10  not resolved
+    old      median 40683 (40633 to 40766)  over base -0.00% (-0.25% to +0.31%), 4 up 6 down of 10  not resolved
+    base2    median 40684 (40607 to 40731)
+    head over old      +0.03% (-0.35% to +0.23%), 7 up 3 down of 10  not resolved
+
+  d1024 wait over quiet: requests a second; noise bar of the excess 4.22%
+    base     wait/quiet +0.20% (-2.57% to +1.11%), 6 up 4 down of 10
+    head     wait/quiet -0.84% (-2.89% to +0.72%), 2 up 8 down of 10   excess over base -0.89% (-3.11% to +1.71%), 4 up 6 down of 10  not resolved
+    old      wait/quiet -0.58% (-2.52% to +0.54%), 4 up 6 down of 10   excess over base -0.17% (-3.57% to +1.56%), 4 up 6 down of 10  not resolved
+    base2    wait/quiet -0.86% (-3.18% to +1.22%), 3 up 7 down of 10
+
+  d1024 wait over quiet: p50 ms; noise bar of the excess 4.75%
+    base     wait/quiet +0.00% (-1.83% to +2.86%), 2 up 3 down of 10
+    head     wait/quiet +0.93% (-0.93% to +3.81%), 7 up 1 down of 10   excess over base +0.93% (-1.87% to +3.81%), 6 up 3 down of 10  not resolved
+    old      wait/quiet +0.00% (-0.93% to +2.83%), 4 up 1 down of 10   excess over base +0.00% (-2.78% to +3.80%), 4 up 2 down of 10  not resolved
+    base2    wait/quiet +0.94% (-0.94% to +3.81%), 6 up 2 down of 10
+
+  d1024 wait over quiet: p99 ms; noise bar of the excess 5.95%
+    base     wait/quiet +0.17% (-1.69% to +3.38%), 5 up 3 down of 10
+    head     wait/quiet +1.03% (-0.34% to +3.51%), 7 up 2 down of 10   excess over base +0.86% (-1.94% to +3.16%), 7 up 2 down of 10  not resolved
+    old      wait/quiet +0.52% (-1.36% to +2.80%), 7 up 2 down of 10   excess over base +0.68% (-1.36% to +4.17%), 7 up 3 down of 10  not resolved
+    base2    wait/quiet +1.39% (-1.70% to +4.15%), 7 up 3 down of 10
+
+  d1024 wait over quiet: CPU us a request; noise bar of the excess 3.78%
+    base     wait/quiet -0.13% (-0.80% to +2.78%), 4 up 6 down of 10
+    head     wait/quiet +0.95% (-1.02% to +2.97%), 8 up 2 down of 10   excess over base +0.62% (-1.67% to +3.46%), 6 up 4 down of 10  not resolved
+    old      wait/quiet +0.66% (-1.01% to +2.64%), 6 up 3 down of 10   excess over base +0.18% (-2.06% to +3.48%), 5 up 5 down of 10  not resolved
+    base2    wait/quiet +0.83% (-1.10% to +2.95%), 8 up 2 down of 10
+
+  d1024 wait over quiet: cycles a request; noise bar of the excess 3.29%
+    base     wait/quiet -0.25% (-0.75% to +2.60%), 4 up 6 down of 10
+    head     wait/quiet +0.79% (-0.43% to +2.46%), 9 up 1 down of 10   excess over base +0.48% (-1.60% to +3.20%), 7 up 3 down of 10  not resolved
+    old      wait/quiet +0.50% (-0.80% to +2.43%), 7 up 3 down of 10   excess over base +0.20% (-1.89% to +3.21%), 6 up 4 down of 10  not resolved
+    base2    wait/quiet +0.72% (-1.11% to +2.85%), 7 up 3 down of 10
+
+  d1024 wait over quiet: instructions a request; noise bar of the excess 0.26%
+    base     wait/quiet +0.04% (-0.12% to +0.22%), 6 up 4 down of 10
+    head     wait/quiet +0.05% (-0.21% to +0.21%), 7 up 3 down of 10   excess over base -0.01% (-0.18% to +0.20%), 4 up 6 down of 10  not resolved
+    old      wait/quiet +0.05% (-0.11% to +0.37%), 6 up 4 down of 10   excess over base -0.03% (-0.23% to +0.36%), 4 up 6 down of 10  not resolved
+    base2    wait/quiet +0.06% (-0.22% to +0.33%), 7 up 3 down of 10
+
+================ em: 10 rounds, 80 runs, 0 failed, threads 31
+
+  em none: requests a second; noise bar 2.37% (base2 over base -0.72% (-2.37% to +1.69%), 2 up 8 down of 10)
+    base     median 33856 (33377 to 34196)
+    head     median 33592 (33129 to 34213)  over base -0.91% (-2.01% to +0.69%), 4 up 6 down of 10  not resolved
+    old      median 33710 (32882 to 33956)  over base -0.54% (-2.50% to +0.90%), 1 up 9 down of 10  not resolved
+    base2    median 33535 (33193 to 34139)
+    head over old      -0.11% (-1.32% to +2.76%), 5 up 5 down of 10  not resolved
+
+  em none: p50 ms; noise bar 0.00% (base2 over base +0.00% (+0.00% to +0.00%), 0 up 0 down of 10)
+    base     median 0.028 (0.028 to 0.028)
+    head     median 0.028 (0.028 to 0.028)  over base +0.00% (+0.00% to +0.00%), 0 up 0 down of 10  not resolved
+    old      median 0.028 (0.028 to 0.028)  over base +0.00% (+0.00% to +0.00%), 0 up 0 down of 10  not resolved
+    base2    median 0.028 (0.028 to 0.028)
+    head over old      +0.00% (+0.00% to +0.00%), 0 up 0 down of 10  not resolved
+
+  em none: p99 ms; noise bar 4.55% (base2 over base +2.22% (-2.17% to +4.55%), 6 up 2 down of 10)
+    base     median 0.045 (0.044 to 0.046)
+    head     median 0.045 (0.044 to 0.046)  over base +0.00% (-2.17% to +2.27%), 3 up 1 down of 10  not resolved
+    old      median 0.045 (0.042 to 0.048)  over base +1.11% (-4.55% to +6.67%), 5 up 3 down of 10  not resolved
+    base2    median 0.045 (0.045 to 0.047)
+    head over old      +0.00% (-6.25% to +7.14%), 2 up 3 down of 10  not resolved
+
+  em none: CPU us a request; noise bar 3.85% (base2 over base +1.29% (-1.81% to +3.85%), 8 up 2 down of 10)
+    base     median 18.57 (18.20 to 18.83)
+    head     median 18.77 (18.35 to 19.07)  over base +1.23% (-0.97% to +2.75%), 7 up 1 down of 10  not resolved
+    old      median 18.66 (18.51 to 19.21)  over base +0.92% (-0.85% to +3.28%), 8 up 2 down of 10  not resolved
+    base2    median 18.83 (18.31 to 19.09)
+    head over old      +0.24% (-3.18% to +2.26%), 6 up 4 down of 10  not resolved
+
+  em idle3: requests a second; noise bar 2.31% (base2 over base -0.43% (-2.31% to +1.24%), 4 up 6 down of 10)
+    base     median 33889 (33476 to 34308)
+    head     median 33616 (33153 to 33834)  over base -1.10% (-1.75% to +0.49%), 1 up 9 down of 10  not resolved
+    old      median 33343 (32921 to 33785)  over base -1.53% (-2.66% to +0.14%), 1 up 9 down of 10  not resolved
+    base2    median 33720 (33207 to 34071)
+    head over old      +0.43% (-0.49% to +1.51%), 8 up 2 down of 10  not resolved
+
+  em idle3: p50 ms; noise bar 3.70% (base2 over base +0.00% (+0.00% to +3.70%), 1 up 0 down of 10)
+    base     median 0.028 (0.027 to 0.028)
+    head     median 0.028 (0.028 to 0.028)  over base +0.00% (+0.00% to +3.70%), 1 up 0 down of 10  not resolved
+    old      median 0.028 (0.028 to 0.028)  over base +0.00% (+0.00% to +3.70%), 1 up 0 down of 10  not resolved
+    base2    median 0.028 (0.028 to 0.028)
+    head over old      +0.00% (+0.00% to +0.00%), 0 up 0 down of 10  not resolved
+
+  em idle3: p99 ms; noise bar 2.27% (base2 over base +1.11% (+0.00% to +2.27%), 5 up 0 down of 10)
+    base     median 0.045 (0.044 to 0.045)
+    head     median 0.045 (0.044 to 0.046)  over base +2.22% (+0.00% to +2.27%), 6 up 0 down of 10  not resolved
+    old      median 0.045 (0.045 to 0.046)  over base +2.22% (+0.00% to +4.55%), 7 up 0 down of 10  not resolved
+    base2    median 0.045 (0.045 to 0.046)
+    head over old      +0.00% (-2.22% to +2.22%), 1 up 3 down of 10  not resolved
+
+  em idle3: CPU us a request; noise bar 2.07% (base2 over base +0.19% (-2.01% to +2.07%), 6 up 4 down of 10)
+    base     median 18.59 (18.32 to 18.90)
+    head     median 19.26 (19.14 to 19.60)  over base +3.96% (+1.38% to +5.46%), 10 up 0 down of 10  RESOLVED
+    old      median 19.30 (19.03 to 19.79)  over base +3.96% (+1.90% to +6.34%), 10 up 0 down of 10  RESOLVED
+    base2    median 18.64 (18.42 to 18.85)
+    head over old      -0.16% (-0.96% to +0.72%), 5 up 5 down of 10  not resolved
+
+  em idle3 over none: requests a second; noise bar of the excess 2.51%
+    base     idle3/none +0.13% (-1.00% to +0.83%), 5 up 5 down of 10
+    head     idle3/none -0.25% (-1.87% to +1.31%), 4 up 6 down of 10   excess over base -0.29% (-1.67% to +1.58%), 3 up 7 down of 10  not resolved
+    old      idle3/none -0.89% (-2.59% to +1.95%), 2 up 8 down of 10   excess over base -0.92% (-2.48% to +2.70%), 4 up 6 down of 10  not resolved
+    base2    idle3/none +0.59% (-2.16% to +1.61%), 8 up 2 down of 10
+
+  em idle3 over none: p50 ms; noise bar of the excess 3.70%
+    base     idle3/none +0.00% (-3.57% to +0.00%), 0 up 1 down of 10
+    head     idle3/none +0.00% (+0.00% to +0.00%), 0 up 0 down of 10   excess over base +0.00% (+0.00% to +3.70%), 1 up 0 down of 10  not resolved
+    old      idle3/none +0.00% (+0.00% to +0.00%), 0 up 0 down of 10   excess over base +0.00% (+0.00% to +3.70%), 1 up 0 down of 10  not resolved
+    base2    idle3/none +0.00% (+0.00% to +0.00%), 0 up 0 down of 10
+
+  em idle3 over none: p99 ms; noise bar of the excess 4.49%
+    base     idle3/none +0.00% (-2.22% to +0.00%), 0 up 3 down of 10
+    head     idle3/none +0.00% (-2.22% to +2.27%), 4 up 3 down of 10   excess over base +0.02% (-2.22% to +4.49%), 5 up 1 down of 10  not resolved
+    old      idle3/none +0.00% (-6.25% to +7.14%), 4 up 3 down of 10   excess over base +0.02% (-6.25% to +7.14%), 5 up 1 down of 10  not resolved
+    base2    idle3/none +0.00% (-4.26% to +2.22%), 1 up 4 down of 10
+
+  em idle3 over none: CPU us a request; noise bar of the excess 3.57%
+    base     idle3/none +0.16% (-1.29% to +1.61%), 6 up 4 down of 10
+    head     idle3/none +3.17% (+0.63% to +5.01%), 10 up 0 down of 10   excess over base +2.64% (+0.91% to +4.13%), 10 up 0 down of 10  not resolved
+    old      idle3/none +3.35% (+0.26% to +6.06%), 10 up 0 down of 10   excess over base +3.17% (-1.33% to +5.94%), 9 up 1 down of 10  not resolved
+    base2    idle3/none -0.63% (-2.01% to +1.95%), 2 up 8 down of 10
+
+================ es: 10 rounds, 80 runs, 0 failed, threads 5
+
+  es none: requests a second; noise bar 1.77% (base2 over base -0.30% (-1.77% to +1.44%), 4 up 6 down of 10)
+    base     median 34029 (33740 to 34432)
+    head     median 33780 (33344 to 34134)  over base -0.85% (-1.75% to +0.19%), 2 up 8 down of 10  not resolved
+    old      median 33769 (33560 to 34276)  over base -0.47% (-1.40% to +0.70%), 3 up 7 down of 10  not resolved
+    base2    median 33948 (33456 to 34354)
+    head over old      -0.26% (-2.23% to +1.11%), 4 up 6 down of 10  not resolved
+
+  es none: p50 ms; noise bar 3.70% (base2 over base +0.00% (-3.57% to +3.70%), 3 up 3 down of 10)
+    base     median 0.028 (0.027 to 0.028)
+    head     median 0.028 (0.027 to 0.028)  over base +0.00% (-3.57% to +3.70%), 2 up 1 down of 10  not resolved
+    old      median 0.028 (0.027 to 0.028)  over base +0.00% (+0.00% to +3.70%), 1 up 0 down of 10  not resolved
+    base2    median 0.028 (0.027 to 0.028)
+    head over old      +0.00% (-3.57% to +3.70%), 1 up 1 down of 10  not resolved
+
+  es none: p99 ms; noise bar 4.55% (base2 over base +0.00% (-2.22% to +4.55%), 4 up 1 down of 10)
+    base     median 0.045 (0.044 to 0.045)
+    head     median 0.045 (0.044 to 0.047)  over base +0.00% (+0.00% to +6.82%), 3 up 0 down of 10  not resolved
+    old      median 0.045 (0.044 to 0.046)  over base +0.00% (-2.22% to +2.27%), 4 up 1 down of 10  not resolved
+    base2    median 0.045 (0.044 to 0.047)
+    head over old      +0.00% (-2.22% to +4.44%), 4 up 3 down of 10  not resolved
+
+  es none: CPU us a request; noise bar 3.41% (base2 over base +0.00% (-2.40% to +3.41%), 5 up 5 down of 10)
+    base     median 18.20 (17.91 to 18.44)
+    head     median 18.30 (18.16 to 18.67)  over base +1.19% (-1.14% to +2.71%), 7 up 3 down of 10  not resolved
+    old      median 18.30 (18.03 to 18.58)  over base +0.55% (-0.81% to +1.93%), 6 up 4 down of 10  not resolved
+    base2    median 18.17 (17.88 to 18.53)
+    head over old      +0.49% (-1.94% to +2.53%), 6 up 4 down of 10  not resolved
+
+  es idle3: requests a second; noise bar 2.42% (base2 over base +0.63% (-0.93% to +2.42%), 8 up 2 down of 10)
+    base     median 33912 (33194 to 34281)
+    head     median 33389 (33154 to 33831)  over base -1.45% (-2.15% to +0.57%), 1 up 9 down of 10  not resolved
+    old      median 33621 (32681 to 34199)  over base -0.49% (-3.39% to +0.58%), 1 up 9 down of 10  not resolved
+    base2    median 34076 (33741 to 34497)
+    head over old      -0.42% (-1.37% to +1.45%), 2 up 8 down of 10  not resolved
+
+  es idle3: p50 ms; noise bar 3.70% (base2 over base +0.00% (-3.57% to +3.70%), 1 up 4 down of 10)
+    base     median 0.028 (0.027 to 0.028)
+    head     median 0.028 (0.028 to 0.028)  over base +0.00% (+0.00% to +3.70%), 2 up 0 down of 10  not resolved
+    old      median 0.028 (0.028 to 0.028)  over base +0.00% (+0.00% to +3.70%), 2 up 0 down of 10  not resolved
+    base2    median 0.028 (0.027 to 0.028)
+    head over old      +0.00% (+0.00% to +0.00%), 0 up 0 down of 10  not resolved
+
+  es idle3: p99 ms; noise bar 2.27% (base2 over base +0.00% (-2.22% to +2.27%), 2 up 3 down of 10)
+    base     median 0.045 (0.044 to 0.046)
+    head     median 0.046 (0.045 to 0.046)  over base +2.22% (-2.17% to +4.55%), 7 up 1 down of 10  not resolved
+    old      median 0.045 (0.045 to 0.047)  over base +2.22% (+0.00% to +4.44%), 6 up 0 down of 10  not resolved
+    base2    median 0.045 (0.044 to 0.046)
+    head over old      +0.00% (-2.17% to +2.22%), 2 up 2 down of 10  not resolved
+
+  es idle3: CPU us a request; noise bar 2.58% (base2 over base -0.88% (-2.58% to +0.33%), 4 up 6 down of 10)
+    base     median 18.24 (17.99 to 18.61)
+    head     median 19.02 (18.78 to 19.27)  over base +4.32% (+2.47% to +5.10%), 10 up 0 down of 10  RESOLVED
+    old      median 18.86 (18.55 to 19.22)  over base +3.71% (+1.88% to +4.74%), 10 up 0 down of 10  RESOLVED
+    base2    median 18.07 (17.92 to 18.33)
+    head over old      +0.69% (-0.36% to +2.50%), 9 up 1 down of 10  not resolved
+
+  es idle3 over none: requests a second; noise bar of the excess 3.97%
+    base     idle3/none -0.31% (-2.26% to +0.26%), 3 up 7 down of 10
+    head     idle3/none -1.01% (-1.67% to +0.21%), 2 up 8 down of 10   excess over base -0.63% (-1.47% to +1.34%), 2 up 8 down of 10  not resolved
+    old      idle3/none -0.68% (-3.17% to +0.42%), 2 up 8 down of 10   excess over base +0.20% (-3.42% to +1.10%), 6 up 4 down of 10  not resolved
+    base2    idle3/none +0.47% (-0.48% to +1.82%), 7 up 3 down of 10
+
+  es idle3 over none: p50 ms; noise bar of the excess 7.02%
+    base     idle3/none +0.00% (+0.00% to +3.70%), 2 up 0 down of 10
+    head     idle3/none +0.00% (+0.00% to +3.70%), 3 up 0 down of 10   excess over base +0.00% (-3.57% to +3.70%), 2 up 1 down of 10  not resolved
+    old      idle3/none +0.00% (+0.00% to +3.70%), 3 up 0 down of 10   excess over base +0.00% (-3.57% to +3.70%), 2 up 1 down of 10  not resolved
+    base2    idle3/none +0.00% (-3.57% to +3.70%), 2 up 3 down of 10
+
+  es idle3 over none: p99 ms; noise bar of the excess 6.43%
+    base     idle3/none +0.00% (-2.22% to +4.55%), 2 up 1 down of 10
+    head     idle3/none +2.22% (-4.26% to +2.27%), 6 up 1 down of 10   excess over base +2.22% (-6.38% to +4.55%), 6 up 2 down of 10  not resolved
+    old      idle3/none +1.11% (-2.17% to +4.55%), 5 up 1 down of 10   excess over base +0.02% (-2.22% to +4.44%), 5 up 1 down of 10  not resolved
+    base2    idle3/none -1.06% (-2.22% to +0.00%), 0 up 5 down of 10
+
+  es idle3 over none: CPU us a request; noise bar of the excess 3.05%
+    base     idle3/none +0.41% (-0.72% to +1.56%), 7 up 3 down of 10
+    head     idle3/none +3.78% (+2.73% to +4.61%), 10 up 0 down of 10   excess over base +3.29% (+2.30% to +4.63%), 10 up 0 down of 10  RESOLVED
+    old      idle3/none +3.22% (+1.72% to +4.74%), 10 up 0 down of 10   excess over base +2.57% (+0.56% to +4.74%), 10 up 0 down of 10  not resolved
+    base2    idle3/none -0.72% (-2.16% to +0.83%), 4 up 6 down of 10

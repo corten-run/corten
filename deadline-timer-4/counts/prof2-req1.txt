@@ -1,0 +1,37 @@
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                20010     20010     20010  20010 | 15.997, 15.997 | 1.000
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+sdelay1            23681     23681     23681  23681 | 14.000, 14.000 | 3.015
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                20016     20016     20016  20016 | 16.000, 16.000 | 1.000
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+sdelay1            23788     23788     23788  23788 | 14.000, 14.000 | 3.017
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                19988     19988     19988  19988 | 16.000, 16.000 | 1.000
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+sdelay1            23696     23696     23696  23696 | 14.000, 14.000 | 3.013
+== get, single-threaded: a = head, b = req1
+ b less a        a        b  function
+    +17.0      0.0     17.0  core::ptr::drop_glue::<..>
+     +6.0     15.0     21.0  core::ptr::drop_glue::<..>
+     +4.0    341.0    345.0  corten::page::run::<corten::page::within_deadline<..>::{closure#0}, corten::page::errors_rendered<..>::{closur
+    -20.7                    (all others)
+     +6.3  20009.8  20016.1  total
+== sdelay1, single-threaded: a = head, b = req1
+ b less a        a        b  function
+    +82.0      0.0     82.0  core::ptr::drop_glue::<..>
+    +24.0    102.0    126.0  <..>::poll
+    +11.0     35.0     46.0  core::ptr::drop_glue::<..>
+    -11.0    565.0    554.0  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt:
+     +0.7                    (all others)
+   +106.7  23681.3  23787.9  total
+== get, single-threaded: a = head, b = soon2
+ b less a        a        b  function
+    -21.8                    (all others)
+    -21.8  20009.8  19988.0  total
+== sdelay1, single-threaded: a = head, b = soon2
+ b less a        a        b  function
+    +29.0    102.0    131.0  <..>::poll
+    -11.9    621.5    609.6  <..>::process_at_time
+     -2.8                    (all others)
+    +14.3  23681.3  23695.5  total

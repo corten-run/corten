@@ -1,0 +1,14 @@
+# q1 02:44:53 load 6.61 10 s, 1024 connections, /baseline11?a=1&b=2, order: base head
+q1.f1	base	251949.43	3.13ms	10.83ms	none
+q1.f1	head	253814.61	3.09ms	10.66ms	none
+q1.f2	base	248663.09	3.21ms	10.45ms	none
+q1.f2	head	273620.13	3.19ms	8.19ms	none
+q1.f3	base	257255.72	3.01ms	10.77ms	none
+q1.f3	head	255835.47	3.02ms	10.91ms	none
+q1.b1	head	255059.87	3.04ms	10.82ms	none
+q1.b1	base	251256.28	3.10ms	10.91ms	none
+q1.b2	head	269944.97	3.19ms	8.40ms	none
+q1.b2	base	264173.30	2.97ms	11.31ms	none
+q1.b3	head	255067.37	3.04ms	10.85ms	none
+q1.b3	base	258808.72	3.06ms	10.98ms	none
+# q1 DONE 02:47:06

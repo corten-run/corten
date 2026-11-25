@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""Instructions a request costs the server, counted by callgrind over keep-alive HTTP/1.1.
+
+After the benchmark app's measure/count.py, for the investigation's app (one port, 8080) and the
+cases a request's deadline can show in: staged GETs that do not wait, a staged GET that waits,
+and unstaged ones as controls.
+
+    ARENA_MODE=default python3 count2.py <server binary> [--reps 3] [--cases get,sdelay1]
+
+A count is two runs of the server under callgrind, one answering 240 requests and one 1,240, on
+one connection, each request sent after the answer before it: the difference over 1,000 leaves
+out startup and the connection's first requests.
+"""
+
+import argparse
+import os
+import re
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+PORT = 8080
+
+
+def get(path):
+    return b"GET " + path + b" HTTP/1.1\r\nHost: localhost:8080\r\n\r\n"
+
+
+CASES = {
+    # Staged, does not wait: typed query parameters in, a short String out.
+    "get": get(b"/baseline11?a=1&b=2"),
+    # Staged, the route of the handler that sleeps, asked to sleep 0 ms: it does not wait.
+    "sdelay0": get(b"/sdelay/0"),
+    # Staged, sleeps 1 ms: the deadline's timer is in use.
+    "sdelay1": get(b"/sdelay/1"),
+    # Unstaged (no deadline), sleeps 1 ms; and unstaged, does not wait.
+    "delay1": get(b"/delay/1"),
+    "pipeline": get(b"/pipeline"),
+}
+
+
+def read_answer(sock, buffered):
+    data = buffered
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(65536)
+        if not chunk:
+            raise SystemExit("the server closed the connection")
+        data += chunk
+    head, rest = data.split(b"\r\n\r\n", 1)
+    length = re.search(rb"(?im)^content-length:\s*(\d+)", head)
+    if length is None:
+        raise SystemExit("an answer without Content-Length:\n" + head.decode("latin-1"))
+    length = int(length.group(1))
+    while len(rest) < length:
+        chunk = sock.recv(65536)
+        if not chunk:
+            raise SystemExit("the server closed the connection")
+        rest += chunk
+    return head + b"\r\n\r\n" + rest[:length], rest[length:]
+
+
+def send(case, count, each_its_own=False):
+    """`count` requests, each after the answer before it: on one connection, or each on its own."""
+    request = CASES[case]
+    sock = None
+    for _ in range(count):
+        if sock is None:
+            sock = socket.create_connection(("127.0.0.1", PORT))
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.sendall(request)
+        got, _ = read_answer(sock, b"")
+        if not got.startswith(b"HTTP/1.1 200"):
+            raise SystemExit(case + " was answered:\n" + got[:400].decode("latin-1"))
+        if each_its_own:
+            sock.close()
+            sock = None
+    if sock is not None:
+        sock.close()
+
+
+def start(server, out):
+    env = dict(os.environ)
+    env["LD_PRELOAD"] = "libjemalloc.so.2"
+    env["MALLOC_CONF"] = "background_thread:false,tcache_max:65536"
+    command = ["taskset", "-c", "0", "valgrind", "--tool=callgrind", "--callgrind-out-file=" + out, server]
+    process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    for _ in range(600):
+        try:
+            socket.create_connection(("127.0.0.1", PORT), timeout=0.2).close()
+            return process
+        except OSError:
+            if process.poll() is not None:
+                raise SystemExit("the server stopped:\n" + process.stderr.read().decode())
+            time.sleep(0.1)
+    process.kill()
+    raise SystemExit("the server did not listen on 8080")
+
+
+def stop(process):
+    process.send_signal(signal.SIGTERM)
+    try:
+        err = process.communicate(timeout=120)[1].decode()
+    except subprocess.TimeoutExpired:
+        process.kill()
+        raise SystemExit("the server did not stop")
+    collected = re.search(r"Collected : (\d+)", err)
+    if collected is None:
+        raise SystemExit("no count in callgrind's output:\n" + err)
+    return int(collected.group(1))
+
+
+def run(server, case, count, each_its_own):
+    process = start(server, "/tmp/count.callgrind")
+    send(case, count, each_its_own)
+    return stop(process)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("server")
+    parser.add_argument("--reps", type=int, default=3)
+    parser.add_argument("--cases", default=",".join(CASES))
+    parser.add_argument("--each-its-own", action="store_true", help="a connection for each request")
+    args = parser.parse_args()
+    print(f"{'case':<14}{'median':>10}{'least':>10}{'most':>10}  runs", flush=True)
+    for case in args.cases.split(","):
+        each = []
+        for _ in range(args.reps):
+            few = run(args.server, case, 240, args.each_its_own)
+            many = run(args.server, case, 1240, args.each_its_own)
+            each.append((many - few) / 1000)
+        ordered = sorted(each)
+        median = ordered[len(ordered) // 2]
+        runs = " ".join(f"{one:.0f}" for one in each)
+        print(f"{case:<14}{median:>10.0f}{ordered[0]:>10.0f}{ordered[-1]:>10.0f}  {runs}", flush=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

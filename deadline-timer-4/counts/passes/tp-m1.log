@@ -1,0 +1,32 @@
+# m1 03:07:18 load 1.08 default, 10 s, one connection, other sent /sdelay/1, order: base head soon
+m1.f1	base	37339.13	25.00us	35.00us	none
+m1.f1	head	37176.83	25.00us	33.00us	none
+m1.f1	soon	37632.05	25.00us	32.00us	none
+m1.f2	base	37385.88	25.00us	32.00us	none
+m1.f2	head	37308.63	25.00us	32.00us	none
+m1.f2	soon	37935.67	25.00us	31.00us	none
+m1.f3	base	37504.79	25.00us	32.00us	none
+m1.f3	head	37017.62	26.00us	32.00us	none
+m1.f3	soon	37288.51	25.00us	34.00us	none
+m1.f4	base	36983.84	26.00us	32.00us	none
+m1.f4	head	37036.52	26.00us	32.00us	none
+m1.f4	soon	37055.66	26.00us	34.00us	none
+m1.f5	base	37080.39	25.00us	35.00us	none
+m1.f5	head	36825.80	26.00us	34.00us	none
+m1.f5	soon	37152.95	26.00us	32.00us	none
+m1.b1	soon	37439.60	25.00us	32.00us	none
+m1.b1	head	37327.90	25.00us	32.00us	none
+m1.b1	base	37062.13	26.00us	33.00us	none
+m1.b2	soon	37716.94	25.00us	32.00us	none
+m1.b2	head	37288.93	25.00us	32.00us	none
+m1.b2	base	37356.40	25.00us	33.00us	none
+m1.b3	soon	37603.40	25.00us	32.00us	none
+m1.b3	head	37075.37	25.00us	34.00us	none
+m1.b3	base	37525.67	25.00us	32.00us	none
+m1.b4	soon	37669.52	25.00us	32.00us	none
+m1.b4	head	35620.57	26.00us	38.00us	none
+m1.b4	base	36693.88	26.00us	35.00us	none
+m1.b5	soon	36724.04	26.00us	35.00us	none
+m1.b5	head	37255.23	26.00us	32.00us	none
+m1.b5	base	36939.99	26.00us	33.00us	none
+# m1 DONE 03:13:10

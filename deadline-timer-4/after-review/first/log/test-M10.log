@@ -1,0 +1,99 @@
+   Compiling corten-run v0.2.0 (/src/crates/corten)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.59s
+     Running unittests src/lib.rs (/target/debug/build/corten-run/03072fc088ecfe1b/out/corten-03072fc088ecfe1b)
+
+running 77 tests
+test app::tests::a_connection_has_the_longer_of_the_grace_and_its_requests_deadline ... ok
+test tests::layout::layout_reads::a_forwarded_write_uses_the_inner_layout_deadline_for_a_page_from_middleware ... ok
+test tests::layout::layout_reads::the_error_page_for_a_4xx_waits_no_later_than_the_deadline ... ok
+test tests::layout::layout_reads::a_page_middleware_makes_for_a_write_is_filled_within_the_deadline_and_its_failure_gets_the_error_page ... ok
+test tests::layout::layout_reads::a_write_forwarded_to_a_fallback_uses_an_earlier_inner_layout_deadline ... ok
+test form::upload::tests::a_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413 ... ok
+test form::upload::tests::a_chunked_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413 ... ok
+test form::upload::tests::a_body_read_past_its_limit_at_the_deadline_is_the_413 ... ok
+test tests::server::a_connect_answered_with_success_has_no_body ... ok
+test form::upload::tests::a_body_bytes_up_to_reads_past_at_the_deadline_is_the_clients_408 ... ok
+test tests::layout::layout_reads::copied_extensions_do_not_cap_an_independent_writes_layout_deadline ... ok
+test tests::layout::layout_reads::a_write_forwarded_to_a_fallback_without_a_deadline_can_time_out_in_the_outer_app ... ok
+test form::upload::tests::a_stalled_upload_at_the_default_deadline_is_the_clients_408 ... ok
+test tests::server::a_connection_polled_inside_anothers_poll_keeps_its_own_timer ... ok
+test tests::server::a_connection_polled_where_there_is_no_clock_makes_no_timer ... ok
+test form::upload::tests::the_deadline_is_the_servers_503_when_the_handler_is_not_waiting_for_the_body ... ok
+test tests::server::a_connection_whose_poll_panics_has_its_timer_back ... ok
+test tests::server::a_connect_answered_chunked_is_sent_without_transfer_encoding ... ok
+test tests::server::a_deadline_dropped_while_its_thread_ends_drops_its_connections_timer ... ok
+test tests::server::a_deadline_of_the_longest_duration_sets_the_connections_timer_30_years_off ... ok
+test tests::server::a_connect_answered_with_a_length_is_sent_without_it ... ok
+test tests::server::a_deadline_waits_on_its_connections_timer_from_the_third_that_waits ... ok
+test tests::server::a_deadline_polled_while_its_thread_ends_makes_its_own_timer ... ok
+test form::upload::tests::a_whole_body_read_past_its_limit_at_the_deadline_is_the_413 ... ok
+test tests::server::a_kept_timer_wakes_what_polled_it_last ... ok
+test tests::server::a_new_connection_polled_inside_anothers_poll_does_not_take_its_timer ... ok
+test tests::server::a_panic_in_finished_work_is_the_handlers ... ok
+test tests::server::a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts ... ok
+test tests::server::a_connection_done_where_its_second_deadline_waited_makes_no_timer ... ok
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... ok
+test tests::server::a_connection_draining_at_shutdown_makes_its_timer_as_before ... ok
+test tests::server::a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit ... ok
+test tests::server::a_runtime_with_no_clock_answers_500_and_goes_on_serving_the_connection ... ok
+test tests::server::a_server_dropped_without_a_shutdown_closes_its_connections ... ok
+test tests::layout::layout_reads::a_refused_write_draws_the_reads_and_a_slow_one_is_left_out_at_the_deadline ... ok
+test tests::server::a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runtime_has_shut_down ... ok
+test tests::app::a_route_in_an_area_meets_its_areas_deadline_body_limit_csp_and_middleware ... ok
+test tests::server::a_body_that_stalls_after_requests_that_waited_is_the_clients_408_at_its_own_deadline ... ok
+test tests::server::a_switched_connection_stops_counting_when_its_route_drops_the_socket ... ok
+test tests::server::a_taken_ipv6_loopback_port_is_an_error ... ok
+test tests::server::a_switched_connection_after_a_step_counts_against_max_connections ... ok
+test tests::server::a_tcp_connection_is_accepted_with_nagle_off ... ok
+test tests::server::a_switched_connection_counts_against_max_connections_until_it_closes ... ok
+test tests::server::a_timer_dropped_in_another_connections_poll_is_not_given_to_that_connection ... ok
+test tests::server::a_timer_whose_deadline_is_dropped_away_from_its_connection_is_dropped ... ok
+test tests::server::a_wrong_websocket_version_keeps_its_headers_in_an_apis_error_shape ... ok
+test tests::server::a_task_past_the_grace_is_ended_and_one_that_panics_ends_alone ... ok
+test tests::bodies::a_body_trickled_in_on_a_route_with_no_deadline_is_a_408 ... ok
+test tests::server::an_upgrade_without_a_switchable_connection_is_a_400_without_upgrade ... ok
+test tests::server::an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites ... ok
+test tests::server::a_request_head_is_held_only_as_large_as_the_app_allows ... ok
+test tests::api::an_area_or_an_api_sets_its_own_deadline ... ok
+test tests::server::how_late_a_deadlines_answer_is ... ignored
+test tests::server::a_switched_connection_is_held_to_the_send_timeout ... ok
+test tests::server::a_served_request_waits_on_its_connections_timer ... ok
+test tests::server::a_runtime_that_ends_drops_its_connections_timers ... ok
+test tests::server::shutdown_tells_the_tasks_and_waits_for_them ... ok
+test tests::server::the_client_ip_is_the_peer_or_what_a_trusted_proxy_forwards ... ok
+test tests::server::two_deadlines_in_one_poll_of_a_new_connection_do_not_take_another_connections_timer ... FAILED
+test tests::server::what_a_request_over_tcp_costs ... ignored
+test tests::server::without_a_connection_there_is_no_client_ip ... ok
+test tests::server::without_a_host_the_app_listens_on_both_loopback_addresses ... ok
+test tests::server::deadlines_on_four_threads_fire_and_none_before_its_limit ... ok
+test tests::server::a_request_served_on_another_runtime_inside_a_handler_has_its_deadline ... ok
+test tests::server::a_request_still_arriving_at_shutdown_has_its_own_deadline ... ok
+test tests::server::a_connection_is_held_only_as_long_and_as_many_as_the_app_allows ... ok
+test tests::server::shutdown_closes_connections_still_answering_once_the_grace_and_deadline_have_passed ... ok
+test tests::server::a_step_before_http_is_counted_and_timed_as_the_connection ... ok
+test tests::server::shutdown_holds_a_connection_whose_requests_waited_to_its_requests_deadline ... ok
+test tests::server::finished_work_releases_what_it_holds_when_the_handler_is_dropped ... ok
+test tests::server::shutdown_holds_a_connection_to_its_own_requests_deadline ... ok
+test tests::server::every_request_of_a_connection_has_its_own_deadline ... ok
+test tests::server::a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does_not ... ok
+test tests::server::a_connections_timer_is_made_once_and_dropped_with_the_connection ... ok
+test tests::server::a_thread_that_serves_one_runtime_after_another_holds_each_to_the_deadline ... ok
+test tests::server::a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_timeout ... ok
+test tests::server::an_answer_waits_for_its_client_only_as_long_as_the_app_allows ... ok
+
+failures:
+
+---- tests::server::two_deadlines_in_one_poll_of_a_new_connection_do_not_take_another_connections_timer stdout ----
+
+thread 'tests::server::two_deadlines_in_one_poll_of_a_new_connection_do_not_take_another_connections_timer' (432) panicked at crates/corten/src/tests/server.rs:2822:9:
+assertion `left == right` failed: both make their own in the inner connection's first poll
+  left: Some((false, true))
+ right: Some((false, false))
+
+
+failures:
+    tests::server::two_deadlines_in_one_poll_of_a_new_connection_do_not_take_another_connections_timer
+
+test result: FAILED. 74 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.52s
+
+error: test failed, to rerun pass `-p corten-run --lib`

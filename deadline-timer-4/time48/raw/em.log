@@ -1,0 +1,1120 @@
+### em r1 1 base none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.63us    4.63us 475.00us   95.44%
+    Req/Sec    34.16k   500.94    35.01k    71.29%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   30.00us
+     99%   45.00us
+  343108 requests in 10.10s, 127.61MB read
+Requests/sec:  33970.84
+Transfer/sec:     12.63MB
+### em r1 2 base idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.89us    3.79us 228.00us   94.19%
+    Req/Sec    33.80k   479.71    34.73k    69.31%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  339666 requests in 10.10s, 126.33MB read
+Requests/sec:  33632.78
+Transfer/sec:     12.51MB
+### em r1 3 head none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.80us    4.35us 293.00us   94.89%
+    Req/Sec    33.96k   461.23    35.05k    65.00%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  337865 requests in 10.00s, 125.66MB read
+Requests/sec:  33786.00
+Transfer/sec:     12.57MB
+### em r1 4 head idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.34us    4.09us 285.00us   93.04%
+    Req/Sec    33.33k   474.05    34.41k    64.36%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   32.00us
+     99%   46.00us
+  334835 requests in 10.10s, 124.54MB read
+Requests/sec:  33152.58
+Transfer/sec:     12.33MB
+### em r1 5 old none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.29us    4.82us 294.00us   94.31%
+    Req/Sec    33.40k   503.43    34.41k    70.30%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   32.00us
+     99%   46.00us
+  335456 requests in 10.10s, 124.77MB read
+Requests/sec:  33213.73
+Transfer/sec:     12.35MB
+### em r1 6 old idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.35us    4.43us 272.00us   93.71%
+    Req/Sec    33.33k   597.28    34.31k    68.32%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   32.00us
+     99%   46.00us
+  334781 requests in 10.10s, 124.52MB read
+Requests/sec:  33147.80
+Transfer/sec:     12.33MB
+### em r1 7 base2 none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.49us    4.43us 268.00us   94.65%
+    Req/Sec    34.33k   526.04    35.32k    74.26%
+  Latency Distribution
+     50%   28.00us
+     75%   28.00us
+     90%   30.00us
+     99%   45.00us
+  344797 requests in 10.10s, 128.24MB read
+Requests/sec:  34139.29
+Transfer/sec:     12.70MB
+### em r1 8 base2 idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.61us    5.36us 575.00us   95.41%
+    Req/Sec    34.23k   432.43    35.21k    65.35%
+  Latency Distribution
+     50%   28.00us
+     75%   28.00us
+     90%   30.00us
+     99%   45.00us
+  343871 requests in 10.10s, 127.90MB read
+Requests/sec:  34049.26
+Transfer/sec:     12.66MB
+### em r2 1 base2 idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.78us    4.10us 269.00us   93.01%
+    Req/Sec    33.94k   486.00    34.86k    74.26%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  340978 requests in 10.10s, 126.82MB read
+Requests/sec:  33762.33
+Transfer/sec:     12.56MB
+### em r2 2 base2 none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.13us    5.74us 614.00us   95.63%
+    Req/Sec    33.64k   658.95    34.64k    84.16%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  337835 requests in 10.10s, 125.65MB read
+Requests/sec:  33449.44
+Transfer/sec:     12.44MB
+### em r2 3 old idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.01us    4.26us 286.00us   95.04%
+    Req/Sec    33.70k   452.01    34.62k    68.32%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  338560 requests in 10.10s, 125.92MB read
+Requests/sec:  33522.69
+Transfer/sec:     12.47MB
+### em r2 4 old none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.62us    6.39us 720.00us   93.19%
+    Req/Sec    33.05k     2.25k   34.67k    91.09%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   33.00us
+     99%   48.00us
+  332103 requests in 10.10s, 123.52MB read
+Requests/sec:  32882.14
+Transfer/sec:     12.23MB
+### em r2 5 head idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.99us    6.91us 819.00us   96.03%
+    Req/Sec    33.82k   399.61    34.73k    71.29%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  339758 requests in 10.10s, 126.37MB read
+Requests/sec:  33640.19
+Transfer/sec:     12.51MB
+### em r2 6 head none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.76us    3.80us 245.00us   94.20%
+    Req/Sec    33.98k   461.56    34.84k    71.29%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  341247 requests in 10.10s, 126.92MB read
+Requests/sec:  33789.53
+Transfer/sec:     12.57MB
+### em r2 7 base idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.07us    4.15us 245.00us   94.66%
+    Req/Sec    33.65k   498.56    34.40k    72.28%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  338084 requests in 10.10s, 125.74MB read
+Requests/sec:  33476.46
+Transfer/sec:     12.45MB
+### em r2 8 base none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.86us    4.62us 268.00us   93.29%
+    Req/Sec    33.92k   697.84    35.13k    72.00%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   32.00us
+     99%   45.00us
+  337253 requests in 10.00s, 125.44MB read
+Requests/sec:  33724.90
+Transfer/sec:     12.54MB
+### em r3 1 base none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.61us    3.82us 252.00us   94.16%
+    Req/Sec    34.16k   415.91    35.14k    66.34%
+  Latency Distribution
+     50%   28.00us
+     75%   28.00us
+     90%   30.00us
+     99%   45.00us
+  343158 requests in 10.10s, 127.63MB read
+Requests/sec:  33977.28
+Transfer/sec:     12.64MB
+### em r3 2 base idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.75us   10.45us   1.41ms   97.96%
+    Req/Sec    34.14k   494.05    35.07k    72.28%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  342931 requests in 10.10s, 127.55MB read
+Requests/sec:  33955.70
+Transfer/sec:     12.63MB
+### em r3 3 head none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.40us    4.07us 283.00us   94.12%
+    Req/Sec    34.39k   541.79    35.23k    79.21%
+  Latency Distribution
+     50%   28.00us
+     75%   28.00us
+     90%   30.00us
+     99%   45.00us
+  345544 requests in 10.10s, 128.52MB read
+Requests/sec:  34213.23
+Transfer/sec:     12.73MB
+### em r3 4 head idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.97us    4.96us 290.00us   94.75%
+    Req/Sec    33.80k   577.95    34.96k    77.23%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  339553 requests in 10.10s, 126.29MB read
+Requests/sec:  33619.74
+Transfer/sec:     12.50MB
+### em r3 5 old none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.66us    4.38us 271.00us   95.07%
+    Req/Sec    34.10k   386.22    35.01k    71.29%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   30.00us
+     99%   45.00us
+  342680 requests in 10.10s, 127.45MB read
+Requests/sec:  33928.82
+Transfer/sec:     12.62MB
+### em r3 6 old idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.81us    4.67us 297.00us   94.79%
+    Req/Sec    33.97k   433.85    34.87k    63.37%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  341217 requests in 10.10s, 126.91MB read
+Requests/sec:  33784.67
+Transfer/sec:     12.57MB
+### em r3 7 base2 none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.88us   11.51us   1.52ms   97.81%
+    Req/Sec    34.00k   392.81    34.96k    74.26%
+  Latency Distribution
+     50%   28.00us
+     75%   28.00us
+     90%   31.00us
+     99%   45.00us
+  341493 requests in 10.10s, 127.01MB read
+Requests/sec:  33811.53
+Transfer/sec:     12.58MB
+### em r3 8 base2 idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.53us    4.05us 255.00us   94.30%
+    Req/Sec    34.25k   493.79    35.31k    73.27%
+  Latency Distribution
+     50%   28.00us
+     75%   28.00us
+     90%   30.00us
+     99%   45.00us
+  344103 requests in 10.10s, 127.98MB read
+Requests/sec:  34071.49
+Transfer/sec:     12.67MB
+### em r4 1 base2 idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.73us    4.46us 272.00us   95.13%
+    Req/Sec    34.04k   442.28    34.91k    72.28%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  342077 requests in 10.10s, 127.23MB read
+Requests/sec:  33870.16
+Transfer/sec:     12.60MB
+### em r4 2 base2 none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.22us    5.91us 354.00us   93.59%
+    Req/Sec    33.52k     2.20k   35.08k    94.06%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   32.00us
+     99%   47.00us
+  336687 requests in 10.10s, 125.23MB read
+Requests/sec:  33335.07
+Transfer/sec:     12.40MB
+### em r4 3 old idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.95us    4.42us 313.00us   94.55%
+    Req/Sec    33.76k   478.62    34.61k    73.27%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  339169 requests in 10.10s, 126.15MB read
+Requests/sec:  33582.38
+Transfer/sec:     12.49MB
+### em r4 4 old none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.25us    5.50us 471.00us   93.73%
+    Req/Sec    33.42k     1.50k   34.49k    94.06%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   32.00us
+     99%   46.00us
+  336018 requests in 10.10s, 124.98MB read
+Requests/sec:  33270.44
+Transfer/sec:     12.37MB
+### em r4 5 head idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.91us    4.05us 249.00us   92.94%
+    Req/Sec    33.77k   512.68    34.65k    64.36%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  339479 requests in 10.10s, 126.26MB read
+Requests/sec:  33611.55
+Transfer/sec:     12.50MB
+### em r4 6 head none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.15us    4.71us 272.00us   93.73%
+    Req/Sec    33.57k   745.47    34.66k    80.20%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  337242 requests in 10.10s, 125.43MB read
+Requests/sec:  33392.02
+Transfer/sec:     12.42MB
+### em r4 7 base idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.48us    3.81us 245.00us   94.29%
+    Req/Sec    34.32k   423.45    35.14k    69.31%
+  Latency Distribution
+     50%   28.00us
+     75%   28.00us
+     90%   30.00us
+     99%   44.00us
+  344724 requests in 10.10s, 128.21MB read
+Requests/sec:  34133.30
+Transfer/sec:     12.70MB
+### em r4 8 base none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.74us    4.62us 273.00us   93.76%
+    Req/Sec    34.04k     1.35k   35.12k    97.03%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  341893 requests in 10.10s, 127.16MB read
+Requests/sec:  33851.82
+Transfer/sec:     12.59MB
+### em r5 1 base none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.75us    4.48us 278.00us   94.72%
+    Req/Sec    34.02k   462.28    34.94k    63.00%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  338313 requests in 10.00s, 125.83MB read
+Requests/sec:  33830.80
+Transfer/sec:     12.58MB
+### em r5 2 base idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.67us   10.55us   1.43ms   98.09%
+    Req/Sec    34.22k   548.72    35.29k    72.28%
+  Latency Distribution
+     50%   28.00us
+     75%   28.00us
+     90%   30.00us
+     99%   45.00us
+  343751 requests in 10.10s, 127.85MB read
+Requests/sec:  34035.34
+Transfer/sec:     12.66MB
+### em r5 3 head none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.16us    4.81us 299.00us   94.40%
+    Req/Sec    33.54k   494.60    34.49k    71.29%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  336887 requests in 10.10s, 125.30MB read
+Requests/sec:  33356.17
+Transfer/sec:     12.41MB
+### em r5 4 head idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.79us    4.33us 303.00us   94.83%
+    Req/Sec    33.97k   472.07    34.88k    76.24%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  341294 requests in 10.10s, 126.94MB read
+Requests/sec:  33792.42
+Transfer/sec:     12.57MB
+### em r5 5 old none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.82us    4.43us 250.00us   94.51%
+    Req/Sec    33.91k   462.76    34.87k    68.32%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  340811 requests in 10.10s, 126.76MB read
+Requests/sec:  33744.31
+Transfer/sec:     12.55MB
+### em r5 6 old idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.22us    4.33us 260.00us   94.29%
+    Req/Sec    33.47k   513.40    34.43k    73.27%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  336194 requests in 10.10s, 125.04MB read
+Requests/sec:  33288.68
+Transfer/sec:     12.38MB
+### em r5 7 base2 none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.97us    7.49us   1.02ms   96.71%
+    Req/Sec    33.80k   490.70    34.63k    68.32%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  339541 requests in 10.10s, 126.29MB read
+Requests/sec:  33620.35
+Transfer/sec:     12.50MB
+### em r5 8 base2 idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.91us    4.54us 278.00us   94.11%
+    Req/Sec    33.85k     1.11k   34.97k    94.06%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  340078 requests in 10.10s, 126.49MB read
+Requests/sec:  33673.79
+Transfer/sec:     12.52MB
+### em r6 1 base2 idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.64us    3.98us 284.00us   93.54%
+    Req/Sec    34.11k     1.44k   35.33k    97.03%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  342758 requests in 10.10s, 127.48MB read
+Requests/sec:  33938.56
+Transfer/sec:     12.62MB
+### em r6 2 base2 none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.84us    4.55us 331.00us   94.95%
+    Req/Sec    33.92k   456.07    34.91k    74.26%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  340868 requests in 10.10s, 126.78MB read
+Requests/sec:  33750.62
+Transfer/sec:     12.55MB
+### em r6 3 old idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.19us    4.58us 231.00us   93.14%
+    Req/Sec    33.49k   512.52    34.82k    71.00%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   32.00us
+     99%   46.00us
+  333203 requests in 10.00s, 123.93MB read
+Requests/sec:  33319.84
+Transfer/sec:     12.39MB
+### em r6 4 old none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.86us   11.37us   1.49ms   98.20%
+    Req/Sec    33.98k   454.95    34.95k    65.35%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  341402 requests in 10.10s, 126.98MB read
+Requests/sec:  33804.09
+Transfer/sec:     12.57MB
+### em r6 5 head idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.87us    4.29us 287.00us   94.61%
+    Req/Sec    33.87k   518.36    34.97k    71.29%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  340078 requests in 10.10s, 126.49MB read
+Requests/sec:  33672.78
+Transfer/sec:     12.52MB
+### em r6 6 head none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.66us    4.45us 278.00us   95.34%
+    Req/Sec    34.14k   594.26    34.95k    81.19%
+  Latency Distribution
+     50%   28.00us
+     75%   28.00us
+     90%   30.00us
+     99%   44.00us
+  342995 requests in 10.10s, 127.57MB read
+Requests/sec:  33960.25
+Transfer/sec:     12.63MB
+### em r6 7 base idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.50us    4.09us 270.00us   93.71%
+    Req/Sec    34.27k   417.21    35.18k    67.33%
+  Latency Distribution
+     50%   28.00us
+     75%   28.00us
+     90%   31.00us
+     99%   44.00us
+  344277 requests in 10.10s, 128.05MB read
+Requests/sec:  34088.74
+Transfer/sec:     12.68MB
+### em r6 8 base none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.67us    4.24us 310.00us   94.50%
+    Req/Sec    34.12k   430.51    35.01k    75.25%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   30.00us
+     99%   44.00us
+  342693 requests in 10.10s, 127.46MB read
+Requests/sec:  33930.34
+Transfer/sec:     12.62MB
+### em r7 1 base none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.51us   10.10us   1.39ms   98.03%
+    Req/Sec    34.38k   487.03    35.05k    78.22%
+  Latency Distribution
+     50%   28.00us
+     75%   28.00us
+     90%   30.00us
+     99%   44.00us
+  345357 requests in 10.10s, 128.45MB read
+Requests/sec:  34195.69
+Transfer/sec:     12.72MB
+### em r7 2 base idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.36us    4.34us 289.00us   94.61%
+    Req/Sec    34.49k   559.56    35.38k    85.15%
+  Latency Distribution
+     50%   27.00us
+     75%   28.00us
+     90%   30.00us
+     99%   44.00us
+  346486 requests in 10.10s, 128.87MB read
+Requests/sec:  34307.58
+Transfer/sec:     12.76MB
+### em r7 3 head none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.79us    4.35us 257.00us   93.33%
+    Req/Sec    33.94k     1.77k   35.12k    96.04%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  340945 requests in 10.10s, 126.81MB read
+Requests/sec:  33757.50
+Transfer/sec:     12.56MB
+### em r7 4 head idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.73us    3.44us 233.00us   94.38%
+    Req/Sec    34.00k   424.81    34.80k    73.27%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   30.00us
+     99%   44.00us
+  341695 requests in 10.10s, 127.09MB read
+Requests/sec:  33833.73
+Transfer/sec:     12.58MB
+### em r7 5 old none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.64us    3.94us 298.00us   94.82%
+    Req/Sec    34.14k   429.00    34.93k    66.34%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   30.00us
+     99%   42.00us
+  342950 requests in 10.10s, 127.55MB read
+Requests/sec:  33956.28
+Transfer/sec:     12.63MB
+### em r7 6 old idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.09us   11.62us   1.53ms   98.31%
+    Req/Sec    33.75k   565.04    34.78k    74.26%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  338953 requests in 10.10s, 126.07MB read
+Requests/sec:  33562.42
+Transfer/sec:     12.48MB
+### em r7 7 base2 none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.16us    4.53us 265.00us   94.01%
+    Req/Sec    33.57k   685.14    34.73k    70.30%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  337192 requests in 10.10s, 125.41MB read
+Requests/sec:  33385.88
+Transfer/sec:     12.42MB
+### em r7 8 base2 idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.03us    4.42us 273.00us   94.41%
+    Req/Sec    33.69k   569.92    34.97k    70.30%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  338488 requests in 10.10s, 125.89MB read
+Requests/sec:  33513.82
+Transfer/sec:     12.46MB
+### em r8 1 base2 idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.03us    4.73us 292.00us   94.39%
+    Req/Sec    33.70k   448.99    34.69k    72.28%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  338594 requests in 10.10s, 125.93MB read
+Requests/sec:  33526.35
+Transfer/sec:     12.47MB
+### em r8 2 base2 none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.18us    4.91us 506.00us   93.39%
+    Req/Sec    33.50k     2.12k   34.82k    95.05%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  336529 requests in 10.10s, 125.17MB read
+Requests/sec:  33320.26
+Transfer/sec:     12.39MB
+### em r8 3 old idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.25us   10.71us   1.42ms   97.68%
+    Req/Sec    33.56k   521.61    34.53k    76.24%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  336975 requests in 10.10s, 125.33MB read
+Requests/sec:  33365.46
+Transfer/sec:     12.41MB
+### em r8 4 old none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.98us    4.31us 316.00us   94.20%
+    Req/Sec    33.75k   657.61    34.96k    82.18%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  339051 requests in 10.10s, 126.10MB read
+Requests/sec:  33570.49
+Transfer/sec:     12.49MB
+### em r8 5 head idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.15us    4.55us 252.00us   93.56%
+    Req/Sec    33.53k   630.73    34.74k    70.30%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  336891 requests in 10.10s, 125.30MB read
+Requests/sec:  33358.22
+Transfer/sec:     12.41MB
+### em r8 6 head none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.39us    4.78us 346.00us   93.23%
+    Req/Sec    33.30k   554.94    34.33k    73.27%
+  Latency Distribution
+     50%   28.00us
+     75%   30.00us
+     90%   32.00us
+     99%   46.00us
+  334599 requests in 10.10s, 124.45MB read
+Requests/sec:  33128.80
+Transfer/sec:     12.32MB
+### em r8 7 base idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.02us    4.73us 286.00us   93.62%
+    Req/Sec    33.68k   581.37    34.65k    73.27%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  338468 requests in 10.10s, 125.89MB read
+Requests/sec:  33511.22
+Transfer/sec:     12.46MB
+### em r8 8 base none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.78us    4.50us 361.00us   94.51%
+    Req/Sec    33.99k   581.49    35.13k    69.31%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  341447 requests in 10.10s, 127.00MB read
+Requests/sec:  33807.88
+Transfer/sec:     12.57MB
+### em r9 1 base none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.69us    4.01us 274.00us   94.00%
+    Req/Sec    34.03k   544.27    35.08k    71.29%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  341967 requests in 10.10s, 127.19MB read
+Requests/sec:  33859.93
+Transfer/sec:     12.59MB
+### em r9 2 base idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.77us    4.49us 480.00us   94.12%
+    Req/Sec    34.00k   462.38    35.05k    74.26%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  341583 requests in 10.10s, 127.05MB read
+Requests/sec:  33821.80
+Transfer/sec:     12.58MB
+### em r9 3 head none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.09us    3.86us 257.00us   91.85%
+    Req/Sec    33.61k   426.92    34.51k    70.30%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  337599 requests in 10.10s, 125.56MB read
+Requests/sec:  33426.98
+Transfer/sec:     12.43MB
+### em r9 4 head idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.26us    4.41us 509.00us   94.42%
+    Req/Sec    33.41k   471.44    34.35k    68.32%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  335598 requests in 10.10s, 124.82MB read
+Requests/sec:  33229.35
+Transfer/sec:     12.36MB
+### em r9 5 old none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.77us    4.28us 412.00us   94.85%
+    Req/Sec    33.96k   499.96    34.98k    72.28%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   44.00us
+  341332 requests in 10.10s, 126.95MB read
+Requests/sec:  33796.33
+Transfer/sec:     12.57MB
+### em r9 6 old idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.60us    7.86us   1.10ms   96.24%
+    Req/Sec    33.10k   593.84    34.35k    71.29%
+  Latency Distribution
+     50%   28.00us
+     75%   30.00us
+     90%   32.00us
+     99%   46.00us
+  332502 requests in 10.10s, 123.67MB read
+Requests/sec:  32920.65
+Transfer/sec:     12.24MB
+### em r9 7 base2 none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.33us    6.02us 470.00us   94.56%
+    Req/Sec    33.39k     1.29k   34.71k    94.06%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   32.00us
+     99%   47.00us
+  335247 requests in 10.10s, 124.69MB read
+Requests/sec:  33192.53
+Transfer/sec:     12.35MB
+### em r9 8 base2 idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.87us    4.22us 229.00us   94.21%
+    Req/Sec    33.86k   496.53    34.92k    63.37%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  340136 requests in 10.10s, 126.51MB read
+Requests/sec:  33676.72
+Transfer/sec:     12.53MB
+### em r10 1 base2 idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.30us    4.44us 244.00us   91.91%
+    Req/Sec    33.39k     1.32k   34.34k    98.02%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   32.00us
+     99%   46.00us
+  335386 requests in 10.10s, 124.74MB read
+Requests/sec:  33207.40
+Transfer/sec:     12.35MB
+### em r10 2 base2 none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.66us    4.56us 331.00us   94.80%
+    Req/Sec    34.11k   569.21    35.06k    69.31%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  342778 requests in 10.10s, 127.49MB read
+Requests/sec:  33939.32
+Transfer/sec:     12.62MB
+### em r10 3 old idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.42us    9.11us   1.20ms   97.01%
+    Req/Sec    33.37k   613.13    34.53k    78.22%
+  Latency Distribution
+     50%   28.00us
+     75%   30.00us
+     90%   32.00us
+     99%   46.00us
+  335201 requests in 10.10s, 124.67MB read
+Requests/sec:  33190.58
+Transfer/sec:     12.34MB
+### em r10 4 old none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    28.88us    4.42us 283.00us   94.29%
+    Req/Sec    33.84k   564.25    34.76k    76.24%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  340135 requests in 10.10s, 126.51MB read
+Requests/sec:  33676.43
+Transfer/sec:     12.53MB
+### em r10 5 head idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.17us    4.62us 301.00us   94.26%
+    Req/Sec    33.55k   497.19    34.58k    68.32%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  336950 requests in 10.10s, 125.32MB read
+Requests/sec:  33361.37
+Transfer/sec:     12.41MB
+### em r10 6 head none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.15us    4.39us 250.00us   94.36%
+    Req/Sec    33.56k   546.12    34.49k    72.28%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  337115 requests in 10.10s, 125.38MB read
+Requests/sec:  33377.54
+Transfer/sec:     12.41MB
+### em r10 7 base idle3
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.04us    4.66us 266.00us   93.37%
+    Req/Sec    33.69k   499.36    34.68k    64.00%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   45.00us
+  334976 requests in 10.00s, 124.59MB read
+Requests/sec:  33497.13
+Transfer/sec:     12.46MB
+### em r10 8 base none
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    29.22us    8.35us   1.14ms   96.88%
+    Req/Sec    33.57k   634.35    34.93k    74.26%
+  Latency Distribution
+     50%   28.00us
+     75%   29.00us
+     90%   31.00us
+     99%   46.00us
+  337103 requests in 10.10s, 125.38MB read
+Requests/sec:  33376.75
+Transfer/sec:     12.41MB

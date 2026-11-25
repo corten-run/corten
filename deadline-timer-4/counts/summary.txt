@@ -1,0 +1,420 @@
+
+other1 default
+  base  r1 20616 (20612..20625)  allocs 16 parks 1.022  |  r2 20627 (20596..20635)  allocs 16 parks 1.030
+  head  r1 20627 (20623..20629) +11 allocs 16 parks 1.031  |  r2 20590 (20590..20631) -37 allocs 16 parks 0.999
+  out1  r1 20642 (20637..20654) +26 allocs 16 parks 1.030  |  r2 20640 (20622..20653) +13 allocs 16 parks 1.030
+  req1  r1 20658 (20658..20661) +42 allocs 16 parks 1.032  |  r2 20633 (20623..20647) +6 allocs 16 parks 1.012
+  rq1   r1 20615 (20604..20622) -1 allocs 16 parks 1.016
+  soon  r1 20630 (20626..20632) +14 allocs 16 parks 1.033  |  r2 20603 (20597..20631) -24 allocs 16 parks 1.018
+  soon2 r1 20606 (20604..20622) -10 allocs 16 parks 1.011  |  r2 20605 (20601..20630) -22 allocs 16 parks 1.010
+
+row9-pause default
+  base  r1 20616 (20606..20673)  allocs 16 parks 1.028  |  r2 20594 (20588..20598)  allocs 16 parks 1.003
+  head  r1 20857 (20841..20868) +241 allocs 16 parks 1.025  |  r2 20808 (20807..20816) +214 allocs 16 parks 1.003
+  out1  r1 20710 (20702..20751) +94 allocs 16 parks 1.024  |  r2 20736 (20733..20740) +142 allocs 16 parks 1.008
+  req1  r1 20695 (20677..20722) +79 allocs 16 parks 1.008  |  r2 20732 (20715..20743) +138 allocs 16 parks 1.011
+  rq1   r1 20710 (20677..20718) +94 allocs 16 parks 1.013
+  soon  r1 20643 (20639..20645) +27 allocs 16 parks 1.022  |  r2 20622 (20620..20623) +28 allocs 16 parks 1.004
+  soon2 r1 20650 (20627..20683) +34 allocs 16 parks 1.014  |  r2 20688 (20615..20689) +94 allocs 16 parks 1.017
+
+other3-pause default
+  base  r1 20613 (20595..20623)  allocs 16 parks 1.021  |  r2 20634 (20601..20658)  allocs 16 parks 1.017
+  head  r1 20823 (20795..20842) +210 allocs 16 parks 1.005  |  r2 20779 (20776..20780) +145 allocs 16 parks 0.999
+  out1  r1 20838 (20800..20843) +225 allocs 16 parks 1.034  |  r2 20841 (20839..20848) +207 allocs 16 parks 1.034
+  req1  r1 20841 (20815..20869) +228 allocs 16 parks 1.007  |  r2 20875 (20841..20885) +241 allocs 16 parks 1.016
+  rq1   r1 20841 (20800..20855) +228 allocs 16 parks 1.012
+  soon  r1 20609 (20599..20622) -4 allocs 16 parks 1.014  |  r2 20592 (20591..20661) -42 allocs 16 parks 1.000
+  soon2 r1 20597 (20597..20599) -16 allocs 16 parks 1.004  |  r2 20671 (20659..20680) +37 allocs 16 parks 1.020
+
+row9-past default
+  base  r1 20625 (20608..20625)  allocs 16 parks 1.030  |  r2 20608 (20590..20616)  allocs 16 parks 1.015
+  head  r1 20628 (20616..20636) +3 allocs 16 parks 1.008  |  r2 20618 (20617..20657) +10 allocs 16 parks 1.000
+  out1  r1 20694 (20688..20712) +69 allocs 16 parks 1.015  |  r2 20676 (20675..20678) +68 allocs 16 parks 1.000
+  req1  r1 20693 (20666..20702) +68 allocs 16 parks 1.022  |  r2 20679 (20659..20690) +71 allocs 16 parks 1.012
+  rq1   r1 20659 (20656..20660) +34 allocs 16 parks 1.003
+  soon  r1 20654 (20631..20658) +29 allocs 16 parks 1.031  |  r2 20634 (20617..20664) +26 allocs 16 parks 1.014
+  soon2 r1 20644 (20606..20657) +19 allocs 16 parks 1.023  |  r2 20620 (20617..20653) +12 allocs 16 parks 1.002
+
+other3-past default
+  base  r1 20596 (20593..20632)  allocs 16 parks 1.006  |  r2 20610 (20601..20624)  allocs 16 parks 1.018
+  head  r1 20596 (20589..20620) +0 allocs 16 parks 1.002  |  r2 20596 (20592..20602) -14 allocs 16 parks 1.003
+  out1  r1 20639 (20614..20642) +43 allocs 16.001 parks 1.029  |  r2 20610 (20605..20614) +0 allocs 16 parks 1.003
+  req1  r1 20634 (20622..20658) +38 allocs 16 parks 1.013  |  r2 20624 (20614..20663) +14 allocs 16 parks 1.004
+  rq1   r1 20617 (20602..20623) +21 allocs 16 parks 1.017
+  soon  r1 20613 (20606..20627) +17 allocs 16 parks 1.017  |  r2 20618 (20617..20620) +8 allocs 16 parks 1.022
+  soon2 r1 20602 (20598..20630) +6 allocs 16 parks 1.009  |  r2 20596 (20593..20597) -14 allocs 16 parks 1.002
+
+other1 percore-by-hand
+  base  r1 19979 (19979..19981)  allocs 16 parks 1.000  |  r2 19979 (19978..19980)  allocs 16 parks 1.000
+  head  r1 19986 (19985..19987) +7 allocs 16.001 parks 1.000  |  r2 19986 (19986..19987) +7 allocs 16 parks 1.000
+  out1  r1 19994 (19994..19995) +15 allocs 16 parks 1.000  |  r2 19994 (19994..19995) +15 allocs 16 parks 1.000
+  req1  r1 20013 (20012..20014) +34 allocs 16 parks 1.000  |  r2 20012 (20011..20013) +33 allocs 16 parks 1.000
+  rq1   r1 19987 (19986..19987) +8 allocs 15.998 parks 1.000
+  soon  r1 19986 (19985..19986) +7 allocs 15.999 parks 1.000  |  r2 19987 (19985..19987) +8 allocs 16 parks 1.000
+  soon2 r1 19986 (19985..19986) +7 allocs 16 parks 1.000  |  r2 19986 (19984..19986) +7 allocs 15.999 parks 1.000
+
+row9-pause percore-by-hand
+  base  r1 19981 (19980..19982)  allocs 16 parks 1.000  |  r2 19981 (19981..19981)  allocs 16 parks 1.000
+  head  r1 20201 (20200..20202) +220 allocs 16 parks 1.001  |  r2 20201 (20200..20201) +220 allocs 16 parks 1.000
+  out1  r1 20067 (20066..20136) +86 allocs 16 parks 1.000  |  r2 20066 (20063..20066) +85 allocs 16 parks 1.000
+  req1  r1 20063 (20062..20064) +82 allocs 16 parks 1.000  |  r2 20063 (20062..20064) +82 allocs 16 parks 1.000
+  rq1   r1 20045 (20045..20046) +64 allocs 15.999 parks 1.000
+  soon  r1 20039 (20013..20072) +58 allocs 16 parks 1.000  |  r2 20014 (20013..20015) +33 allocs 16 parks 1.000
+  soon2 r1 20040 (20016..20073) +59 allocs 16 parks 1.000  |  r2 20015 (20014..20073) +34 allocs 16 parks 1.000
+
+other3-pause percore-by-hand
+  base  r1 19980 (19979..20029)  allocs 16.001 parks 1.000  |  r2 19979 (19979..19980)  allocs 16.001 parks 1.000
+  head  r1 20173 (20171..20200) +193 allocs 15.999 parks 1.000  |  r2 20173 (20171..20231) +194 allocs 16 parks 1.000
+  out1  r1 20181 (20181..20182) +201 allocs 15.999 parks 1.000  |  r2 20183 (20181..20184) +204 allocs 16 parks 1.000
+  req1  r1 20259 (20200..20259) +279 allocs 16 parks 1.000  |  r2 20200 (20200..20258) +221 allocs 15.999 parks 1.000
+  rq1   r1 20224 (20175..20243) +244 allocs 16 parks 0.999
+  soon  r1 19986 (19986..20046) +6 allocs 15.999 parks 1.000  |  r2 19985 (19984..19987) +6 allocs 16 parks 1.000
+  soon2 r1 20013 (19984..20043) +33 allocs 16 parks 0.999  |  r2 19986 (19986..20015) +7 allocs 16 parks 1.001
+
+row9-past percore-by-hand
+  base  r1 19982 (19980..19982)  allocs 16 parks 1.000  |  r2 19981 (19981..19982)  allocs 16 parks 1.000
+  head  r1 20013 (20013..20014) +31 allocs 16 parks 1.000  |  r2 20013 (20013..20014) +32 allocs 16 parks 1.000
+  out1  r1 20066 (20066..20068) +84 allocs 16 parks 1.000  |  r2 20067 (20066..20067) +86 allocs 16 parks 1.000
+  req1  r1 20061 (20061..20063) +79 allocs 16 parks 1.000  |  r2 20062 (20061..20065) +81 allocs 16 parks 1.000
+  rq1   r1 20046 (20045..20046) +64 allocs 16 parks 1.000
+  soon  r1 20014 (20012..20016) +32 allocs 16 parks 1.001  |  r2 20013 (20012..20015) +32 allocs 16 parks 1.000
+  soon2 r1 20013 (20013..20014) +31 allocs 16 parks 1.000  |  r2 20014 (20013..20014) +33 allocs 16 parks 1.000
+
+other3-past percore-by-hand
+  base  r1 19978 (19977..19978)  allocs 16 parks 1.000  |  r2 19979 (19978..19980)  allocs 16.001 parks 1.000
+  head  r1 19985 (19985..19987) +7 allocs 16.001 parks 1.000  |  r2 19986 (19985..19986) +7 allocs 16 parks 1.000
+  out1  r1 19995 (19994..19996) +17 allocs 16 parks 1.000  |  r2 19996 (19995..19996) +17 allocs 16 parks 1.000
+  req1  r1 20013 (20012..20013) +35 allocs 16 parks 1.001
+  rq1   r1 19987 (19986..19989) +9 allocs 16 parks 1.000
+  soon  r1 19985 (19985..19986) +7 allocs 15.999 parks 1.000  |  r2 19986 (19986..19986) +7 allocs 16 parks 1.000
+  soon2 r1 19986 (19985..19986) +8 allocs 16 parks 1.000
+
+gapw default
+  base  r1 25253 (25244..25255)  allocs 14 parks 3.070
+  head  r1 25135 (25094..25152) -118 allocs 14 parks 3.060
+  soon2 r1 25337 (25332..25341) +84 allocs 14 parks 3.245
+  soon2h r1 29420 (29404..29424) +4167 allocs 14 parks 5.095
+
+longw default
+  base  r1 26418 (26410..26427)  allocs 14 parks 4.035
+  head  r1 26282 (26269..26287) -136 allocs 14 parks 4.020
+  soon2 r1 26265 (26258..26271) -153 allocs 14 parks 3.990
+  soon2h r1 31730 (31717..31749) +5312 allocs 14 parks 5.825
+
+gapw percore-by-hand
+  base  r1 24030 (24014..24034)  allocs 13.995 parks 3.010
+  head  r1 24011 (23988..24023) -19 allocs 13.995 parks 3.025
+  soon2 r1 24222 (24210..24241) +192 allocs 13.99 parks 3.205
+  soon2h r1 27702 (27701..27710) +3672 allocs 14 parks 5.010
+
+longw percore-by-hand
+  base  r1 25286 (25278..25288)  allocs 14.01 parks 4.030
+  head  r1 25240 (25237..25242) -46 allocs 14 parks 4.010
+  soon2 r1 25223 (25219..25231) -63 allocs 14 parks 3.970
+  soon2h r1 30055 (30010..30061) +4769 allocs 14 parks 5.775
+
+loop1 default
+  base  r1 20621 (20619..20627)  allocs 16 parks 1.029  |  r2 20614 (20612..20619)  allocs 16 parks 1.022
+  head  r1 20837 (20835..20837) +216 allocs 16 parks 1.029  |  r2 20831 (20830..20846) +217 allocs 16 parks 1.021
+  out1  r1 20713 (20703..20715) +92 allocs 16 parks 1.032
+  soon  r1 20839 (20827..20839) +218 allocs 16 parks 1.031
+  soon2 r1 20800 (20798..20830) +179 allocs 16 parks 1.003  |  r2 20820 (20804..20832) +206 allocs 16 parks 1.019
+
+loop8 default
+  base  r1 19495 (19485..19496)  allocs 16 parks 0.153  |  r2 19477 (19475..19487)  allocs 16 parks 0.144
+  head  r1 19542 (19537..19551) +47 allocs 16 parks 0.149  |  r2 19536 (19534..19548) +59 allocs 16 parks 0.144
+  out1  r1 19562 (19549..19575) +67 allocs 16 parks 0.142
+  soon  r1 19532 (19515..19546) +37 allocs 16 parks 0.148
+  soon2 r1 19515 (19503..19522) +20 allocs 16 parks 0.133  |  r2 19524 (19519..19524) +47 allocs 16 parks 0.141
+
+loop64 default
+  base  r1 19233 (19198..19288)  allocs 16.011 parks 0.021  |  r2 19323 (19239..19344)  allocs 16.011 parks 0.020
+  head  r1 19282 (19264..19326) +49 allocs 16.002 parks 0.017  |  r2 19374 (19259..19378) +51 allocs 15.998 parks 0.016
+  out1  r1 19310 (19306..19318) +77 allocs 16.01 parks 0.019
+  soon  r1 19276 (19264..19313) +43 allocs 16.024 parks 0.018
+  soon2 r1 19294 (19284..19321) +61 allocs 16.013 parks 0.018  |  r2 19316 (19269..19321) -7 allocs 16 parks 0.018
+
+quiet64 default
+  base  r1 19245 (19234..19255)  allocs 15.998 parks 0.018  |  r2 19239 (19206..19241)  allocs 15.988 parks 0.016
+  head  r1 19237 (19225..19246) -8 allocs 16 parks 0.018  |  r2 19298 (19240..19305) +59 allocs 15.991 parks 0.016
+  out1  r1 19258 (19253..19260) +13 allocs 15.985 parks 0.018
+  soon  r1 19238 (19233..19301) -7 allocs 16.001 parks 0.019
+  soon2 r1 19288 (19243..19290) +43 allocs 15.972 parks 0.018  |  r2 19244 (19231..19296) +5 allocs 15.991 parks 0.016
+
+quiet1 default
+  base  r1 20623 (20616..20628)  allocs 16 parks 1.028  |  r2 20622 (20596..20623)  allocs 16 parks 1.029
+  head  r1 20612 (20592..20628) -11 allocs 16 parks 1.020  |  r2 20624 (20616..20630) +2 allocs 16 parks 1.027
+  out1  r1 20623 (20606..20650) +0 allocs 16 parks 1.015
+  soon  r1 20629 (20606..20634) +6 allocs 16 parks 1.033
+  soon2 r1 20596 (20595..20626) -27 allocs 16 parks 1.004  |  r2 20600 (20585..20631) -22 allocs 16 parks 1.006
+
+loop1 percore-by-hand
+  base  r1 19980 (19980..19981)  allocs 16 parks 1.000  |  r2 19981 (19980..19982)  allocs 16 parks 1.000
+  head  r1 20200 (20199..20221) +220 allocs 16 parks 1.000  |  r2 20201 (20200..20201) +220 allocs 16 parks 1.001
+  out1  r1 20067 (20066..20068) +87 allocs 16 parks 1.000
+  soon  r1 20191 (20191..20192) +211 allocs 16 parks 1.000
+  soon2 r1 20191 (20191..20191) +211 allocs 16 parks 1.000  |  r2 20192 (20191..20193) +211 allocs 16 parks 1.000
+
+loop8 percore-by-hand
+  base  r1 19285 (19271..19287)  allocs 16.003 parks 0.143  |  r2 19280 (19280..19284)  allocs 15.999 parks 0.138
+  head  r1 19338 (19337..19347) +53 allocs 16 parks 0.136  |  r2 19341 (19341..19347) +61 allocs 15.999 parks 0.142
+  out1  r1 19359 (19358..19376) +74 allocs 16.002 parks 0.127
+  soon  r1 19335 (19324..19342) +50 allocs 16.002 parks 0.133
+  soon2 r1 19327 (19322..19330) +42 allocs 16.001 parks 0.127  |  r2 19327 (19326..19336) +47 allocs 16 parks 0.125
+
+loop64 percore-by-hand
+  base  r1 19171 (19170..19312)  allocs 16.004 parks 0.016  |  r2 19165 (19163..19175)  allocs 16.005 parks 0.013
+  head  r1 19196 (19192..19332) +25 allocs 15.971 parks 0.016  |  r2 19194 (19191..19205) +29 allocs 15.998 parks 0.016
+  out1  r1 19256 (19255..19261) +85 allocs 16.009 parks 0.016
+  soon  r1 19197 (19070..19212) +26 allocs 15.998 parks 0.015
+  soon2 r1 19202 (19197..19208) +31 allocs 16.006 parks 0.018  |  r2 19205 (19204..19342) +40 allocs 15.998 parks 0.015
+
+quiet64 percore-by-hand
+  base  r1 19172 (19169..19183)  allocs 16.001 parks 0.016  |  r2 19180 (19178..19182)  allocs 16.029 parks 0.018
+  head  r1 19179 (19179..19183) +7 allocs 16.005 parks 0.017  |  r2 19169 (19163..19184) -11 allocs 15.979 parks 0.015
+  out1  r1 19164 (19162..19181) -8 allocs 15.997 parks 0.015
+  soon  r1 19175 (19152..19177) +3 allocs 16.002 parks 0.016
+  soon2 r1 19175 (19150..19181) +3 allocs 16.011 parks 0.016  |  r2 19153 (19151..19177) -27 allocs 16.001 parks 0.016
+
+quiet1 percore-by-hand
+  base  r1 19981 (19981..19982)  allocs 16 parks 1.000  |  r2 19981 (19981..19981)  allocs 16 parks 1.000
+  head  r1 19989 (19988..19989) +8 allocs 16 parks 1.000  |  r2 19988 (19988..19989) +7 allocs 16 parks 1.000
+  out1  r1 19997 (19996..20001) +16 allocs 16 parks 1.000
+  soon  r1 19988 (19988..19988) +7 allocs 16 parks 1.000
+  soon2 r1 19988 (19987..19989) +7 allocs 16 parks 1.000  |  r2 20010 (19988..20011) +29 allocs 16 parks 1.000
+
+row1 default
+  base  r1 20620 (20607..20623)  allocs 16 parks 1.029  |  r2 20621 (20618..20629)  allocs 16 parks 1.032
+  head  r1 20625 (20611..20629) +5 allocs 16 parks 1.031  |  r2 20624 (20624..20626) +3 allocs 16 parks 1.030
+  out1  r1 20630 (20623..20635) +10 allocs 16 parks 1.021  |  r2 20635 (20634..20649) +14 allocs 16 parks 1.027
+  out8  r1 20628 (20615..20631) +8 allocs 16 parks 1.018  |  r2 20646 (20627..20647) +25 allocs 16 parks 1.033
+  req1  r1 20635 (20625..20643) +15 allocs 16 parks 1.014  |  r2 20633 (20631..20635) +12 allocs 16 parks 1.012
+  req8  r1 20648 (20635..20655) +28 allocs 16 parks 1.025  |  r2 20659 (20637..20663) +38 allocs 16 parks 1.034
+  rq1   r1 20633 (20599..20633) +13 allocs 16 parks 1.029  |  r2 20610 (20608..20618) -11 allocs 16 parks 1.010
+  rq8   r1 20626 (20619..20636) +6 allocs 16 parks 1.026  |  r2 20620 (20605..20622) -1 allocs 16 parks 1.020
+  far   r1 20609 (20608..20628) -11 allocs 16 parks 1.008  |  r2 20621 (20613..20626) +0 allocs 16 parks 1.018
+  soon  r1 20624 (20620..20630) +4 allocs 16 parks 1.031  |  r2 20626 (20613..20634) +5 allocs 16 parks 1.032
+  soon2 r1 20599 (20590..20616) -21 allocs 16 parks 1.006  |  r2 20610 (20598..20615) -11 allocs 16 parks 1.015
+
+row2 default
+  base  r1 25053 (25050..25059)  allocs 14 parks 3.062  |  r2 25049 (25047..25056)  allocs 14 parks 3.057
+  head  r1 24936 (24919..24938) -117 allocs 14 parks 3.065  |  r2 24930 (24924..24930) -119 allocs 14 parks 3.062
+  out1  r1 25052 (25047..25058) -1 allocs 14 parks 3.060  |  r2 25051 (25051..25059) +2 allocs 14 parks 3.063
+  out8  r1 25052 (25047..25057) -1 allocs 14 parks 3.060  |  r2 25054 (25051..25056) +5 allocs 14 parks 3.060
+  req1  r1 25032 (25030..25042) -21 allocs 14 parks 3.064  |  r2 25041 (25031..25041) -8 allocs 14 parks 3.062
+  req8  r1 25030 (25024..25030) -23 allocs 14 parks 3.059  |  r2 25037 (25029..25037) -12 allocs 14 parks 3.059
+  rq1   r1 24964 (24956..24967) -89 allocs 14 parks 3.062  |  r2 24971 (24970..24973) -78 allocs 14 parks 3.062
+  rq8   r1 24961 (24960..24965) -92 allocs 14 parks 3.059  |  r2 24960 (24960..24965) -89 allocs 14 parks 3.060
+  far   r1 25288 (25281..25296) +235 allocs 14 parks 3.063  |  r2 25277 (25275..25289) +228 allocs 14 parks 3.056
+  soon  r1 24938 (24926..24940) -115 allocs 14 parks 3.055  |  r2 24933 (24925..24953) -116 allocs 14 parks 3.057
+  soon2 r1 24944 (24930..24953) -109 allocs 14 parks 3.059  |  r2 24947 (24942..24948) -102 allocs 14 parks 3.059
+
+row6 default
+  base  r1 38400 (38367..38424)  allocs 26.001 parks 4.764  |  r2 38413 (38387..38417)  allocs 26.001 parks 4.761
+  head  r1 38531 (38508..38567) +131 allocs 26.001 parks 4.771  |  r2 38518 (38516..38546) +105 allocs 26.001 parks 4.756
+  out1  r1 38596 (38553..38602) +196 allocs 26.001 parks 4.766  |  r2 38584 (38571..38586) +171 allocs 26.001 parks 4.756
+  out8  r1 38582 (38569..38749) +182 allocs 26.001 parks 4.771  |  r2 38591 (38567..38601) +178 allocs 26.001 parks 4.764
+  req1  r1 38592 (38591..38615) +192 allocs 26.001 parks 4.757  |  r2 38561 (38410..38608) +148 allocs 26.001 parks 4.712
+  req8  r1 38589 (38571..38630) +189 allocs 26.001 parks 4.747  |  r2 38595 (38591..38638) +182 allocs 26.001 parks 4.758
+  rq1   r1 38540 (38538..38559) +140 allocs 26.001 parks 4.752  |  r2 38518 (38515..38541) +105 allocs 26.001 parks 4.739
+  rq8   r1 38476 (38339..38558) +76 allocs 26.001 parks 4.708  |  r2 38535 (38535..38549) +122 allocs 26.001 parks 4.750
+  far   r1 38573 (38570..38616) +173 allocs 26.001 parks 4.781  |  r2 38554 (38542..38556) +141 allocs 26.001 parks 4.743
+  soon  r1 38549 (38522..38552) +149 allocs 26.001 parks 4.774  |  r2 38512 (38503..38513) +99 allocs 26.001 parks 4.745
+  soon2 r1 38548 (38544..38556) +148 allocs 26.001 parks 4.767  |  r2 38349 (38006..38539) -64 allocs 26.001 parks 4.629
+
+row9 default
+  base  r1 20623 (20609..20627)  allocs 16 parks 1.028  |  r2 20628 (20612..20632)  allocs 16 parks 1.032
+  head  r1 20846 (20820..20853) +223 allocs 16 parks 1.032  |  r2 20816 (20811..20831) +188 allocs 16 parks 1.008
+  out1  r1 20714 (20707..20718) +91 allocs 16 parks 1.033  |  r2 20692 (20671..20717) +64 allocs 16 parks 1.014
+  out8  r1 20700 (20700..20702) +77 allocs 16 parks 1.022  |  r2 20708 (20707..20711) +80 allocs 16 parks 1.029
+  req1  r1 20679 (20669..20687) +56 allocs 16 parks 1.010  |  r2 20671 (20668..20701) +43 allocs 16 parks 1.003
+  req8  r1 20690 (20679..20691) +67 allocs 16 parks 1.019  |  r2 20695 (20667..20703) +67 allocs 16 parks 1.025
+  rq1   r1 20659 (20655..20678) +36 allocs 16 parks 1.004  |  r2 20666 (20660..20667) +38 allocs 16 parks 1.009
+  rq8   r1 20668 (20662..20677) +45 allocs 16 parks 1.010  |  r2 20670 (20668..20679) +42 allocs 16 parks 1.012
+  far   r1 20861 (20850..20879) +238 allocs 16 parks 1.028  |  r2 20853 (20830..20855) +225 allocs 16 parks 1.017
+  soon  r1 20836 (20833..20847) +213 allocs 16 parks 1.032  |  r2 20834 (20824..20841) +206 allocs 16 parks 1.029
+  soon2 r1 20829 (20810..20843) +206 allocs 16 parks 1.026  |  r2 20794 (20790..20832) +166 allocs 16 parks 1.000
+
+other3 default
+  base  r1 20617 (20591..20629)  allocs 16 parks 1.026  |  r2 20609 (20599..20623)  allocs 16 parks 1.017
+  head  r1 20810 (20775..20815) +193 allocs 16 parks 1.022  |  r2 20796 (20787..20817) +187 allocs 16 parks 1.012
+  out1  r1 20838 (20834..20838) +221 allocs 16 parks 1.032  |  r2 20831 (20830..20840) +222 allocs 16 parks 1.029
+  out8  r1 20814 (20798..20820) +197 allocs 16 parks 1.015  |  r2 20834 (20824..20838) +225 allocs 16 parks 1.030
+  req1  r1 20802 (20795..20807) +185 allocs 16 parks 1.000  |  r2 20812 (20807..20832) +203 allocs 16 parks 1.004
+  req8  r1 20804 (20798..20812) +187 allocs 16 parks 0.999  |  r2 20833 (20804..20850) +224 allocs 16 parks 1.019
+  rq1   r1 20830 (20780..20831) +213 allocs 16 parks 1.032  |  r2 20785 (20785..20788) +176 allocs 16 parks 0.999
+  rq8   r1 20785 (20784..20790) +168 allocs 16 parks 1.000  |  r2 20789 (20785..20790) +180 allocs 16 parks 1.002
+  far   r1 20818 (20811..20830) +201 allocs 16 parks 1.024  |  r2 20821 (20787..20825) +212 allocs 16.001 parks 1.024
+  soon  r1 20803 (20791..20810) +186 allocs 16 parks 1.026  |  r2 20801 (20782..20818) +192 allocs 16 parks 1.023
+  soon2 r1 20779 (20771..20794) +162 allocs 16.001 parks 1.007  |  r2 20786 (20774..20818) +177 allocs 16 parks 1.012
+
+alt default
+  base  r1 22891 (22832..22894)  allocs 15 parks 2.045  |  r2 22832 (22820..22867)  allocs 15 parks 2.026
+  head  r1 22918 (22883..22928) +27 allocs 15 parks 2.038  |  r2 22882 (22880..22931) +50 allocs 15 parks 2.040
+  out1  r1 23173 (23167..23211) +282 allocs 15 parks 2.043  |  r2 23151 (23142..23214) +319 allocs 15 parks 2.023
+  out8  r1 22981 (22965..23029) +90 allocs 15 parks 2.044  |  r2 23014 (22980..23026) +182 allocs 15 parks 2.043
+  req1  r1 23142 (23140..23154) +251 allocs 15 parks 2.032  |  r2 23144 (23142..23151) +312 allocs 15 parks 2.033
+  req8  r1 22960 (22959..22969) +69 allocs 15 parks 2.042  |  r2 22955 (22955..22962) +123 allocs 15 parks 2.039
+  rq1   r1 23109 (23091..23161) +218 allocs 15 parks 2.041  |  r2 23104 (23101..23107) +272 allocs 15 parks 2.038
+  rq8   r1 22910 (22907..22924) +19 allocs 15 parks 2.035  |  r2 22931 (22919..22931) +99 allocs 15 parks 2.048
+  far   r1 23077 (23076..23115) +186 allocs 15 parks 2.044  |  r2 23124 (23118..23134) +292 allocs 15 parks 2.041
+  soon  r1 22877 (22875..22880) -14 allocs 15 parks 2.038  |  r2 22884 (22876..22935) +52 allocs 15 parks 2.042
+  soon2 r1 22886 (22879..22891) -5 allocs 15 parks 2.041  |  r2 22873 (22866..22880) +41 allocs 15 parks 2.032
+
+row1 percore-by-hand
+  base  r1 19982 (19982..19982)  allocs 16 parks 1.000  |  r2 19981 (19980..19982)  allocs 16 parks 1.000
+  head  r1 19989 (19987..19990) +7 allocs 16 parks 1.000  |  r2 19990 (19989..19991) +9 allocs 16 parks 1.000
+  out1  r1 19998 (19996..19998) +16 allocs 16 parks 1.000  |  r2 19998 (19997..19999) +17 allocs 16 parks 1.000
+  out8  r1 19997 (19997..19997) +15 allocs 16 parks 1.000  |  r2 19998 (19997..19998) +17 allocs 16 parks 1.000
+  req1  r1 20036 (20016..20037) +54 allocs 16 parks 1.000  |  r2 20016 (20015..20016) +35 allocs 16 parks 1.000
+  req8  r1 20037 (20017..20037) +55 allocs 16 parks 1.000  |  r2 20015 (20015..20037) +34 allocs 16 parks 1.000
+  rq1   r1 19993 (19992..19993) +11 allocs 16 parks 1.000  |  r2 19990 (19989..19991) +9 allocs 16 parks 1.000
+  rq8   r1 19991 (19990..19993) +9 allocs 16 parks 1.000  |  r2 19989 (19989..19992) +8 allocs 16 parks 1.000
+  far   r1 19995 (19995..19997) +13 allocs 16 parks 1.000  |  r2 19996 (19996..19996) +15 allocs 16 parks 1.000
+  soon  r1 19989 (19989..19989) +7 allocs 16 parks 1.000  |  r2 19988 (19988..19988) +7 allocs 16 parks 1.000
+  soon2 r1 20009 (19987..20010) +27 allocs 16 parks 1.000  |  r2 20010 (19989..20010) +29 allocs 16 parks 1.000
+
+row2 percore-by-hand
+  base  r1 23811 (23805..23816)  allocs 14 parks 3.012  |  r2 23808 (23806..23812)  allocs 14 parks 3.010
+  head  r1 23677 (23673..23687) -134 allocs 13.997 parks 3.012  |  r2 23676 (23675..23679) -132 allocs 13.998 parks 3.010
+  out1  r1 23805 (23801..23810) -6 allocs 13.997 parks 3.016  |  r2 23807 (23801..23810) -1 allocs 14 parks 3.016
+  out8  r1 23807 (23803..23811) -4 allocs 13.998 parks 3.017  |  r2 23801 (23799..23806) -7 allocs 14 parks 3.012
+  req1  r1 23786 (23779..23799) -25 allocs 14 parks 3.016  |  r2 23784 (23778..23789) -24 allocs 13.998 parks 3.011
+  req8  r1 23791 (23785..23792) -20 allocs 14 parks 3.020  |  r2 23781 (23779..23788) -27 allocs 14 parks 3.010
+  rq1   r1 23714 (23711..23720) -97 allocs 14 parks 3.012  |  r2 23716 (23706..23720) -92 allocs 14 parks 3.014
+  rq8   r1 23717 (23713..23718) -94 allocs 14 parks 3.016  |  r2 23711 (23711..23713) -97 allocs 13.998 parks 3.011
+  far   r1 24038 (24038..24040) +227 allocs 14 parks 3.014  |  r2 24035 (24029..24066) +227 allocs 14 parks 3.007
+  soon  r1 23691 (23688..23693) -120 allocs 13.998 parks 3.012  |  r2 23692 (23681..23693) -116 allocs 14 parks 3.009
+  soon2 r1 23693 (23690..23703) -118 allocs 14 parks 3.011  |  r2 23696 (23690..23698) -112 allocs 14 parks 3.013
+
+row6 percore-by-hand
+  base  r1 35072 (35063..35076)  allocs 26 parks 4.017  |  r2 35080 (35064..35081)  allocs 26 parks 4.015
+  head  r1 35224 (35221..35231) +152 allocs 26 parks 4.015  |  r2 35229 (35224..35238) +149 allocs 26 parks 4.020
+  out1  r1 35251 (35248..35255) +179 allocs 26 parks 4.013  |  r2 35237 (35235..35245) +157 allocs 26 parks 4.010
+  out8  r1 35242 (35240..35251) +170 allocs 26 parks 4.016  |  r2 35259 (35246..35263) +179 allocs 26 parks 4.017
+  req1  r1 35280 (35275..35289) +208 allocs 26 parks 4.012  |  r2 35284 (35276..35285) +204 allocs 26 parks 4.015
+  req8  r1 35280 (35275..35286) +208 allocs 26 parks 4.016  |  r2 35281 (35275..35288) +201 allocs 26 parks 4.012
+  rq1   r1 35214 (35213..35222) +142 allocs 26 parks 4.013  |  r2 35212 (35208..35216) +132 allocs 26 parks 4.014
+  rq8   r1 35228 (35221..35232) +156 allocs 26 parks 4.015  |  r2 35221 (35210..35226) +141 allocs 26 parks 4.012
+  far   r1 35248 (35233..35248) +176 allocs 26 parks 4.016  |  r2 35231 (35225..35248) +151 allocs 26 parks 4.009
+  soon  r1 35229 (35226..35241) +157 allocs 26 parks 4.013  |  r2 35239 (35236..35271) +159 allocs 26 parks 4.017
+  soon2 r1 35236 (35225..35245) +164 allocs 26 parks 4.018  |  r2 35239 (35237..35241) +159 allocs 26 parks 4.014
+
+row9 percore-by-hand
+  base  r1 19981 (19980..19983)  allocs 16 parks 1.000  |  r2 19981 (19981..19982)  allocs 16 parks 1.000
+  head  r1 20200 (20200..20200) +219 allocs 16 parks 1.000  |  r2 20202 (20202..20203) +221 allocs 16 parks 1.001
+  out1  r1 20067 (20066..20068) +86 allocs 16 parks 1.000  |  r2 20067 (20066..20067) +86 allocs 16 parks 0.999
+  out8  r1 20067 (20065..20068) +86 allocs 16 parks 1.000  |  r2 20066 (20066..20067) +85 allocs 16 parks 1.000
+  req1  r1 20062 (20061..20063) +81 allocs 16 parks 1.000  |  r2 20062 (20061..20063) +81 allocs 16 parks 1.000
+  req8  r1 20061 (20060..20062) +80 allocs 16 parks 0.999  |  r2 20062 (20061..20063) +81 allocs 16 parks 0.999
+  rq1   r1 20045 (20044..20045) +64 allocs 16 parks 1.000  |  r2 20046 (20044..20047) +65 allocs 16 parks 1.000
+  rq8   r1 20047 (20046..20047) +66 allocs 16 parks 1.000  |  r2 20047 (20046..20047) +66 allocs 16 parks 1.000
+  far   r1 20225 (20225..20226) +244 allocs 16 parks 1.000  |  r2 20226 (20225..20228) +245 allocs 16 parks 1.000
+  soon  r1 20191 (20189..20193) +210 allocs 16 parks 1.000  |  r2 20191 (20191..20192) +210 allocs 16.002 parks 1.000
+  soon2 r1 20191 (20191..20192) +210 allocs 16 parks 1.000  |  r2 20192 (20192..20194) +211 allocs 16 parks 1.000
+
+other3 percore-by-hand
+  base  r1 19979 (19978..19979)  allocs 16 parks 1.000  |  r2 19979 (19978..19979)  allocs 16 parks 1.000
+  head  r1 20171 (20171..20173) +192 allocs 16 parks 1.000  |  r2 20172 (20171..20173) +193 allocs 16 parks 0.999
+  out1  r1 20181 (20164..20182) +202 allocs 16 parks 1.000  |  r2 20182 (20180..20183) +203 allocs 16.001 parks 1.000
+  out8  r1 20181 (20181..20182) +202 allocs 16 parks 1.000  |  r2 20182 (20182..20183) +203 allocs 15.999 parks 1.000
+  req1  r1 20199 (20199..20200) +220 allocs 16 parks 1.000  |  r2 20200 (20198..20200) +221 allocs 16.001 parks 1.000
+  req8  r1 20199 (20199..20200) +220 allocs 16 parks 1.000  |  r2 20200 (20199..20200) +221 allocs 16 parks 1.000
+  rq1   r1 20174 (20171..20174) +195 allocs 16 parks 1.001  |  r2 20174 (20173..20175) +195 allocs 15.999 parks 1.000
+  rq8   r1 20174 (20173..20174) +195 allocs 15.999 parks 1.000  |  r2 20174 (20173..20175) +195 allocs 16.001 parks 1.000
+  far   r1 20180 (20179..20181) +201 allocs 15.999 parks 1.000  |  r2 20180 (20180..20180) +201 allocs 16.001 parks 1.000
+  soon  r1 20163 (20162..20165) +184 allocs 15.999 parks 1.000  |  r2 20163 (20162..20163) +184 allocs 15.998 parks 0.999
+  soon2 r1 20164 (20163..20165) +185 allocs 16 parks 1.000  |  r2 20164 (20162..20165) +185 allocs 16 parks 1.001
+
+alt percore-by-hand
+  base  r1 21901 (21897..21902)  allocs 15 parks 2.010  |  r2 21896 (21895..21900)  allocs 15 parks 2.007
+  head  r1 21938 (21937..21940) +37 allocs 15 parks 2.007  |  r2 21940 (21934..21995) +44 allocs 15 parks 2.005
+  out1  r1 22220 (22205..22227) +319 allocs 15 parks 2.006  |  r2 22225 (22223..22226) +329 allocs 15 parks 2.007
+  out8  r1 22030 (22014..22031) +129 allocs 15 parks 2.007  |  r2 22030 (22027..22033) +134 allocs 15 parks 2.005
+  req1  r1 22211 (22209..22215) +310 allocs 15 parks 2.005
+  req8  r1 22018 (22018..22022) +117 allocs 15 parks 2.007  |  r2 22014 (22012..22015) +118 allocs 15 parks 2.003
+  rq1   r1 22167 (22166..22217) +266 allocs 15 parks 2.006  |  r2 22169 (22151..22170) +273 allocs 15 parks 2.008
+  rq8   r1 21976 (21974..21979) +75 allocs 15 parks 2.005  |  r2 21976 (21975..21980) +80 allocs 15 parks 2.005
+  far   r1 22128 (22126..22190) +227 allocs 15 parks 2.005  |  r2 22129 (22127..22129) +233 allocs 15 parks 2.007
+  soon  r1 21935 (21932..21941) +34 allocs 15 parks 2.004  |  r2 21934 (21933..21935) +38 allocs 15 parks 2.002
+  soon2 r1 21940 (21939..21941) +39 allocs 15 parks 2.005  |  r2 21938 (21936..21940) +42 allocs 15 parks 2.004
+
+prof-other3 default
+  base  r1 20599 (20599..20599)  allocs 16 parks 1.007
+  head  r1 20815 (20815..20815) +216 allocs 16 parks 1.027
+
+prof-row9 default
+  base  r1 20619 (20619..20619)  allocs 16 parks 1.020
+  head  r1 20846 (20846..20846) +227 allocs 16 parks 1.031
+
+prof-row1 default
+  base  r1 20600 (20600..20600)  allocs 16 parks 1.010
+  head  r1 20621 (20621..20621) +21 allocs 16 parks 1.026
+
+prof-other3 percore-by-hand
+  base  r1 19977 (19977..19977)  allocs 15.999 parks 0.999
+  head  r1 20173 (20173..20173) +196 allocs 15.999 parks 1.000
+
+prof-row9 percore-by-hand
+  base  r1 19982 (19982..19982)  allocs 16 parks 1.000
+  head  r1 20199 (20199..20199) +217 allocs 16 parks 1.000
+
+prof-row1 percore-by-hand
+  base  r1 19983 (19983..19983)  allocs 16 parks 1.000
+  head  r1 19989 (19989..19989) +6 allocs 16 parks 1.000
+
+row1-standing-1000 default
+  base  r1 20804 (20797..20804)  allocs 16 parks 1.030  |  r2 20809 (20808..20813)  allocs 16 parks 1.033
+  head  r1 20793 (20786..20812) -11 allocs 16 parks 1.015  |  r2 20809 (20804..20814) +0 allocs 16 parks 1.029
+
+row1-standing-30000 default
+  base  r1 20811 (20803..20819)  allocs 16 parks 1.028  |  r2 20780 (20774..20805)  allocs 16 parks 1.002
+  head  r1 20806 (20803..20817) -5 allocs 16 parks 1.020  |  r2 20820 (20794..20821) +40 allocs 16 parks 1.032
+
+row1-standing-3600000 default
+  base  r1 20817 (20807..20820)  allocs 16 parks 1.022  |  r2 20807 (20802..20827)  allocs 16 parks 1.017
+  head  r1 20814 (20811..20828) -3 allocs 16 parks 1.020  |  r2 20812 (20810..20826) +5 allocs 16 parks 1.020
+
+row1-standing-946080000000 default
+  base  r1 20836 (20818..20840)  allocs 16 parks 1.026  |  r2 20827 (20815..20846)  allocs 16 parks 1.019
+  head  r1 20840 (20814..20846) +4 allocs 16 parks 1.027  |  r2 20828 (20819..20833) +1 allocs 16 parks 1.018
+
+row2-standing-30000 default
+  base  r1 25138 (25131..25146)  allocs 14 parks 3.057  |  r2 25149 (25147..25151)  allocs 14 parks 3.062
+  head  r1 24941 (24920..24943) -197 allocs 14 parks 3.067  |  r2 24930 (24923..24940) -219 allocs 14 parks 3.056
+
+row9-standing-30000 default
+  base  r1 20817 (20790..20818)  allocs 16 parks 1.032  |  r2 20784 (20780..20786)  allocs 16 parks 1.003
+  head  r1 20828 (20814..20849) +11 allocs 16 parks 1.018  |  r2 20821 (20808..20848) +37 allocs 16 parks 1.012
+
+other3-standing-30000 default
+  base  r1 20781 (20776..20816)  allocs 16 parks 1.004  |  r2 20783 (20773..20788)  allocs 16 parks 1.006
+  head  r1 20790 (20782..20818) +9 allocs 16 parks 1.009  |  r2 20780 (20780..20821) -3 allocs 16 parks 1.006
+
+row1-standing-1000 percore-by-hand
+  base  r1 20159 (20158..20159)  allocs 16 parks 1.000  |  r2 20160 (20138..20160)  allocs 16 parks 1.000
+  head  r1 20167 (20167..20167) +8 allocs 16 parks 1.000  |  r2 20166 (20165..20167) +6 allocs 16 parks 1.000
+
+row1-standing-30000 percore-by-hand
+  base  r1 20169 (20168..20169)  allocs 16 parks 1.000  |  r2 20168 (20168..20169)  allocs 16 parks 1.000
+  head  r1 20175 (20175..20176) +6 allocs 16 parks 1.000  |  r2 20175 (20175..20198) +7 allocs 16 parks 1.000
+
+row1-standing-3600000 percore-by-hand
+  base  r1 20177 (20177..20177)  allocs 16 parks 1.000  |  r2 20177 (20177..20177)  allocs 16 parks 1.000
+  head  r1 20184 (20184..20185) +7 allocs 16 parks 1.000  |  r2 20184 (20184..20206) +7 allocs 16 parks 1.000
+
+row1-standing-946080000000 percore-by-hand
+  base  r1 20194 (20174..20194)  allocs 16 parks 1.000  |  r2 20193 (20193..20193)  allocs 16 parks 1.000
+  head  r1 20200 (20200..20201) +6 allocs 16 parks 1.000  |  r2 20200 (20200..20201) +7 allocs 16 parks 1.000
+
+row2-standing-30000 percore-by-hand
+  base  r1 23857 (23833..23904)  allocs 13.998 parks 3.013  |  r2 23895 (23891..23903)  allocs 14 parks 3.009
+  head  r1 23623 (23623..23713) -234 allocs 13.998 parks 3.016  |  r2 23676 (23672..23679) -219 allocs 13.998 parks 3.011
+
+row9-standing-30000 percore-by-hand
+  base  r1 20168 (20168..20169)  allocs 16 parks 1.000  |  r2 20169 (20168..20169)  allocs 16 parks 1.000
+  head  r1 20200 (20199..20203) +32 allocs 16 parks 0.999  |  r2 20201 (20200..20201) +32 allocs 16 parks 1.000
+
+other3-standing-30000 percore-by-hand
+  base  r1 20165 (20165..20168)  allocs 16.002 parks 1.000  |  r2 20165 (20164..20167)  allocs 16 parks 1.000
+  head  r1 20173 (20172..20175) +8 allocs 16 parks 1.001  |  r2 20173 (20172..20174) +8 allocs 16 parks 1.000

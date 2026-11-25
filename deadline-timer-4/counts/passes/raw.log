@@ -1,0 +1,4144 @@
+### p1.f1 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     5.00ms    1.10ms  24.31ms   67.68%
+    Req/Sec    51.37k     1.21k   64.42k    93.69%
+  Latency Distribution
+     50%    4.98ms
+     75%    5.73ms
+     90%    6.41ms
+     99%    7.75ms
+  2024060 requests in 10.05s, 752.81MB read
+Requests/sec: 201307.87
+Transfer/sec:     74.87MB
+### p1.f1 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.72ms    0.96ms  21.70ms   67.66%
+    Req/Sec    54.39k   777.11    59.85k    76.26%
+  Latency Distribution
+     50%    4.70ms
+     75%    5.36ms
+     90%    5.96ms
+     99%    7.12ms
+  2143437 requests in 10.03s, 797.21MB read
+Requests/sec: 213627.60
+Transfer/sec:     79.46MB
+### p1.f1 out1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.67ms    0.97ms  16.64ms   68.04%
+    Req/Sec    54.91k     2.26k   78.14k    96.21%
+  Latency Distribution
+     50%    4.65ms
+     75%    5.31ms
+     90%    5.91ms
+     99%    7.08ms
+  2162902 requests in 10.02s, 804.45MB read
+Requests/sec: 215779.02
+Transfer/sec:     80.26MB
+### p1.f1 out8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.83ms    1.02ms  14.71ms   68.00%
+    Req/Sec    53.23k     1.01k   57.62k    79.80%
+  Latency Distribution
+     50%    4.80ms
+     75%    5.49ms
+     90%    6.13ms
+     99%    7.42ms
+  2096799 requests in 10.02s, 779.87MB read
+Requests/sec: 209174.97
+Transfer/sec:     77.80MB
+### p1.f1 far
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.80ms    1.00ms  36.90ms   68.29%
+    Req/Sec    53.56k     0.97k   62.35k    88.89%
+  Latency Distribution
+     50%    4.77ms
+     75%    5.45ms
+     90%    6.07ms
+     99%    7.31ms
+  2109814 requests in 10.03s, 784.71MB read
+Requests/sec: 210328.96
+Transfer/sec:     78.23MB
+### p1.f1 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.68ms    0.95ms  17.96ms   68.20%
+    Req/Sec    54.91k     1.07k   58.11k    68.69%
+  Latency Distribution
+     50%    4.65ms
+     75%    5.30ms
+     90%    5.90ms
+     99%    7.09ms
+  2163057 requests in 10.02s, 804.51MB read
+Requests/sec: 215857.41
+Transfer/sec:     80.28MB
+### p1.f2 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     5.05ms    1.13ms  13.33ms   67.52%
+    Req/Sec    50.80k     2.01k   72.14k    87.37%
+  Latency Distribution
+     50%    5.02ms
+     75%    5.81ms
+     90%    6.51ms
+     99%    7.91ms
+  2001062 requests in 10.06s, 744.26MB read
+Requests/sec: 198909.66
+Transfer/sec:     73.98MB
+### p1.f2 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.73ms    0.98ms  20.87ms   67.95%
+    Req/Sec    54.34k     1.06k   66.57k    86.11%
+  Latency Distribution
+     50%    4.70ms
+     75%    5.37ms
+     90%    5.98ms
+     99%    7.18ms
+  2140998 requests in 10.02s, 796.31MB read
+Requests/sec: 213571.02
+Transfer/sec:     79.43MB
+### p1.f2 out1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.71ms    0.96ms  15.41ms   68.08%
+    Req/Sec    54.52k     0.93k   61.79k    81.31%
+  Latency Distribution
+     50%    4.69ms
+     75%    5.34ms
+     90%    5.93ms
+     99%    7.12ms
+  2147809 requests in 10.02s, 798.84MB read
+Requests/sec: 214351.02
+Transfer/sec:     79.72MB
+### p1.f2 out8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.69ms    0.95ms  23.95ms   67.79%
+    Req/Sec    54.78k   825.97    64.15k    79.04%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.32ms
+     90%    5.91ms
+     99%    7.04ms
+  2158036 requests in 10.05s, 802.64MB read
+Requests/sec: 214711.98
+Transfer/sec:     79.86MB
+### p1.f2 far
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.85ms    1.03ms  25.81ms   67.80%
+    Req/Sec    52.95k     1.13k   67.31k    86.62%
+  Latency Distribution
+     50%    4.82ms
+     75%    5.53ms
+     90%    6.18ms
+     99%    7.41ms
+  2086251 requests in 10.05s, 775.95MB read
+Requests/sec: 207538.06
+Transfer/sec:     77.19MB
+### p1.f2 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.70ms    0.97ms  13.41ms   68.04%
+    Req/Sec    54.60k     1.23k   66.09k    81.82%
+  Latency Distribution
+     50%    4.68ms
+     75%    5.34ms
+     90%    5.95ms
+     99%    7.16ms
+  2151570 requests in 10.07s, 800.24MB read
+Requests/sec: 213713.49
+Transfer/sec:     79.49MB
+### p1.f3 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.82ms    1.02ms  21.06ms   67.65%
+    Req/Sec    53.35k     2.02k   75.76k    97.74%
+  Latency Distribution
+     50%    4.80ms
+     75%    5.49ms
+     90%    6.12ms
+     99%    7.34ms
+  2117550 requests in 10.09s, 787.59MB read
+Requests/sec: 209946.25
+Transfer/sec:     78.09MB
+### p1.f3 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.72ms    0.98ms  21.91ms   67.92%
+    Req/Sec    54.39k     2.20k   77.69k    96.49%
+  Latency Distribution
+     50%    4.70ms
+     75%    5.37ms
+     90%    5.98ms
+     99%    7.17ms
+  2159782 requests in 10.09s, 803.29MB read
+Requests/sec: 213975.71
+Transfer/sec:     79.58MB
+### p1.f3 out1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.66ms    0.96ms  19.18ms   68.40%
+    Req/Sec    55.12k     2.81k   94.56k    98.24%
+  Latency Distribution
+     50%    4.65ms
+     75%    5.29ms
+     90%    5.88ms
+     99%    7.01ms
+  2182883 requests in 10.10s, 811.89MB read
+Requests/sec: 216213.09
+Transfer/sec:     80.42MB
+### p1.f3 out8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.72ms    0.99ms  15.43ms   68.39%
+    Req/Sec    54.36k     1.40k   64.79k    78.79%
+  Latency Distribution
+     50%    4.69ms
+     75%    5.36ms
+     90%    5.97ms
+     99%    7.24ms
+  2141904 requests in 10.05s, 796.64MB read
+Requests/sec: 213224.81
+Transfer/sec:     79.31MB
+### p1.f3 far
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.79ms    1.01ms  18.51ms   68.15%
+    Req/Sec    53.70k     1.06k   57.14k    87.00%
+  Latency Distribution
+     50%    4.76ms
+     75%    5.44ms
+     90%    6.06ms
+     99%    7.31ms
+  2136735 requests in 10.09s, 794.72MB read
+Requests/sec: 211712.18
+Transfer/sec:     78.74MB
+### p1.f3 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.71ms    0.97ms  15.44ms   68.30%
+    Req/Sec    54.52k     1.04k   61.21k    81.57%
+  Latency Distribution
+     50%    4.68ms
+     75%    5.34ms
+     90%    5.95ms
+     99%    7.17ms
+  2147816 requests in 10.02s, 798.84MB read
+Requests/sec: 214348.19
+Transfer/sec:     79.72MB
+### p1.f4 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.78ms    0.99ms  14.04ms   67.79%
+    Req/Sec    53.69k   771.49    61.51k    88.89%
+  Latency Distribution
+     50%    4.76ms
+     75%    5.44ms
+     90%    6.06ms
+     99%    7.24ms
+  2115196 requests in 10.05s, 786.71MB read
+Requests/sec: 210448.54
+Transfer/sec:     78.27MB
+### p1.f4 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.69ms    0.95ms  16.58ms   67.76%
+    Req/Sec    54.78k   763.16    59.05k    79.50%
+  Latency Distribution
+     50%    4.66ms
+     75%    5.32ms
+     90%    5.91ms
+     99%    7.06ms
+  2180533 requests in 10.10s, 811.01MB read
+Requests/sec: 215926.96
+Transfer/sec:     80.31MB
+### p1.f4 out1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.71ms    1.00ms  26.06ms   68.72%
+    Req/Sec    54.53k     3.38k  108.61k    98.74%
+  Latency Distribution
+     50%    4.70ms
+     75%    5.36ms
+     90%    5.97ms
+     99%    7.16ms
+  2159776 requests in 10.09s, 803.29MB read
+Requests/sec: 214099.20
+Transfer/sec:     79.63MB
+### p1.f4 out8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.69ms    0.96ms  21.75ms   67.75%
+    Req/Sec    54.77k     1.67k   71.64k    93.48%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.33ms
+     90%    5.92ms
+     99%    7.09ms
+  2173935 requests in 10.10s, 808.56MB read
+Requests/sec: 215246.74
+Transfer/sec:     80.06MB
+### p1.f4 far
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.79ms    1.01ms  16.59ms   68.09%
+    Req/Sec    53.56k     0.98k   59.46k    83.84%
+  Latency Distribution
+     50%    4.77ms
+     75%    5.46ms
+     90%    6.08ms
+     99%    7.32ms
+  2110664 requests in 10.04s, 785.03MB read
+Requests/sec: 210125.52
+Transfer/sec:     78.15MB
+### p1.f4 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.67ms    0.95ms  18.55ms   68.09%
+    Req/Sec    55.04k     0.96k   65.98k    87.12%
+  Latency Distribution
+     50%    4.64ms
+     75%    5.29ms
+     90%    5.88ms
+     99%    7.03ms
+  2169021 requests in 10.03s, 806.73MB read
+Requests/sec: 216209.45
+Transfer/sec:     80.42MB
+### p1.f5 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.88ms    1.05ms  17.13ms   68.05%
+    Req/Sec    52.64k     1.68k   69.08k    93.98%
+  Latency Distribution
+     50%    4.85ms
+     75%    5.57ms
+     90%    6.22ms
+     99%    7.50ms
+  2090245 requests in 10.09s, 777.43MB read
+Requests/sec: 207065.76
+Transfer/sec:     77.01MB
+### p1.f5 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.69ms    0.96ms  29.59ms   68.49%
+    Req/Sec    54.75k     0.97k   61.85k    86.11%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.32ms
+     90%    5.91ms
+     99%    7.10ms
+  2157108 requests in 10.05s, 802.30MB read
+Requests/sec: 214722.77
+Transfer/sec:     79.86MB
+### p1.f5 out1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.66ms    0.95ms  30.89ms   67.66%
+    Req/Sec    55.05k     0.91k   61.32k    81.00%
+  Latency Distribution
+     50%    4.64ms
+     75%    5.29ms
+     90%    5.89ms
+     99%    7.03ms
+  2191412 requests in 10.09s, 815.06MB read
+Requests/sec: 217224.50
+Transfer/sec:     80.79MB
+### p1.f5 out8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.62ms    0.94ms  24.92ms   67.98%
+    Req/Sec    55.61k     2.17k   78.54k    95.74%
+  Latency Distribution
+     50%    4.60ms
+     75%    5.23ms
+     90%    5.82ms
+     99%    6.96ms
+  2207898 requests in 10.09s, 821.19MB read
+Requests/sec: 218730.50
+Transfer/sec:     81.35MB
+### p1.f5 far
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.70ms    0.95ms  19.46ms   67.68%
+    Req/Sec    54.69k   745.62    58.47k    80.50%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.33ms
+     90%    5.93ms
+     99%    7.06ms
+  2177042 requests in 10.10s, 809.71MB read
+Requests/sec: 215558.27
+Transfer/sec:     80.17MB
+### p1.f5 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.70ms    0.96ms  39.49ms   67.79%
+    Req/Sec    54.66k   725.80    60.31k    81.82%
+  Latency Distribution
+     50%    4.68ms
+     75%    5.33ms
+     90%    5.93ms
+     99%    7.06ms
+  2153511 requests in 10.02s, 800.96MB read
+Requests/sec: 214900.73
+Transfer/sec:     79.93MB
+### p1.b1 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.88ms    1.04ms  35.03ms   67.60%
+    Req/Sec    52.61k     0.85k   59.33k    83.08%
+  Latency Distribution
+     50%    4.86ms
+     75%    5.57ms
+     90%    6.22ms
+     99%    7.50ms
+  2072602 requests in 10.03s, 770.87MB read
+Requests/sec: 206549.46
+Transfer/sec:     76.82MB
+### p1.b1 far
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.79ms    1.01ms  26.96ms   68.31%
+    Req/Sec    53.60k     0.99k   60.08k    86.36%
+  Latency Distribution
+     50%    4.76ms
+     75%    5.45ms
+     90%    6.08ms
+     99%    7.30ms
+  2111313 requests in 10.03s, 785.27MB read
+Requests/sec: 210508.30
+Transfer/sec:     78.29MB
+### p1.b1 out8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.71ms    0.98ms  17.98ms   68.22%
+    Req/Sec    54.48k     0.99k   61.97k    85.86%
+  Latency Distribution
+     50%    4.69ms
+     75%    5.35ms
+     90%    5.96ms
+     99%    7.15ms
+  2146699 requests in 10.03s, 798.43MB read
+Requests/sec: 214003.69
+Transfer/sec:     79.60MB
+### p1.b1 out1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.71ms    0.97ms  20.27ms   68.02%
+    Req/Sec    54.52k     0.95k   58.95k    77.53%
+  Latency Distribution
+     50%    4.68ms
+     75%    5.35ms
+     90%    5.95ms
+     99%    7.14ms
+  2147886 requests in 10.05s, 798.87MB read
+Requests/sec: 213795.99
+Transfer/sec:     79.52MB
+### p1.b1 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.90ms    1.10ms  28.36ms   68.70%
+    Req/Sec    52.40k     2.33k   79.08k    93.22%
+  Latency Distribution
+     50%    4.86ms
+     75%    5.61ms
+     90%    6.28ms
+     99%    7.68ms
+  2075179 requests in 10.07s, 771.83MB read
+Requests/sec: 205997.51
+Transfer/sec:     76.62MB
+### p1.b1 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.92ms    1.07ms  15.89ms   67.65%
+    Req/Sec    52.18k   811.96    58.46k    81.82%
+  Latency Distribution
+     50%    4.90ms
+     75%    5.63ms
+     90%    6.29ms
+     99%    7.59ms
+  2056399 requests in 10.03s, 764.84MB read
+Requests/sec: 205050.48
+Transfer/sec:     76.27MB
+### p1.b2 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.67ms    0.96ms  13.48ms   67.84%
+    Req/Sec    55.05k     1.88k   76.49k    97.74%
+  Latency Distribution
+     50%    4.65ms
+     75%    5.30ms
+     90%    5.90ms
+     99%    7.05ms
+  2185461 requests in 10.08s, 812.85MB read
+Requests/sec: 216781.76
+Transfer/sec:     80.63MB
+### p1.b2 far
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.80ms    1.05ms  28.39ms   68.64%
+    Req/Sec    53.52k     3.52k  109.85k    99.25%
+  Latency Distribution
+     50%    4.78ms
+     75%    5.49ms
+     90%    6.12ms
+     99%    7.38ms
+  2119249 requests in 10.10s, 788.22MB read
+Requests/sec: 209916.36
+Transfer/sec:     78.07MB
+### p1.b2 out8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.69ms    0.96ms  16.79ms   68.03%
+    Req/Sec    54.77k     1.61k   70.05k    89.72%
+  Latency Distribution
+     50%    4.66ms
+     75%    5.32ms
+     90%    5.93ms
+     99%    7.12ms
+  2174257 requests in 10.10s, 808.68MB read
+Requests/sec: 215361.01
+Transfer/sec:     80.10MB
+### p1.b2 out1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.64ms    0.95ms  40.25ms   68.43%
+    Req/Sec    55.35k     2.52k  102.34k    97.98%
+  Latency Distribution
+     50%    4.63ms
+     75%    5.27ms
+     90%    5.85ms
+     99%    7.01ms
+  2186180 requests in 10.10s, 813.11MB read
+Requests/sec: 216468.88
+Transfer/sec:     80.51MB
+### p1.b2 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.66ms    0.94ms  37.96ms   67.87%
+    Req/Sec    55.17k     0.99k   65.19k    84.34%
+  Latency Distribution
+     50%    4.63ms
+     75%    5.28ms
+     90%    5.87ms
+     99%    6.99ms
+  2173362 requests in 10.04s, 808.35MB read
+Requests/sec: 216488.73
+Transfer/sec:     80.52MB
+### p1.b2 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.75ms    1.01ms  17.39ms   68.41%
+    Req/Sec    54.07k     2.88k   98.67k    97.49%
+  Latency Distribution
+     50%    4.73ms
+     75%    5.42ms
+     90%    6.03ms
+     99%    7.22ms
+  2141612 requests in 10.10s, 796.54MB read
+Requests/sec: 212085.79
+Transfer/sec:     78.88MB
+### p1.b3 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.77ms    0.99ms  12.76ms   67.77%
+    Req/Sec    53.91k     0.85k   63.86k    83.08%
+  Latency Distribution
+     50%    4.74ms
+     75%    5.42ms
+     90%    6.03ms
+     99%    7.21ms
+  2123676 requests in 10.03s, 789.87MB read
+Requests/sec: 211706.12
+Transfer/sec:     78.74MB
+### p1.b3 far
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.80ms    1.02ms  14.79ms   68.01%
+    Req/Sec    53.53k     2.06k   74.39k    93.73%
+  Latency Distribution
+     50%    4.77ms
+     75%    5.47ms
+     90%    6.10ms
+     99%    7.34ms
+  2124748 requests in 10.10s, 790.26MB read
+Requests/sec: 210414.15
+Transfer/sec:     78.26MB
+### p1.b3 out8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.73ms    0.97ms  20.37ms   68.02%
+    Req/Sec    54.34k     0.94k   60.30k    79.55%
+  Latency Distribution
+     50%    4.70ms
+     75%    5.36ms
+     90%    5.97ms
+     99%    7.17ms
+  2141256 requests in 10.02s, 796.40MB read
+Requests/sec: 213717.06
+Transfer/sec:     79.49MB
+### p1.b3 out1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.65ms    0.94ms  16.52ms   68.35%
+    Req/Sec    55.27k     1.02k   69.40k    90.15%
+  Latency Distribution
+     50%    4.62ms
+     75%    5.26ms
+     90%    5.84ms
+     99%    7.00ms
+  2177321 requests in 10.05s, 809.82MB read
+Requests/sec: 216740.23
+Transfer/sec:     80.61MB
+### p1.b3 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.70ms    0.96ms   9.67ms   67.67%
+    Req/Sec    54.63k   820.86    59.69k    79.55%
+  Latency Distribution
+     50%    4.68ms
+     75%    5.34ms
+     90%    5.93ms
+     99%    7.08ms
+  2151690 requests in 10.02s, 800.28MB read
+Requests/sec: 214843.23
+Transfer/sec:     79.91MB
+### p1.b3 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.76ms    1.01ms  16.37ms   68.42%
+    Req/Sec    53.94k     2.49k   86.62k    96.98%
+  Latency Distribution
+     50%    4.74ms
+     75%    5.42ms
+     90%    6.05ms
+     99%    7.25ms
+  2136162 requests in 10.08s, 794.51MB read
+Requests/sec: 211986.20
+Transfer/sec:     78.84MB
+### p1.b4 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.87ms    1.04ms  11.81ms   67.47%
+    Req/Sec    52.75k     1.55k   68.72k    93.98%
+  Latency Distribution
+     50%    4.84ms
+     75%    5.56ms
+     90%    6.22ms
+     99%    7.48ms
+  2094453 requests in 10.09s, 779.00MB read
+Requests/sec: 207521.86
+Transfer/sec:     77.18MB
+### p1.b4 far
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.75ms    0.98ms  11.65ms   67.61%
+    Req/Sec    54.03k     0.92k   64.61k    86.11%
+  Latency Distribution
+     50%    4.73ms
+     75%    5.41ms
+     90%    6.02ms
+     99%    7.19ms
+  2128311 requests in 10.03s, 791.59MB read
+Requests/sec: 212108.13
+Transfer/sec:     78.89MB
+### p1.b4 out8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.65ms    0.95ms  23.88ms   67.77%
+    Req/Sec    55.18k     1.17k   66.60k    79.80%
+  Latency Distribution
+     50%    4.63ms
+     75%    5.28ms
+     90%    5.88ms
+     99%    7.02ms
+  2174422 requests in 10.05s, 808.74MB read
+Requests/sec: 216283.65
+Transfer/sec:     80.44MB
+### p1.b4 out1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.67ms    0.96ms  10.48ms   67.75%
+    Req/Sec    54.94k     1.82k   72.86k    93.48%
+  Latency Distribution
+     50%    4.65ms
+     75%    5.31ms
+     90%    5.91ms
+     99%    7.08ms
+  2181596 requests in 10.10s, 811.41MB read
+Requests/sec: 216002.30
+Transfer/sec:     80.34MB
+### p1.b4 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.77ms    1.02ms  20.08ms   68.24%
+    Req/Sec    53.79k     2.68k   90.16k    97.74%
+  Latency Distribution
+     50%    4.75ms
+     75%    5.45ms
+     90%    6.08ms
+     99%    7.29ms
+  2130262 requests in 10.10s, 792.31MB read
+Requests/sec: 210965.61
+Transfer/sec:     78.47MB
+### p1.b4 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.85ms    1.02ms  11.31ms   67.42%
+    Req/Sec    52.93k   709.77    57.09k    74.25%
+  Latency Distribution
+     50%    4.83ms
+     75%    5.53ms
+     90%    6.17ms
+     99%    7.38ms
+  2106725 requests in 10.09s, 783.56MB read
+Requests/sec: 208741.76
+Transfer/sec:     77.64MB
+### p1.b5 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.62ms    0.95ms  18.68ms   68.23%
+    Req/Sec    55.62k     2.30k   79.82k    94.99%
+  Latency Distribution
+     50%    4.59ms
+     75%    5.23ms
+     90%    5.82ms
+     99%    6.97ms
+  2207587 requests in 10.09s, 821.07MB read
+Requests/sec: 218851.95
+Transfer/sec:     81.40MB
+### p1.b5 far
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.89ms    1.05ms  14.65ms   67.62%
+    Req/Sec    52.55k     1.52k   69.41k    93.73%
+  Latency Distribution
+     50%    4.86ms
+     75%    5.59ms
+     90%    6.24ms
+     99%    7.54ms
+  2086098 requests in 10.09s, 775.89MB read
+Requests/sec: 206722.12
+Transfer/sec:     76.89MB
+### p1.b5 out8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.77ms    1.00ms  20.61ms   67.60%
+    Req/Sec    53.90k     0.86k   64.56k    84.09%
+  Latency Distribution
+     50%    4.74ms
+     75%    5.43ms
+     90%    6.05ms
+     99%    7.25ms
+  2123316 requests in 10.03s, 789.73MB read
+Requests/sec: 211632.45
+Transfer/sec:     78.71MB
+### p1.b5 out1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.60ms    0.93ms  33.54ms   68.23%
+    Req/Sec    55.82k     1.81k   73.50k    93.48%
+  Latency Distribution
+     50%    4.58ms
+     75%    5.20ms
+     90%    5.78ms
+     99%    6.92ms
+  2216113 requests in 10.10s, 824.25MB read
+Requests/sec: 219511.67
+Transfer/sec:     81.64MB
+### p1.b5 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.70ms    0.97ms  15.84ms   68.74%
+    Req/Sec    54.61k     1.28k   60.58k    94.95%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.33ms
+     90%    5.94ms
+     99%    7.18ms
+  2151643 requests in 10.04s, 800.27MB read
+Requests/sec: 214389.39
+Transfer/sec:     79.74MB
+### p1.b5 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.90ms    1.05ms  36.56ms   67.55%
+    Req/Sec    52.43k     1.40k   66.26k    94.74%
+  Latency Distribution
+     50%    4.87ms
+     75%    5.60ms
+     90%    6.25ms
+     99%    7.53ms
+  2081435 requests in 10.09s, 774.15MB read
+Requests/sec: 206322.66
+Transfer/sec:     76.74MB
+### q1.f1 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.15ms    2.57ms  16.49ms   70.68%
+    Req/Sec    63.95k     1.96k   81.86k    89.47%
+  Latency Distribution
+     50%    3.13ms
+     75%    5.98ms
+     90%    8.14ms
+     99%   10.83ms
+  2538903 requests in 10.08s, 0.92GB read
+Requests/sec: 251949.43
+Transfer/sec:     93.71MB
+### q1.f1 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.10ms    2.54ms  39.36ms   70.29%
+    Req/Sec    64.68k     0.87k   71.00k    73.99%
+  Latency Distribution
+     50%    3.09ms
+     75%    5.92ms
+     90%    7.98ms
+     99%   10.66ms
+  2548571 requests in 10.04s, 0.93GB read
+Requests/sec: 253814.61
+Transfer/sec:     94.40MB
+### q1.f2 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.12ms    2.41ms  24.92ms   70.45%
+    Req/Sec    63.61k     2.91k   97.60k    79.55%
+  Latency Distribution
+     50%    3.21ms
+     75%    5.89ms
+     90%    7.68ms
+     99%   10.45ms
+  2506835 requests in 10.08s, 0.91GB read
+Requests/sec: 248663.09
+Transfer/sec:     92.49MB
+### q1.f2 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     3.71ms    1.77ms  15.06ms   68.28%
+    Req/Sec    69.60k     1.93k   88.79k    92.73%
+  Latency Distribution
+     50%    3.19ms
+     75%    5.15ms
+     90%    6.05ms
+     99%    8.19ms
+  2762647 requests in 10.10s, 1.00GB read
+Requests/sec: 273620.13
+Transfer/sec:    101.77MB
+### q1.f3 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.06ms    2.58ms  26.01ms   70.90%
+    Req/Sec    65.57k     1.64k   77.72k    86.62%
+  Latency Distribution
+     50%    3.01ms
+     75%    5.85ms
+     90%    8.14ms
+     99%   10.77ms
+  2583320 requests in 10.04s, 0.94GB read
+Requests/sec: 257255.72
+Transfer/sec:     95.68MB
+### q1.f3 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.08ms    2.59ms  16.73ms   70.84%
+    Req/Sec    65.26k     2.02k  100.82k    98.23%
+  Latency Distribution
+     50%    3.02ms
+     75%    5.91ms
+     90%    8.16ms
+     99%   10.91ms
+  2571288 requests in 10.05s, 0.93GB read
+Requests/sec: 255835.47
+Transfer/sec:     95.15MB
+### q1.b1 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.11ms    2.61ms  23.86ms   71.09%
+    Req/Sec    64.93k     1.22k   81.69k    86.62%
+  Latency Distribution
+     50%    3.04ms
+     75%    5.93ms
+     90%    8.20ms
+     99%   10.82ms
+  2558097 requests in 10.03s, 0.93GB read
+Requests/sec: 255059.87
+Transfer/sec:     94.87MB
+### q1.b1 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.16ms    2.63ms  55.49ms   71.16%
+    Req/Sec    64.03k     1.54k   88.46k    94.95%
+  Latency Distribution
+     50%    3.10ms
+     75%    5.98ms
+     90%    8.35ms
+     99%   10.91ms
+  2522106 requests in 10.04s, 0.92GB read
+Requests/sec: 251256.28
+Transfer/sec:     93.45MB
+### q1.b2 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     3.75ms    1.82ms  16.25ms   68.10%
+    Req/Sec    68.89k     1.25k   82.87k    86.62%
+  Latency Distribution
+     50%    3.19ms
+     75%    5.23ms
+     90%    6.17ms
+     99%    8.40ms
+  2714156 requests in 10.05s, 0.99GB read
+Requests/sec: 269944.97
+Transfer/sec:    100.40MB
+### q1.b2 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.00ms    2.60ms  24.24ms   71.89%
+    Req/Sec    67.12k     2.16k   92.06k    93.73%
+  Latency Distribution
+     50%    2.97ms
+     75%    5.80ms
+     90%    7.86ms
+     99%   11.31ms
+  2665242 requests in 10.09s, 0.97GB read
+Requests/sec: 264173.30
+Transfer/sec:     98.25MB
+### q1.b3 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.10ms    2.61ms  18.95ms   71.07%
+    Req/Sec    65.02k     2.79k  105.94k    98.74%
+  Latency Distribution
+     50%    3.04ms
+     75%    5.90ms
+     90%    8.24ms
+     99%   10.85ms
+  2574697 requests in 10.09s, 0.94GB read
+Requests/sec: 255067.37
+Transfer/sec:     94.87MB
+### q1.b3 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.03ms    2.49ms  43.16ms   71.50%
+    Req/Sec    65.88k     1.17k   73.08k    75.76%
+  Latency Distribution
+     50%    3.06ms
+     75%    5.80ms
+     90%    7.68ms
+     99%   10.98ms
+  2596067 requests in 10.03s, 0.94GB read
+Requests/sec: 258808.72
+Transfer/sec:     96.26MB
+### p2.f1 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.93ms    1.12ms  12.51ms   67.86%
+    Req/Sec    51.91k     2.90k   71.76k    94.19%
+  Latency Distribution
+     50%    4.89ms
+     75%    5.67ms
+     90%    6.37ms
+     99%    7.82ms
+  2044951 requests in 10.03s, 760.58MB read
+Requests/sec: 203881.29
+Transfer/sec:     75.83MB
+### p2.f1 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.69ms    0.98ms  16.75ms   68.51%
+    Req/Sec    54.73k     2.83k   92.98k    96.98%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.34ms
+     90%    5.94ms
+     99%    7.12ms
+  2167190 requests in 10.10s, 806.05MB read
+Requests/sec: 214613.90
+Transfer/sec:     79.82MB
+### p2.f1 req1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.68ms    0.94ms  11.54ms   67.91%
+    Req/Sec    54.92k   835.23    63.74k    83.33%
+  Latency Distribution
+     50%    4.66ms
+     75%    5.30ms
+     90%    5.88ms
+     99%    7.04ms
+  2163903 requests in 10.03s, 804.83MB read
+Requests/sec: 215842.00
+Transfer/sec:     80.28MB
+### p2.f1 req8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.67ms    0.95ms  14.64ms   67.95%
+    Req/Sec    54.99k     0.91k   65.59k    88.64%
+  Latency Distribution
+     50%    4.65ms
+     75%    5.30ms
+     90%    5.88ms
+     99%    7.02ms
+  2165393 requests in 10.03s, 805.38MB read
+Requests/sec: 215853.38
+Transfer/sec:     80.28MB
+### p2.f1 soon2
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.68ms    0.95ms  18.11ms   67.84%
+    Req/Sec    54.91k     0.85k   63.74k    83.33%
+  Latency Distribution
+     50%    4.65ms
+     75%    5.30ms
+     90%    5.90ms
+     99%    7.06ms
+  2163101 requests in 10.03s, 804.53MB read
+Requests/sec: 215763.42
+Transfer/sec:     80.25MB
+### p2.f2 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.85ms    1.04ms  23.81ms   68.51%
+    Req/Sec    52.93k     0.89k   65.12k    88.13%
+  Latency Distribution
+     50%    4.82ms
+     75%    5.53ms
+     90%    6.16ms
+     99%    7.41ms
+  2085959 requests in 10.05s, 775.84MB read
+Requests/sec: 207580.25
+Transfer/sec:     77.21MB
+### p2.f2 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.87ms    1.06ms  24.66ms   68.16%
+    Req/Sec    52.73k     2.73k   89.55k    97.49%
+  Latency Distribution
+     50%    4.86ms
+     75%    5.57ms
+     90%    6.22ms
+     99%    7.51ms
+  2088079 requests in 10.09s, 776.63MB read
+Requests/sec: 207003.78
+Transfer/sec:     76.99MB
+### p2.f2 req1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.66ms    0.94ms  15.39ms   68.04%
+    Req/Sec    55.15k   844.70    62.20k    85.10%
+  Latency Distribution
+     50%    4.63ms
+     75%    5.27ms
+     90%    5.86ms
+     99%    7.01ms
+  2172730 requests in 10.03s, 808.11MB read
+Requests/sec: 216721.40
+Transfer/sec:     80.61MB
+### p2.f2 req8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.72ms    0.97ms  42.39ms   67.67%
+    Req/Sec    54.48k   812.27    61.33k    76.52%
+  Latency Distribution
+     50%    4.69ms
+     75%    5.36ms
+     90%    5.97ms
+     99%    7.13ms
+  2146481 requests in 10.04s, 798.35MB read
+Requests/sec: 213800.40
+Transfer/sec:     79.52MB
+### p2.f2 soon2
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.68ms    0.95ms  30.01ms   67.99%
+    Req/Sec    54.88k   834.53    59.41k    78.25%
+  Latency Distribution
+     50%    4.66ms
+     75%    5.30ms
+     90%    5.89ms
+     99%    7.05ms
+  2183721 requests in 10.10s, 812.20MB read
+Requests/sec: 216296.86
+Transfer/sec:     80.45MB
+### p2.f3 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.79ms    1.00ms  12.58ms   67.57%
+    Req/Sec    53.66k     1.27k   66.53k    93.98%
+  Latency Distribution
+     50%    4.76ms
+     75%    5.45ms
+     90%    6.07ms
+     99%    7.30ms
+  2130180 requests in 10.08s, 792.28MB read
+Requests/sec: 211284.91
+Transfer/sec:     78.58MB
+### p2.f3 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.65ms    0.95ms  22.79ms   68.11%
+    Req/Sec    55.23k     1.22k   67.42k    87.12%
+  Latency Distribution
+     50%    4.63ms
+     75%    5.28ms
+     90%    5.86ms
+     99%    6.99ms
+  2175301 requests in 10.04s, 809.07MB read
+Requests/sec: 216672.86
+Transfer/sec:     80.59MB
+### p2.f3 req1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.79ms    1.01ms  13.67ms   67.70%
+    Req/Sec    53.68k     1.66k   70.17k    90.73%
+  Latency Distribution
+     50%    4.76ms
+     75%    5.45ms
+     90%    6.07ms
+     99%    7.30ms
+  2131118 requests in 10.09s, 792.63MB read
+Requests/sec: 211261.26
+Transfer/sec:     78.58MB
+### p2.f3 req8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.69ms    0.95ms  17.28ms   67.98%
+    Req/Sec    54.78k     0.89k   60.15k    76.01%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.32ms
+     90%    5.92ms
+     99%    7.09ms
+  2157851 requests in 10.05s, 802.58MB read
+Requests/sec: 214629.06
+Transfer/sec:     79.83MB
+### p2.f3 soon2
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.75ms    0.99ms  20.75ms   67.78%
+    Req/Sec    54.06k     1.58k   70.43k    94.99%
+  Latency Distribution
+     50%    4.72ms
+     75%    5.40ms
+     90%    6.02ms
+     99%    7.25ms
+  2146586 requests in 10.10s, 798.39MB read
+Requests/sec: 212538.86
+Transfer/sec:     79.05MB
+### p2.f4 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.78ms    1.00ms  18.44ms   67.62%
+    Req/Sec    53.71k     1.52k   69.14k    91.73%
+  Latency Distribution
+     50%    4.75ms
+     75%    5.44ms
+     90%    6.08ms
+     99%    7.31ms
+  2132078 requests in 10.08s, 792.99MB read
+Requests/sec: 211528.33
+Transfer/sec:     78.67MB
+### p2.f4 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.71ms    0.98ms  17.74ms   68.38%
+    Req/Sec    54.55k     2.22k   95.78k    97.48%
+  Latency Distribution
+     50%    4.69ms
+     75%    5.35ms
+     90%    5.96ms
+     99%    7.14ms
+  2154642 requests in 10.10s, 801.38MB read
+Requests/sec: 213344.26
+Transfer/sec:     79.35MB
+### p2.f4 req1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.69ms    0.95ms  14.99ms   67.81%
+    Req/Sec    54.78k     0.98k   61.54k    80.81%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.31ms
+     90%    5.91ms
+     99%    7.06ms
+  2157574 requests in 10.03s, 802.47MB read
+Requests/sec: 215161.17
+Transfer/sec:     80.03MB
+### p2.f4 req8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.64ms    0.95ms  26.51ms   68.22%
+    Req/Sec    55.29k     1.93k   76.67k    94.95%
+  Latency Distribution
+     50%    4.62ms
+     75%    5.27ms
+     90%    5.85ms
+     99%    7.03ms
+  2178371 requests in 10.04s, 810.21MB read
+Requests/sec: 217044.93
+Transfer/sec:     80.73MB
+### p2.f4 soon2
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.81ms    1.04ms  15.80ms   68.63%
+    Req/Sec    53.33k     2.55k   87.76k    98.49%
+  Latency Distribution
+     50%    4.79ms
+     75%    5.50ms
+     90%    6.13ms
+     99%    7.40ms
+  2112176 requests in 10.09s, 785.59MB read
+Requests/sec: 209389.98
+Transfer/sec:     77.88MB
+### p2.f5 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.91ms    1.06ms  21.29ms   67.84%
+    Req/Sec    52.36k     2.08k   75.20k    97.99%
+  Latency Distribution
+     50%    4.88ms
+     75%    5.61ms
+     90%    6.27ms
+     99%    7.56ms
+  2078060 requests in 10.08s, 772.90MB read
+Requests/sec: 206143.31
+Transfer/sec:     76.67MB
+### p2.f5 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.70ms    0.96ms  13.44ms   68.03%
+    Req/Sec    54.62k     0.97k   64.14k    79.80%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.33ms
+     90%    5.93ms
+     99%    7.13ms
+  2152577 requests in 10.04s, 800.61MB read
+Requests/sec: 214467.82
+Transfer/sec:     79.77MB
+### p2.f5 req1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.70ms    0.96ms  37.07ms   67.84%
+    Req/Sec    54.61k     0.88k   62.81k    82.25%
+  Latency Distribution
+     50%    4.68ms
+     75%    5.34ms
+     90%    5.93ms
+     99%    7.07ms
+  2173068 requests in 10.09s, 808.24MB read
+Requests/sec: 215393.69
+Transfer/sec:     80.11MB
+### p2.f5 req8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.76ms    1.01ms  24.03ms   68.78%
+    Req/Sec    54.04k     2.13k   77.10k    96.74%
+  Latency Distribution
+     50%    4.73ms
+     75%    5.41ms
+     90%    6.02ms
+     99%    7.23ms
+  2145082 requests in 10.10s, 797.83MB read
+Requests/sec: 212488.54
+Transfer/sec:     79.03MB
+### p2.f5 soon2
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.65ms    0.95ms  13.55ms   67.78%
+    Req/Sec    55.20k     1.98k   76.88k    96.99%
+  Latency Distribution
+     50%    4.63ms
+     75%    5.28ms
+     90%    5.87ms
+     99%    7.01ms
+  2191554 requests in 10.08s, 815.11MB read
+Requests/sec: 217316.32
+Transfer/sec:     80.83MB
+### p2.b1 soon2
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.68ms    0.97ms  19.75ms   68.42%
+    Req/Sec    54.86k     1.45k   70.16k    90.40%
+  Latency Distribution
+     50%    4.66ms
+     75%    5.31ms
+     90%    5.91ms
+     99%    7.10ms
+  2161380 requests in 10.06s, 803.89MB read
+Requests/sec: 214944.05
+Transfer/sec:     79.94MB
+### p2.b1 req8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.70ms    0.95ms  16.70ms   67.71%
+    Req/Sec    54.69k   656.97    57.44k    71.21%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.33ms
+     90%    5.92ms
+     99%    7.06ms
+  2154767 requests in 10.04s, 801.43MB read
+Requests/sec: 214699.08
+Transfer/sec:     79.85MB
+### p2.b1 req1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.66ms    0.95ms  14.29ms   67.91%
+    Req/Sec    55.15k     1.56k   71.41k    93.48%
+  Latency Distribution
+     50%    4.63ms
+     75%    5.28ms
+     90%    5.87ms
+     99%    7.03ms
+  2188943 requests in 10.10s, 814.14MB read
+Requests/sec: 216785.07
+Transfer/sec:     80.63MB
+### p2.b1 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.72ms    0.99ms  13.46ms   68.28%
+    Req/Sec    54.45k     1.81k   79.42k    93.43%
+  Latency Distribution
+     50%    4.70ms
+     75%    5.36ms
+     90%    5.97ms
+     99%    7.18ms
+  2145307 requests in 10.05s, 797.91MB read
+Requests/sec: 213437.47
+Transfer/sec:     79.38MB
+### p2.b1 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.83ms    1.01ms  18.01ms   67.84%
+    Req/Sec    53.22k     0.89k   61.26k    83.59%
+  Latency Distribution
+     50%    4.80ms
+     75%    5.49ms
+     90%    6.12ms
+     99%    7.36ms
+  2096448 requests in 10.06s, 779.74MB read
+Requests/sec: 208410.22
+Transfer/sec:     77.51MB
+### p2.b2 soon2
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.69ms    0.97ms  14.32ms   68.18%
+    Req/Sec    54.73k     2.16k   77.55k    95.99%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.33ms
+     90%    5.93ms
+     99%    7.13ms
+  2172650 requests in 10.09s, 808.08MB read
+Requests/sec: 215422.68
+Transfer/sec:     80.12MB
+### p2.b2 req8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.68ms    0.96ms  21.91ms   67.83%
+    Req/Sec    54.82k     1.53k   70.82k    94.24%
+  Latency Distribution
+     50%    4.66ms
+     75%    5.31ms
+     90%    5.91ms
+     99%    7.07ms
+  2176449 requests in 10.09s, 809.49MB read
+Requests/sec: 215755.64
+Transfer/sec:     80.25MB
+### p2.b2 req1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.71ms    0.96ms  15.47ms   67.86%
+    Req/Sec    54.58k     0.89k   59.51k    82.32%
+  Latency Distribution
+     50%    4.68ms
+     75%    5.34ms
+     90%    5.94ms
+     99%    7.13ms
+  2150397 requests in 10.04s, 799.80MB read
+Requests/sec: 214276.28
+Transfer/sec:     79.70MB
+### p2.b2 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.73ms    0.98ms  22.04ms   67.97%
+    Req/Sec    54.25k     1.23k   62.16k    84.75%
+  Latency Distribution
+     50%    4.71ms
+     75%    5.38ms
+     90%    5.99ms
+     99%    7.19ms
+  2159196 requests in 10.09s, 803.08MB read
+Requests/sec: 213925.26
+Transfer/sec:     79.57MB
+### p2.b2 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.92ms    1.06ms  21.80ms   68.07%
+    Req/Sec    52.22k     0.89k   61.29k    79.55%
+  Latency Distribution
+     50%    4.89ms
+     75%    5.62ms
+     90%    6.28ms
+     99%    7.59ms
+  2056633 requests in 10.06s, 764.93MB read
+Requests/sec: 204479.97
+Transfer/sec:     76.05MB
+### p2.b3 soon2
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.67ms    0.96ms  12.59ms   67.89%
+    Req/Sec    55.02k     2.27k   79.75k    96.24%
+  Latency Distribution
+     50%    4.65ms
+     75%    5.30ms
+     90%    5.90ms
+     99%    7.05ms
+  2183525 requests in 10.09s, 812.12MB read
+Requests/sec: 216356.57
+Transfer/sec:     80.47MB
+### p2.b3 req8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.68ms    0.99ms  20.59ms   68.75%
+    Req/Sec    54.82k     3.15k  103.58k    97.99%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.33ms
+     90%    5.93ms
+     99%    7.13ms
+  2171201 requests in 10.09s, 807.54MB read
+Requests/sec: 215224.49
+Transfer/sec:     80.05MB
+### p2.b3 req1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.66ms    0.96ms  41.47ms   68.01%
+    Req/Sec    55.15k     2.01k   77.50k    96.24%
+  Latency Distribution
+     50%    4.64ms
+     75%    5.29ms
+     90%    5.88ms
+     99%    7.04ms
+  2189009 requests in 10.10s, 814.16MB read
+Requests/sec: 216784.00
+Transfer/sec:     80.63MB
+### p2.b3 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.65ms    0.94ms  11.86ms   67.61%
+    Req/Sec    55.30k     1.41k   70.22k    95.49%
+  Latency Distribution
+     50%    4.62ms
+     75%    5.27ms
+     90%    5.86ms
+     99%    6.99ms
+  2195117 requests in 10.08s, 816.44MB read
+Requests/sec: 217797.27
+Transfer/sec:     81.01MB
+### p2.b3 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.76ms    1.00ms  29.98ms   67.86%
+    Req/Sec    53.95k     2.10k   77.18k    98.75%
+  Latency Distribution
+     50%    4.74ms
+     75%    5.43ms
+     90%    6.05ms
+     99%    7.26ms
+  2141546 requests in 10.09s, 796.51MB read
+Requests/sec: 212181.36
+Transfer/sec:     78.92MB
+### p2.b4 soon2
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.65ms    0.94ms  18.88ms   68.01%
+    Req/Sec    55.21k     0.92k   65.57k    82.32%
+  Latency Distribution
+     50%    4.63ms
+     75%    5.27ms
+     90%    5.84ms
+     99%    6.99ms
+  2175549 requests in 10.03s, 809.16MB read
+Requests/sec: 216893.12
+Transfer/sec:     80.67MB
+### p2.b4 req8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.62ms    0.92ms  11.28ms   67.82%
+    Req/Sec    55.60k     0.86k   62.18k    80.30%
+  Latency Distribution
+     50%    4.59ms
+     75%    5.23ms
+     90%    5.81ms
+     99%    6.92ms
+  2190382 requests in 10.03s, 814.68MB read
+Requests/sec: 218412.58
+Transfer/sec:     81.23MB
+### p2.b4 req1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.67ms    0.96ms  15.82ms   67.85%
+    Req/Sec    54.96k     1.78k   73.46k    94.24%
+  Latency Distribution
+     50%    4.65ms
+     75%    5.30ms
+     90%    5.90ms
+     99%    7.07ms
+  2181515 requests in 10.10s, 811.38MB read
+Requests/sec: 216059.44
+Transfer/sec:     80.36MB
+### p2.b4 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.64ms    0.94ms  24.32ms   68.22%
+    Req/Sec    55.32k   839.10    63.49k    86.36%
+  Latency Distribution
+     50%    4.62ms
+     75%    5.26ms
+     90%    5.85ms
+     99%    7.00ms
+  2179827 requests in 10.03s, 810.75MB read
+Requests/sec: 217382.57
+Transfer/sec:     80.85MB
+### p2.b4 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.77ms    1.00ms  13.27ms   67.74%
+    Req/Sec    53.92k     1.71k   71.16k    94.24%
+  Latency Distribution
+     50%    4.74ms
+     75%    5.43ms
+     90%    6.04ms
+     99%    7.25ms
+  2139804 requests in 10.10s, 795.86MB read
+Requests/sec: 211866.06
+Transfer/sec:     78.80MB
+### p2.b5 soon2
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.60ms    0.92ms  24.53ms   67.92%
+    Req/Sec    55.88k     1.67k   73.70k    96.24%
+  Latency Distribution
+     50%    4.58ms
+     75%    5.20ms
+     90%    5.77ms
+     99%    6.88ms
+  2217669 requests in 10.10s, 824.82MB read
+Requests/sec: 219566.19
+Transfer/sec:     81.66MB
+### p2.b5 req8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.65ms    0.94ms  17.12ms   67.91%
+    Req/Sec    55.20k     1.40k   68.79k    92.48%
+  Latency Distribution
+     50%    4.63ms
+     75%    5.27ms
+     90%    5.86ms
+     99%    7.01ms
+  2191659 requests in 10.09s, 815.15MB read
+Requests/sec: 217239.68
+Transfer/sec:     80.80MB
+### p2.b5 req1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.72ms    0.97ms  11.76ms   67.62%
+    Req/Sec    54.42k     0.89k   63.14k    83.25%
+  Latency Distribution
+     50%    4.70ms
+     75%    5.37ms
+     90%    5.98ms
+     99%    7.13ms
+  2165194 requests in 10.09s, 805.31MB read
+Requests/sec: 214574.18
+Transfer/sec:     79.81MB
+### p2.b5 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.71ms    0.97ms  10.40ms   67.58%
+    Req/Sec    54.57k     1.62k   71.49k    94.99%
+  Latency Distribution
+     50%    4.68ms
+     75%    5.35ms
+     90%    5.95ms
+     99%    7.12ms
+  2166836 requests in 10.09s, 805.92MB read
+Requests/sec: 214695.94
+Transfer/sec:     79.85MB
+### p2.b5 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.73ms    0.98ms  27.94ms   67.79%
+    Req/Sec    54.28k     1.68k   72.24k    93.98%
+  Latency Distribution
+     50%    4.71ms
+     75%    5.38ms
+     90%    5.99ms
+     99%    7.18ms
+  2154784 requests in 10.09s, 801.44MB read
+Requests/sec: 213613.81
+Transfer/sec:     79.45MB
+### s1.f1 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.62us    9.81us   1.22ms   99.46%
+    Req/Sec    37.88k     1.48k   38.79k    97.03%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   35.00us
+  380549 requests in 10.10s, 141.54MB read
+Requests/sec:  37679.49
+Transfer/sec:     14.01MB
+### s1.f1 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.66us    8.21us   0.91ms   99.31%
+    Req/Sec    37.76k   421.48    38.53k    73.27%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  379415 requests in 10.10s, 141.12MB read
+Requests/sec:  37568.26
+Transfer/sec:     13.97MB
+### s1.f1 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.19us    6.31us 609.00us   97.42%
+    Req/Sec    38.40k     1.42k   39.56k    96.04%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   34.00us
+  385626 requests in 10.10s, 143.43MB read
+Requests/sec:  38181.88
+Transfer/sec:     14.20MB
+### s1.f2 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.50us    5.43us 566.00us   98.74%
+    Req/Sec    37.84k   401.00    38.80k    71.29%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   31.00us
+  380428 requests in 10.10s, 141.49MB read
+Requests/sec:  37667.73
+Transfer/sec:     14.01MB
+### s1.f1 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.16us    3.72us 472.00us   98.39%
+    Req/Sec    38.29k   368.59    39.07k    67.33%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   31.00us
+  384697 requests in 10.10s, 143.08MB read
+Requests/sec:  38092.26
+Transfer/sec:     14.17MB
+### s1.f1 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.41us    4.73us 632.00us   98.35%
+    Req/Sec    37.98k   510.91    38.88k    77.23%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  381641 requests in 10.10s, 141.94MB read
+Requests/sec:  37787.38
+Transfer/sec:     14.05MB
+### s1.f1 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.38us    7.38us 586.00us   99.20%
+    Req/Sec    38.17k   548.15    39.12k    73.27%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   32.00us
+  383520 requests in 10.10s, 142.64MB read
+Requests/sec:  37974.68
+Transfer/sec:     14.12MB
+### s1.f2 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.38us    5.82us 613.00us   98.82%
+    Req/Sec    38.05k   485.89    38.98k    76.24%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   32.00us
+  382332 requests in 10.10s, 142.20MB read
+Requests/sec:  37857.13
+Transfer/sec:     14.08MB
+### s1.f2 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.55us    5.82us 508.00us   98.76%
+    Req/Sec    37.76k   441.82    38.47k    74.26%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  379307 requests in 10.10s, 141.08MB read
+Requests/sec:  37555.20
+Transfer/sec:     13.97MB
+### s1.f2 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.45us    6.61us 809.00us   99.08%
+    Req/Sec    37.97k   388.93    38.83k    71.29%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  381545 requests in 10.10s, 141.91MB read
+Requests/sec:  37778.11
+Transfer/sec:     14.05MB
+### s1.f3 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.64us    8.50us 622.00us   99.32%
+    Req/Sec    37.87k   650.10    38.76k    80.20%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   33.00us
+  380387 requests in 10.10s, 141.48MB read
+Requests/sec:  37663.57
+Transfer/sec:     14.01MB
+### s1.f3 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.66us    3.50us 412.00us   98.46%
+    Req/Sec    37.62k   360.24    38.24k    69.31%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  377814 requests in 10.10s, 140.52MB read
+Requests/sec:  37407.98
+Transfer/sec:     13.91MB
+### s1.f3 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.60us    6.16us 545.00us   95.97%
+    Req/Sec    37.81k     1.79k   39.11k    94.06%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   35.00us
+  379816 requests in 10.10s, 141.27MB read
+Requests/sec:  37607.78
+Transfer/sec:     13.99MB
+### s1.f4 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.39us    4.76us 617.00us   98.51%
+    Req/Sec    38.05k   555.79    38.99k    81.19%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   32.00us
+  382192 requests in 10.10s, 142.15MB read
+Requests/sec:  37842.64
+Transfer/sec:     14.07MB
+### s1.f4 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.76us    5.73us 571.00us   97.29%
+    Req/Sec    37.51k     1.13k   38.65k    95.05%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   34.00us
+  376746 requests in 10.10s, 140.12MB read
+Requests/sec:  37303.30
+Transfer/sec:     13.87MB
+### s1.f4 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.60us    7.19us 637.00us   95.98%
+    Req/Sec    37.81k     1.86k   39.21k    93.07%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   35.00us
+  379879 requests in 10.10s, 141.29MB read
+Requests/sec:  37614.89
+Transfer/sec:     13.99MB
+### s1.f5 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.51us    4.76us 537.00us   96.64%
+    Req/Sec    37.83k     1.70k   39.03k    97.03%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   35.00us
+  380088 requests in 10.10s, 141.37MB read
+Requests/sec:  37634.13
+Transfer/sec:     14.00MB
+### s1.f5 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.87us    6.36us 572.00us   99.08%
+    Req/Sec    37.40k   374.38    38.27k    69.31%
+  Latency Distribution
+     50%   26.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  375775 requests in 10.10s, 139.76MB read
+Requests/sec:  37207.80
+Transfer/sec:     13.84MB
+### s1.f5 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.11us    5.29us 595.00us   98.70%
+    Req/Sec    38.45k   471.74    39.22k    70.30%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   32.00us
+  386258 requests in 10.10s, 143.66MB read
+Requests/sec:  38244.40
+Transfer/sec:     14.22MB
+### s1.b1 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.52us    6.80us 582.00us   97.18%
+    Req/Sec    37.94k     1.62k   39.12k    95.05%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   34.00us
+  381049 requests in 10.10s, 141.72MB read
+Requests/sec:  37730.35
+Transfer/sec:     14.03MB
+### s1.b1 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.79us    5.29us 627.00us   96.91%
+    Req/Sec    37.40k     1.47k   38.45k    97.03%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   34.00us
+  375978 requests in 10.10s, 139.84MB read
+Requests/sec:  37228.60
+Transfer/sec:     13.85MB
+### s1.b1 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.77us    8.84us   1.08ms   98.63%
+    Req/Sec    37.57k     2.04k   38.96k    95.05%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   35.00us
+  377408 requests in 10.10s, 140.37MB read
+Requests/sec:  37369.15
+Transfer/sec:     13.90MB
+### s1.b2 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.83us    5.91us 678.00us   97.36%
+    Req/Sec    37.36k     1.34k   38.39k    97.03%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   34.00us
+  375430 requests in 10.10s, 139.63MB read
+Requests/sec:  37171.70
+Transfer/sec:     13.83MB
+### s1.b2 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.61us    3.32us 414.00us   97.90%
+    Req/Sec    37.65k   441.19    38.56k    68.32%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  378174 requests in 10.10s, 140.66MB read
+Requests/sec:  37445.75
+Transfer/sec:     13.93MB
+### s1.b2 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.65us   10.51us   1.15ms   99.64%
+    Req/Sec    37.81k     1.41k   38.81k    97.03%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   34.00us
+  379917 requests in 10.10s, 141.30MB read
+Requests/sec:  37616.58
+Transfer/sec:     13.99MB
+### s1.b3 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.36us    3.61us 473.00us   97.72%
+    Req/Sec    38.02k   455.43    39.03k    85.15%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   32.00us
+  382043 requests in 10.10s, 142.09MB read
+Requests/sec:  37827.41
+Transfer/sec:     14.07MB
+### s1.b3 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.53us    2.92us 512.00us   97.37%
+    Req/Sec    37.71k   395.96    38.80k    67.33%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  378909 requests in 10.10s, 140.93MB read
+Requests/sec:  37516.62
+Transfer/sec:     13.95MB
+### s1.b3 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.48us    5.62us 544.00us   97.21%
+    Req/Sec    37.94k     1.50k   38.96k    96.04%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   34.00us
+  381218 requests in 10.10s, 141.79MB read
+Requests/sec:  37746.16
+Transfer/sec:     14.04MB
+### s1.b4 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.78us    3.06us 373.00us   96.59%
+    Req/Sec    37.37k     1.13k   38.43k    97.03%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   34.00us
+  375521 requests in 10.10s, 139.67MB read
+Requests/sec:  37183.32
+Transfer/sec:     13.83MB
+### s1.b4 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.96us    5.58us 560.00us   95.18%
+    Req/Sec    37.22k     1.99k   38.72k    95.05%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   35.00us
+  373996 requests in 10.10s, 139.10MB read
+Requests/sec:  37029.33
+Transfer/sec:     13.77MB
+### s1.b4 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.46us    4.07us 547.00us   98.39%
+    Req/Sec    37.87k   331.72    38.49k    68.32%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   31.00us
+  380565 requests in 10.10s, 141.54MB read
+Requests/sec:  37681.31
+Transfer/sec:     14.01MB
+### s1.b5 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.71us   30.71us   3.01ms   99.86%
+    Req/Sec    38.26k     1.50k   39.27k    96.04%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   34.00us
+  384305 requests in 10.10s, 142.94MB read
+Requests/sec:  38050.11
+Transfer/sec:     14.15MB
+### s1.b5 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.67us    5.74us 575.00us   98.77%
+    Req/Sec    37.69k   526.30    38.63k    79.21%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  378672 requests in 10.10s, 140.84MB read
+Requests/sec:  37493.24
+Transfer/sec:     13.94MB
+### s1.b5 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.48us    8.11us 756.00us   99.25%
+    Req/Sec    38.07k   463.62    38.95k    70.30%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   32.00us
+  382615 requests in 10.10s, 142.31MB read
+Requests/sec:  37885.39
+Transfer/sec:     14.09MB
+### m1.f1 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.80us   11.38us   1.48ms   99.71%
+    Req/Sec    37.52k     1.36k   38.77k    97.03%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   35.00us
+  377106 requests in 10.10s, 140.26MB read
+Requests/sec:  37339.13
+Transfer/sec:     13.89MB
+### m1.f1 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    26.38us   26.01us   2.49ms   99.78%
+    Req/Sec    37.38k   465.53    38.22k    67.33%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   33.00us
+  375480 requests in 10.10s, 139.65MB read
+Requests/sec:  37176.83
+Transfer/sec:     13.83MB
+### m1.f1 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.45us    3.33us 434.00us   97.79%
+    Req/Sec    37.82k   415.03    38.65k    71.29%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  380085 requests in 10.10s, 141.37MB read
+Requests/sec:  37632.05
+Transfer/sec:     14.00MB
+### m1.f2 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.87us   14.56us   1.77ms   99.82%
+    Req/Sec    37.59k   401.99    38.37k    62.38%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  377588 requests in 10.10s, 140.44MB read
+Requests/sec:  37385.88
+Transfer/sec:     13.91MB
+### m1.f2 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.69us    3.40us 422.00us   98.31%
+    Req/Sec    37.48k   388.38    38.29k    64.36%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  376781 requests in 10.10s, 140.14MB read
+Requests/sec:  37308.63
+Transfer/sec:     13.88MB
+### m1.f2 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.32us    5.06us 496.00us   98.74%
+    Req/Sec    38.12k   388.77    38.81k    64.36%
+  Latency Distribution
+     50%   25.00us
+     75%   25.00us
+     90%   26.00us
+     99%   31.00us
+  383121 requests in 10.10s, 142.50MB read
+Requests/sec:  37935.67
+Transfer/sec:     14.11MB
+### m1.f3 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.55us    2.26us 381.00us   96.85%
+    Req/Sec    37.71k   399.35    38.42k    66.34%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  378788 requests in 10.10s, 140.88MB read
+Requests/sec:  37504.79
+Transfer/sec:     13.95MB
+### m1.f3 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.97us    4.61us 412.00us   98.51%
+    Req/Sec    37.22k   345.50    37.95k    72.28%
+  Latency Distribution
+     50%   26.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  373868 requests in 10.10s, 139.05MB read
+Requests/sec:  37017.62
+Transfer/sec:     13.77MB
+### m1.f3 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.76us    4.26us 500.00us   96.55%
+    Req/Sec    37.48k     1.47k   38.69k    96.04%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   34.00us
+  376594 requests in 10.10s, 140.07MB read
+Requests/sec:  37288.51
+Transfer/sec:     13.87MB
+### m1.f4 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    26.08us   13.36us   1.73ms   99.78%
+    Req/Sec    37.17k   336.60    37.78k    62.38%
+  Latency Distribution
+     50%   26.00us
+     75%   26.00us
+     90%   27.00us
+     99%   32.00us
+  373533 requests in 10.10s, 138.93MB read
+Requests/sec:  36983.84
+Transfer/sec:     13.76MB
+### m1.f4 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.94us    4.37us 531.00us   98.50%
+    Req/Sec    37.22k   432.67    38.08k    68.32%
+  Latency Distribution
+     50%   26.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  374047 requests in 10.10s, 139.12MB read
+Requests/sec:  37036.52
+Transfer/sec:     13.78MB
+### m1.f4 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.93us    3.95us 468.00us   97.05%
+    Req/Sec    37.23k     1.10k   37.97k    97.03%
+  Latency Distribution
+     50%   26.00us
+     75%   26.00us
+     90%   27.00us
+     99%   34.00us
+  374228 requests in 10.10s, 139.19MB read
+Requests/sec:  37055.66
+Transfer/sec:     13.78MB
+### m1.f5 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    26.00us    7.36us 689.00us   97.78%
+    Req/Sec    37.28k     1.52k   38.71k    96.04%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   35.00us
+  374508 requests in 10.10s, 139.29MB read
+Requests/sec:  37080.39
+Transfer/sec:     13.79MB
+### m1.f5 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    26.12us    7.56us   1.00ms   98.32%
+    Req/Sec    37.01k     1.29k   38.26k    97.03%
+  Latency Distribution
+     50%   26.00us
+     75%   26.00us
+     90%   27.00us
+     99%   34.00us
+  371932 requests in 10.10s, 138.33MB read
+Requests/sec:  36825.80
+Transfer/sec:     13.70MB
+### m1.f5 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.90us    4.72us 423.00us   98.46%
+    Req/Sec    37.33k   468.12    38.37k    69.31%
+  Latency Distribution
+     50%   26.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  375244 requests in 10.10s, 139.57MB read
+Requests/sec:  37152.95
+Transfer/sec:     13.82MB
+### m1.b1 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.72us    6.76us 555.00us   99.11%
+    Req/Sec    37.62k   398.34    38.42k    66.34%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  378110 requests in 10.10s, 140.63MB read
+Requests/sec:  37439.60
+Transfer/sec:     13.93MB
+### m1.b1 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.75us    4.72us 449.00us   98.61%
+    Req/Sec    37.51k   386.38    38.54k    71.29%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  377010 requests in 10.10s, 140.22MB read
+Requests/sec:  37327.90
+Transfer/sec:     13.88MB
+### m1.b1 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    26.02us    6.44us 544.00us   98.74%
+    Req/Sec    37.25k   580.94    38.37k    86.14%
+  Latency Distribution
+     50%   26.00us
+     75%   26.00us
+     90%   26.00us
+     99%   33.00us
+  374300 requests in 10.10s, 139.21MB read
+Requests/sec:  37062.13
+Transfer/sec:     13.78MB
+### m1.b2 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.55us    7.61us 838.00us   99.35%
+    Req/Sec    37.89k   399.32    38.75k    70.30%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  380909 requests in 10.10s, 141.67MB read
+Requests/sec:  37716.94
+Transfer/sec:     14.03MB
+### m1.b2 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.86us    7.22us 649.00us   99.36%
+    Req/Sec    37.48k   394.18    38.28k    66.34%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  376586 requests in 10.10s, 140.06MB read
+Requests/sec:  37288.93
+Transfer/sec:     13.87MB
+### m1.b2 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    26.07us   22.57us   2.42ms   99.84%
+    Req/Sec    37.55k   479.81    38.48k    63.37%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   33.00us
+  377288 requests in 10.10s, 140.33MB read
+Requests/sec:  37356.40
+Transfer/sec:     13.89MB
+### m1.b3 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.60us    6.70us   0.86ms   99.17%
+    Req/Sec    37.81k   403.32    38.77k    70.30%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  379776 requests in 10.10s, 141.25MB read
+Requests/sec:  37603.40
+Transfer/sec:     13.99MB
+### m1.b3 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.85us    2.21us 145.00us   95.95%
+    Req/Sec    37.25k     1.40k   38.35k    96.04%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   34.00us
+  374441 requests in 10.10s, 139.27MB read
+Requests/sec:  37075.37
+Transfer/sec:     13.79MB
+### m1.b3 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.60us    4.78us 483.00us   98.51%
+    Req/Sec    37.71k   480.38    38.63k    75.25%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  378984 requests in 10.10s, 140.96MB read
+Requests/sec:  37525.67
+Transfer/sec:     13.96MB
+### m1.b4 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.52us    6.21us   0.92ms   98.93%
+    Req/Sec    37.88k   384.78    38.58k    71.29%
+  Latency Distribution
+     50%   25.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  380441 requests in 10.10s, 141.50MB read
+Requests/sec:  37669.52
+Transfer/sec:     14.01MB
+### m1.b4 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    27.38us   18.49us   1.76ms   99.60%
+    Req/Sec    35.83k     1.64k   37.17k    94.06%
+  Latency Distribution
+     50%   26.00us
+     75%   27.00us
+     90%   29.00us
+     99%   38.00us
+  359753 requests in 10.10s, 133.80MB read
+Requests/sec:  35620.57
+Transfer/sec:     13.25MB
+### m1.b4 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    26.42us   14.60us   1.71ms   99.72%
+    Req/Sec    36.88k     1.49k   38.10k    98.02%
+  Latency Distribution
+     50%   26.00us
+     75%   26.00us
+     90%   27.00us
+     99%   35.00us
+  370584 requests in 10.10s, 137.83MB read
+Requests/sec:  36693.88
+Transfer/sec:     13.65MB
+### m1.b5 soon
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    26.30us    8.70us 792.00us   97.78%
+    Req/Sec    36.92k     1.88k   38.35k    94.06%
+  Latency Distribution
+     50%   26.00us
+     75%   26.00us
+     90%   27.00us
+     99%   35.00us
+  370885 requests in 10.10s, 137.94MB read
+Requests/sec:  36724.04
+Transfer/sec:     13.66MB
+### m1.b5 head
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    25.95us   15.97us   1.89ms   99.85%
+    Req/Sec    37.44k   323.41    38.13k    66.34%
+  Latency Distribution
+     50%   26.00us
+     75%   26.00us
+     90%   26.00us
+     99%   32.00us
+  376268 requests in 10.10s, 139.95MB read
+Requests/sec:  37255.23
+Transfer/sec:     13.86MB
+### m1.b5 base
+Running 10s test @ http://127.0.0.1:8080/baseline11?a=1&b=2
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    26.02us    4.61us 603.00us   98.37%
+    Req/Sec    37.12k   397.07    37.85k    63.37%
+  Latency Distribution
+     50%   26.00us
+     75%   26.00us
+     90%   27.00us
+     99%   33.00us
+  373070 requests in 10.10s, 138.76MB read
+Requests/sec:  36939.99
+Transfer/sec:     13.74MB
+### p3.f1 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.82ms    1.01ms  38.55ms   67.60%
+    Req/Sec    53.27k   834.22    61.71k    76.01%
+  Latency Distribution
+     50%    4.80ms
+     75%    5.50ms
+     90%    6.12ms
+     99%    7.34ms
+  2099179 requests in 10.03s, 780.75MB read
+Requests/sec: 209279.31
+Transfer/sec:     77.84MB
+### p3.f1 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.65ms    0.96ms  15.60ms   68.41%
+    Req/Sec    55.21k     2.35k   80.80k    93.98%
+  Latency Distribution
+     50%    4.63ms
+     75%    5.28ms
+     90%    5.88ms
+     99%    7.07ms
+  2191994 requests in 10.09s, 815.27MB read
+Requests/sec: 217171.63
+Transfer/sec:     80.77MB
+### p3.f1 rq1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.63ms    0.94ms  44.82ms   68.18%
+    Req/Sec    55.50k     1.56k   69.75k    89.72%
+  Latency Distribution
+     50%    4.60ms
+     75%    5.24ms
+     90%    5.82ms
+     99%    6.99ms
+  2203568 requests in 10.09s, 819.58MB read
+Requests/sec: 218328.74
+Transfer/sec:     81.20MB
+### p3.f1 rq8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.66ms    0.95ms  46.23ms   68.01%
+    Req/Sec    55.08k   811.87    61.63k    80.81%
+  Latency Distribution
+     50%    4.64ms
+     75%    5.28ms
+     90%    5.88ms
+     99%    7.03ms
+  2169968 requests in 10.03s, 807.08MB read
+Requests/sec: 216415.72
+Transfer/sec:     80.49MB
+### p3.f1 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.62ms    0.93ms  12.18ms   67.74%
+    Req/Sec    55.58k   738.21    63.10k    81.25%
+  Latency Distribution
+     50%    4.60ms
+     75%    5.24ms
+     90%    5.82ms
+     99%    6.93ms
+  2212029 requests in 10.10s, 822.73MB read
+Requests/sec: 219020.71
+Transfer/sec:     81.46MB
+### p3.f2 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.82ms    1.02ms  18.92ms   67.55%
+    Req/Sec    53.26k     0.98k   62.17k    91.16%
+  Latency Distribution
+     50%    4.79ms
+     75%    5.50ms
+     90%    6.13ms
+     99%    7.38ms
+  2099072 requests in 10.04s, 780.71MB read
+Requests/sec: 209138.59
+Transfer/sec:     77.79MB
+### p3.f2 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.63ms    0.95ms  14.82ms   67.98%
+    Req/Sec    55.45k     2.15k   78.97k    93.73%
+  Latency Distribution
+     50%    4.61ms
+     75%    5.25ms
+     90%    5.84ms
+     99%    6.98ms
+  2201017 requests in 10.10s, 818.63MB read
+Requests/sec: 217940.69
+Transfer/sec:     81.06MB
+### p3.f2 rq1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.77ms    1.04ms  25.80ms   69.87%
+    Req/Sec    53.84k     1.17k   73.86k    96.97%
+  Latency Distribution
+     50%    4.74ms
+     75%    5.43ms
+     90%    6.05ms
+     99%    7.29ms
+  2121368 requests in 10.08s, 789.01MB read
+Requests/sec: 210387.68
+Transfer/sec:     78.25MB
+### p3.f2 rq8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.75ms    1.00ms  33.35ms   69.08%
+    Req/Sec    54.14k     1.07k   65.74k    94.19%
+  Latency Distribution
+     50%    4.72ms
+     75%    5.39ms
+     90%    6.00ms
+     99%    7.18ms
+  2132821 requests in 10.06s, 793.27MB read
+Requests/sec: 211919.06
+Transfer/sec:     78.82MB
+### p3.f2 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.78ms    1.00ms  17.97ms   67.74%
+    Req/Sec    53.72k     1.07k   55.86k    79.04%
+  Latency Distribution
+     50%    4.75ms
+     75%    5.44ms
+     90%    6.07ms
+     99%    7.29ms
+  2116115 requests in 10.02s, 787.05MB read
+Requests/sec: 211228.16
+Transfer/sec:     78.56MB
+### p3.f3 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.81ms    1.03ms  46.56ms   68.89%
+    Req/Sec    53.43k     1.06k   62.66k    90.91%
+  Latency Distribution
+     50%    4.78ms
+     75%    5.47ms
+     90%    6.10ms
+     99%    7.36ms
+  2105548 requests in 10.03s, 783.12MB read
+Requests/sec: 209832.74
+Transfer/sec:     78.04MB
+### p3.f3 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.70ms    0.99ms  29.53ms   68.70%
+    Req/Sec    54.64k     1.26k   67.50k    89.39%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.34ms
+     90%    5.95ms
+     99%    7.16ms
+  2152712 requests in 10.04s, 800.66MB read
+Requests/sec: 214326.00
+Transfer/sec:     79.71MB
+### p3.f3 rq1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.69ms    0.96ms  17.14ms   68.05%
+    Req/Sec    54.79k     1.07k   69.45k    89.90%
+  Latency Distribution
+     50%    4.66ms
+     75%    5.32ms
+     90%    5.91ms
+     99%    7.07ms
+  2159155 requests in 10.05s, 803.06MB read
+Requests/sec: 214781.28
+Transfer/sec:     79.88MB
+### p3.f3 rq8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.71ms    0.97ms  18.11ms   67.66%
+    Req/Sec    54.53k     1.59k   70.99k    94.99%
+  Latency Distribution
+     50%    4.69ms
+     75%    5.36ms
+     90%    5.96ms
+     99%    7.14ms
+  2164262 requests in 10.10s, 804.96MB read
+Requests/sec: 214338.97
+Transfer/sec:     79.72MB
+### p3.f3 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.61ms    0.92ms  12.49ms   67.87%
+    Req/Sec    55.68k   779.29    58.97k    78.75%
+  Latency Distribution
+     50%    4.59ms
+     75%    5.22ms
+     90%    5.78ms
+     99%    6.91ms
+  2216491 requests in 10.10s, 824.39MB read
+Requests/sec: 219461.88
+Transfer/sec:     81.63MB
+### p3.f4 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.77ms    0.99ms  17.50ms   67.72%
+    Req/Sec    53.88k     1.52k   69.21k    93.48%
+  Latency Distribution
+     50%    4.73ms
+     75%    5.42ms
+     90%    6.04ms
+     99%    7.25ms
+  2138885 requests in 10.10s, 795.52MB read
+Requests/sec: 211858.83
+Transfer/sec:     78.80MB
+### p3.f4 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.71ms    0.96ms  23.44ms   67.82%
+    Req/Sec    54.57k     1.71k   71.42k    94.24%
+  Latency Distribution
+     50%    4.68ms
+     75%    5.35ms
+     90%    5.95ms
+     99%    7.11ms
+  2166110 requests in 10.09s, 805.65MB read
+Requests/sec: 214747.87
+Transfer/sec:     79.87MB
+### p3.f4 rq1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.63ms    0.99ms  33.11ms   70.21%
+    Req/Sec    55.40k     2.14k   77.72k    93.43%
+  Latency Distribution
+     50%    4.61ms
+     75%    5.25ms
+     90%    5.84ms
+     99%    7.01ms
+  2183481 requests in 10.04s, 812.11MB read
+Requests/sec: 217481.54
+Transfer/sec:     80.89MB
+### p3.f4 rq8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.63ms    0.94ms  17.35ms   68.09%
+    Req/Sec    55.45k     1.51k   70.72k    95.74%
+  Latency Distribution
+     50%    4.61ms
+     75%    5.24ms
+     90%    5.82ms
+     99%    6.96ms
+  2201039 requests in 10.09s, 818.64MB read
+Requests/sec: 218192.45
+Transfer/sec:     81.15MB
+### p3.f4 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.82ms    1.02ms  31.34ms   67.87%
+    Req/Sec    53.33k     1.81k   71.43k    94.49%
+  Latency Distribution
+     50%    4.79ms
+     75%    5.49ms
+     90%    6.12ms
+     99%    7.37ms
+  2117230 requests in 10.10s, 787.47MB read
+Requests/sec: 209696.51
+Transfer/sec:     77.99MB
+### p3.f5 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.95ms    1.07ms  21.66ms   67.85%
+    Req/Sec    51.86k     0.93k   59.46k    86.62%
+  Latency Distribution
+     50%    4.93ms
+     75%    5.66ms
+     90%    6.32ms
+     99%    7.65ms
+  2042950 requests in 10.03s, 759.84MB read
+Requests/sec: 203720.69
+Transfer/sec:     75.77MB
+### p3.f5 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.66ms    0.95ms  11.78ms   67.77%
+    Req/Sec    55.12k     0.98k   67.19k    87.12%
+  Latency Distribution
+     50%    4.64ms
+     75%    5.29ms
+     90%    5.88ms
+     99%    7.01ms
+  2171519 requests in 10.05s, 807.66MB read
+Requests/sec: 216137.74
+Transfer/sec:     80.39MB
+### p3.f5 rq1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.62ms    0.95ms  12.40ms   68.46%
+    Req/Sec    55.54k     2.35k   83.98k    95.98%
+  Latency Distribution
+     50%    4.61ms
+     75%    5.25ms
+     90%    5.83ms
+     99%    6.95ms
+  2198913 requests in 10.10s, 817.85MB read
+Requests/sec: 217740.35
+Transfer/sec:     80.98MB
+### p3.f5 rq8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.68ms    0.95ms  38.40ms   67.73%
+    Req/Sec    54.84k     1.50k   70.64k    96.74%
+  Latency Distribution
+     50%    4.66ms
+     75%    5.31ms
+     90%    5.90ms
+     99%    7.06ms
+  2177279 requests in 10.08s, 809.80MB read
+Requests/sec: 215927.97
+Transfer/sec:     80.31MB
+### p3.f5 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.72ms    1.02ms  42.01ms   70.92%
+    Req/Sec    54.47k   828.05    62.28k    81.31%
+  Latency Distribution
+     50%    4.69ms
+     75%    5.35ms
+     90%    5.95ms
+     99%    7.16ms
+  2146010 requests in 10.04s, 798.17MB read
+Requests/sec: 213846.27
+Transfer/sec:     79.54MB
+### p3.b1 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.82ms    1.01ms  16.53ms   67.83%
+    Req/Sec    53.26k     0.95k   57.98k    82.58%
+  Latency Distribution
+     50%    4.80ms
+     75%    5.49ms
+     90%    6.12ms
+     99%    7.36ms
+  2098319 requests in 10.04s, 780.43MB read
+Requests/sec: 209034.98
+Transfer/sec:     77.75MB
+### p3.b1 rq8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.63ms    0.94ms  19.32ms   68.19%
+    Req/Sec    55.47k     1.01k   61.69k    89.65%
+  Latency Distribution
+     50%    4.61ms
+     75%    5.24ms
+     90%    5.82ms
+     99%    6.96ms
+  2185398 requests in 10.03s, 812.82MB read
+Requests/sec: 217932.42
+Transfer/sec:     81.06MB
+### p3.b1 rq1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.84ms    1.03ms  37.04ms   68.13%
+    Req/Sec    53.09k     0.90k   59.01k    83.33%
+  Latency Distribution
+     50%    4.81ms
+     75%    5.51ms
+     90%    6.15ms
+     99%    7.39ms
+  2091780 requests in 10.02s, 778.00MB read
+Requests/sec: 208837.41
+Transfer/sec:     77.67MB
+### p3.b1 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.63ms    0.93ms  18.74ms   68.14%
+    Req/Sec    55.54k     1.03k   65.59k    86.87%
+  Latency Distribution
+     50%    4.60ms
+     75%    5.24ms
+     90%    5.82ms
+     99%    6.95ms
+  2187748 requests in 10.02s, 813.70MB read
+Requests/sec: 218229.40
+Transfer/sec:     81.17MB
+### p3.b1 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.80ms    1.00ms  16.83ms   67.82%
+    Req/Sec    53.54k     1.24k   68.59k    92.17%
+  Latency Distribution
+     50%    4.77ms
+     75%    5.46ms
+     90%    6.08ms
+     99%    7.29ms
+  2109144 requests in 10.02s, 784.46MB read
+Requests/sec: 210442.38
+Transfer/sec:     78.27MB
+### p3.b2 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.79ms    1.04ms  18.86ms   68.89%
+    Req/Sec    53.63k     3.27k  105.40k    98.99%
+  Latency Distribution
+     50%    4.77ms
+     75%    5.46ms
+     90%    6.10ms
+     99%    7.38ms
+  2123786 requests in 10.09s, 789.91MB read
+Requests/sec: 210542.54
+Transfer/sec:     78.31MB
+### p3.b2 rq8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.66ms    0.95ms  18.64ms   67.86%
+    Req/Sec    55.12k     0.89k   59.37k    79.04%
+  Latency Distribution
+     50%    4.64ms
+     75%    5.28ms
+     90%    5.87ms
+     99%    7.02ms
+  2171704 requests in 10.03s, 807.73MB read
+Requests/sec: 216457.07
+Transfer/sec:     80.51MB
+### p3.b2 rq1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.71ms    0.96ms  19.32ms   67.89%
+    Req/Sec    54.50k     0.87k   64.63k    85.86%
+  Latency Distribution
+     50%    4.69ms
+     75%    5.34ms
+     90%    5.95ms
+     99%    7.10ms
+  2147774 requests in 10.03s, 798.83MB read
+Requests/sec: 214152.35
+Transfer/sec:     79.65MB
+### p3.b2 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.69ms    0.96ms  19.51ms   68.16%
+    Req/Sec    54.80k     1.04k   64.67k    86.62%
+  Latency Distribution
+     50%    4.66ms
+     75%    5.32ms
+     90%    5.91ms
+     99%    7.09ms
+  2158263 requests in 10.03s, 802.73MB read
+Requests/sec: 215251.58
+Transfer/sec:     80.06MB
+### p3.b2 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.93ms    1.07ms  15.21ms   67.65%
+    Req/Sec    52.06k     0.97k   61.16k    87.63%
+  Latency Distribution
+     50%    4.90ms
+     75%    5.64ms
+     90%    6.31ms
+     99%    7.64ms
+  2051120 requests in 10.04s, 762.88MB read
+Requests/sec: 204287.76
+Transfer/sec:     75.98MB
+### p3.b3 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.63ms    0.96ms  23.49ms   69.10%
+    Req/Sec    55.47k     0.99k   66.16k    84.60%
+  Latency Distribution
+     50%    4.61ms
+     75%    5.24ms
+     90%    5.83ms
+     99%    6.97ms
+  2185554 requests in 10.04s, 812.88MB read
+Requests/sec: 217785.38
+Transfer/sec:     81.00MB
+### p3.b3 rq8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.69ms    0.96ms  15.67ms   68.03%
+    Req/Sec    54.71k     1.09k   59.29k    81.06%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.33ms
+     90%    5.93ms
+     99%    7.11ms
+  2155293 requests in 10.02s, 801.62MB read
+Requests/sec: 215097.99
+Transfer/sec:     80.00MB
+### p3.b3 rq1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.84ms    1.02ms  15.84ms   67.90%
+    Req/Sec    53.12k   808.35    59.92k    78.28%
+  Latency Distribution
+     50%    4.81ms
+     75%    5.51ms
+     90%    6.15ms
+     99%    7.40ms
+  2093264 requests in 10.02s, 778.55MB read
+Requests/sec: 208851.28
+Transfer/sec:     77.68MB
+### p3.b3 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.71ms    0.98ms  18.31ms   68.65%
+    Req/Sec    54.60k     1.31k   60.13k    90.50%
+  Latency Distribution
+     50%    4.67ms
+     75%    5.33ms
+     90%    5.94ms
+     99%    7.13ms
+  2172763 requests in 10.09s, 808.12MB read
+Requests/sec: 215264.72
+Transfer/sec:     80.06MB
+### p3.b3 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.95ms    1.07ms  28.77ms   67.66%
+    Req/Sec    51.94k     0.99k   60.60k    84.09%
+  Latency Distribution
+     50%    4.92ms
+     75%    5.66ms
+     90%    6.32ms
+     99%    7.65ms
+  2045918 requests in 10.02s, 760.94MB read
+Requests/sec: 204191.38
+Transfer/sec:     75.95MB
+### p3.b4 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.62ms    0.93ms  10.02ms   68.13%
+    Req/Sec    55.62k     1.33k   71.53k    94.95%
+  Latency Distribution
+     50%    4.60ms
+     75%    5.24ms
+     90%    5.81ms
+     99%    6.91ms
+  2191479 requests in 10.03s, 815.08MB read
+Requests/sec: 218507.04
+Transfer/sec:     81.27MB
+### p3.b4 rq8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.83ms    1.02ms  32.47ms   67.86%
+    Req/Sec    53.24k   768.14    55.42k    77.75%
+  Latency Distribution
+     50%    4.80ms
+     75%    5.50ms
+     90%    6.13ms
+     99%    7.36ms
+  2118684 requests in 10.10s, 788.01MB read
+Requests/sec: 209808.23
+Transfer/sec:     78.03MB
+### p3.b4 rq1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.68ms    0.97ms  16.51ms   68.12%
+    Req/Sec    54.88k     2.35k   80.54k    98.25%
+  Latency Distribution
+     50%    4.66ms
+     75%    5.32ms
+     90%    5.92ms
+     99%    7.09ms
+  2178130 requests in 10.10s, 810.12MB read
+Requests/sec: 215743.76
+Transfer/sec:     80.24MB
+### p3.b4 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.85ms    1.03ms  14.31ms   67.83%
+    Req/Sec    52.96k   836.31    60.41k    78.54%
+  Latency Distribution
+     50%    4.82ms
+     75%    5.53ms
+     90%    6.17ms
+     99%    7.42ms
+  2086107 requests in 10.03s, 775.89MB read
+Requests/sec: 207990.24
+Transfer/sec:     77.36MB
+### p3.b4 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.82ms    1.01ms  12.18ms   67.54%
+    Req/Sec    53.33k     1.61k   69.74k    93.23%
+  Latency Distribution
+     50%    4.79ms
+     75%    5.49ms
+     90%    6.12ms
+     99%    7.37ms
+  2117029 requests in 10.09s, 787.39MB read
+Requests/sec: 209744.99
+Transfer/sec:     78.01MB
+### p3.b5 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.62ms    0.93ms  19.33ms   68.62%
+    Req/Sec    55.58k     0.98k   64.75k    90.40%
+  Latency Distribution
+     50%    4.60ms
+     75%    5.23ms
+     90%    5.80ms
+     99%    6.96ms
+  2189403 requests in 10.02s, 814.31MB read
+Requests/sec: 218484.67
+Transfer/sec:     81.26MB
+### p3.b5 rq8
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.79ms    1.01ms  14.70ms   67.72%
+    Req/Sec    53.63k     1.59k   72.85k    96.49%
+  Latency Distribution
+     50%    4.77ms
+     75%    5.46ms
+     90%    6.09ms
+     99%    7.32ms
+  2129137 requests in 10.09s, 791.90MB read
+Requests/sec: 210969.24
+Transfer/sec:     78.47MB
+### p3.b5 rq1
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.85ms    1.03ms  16.66ms   67.86%
+    Req/Sec    52.97k     1.06k   60.88k    80.81%
+  Latency Distribution
+     50%    4.82ms
+     75%    5.53ms
+     90%    6.17ms
+     99%    7.45ms
+  2087324 requests in 10.04s, 776.34MB read
+Requests/sec: 207833.23
+Transfer/sec:     77.30MB
+### p3.b5 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.67ms    0.95ms  38.96ms   67.95%
+    Req/Sec    54.96k   702.19    61.85k    82.07%
+  Latency Distribution
+     50%    4.65ms
+     75%    5.30ms
+     90%    5.89ms
+     99%    7.02ms
+  2165077 requests in 10.03s, 805.26MB read
+Requests/sec: 215865.91
+Transfer/sec:     80.29MB
+### p3.b5 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.81ms    1.01ms  24.87ms   67.76%
+    Req/Sec    53.44k     1.76k   71.97k    95.74%
+  Latency Distribution
+     50%    4.79ms
+     75%    5.48ms
+     90%    6.10ms
+     99%    7.34ms
+  2121353 requests in 10.09s, 789.00MB read
+Requests/sec: 210302.01
+Transfer/sec:     78.22MB
+### p4.f1 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.16ms    0.99ms  47.99ms   99.44%
+    Req/Sec    62.16k     1.86k   68.78k    97.22%
+  Latency Distribution
+     50%    4.07ms
+     75%    4.31ms
+     90%    4.55ms
+     99%    4.88ms
+  2448800 requests in 10.04s, 0.89GB read
+Requests/sec: 243816.23
+Transfer/sec:     90.68MB
+### p4.f1 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.34ms    1.29ms  51.18ms   99.53%
+    Req/Sec    59.77k     2.21k   68.91k    97.47%
+  Latency Distribution
+     50%    4.31ms
+     75%    4.51ms
+     90%    4.68ms
+     99%    4.95ms
+  2354491 requests in 10.03s, 0.86GB read
+Requests/sec: 234715.89
+Transfer/sec:     87.30MB
+### p4.f1 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.07ms  401.72us  19.40ms   76.72%
+    Req/Sec    63.07k     1.23k   67.44k    82.07%
+  Latency Distribution
+     50%    4.05ms
+     75%    4.25ms
+     90%    4.53ms
+     99%    4.87ms
+  2485219 requests in 10.03s, 0.90GB read
+Requests/sec: 247833.27
+Transfer/sec:     92.18MB
+### p4.f2 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.28ms  779.16us  38.17ms   97.27%
+    Req/Sec    60.28k     1.83k   74.40k    93.73%
+  Latency Distribution
+     50%    4.14ms
+     75%    4.58ms
+     90%    4.80ms
+     99%    5.11ms
+  2392973 requests in 10.10s, 0.87GB read
+Requests/sec: 237037.22
+Transfer/sec:     88.16MB
+### p4.f2 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.16ms  711.15us  37.64ms   96.69%
+    Req/Sec    61.92k     1.89k   70.80k    95.20%
+  Latency Distribution
+     50%    4.11ms
+     75%    4.35ms
+     90%    4.62ms
+     99%    4.93ms
+  2438645 requests in 10.07s, 0.89GB read
+Requests/sec: 242267.40
+Transfer/sec:     90.11MB
+### p4.f2 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.06ms  703.28us  36.81ms   96.06%
+    Req/Sec    63.47k     1.76k   76.40k    97.24%
+  Latency Distribution
+     50%    3.97ms
+     75%    4.21ms
+     90%    4.57ms
+     99%    4.90ms
+  2518954 requests in 10.09s, 0.91GB read
+Requests/sec: 249531.09
+Transfer/sec:     92.81MB
+### p4.f3 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.36ms    1.84ms  70.93ms   99.50%
+    Req/Sec    60.02k     3.03k   68.52k    98.74%
+  Latency Distribution
+     50%    4.18ms
+     75%    4.48ms
+     90%    4.68ms
+     99%    4.99ms
+  2364057 requests in 10.04s, 0.86GB read
+Requests/sec: 235460.21
+Transfer/sec:     87.58MB
+### p4.f3 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.30ms  617.86us  33.10ms   98.38%
+    Req/Sec    59.93k     1.32k   66.40k    96.25%
+  Latency Distribution
+     50%    4.23ms
+     75%    4.45ms
+     90%    4.64ms
+     99%    4.91ms
+  2385120 requests in 10.09s, 0.87GB read
+Requests/sec: 236288.50
+Transfer/sec:     87.88MB
+### p4.f3 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.08ms  487.94us  25.06ms   84.48%
+    Req/Sec    62.99k     1.17k   66.53k    84.09%
+  Latency Distribution
+     50%    4.02ms
+     75%    4.31ms
+     90%    4.58ms
+     99%    4.90ms
+  2481715 requests in 10.03s, 0.90GB read
+Requests/sec: 247407.11
+Transfer/sec:     92.02MB
+### p4.f4 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.15ms  526.21us  32.64ms   84.59%
+    Req/Sec    61.83k     1.54k   70.79k    82.83%
+  Latency Distribution
+     50%    4.12ms
+     75%    4.44ms
+     90%    4.65ms
+     99%    4.94ms
+  2435911 requests in 10.08s, 0.88GB read
+Requests/sec: 241546.67
+Transfer/sec:     89.84MB
+### p4.f4 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.20ms  380.94us  16.82ms   81.29%
+    Req/Sec    61.18k     1.09k   64.67k    85.10%
+  Latency Distribution
+     50%    4.12ms
+     75%    4.41ms
+     90%    4.63ms
+     99%    4.91ms
+  2409431 requests in 10.04s, 0.88GB read
+Requests/sec: 240062.24
+Transfer/sec:     89.29MB
+### p4.f4 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.16ms  623.55us  32.15ms   91.81%
+    Req/Sec    61.87k     1.99k   82.53k    92.46%
+  Latency Distribution
+     50%    4.05ms
+     75%    4.35ms
+     90%    4.70ms
+     99%    5.02ms
+  2449774 requests in 10.10s, 0.89GB read
+Requests/sec: 242626.57
+Transfer/sec:     90.24MB
+### p4.f5 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.13ms  776.18us  40.15ms   98.09%
+    Req/Sec    62.40k     1.86k   67.06k    94.70%
+  Latency Distribution
+     50%    4.04ms
+     75%    4.30ms
+     90%    4.60ms
+     99%    4.94ms
+  2457924 requests in 10.02s, 0.89GB read
+Requests/sec: 245214.45
+Transfer/sec:     91.20MB
+### p4.f5 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.02ms  542.17us  31.95ms   86.31%
+    Req/Sec    63.93k     1.11k   68.82k    82.07%
+  Latency Distribution
+     50%    4.04ms
+     75%    4.25ms
+     90%    4.48ms
+     99%    4.84ms
+  2518869 requests in 10.04s, 0.91GB read
+Requests/sec: 250936.20
+Transfer/sec:     93.33MB
+### p4.f5 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.13ms    0.88ms  50.75ms   99.24%
+    Req/Sec    62.53k     2.00k   67.62k    95.71%
+  Latency Distribution
+     50%    4.06ms
+     75%    4.27ms
+     90%    4.51ms
+     99%    4.87ms
+  2463938 requests in 10.03s, 0.89GB read
+Requests/sec: 245762.09
+Transfer/sec:     91.41MB
+### p4.b1 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.16ms  378.87us  16.01ms   71.42%
+    Req/Sec    61.71k     1.09k   66.27k    70.00%
+  Latency Distribution
+     50%    4.07ms
+     75%    4.37ms
+     90%    4.73ms
+     99%    5.04ms
+  2455571 requests in 10.09s, 0.89GB read
+Requests/sec: 243278.72
+Transfer/sec:     90.48MB
+### p4.b1 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.12ms  539.24us  34.48ms   94.90%
+    Req/Sec    62.37k     1.14k   69.16k    85.61%
+  Latency Distribution
+     50%    4.10ms
+     75%    4.22ms
+     90%    4.42ms
+     99%    4.82ms
+  2457217 requests in 10.06s, 0.89GB read
+Requests/sec: 244226.28
+Transfer/sec:     90.84MB
+### p4.b1 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.11ms  508.46us  39.80ms   94.14%
+    Req/Sec    62.57k     0.89k   71.47k    84.34%
+  Latency Distribution
+     50%    4.07ms
+     75%    4.21ms
+     90%    4.45ms
+     99%    4.82ms
+  2465489 requests in 10.06s, 0.90GB read
+Requests/sec: 245111.66
+Transfer/sec:     91.17MB
+### p4.b2 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.01ms  666.00us  32.67ms   93.53%
+    Req/Sec    64.20k     1.90k   67.86k    98.48%
+  Latency Distribution
+     50%    4.00ms
+     75%    4.26ms
+     90%    4.51ms
+     99%    4.84ms
+  2530011 requests in 10.03s, 0.92GB read
+Requests/sec: 252245.55
+Transfer/sec:     93.82MB
+### p4.b2 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.12ms  486.37us  16.72ms   69.77%
+    Req/Sec    62.34k     1.17k   65.77k    88.64%
+  Latency Distribution
+     50%    4.05ms
+     75%    4.38ms
+     90%    4.77ms
+     99%    5.05ms
+  2456378 requests in 10.02s, 0.89GB read
+Requests/sec: 245074.47
+Transfer/sec:     91.15MB
+### p4.b2 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.24ms  839.13us  30.61ms   65.64%
+    Req/Sec    60.78k     1.45k   67.52k    91.16%
+  Latency Distribution
+     50%    4.16ms
+     75%    4.81ms
+     90%    5.16ms
+     99%    5.47ms
+  2394459 requests in 10.06s, 0.87GB read
+Requests/sec: 238033.74
+Transfer/sec:     88.53MB
+### p4.b3 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.20ms    1.10ms  42.19ms   99.45%
+    Req/Sec    61.60k     2.01k   74.86k    92.68%
+  Latency Distribution
+     50%    4.19ms
+     75%    4.44ms
+     90%    4.66ms
+     99%    4.94ms
+  2426229 requests in 10.06s, 0.88GB read
+Requests/sec: 241168.99
+Transfer/sec:     89.70MB
+### p4.b3 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.23ms    1.07ms  43.63ms   99.50%
+    Req/Sec    61.26k     2.16k   64.65k    96.46%
+  Latency Distribution
+     50%    4.15ms
+     75%    4.28ms
+     90%    4.51ms
+     99%    4.87ms
+  2413042 requests in 10.02s, 0.88GB read
+Requests/sec: 240710.75
+Transfer/sec:     89.53MB
+### p4.b3 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.14ms    0.98ms  43.70ms   98.97%
+    Req/Sec    62.37k     1.84k   77.13k    95.96%
+  Latency Distribution
+     50%    4.07ms
+     75%    4.21ms
+     90%    4.45ms
+     99%    4.82ms
+  2457212 requests in 10.08s, 0.89GB read
+Requests/sec: 243774.34
+Transfer/sec:     90.67MB
+### p4.b4 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.08ms  363.29us  17.02ms   74.96%
+    Req/Sec    62.99k     1.54k   79.31k    91.71%
+  Latency Distribution
+     50%    4.10ms
+     75%    4.23ms
+     90%    4.47ms
+     99%    4.84ms
+  2494449 requests in 10.09s, 0.91GB read
+Requests/sec: 247210.44
+Transfer/sec:     91.95MB
+### p4.b4 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.16ms  573.92us  15.77ms   68.87%
+    Req/Sec    61.55k     3.06k   79.98k    90.95%
+  Latency Distribution
+     50%    4.28ms
+     75%    4.55ms
+     90%    4.73ms
+     99%    5.05ms
+  2437888 requests in 10.10s, 0.89GB read
+Requests/sec: 241394.65
+Transfer/sec:     89.78MB
+### p4.b4 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.24ms    1.10ms  55.12ms   99.36%
+    Req/Sec    61.07k     2.22k   71.36k    98.25%
+  Latency Distribution
+     50%    4.15ms
+     75%    4.43ms
+     90%    4.64ms
+     99%    4.94ms
+  2424213 requests in 10.09s, 0.88GB read
+Requests/sec: 240277.07
+Transfer/sec:     89.37MB
+### p4.b5 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.00ms  711.65us  40.05ms   96.13%
+    Req/Sec    64.33k     1.27k   70.56k    93.69%
+  Latency Distribution
+     50%    3.89ms
+     75%    4.16ms
+     90%    4.52ms
+     99%    4.85ms
+  2535436 requests in 10.05s, 0.92GB read
+Requests/sec: 252361.06
+Transfer/sec:     93.86MB
+### p4.b5 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.04ms  341.65us  23.26ms   84.79%
+    Req/Sec    63.49k     1.02k   67.21k    86.00%
+  Latency Distribution
+     50%    4.06ms
+     75%    4.15ms
+     90%    4.26ms
+     99%    4.80ms
+  2526702 requests in 10.09s, 0.92GB read
+Requests/sec: 250481.89
+Transfer/sec:     93.16MB
+### p4.b5 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.13ms  835.09us  54.08ms   99.30%
+    Req/Sec    62.38k     1.64k   70.47k    96.72%
+  Latency Distribution
+     50%    4.10ms
+     75%    4.24ms
+     90%    4.50ms
+     99%    4.87ms
+  2457663 requests in 10.06s, 0.89GB read
+Requests/sec: 244322.23
+Transfer/sec:     90.87MB
+### p5.f1 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.06ms  592.49us  38.57ms   95.93%
+    Req/Sec    63.37k     1.60k   68.81k    94.19%
+  Latency Distribution
+     50%    4.03ms
+     75%    4.16ms
+     90%    4.34ms
+     99%    4.83ms
+  2496095 requests in 10.04s, 0.91GB read
+Requests/sec: 248550.60
+Transfer/sec:     92.44MB
+### p5.f1 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.08ms  573.86us  24.22ms   73.09%
+    Req/Sec    63.00k     1.50k   66.02k    93.18%
+  Latency Distribution
+     50%    3.97ms
+     75%    4.39ms
+     90%    4.80ms
+     99%    5.10ms
+  2482557 requests in 10.05s, 0.90GB read
+Requests/sec: 247066.25
+Transfer/sec:     91.89MB
+### p5.f1 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.13ms  429.49us  24.07ms   90.97%
+    Req/Sec    62.21k     1.01k   67.02k    84.09%
+  Latency Distribution
+     50%    4.08ms
+     75%    4.23ms
+     90%    4.48ms
+     99%    4.83ms
+  2450767 requests in 10.03s, 0.89GB read
+Requests/sec: 244409.95
+Transfer/sec:     90.90MB
+### p5.f2 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     3.99ms  513.02us  35.68ms   93.04%
+    Req/Sec    64.43k     0.89k   69.08k    78.20%
+  Latency Distribution
+     50%    3.95ms
+     75%    4.14ms
+     90%    4.33ms
+     99%    4.78ms
+  2558972 requests in 10.09s, 0.93GB read
+Requests/sec: 253656.27
+Transfer/sec:     94.34MB
+### p5.f2 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.08ms  712.67us  44.22ms   96.64%
+    Req/Sec    63.12k     1.84k   78.86k    96.23%
+  Latency Distribution
+     50%    4.07ms
+     75%    4.22ms
+     90%    4.50ms
+     99%    4.86ms
+  2500079 requests in 10.09s, 0.91GB read
+Requests/sec: 247724.01
+Transfer/sec:     92.14MB
+### p5.f2 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.05ms  558.51us  30.07ms   96.34%
+    Req/Sec    63.63k     1.33k   68.71k    89.39%
+  Latency Distribution
+     50%    4.03ms
+     75%    4.12ms
+     90%    4.23ms
+     99%    4.77ms
+  2506979 requests in 10.02s, 0.91GB read
+Requests/sec: 250185.35
+Transfer/sec:     93.05MB
+### p5.f3 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.15ms  637.14us  36.07ms   93.95%
+    Req/Sec    61.99k     2.16k   69.09k    98.48%
+  Latency Distribution
+     50%    4.06ms
+     75%    4.37ms
+     90%    4.67ms
+     99%    4.99ms
+  2442173 requests in 10.05s, 0.89GB read
+Requests/sec: 242942.68
+Transfer/sec:     90.36MB
+### p5.f3 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.06ms  525.42us  32.39ms   91.49%
+    Req/Sec    63.27k     1.37k   74.25k    90.40%
+  Latency Distribution
+     50%    4.07ms
+     75%    4.19ms
+     90%    4.39ms
+     99%    4.83ms
+  2493483 requests in 10.07s, 0.91GB read
+Requests/sec: 247723.11
+Transfer/sec:     92.14MB
+### p5.f3 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.08ms  714.53us  34.59ms   96.38%
+    Req/Sec    63.11k     1.48k   67.40k    90.75%
+  Latency Distribution
+     50%    3.96ms
+     75%    4.23ms
+     90%    4.60ms
+     99%    4.93ms
+  2511638 requests in 10.10s, 0.91GB read
+Requests/sec: 248733.45
+Transfer/sec:     92.51MB
+### p5.f4 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.00ms  454.33us  28.90ms   91.13%
+    Req/Sec    64.28k     1.04k   67.23k    85.61%
+  Latency Distribution
+     50%    4.02ms
+     75%    4.13ms
+     90%    4.23ms
+     99%    4.79ms
+  2532770 requests in 10.03s, 0.92GB read
+Requests/sec: 252428.59
+Transfer/sec:     93.89MB
+### p5.f4 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.05ms  816.82us  36.21ms   98.69%
+    Req/Sec    63.62k     1.79k   67.97k    91.67%
+  Latency Distribution
+     50%    4.02ms
+     75%    4.18ms
+     90%    4.36ms
+     99%    4.86ms
+  2506778 requests in 10.02s, 0.91GB read
+Requests/sec: 250161.99
+Transfer/sec:     93.04MB
+### p5.f4 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.08ms  789.24us  39.19ms   98.04%
+    Req/Sec    63.26k     1.50k   67.86k    93.94%
+  Latency Distribution
+     50%    4.02ms
+     75%    4.28ms
+     90%    4.61ms
+     99%    4.90ms
+  2492311 requests in 10.02s, 0.91GB read
+Requests/sec: 248633.01
+Transfer/sec:     92.47MB
+### p5.f5 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     3.99ms    0.87ms  41.22ms   98.74%
+    Req/Sec    64.75k     1.73k   69.44k    96.72%
+  Latency Distribution
+     50%    4.00ms
+     75%    4.17ms
+     90%    4.36ms
+     99%    4.83ms
+  2550761 requests in 10.02s, 0.93GB read
+Requests/sec: 254457.03
+Transfer/sec:     94.64MB
+### p5.f5 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.04ms  723.37us  39.91ms   97.80%
+    Req/Sec    63.75k     1.55k   70.27k    90.40%
+  Latency Distribution
+     50%    4.02ms
+     75%    4.16ms
+     90%    4.36ms
+     99%    4.82ms
+  2512064 requests in 10.02s, 0.91GB read
+Requests/sec: 250703.26
+Transfer/sec:     93.24MB
+### p5.f5 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.05ms    0.86ms  42.60ms   99.01%
+    Req/Sec    63.78k     2.24k   74.39k    97.99%
+  Latency Distribution
+     50%    4.01ms
+     75%    4.17ms
+     90%    4.33ms
+     99%    4.82ms
+  2532360 requests in 10.10s, 0.92GB read
+Requests/sec: 250756.92
+Transfer/sec:     93.26MB
+### p5.b1 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.09ms  737.75us  43.04ms   97.20%
+    Req/Sec    62.91k     2.01k   70.84k    89.47%
+  Latency Distribution
+     50%    4.09ms
+     75%    4.21ms
+     90%    4.45ms
+     99%    4.86ms
+  2497477 requests in 10.08s, 0.91GB read
+Requests/sec: 247844.43
+Transfer/sec:     92.18MB
+### p5.b1 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.00ms  633.37us  39.85ms   92.47%
+    Req/Sec    64.34k     1.53k   75.01k    94.49%
+  Latency Distribution
+     50%    4.04ms
+     75%    4.19ms
+     90%    4.33ms
+     99%    4.84ms
+  2553997 requests in 10.09s, 0.93GB read
+Requests/sec: 253012.73
+Transfer/sec:     94.10MB
+### p5.b1 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.08ms  611.53us  32.80ms   97.06%
+    Req/Sec    63.10k     1.98k   73.79k    97.99%
+  Latency Distribution
+     50%    4.04ms
+     75%    4.14ms
+     90%    4.28ms
+     99%    4.80ms
+  2504924 requests in 10.10s, 0.91GB read
+Requests/sec: 248086.19
+Transfer/sec:     92.27MB
+### p5.b2 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.11ms  539.04us  23.86ms   76.77%
+    Req/Sec    62.57k     1.48k   66.44k    91.92%
+  Latency Distribution
+     50%    4.12ms
+     75%    4.40ms
+     90%    4.63ms
+     99%    4.93ms
+  2464852 requests in 10.02s, 0.90GB read
+Requests/sec: 246024.08
+Transfer/sec:     91.50MB
+### p5.b2 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.17ms    0.87ms  38.70ms   98.11%
+    Req/Sec    61.90k     1.63k   68.70k    93.18%
+  Latency Distribution
+     50%    4.17ms
+     75%    4.48ms
+     90%    4.66ms
+     99%    4.93ms
+  2438780 requests in 10.05s, 0.89GB read
+Requests/sec: 242643.91
+Transfer/sec:     90.25MB
+### p5.b2 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.17ms  629.67us  25.46ms   71.71%
+    Req/Sec    61.64k     1.23k   65.46k    91.16%
+  Latency Distribution
+     50%    4.27ms
+     75%    4.56ms
+     90%    4.75ms
+     99%    5.03ms
+  2428306 requests in 10.02s, 0.88GB read
+Requests/sec: 242389.33
+Transfer/sec:     90.15MB
+### p5.b3 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.02ms  370.60us  19.26ms   89.09%
+    Req/Sec    63.96k     1.36k   67.56k    89.25%
+  Latency Distribution
+     50%    4.00ms
+     75%    4.13ms
+     90%    4.26ms
+     99%    4.81ms
+  2544801 requests in 10.09s, 0.92GB read
+Requests/sec: 252198.29
+Transfer/sec:     93.80MB
+### p5.b3 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.03ms  560.69us  27.96ms   87.20%
+    Req/Sec    63.77k     1.08k   71.80k    88.89%
+  Latency Distribution
+     50%    3.97ms
+     75%    4.22ms
+     90%    4.58ms
+     99%    4.93ms
+  2512710 requests in 10.08s, 0.91GB read
+Requests/sec: 249367.95
+Transfer/sec:     92.75MB
+### p5.b3 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.03ms  718.78us  36.90ms   98.14%
+    Req/Sec    63.93k     2.02k   83.64k    95.98%
+  Latency Distribution
+     50%    4.03ms
+     75%    4.13ms
+     90%    4.24ms
+     99%    4.76ms
+  2530997 requests in 10.09s, 0.92GB read
+Requests/sec: 250757.05
+Transfer/sec:     93.26MB
+### p5.b4 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.23ms  634.05us  22.10ms   73.68%
+    Req/Sec    60.80k     2.01k   70.27k    95.49%
+  Latency Distribution
+     50%    4.02ms
+     75%    4.77ms
+     90%    4.92ms
+     99%    5.18ms
+  2413439 requests in 10.09s, 0.88GB read
+Requests/sec: 239164.85
+Transfer/sec:     88.95MB
+### p5.b4 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.16ms    1.65ms  52.97ms   99.54%
+    Req/Sec    62.78k     2.90k   76.79k    98.74%
+  Latency Distribution
+     50%    4.02ms
+     75%    4.27ms
+     90%    4.65ms
+     99%    4.99ms
+  2473143 requests in 10.05s, 0.90GB read
+Requests/sec: 246009.73
+Transfer/sec:     91.50MB
+### p5.b4 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.13ms  592.60us  34.25ms   97.00%
+    Req/Sec    62.29k     1.39k   66.53k    84.75%
+  Latency Distribution
+     50%    4.10ms
+     75%    4.17ms
+     90%    4.32ms
+     99%    4.80ms
+  2478916 requests in 10.10s, 0.90GB read
+Requests/sec: 245533.93
+Transfer/sec:     91.32MB
+### p5.b5 base
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.13ms  523.64us  32.12ms   90.68%
+    Req/Sec    62.27k     1.89k   71.84k    93.48%
+  Latency Distribution
+     50%    4.12ms
+     75%    4.25ms
+     90%    4.50ms
+     99%    4.89ms
+  2472173 requests in 10.08s, 0.90GB read
+Requests/sec: 245140.42
+Transfer/sec:     91.18MB
+### p5.b5 head
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.06ms  645.33us  35.18ms   92.52%
+    Req/Sec    63.48k     1.47k   70.14k    90.66%
+  Latency Distribution
+     50%    4.00ms
+     75%    4.27ms
+     90%    4.60ms
+     99%    4.90ms
+  2500720 requests in 10.03s, 0.91GB read
+Requests/sec: 249287.84
+Transfer/sec:     92.72MB
+### p5.b5 soon
+Running 10s test @ http://127.0.0.1:8080/sdelay/1
+  4 threads and 1024 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.10ms  751.10us  43.95ms   89.64%
+    Req/Sec    62.74k     1.04k   73.82k    87.12%
+  Latency Distribution
+     50%    4.03ms
+     75%    4.41ms
+     90%    4.81ms
+     99%    5.10ms
+  2471820 requests in 10.05s, 0.90GB read
+Requests/sec: 245997.38
+Transfer/sec:     91.49MB

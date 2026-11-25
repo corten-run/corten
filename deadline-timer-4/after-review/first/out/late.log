@@ -1,0 +1,33 @@
+# built base rc=0 13:50:19 load 0.86
+# built head rc=0 14:00:25 load 0.85
+== base round 1 14:01:25 load 0.31
+past the deadline: least 1.554214ms, median 2.666553ms, most 3.483293ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1008 filtered out; finished in 11.17s
+== head round 1 14:01:37 load 0.34
+past the deadline: least 1.516002ms, median 2.655371ms, most 3.638167ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1034 filtered out; finished in 11.16s
+== base round 2 14:01:48 load 0.26
+past the deadline: least 1.536555ms, median 2.701248ms, most 3.457957ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1008 filtered out; finished in 11.18s
+== head round 2 14:02:00 load 0.22
+past the deadline: least 1.517521ms, median 2.668276ms, most 3.457586ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1034 filtered out; finished in 11.17s
+== base round 3 14:02:12 load 0.19
+past the deadline: least 1.495637ms, median 2.651816ms, most 3.538149ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1008 filtered out; finished in 11.18s
+== head round 3 14:02:24 load 0.21
+past the deadline: least 1.525451ms, median 2.651056ms, most 3.476189ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1034 filtered out; finished in 11.17s
+== base round 4 14:02:35 load 0.18
+past the deadline: least 1.484919ms, median 2.654324ms, most 3.612228ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1008 filtered out; finished in 11.17s
+== head round 4 14:02:47 load 0.15
+past the deadline: least 1.549006ms, median 2.673241ms, most 3.536186ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1034 filtered out; finished in 11.17s
+== base round 5 14:02:59 load 0.18
+past the deadline: least 1.48594ms, median 2.684744ms, most 3.549041ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1008 filtered out; finished in 11.18s
+== head round 5 14:03:11 load 0.32
+past the deadline: least 1.47559ms, median 2.652994ms, most 3.69359ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1034 filtered out; finished in 11.16s
+# LATE-DONE 14:03:22
