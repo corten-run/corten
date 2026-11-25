@@ -4,11 +4,13 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { inspect } from "node:util";
 import { copyEvidence, digest, durable, inside, inspectEvidence, readRegular, tree } from "./evidence.mjs";
 import { catalogResult } from "./test-fixtures/catalog.mjs";
 import { groupDescriptor } from "../../catalog/group.mjs";
 import { cpuSettings, parseArgs } from "../../catalog/contract.mjs";
 import { productionFixture } from "../../json-api/production-fixtures.mjs";
+import { producerProvenance } from "../../json-api/production.mjs";
 import { jsonSources, saveJsonFixture } from "./test-fixtures/json.mjs";
 import { marketplaceResult } from "./test-fixtures/marketplace.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
@@ -140,6 +142,27 @@ for (const fault of ["none", "raw hash mismatch", "receipt string"]) {
     if (fault === "raw hash mismatch") fs.writeFileSync(join(root, checked.raw.path), "{}");
     if (fault === "none") assert.equal(inspectEvidence(b, root).baseline, true);
     else assert.throws(() => inspectEvidence(b, root), /strict JSON native attempt incomplete/);
+  });
+}
+for (const [fault, canary, message] of [
+  ["schema", "SAVED_SCHEMA_CANARY", "current JSON campaign requires v2 evidence"],
+  ["malformed digest", "SAVED_DIGEST_CANARY", "invalid JSON producer digest: load-resource-proof.mjs"],
+  ["wrong digest", "a1".repeat(32), "JSON producer differs from bound commit: load-resource-proof.mjs"],
+]) {
+  test(`isolated JSON replay refuses a ${fault} without printing saved text`, (t) => {
+    const root = temporary(t), commit = "a".repeat(40), round = "j1";
+    const s = { schema: "json-api-results/v2", round, commit, options: {}, measurement: { cpus: {} },
+      producer: producerProvenance("json-api-producer/v3") };
+    const b = { request: { group: "json-api", round, commit }, execution: { effectiveOptions: s.options },
+      resources: { expectedCpus: s.measurement.cpus }, sources: jsonSources(s) };
+    if (fault === "schema") s.schema = canary;
+    else s.producer.sources["load-resource-proof.mjs"] = canary;
+    fs.writeFileSync(join(root, "summary.json"), JSON.stringify(s));
+    assert.throws(() => inspectEvidence(b, root), (error) => {
+      assert.ok(!inspect(error).includes(canary), "refusal echoes saved text");
+      assert.equal(error.message, message);
+      return true;
+    });
   });
 }
 test("marketplace uses its native schema, exact configuration and full excluded-candidate ledger", (t) => {

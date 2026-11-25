@@ -155,10 +155,10 @@ export function copyEvidence(source, destination) {
 }
 
 export function verifyJsonProducer(binding, summary) {
-  assert.equal(summary.schema, timedSummarySchema, "current JSON campaign requires v2 evidence");
+  assert.ok(summary.schema === timedSummarySchema, "current JSON campaign requires v2 evidence");
   const names = producerSourceNames(summary.producer?.schema);
   assert.ok(isDeepStrictEqual(Object.keys(summary.producer.sources).sort(), [...names].sort()), "JSON producer inventory differs");
-  assert.equal(binding.sources?.commit, binding.request.commit, "JSON producer commit differs");
+  assert.ok(binding.sources?.commit === binding.request.commit, "JSON producer commit differs");
   const files = binding.sources.files;
   assert.ok(Array.isArray(files), "JSON bound sources missing");
   const sources = new Map(files.map((row) => [row.path, row.sha256]));
@@ -168,8 +168,9 @@ export function verifyJsonProducer(binding, summary) {
   for (const name of names) {
     const path = `bench/json-api/${name}`;
     assert.ok(sources.has(path), "JSON producer missing from bound commit");
-    assert.match(summary.producer.sources[name], /^[a-f0-9]{64}$/);
-    assert.equal(summary.producer.sources[name], sources.get(path), "JSON producer differs from bound commit");
+    const sha256 = summary.producer.sources[name];
+    assert.ok(typeof sha256 === "string" && /^[a-f0-9]{64}$/.test(sha256), `invalid JSON producer digest: ${name}`);
+    assert.ok(sha256 === sources.get(path), `JSON producer differs from bound commit: ${name}`);
   }
 }
 

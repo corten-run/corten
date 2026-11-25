@@ -36,6 +36,7 @@ export function verifyLife(state, receipt, { before, load, code, at }) {
   if (!created) assert.ok(Date.parse(state.startedAt) <= at, "participant starts after observation");
   if (load && !before) assert.ok(typeof state.finishedAt === "string" && Number.isFinite(Date.parse(state.finishedAt)) && Date.parse(state.finishedAt) >= Date.parse(state.startedAt)
     && Date.parse(state.finishedAt) <= at, "load finish clock invalid");
+  else timestampNs(state.finishedAt);
 }
 
 export function life(info) {

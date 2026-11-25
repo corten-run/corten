@@ -99,6 +99,14 @@ test("load lifetime encloses measured nanoseconds, fixed events and active gener
   const replay = () => replayTimedRun(run, run.identity, args[0], f.load, args[1], args[2], native);
   const derive = (r) => deriveProductionPhase(r, run.identity, "fixed", ...args, { stream, native });
   assert.equal(replay().phases.fixed.targetOutcome, "failed");
+  for (const [role, keys] of [["load", ["before"]], ["app", ["before", "after"]], ["upstream", ["before", "after"]]]) {
+    for (const value of ["0001-01-01T00:00:00.000000000Z", ["0001-01-01T00:00:00Z"], "not a Docker timestamp"]) {
+      const bad = structuredClone(raw);
+      for (const key of keys) bad[key].liveness[role].finishedAt = value;
+      if (typeof value === "string" && value.startsWith("0001")) assert.equal(derive(bad).targetOutcome, "failed");
+      else assert.throws(() => derive(bad), /RFC3339 nanosecond event timestamp required/, role);
+    }
+  }
   for (const change of [(s) => { s.liveness.upstream.containerId = s.participants.upstream.containerId = "9".repeat(64); },
     (s) => { s.liveness.upstream.startedAt = new Date(Date.parse(s.liveness.upstream.startedAt) + 1).toISOString(); }]) {
     const bad = structuredClone(raw); change(bad.before); change(bad.after); saved.raw = f.put(bad);

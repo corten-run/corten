@@ -373,8 +373,9 @@ above exits nonzero for invalid evidence. Run it from a checkout of the measured
 against the pins of the checkout it loads, so a round measured before a pin moved fails from a
 newer checkout, with a message naming the pin it expected and the measured commit. A split round validates each native `dN` folder;
 the merged summary alone is not a producer folder. The historical summary reporter remains
-available, but its success is not raw-evidence validation. Old folders without the new
-receipts fail closed; do not backfill them with inferred observations.
+available, but its success is not raw-evidence validation. Newer validators may require
+receipt fields that an older producer did not write. Replay older folders from the producer's
+measured checkout, not the latest checkout; do not backfill receipts with inferred observations.
 Raw replay checks the profile, settings, app image label and qualification receipts under the
 same contract. V1 replay is offline only and still requires the original raw receipts.
 The v3 receipts also retain the selected immutable k6 manifest, platform and actual
