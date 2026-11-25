@@ -19,11 +19,14 @@ import { groupNames } from "./groups.mjs";
 // and reads an app row whose action names a restart-relevant event only when it is exactly that word.
 // Convergence v6 and soak v8: a measured cell's app, load and the pass's upstream were each inspected
 // with the image, CPU quota, CPU pinning, memory limit and load settings the summary records
-// (appliedSettings; a cell that differs fails `settings`), and its app was rechecked as the instance
-// that served the cold probe immediately before the load started (atLaunch). Soak v8 also reads its
-// event stream only when every row is a complete, nonblank line, and fails a cell `instance-changed`
-// when the app had a restart-relevant event stamped before the load started, so a saved event is
-// never before the load.
+// (appliedSettings; a cell that differs fails `settings`): the app's again at the launch check and
+// after the load, and an API cell's upstream before the cell and after its load, since `docker
+// update` changes them without a restart. Its app was rechecked as the instance that served the cold
+// probe immediately before the load started (atLaunch). Soak v8 also reads its event stream only
+// when every row is a complete, nonblank line, and fails a cell `instance-changed` when the app had
+// a restart-relevant event stamped before the load started, so a saved event is never before the
+// load, or when the app's own StartedAt after the load is a later start stamped before the load's
+// (startedBeforeLoad), whether or not the event stream reads.
 export const convergenceSchema = "marketplace-convergence/v6";
 export const soakSchema = "marketplace-soak/v8";
 // The targets and sources of the timed profiles: a page in rotating locales and locale-neutral JSON,
@@ -473,6 +476,19 @@ export function atLaunch(served, info) {
     served?.restartCount !== now.restartCount && "another RestartCount", !now.running && "not running", now.oomKilled && "OOM-killed"].filter(Boolean);
   assert.ok(changed.length === 0, `the app changed after it served the cold probe and before the load started: ${changed.join(", ")}`);
   return now;
+}
+/**
+ * A soak's app after the load (`after`, appInstance) whose StartedAt is not the one it had at the
+ * launch check (`launched`, atLaunch's answer) and is stamped strictly before the load container's
+ * StartedAt (`loadStartedAt`, Docker's own text): the app started again after that check and before
+ * the load began, so the load may not have run against the instance that served the cold probe. Both
+ * times are Docker's, compared in nanoseconds (dockerNanos). This reads the inspect alone, so it
+ * refuses such a cell whether or not the event stream could be read. The message names no value.
+ */
+export function startedBeforeLoad(launched, after, loadStartedAt) {
+  const load = dockerNanos(loadStartedAt), started = dockerNanos(after?.startedAt);
+  assert.ok(load !== null && started !== null, "the load's or the app's StartedAt is not a time");
+  assert.ok(after.startedAt === launched?.startedAt || started >= load, "the app started again after the launch check and before the load started");
 }
 /**
  * The settings a pass records for one of its containers (`role`: app, load or upstream), checked

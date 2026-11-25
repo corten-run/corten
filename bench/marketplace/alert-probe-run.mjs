@@ -229,7 +229,11 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
           if (!pending.has(id)) pending.set(id, { kind: "network", id, name: null });
           await remove(id, { recovered: !record.created.some((entry) => entry.id === id) });
         }
-        await settleFound("network");
+      } catch (error) { fail(`networks labelled ${record.ownerLabel}`, error); }
+      // As for containers: a failed owner-label listing does not keep a network an attempt's own
+      // label found from being removed, or confirmed absent, by its ID.
+      await settleFound("network");
+      try {
         record.remaining = { containers: await list("container", label), networks: await list("network", label) };
         assert.deepEqual(record.remaining, { containers: [], networks: [] }, "owned resources survived teardown");
       } catch (error) { fail(`resources labelled ${record.ownerLabel}`, error); }

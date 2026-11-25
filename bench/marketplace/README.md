@@ -323,7 +323,10 @@ not running or OOM-killed, there fails the cell `instance-changed` and no load s
 before the load is never read as one during it. A soak also fails the cell `instance-changed` when its
 event stream shows a start, restart, die, kill or OOM of the app stamped before the load container's
 StartedAt (after that last inspect, before the load), and a saved soak event is never before the
-load. The settings the summary records are checked on Docker's inspect before any reading from a
+load. It fails it too when the app's own inspect after the load shows a StartedAt other than the
+one at that last inspect and stamped before the load container's StartedAt (`startedBeforeLoad`, in
+nanoseconds), which needs no event stream, so a restart there fails the cell even when the stream
+is unavailable. The settings the summary records are checked on Docker's inspect before any reading from a
 container is kept (`appliedSettings`): the upstream's CPU quota (Docker's NanoCpus from `--cpus`,
 with no CpuQuota of its own), CPU pinning (`CpusetCpus`) and memory limit before any cell; for each
 cell the app's image ID, quota, pinning, memory limit and source (with the group's profile and
@@ -331,7 +334,11 @@ connection limit), and the load's image ID, quota, pinning, memory limit and eve
 `window-load.js` reads (`BASE`, `TARGET`, `LOCALE`, `MODE`, `WINDOWS`, `WINDOW_SECONDS`, and
 `VUS` or `RATE`, each exactly once with the requested value, and the other absent), before the load
 starts and again after it ran, so the VUs and rate `validateLoadExecution` reads are the ones
-requested. A container that differs fails the cell `settings` (the upstream, the pass) with a fixed
+requested. Since `docker update` changes a running container's CPU quota, pinning and memory
+without a restart, the app's settings are checked again at that last inspect before the load and
+after the load, and an API cell's upstream's before the cell and after its load
+(`upstream-container-before.json`, `upstream-container-after.json`). A container that differs fails
+the cell `settings` (the upstream before any cell, the pass) with a fixed
 message naming the role and setting, never Docker's value; `load-container.json` also keeps the
 window settings. Then, for a convergence cell: the same ID
 and StartedAt, running, not restarted or OOM-killed, `heldThrough`; for a soak: the restart
@@ -659,7 +666,8 @@ ordinary. A create that returns no ID, whatever its error (a daemon error can fo
 the daemon already made), is looked for by a label of its own for up to 10 seconds at teardown,
 each lookup cut to the time left; if nothing appears, its cleanup is reported unconfirmed and
 the run fails, since Docker may still make it. A failed lookup is reported and does not stop
-the sweep by the owner label. Before removing a container or network the runner looks it up by
+the sweep by the owner label, and a failed owner-label listing is reported and does not stop an
+ID such a lookup found from being removed, or confirmed absent, by that ID. Before removing a container or network the runner looks it up by
 its own ID: only an empty answer counts as already gone, and any other answer (another full ID)
 leaves its removal unconfirmed and fails the teardown, as `bench/fullstack/idle-close.mjs` does.
 `--deadline` bounds the whole run: work stops starting two minutes before it, leaving that

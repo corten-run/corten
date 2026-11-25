@@ -24,9 +24,13 @@
 // Settings: before a cell's reading is kept, its app's and its load's inspect must show the image,
 // CPU quota, CPU pinning, memory limit and load settings the summary records (steady-contract.mjs
 // appliedSettings), as must the upstream's before any cell runs; the load's are checked before it
-// starts and again once it has run. The app is rechecked as the instance that served the cold probe
-// immediately before the load starts (atLaunch), so a change before the load fails the cell
-// `instance-changed` and is never read as one during it.
+// starts and again once it has run. `docker update` changes a running container's CPU quota,
+// pinning and memory without a restart, so the app's are checked again at the launch check and
+// after the load, and an API cell's upstream before the cell and after its load. The app is
+// rechecked as the instance that served the cold probe immediately before the load starts
+// (atLaunch), so a change before the load fails the cell `instance-changed` and is never read as
+// one during it; a soak's app whose StartedAt after the load is a later start stamped before the
+// load's own (startedBeforeLoad) fails it too, whether or not its event stream reads.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -46,7 +50,7 @@ import { records } from "./fixtures.mjs";
 import { locales } from "./contract.mjs";
 import { ownedResources, reconcileWindow, runClock } from "./alert-probe-run.mjs";
 import { appBefore, appInstance, appliedSettings, atLaunch, checkFixture, convergenceSchema, cpuModelDigest, eventFormat, failureCodes, flattenPoint, flattenRule, heldThrough, markerIs, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell,
-  savedOptions, savedValue, servedCold, soakMemoryClock, soakSchema, summarizeSoak, timedStartup, validateConvergence, validateSoak, verdictText, windowClock } from "./steady-contract.mjs";
+  savedOptions, savedValue, servedCold, soakMemoryClock, soakSchema, startedBeforeLoad, summarizeSoak, timedStartup, validateConvergence, validateSoak, verdictText, windowClock } from "./steady-contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -437,7 +441,8 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   const fixtureMount = ["-v", `${fixtureCopy}:/fixtures:ro`];
   let fixtureCopySha256 = null;
   const upstreamName = `${runId}-upstream`;
-  let network;
+  // The upstream's container ID and the settings the summary records for it, once it is created.
+  let network, upstreamId, upstreamSettings;
   const port = async (id) => {
     const hostPort = (await owned.inspect(id)).NetworkSettings?.Ports?.["8080/tcp"]?.[0]?.HostPort;
     assert.ok(hostPort, `${id}: no private host port`);
@@ -509,7 +514,16 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   async function pass(cell, imageId, raw, left) {
     const name = `${runId}-${cell.app}`;
     let sampler, app, k6, marker, stream, streamError;
+    // An API cell's load reaches the upstream, so its settings are checked before the cell and again
+    // after the load, like the app's: `docker update` can change them without a restart.
+    const upstreamHeld = async (when) => {
+      if (cell.source !== "api") return;
+      const info = await step("container", () => owned.inspect(upstreamId));
+      retain(join(raw, `upstream-container-${when}.json`), containerReceipt(info));
+      await step("settings", () => appliedSettings(info, upstreamSettings));
+    };
     try {
+      await upstreamHeld("before");
       app = await step("container", () => owned.container(appArgs(name, cell.source, imageId), name));
       const served = await step("cold-start", () => coldStart(app, name, cell.target, raw, left));
       if (left.length) throw coded("unsettled", new Error("the cold sidecar was not removed"));
@@ -520,9 +534,12 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       // The instance the load will measure is the one that served the cold probe; otherwise no load starts.
       await step("instance-changed", () => servedCold(served, instance));
       await step("cold-start", () => appBefore(before));
-      // The app the summary describes: its image, CPU quota and pinning, memory and source.
-      await step("settings", () => appliedSettings(before, { role: "app", image: imageId, quota: cpus.app.quota, cpuset: cpus.app.cpuset, memoryBytes: summary.measurement.appMemoryBytes,
-        env: { MARKETPLACE_SOURCE: cell.source, ...(options.group ? { PROFILE: boundedQualificationSettings.nativeProfile, MAX_CONNECTIONS: String(boundedQualificationSettings.maxConnections) } : {}) } }));
+      // The app the summary describes: its image, CPU quota and pinning, memory and source. Checked
+      // here, at the launch check and after the load, since `docker update` changes the quota,
+      // pinning and memory of a running container without a restart.
+      const appSettings = { role: "app", image: imageId, quota: cpus.app.quota, cpuset: cpus.app.cpuset, memoryBytes: summary.measurement.appMemoryBytes,
+        env: { MARKETPLACE_SOURCE: cell.source, ...(options.group ? { PROFILE: boundedQualificationSettings.nativeProfile, MAX_CONNECTIONS: String(boundedQualificationSettings.maxConnections) } : {}) } };
+      await step("settings", () => appliedSettings(before, appSettings));
       if (!convergence) {
         // The live event stream, listening before the load: the marker's first start shows it is.
         marker = await step("container", () => owned.container(["--network", "none", ...cpus.load.args, "--memory", "64m", nodeImage, "true"], `${name}-marker`));
@@ -547,7 +564,8 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       // probe. A change found here was before the load, so no load starts.
       const launch = await step("container", () => owned.inspect(app));
       retain(join(raw, "app-container-launch.json"), snapshot(launch));
-      await step("instance-changed", () => atLaunch(served, launch));
+      const launched = await step("instance-changed", () => atLaunch(served, launch));
+      await step("settings", () => appliedSettings(launch, appSettings));
       // The memory samples' origin, on the same workstation clock as their own stamps (soakMemoryClock).
       const memoryOriginMs = clock.now();
       await step("load-exit", () => owned.docker(["start", "-a", k6], { timeout: (seconds + 60) * 1000, file: join(raw, "load.log") }));
@@ -574,6 +592,9 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       const { k6Summary, load, windows, tail, unrecorded, requests, iterations, latencyMaxMs, arrivals } = evidence;
       const after = await step("container", () => owned.inspect(app));
       retain(join(raw, "app-container-after.json"), snapshot(after));
+      // The settings held through the load: the app's, and an API cell's upstream's.
+      await step("settings", () => appliedSettings(after, appSettings));
+      await upstreamHeld("after");
       if (convergence) {
         // A failed answer can be faster than a served one, so throughput with failures says nothing
         // about warming: a failure anywhere, in a window or in the graceful stop, means no verdict.
@@ -590,6 +611,10 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       if (statsError) { keep("memory samples", statsError); log(`${cell.app} ${cell.source} ${cell.target}: memory samples failed: ${firstLine(statsError)}`); }
       const samples = statsError ? null : (stats?.samples?.[app] ?? []).map((s) => ({ atSeconds: (s.t - memoryOriginMs) / 1000, mib: s.mem }));
       const end = await step("container", () => appInstance(after, "after"));
+      // The app's own StartedAt, a later start than at the launch check and stamped before the load's:
+      // it restarted before the load began. Read from Docker's inspect alone, so this holds whether or
+      // not the event stream below reads.
+      await step("instance-changed", () => startedBeforeLoad(launched, end, loadInfo.State.StartedAt));
       // The marker's second start, after the app's last inspect, shows the stream had delivered every
       // app event published before it. Docker's event times and the load's StartedAt and FinishedAt
       // are all the daemon's clock; readEvents requires the two marker starts to bracket the load. A stream that failed, did not show both marker starts or has a row that is not this
@@ -724,14 +749,15 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     summary.tools = { k6: await step("tools", () => k6Tool()), upstream: null };
     network = await step("container", () => owned.network(`${runId}-net`));
     const upstreamInfo = await step("container", async () => {
-      const upstreamId = await owned.container(["--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
+      upstreamId = await owned.container(["--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
         ...fixtureMount, nodeImage, "node", "/bench/marketplace/upstream.mjs"], upstreamName);
       await owned.start(upstreamId);
       return owned.inspect(upstreamId);
     });
     retain(join(folder, "upstream-container.json"), containerReceipt(upstreamInfo));
     summary.tools.upstream = { imageId: await step("tools", () => pinned("imageId", upstreamInfo.Image, "the upstream image ID")) };
-    await step("settings", () => appliedSettings(upstreamInfo, { role: "upstream", image: summary.tools.upstream.imageId, quota: cpus.api.quota, cpuset: cpus.api.cpuset, memoryBytes: summary.measurement.upstreamMemoryBytes }));
+    upstreamSettings = { role: "upstream", image: summary.tools.upstream.imageId, quota: cpus.api.quota, cpuset: cpus.api.cpuset, memoryBytes: summary.measurement.upstreamMemoryBytes };
+    await step("settings", () => appliedSettings(upstreamInfo, upstreamSettings));
     await step("upstream", async () => upstreamReady(`${await port(upstreamInfo.Id)}/health`));
     save();
     for (const source of options.sources) for (const app of options.apps) for (const target of options.targets) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appBefore, appInstance, checkFixture, cpuModelDigest, cpuModelLimit, fixedRateLoad, convergenceLines, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, intervalSchedule, parseSaved, parseSteadyArgs, readDropped, readEvents, readWindows, ruleText, savedValue, soakArrivals, soakMemoryClock, soakSchema, summarizeSoak, timedWarmupVus, unlikeRound, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
+import { appBefore, appInstance, checkFixture, cpuModelDigest, cpuModelLimit, fixedRateLoad, convergenceLines, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, intervalSchedule, parseSaved, parseSteadyArgs, readDropped, readEvents, readWindows, ruleText, savedValue, soakArrivals, soakMemoryClock, soakSchema, startedBeforeLoad, summarizeSoak, timedWarmupVus, unlikeRound, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
 import { savedPass } from "./steady-saved-fixture.mjs";
 import { cpuSettings, resultSchema, v5Schema } from "./run-contract.mjs";
 import { convergenceReport, soakReport, steadyReport } from "./steady-report.mjs";
@@ -778,6 +778,19 @@ test("a convergence cell refuses an app that stopped, restarted, was replaced or
   assert.deepEqual(appBefore(inspect()), { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00.000000001Z", restartCount: 0, running: true, oomKilled: false });
   assert.deepEqual(appInstance(inspect({ State: { Running: false } }), "after").running, false);
   // steady-run.test.mjs shows the runner applying it to a cell whose app was OOM-killed or restarted under load.
+});
+
+test("a soak's app whose StartedAt after the load is a later start stamped before the load's own refuses the cell, read in nanoseconds", () => {
+  const launched = { startedAt: "2026-11-20T00:00:00.000000001Z" }, load = "2026-11-20T00:01:00.000000500Z";
+  const after = (startedAt) => ({ startedAt });
+  // Unchanged, or started again at or after the load's own StartedAt (a restart during the load, the load's to read).
+  for (const at of [launched.startedAt, load, "2026-11-20T00:01:00.000000501Z"]) startedBeforeLoad(launched, after(at), load);
+  // Started again before the load: in the same millisecond, a nanosecond earlier, is still before.
+  for (const at of ["2026-11-20T00:01:00.000000499Z", "2026-11-20T00:00:30Z"])
+    assert.throws(() => startedBeforeLoad(launched, after(at), load), /^AssertionError \[ERR_ASSERTION\]: the app started again after the launch check and before the load started$/);
+  // A time that is not one is refused with a fixed message naming no value.
+  for (const [a, l] of [["not a time", load], [launched.startedAt, "0001-01-01T00:00:00Z"]])
+    assert.throws(() => startedBeforeLoad(launched, after(a), l), /^AssertionError \[ERR_ASSERTION\]: the load's or the app's StartedAt is not a time$/);
 });
 
 test("a value from outside the checkout is saved only when it matches its pattern", () => {

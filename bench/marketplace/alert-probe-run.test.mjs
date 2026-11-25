@@ -541,3 +541,25 @@ test("what an attempt's label found is removed, or confirmed absent, by its own 
   assert.deepEqual([record.unacknowledged[0].outcome, record.complete], ["removed", true]);
   assert.ok(!docker.calls.some(({ args }) => args[0] === "rm"), "nothing to remove");
 });
+
+// A network an attempt's label found is removed by its ID even when the owner-label listing of
+// networks fails, as a container is; the failed listing still leaves cleanup incomplete.
+test("a network an attempt's own label found is removed by its ID even when the owner-label listing of networks fails", async () => {
+  const docker = fakeDocker({ faults: { "network create": () => "lose" } });
+  const sweep = `label=${ownerKey}=alert-probe-test`;
+  const failing = Object.assign(async (args, opts) => {
+    if (args[0] === "network" && args[1] === "ls" && args.includes(sweep)) { docker.time.t += 10; throw new Error("docker network ls: exit 1\nError response from daemon: Bad Gateway"); }
+    return docker(args, opts);
+  }, { time: docker.time });
+  const owned = ownedResources({ docker: failing, runId: "alert-probe-test", window: 50, clock: runClock({ now: () => docker.time.t, sleep: async (ms) => { docker.time.t += ms; } }) });
+  await assert.rejects(owned.network("alert-probe-test-net"), /lost acknowledgement/);
+  const [made] = docker.networks.keys();
+  const record = await owned.teardown();
+  const [attempt] = record.unacknowledged;
+  assert.deepEqual([attempt.ids, attempt.outcome], [[made], "removed"]);
+  assert.deepEqual(record.recovered.map((e) => e.id), [made]);
+  assert.equal(docker.networks.size, 0, "the network its label found is removed");
+  assert.ok(docker.calls.some(({ args }) => args.includes(`id=${made}`)), "looked up by its own ID");
+  assert.equal(record.complete, false, "the failed listing is still a teardown failure");
+  assert.ok(record.failures.some((f) => f.resource === `networks labelled ${record.ownerLabel}`), JSON.stringify(record.failures));
+});

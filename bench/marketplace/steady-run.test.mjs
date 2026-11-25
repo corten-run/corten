@@ -675,8 +675,10 @@ test("a soak reads restarts from a live event stream only when it shows it cover
   // Events are paired by their daemon times, not the order the stream delivered them: a start
   // delivered after a die but stamped at the same time, or earlier, is not a restart. The stream
   // covered the load and showed both, so the soak reads them as observations and Restarted: no.
-  const sameTime = await soak("same-time", { duringLoad: (state) => { state.emit(state.app().id, "die"); state.emit(state.app().id, "start"); } });
-  const earlier = await soak("earlier", { duringLoad: (state) => { state.emit(state.app().id, "die"); state.offset -= 5; state.emit(state.app().id, "start"); state.offset += 5; } });
+  // Each pair's times are fixed from one clock reading, so the same time is exactly the same.
+  const stamped = (state, action, nanos) => { for (const listener of state.listeners) listener(state.app().id, action, String(nanos)); };
+  const sameTime = await soak("same-time", { duringLoad: (state) => { const at = BigInt(state.now()) * 1_000_000n; stamped(state, "die", at); stamped(state, "start", at); } });
+  const earlier = await soak("earlier", { duringLoad: (state) => { const at = BigInt(state.now()) * 1_000_000n; stamped(state, "die", at); stamped(state, "start", at - 5_000_000n); } });
   for (const [name, { r, s }] of [["same-time", sameTime], ["earlier", earlier]]) {
     assert.deepEqual([r.eventStream, r.events.map((e) => e.action), r.restarted, r.restartCount, r.replaced], ["seen", ["die", "start"], false, 0, false], name);
     assert.match(steadyReport(s), /\| exit \(die\) at \d+ s, start at \d+ s \| no \|$/m, name);
@@ -1433,6 +1435,99 @@ test("the app is rechecked as the instance that served the cold probe immediatel
   assert.equal(held.loaded, true);
   assert.equal(held.s.cells[0].failure, "instance-changed");
   assert.ok(errorsOf(folder("convergence-during")).includes("app container stopped, restarted, was replaced or was OOM-killed during the pass: another StartedAt"));
+});
+
+// A pass with a fake docker stats client, which a soak samples its app's memory through.
+function sampled(fake, options, folder, extra = {}) {
+  let tick = 0;
+  const stats = statsClient({ delayMs: 10, rows: (a) => Array.from({ length: 180 }, () => ({ ID: a.at(-1), Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" })) });
+  return run(fake, options, folder, { spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ }, ...extra });
+}
+const loadStarted = (args, state) => args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-k6"];
+const withHost = (change) => (info) => ({ ...info, HostConfig: { ...info.HostConfig, ...change } });
+
+test("an app whose settings a docker update changes after its first check, at the launch check or during the load, fails the cell `settings` and keeps no reading", async (t) => {
+  const folder = folderOf(t);
+  const convergence = parseSteadyArgs(["convergence", "t44", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const soak = parseSteadyArgs(["soak", "t45", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps);
+  // [name, the pass, when the update lands, the change, the setting the message names, whether the load ran]
+  const cases = [
+    // Once the load container is created: after the app's first check, seen at the launch check.
+    ["launch-quota", convergence, (args) => args[0] === "create" && args[2] === "marketplace-test-run-k6", withHost({ NanoCpus: 2e9 }), "CPU quota", false],
+    ["launch-memory", soak, (args) => args[0] === "create" && args[2] === "marketplace-test-run-k6", withHost({ Memory: 2 ** 31 }), "memory limit", false],
+    // Once the load has started: seen in the app's inspect after it.
+    ["load-cpuset", convergence, loadStarted, withHost({ CpusetCpus: "0" }), "CPU pinning (cpuset)", true],
+    ["load-quota", soak, loadStarted, withHost({ NanoCpus: 2e9 }), "CPU quota", true],
+  ];
+  for (const [name, options, when, change, what, loads] of cases) {
+    const soakPass = options.kind === "soak";
+    let updated = false;
+    const fake = fakeDocker({ ...(soakPass ? { exportFor: () => soakExport(), clockMs: 1_800_000, loadMs: 50 } : { exportFor: () => k6Export(flat(8)) }),
+      override: (args, state) => { if (when(args, state)) updated = true; }, inspected: (info, c) => (c.kind === "app" && updated ? change(info) : info) });
+    const s = await sampled(fake, options, folder(name), { env: pinnedEnv });
+    assert.equal(s.cells[0].failure, "settings", `${name}: ${JSON.stringify(s.cells[0])}`);
+    assert.ok(errorsOf(folder(name)).includes(`the app container's ${what} is not the one this pass records`), name);
+    assert.equal(fake.calls.some((c) => loadStarted(c.args, fake)), loads, `${name}: whether the load ran`);
+    assert.equal(s.complete, true, name);
+    (soakPass ? validateSoak : validateConvergence)(s);
+  }
+});
+
+test("an API cell's upstream is checked before the cell and after its load: settings a docker update changes fail that cell `settings`", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t46", "--apps", "corten", "--sources", "api", "--minutes", "2"], apps, groupApps);
+  const raw = (name, target) => join(folder(name), "api", "corten", target);
+  const measure = async (name, when) => {
+    let updated = false, loads = 0;
+    const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => { if (loadStarted(args, state)) loads++; if (when(args, state)) updated = true; },
+      inspected: (info, c) => (c.kind === "upstream" && updated ? withHost({ CpusetCpus: "" })(info) : info) });
+    const s = await run(fake, options, folder(name), { env: pinnedEnv });
+    return { s, loads };
+  };
+  // During the first cell's load: that cell fails after its load, and the next before its app is created.
+  const during = await measure("during", loadStarted);
+  assert.deepEqual([during.s.cells.map((c) => [c.target, c.failure, c.verdict]), during.loads], [[["page", "settings", null], ["json", "settings", null]], 1], JSON.stringify(during.s.cells));
+  assert.ok(errorsOf(folder("during")).includes("the upstream container's CPU pinning (cpuset) is not the one this pass records"));
+  assert.ok(existsSync(join(raw("during", "page"), "upstream-container-after.json")), "the upstream's inspect after the load is kept raw");
+  assert.equal(during.s.complete, true);
+  validateConvergence(during.s);
+  // Between the cells (once the first cell's app is removed): the first reads, the second fails before its app exists.
+  const between = await measure("between", (args, state) => args[0] === "rm" && args.at(-1) === state.ids["marketplace-test-run-corten"]);
+  assert.deepEqual([between.s.cells.map((c) => [c.target, c.failure ?? "read"]), between.loads], [[["page", "read"], ["json", "settings"]], 1], JSON.stringify(between.s.cells));
+  assert.ok(!existsSync(join(raw("between", "json"), "app-container.json")), "no app was created for the refused cell");
+  validateConvergence(between.s);
+  // Unchanged: every API cell reads, with the upstream's inspect before the cell and after its load kept raw.
+  const held = await measure("held", () => false);
+  assert.equal(held.s.complete, true, JSON.stringify(held.s.failures));
+  assert.deepEqual(held.s.cells.map((c) => [c.target, c.failure, c.verdict.withinTolerance]), [["page", undefined, true], ["json", undefined, true]]);
+  for (const target of ["page", "json"]) for (const when of ["before", "after"]) assert.ok(existsSync(join(raw("held", target), `upstream-container-${when}.json`)), `${target} ${when}`);
+  validateConvergence(held.s);
+});
+
+test("a soak's app that started again after the launch check and before the load fails the cell `instance-changed` from Docker's inspect alone, with the event stream unavailable", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["soak", "t47", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps);
+  // An events client that cannot run at all, so the soak has no event stream.
+  const broken = () => { const child = new EventEmitter(); Object.assign(child, { stdout: new PassThrough(), stderr: new PassThrough(), kill() { return true; } }); setImmediate(() => { child.emit("error", Object.assign(new Error("spawn docker ENOENT"), { code: "ENOENT" })); child.emit("close", -2); }); return child; };
+  const soak = async (name, extra) => {
+    const fake = fakeDocker({ exportFor: () => soakExport(), clockMs: 1_800_000, loadMs: 50, ...extra });
+    return sampled(fake, options, folder(name), { spawnEvents: broken });
+  };
+  // Restarted in place as the load is started (after the launch check): a new StartedAt a
+  // millisecond before the load container's own, and no event to show it.
+  const early = await soak("before-load", { override: (args, state) => {
+    if (!loadStarted(args, state)) return;
+    const app = state.app(); app.state = { ...app.state, StartedAt: new Date(state.now()).toISOString() }; state.offset += 1;
+  } });
+  assert.equal(early.cells[0].failure, "instance-changed", JSON.stringify(early.cells[0]));
+  assert.ok(errorsOf(folder("before-load")).includes("the app started again after the launch check and before the load started"));
+  assert.equal(early.complete, true);
+  validateSoak(early);
+  // The same restart during the load, with the stream just as unavailable, is the load's: read, not refused.
+  const during = await soak("during-load", { restartOnLoad: true });
+  assert.equal(during.cells[0].failure, undefined, JSON.stringify(during.cells[0]));
+  assert.equal(during.cells[0].restarts.eventStream, "unavailable");
+  validateSoak(during);
 });
 
 test("a create whose acknowledgement was lost counts as cleaned up only once what its label found is removed by its own ID; until then the fixture copy is kept", async (t) => {
