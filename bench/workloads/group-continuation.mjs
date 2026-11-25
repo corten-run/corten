@@ -9,7 +9,8 @@ import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
 import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
 import { createContradiction, createErroredCustody, createErroredReceipt, createRecheckLock, setupEvidence, terminalSetupScript, verifyCreateErrored,
-  verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+  exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement,
+  verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readFleet, readGroup,
   postedContradiction, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
   verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
@@ -84,11 +85,16 @@ const known = ({ state }) => state?.id && state.status === "collected" && state.
 const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": "failed-setup-host.json", unused: "unused-host.json" })[kind];
 const lockBytes = (root) => { const bytes = fleetBatchLock(root); return bytes && digest(bytes); };
 
-function verifyRetryRetirement(saved, processStart, retainedLocks) {
+function verifyRetryRetirement(saved, processStart, retainedLocks, exitOne) {
   const { local, state, stateRoot } = saved, { kind, evidenceSha256 } = state.retirement;
   assert.ok(!present(join(local, "stream-recovery.lock")), "group recovery remains active");
   if (kind === "native-failed") {
-    if (saved.outcome === "available") verifyFailedNativeRetirement(local, state);
+    if (exitOne) {
+      assert.equal(saved.outcome, "available", "exit-one retirement still holds custody");
+      exitOneReadLocks(local);
+      const { assertCustody } = verifyFailedExitOneRetirement(local, state, evidenceSha256, true);
+      retainedLocks.push(() => { exitOneReadLocks(local); assertCustody(); });
+    } else if (saved.outcome === "available") verifyFailedNativeRetirement(local, state);
     else {
       const sameLocks = historicalChildLocks(saved, processStart);
       assert.ok(sameLocks, "unresolved custody for the selected group");
@@ -214,6 +220,10 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
     for (const saved of children) {
       const { group, state, stateSha256 } = saved, selected = group === admittedGroup;
       const pinned = archives && Object.hasOwn(archives, group);
+      const exitOne = failedExitOneCandidate(saved.local, state);
+      if (failedExitOneScope(state) && state.archiveSha256 && !terminal(saved))
+        assert.fail("unresolved custody: the bound Client Heavy attempt requires confirmed absence");
+      if (exitOne) assert.ok(!pinned, "failed exit one is not a retained result");
       // Only bound historical allocations past create/bootstrap (or with a
       // recorded terminal setup) can have cleanup settled by an account census.
       const setup = setupCensus(fleet, saved, lock, launch);
@@ -248,8 +258,8 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
         outcome = "create-errored";
       } else if (terminal(saved)) {
         if (state.status === "retired") {
-          if (selected) {
-            try { verifyRetryRetirement(saved, processStart, retainedLocks); }
+          if (selected || failedExitOneScope(state)) {
+            try { verifyRetryRetirement(saved, processStart, retainedLocks, exitOne); }
             catch (cause) { refuseAdmission("custody-replay", new Error("unresolved custody: selected group retirement is not verified", { cause })); }
             receipt = retirementFile(state.retirement.kind);
           }
@@ -302,6 +312,10 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       const { group } = row;
       const saved = readGroup(fleet, group);
       assert.equal(saved.stateSha256, row.stateSha256, "continuation state changed");
+      if (failedExitOneScope(saved.state) && saved.state.archiveSha256 && !terminal(saved))
+        assert.fail("unresolved custody: the bound Client Heavy attempt requires confirmed absence");
+      if (failedExitOneCandidate(saved.local, saved.state))
+        assert.equal(row.outcome, "native-failed-retired", "unresolved custody: failed exit one needs confirmed retirement");
       const setup = row.outcome === "uncollected" && setupCensus(fleet, saved, lock, launch);
       const noCreate = notCreated(fleet, saved, lock), outcome = noCreate ? "not-created" : setup ? setupCensusOutcome : row.outcome;
       if (manifest.single && (retryable({ ...row, outcome }) || outcome === "verified"))

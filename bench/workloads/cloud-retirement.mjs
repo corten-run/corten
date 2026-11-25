@@ -8,9 +8,10 @@ import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { bootstrapWorkspaceScript, preloginUserData, savedLoadLayout, savedPlacement, stagedFleet } from "./cloud-contract.mjs";
 import { sealedMonitor, settledMonitor } from "./cloud-control-stream.mjs";
 import { quote } from "./cloud-transport.mjs";
-import { guardianSha256, guardianSource } from "./cloud-control-runtime.mjs";
+import { acknowledgedBootstrapSeal, guardianSha256, guardianSource } from "./cloud-control-runtime.mjs";
 import { verifyControlSetupQuery } from "./cloud-control-session.mjs";
 import { verifyControlWatcher } from "./isolated/control-admission.mjs";
+import { verifyStreamDrain, verifyStreamSeal } from "./isolated/control-stream.mjs";
 import { campaignRounds, jsonPreparationRound, nativeArtifactRoot } from "./registry.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { cancellationState, mixedDigest, mixedWait, originalMixedControls, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
@@ -224,26 +225,30 @@ function preplanGroup(local, state, readGrouped = groupedFailure) {
   return { ...grouped, preplan: true };
 }
 
-function originalFailedWrapper(local, state, verifyTree = verifyEvidenceTree) {
+function originalFailedWrapper(local, state, verifyTree = verifyEvidenceTree, exit = 2) {
   assert.equal(fileHash(join(local, "results.tgz")), state.archiveSha256, "original failed archive changed");
   const extracted = join(local, state.evidence); physical(extracted);
   verifyTree(extracted, state.evidenceSha256, "original failed extraction changed");
-  assert.ok(regular(join(extracted, "exit-code"), 16).equals(Buffer.from("2\n")), "custody requires the saved failure exit, not a successful report");
+  assert.ok(regular(join(extracted, "exit-code"), 16).equals(Buffer.from(`${exit}\n`)), "custody requires the saved failure exit, not a successful report");
   const folder = join(extracted, "campaign"); physical(folder);
   return { extracted, folder };
+}
+
+function verifyNativeEntryLog(extracted, state, exit) {
+  const job = remoteFiles(state)["job.sh"].split("\n");
+  const stage = job.lastIndexOf("bootstrap_stage=native-entry");
+  assert.ok(stage >= 0 && job[stage + 1]?.startsWith("node 'bench/workloads/isolated/campaign-entry.mjs' "), "native-entry source differs");
+  const line = Buffer.from(`benchmark job failed: stage=native-entry line=${stage + 2} exit=${exit}\n`);
+  const log = regular(join(extracted, "run.log"));
+  const start = log.length - line.length;
+  assert.ok(start >= 0 && (start === 0 || log[start - 1] === 10) && log.subarray(start).equals(line), "source-bound final native-entry failure required");
 }
 
 function verifyPreplanArchive({ extracted, folder }, state) {
   const dir = opendirSync(folder);
   try { assert.ok(dir.readSync() === null, "preplan failure requires an empty archived campaign"); }
   finally { dir.closeSync(); }
-  const job = remoteFiles(state)["job.sh"].split("\n");
-  const stage = job.lastIndexOf("bootstrap_stage=native-entry");
-  assert.ok(stage >= 0 && job[stage + 1]?.startsWith("node 'bench/workloads/isolated/campaign-entry.mjs' "), "native-entry source differs");
-  const line = Buffer.from(`benchmark job failed: stage=native-entry line=${stage + 2} exit=2\n`);
-  const log = regular(join(extracted, "run.log"));
-  const start = log.length - line.length;
-  assert.ok(start >= 0 && (start === 0 || log[start - 1] === 10) && log.subarray(start).equals(line), "source-bound final native-entry failure required");
+  verifyNativeEntryLog(extracted, state, 2);
 }
 
 export function groupedPreplanFailure(local, state) {
@@ -253,14 +258,147 @@ export function groupedPreplanFailure(local, state) {
 }
 
 export const handoffRetirementPolicy = "grouped-handoff-failure-existing-custody-only";
-export function handoffLocks(local, holdingOperationLock = false) {
+export const failedExitOnePolicy = "r78-client-heavy-sealed-exit-one-retirement-only";
+export const failedExitOneScope = (s) => s?.round === "r78" && s.commit === "7c13920f87b6baa6c7f967027d2eff9358201e4c"
+  && s.group === "client-heavy" && stagedFleet(s.fleet) && s.fleet.single?.group === s.group && !s.fleet.single.offlineHandoff
+  && s.control?.monitor?.phase === "closed";
+export const failedExitOneCandidate = (local, s) => failedExitOneScope(s) && s.evidence !== undefined
+  && regular(join(local, s.evidence, "exit-code"), 16).equals(Buffer.from("1\n"));
+
+function verifyExitOneManifest(directory, entries) {
+  let index = 0;
+  function visit(file, path) {
+    const stat = lstatSync(file);
+    const record = stat.isDirectory() ? { path, type: "directory" }
+      : { path, type: "file", bytes: stat.size, sha256: fileHash(file, stat.size) };
+    assert.ok(isDeepStrictEqual(entries[index++], record), "archived collection member differs");
+    if (stat.isDirectory()) {
+      physical(file);
+      for (const name of readdirSync(file).sort()) {
+        if (!path && name === "collection-manifest.json") continue;
+        visit(join(file, name), path ? `${path}/${name}` : name);
+      }
+    }
+  }
+  visit(directory, "");
+  assert.equal(index, entries.length, "archived collection inventory differs");
+}
+
+function exitOneCampaign(state, grouped, { extracted, folder }, campaign, plan, result) {
+  verifyNativeEntryLog(extracted, state, 1);
+  const { status } = result, dir = join(folder, campaign);
+  assert.equal(status.state, "finished");
+  assert.equal(status.nextGroup, null);
+  assert.deepEqual(status.uncollectedNativeRoots, [], "failed exit has pending native output");
+  assert.equal(status.outcomes[0].outcome, "failed", "only an intrinsically failed group may retire as exit one");
+  const read = (name) => regular(join(dir, name)), seal = JSON.parse(read("control-stream-seal.json"));
+  assert.deepEqual(seal.registration, grouped.registration, "archived stream registration differs");
+  verifyStreamSeal(grouped.registration.binding, seal);
+  const drain = JSON.parse(read("control-stream-drain.json"));
+  verifyStreamDrain(grouped.registration.binding, grouped.registration, drain);
+  assert.ok(BigInt(drain.monoNs) >= BigInt(seal.sealedMonoNs), "stream drain predates seal");
+  const collection = JSON.parse(read("collection-manifest.json"));
+  assert.deepEqual(collection.status, status, "terminal collection status differs");
+  assert.equal(collection.wholeHostTerminal, "parent-must-observe");
+  assert.equal(collection.deletionAuthorized, false);
+  const { entries, sha256 } = collection.manifest;
+  assert.ok(Array.isArray(entries) && entries.length <= evidenceEnvelope.nodes && deploymentSha256(entries) === sha256,
+    "archived collection manifest differs");
+  verifyExitOneManifest(dir, entries);
+  const journal = entries.filter(({ path }) => /^\d{5}-[a-z-]+\.json$/.test(path)).map(({ path }) => path).sort();
+  assert.ok(journal.length >= 3 && journal.at(-1).endsWith("-finished.json") && journal.at(-2).endsWith("-stream-sealed.json")
+    && journal.at(-3).endsWith("-group-finished.json"), "terminal journal missing");
+  for (const [offset, kind] of ["finished", "stream-sealed", "group-finished"].entries()) {
+    const name = journal.at(-1 - offset), event = JSON.parse(read(name));
+    assert.equal(name, `${String(journal.length - 1 - offset).padStart(5, "0")}-${kind}.json`);
+    assert.equal(event.schema, "benchmark-isolated-campaign-event/v1");
+    assert.equal(event.kind, kind); assert.equal(event.sequence, journal.length - 1 - offset);
+    assert.equal(event.campaign, campaign); assert.equal(event.round, state.round); assert.equal(event.campaignSha256, plan.campaignSha256);
+    if (kind === "finished") assert.deepEqual(event.status, status, "finished journal differs");
+    if (kind === "stream-sealed") {
+      assert.equal(event.path, "control-stream-seal.json");
+      assert.equal(event.sha256, grouped.terminal.sealSha256);
+      assert.deepEqual(event.binding, grouped.registration.binding);
+    }
+    if (kind === "group-finished") {
+      assert.equal(event.group, state.group); assert.equal(event.outcome, "failed");
+      assert.match(event.nativeManifestSha256, /^[a-f0-9]{64}$/);
+      assert.equal(event.nativeManifestSha256, status.outcomes[0].nativeManifestSha256);
+    }
+  }
+  const phase = "00-client-heavy-timing";
+  const native = `${phase}/native`, nativeManifest = JSON.parse(read(`${phase}/native-manifest.json`));
+  const nativeEntries = entries.filter(({ path }) => path === native || path.startsWith(`${native}/`))
+    .map(({ path, ...record }) => ({ path: path.slice(native.length + 1), ...record }));
+  assert.ok(isDeepStrictEqual(nativeEntries, nativeManifest.entries) && deploymentSha256(nativeEntries) === nativeManifest.sha256
+    && nativeManifest.sha256 === status.outcomes[0].nativeManifestSha256, "archived native manifest differs");
+  for (const [kind, path] of [["native-output-reserved", grouped.phases.timing], ["phase-sealed", grouped.phases.timing]]) {
+    const names = journal.filter(name => name.endsWith(`-${kind}.json`));
+    assert.equal(names.length, 1, "exact Client Heavy phase required");
+    const event = JSON.parse(read(names[0]));
+    assert.equal(event.group, state.group); assert.equal(event.phase, "timing");
+    assert.equal(event.artifactRoot, path, "journal names an unaccounted native root");
+    if (kind === "phase-sealed") assert.equal(event.nativeManifestSha256, nativeManifest.sha256);
+  }
+  assert.deepEqual(readdirSync(extracted).sort(), ["campaign", "control", "exit-code", "host.txt", "run.log"],
+    "unexpected original archive root");
+  const archivedNative = treeHash(join(dir, native));
+  const empty = archivedNative === digest("d\0\0");
+  return { campaign: treeHash(folder), native: archivedNative, empty,
+    control: treeHash(join(extracted, "control")),
+    wrapper: { runLog: fileHash(join(extracted, "run.log")), host: fileHash(join(extracted, "host.txt")) } };
+}
+
+export function verifyFailedExitOneCustody(local, state, { pin = false } = {}) {
+  assert.ok(failedExitOneScope(state), "only the source-bound monitored Client Heavy attempt can use exit-one retirement");
+  assert.equal(state.control.helperSha256, guardianSha256, "original control source changed");
+  assert.deepEqual(state.control.sealed, ["bootstrap"], "collection epoch is foreclosed");
+  assert.ok(acknowledgedBootstrapSeal(state.control.ledger.filter(({ request }) => request.epoch === "bootstrap")),
+    "original bootstrap seal was not acknowledged");
+  assert.ok(state.bootstrapReady && state.id && state.ip && state.createIntentAt && state.fullGroupQualified === false
+    && ["collectedAt", "validation", "evidenceOutcome", "exitCode", "preBootstrapTerminal", "mixedCancellation",
+      "auditIntent", "auditIntents", "createErrored", "createContradicted"].every(key => state[key] === undefined),
+  "only an unqualified bound failed campaign may retire");
+  assert.ok(state.status === "running" && !state.deletionIntentAt && !state.retirement && !state.destroyedAt
+    || state.status === "retired" && state.retirement?.kind === "native-failed" && state.deletionIntentAt, "exit-one retirement state differs");
+  const publications = (authored) => {
+    handoffPublications(local);
+    assert.ok(!readdirSync(local).some(name => /^failed-native-(?:results|capture)|^custody-/.test(name)), "unaccounted failed native custody");
+    if (!authored && state.status !== "retired")
+      for (const name of ["failed-native-reservation.json", "failed-native-host.json"])
+        assert.ok(!lstatSync(join(local, name), { throwIfNoEntry: false }), "prior exit-one retirement publication requires inspection");
+  };
+  publications();
+  const fleetRoot = dirname(dirname(local)), launch = join(fleetRoot, "launch-intent.json"), fleet = join(fleetRoot, `fleet-${state.round}.json`);
+  const files = [launch, fleet, ...["known_hosts", "results.tgz", "monitor-registration.json", "monitor-local-closed.json", "monitor-terminal.json"]
+    .map(name => join(local, name))];
+  const inputs = files.map(path => [path, evidenceFileIdentity(path)]);
+  const grouped = { ...groupedFailure(local, state), exitOne: true };
+  assert.deepEqual(grouped.roots, ["/bench/campaign", `/bench/repo/${grouped.phases.timing}`]);
+  grouped.roots.push("/bench/control");
+  let unchanged;
+  const inspected = failedNativeArchiveEvidence(local, state, grouped, groupedFailure,
+    pin ? (...args) => { unchanged = pinEvidenceTree(...args); } : verifyEvidenceTree);
+  const launchIntentSha256 = fileHash(launch, 1024 * 1024), fleetManifestSha256 = fileHash(fleet, 1024 * 1024);
+  const assertCustody = (includeTree = true, authored = false) => {
+    if (includeTree) unchanged?.();
+    publications(authored);
+    for (const [path, before] of inputs)
+      assert.ok(evidenceFileIdentity(path) === before, "local exit-one custody changed");
+  };
+  assertCustody(false);
+  return { grouped, hashes: inspected.exitOneHashes, launchIntentSha256, fleetManifestSha256, assertCustody };
+}
+export function handoffLocks(local, holdingOperationLock = false, continuation = false) {
   const base = dirname(local), fleet = dirname(base);
   const paths = [join(local, "stream-recovery.lock"), join(local, "audit-delivery.lock"), join(local, createRecheckLock),
-    join(base, ".groups-launch.lock"), join(fleet, ".fleet-operation.lock"),
-    join(dirname(fleet), ".continuation-operation.lock")];
+    join(base, ".groups-launch.lock"), join(fleet, ".fleet-operation.lock")];
+  if (!continuation) paths.push(join(dirname(fleet), ".continuation-operation.lock"));
   if (!holdingOperationLock) paths.push(join(local, "operation.lock"));
   assert.ok(paths.every(path => !lstatSync(path, { throwIfNoEntry: false })), "handoff recovery has competing or retained custody");
 }
+
+export const exitOneReadLocks = (local) => handoffLocks(local, false, true);
 
 function handoffPublications(local) {
   // Ordinary collection leaves its download files behind. Only the published
@@ -306,7 +444,7 @@ export function failedNativeArchive(local, state, grouped) {
 function failedNativeArchiveEvidence(local, state, grouped, readGrouped, verifyTree) {
   const roots = grouped?.roots ?? failedNativeRoots(state);
   let retirementAllowed = true;
-  const wrapper = originalFailedWrapper(local, state, verifyTree), { folder } = wrapper;
+  const wrapper = originalFailedWrapper(local, state, verifyTree, grouped?.exitOne ? 1 : 2), { folder } = wrapper;
   if (grouped?.preplan === true) {
     assert.ok(isDeepStrictEqual(grouped, preplanGroup(local, state, readGrouped)), "grouped preplan identity differs");
     verifyPreplanArchive(wrapper, state);
@@ -382,7 +520,8 @@ function failedNativeArchiveEvidence(local, state, grouped, readGrouped, verifyT
     assert.equal(result.status.outcomes.length, 1); assert.equal(result.status.outcomes[0].group, state.group); assert.equal(result.status.outcomes[0].outcome, "not-run");
     assert.ok(!readdirSync(dir).some((n) => /^mixed-(native-audits|audit-delivery(?:-retained)?)\.json$/.test(n)), "cancelled wait advanced into audit");
   }
-  return { campaign, roots, retirementAllowed, pending: result.status.uncollectedNativeRoots };
+  return { campaign, roots, retirementAllowed, pending: result.status.uncollectedNativeRoots,
+    ...(grouped?.exitOne ? { exitOneHashes: exitOneCampaign(state, grouped, wrapper, campaign, plan, result) } : {}) };
 }
 
 // Only trusted controller code runs remotely. Native files are opened as data,
@@ -437,6 +576,8 @@ def cloud_instance():
 
 export function failedNativeScript(state, captureSha256 = null, fence = null, grouped) {
   const roots = grouped?.roots ?? failedNativeRoots(state);
+  const exitOne = grouped?.exitOne === true;
+  if (exitOne) assert.ok(failedExitOneScope(state));
   assert.ok(captureSha256 === null || /^[a-f0-9]{64}$/.test(captureSha256));
   if (fence !== null) {
     assert.equal(fence.snapshotSha256, captureSha256);
@@ -505,11 +646,23 @@ def command(args):
     return r.stdout
 parent_pid = os.getppid()
 parent = pathlib.Path('/proc') / str(parent_pid)
-parent_command = b'\\0'.join(os.fsencode(arg) for arg in ['/usr/bin/timeout', '600', '/usr/bin/python3'] + sys.argv) + b'\\0'
+parent_command = b'\\0'.join(os.fsencode(arg) for arg in ['/usr/bin/timeout', '600', '/usr/bin/python3'] + sys.argv) + b'\\0'${exitOne ? `
+def accounted_work():
+    work, child = c['roots'][1].rsplit('/', 1)
+    try:
+        fd = opened(work, os.O_RDONLY | os.O_DIRECTORY)
+    except FileNotFoundError:
+        return
+    try:
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                assert entry.name == child and entry.is_dir(follow_symlinks=False)
+    finally:
+        os.close(fd)` : ""}
 def quiet():
     assert parent_pid > 1 and os.getppid() == parent_pid and parent_pid != os.getpid()
     assert (parent / 'cmdline').read_bytes() == parent_command and os.readlink(parent / 'exe') == '/usr/bin/timeout'
-    with urllib.request.urlopen('http://169.254.169.254/metadata/v1/id', timeout=3) as response:
+    with ${exitOne ? "urllib.request.build_opener(urllib.request.ProxyHandler({})).open" : "urllib.request.urlopen"}('http://169.254.169.254/metadata/v1/id', timeout=3) as response:
         assert response.read(64).decode().strip() == host_id
     properties = ['Id', 'LoadState', 'FragmentPath', 'ActiveState', 'Restart', 'MainPID', 'Job', 'ExecMainCode', 'ExecMainStatus', 'ExecMainStartTimestamp']${grouped ? `
     assert os.uname().nodename == c['host']['name']
@@ -526,7 +679,7 @@ def quiet():
     assert set(v) == set(properties) and v['Id'] == unit and v['LoadState'] == 'loaded'
     assert v['FragmentPath'] == '/etc/systemd/system/' + unit
     assert v['ActiveState'] in ['inactive', 'failed'] and v['Restart'] == 'no' and v['MainPID'] == '0' and v['Job'] == ''
-    assert v['ExecMainCode'] == '1' and v['ExecMainStatus'] == '2' and v['ExecMainStartTimestamp'].strip() not in ['', 'n/a']${grouped ? `
+    assert v['ExecMainCode'] == '1' and v['ExecMainStatus'] == '${exitOne ? 1 : 2}' and v['ExecMainStartTimestamp'].strip() not in ['', 'n/a']${grouped ? `
     assert v['ControlPID'] == '0'` : ""}
     assert command(['systemctl', 'list-jobs', '--no-legend', '--no-pager']).strip() == ''
     assert json.loads(command(['cloud-init', 'status', '--format', 'json']))['status'] == 'done'
@@ -541,7 +694,9 @@ def quiet():
         assert small('/bench/bootstrap-ready.json', 1024) == c['marker'].encode('ascii')
     else:
         assert not c['requireMarker']
-    assert small('/bench/exit-code', 16) == b'2\\n'
+    assert small('/bench/exit-code', 16) == b'${exitOne ? 1 : 2}\\n'${exitOne ? `
+    assert not os.path.lexists('/bench/failed-native-custody.tgz')
+    accounted_work()` : ""}
     assert small('/bench/repo/.git/HEAD', 128) == (c['commit'] + '\\n').encode('ascii')
     git = configparser.ConfigParser(interpolation=None)
     git.read_string(small('/bench/repo/.git/config', 65536).decode('utf8'))
@@ -656,7 +811,18 @@ if c['fence'] is None:
     assert hashes['/bench/results.tgz'] == c['archiveSha256']
 snapshot = dict(roots=roots, metadataSha256=metadata_sha)
 snapshot_sha = sha(encoded(snapshot))
-archive = '/bench/failed-native-custody.tgz'
+${exitOne ? `# Read-only: this route must never recreate, download or replace a custody archive.
+if c['captureSha256'] is not None:
+    assert snapshot_sha == c['captureSha256']
+archive_row = inventories[-1][0]
+assert archive_row['kind'] == 'f' and archive_row['metadata'][4] <= c['bounds']['compressed']
+if c['fence'] is None:
+    archive_sha = hashes['/bench/results.tgz']
+else:
+    h = hashlib.sha256()
+    consume('/bench/results.tgz', archive_row, h.update)
+    archive_sha = h.hexdigest()
+assert archive_sha == c['archiveSha256']` : `archive = '/bench/failed-native-custody.tgz'
 if c['captureSha256'] is None:
     # Exclusive publication: unexplained/partial capture files are never adopted.
     fd = opened(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
@@ -704,14 +870,15 @@ h = hashlib.sha256()
 consume(archive, archive_row, h.update)
 archive_sha = h.hexdigest()
 if c['fence'] is not None:
-    assert archive_sha == c['fence']['archiveSha256']
+    assert archive_sha == c['fence']['archiveSha256']`}
 # Both the captured paths and their metadata must remain current after copying.
 nodes, content, names, members = 0, 0, 0, 0
 assert encoded([inventory(path) for path in all_roots]) == metadata_bytes
 quiet()
 print(json.dumps(dict(schema='benchmark-failed-native-host/v1', hostId=host_id, unit=unit, custody=True,
     roots=roots, metadataSha256=metadata_sha, snapshotSha256=snapshot_sha, archiveSha256=archive_sha,
-    observedAtMs=int(time.time()*1000), historicalAccountingQualified=False)))
+    observedAtMs=int(time.time()*1000), historicalAccountingQualified=False${exitOne ? `,
+    wrapper=(dict(runLog=hashes['/bench/run.log'], host=hashes['/bench/host.txt']) if c['fence'] is None else c['fence']['wrapper'])` : ""})))
 CORTEN_FAILED_NATIVE_HOST`;
 }
 
@@ -719,7 +886,8 @@ export function failedNativeObservation(raw, state, startedAtMs, finishedAtMs, g
   const roots = grouped?.roots ?? failedNativeRoots(state);
   assert.ok(typeof raw === "string" && Buffer.byteLength(raw) <= 16384, "bounded custody observation required");
   const observation = JSON.parse(raw);
-  assert.deepEqual(Object.keys(observation).sort(), ["archiveSha256", "custody", "historicalAccountingQualified", "hostId", "metadataSha256", "observedAtMs", "roots", "schema", "snapshotSha256", "unit"].sort());
+  assert.deepEqual(Object.keys(observation).sort(), ["archiveSha256", "custody", "historicalAccountingQualified", "hostId", "metadataSha256", "observedAtMs", "roots", "schema", "snapshotSha256", "unit",
+    ...(grouped?.exitOne ? ["wrapper"] : [])].sort());
   assert.equal(observation.schema, "benchmark-failed-native-host/v1");
   assert.equal(observation.hostId, state.id); assert.equal(observation.unit, state.unit);
   assert.equal(observation.custody, true); assert.equal(observation.historicalAccountingQualified, false);
@@ -741,6 +909,66 @@ export function failedNativeObservation(raw, state, startedAtMs, finishedAtMs, g
   assert.ok(Number.isSafeInteger(observation.observedAtMs) && observation.observedAtMs >= startedAtMs - 5000
     && observation.observedAtMs <= finishedAtMs + 5000, "custody observation clock differs");
   return observation;
+}
+
+export function failedExitOneObservation(raw, state, started, finished, { grouped, hashes }) {
+  const observation = failedNativeObservation(raw, state, started, finished, grouped);
+  const { roots, metadataSha256 } = observation;
+  assert.equal(observation.snapshotSha256, deploymentSha256({ roots, metadataSha256 }), "exit-one snapshot differs");
+  const [campaign, native, control] = observation.roots;
+  assert.equal(observation.archiveSha256, state.archiveSha256, "original remote archive differs");
+  assert.equal(campaign.treeSha256, hashes.campaign, "live campaign differs from the archive");
+  assert.equal(control.treeSha256, hashes.control, "live control root differs from the archive");
+  assert.ok(native.present ? native.treeSha256 === hashes.native : hashes.empty, "unpreserved live native output");
+  assert.deepEqual(observation.wrapper, hashes.wrapper, "live wrapper files differ from the archive");
+  return observation;
+}
+
+export function verifyFailedExitOneRetirement(local, state, expectedSha256 = state.retirement.evidenceSha256, pin = false) {
+  const path = join(local, "failed-native-host.json"), original = join(local, "failed-native-reservation.json");
+  const files = [path, original].map(path => [path, evidenceFileIdentity(path)]);
+  const bytes = regular(path, 65536), record = JSON.parse(bytes);
+  assert.equal(digest(bytes), expectedSha256, "exit-one retirement receipt changed");
+  assert.equal(record.schema, "benchmark-failed-native-retirement/v3");
+  assert.deepEqual(Object.keys(record).sort(), ["controllerCommit", "fence", "fleetManifestSha256", "launchIntentSha256",
+    "observation", "reservationSha256", "schema"]);
+  assert.match(record.controllerCommit, /^[a-f0-9]{40}$/);
+  assert.notEqual(record.controllerCommit, state.commit);
+  assert.equal(state.status, "retired");
+  const custody = verifyFailedExitOneCustody(local, state, { pin });
+  const { grouped, launchIntentSha256, fleetManifestSha256 } = custody;
+  assert.ok(record.launchIntentSha256 === launchIntentSha256 && record.fleetManifestSha256 === fleetManifestSha256,
+    "exit-one launch or fleet changed");
+  const prior = regular(original, 1024 * 1024);
+  assert.equal(digest(prior), record.reservationSha256, "exit-one original reservation changed");
+  const saved = JSON.parse(prior);
+  assert.equal(saved.status, "running");
+  assert.ok(!saved.deletionIntentAt && !saved.destroyedAt && !saved.retirement, "prior exit-one retirement intent");
+  verifyFailedNativeReservation(state, saved, grouped);
+  const probeRows = state.control.ledger.slice(saved.control.ledger.length);
+  assert.equal(probeRows.length, 2, "two acknowledged exit-one probes required");
+  const check = ({ startedAtMs, finishedAtMs, proof, scriptSha256, ...extra }, first, row) => {
+    assert.deepEqual(extra, {});
+    const script = failedNativeScript(state, first?.snapshotSha256 ?? null, first ?? null, grouped);
+    assert.equal(scriptSha256, digest(script), "exit-one proof script changed");
+    assert.ok(row.localTerminal && row.code === 0 && row.request.epoch === "collection" && row.request.seal === undefined
+      && row.request.invocation.channel === "ssh" && row.request.invocation.deadlineMs === (first ? 60000 : 660000)
+      && row.request.invocation.requestSha256 === digest(`set -euo pipefail\n${script}\n`), "exit-one probe acknowledgement differs");
+    return failedExitOneObservation(JSON.stringify(proof), state, startedAtMs, finishedAtMs, custody);
+  };
+  const first = check(record.observation, null, probeRows[0]), final = check(record.fence, first, probeRows[1]);
+  const intent = Date.parse(state.deletionIntentAt);
+  assert.ok(record.fence.startedAtMs >= record.observation.finishedAtMs
+    && intent >= record.fence.finishedAtMs && intent < record.fence.startedAtMs + 60000
+    && (state.destroyedAt === undefined || Date.parse(state.destroyedAt) >= intent), "exit-one proof window differs");
+  const withoutTime = ({ observedAtMs, ...rest }) => rest;
+  assert.deepEqual(withoutTime(first), withoutTime(final), "exit-one proof changed before deletion");
+  const assertCustody = (includeTree = true) => {
+    custody.assertCustody(includeTree);
+    for (const [path, before] of files) assert.ok(evidenceFileIdentity(path) === before, "exit-one receipt files changed");
+  };
+  assertCustody(false);
+  return { ...custody, record, assertCustody };
 }
 
 export function verifyFailedNativeReservation(state, prior, grouped) {
@@ -883,6 +1111,10 @@ function replayFailedNativeRetirement(local, state, expectedSha256, readGrouped,
   assert.match(expectedSha256, /^[a-f0-9]{64}$/);
   assert.equal(digest(bytes), expectedSha256, "failed-native retirement receipt changed");
   const record = JSON.parse(bytes);
+  if (record.schema === "benchmark-failed-native-retirement/v3") {
+    assert.ok(!pin, "approved handoff retirement receipt required");
+    return verifyFailedExitOneRetirement(local, state, expectedSha256).record;
+  }
   const handoff = record.schema === "benchmark-failed-native-retirement/v2";
   assert.deepEqual(Object.keys(record).sort(), ["capture", "confirmation", "finishedAtMs", "rehash", "schema", "scriptSha256", "startedAtMs",
     ...(handoff ? ["handoff"] : [])].sort());

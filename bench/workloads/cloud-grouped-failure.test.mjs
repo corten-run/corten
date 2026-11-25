@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -12,6 +13,7 @@ import { verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { fleetChildOptions, readFleet, readGroup, verifyFleet } from "./fleet-verify.mjs";
+import { continuationAdmission, inspectContinuation } from "./group-continuation.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 import { streamLimits } from "./isolated/control-stream.mjs";
 
@@ -24,25 +26,29 @@ const canonical = (value) => JSON.stringify(value, (_, v) => v && typeof v === "
   ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]])) : v);
 
 function fixture(t, group, flags = {}) {
-  const json = group === "json-api", { preplan, handoff } = flags;
-  const closed = json || handoff, phase = closed ? "closed" : "invalid";
-  const single = preplan || handoff;
-  const fleetGroup = single ? join(`${group}--${round}`, group) : flags.fleetLayout ? group : undefined;
-  const h = harness(t, { ...flags, round, fleetGroup });
+  const json = group === "json-api", { preplan, handoff, exitOne } = flags;
+  const closed = json || handoff || exitOne, phase = closed ? "closed" : "invalid";
+  const single = preplan || handoff || exitOne;
+  const measured = exitOne ? "7c13920f87b6baa6c7f967027d2eff9358201e4c" : commit;
+  const measuredRound = exitOne ? "r78" : round, campaignId = exitOne ? "r78-0123456789abcdef" : campaign;
+  const fleetGroup = single ? join(exitOne ? group : `${group}--${measuredRound}`, group) : flags.fleetLayout ? group : undefined;
+  const h = harness(t, { ...flags, round: measuredRound, fleetGroup });
   if (fleetGroup) mkdirSync(h.base, { recursive: true });
   h.seed();
   const root = dirname(h.base);
   const region = json ? "blr1" : "sfo3";
-  const child = fleetPlan({ round, commit, token: "a".repeat(16), sshKey: "42", provider: { accountId, context },
+  const child = fleetPlan({ round: measuredRound, commit: measured, token: "a".repeat(16), sshKey: "42", provider: { accountId, context },
     tokens: single ? { [group]: "1".repeat(16) } : Object.fromEntries(h.saved().selection.groups.map(({ group }, index) => [group, String(index).padStart(16, "0")])) },
   "2026-11-21T00:00:00.000Z", "sfo3", { stagedPlacement: !flags.fleetLayout || single,
-    ...(single ? { single: { group, indexSha256: "b".repeat(64), checkout: h.repo } } : {}) });
-  if (fleetGroup) writeFileSync(join(root, `fleet-${round}.json`), JSON.stringify(child));
+    ...(single ? { single: { group, indexSha256: exitOne ? digest("[]") : "b".repeat(64), checkout: h.repo } } : {}) });
+  if (exitOne) writeFileSync(join(dirname(root), "index.json"), "[]");
+  if (fleetGroup) writeFileSync(join(root, `fleet-${measuredRound}.json`), JSON.stringify(child));
   const token = child.jobs.find((j) => j.group === group).token;
-  const saved = { ...h.saved(), ...reservation({ round, commit, token, group, fleet: child,
+  const saved = { ...h.saved(), ...reservation({ round: measuredRound, commit: measured, token, group, fleet: child,
     ...(!fleetGroup ? { remainingPlacement: { region, intentSha256: "a".repeat(64) } } : {}) }), provider: child.provider, status: "running",
-    ...(!flags.legacyKey ? { launchHostKeySha256: digest(establishedKey) } : {}) };
-  const binding = { round, commit, token, helperSha256: guardianSha256 };
+    ...(!flags.legacyKey ? { launchHostKeySha256: digest(establishedKey) } : {}),
+    ...(exitOne ? { bootstrapReady: { observedAt: "2026-11-21T00:00:00.000Z", sha256: digest("started") } } : {}) };
+  const binding = { round: measuredRound, commit: measured, token, helperSha256: guardianSha256 };
   const reg = { ...structuredClone(registration), binding,
     host: { ...registration.host, hostname: flags.foreignHostname ? "different-host" : saved.name } };
   const boot = { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: ["bootstrap"] };
@@ -53,14 +59,17 @@ function fixture(t, group, flags = {}) {
   const sealControl = controlRequest(saved, "ssh", [`root@${saved.ip}`, ":"], 60000, "bootstrap", [intent.invocation]);
   saved.control.ledger.push({ request: sealControl, localTerminal: true, code: 0 });
   h.change((s) => Object.assign(s, saved));
-  h.hosts([{ ...h.host(), name: saved.name, tags: [...tags, saved.tag], region: { slug: saved.host.region } }]);
+  h.hosts([{ ...h.host(), name: saved.name, tags: [...tags, saved.tag], size_slug: saved.host.size, region: { slug: saved.host.region } }]);
   const put = (name, value) => writeFileSync(join(h.local, name), JSON.stringify(value));
   put("monitor-registration.json", reg);
   const closedAtMs = Date.now() - 2 * streamLimits.leaseMs - 1000;
   put("monitor-local-closed.json", { binding, id: reg.id, code: closed ? 0 : 255, signal: null, remoteDrained: false,
     closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs });
+  const seal = exitOne ? JSON.stringify({ schema: "benchmark-control-stream-seal/v1", registration: reg,
+    lease: { id: reg.id, host: reg.host, expiresMonoNs: "4000000" }, sealedMonoNs: "2000000",
+    observations: [{ sequence: 1, monoNs: "1500000", registrationSha256: digest(JSON.stringify(reg)) }] }) : "synthetic seal";
   put(closed ? "monitor-terminal.json" : "monitor-invalid.json", { binding, id: reg.id, ...(closed
-    ? { localClosed: true, remoteDrained: false, nativeTerminal: true, campaign, sealSha256: digest("synthetic seal") }
+    ? { localClosed: true, remoteDrained: false, nativeTerminal: true, campaign: campaignId, sealSha256: digest(seal) }
     : { publicationRevoked: true, remoteTerminal: false }) });
   if (!closed) {
     writeFileSync(join(h.local, "operation.lock"), retainedOperation);
@@ -69,25 +78,59 @@ function fixture(t, group, flags = {}) {
   const sibling = join(h.base, "sibling.lock"); writeFileSync(sibling, "sibling stays locked");
   writeFileSync(join(h.local, "known_hosts"), flags.replaceKey ? "synthetic replacement\n" : establishedKey);
 
-  const mainRoot = json ? "bench/json-api/results/j75" : handoff ? `bench/marketplace/results/${round}` : "bench/fullstack-browser/work/w37";
+  const mainRoot = json ? "bench/json-api/results/j75" : exitOne ? "bench/client-heavy/work/w78"
+    : handoff ? `bench/marketplace/results/${round}` : "bench/fullstack-browser/work/w37";
   const outputRoots = json ? ["bench/json-api/results/j74", mainRoot] : [mainRoot];
-  const plan = { schema: "benchmark-isolated-group-campaign/v1", round, commit, order: [group],
-    bindings: [{ campaignMode: json ? "dedicated-blr1" : "dedicated", request: { group, round: json ? "j75" : handoff ? round : "w37", commit },
+  const plan = { schema: "benchmark-isolated-group-campaign/v1", round: measuredRound, commit: measured, order: [group],
+    bindings: [{ campaignMode: json ? "dedicated-blr1" : "dedicated", request: { group, round: json ? "j75" : exitOne ? "w78" : handoff ? round : "w37", commit: measured },
       validation: { artifactRoot: mainRoot } }] };
   plan.campaignSha256 = deploymentSha256(plan);
-  const attempt = { schema: "benchmark-isolated-campaign-reservation/v1", id: campaign, commit, campaignSha256: plan.campaignSha256 };
-  const status = { schema: "benchmark-isolated-campaign-status/v1", state: closed ? "finished" : "preserved-uncertain", round,
-    campaign, campaignSha256: plan.campaignSha256, controllerReady: false, isolation: "unverified", executionVersion: 5,
-    outcomes: [{ group, outcome: flags.lateSealFailure ? "native-validated" : json ? "failed" : "preserved-uncertain" }],
-    uncollectedNativeRoots: json || flags.lateSealFailure ? [] : [{ group, phase: "timing", artifactRoot: flags.foreignPath ?? mainRoot }] };
+  const nativePayload = "preserved raw failure output\n";
+  const nativeEntries = [{ path: "", type: "directory" }, { path: "failure.txt", type: "file", bytes: nativePayload.length, sha256: digest(nativePayload) }];
+  const nativeManifestSha256 = deploymentSha256(nativeEntries);
+  const attempt = { schema: "benchmark-isolated-campaign-reservation/v1", id: campaignId, commit: measured, campaignSha256: plan.campaignSha256 };
+  const status = { schema: "benchmark-isolated-campaign-status/v1", state: closed ? "finished" : "preserved-uncertain", round: measuredRound,
+    campaign: campaignId, campaignSha256: plan.campaignSha256, controllerReady: false, isolation: "unverified", executionVersion: 5,
+    outcomes: [{ group, outcome: flags.lateSealFailure ? "native-validated" : json || exitOne ? "failed" : "preserved-uncertain",
+      ...(exitOne ? { nativeManifestSha256 } : {}) }],
+    uncollectedNativeRoots: json || flags.lateSealFailure || exitOne && !flags.pending ? [] : [{ group, phase: "timing", artifactRoot: flags.foreignPath ?? mainRoot }],
+    ...(exitOne ? { nextGroup: null } : {}) };
+  const result = { status, wholeHostTerminal: "parent-must-observe", deletionAuthorized: false }, prefix = `campaign/${campaignId}/`;
   const entries = [{ name: "campaign/" }, ...(preplan ? [] : [{ name: "campaign/.host-attempt.json", body: JSON.stringify(attempt) },
-    { name: `campaign/${campaign}/` }, { name: `campaign/${campaign}/plan.json`, body: JSON.stringify(plan) },
-    { name: `campaign/${campaign}/campaign-result.json`, body: JSON.stringify({ status, wholeHostTerminal: "parent-must-observe", deletionAuthorized: false }) },
-    ...(closed ? [{ name: `campaign/${campaign}/control-stream-seal.json`, body: "synthetic seal" }] : [])])];
-  const wrapperFiles = metadata().map((e) => e.name === "exit-code" ? { ...e, body: "2\n" } : e);
-  if (preplan) {
+    { name: prefix }, { name: prefix + "plan.json", body: JSON.stringify(plan) },
+    { name: prefix + "campaign-result.json", body: JSON.stringify(result) },
+    ...(closed ? [{ name: prefix + "control-stream-seal.json", body: seal }] : [])])];
+  const wrapperFiles = metadata().map((e) => e.name === "exit-code" ? { ...e, body: exitOne ? `${flags.rawExit ?? 1}\n` : "2\n" } : e);
+  if (exitOne) {
+    const phaseDir = "00-client-heavy-timing/", phaseBinding = { group, phase: "timing", artifactRoot: flags.foreignPath ?? mainRoot };
+    const journal = [["native-output-reserved", phaseBinding], ["phase-sealed", { ...phaseBinding, nativeManifestSha256 }],
+      ["group-finished", { group, outcome: status.outcomes[0].outcome, nativeManifestSha256 }],
+      ["stream-sealed", { path: "control-stream-seal.json", sha256: digest(seal), binding }], ["finished", { status }]];
+    entries.push(
+      { name: prefix + phaseDir }, { name: prefix + phaseDir + "native/" }, { name: prefix + phaseDir + "native/failure.txt", body: nativePayload },
+      { name: prefix + phaseDir + "native-manifest.json", body: JSON.stringify({ entries: nativeEntries, sha256: nativeManifestSha256 }) },
+      { name: prefix + "control-stream-drain.json", body: JSON.stringify({ schema: "benchmark-control-stream-drain/v1", id: reg.id,
+        registrationSha256: digest(JSON.stringify(reg)), host: reg.host, identitiesAbsent: true, monoNs: "2500000",
+        listener: reg.listener, scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] }) },
+      ...journal.map(([kind, detail], sequence) => ({ name: prefix + `${String(sequence).padStart(5, "0")}-${kind}.json`,
+        body: JSON.stringify({ schema: "benchmark-isolated-campaign-event/v1", kind, sequence,
+          campaign: campaignId, round: measuredRound, campaignSha256: plan.campaignSha256, ...detail }) })));
+    const records = entries.filter(({ name }) => name.startsWith(prefix))
+      .map(({ name, body }) => ({ path: name.slice(prefix.length).replace(/\/$/, ""), type: name.endsWith("/") ? "directory" : "file",
+        ...(body === undefined ? {} : { bytes: Buffer.byteLength(body), sha256: digest(body) }) }));
+    records.sort((a, b) => {
+      const left = a.path.split("/"), right = b.path.split("/");
+      for (let i = 0; i < Math.min(left.length, right.length); i++)
+        if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1;
+      return left.length - right.length;
+    });
+    if (!flags.noManifest) entries.push({ name: prefix + "collection-manifest.json",
+      body: JSON.stringify({ ...result, manifest: { entries: records, sha256: deploymentSha256(records) } }) });
+    entries.push({ name: "control/" }, { name: "control/stream-terminal.json", body: "{}" });
+  }
+  if (preplan || exitOne && !flags.noNativeExitLog) {
     const line = remoteFiles(saved)["job.sh"].split("\n").lastIndexOf("bootstrap_stage=native-entry") + 2;
-    wrapperFiles[0].body += `benchmark job failed: stage=native-entry line=${line} exit=2\n`;
+    wrapperFiles[0].body += `benchmark job failed: stage=native-entry line=${line} exit=${exitOne ? 1 : 2}\n`;
   }
   const wrapper = archive([...wrapperFiles, ...entries]); h.setArchive(wrapper);
   const copy = join(h.temp, "fixture-copy");
@@ -96,11 +139,11 @@ function fixture(t, group, flags = {}) {
     else writeFileSync(join(copy, name), body);
   }
   const native = join(copy, "native"); mkdirSync(native);
-  const nativePayload = "preserved raw failure output\n";
   writeFileSync(join(native, "failure.txt"), nativePayload);
   const roots = [{ path: "/bench/campaign", present: true, treeSha256: treeHash(join(copy, "campaign")), nodes: entries.length, bytes: 100 },
     ...outputRoots.map((name, index) => index ? { path: `/bench/repo/${name}`, present: false }
       : { path: `/bench/repo/${name}`, present: true, treeSha256: treeHash(native), nodes: 2, bytes: nativePayload.length }),
+    ...(exitOne ? [{ path: "/bench/control", present: true, treeSha256: treeHash(join(copy, "control")), nodes: 2, bytes: 2 }] : []),
     ...[...wrapperFiles, { name: "results.tgz", body: wrapper }].map(({ name, body }) => {
       const bytes = Buffer.from(body);
       return { path: `/bench/${name}`, present: true, nodes: 1, bytes: bytes.length,
@@ -114,6 +157,7 @@ function fixture(t, group, flags = {}) {
   let probes = 0, custodyDownloads = 0, deleteExpiry;
   const run = (binary, args, ...rest) => {
     const script = args.at(-1);
+    if (exitOne && binary === "git" && args[0] === "rev-parse" && args[1] === "HEAD") return { status: 0, stdout: measured };
     if (preplan && ["ssh", "scp"].includes(binary)) {
       assert.ok(existsSync(join(h.local, "stream-recovery.lock")));
       assert.ok(binary === "ssh" ? script.includes("CORTEN_FAILED_NATIVE_HOST") : args.at(-2).endsWith(":/bench/failed-native-custody.tgz"));
@@ -127,6 +171,20 @@ function fixture(t, group, flags = {}) {
       assert.ok(args.includes("StrictHostKeyChecking=yes"));
       assert.ok(outputRoots.every((root) => script.includes(`/bench/repo/${root}`)));
       assert.ok(script.includes(reg.host.bootId));
+      if (exitOne) {
+        assert.ok(script.includes("v['ExecMainStatus'] == '1'"));
+        assert.ok(script.includes("small('/bench/exit-code', 16) == b'1\\n'"));
+        assert.ok(!script.includes("tarfile.open") && !script.includes("pack.sh;"));
+        flags.checkProbe?.(script);
+        if (flags.activeProof && probes === 2) return { status: 1, stdout: "" };
+        const observed = { schema: "benchmark-failed-native-host/v1", custody: true, historicalAccountingQualified: false,
+          hostId: saved.id, unit: saved.unit, roots: structuredClone(roots), metadataSha256,
+          snapshotSha256: digest(snapshot), archiveSha256: digest(wrapper), observedAtMs: Date.now(),
+          wrapper: { runLog: digest(wrapperFiles[0].body), host: digest(wrapperFiles[1].body) } };
+        flags.alterProof?.(observed, probes);
+        observed.snapshotSha256 = deploymentSha256({ roots: observed.roots, metadataSha256: observed.metadataSha256 });
+        return { status: 0, stdout: JSON.stringify(observed) };
+      }
       if (flags.refuseFirstProbe && probes === 1) {
         const id = rest[3].request.invocation.id;
         return shellTransport({ repo: h.repo, spawn: () => ({ status: 1, stdout: "",
@@ -152,13 +210,14 @@ function fixture(t, group, flags = {}) {
     }
     return h.run(binary, args, ...rest);
   };
-  return { h, root, sibling, wrapper, custody, roots, run, get probes() { return probes; }, get downloads() { return custodyDownloads; },
+  return { h, root, sibling, wrapper, custody, roots, run, measured, measuredRound, get probes() { return probes; }, get downloads() { return custodyDownloads; },
     get deleteExpiry() { return deleteExpiry; }, task: (deps = {}, options) => h.task({ run,
       inspect: () => assert.fail("native replay must not decide custody"), ...deps }, options) };
 }
 
 function singleFixture(t, flags, group) {
   const f = fixture(t, group, flags);
+  const { measured: commit, measuredRound: round } = f;
   const { h, root, wrapper } = f, options = { round, stateDir: h.base, retireFailedNative: true };
   const fleet = readFleet(root, round), child = fleetChildOptions(fleet, group, "detach");
   const job = { action: "detach", stateRoot: child.stateDir, controllerCommit: commit, options: child, fleetSha256: fleet.manifestSha256 };
@@ -206,8 +265,17 @@ function singleFixture(t, flags, group) {
 const preplanFixture = (t, flags) => singleFixture(t, { ...flags, preplan: true }, "fullstack-browser");
 
 async function handoffFixture(t, flags = {}) {
-  const f = singleFixture(t, { ...flags, handoff: true, lateSealFailure: true }, "localized-marketplace");
-  assert.equal(await f.task().collect(), 3);
+  const f = flags.exitOne ? singleFixture(t, flags, "client-heavy")
+    : singleFixture(t, { ...flags, handoff: true, lateSealFailure: true }, "localized-marketplace");
+  const { measured: commit, measuredRound: round } = f;
+  if (flags.exitOne) {
+    if (flags.collectFirst) {
+      let attempts = 0;
+      await assert.rejects(f.task({ inspect: () => { attempts++; throw new Error("synthetic offline replay unavailable"); } }).collect(),
+        /native campaign validation unavailable or invalid/);
+      assert.equal(attempts, 1);
+    } else await f.preserveWrapper();
+  } else assert.equal(await f.task().collect(), 3);
   const { h, repairCommit } = f, args = [round, "--state-dir", h.base, "--retire-failed-native"];
   const launched = [], knobs = {};
   let approval;
@@ -241,7 +309,7 @@ async function handoffFixture(t, flags = {}) {
       parts[parts.length - 1] = options.input.slice(JSON.stringify(request).length)
         .replace(/^set -euo pipefail\n/, "").replace(/\n$/, "");
       const result = f.run(binary, parts, options.timeout);
-      if (f.probes === 3) {
+      if (f.probes === (flags.exitOne ? 2 : 3)) {
         knobs.expire?.();
         knobs.finalFence?.();
       }
@@ -250,7 +318,7 @@ async function handoffFixture(t, flags = {}) {
     providerFactory: ({ createMode }) => Object.assign((argv, timeout, allowFail, expiry) => {
       assert.equal(createMode, null); launched.push(["provider", ...argv]);
       if (knobs.beforeFinalPending && argv[2] === "get" && f.probes === 2) knobs.beforeFinalPending();
-      if (knobs.beforeIntent && argv[2] === "get" && f.probes === 3 && !h.saved().deletionIntentAt) knobs.beforeIntent();
+      if (knobs.beforeIntent && argv[2] === "get" && f.probes === (flags.exitOne ? 2 : 3) && !h.saved().deletionIntentAt) knobs.beforeIntent();
       if (knobs.dispatchAccount && argv[0] === "account" && h.saved().deletionIntentAt) knobs.dispatchAccount();
       if (knobs.exactRead && argv[2] === "get" && h.saved().deletionIntentAt) knobs.exactRead();
       if (knobs.failExactRead && argv[2] === "get")
@@ -266,6 +334,163 @@ async function handoffFixture(t, flags = {}) {
     async preview() { assert.equal(await productionMain([...args, "--print-approval"], deps), 3); return approval; },
     retire: (approved) => productionMain([...args, "--approve-reviewed-merged-ready", approved.approvalSha256], deps) };
 }
+
+const probeCodeTest = `
+import ast, contextlib, hashlib, sys
+from types import SimpleNamespace
+source = sys.stdin.read()
+compile(source, 'retirement probe', 'exec')
+method = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == 'accounted_work')
+def opened(path, flags):
+    assert path == '/bench/repo/bench/client-heavy/work' and flags == 3
+    return 42
+def scan(fd):
+    assert fd == 42
+    return contextlib.nullcontext(entries)
+os = SimpleNamespace(O_RDONLY=1, O_DIRECTORY=2, scandir=scan, close=lambda fd: None)
+c = {'roots': ['/bench/campaign', '/bench/repo/bench/client-heavy/work/w78']}
+exec(compile(ast.Module(body=[method], type_ignores=[]), 'work proof', 'exec'))
+def entry(name, directory=True):
+    def is_dir(*, follow_symlinks):
+        assert follow_symlinks is False
+        return directory
+    return SimpleNamespace(name=name, is_dir=is_dir)
+for entries, valid in [([], True), ([entry('w78')], True), ([entry('w78', False)], False),
+        ([entry('w78'), entry('w78.compiler')], False), ([entry('.compiler-owner-leftover')], False)]:
+    try:
+        accounted_work()
+    except AssertionError:
+        assert not valid
+    else:
+        assert valid
+first = source.index('# Read-only: this route')
+last = source.index('# Both the captured paths', first)
+archive = compile(source[first:last], 'archive proof', 'exec')
+c.update(captureSha256='snapshot', fence={}, bounds={'compressed': 16}, archiveSha256=hashlib.sha256(b'original').hexdigest())
+snapshot_sha = 'snapshot'
+inventories = [[{'kind': 'f', 'metadata': [0, 0, 0, 1, 8]}]]
+def consume(path, row, write):
+    assert path == '/bench/results.tgz' and row is inventories[-1][0]
+    write(payload)
+for payload in [b'original', b'modified']:
+    try:
+        exec(archive)
+    except AssertionError:
+        assert payload == b'modified'
+    else:
+        assert payload == b'original'
+`;
+
+test("bound exit one needs new approval, and continuation waits for exact absence", async (t) => {
+  const python = process.platform === "win32" ? "python" : "python3";
+  const available = spawnSync(python, ["--version"], { timeout: 3000, windowsHide: true }).status === 0;
+  if (!available) t.diagnostic("Python unavailable; generated probe source checks skipped");
+  const checkProbe = available ? (script) => {
+    const program = script.split("\n").slice(1, -1).join("\n");
+    const r = spawnSync(python, ["-I", "-c", probeCodeTest], { input: program, encoding: "utf8", timeout: 5000, windowsHide: true });
+    assert.equal(r.status, 0, r.stderr);
+  } : undefined;
+  const { f, preview, retire, knobs, launched } = await handoffFixture(t, { exitOne: true, collectFirst: true, deleteLost: true, checkProbe });
+  const { h } = f, input = { repo: h.repo, inspect: () => assert.fail("retirement cannot replay native timing") };
+  const continuation = dirname(f.root);
+  const admit = () => continuationAdmission(continuation, "client-heavy", input);
+  const report = () => verifyFleet({ root: f.root, round: f.measuredRound, commit: f.measured }, input);
+  const original = readFileSync(h.statePath), extract = join(h.local, h.saved().evidence), originalTree = treeHash(extract);
+  assert.equal(h.saved().validation, undefined);
+  assert.equal(h.saved().deletionIntentAt, undefined);
+  assert.deepEqual(readFileSync(join(h.local, "results.tgz")), f.wrapper);
+  await assert.rejects(admit(), /requires confirmed absence/);
+  const p = await preview();
+  assert.equal(p.recovery.policy, "r78-client-heavy-sealed-exit-one-retirement-only");
+  assert.equal(p.recovery.intent.launch, digest(readFileSync(f.intentPath)));
+  assert.equal(p.reservationSha256, digest(original));
+  assert.deepEqual(launched, []);
+  await assert.rejects(retire(p), /acknowledgement lost/);
+  assert.equal(h.saved().status, "retired");
+  assert.equal(h.saved().destroyedAt, undefined);
+  assert.equal((await report()).groups[0].outcome, "cleanup-pending");
+  await assert.rejects(admit(), /requires confirmed absence/);
+  await assert.rejects(retire(p), /explicit operator-approved exact action required/);
+  const before = launched.length;
+  knobs.failExactRead = true;
+  await assert.rejects(retire(await preview()), /exact host observation failed/);
+  assert.equal(h.saved().destroyedAt, undefined);
+  knobs.failExactRead = false;
+  assert.equal(await retire(await preview()), 1);
+  assert.ok(launched.slice(before).every((row) => row[0] === "provider" && row.includes("get")));
+  const saved = h.saved(), receipt = verifyFailedNativeRetirement(h.local, saved);
+  assert.equal(receipt.schema, "benchmark-failed-native-retirement/v3");
+  assert.equal(receipt.reservationSha256, digest(original));
+  assert.equal(receipt.observation.proof.archiveSha256, saved.archiveSha256);
+  assert.equal(saved.fullGroupQualified, false);
+  assert.ok(saved.destroyedAt && ["validation", "exitCode", "collectedAt", "evidenceOutcome"].every(k => saved[k] === undefined));
+  assert.equal(h.deletes, 1); assert.equal(h.creates, 0);
+  assert.equal(f.probes, 2); assert.equal(f.downloads, 0);
+  assert.deepEqual(readFileSync(join(h.local, "results.tgz")), f.wrapper);
+  assert.equal(treeHash(extract), originalTree);
+  assert.deepEqual(readFileSync(join(h.local, "failed-native-reservation.json")), original);
+  assert.equal((await report()).groups[0].outcome, "native-failed-retired");
+  assert.equal((await admit()).rows.find(r => r.group === "client-heavy").retryable, true);
+  const after = await inspectContinuation(continuation, input);
+  assert.ok(after.report.eligibleToRun.includes("client-heavy"));
+  assert.equal(after.report.publishableBaseline, false);
+});
+
+test("exit-one preview refuses unsafe saved scopes before provider access", async (t) => {
+  for (const [name, flags, refusal] of [
+    ["successful raw exit", { rawExit: 0 }, /failed-native-capture/], ["unknown raw exit", { rawExit: 3 }, /failed-native-capture/],
+    ["native validated", { lateSealFailure: true }, /intrinsically failed/], ["pending root", { pending: true }, /pending native output/],
+    ["unaccounted journal root", { foreignPath: "bench/client-heavy/work/foreign" }, /unaccounted native root/],
+    ["incomplete campaign", { noManifest: true }, /collection-manifest/],
+    ["wrong registered host", { foreignHostname: true }, /registered host differs/],
+    ["unbound known hosts", { legacyKey: true }, /no launch-established host key/],
+    ["unbound native exit", { noNativeExitLog: true }, /source-bound final native-entry failure/],
+  ]) await t.test(name, async (t) => {
+    const { f, preview, launched } = await handoffFixture(t, { exitOne: true, ...flags });
+    await assert.rejects(preview(), refusal);
+    assert.deepEqual(launched, []);
+    assert.equal(f.h.deletes, 0); assert.equal(f.h.creates, 0);
+  });
+  for (const lock of ["operation.lock", "stream-recovery.lock", "audit-delivery.lock", "create-recheck.lock", "../.groups-launch.lock",
+    "../../.fleet-operation.lock", "../../../.continuation-operation.lock"]) await t.test(lock, async (t) => {
+    const { f, preview, launched } = await handoffFixture(t, { exitOne: true });
+    writeFileSync(join(f.h.local, lock), "foreign-live-or-retained\n");
+    await assert.rejects(preview(), /competing or retained custody/);
+    assert.deepEqual(launched, []);
+  });
+});
+
+test("exit-one retirement refuses foreign allocation, remote drift and local replacement", async (t) => {
+  for (const [name, flags, error] of [
+    ["archive digest", { alterProof: (p) => { p.archiveSha256 = digest("foreign"); } }, /original remote archive differs/],
+    ["control root", { alterProof: (p) => { p.roots[2].treeSha256 = digest("foreign"); } }, /live control root differs/],
+    ["unpreserved output", { alterProof: (p) => { p.roots[1] = { path: p.roots[1].path, present: false }; } }, /unpreserved live native output/],
+    ["fresh fence metadata", { alterProof: (p, probe) => { if (probe === 2) p.metadataSha256 = digest("changed"); } }, /proof changed/],
+    ["active unit", { activeProof: true }, /control process failed/],
+    ["wrong provider account", { accountId: "different-account" }, /provider account identity changed/],
+    ["foreign exact allocation", {}, /owned droplet|ownership tag/],
+    ["distinct extraction from the same bound archive", {}, /archive|extraction/],
+  ]) await t.test(name, async (t) => {
+    const { f, preview, retire } = await handoffFixture(t, { exitOne: true, ...flags });
+    const { h } = f, extract = join(h.local, h.saved().evidence);
+    if (name === "foreign exact allocation") h.hosts([{ ...h.host(), name: h.saved().name, tags: ["foreign"] }]);
+    if (name === "distinct extraction from the same bound archive") {
+      const path = join(extract, "run.log"), changed = readFileSync(path);
+      changed[0] ^= 1; writeFileSync(path, changed);
+      h.change(s => { s.evidenceSha256 = treeHash(extract); });
+    }
+    await assert.rejects(retire(await preview()), error);
+    assert.equal(h.saved().deletionIntentAt, undefined);
+    assert.equal(h.deletes, 0); assert.equal(h.creates, 0);
+  });
+  const { f, preview, retire, knobs } = await handoffFixture(t, { exitOne: true });
+  const { h } = f, approved = await preview();
+  knobs.dispatchAccount = () => { appendFileSync(join(h.local, h.saved().evidence, "run.log"), "late change"); };
+  await assert.rejects(retire(approved), /extraction/);
+  assert.ok(h.saved().deletionIntentAt && !h.saved().destroyedAt);
+  assert.equal(h.deletes, 0); assert.equal(h.creates, 0);
+  await assert.rejects(preview(), /extraction changed/);
+});
 
 test("approved handoff retirement reuses an exact ordinary capture and reconciles only exact absence", async (t) => {
   const { f, preview, retire, knobs, launched } = await handoffFixture(t, { deleteLost: true });

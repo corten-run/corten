@@ -11,7 +11,7 @@ import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verify
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { createContradiction, createErroredCustody, readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
-  verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+  exitOneReadLocks, failedExitOneCandidate, verifyFailedExitOneRetirement, verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function fleetRoot(path, repo) {
@@ -520,12 +520,18 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
           const historicalCheck = historicalLocks && (() => {
             assert.ok(historicalLocks(), "historical child locks changed");
           });
-          if (historicalCheck) verifyHistoricalFailedNativeRetirement(job.local, s, historicalCheck);
+          let exitOneCheck;
+          if (failedExitOneCandidate(job.local, s)) {
+            exitOneReadLocks(job.local);
+            const { record, assertCustody } = verifyFailedExitOneRetirement(job.local, s, s.retirement.evidenceSha256, true);
+            assert.equal(record.launchIntentSha256, readLaunchIntent(fleet).sha256, "exit-one launch intent differs");
+            exitOneCheck = () => { exitOneReadLocks(job.local); assertCustody(); };
+          } else if (historicalCheck) verifyHistoricalFailedNativeRetirement(job.local, s, historicalCheck);
           else verifyFailedNativeRetirement(job.local, s);
           assert.equal(digest(regular(join(job.local, "state.json"), 1024 * 1024)), job.stateSha256, "retirement changed during verification");
           if (historicalCheck) historicalCheck();
           else if (retained) assert.ok(noRecovery() && !retainedInvalidOwner(job.local, s), "retained lock owner changed during verification");
-          retirements.push({ group, index: result.groups.length, stateSha256: job.stateSha256, retained, historicalLocks, historicalCheck });
+          retirements.push({ group, index: result.groups.length, stateSha256: job.stateSha256, retained, historicalLocks, historicalCheck, exitOneCheck });
           add({ group, outcome: s.destroyedAt ? "native-failed-retired" : "cleanup-pending", id: s.id }); continue;
         }
         const setup = s.retirement.kind === "setup-failed";
@@ -562,7 +568,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
   } catch { evidenceError = "fleet-evidence-changed-or-duplicated"; }
   // A later sibling's replay may have overlapped failed-host recovery. Rebind
   // the status to the verified state and receipt, not the earlier display row.
-  for (const { group, index, stateSha256, retained, historicalLocks, historicalCheck } of retirements) {
+  for (const { group, index, stateSha256, retained, historicalLocks, historicalCheck, exitOneCheck } of retirements) {
     try {
       const job = readGroup(fleet, group);
       if (present(join(job.local, "stream-recovery.lock"))
@@ -573,6 +579,8 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
       assert.equal(job.outcome, retained ? "busy" : "available");
       assert.equal(job.stateSha256, stateSha256);
       assert.equal(digest(regular(join(job.local, "failed-native-host.json"))), job.state.retirement.evidenceSha256);
+      exitOneCheck?.();
+      if (exitOneCheck) retainCheck?.(exitOneCheck);
       if (historicalCheck) retainCheck?.(historicalCheck);
     } catch { result.groups[index] = { group, outcome: "uncertain", error: "group-retirement-changed" }; }
   }

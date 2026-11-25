@@ -11,7 +11,8 @@ import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, handoffCapture, handoffLocks, handoffRetirementPolicy,
-  interruptedFirstUpload, launchHostKey, offlineNeverStarted, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
+  failedExitOneCandidate, failedExitOnePolicy, verifyFailedExitOneCustody, verifyFailedExitOneRetirement, interruptedFirstUpload,
+  launchHostKey, offlineNeverStarted, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
@@ -144,15 +145,30 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
         const { stagedChildIntent } = await import("./fleet.mjs");
         if (saved.control?.monitor?.phase === "closed") {
           handoffLocks(local, holdingOperationLock);
-          const { grouped, capture, captureSha256 } = handoffCapture(local, saved);
-          recovery = { policy: handoffRetirementPolicy, measuredCommit: saved.commit, captureControllerCommit: capture.controllerCommit,
-            captureSha256, preservedReservationSha256: capture.reservationSha256, provider: saved.provider,
-            hostId: saved.id, ip: saved.ip, group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256,
-            evidenceSha256: saved.evidenceSha256, custodyArchiveSha256: capture.observation.archiveSha256,
-            custodyEvidenceSha256: capture.evidenceSha256, snapshotSha256: capture.observation.snapshotSha256,
-            launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
-            registrationSha256: saved.control.monitor.registrationSha256, sealSha256: grouped.terminal.sealSha256,
-            campaign: grouped.terminal.campaign, intent: stagedChildIntent(physicalRequest, saved), fleetSha256: saved.fleet.fleetSha256 };
+          if (failedExitOneCandidate(local, saved)) {
+            const absentOnly = saved.status === "retired";
+            const { grouped, launchIntentSha256, fleetManifestSha256, record } = absentOnly
+              ? verifyFailedExitOneRetirement(local, saved) : verifyFailedExitOneCustody(local, saved);
+            if (absentOnly) assert.equal(record.controllerCommit, head, "original exit-one retirement controller required");
+            const intent = stagedChildIntent(physicalRequest, saved);
+            assert.deepEqual(intent, { launch: launchIntentSha256 }, "original exit-one launch intent changed");
+            recovery = { policy: failedExitOnePolicy, operation: absentOnly ? "reconcile-absence-only" : "observe-terminal-and-retire",
+              measuredCommit: saved.commit, provider: saved.provider, hostId: saved.id,
+              ip: saved.ip, group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256,
+              launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
+              registrationSha256: saved.control.monitor.registrationSha256, sealSha256: grouped.terminal.sealSha256,
+              campaign: grouped.terminal.campaign, intent, fleetManifestSha256 };
+          } else {
+            const { grouped, capture, captureSha256 } = handoffCapture(local, saved);
+            recovery = { policy: handoffRetirementPolicy, measuredCommit: saved.commit, captureControllerCommit: capture.controllerCommit,
+              captureSha256, preservedReservationSha256: capture.reservationSha256, provider: saved.provider,
+              hostId: saved.id, ip: saved.ip, group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256,
+              evidenceSha256: saved.evidenceSha256, custodyArchiveSha256: capture.observation.archiveSha256,
+              custodyEvidenceSha256: capture.evidenceSha256, snapshotSha256: capture.observation.snapshotSha256,
+              launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
+              registrationSha256: saved.control.monitor.registrationSha256, sealSha256: grouped.terminal.sealSha256,
+              campaign: grouped.terminal.campaign, intent: stagedChildIntent(physicalRequest, saved), fleetSha256: saved.fleet.fleetSha256 };
+          }
         } else {
           const grouped = groupedPreplanFailure(local, saved);
           // A refused custody probe can append a settled collection ledger row
@@ -355,7 +371,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     // The approval hash excludes missing inputs, such as a bench install removed since the recheck.
     assert.deepEqual(locked.missing, [], "native campaign integration missing; do not allocate");
     checkFleetAdmission?.();
-    if (locked.subject.recovery?.policy === handoffRetirementPolicy) entered = true;
+    if ([handoffRetirementPolicy, failedExitOnePolicy].includes(locked.subject.recovery?.policy)) entered = true;
     return locked.subject;
   };
   const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch) => {
@@ -385,7 +401,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       reservationSha256: plan.subject.reservationSha256, knownHostsSha256: plan.subject.recovery.knownHostsSha256,
     } }), ...(options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
       recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256,
-        ...(options.r21MeasuredCheckout || ["grouped-preplan-failure-custody-only", handoffRetirementPolicy].includes(plan.subject.recovery?.policy)
+        ...(options.r21MeasuredCheckout || ["grouped-preplan-failure-custody-only", handoffRetirementPolicy, failedExitOnePolicy].includes(plan.subject.recovery?.policy)
           ? plan.subject.recovery : {}) },
     } : {}) });
   let result;

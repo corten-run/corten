@@ -1301,6 +1301,45 @@ whether DELETE was acknowledged or this is an absence-only retry. It cannot
 repeat DELETE, qualify the group, promote the wrapper exit, or publish the
 native output.
 
+### Retire The Sealed Client Heavy Exit 1
+
+For [#2082 Benchmark r78 Client Heavy: ordinary collection keeps a paid terminal host after binding its failed archive](https://github.com/corten-run/corten/issues/2082),
+use the same separate `--retire-failed-native --print-approval` command, not another
+`--collect`. This policy is limited to monitored, dedicated, staged single-group
+Client Heavy r78 measured at `7c13920f87b6baa6c7f967027d2eff9358201e4c`. Use a
+clean, independently reviewed, merged descendant that passes the committed
+source comparison above. The measured checkout, archive and extraction remain
+unchanged.
+
+Require policy `r78-client-heavy-sealed-exit-one-retirement-only` and operation
+`observe-terminal-and-retire`. Check the preview against this attempt's consumed
+launch intent, exact reservation, account and allocation, launch key, registered
+boot, sealed campaign and original archive and extraction hashes. Use the exact
+new approval hash with `--approve-reviewed-merged-ready`. The locked controller
+requires a source-bound raw exit 1, a finished failed group (not a native-validated
+group), an intact collection manifest and stream seal/drain, and no pending
+native roots, validation, deletion intent or competing custody. It compares the
+original tar members to the bound extraction before contacting the host.
+
+Both host observations use the launch-pinned key and the current same-account
+allocation. The read-only probe requires the original boot and job controls, an
+idle terminal unit with exit 1, no active benchmark work and no unaccounted
+Client Heavy work roots. It checks the still-original wrapper archive and live
+campaign/control/output roots against the held bytes. The final fence keeps
+the same root inventory and rehashes the original archive within the existing
+60-second DELETE proof window; it never repacks, downloads or runs native
+validation. A mismatch or incomplete observation preserves custody.
+
+The receipt and durable deletion intent permit at most one DELETE; only an
+authenticated exact-ID 404 on the saved account records completion. If a DELETE
+is uncertain but the operation lock settled, preview again at the same repair
+commit. Require operation `reconcile-absence-only` and approve that new hash;
+it may only check absence, with no SSH or repeat DELETE. An unexplained prior
+receipt without its intent, interrupted publication or retained lock requires
+operator inspection, never automatic takeover. Fleet and continuation treat
+the attempt as unqualified and do not admit a successor before confirmed
+absence. No timings or result are accepted by this route.
+
 ### Earlier Failed Native Migrations
 
 The shared `cloud-retirement.mjs:failedNativePolicy` allowlist also admits only the
