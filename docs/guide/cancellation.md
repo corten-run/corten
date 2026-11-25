@@ -54,13 +54,14 @@ deadline fires when it did. What an app can see of the kept timer:
   one, is woken once, for nothing, when the time the last such request's deadline was set for
   comes.
 - While any connection's timer is set (from that connection's third request that waited until
-  the time its last such request's deadline was set for, 30 seconds after it by default), every
-  thread of the runtime that serves it works out a timeout each time it runs out of work and
-  waits, about 190 instructions each time, whichever connection it serves next. A server whose
-  threads wait once a request pays that on every request: on one connection that never waits,
+  the time its last such request's deadline was set for, 30 seconds after it by default), the
+  runtime that serves it works out a timeout each time the runtime's driver parks (the wait
+  for the next event, which one thread of the runtime makes when it has no work left): about
+  190 instructions each time, whichever connection is served next. A server whose driver
+  parks once a request pays that on every request: on one connection that never waits,
   beside an idle one that had waited three times, 1% more instructions and 4% more of the
   server's CPU time a request, about 0.7 microseconds (measured on one machine; no cycle run
-  has read it). A busy server pays less of it, one wait serving many requests, and an app that
+  has read it). A busy server pays less of it, one park serving many requests, and an app that
   keeps a timer of its own waiting (a task that sleeps in a loop, a handler's timeout) paid it
   before this and pays nothing more.
 - A test on tokio's paused clock (`start_paused`) that leaves a served connection open after

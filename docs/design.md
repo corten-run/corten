@@ -10450,11 +10450,16 @@ rules something out.
        5.1%, every round up, noise 2.6%; 18.24 to 19.02), and answered 1.1% and 1.5% fewer
        requests a second, nine rounds of ten down and neither resolved (noise 2.3% and 2.4%).
        With no idle connection the same request read 1.2% more CPU time on both runtimes, not
-       resolved, so not all of the 4% is the set timer's. That is four times what the
-       instructions give: callgrind counts none of the kernel's, and a park with a timeout has
-       the kernel set a timer of its own (reasoned, not measured). The CPU time is recorded by
-       that measurement but was not among the values written down before it ran. It is the
-       request the change costs most. No cycle run has read it; the one this change is gated
+       resolved, so not all of the 4% is the set timer's. By the rule that measurement wrote
+       down for a workload of two conditions, which reads a build's change from no idle
+       connection to one against the base's own, the set timer's part is 2.6% on the
+       multi-threaded runtime (0.9% to 4.1%, every round up, under a noise of 3.6%, so not
+       resolved) and 3.3% on the single-threaded one (2.3% to 4.6%, every round up, noise
+       3.1%, resolved). Either reading is three to four times what the instructions give:
+       callgrind counts none of the kernel's, and a park with a timeout has the kernel set a
+       timer of its own (reasoned, not measured). The CPU time is recorded by that measurement
+       but was not among the values written down before it ran. It is the request the change
+       costs most. No cycle run has read it; the one this change is gated
        by declares, in the pull request and before its first turn, the workloads it reads.
     2. A connection whose only request waits, the default of a proxy that opens a connection for
        each request, makes no timer, and pays for the first deadline telling the connection it
