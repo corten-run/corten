@@ -50,9 +50,15 @@ return Problem Details. The router still decides which methods are allowed.
 An upstream error on the page returns HTML with the existing 500 status.
 `GET /health/live` answers without reading the record source.
 
-The matched script policy still permits evaluation for Topcoat's native runtime,
-and the adapter does not yet check the configured Host allowlist. Neither r65
-source is requalified by these changes. The r65 deadline, body/header limits
+The matched profile accepts only the loopback host names (`localhost`,
+`127.0.0.1`, `[::1]`) and exact host names listed in `HOSTS` (comma-separated,
+without ports). Requests may include a port. An unknown Host such as r65's
+`unrecognized.invalid` receives 421 before the adapter reads the source.
+Forwarded host headers do not affect this check. The native same-origin
+check for writes and the default profile are unchanged.
+
+The matched script policy still permits evaluation for Topcoat's native runtime.
+Neither r65 source is requalified by these changes. The r65 deadline, body/header limits
 and connection cap that were not probed are not diagnosed here.
 See the [recorded qualification outcomes](https://github.com/corten-run/corten/issues/1305#issuecomment-7147850444).
 

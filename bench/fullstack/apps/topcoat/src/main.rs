@@ -5,6 +5,7 @@
 mod alerts;
 mod catalog;
 mod catalog_view;
+mod hosts;
 mod items;
 mod marketplace;
 mod marketplace_view;
@@ -75,7 +76,11 @@ fn router() -> Router {
         .assets(AssetBundle::load().expect("asset bundle next to the binary (topcoat asset bundle)"))
         .layer(RuntimeLayer::new());
     let builder = if matched() {
-        builder.route(live).layer(LayerFn::new(None::<&str>, marketplace_view::record_errors)).layer(profile_layer())
+        builder
+            .route(live)
+            .layer(LayerFn::new(None::<&str>, marketplace_view::record_errors))
+            .layer(profile_layer())
+            .layer(hosts::AllowedHosts::from_env())
     } else {
         builder
     };

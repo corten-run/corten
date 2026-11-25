@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -47,14 +47,19 @@ async function until(check, ms, message) {
   assert.fail(message);
 }
 
-async function withApp(source, apiPort, check) {
+const ownedHost = "marketplace-r65-04ded02e68-topcoat";
+const unknownHost = "unrecognized.invalid";
+const pagePath = `/marketplace/en-US/${record.id}`;
+
+async function withApp(source, apiPort, check, profile = "matched") {
   const probe = createServer();
   const port = await loopback(probe);
   await new Promise((done) => probe.close(done));
   const base = `http://127.0.0.1:${port}`;
   const child = spawn(resolve(binary), [], {
     stdio: ["ignore", "ignore", "inherit"],
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(port), PROFILE: "matched",
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(port), PROFILE: profile,
+      HOSTS: `${ownedHost},fsw-topcoat`,
       ITEM_SOURCE: "api", CATALOG_SOURCE: "api", MARKETPLACE_SOURCE: source,
       API_BASE: `http://127.0.0.1:${apiPort}`, MARKETPLACE_FIXTURE_PATH: fixture },
   });
@@ -78,6 +83,20 @@ async function withApp(source, apiPort, check) {
   }
 }
 
+// Override Host without changing the actual socket or relying on Fetch's header handling.
+function statusAt(base, path, host, { method = "GET", headers = {} } = {}) {
+  return new Promise((done, reject) => {
+    const req = request(base + path, { method, headers: { ...headers, Host: host },
+      signal: AbortSignal.timeout(5_000) }, (res) => {
+      res.on("error", reject);
+      res.on("end", () => done(res.statusCode));
+      res.resume();
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 async function problem(response, status, title) {
   assert.equal(response.status, status);
   assert.equal(response.headers.get("content-type"), "application/problem+json");
@@ -92,9 +111,20 @@ try {
       const json = await get(`/api/marketplace/${record.id}`);
       assert.equal(json.status, 200);
       assert.deepEqual(await json.json(), record);
-      const page = await get(`/marketplace/en-US/${record.id}`);
+      const page = await get(pagePath);
       assert.equal(page.status, 200);
       assert.match(await page.text(), /Ember &lt;dragon&gt;/);
+      const port = new URL(base).port;
+      for (const host of [`127.0.0.1:${port}`, "localhost", `[::1]:${port}`, ownedHost, "fsw-topcoat:8080"]) {
+        assert.equal(await statusAt(base, pagePath, host), 200, host);
+      }
+      const beforeBadHost = structuredClone(counts);
+      for (const host of [unknownHost, `${ownedHost}.invalid`, "localhost:65536"]) {
+        assert.equal(await statusAt(base, pagePath, host, {
+          headers: { Forwarded: `host=${ownedHost}`, "X-Forwarded-Host": ownedHost },
+        }), 421, host);
+      }
+      assert.deepEqual(counts, beforeBadHost, "bad Host must not read the upstream");
       // In both modes the 404 and 405 have JSON bodies; native HEAD and Allow stay intact.
       await problem(await get("/api/marketplace/missing"), 404, "Not Found");
       const wrong = await get(`/api/marketplace/${record.id}`, { method: "POST", headers: { Origin: base } });
@@ -104,6 +134,16 @@ try {
         method: "POST", headers: { Origin: "https://foreign.invalid" },
       });
       assert.equal(foreignPost.status, 403);
+      const internal = `${ownedHost}:8080`, jsonPath = `/api/marketplace/${record.id}`;
+      assert.equal(await statusAt(base, jsonPath, internal, {
+        method: "POST", headers: { Origin: `http://${internal}` },
+      }), 405, "same internal Host and Origin pass the native origin check");
+      assert.equal(await statusAt(base, jsonPath, internal, {
+        method: "POST", headers: { Origin: "http://fsw-topcoat:8080" },
+      }), 403, "a different allowed Host is not a trusted cross-origin writer");
+      assert.equal(await statusAt(base, jsonPath, unknownHost, {
+        method: "POST", headers: { Origin: `http://${unknownHost}` },
+      }), 421, "same Origin does not make an unknown Host valid");
       const other = await get("/api/alerts", { method: "POST", headers: { Origin: base } });
       assert.equal(other.status, 405);
       assert.equal(other.headers.get("content-type"), null);
@@ -149,6 +189,9 @@ try {
     });
     console.log(`PASS Topcoat matched ${source}: native Marketplace parity probes`);
   }
+  await withApp("fixture", apiPort, async (_get, base) => {
+    assert.equal(await statusAt(base, pagePath, unknownHost), 200, "the default profile still does not filter Host");
+  }, "");
 } finally {
   upstream.closeAllConnections();
   await new Promise((done) => upstream.close(done));
