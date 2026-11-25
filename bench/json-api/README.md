@@ -144,11 +144,10 @@ lifetime, with no grace. Slots start one second after the rounded-up Docker star
 timestamp. Replay derives the schedule from the exact lifetime and requires a
 complete acquisition for each full slot. A final partial slot can contribute a
 sample only if the entire acquisition fits. A process or cgroup disappearance
-at the boundary is resolved only when the exact clean terminal Docker receipt
-places exit no later than the earliest read start after allowing for clock
-discrepancy and millisecond rounding, and all full slots are present. A late
-scheduler wake without a read is also acceptable only if no full slot is
-missing. Neither a later exit nor a discontinuous sampling clock excuses a failed read. The existing
+before a read completes fails the phase, even in the last partial slot. The
+attached client's exit stops new reads without waiting for its output pipes to
+close. A late scheduler wake without a read is acceptable only if no full slot
+is missing. The existing
 five-second bound applies at both edges and across gaps. At least two observations are needed for a timed
 phase to qualify; a very short diagnostic run may end too early to prove headroom.
 CPU is the upper bound on percent of a core: the difference in cgroup

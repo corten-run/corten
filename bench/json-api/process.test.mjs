@@ -5,6 +5,8 @@ import { join, resolve, sep } from "node:path";
 import test from "node:test";
 import { commands } from "./process.mjs";
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 
 test("normal child99 is observable only by the explicit receipt path; legacy commands remain strict", async () => {
   const io = commands(process.cwd());
@@ -46,4 +48,20 @@ test("a timed-out command reaps its owned termination helper and permits natural
   assert.equal(result.error, undefined, "owned timeout worker did not terminate naturally");
   assert.equal(result.status, 0, "owned timeout worker failed");
   assert.match(result.stdout, /owned timeout terminal/);
+});
+
+test("command exit stops the sampler before pipes close; held pipes fail and release at the deadline", async () => {
+  const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null,
+    stdout: new PassThrough(), stderr: new PassThrough(), unref() { this.unreferenced = true; } });
+  const io = commands(process.cwd(), { spawnClient: () => child, pipeGrace: 20 });
+  let notified = false;
+  try {
+    const result = io.command("synthetic-inspect", [], { timeout: 20, observeExit: true, onExit: () => { notified = true; } });
+    child.exitCode = 0;
+    child.emit("exit", 0, null);
+    assert.equal(notified, true);
+    await assert.rejects(result, (error) => error.exit?.expired === true
+      && error.ioErrors.includes("command did not close within the stop grace; output incomplete"));
+    assert.ok(child.unreferenced && child.stdout.destroyed && child.stderr.destroyed);
+  } finally { io.dispose(); }
 });

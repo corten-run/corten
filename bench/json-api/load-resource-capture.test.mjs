@@ -50,7 +50,7 @@ test("early scheduler wake cannot advance acquisition and a missed slot cannot b
   assert.deepEqual(delayed.argumentsSeen, []);
 });
 
-test("disappearance defers to the exact terminal receipt; no required slot or other fault can be ignored", async () => {
+test("a failed resource read is never waived by a clean terminal receipt", async () => {
   const vanished = Object.assign(new Error("synthetic process vanished"), { code: "ENOENT" });
   for (const fault of [vanished, new LoadResourceLifetimeEnded("cgroup unpopulated")]) {
     const f = fixture({ observations: [info("running")], nextWait: (ms) => ms + 5, collect(args) {
@@ -61,11 +61,10 @@ test("disappearance defers to the exact terminal receipt; no required slot or ot
     await new Promise(setImmediate);
     const result = await f.capture.stop();
     assert.deepEqual(f.ids, [id], "no race against an intermediate Docker status");
-    assert.equal(finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(3000), exitCode: 99 })).rows.length, 2);
-    for (const ms of [2999, 3000]) assert.equal(finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(ms) })).rows.length, 2);
-    for (const ms of [3005, 3900]) {
+    assert.equal(result.capture.rows.length, 2);
+    for (const ms of [2999, 3000, 3005, 3900]) {
       assert.throws(() => finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(ms) })),
-        (error) => error === fault, "a later finish in the same slot is not evidence of disappearance");
+        (error) => error === fault, "exit from either side of the failed read is not a substitute for it");
     }
     for (const edits of [{ finishedAt: stamp(4000) }, { startedAt: stamp(1) }, { oomKilled: true },
       { finishedAt: stamp(1999) }, { containerId: "b".repeat(64) }, { running: true }]) {
@@ -97,7 +96,7 @@ test("a later exit during unwind or a wall-clock step cannot excuse disappearanc
     assert.ok(ended);
     assert.equal(result.capture.rows.length, 2);
     assert.throws(() => finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(jump ? 3100 : 3400) })),
-      jump ? /clock discontinuity/ : (error) => error === fault);
+      (error) => error === fault);
   }
 });
 
@@ -118,6 +117,29 @@ test("a clock step inside the continuity tolerance cannot make a later exit prec
   const result = await f.stop();
   assert.equal(result.capture.rows.length, 2);
   assert.throws(() => finalizeLoadResourceCapture(result, terminal()), (error) => error === fault);
+  // Docker's clock can step after the failed acquisition and its unwind, too.
+  assert.throws(() => finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(2990) })),
+    (error) => error === fault);
+});
+
+test("attached client exit stops reads before the pipe join", async () => {
+  let at = epoch, signal, wake;
+  const reads = [];
+  const observer = startLoadResourceCapture({ id, now: () => at, monotonic: () => at - epoch,
+    async inspect() { return info("running"); },
+    async wait(ms, current) {
+      if (at < epoch + 2000) { at += ms; return; }
+      signal = current; await new Promise((resolve) => { wake = resolve; });
+    },
+    acquire({ sequence }) { reads.push(sequence); return { sequence }; },
+  });
+  await new Promise(setImmediate);
+  assert.deepEqual(reads, [0, 1]);
+  observer.requestStop();
+  assert.equal(signal.aborted, true);
+  at += 1000; wake();
+  assert.equal(finalizeLoadResourceCapture(await observer.stop(), terminal()).rows.length, 2);
+  assert.deepEqual(reads, [0, 1]);
 });
 
 test("a late wake does not acquire or lose an optional slot, but cannot excuse a full slot", async () => {

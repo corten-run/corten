@@ -13,7 +13,7 @@ const count = (n) => Number.isSafeInteger(n) && n >= 0;
 export const captureLimits = Object.freeze({ ...streamLimits, stderrBytes: 4 * 2 ** 20, auxiliaryBytes: 2 * 2 ** 20 });
 export const producerSources = Object.freeze(["load.js", "load-outcome.js", "timed-load.js", "fixed-prototype-load.js", "upstream-observer.mjs"]);
 export const legacyProducerSchema = "json-api-producer/v2";
-const scheduledSources = Object.freeze([...producerSources, "run.mjs", "phase.mjs", "load-resource-capture.mjs", "load-resource-proof.mjs"]);
+const scheduledSources = Object.freeze([...producerSources, "run.mjs", "phase.mjs", "process.mjs", "load-resource-capture.mjs", "load-resource-proof.mjs"]);
 export function producerSourceNames(schema) {
   if (schema === scheduledProducerSchema) return scheduledSources;
   assert.ok(schema === legacyProducerSchema, "unknown timed producer schema");

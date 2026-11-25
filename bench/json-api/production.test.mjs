@@ -210,14 +210,21 @@ test('phase joins both samplers before saving a native command failure', async (
   mkdirSync(join(folder, 'joined'));
   const options = { duration: 1, warmup: 1, rate: 3 }, loadId = 'a'.repeat(64);
   const commandFailure = new Error('command deadline\ncommand stderr is not a receipt field');
-  let result, appStopped = false, loadStopped = false;
+  let result, appStopped = false, loadStopped = false, stopRequested = false;
   const sampled = { schema: loadResourceCaptureSchema, live: null, rows: [] };
   const io = {
     async observe() { return { participants: { load: { containerId: loadId } } }; },
     async counters() { return {}; },
     sample() { return { async stop() { appStopped = true; throw new Error('app stats failed'); } }; },
-    sampleLoad(id) { assert.equal(id, loadId); return { async stop() { loadStopped = true; return { capture: sampled }; } }; },
-    async execute() { throw commandFailure; },
+    sampleLoad(id) {
+      assert.equal(id, loadId);
+      return { requestStop() { stopRequested = true; }, async stop() { loadStopped = true; return { capture: sampled }; } };
+    },
+    async execute({ onExit }) {
+      onExit();
+      assert.ok(stopRequested && !loadStopped, "child exit requests stop without waiting for the samplers or pipes");
+      throw commandFailure;
+    },
     async reads() { return {}; },
     async copy() { throw new Error('no command artifacts'); },
     write(path, raw) {
@@ -273,7 +280,7 @@ test('a terminal read failure retains known and unresolved load sampler faults',
   const capture = { schema: loadResourceCaptureSchema, live: { id: loadId, pid: 42 }, rows: [{ sequence: 0 }] };
   for (const [path, fault] of [
     ['known', { error: new Error('invalid CPU counter') }],
-    ['unresolved', { ending: { error: new Error('process vanished before terminal proof') } }],
+    ['unresolved', { missed: { error: new Error('missing scheduled load acquisition') } }],
   ]) {
     mkdirSync(join(folder, path));
     let result, counterCalls = 0;
@@ -289,7 +296,7 @@ test('a terminal read failure retains known and unresolved load sampler faults',
       expected: {}, options, tools: { node: {}, k6: {} }, context: {}, io }), /terminal counters failed/);
     assert.equal(result.loadResources, capture);
     assert.equal(result.command.exit.code, f.command.exit.code);
-    assert.deepEqual(result.captureErrors, [(fault.error ?? fault.ending.error).message, 'terminal counters failed']);
+    assert.deepEqual(result.captureErrors, [(fault.error ?? fault.missed.error).message, 'terminal counters failed']);
   }
 });
 

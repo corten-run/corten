@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import test from "node:test";
 import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 import { scheduledProducerMarker, scheduledProducerSchema } from "./contract.mjs";
 import { legacyProducerSchema, producerProvenance } from "./production.mjs";
-import { inspectJson, producerPolicyAtCommit } from "./report.mjs";
+import { inspectJson, producerPolicyAtCommit, verifyProducerAtCommit } from "./report.mjs";
 import { settleJsonRun } from "./run.mjs";
 import { result } from "./test-fixtures.mjs";
 import { timedSummarySchema } from "./timed-outcomes.mjs";
@@ -70,4 +70,20 @@ test("strict JSON replay reads the producer policy from the exact commit, not th
   assert.equal(different(f.summary, required(current)), true, "older result schema may not downgrade");
   assert.equal(different(summary, required(old)), false, "historical producer policy remains readable");
   assert.equal(different({ ...summary, producer: producerProvenance(scheduledProducerSchema) }, required(old)), true);
+
+  const producer = producerProvenance(scheduledProducerSchema);
+  assert.ok(producer.sources["process.mjs"], "the command clock and output bounds belong to the producer");
+  for (const name of Object.keys(producer.sources))
+    writeFileSync(join(dirname(path), name), readFileSync(new URL(name, import.meta.url)));
+  git("add", "--", "bench/json-api");
+  git("commit", "-qm", "exact producer sources");
+  const measured = git("rev-parse", "HEAD");
+  verifyProducerAtCommit(producer, measured, root);
+  writeFileSync(join(dirname(path), "process.mjs"), "different command process source\n");
+  git("add", "--", "bench/json-api/process.mjs");
+  git("commit", "-qm", "different producer bytes under same policy");
+  const other = git("rev-parse", "HEAD");
+  assert.equal(producerPolicyAtCommit(other, root), scheduledProducerSchema);
+  assert.throws(() => verifyProducerAtCommit(producer, other, root), /differs from measured commit: process\.mjs/);
+  verifyProducerAtCommit(producer, measured, root);
 });

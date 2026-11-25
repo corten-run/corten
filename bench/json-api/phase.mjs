@@ -46,7 +46,7 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
       loadResult = results[1].value;
       raw.loadResources = loadResult.capture;
       if (loadResult.error) sampleErrors.push(firstLine(loadResult.error));
-      loadEnding = loadResult.ending?.error;
+      loadEnding = loadResult.missed?.error;
     }
     for (const result of results) if (result.status === "rejected") sampleErrors.push(firstLine(result.reason));
   }
@@ -58,7 +58,7 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
     sampler = io.sample();
     try {
       loadSampler = io.sampleLoad?.(raw.before.participants.load.containerId);
-      raw.command = await io.execute({ observeExit: true, stdoutFile: output, stderrFile: log,
+      raw.command = await io.execute({ observeExit: true, onExit: () => loadSampler?.requestStop?.(), stdoutFile: output, stderrFile: log,
       maxStdoutBytes: config.mode === "fixed" ? captureLimits.bytes : captureLimits.auxiliaryBytes, maxStderrBytes: captureLimits.stderrBytes,
       timeout: (config.seconds + 25) * 1000 }); }
     catch (error) { failure = error; raw.command = { exit: error.exit ?? null, clock: error.clock ?? null, ioErrors: error.ioErrors ?? [error.message] }; }

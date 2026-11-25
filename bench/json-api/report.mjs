@@ -11,21 +11,37 @@ import { spread } from "../fullstack/passes.mjs";
 import { verifyK6Provenance } from "../load-tool.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { timedSummarySchema, timedCaseProjection } from "./timed-outcomes.mjs";
-import { legacyProducerSchema, verifyProducer } from "./production.mjs";
+import { legacyProducerSchema, producerSourceNames, verifyProducer } from "./production.mjs";
 import { replayTimedRun } from "./evidence.mjs";
 
-export function producerPolicyAtCommit(commit, repo = process.cwd()) {
-  assert.ok(typeof commit === "string" && /^[a-f0-9]{40}$/.test(commit), "full measured commit required for strict reporting");
+function gitAtMeasuredCheckout(repo, args, options) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));
-  const result = spawnSync("git", ["--no-replace-objects", "-C", repo, "ls-tree", "--full-tree", "-z", `${commit}^{commit}`, "--", scheduledProducerMarker], {
-    env: { ...env, GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0" }, encoding: "utf8", windowsHide: true,
-    timeout: 5000, maxBuffer: 16 * 1024, stdio: ["ignore", "pipe", "ignore"],
+  return spawnSync("git", ["--no-replace-objects", "-C", repo, ...args], {
+    env: { ...env, GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0" }, windowsHide: true, timeout: 5000,
+    stdio: ["ignore", "pipe", "ignore"], ...options,
   });
+}
+function requireMeasuredCommit(commit) {
+  assert.ok(typeof commit === "string" && /^[a-f0-9]{40}$/.test(commit), "full measured commit required for strict reporting");
+}
+export function producerPolicyAtCommit(commit, repo = process.cwd()) {
+  requireMeasuredCommit(commit);
+  const result = gitAtMeasuredCheckout(repo, ["ls-tree", "--full-tree", "-z", `${commit}^{commit}`, "--", scheduledProducerMarker],
+    { encoding: "utf8", maxBuffer: 16 * 1024 });
   assert.ok(result.status === 0 && !result.error, "cannot read strict JSON producer policy at measured commit");
   if (!result.stdout) return legacyProducerSchema;
   assert.ok(/^100(?:644|755) blob [a-f0-9]{40}\t/.test(result.stdout) && result.stdout.split("\t")[1] === scheduledProducerMarker + "\0",
     "invalid committed JSON load sampler marker");
   return scheduledProducerSchema;
+}
+
+export function verifyProducerAtCommit(producer, commit, repo = process.cwd()) {
+  requireMeasuredCommit(commit);
+  for (const name of producerSourceNames(producer?.schema)) {
+    const result = gitAtMeasuredCheckout(repo, ["cat-file", "blob", `${commit}^{commit}:bench/json-api/${name}`], { maxBuffer: 1024 ** 2 });
+    assert.ok(result.status === 0 && !result.error, `cannot read measured JSON producer file: ${name}`);
+    assert.ok(producer.sources?.[name] === sha256(result.stdout), `JSON producer differs from measured commit: ${name}`);
+  }
 }
 
 export function inspectJson(summary, { load, commit, requiredProducer } = {}) {
@@ -287,8 +303,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       else throw new Error(`unknown/duplicate report argument ${args[i]}`);
     }
     const summary = JSON.parse(readFileSync(file, "utf8"));
-    const report = inspectJson(summary, { load: reader(dirname(file)), commit,
-      requiredProducer: strict ? producerPolicyAtCommit(commit ?? summary.commit) : undefined });
+    const measured = commit ?? summary.commit;
+    const requiredProducer = strict ? producerPolicyAtCommit(measured) : undefined;
+    if (strict && summary.schema === timedSummarySchema && summary.producer?.schema === requiredProducer)
+      verifyProducerAtCommit(summary.producer, measured);
+    const report = inspectJson(summary, { load: reader(dirname(file)), commit, requiredProducer });
     console.log(renderJson(report)); if (strict && !report.baseline) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
