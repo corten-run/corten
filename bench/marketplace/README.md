@@ -197,13 +197,25 @@ A convergence pass keeps each window's throughput, p95 and p99, and gives each c
 reading (`flattenRule`, `marketplace-tolerance/v4`, in [steady-contract.mjs](steady-contract.mjs),
 which states the steps). It is a screening reading of throughput, not a certificate of steady
 state. Its spans are in seconds (`--window` must divide 60). The tail is the median throughput of
-the last 60 s. If the 60 s before it or the first 60 s ran more than 5% above the tail, the reading
-is "not within tolerance at the end: lower at the end". Otherwise it reads "within the stated
-tolerance from the window ending at N s" when, from that window to the end and for at least 60 s,
-every window is within 10% of the tail median, every three-window median within 5%, and the
-least-squares line through those windows changes by at most 5% of the tail; the onset window must
-itself be within 5% of the tail. Otherwise it reads "not within tolerance at the end": higher at
-the end, lower at the end, or within it for less than 60 s.
+the last 60 s. Otherwise it reads "within the stated tolerance from the window ending at N s"
+when, from that window to the end and for at least 60 s, every window is within 10% of the tail
+median, every three-window median within 5%, and the least-squares line through those windows
+changes by at most 5% of the tail; the onset window must itself be within 5% of the tail, and
+neither the first 60 s nor the 60 s before the tail may have a median more than 5% above it.
+A reading of "not within tolerance at the end" names the comparison that decided it, never a
+direction of travel:
+
+1. the median of the first 60 s, or of the 60 s before the last 60 s, is more than 5% above the
+   last 60 s median;
+2. the final stretch inside the bounds (every window within 10%, every three-window median within
+   5% of the tail) is shorter than 60 s, sometimes with "and the last 60 s median is more than 5%
+   above the 60 s before it";
+3. that stretch lasts at least 60 s but has no onset, and the least-squares line through it goes
+   up, or does not go up.
+
+A comparison of medians says nothing about the last window: a pass that climbed and whose last
+window then fell to half can read "the last 60 s median is more than 5% above the 60 s before it",
+because the falling window leaves the stretch empty and the medians are still in that order.
 
 What the reading does not detect, by construction (each case is pinned in `steady.test.mjs`):
 
@@ -212,8 +224,9 @@ What the reading does not detect, by construction (each case is pinned in `stead
    steady climb from 1000 to 1076 over 20 windows from the window ending at 105 s.
 2. A shift of under 10% in the last window is not detected: nineteen windows at 1000 then one at
    1090 reads within tolerance from the window ending at 15 s, because the tail median is unchanged.
-3. A pass that started faster reads as lower at the end even if it then held: four windows at 1100
-   then sixteen at 1000 is not within tolerance.
+3. A pass that started faster is not within tolerance even if it then held: four windows at 1100
+   then sixteen at 1000 reads "the median of the first 60 s is more than 5% above the last 60 s
+   median".
 4. The onset is resolved to one window and given as that window's end, so a 15 s window never reads
    under 15 s; readings at different window lengths are not comparable.
 

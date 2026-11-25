@@ -19,28 +19,47 @@ test("a pass that warms and then holds is within tolerance from the end of the w
 test("an adapter with nothing to warm reads from the end of its first window, never under one window", () => {
   assert.deepEqual(flattenPoint(windows(Array(20).fill(1200))), within(0, 15, 1200, 1200, 1200));
 });
-test("a pass higher at its end is not within tolerance at the end", () => {
+test("a stretch inside the bounds with no onset and an upward line, or a short one under a higher last median, is not within tolerance at the end", () => {
+  // A steady climb: its final stretch lasts at least 60 s, but no window in it starts a line within 5%.
   const rising = windows(Array.from({ length: 20 }, (_, i) => 500 + 40 * i));
-  assert.deepEqual(flattenPoint(rising), { withinTolerance: false, reason: "still-rising", tailRps: 1200, previousRps: 1040, headRps: 560 });
-  assert.equal(verdictText(flattenPoint(rising)), "not within tolerance at the end: higher at the end");
+  assert.deepEqual(flattenPoint(rising), { withinTolerance: false, reason: "trend-up", tailRps: 1200, previousRps: 1040, headRps: 560 });
+  assert.equal(verdictText(flattenPoint(rising)), "not within tolerance at the end: the final stretch in which every window is within 10% and every three-window median within 5% of the last 60 s median lasts at least 60 s, but no window in it that leaves 60 s to the end is both within 5% of that median and the start of a least-squares line to the end that changes by at most 5% of it; the least-squares line through the whole stretch goes up");
   // A late jump that holds 60 s reads from the jump, not before it.
   assert.deepEqual(flattenPoint(windows([...Array(16).fill(800), 900, 900, 900, 900])), within(16, 255, 900, 800, 800));
-  // One that has held for less than 60 s is higher at the end.
-  assert.equal(flattenPoint(windows([...Array(17).fill(800), 900, 900, 900])).reason, "still-rising");
+  // One that has held for less than 60 s: a short stretch, with the last 60 s median above the 60 s before it.
+  const late = flattenPoint(windows([...Array(17).fill(800), 900, 900, 900]));
+  assert.equal(late.reason, "short-above-previous");
+  assert.equal(verdictText(late), "not within tolerance at the end: the final stretch in which every window is within 10% and every three-window median within 5% of the last 60 s median is shorter than 60 s, and the last 60 s median is more than 5% above the 60 s before it");
+});
+test("a falling last window is never described as rising", () => {
+  // The real local pass's shape: a climb, then the last window at half the level. The empty stretch
+  // and the two medians decide it; the text compares the medians and says nothing about a rise.
+  const fell = flattenPoint(windows([4546, 8133, 10983, 9275, 10090, 9707, 9613, 4683]));
+  assert.equal(fell.reason, "short-above-previous");
+  const text = verdictText(fell);
+  assert.match(text, /the last 60 s median is more than 5% above the 60 s before it$/);
+  assert.doesNotMatch(text, /ris|higher|faster|climb|getting|goes up/);
+  // A stretch at least 60 s long with no onset: the line's direction is stated as a line, not as the end.
+  const up = verdictText({ withinTolerance: false, reason: "trend-up", tailRps: 1000, previousRps: 1000, headRps: 1000 });
+  const down = verdictText({ withinTolerance: false, reason: "trend-down", tailRps: 1000, previousRps: 1000, headRps: 1000 });
+  assert.match(up, /lasts at least 60 s, but no window in it .* the least-squares line through the whole stretch goes up$/);
+  assert.match(down, /the least-squares line through the whole stretch does not go up$/);
+  for (const t of [up, down]) assert.doesNotMatch(t, /higher at the end|lower at the end|rising|slower|faster/);
+  assert.throws(() => verdictText({ withinTolerance: false, reason: "still-rising" }), /unknown reading/);
 });
 test("variation inside the stated bounds reads as within tolerance; a window beyond them is not hidden", () => {
   assert.equal(flattenPoint(windows(Array.from({ length: 16 }, (_, i) => (i % 2 ? 1030 : 970)))).window, 0);
   assert.equal(flattenPoint(windows([1000, 1000, 1000, 1000, 1000, 1080, 1000, 1000, 1000, 1000, 1000, 1000])).window, 0);
   // Alternating 8% either side: every window is inside 10%, but each three-window median is 8% off.
-  assert.equal(flattenPoint(windows(Array.from({ length: 20 }, (_, i) => (i % 2 ? 1080 : 920)))).reason, "short-steady");
+  assert.equal(flattenPoint(windows(Array.from({ length: 20 }, (_, i) => (i % 2 ? 1080 : 920)))).reason, "short");
   // A 40% dip ends the run where it falls; one in the last 60 s leaves too little time inside it.
   assert.deepEqual(flattenPoint(windows([500, 800, 1000, 1000, 1000, 600, 1000, 1000, 1000, 1000, 1000, 1000])), within(6, 105, 1000, 1000, 900));
-  assert.equal(flattenPoint(windows([500, 800, 1000, 1000, 1000, 600, 1000, 1000, 1000, 1000, 1000, 700])).reason, "short-steady");
-  assert.equal(verdictText(flattenPoint(windows([...Array(19).fill(1000), 850]))), "not within tolerance at the end: within it for less than 60 s");
+  assert.equal(flattenPoint(windows([500, 800, 1000, 1000, 1000, 600, 1000, 1000, 1000, 1000, 1000, 700])).reason, "short");
+  assert.equal(verdictText(flattenPoint(windows([...Array(19).fill(1000), 850]))), "not within tolerance at the end: the final stretch in which every window is within 10% and every three-window median within 5% of the last 60 s median is shorter than 60 s");
   assert.equal(flattenPoint(windows([500, 1000, 500, 600, 800, 1000, 1000, 1000, 1000, 1000, 1000, 1000])).window, 5);
-  assert.equal(flattenPoint(windows([...Array(14).fill(1000), 700, 700])).reason, "slower-at-end");
+  assert.equal(flattenPoint(windows([...Array(14).fill(1000), 700, 700])).reason, "earlier-above-tail");
   // [1000, 1000, 500, 1000] five times: every three-window median is 1000, but one window in four is half the tail.
-  assert.equal(flattenPoint(windows(Array.from({ length: 5 }, () => [1000, 1000, 500, 1000]).flat())).reason, "short-steady");
+  assert.equal(flattenPoint(windows(Array.from({ length: 5 }, () => [1000, 1000, 500, 1000]).flat())).reason, "short");
   // 15 windows at 800 then 5 at 1000: 75 s inside the bounds at the new level.
   assert.deepEqual(flattenPoint(windows([...Array(15).fill(800), ...Array(5).fill(1000)])), within(15, 240, 1000, 800, 800));
 });
@@ -55,8 +74,10 @@ test("the reviewer's four constructed passes read as the documented limits say",
   //    window whose remaining climb is under 5% of the tail.
   const climb = flattenPoint(windows(Array.from({ length: 20 }, (_, i) => 1000 + (76 * i) / 19)));
   assert.deepEqual([climb.withinTolerance, climb.window, climb.fromSeconds, climb.tailRps], [true, 6, 105, 1070]);
-  // 4. A pass that started faster and then held: its first 60 s ran 10% above the tail.
-  assert.deepEqual(flattenPoint(windows([...Array(4).fill(1100), ...Array(16).fill(1000)])), { withinTolerance: false, reason: "slower-at-end", tailRps: 1000, previousRps: 1000, headRps: 1100 });
+  // 4. A pass that started faster and then held: its first 60 s median is 10% above the tail's.
+  const started = flattenPoint(windows([...Array(4).fill(1100), ...Array(16).fill(1000)]));
+  assert.deepEqual(started, { withinTolerance: false, reason: "earlier-above-tail", tailRps: 1000, previousRps: 1000, headRps: 1100 });
+  assert.equal(verdictText(started), "not within tolerance at the end: the median of the first 60 s is more than 5% above the last 60 s median");
   // The stated bounds and limits are what the report prints.
   for (const text of ["not a certificate of steady state", "within 10% of the median of the last 60 s", "every three-window median within 5%", "changed by at most 5% of the tail",
     "Oscillation or drift inside those bounds reads as within tolerance", "a shift of under 10% in the last window is not detected", "resolved to one window and given as that window's end", "readings at different window lengths are not comparable"])
@@ -66,16 +87,16 @@ test("short, empty and degrading passes give no reading or a stated one", () => 
   assert.deepEqual(flattenPoint(windows([1000, 1000, 1000, 1000, 1000, 1000, 1000])), { withinTolerance: false, reason: "too-few-windows" });
   assert.equal(verdictText(flattenPoint(windows([1000, 1000, 1000, 1000, 1000, 1000, 1000]))), "no reading: too few windows");
   assert.equal(verdictText(flattenPoint(windows([1000, 1000, 1000, 1000, 0, 0, 0, 0]))), "no reading: nothing served at the end");
-  assert.deepEqual(flattenPoint(windows([800, 800, 800, 800, 1000, 1000, 600, 600, 1000, 1000, 600, 600])), { withinTolerance: false, reason: "short-steady", tailRps: 800, previousRps: 800, headRps: 800 });
-  assert.deepEqual(flattenPoint(windows([1500, 1400, 1300, 1200, 1100, 1000, 1000, 1000, 1000, 1000, 1000, 1000])), { withinTolerance: false, reason: "slower-at-end", tailRps: 1000, previousRps: 1000, headRps: 1350 });
+  assert.deepEqual(flattenPoint(windows([800, 800, 800, 800, 1000, 1000, 600, 600, 1000, 1000, 600, 600])), { withinTolerance: false, reason: "short", tailRps: 800, previousRps: 800, headRps: 800 });
+  assert.deepEqual(flattenPoint(windows([1500, 1400, 1300, 1200, 1100, 1000, 1000, 1000, 1000, 1000, 1000, 1000])), { withinTolerance: false, reason: "earlier-above-tail", tailRps: 1000, previousRps: 1000, headRps: 1350 });
   assert.throws(() => flattenPoint(windows([1, 2, 3, 4, 5, 6, 7, 8]), { ...flattenRule, tolerance: 0.5 }), /stated tolerance rule/);
   assert.throws(() => flattenPoint([{ rps: Number.NaN, startSeconds: 0 }]), /finite/);
 });
-test("a runtime that keeps getting slower is lower at the end, at any rate of decline", () => {
+test("a pass whose earlier medians are more than 5% above its last 60 s median is not within tolerance, at any rate of decline", () => {
   const falling = windows(Array.from({ length: 20 }, (_, i) => 1500 - 25 * i));
-  assert.deepEqual(flattenPoint(falling), { withinTolerance: false, reason: "slower-at-end", tailRps: 1062.5, previousRps: 1162.5, headRps: 1462.5 });
-  assert.equal(verdictText(flattenPoint(falling)), "not within tolerance at the end: lower at the end");
-  assert.equal(flattenPoint(windows(Array.from({ length: 20 }, (_, i) => 1200 - 5 * i))).reason, "slower-at-end");
+  assert.deepEqual(flattenPoint(falling), { withinTolerance: false, reason: "earlier-above-tail", tailRps: 1062.5, previousRps: 1162.5, headRps: 1462.5 });
+  assert.equal(verdictText(flattenPoint(falling)), "not within tolerance at the end: the median of the first 60 s and the median of the 60 s before the last 60 s are each more than 5% above the last 60 s median");
+  assert.equal(flattenPoint(windows(Array.from({ length: 20 }, (_, i) => 1200 - 5 * i))).reason, "earlier-above-tail");
   assert.equal(flattenPoint(windows([...Array(8).fill(1000), 1200, 1200, ...Array(10).fill(1000)])).window, 10);
 });
 test("the reading's spans are in seconds, but its onset is resolved to one window, so widths are not comparable", () => {
@@ -374,8 +395,9 @@ test("the timed reporter lists every differing or missing input and never judges
   assert.match(missing[1], /image IDs are not recorded on both sides for drogon/);
   const falling = convergencePass(); falling.options = parseSteadyArgs(["convergence", "w3", "--apps", "corten,aspnet", "--minutes", "5"], apps, groupApps);
   falling.cells = falling.cells.map((c) => cellOf(c.app, c.source, c.target, Array.from({ length: 20 }, (_, i) => (c.app === "corten" && c.source === "fixture" && c.target === "page" ? 1500 - 25 * i : 1000))));
-  assert.ok(convergenceLines(likeRound(90), ["corten"], falling).includes("Reading: corten fixture page: not within tolerance at the end: lower at the end."));
-  assert.match(convergenceReport(falling), /^\| corten \| fixture \| page \| not within tolerance at the end: lower at the end \|/m);
+  const fallingText = "not within tolerance at the end: the median of the first 60 s and the median of the 60 s before the last 60 s are each more than 5% above the last 60 s median";
+  assert.ok(convergenceLines(likeRound(90), ["corten"], falling).includes(`Reading: corten fixture page: ${fallingText}.`));
+  assert.ok(convergenceReport(falling).includes(`| corten | fixture | page | ${fallingText} |`));
   const forged = convergencePass(); forged.cells[0] = cellOf("corten", "fixture", "page", Array.from({ length: 12 }, (_, i) => 500 + 50 * i));
   forged.cells[0].verdict = { withinTolerance: true, window: 0, fromSeconds: 15, tailRps: 1, previousRps: 1, headRps: 1 };
   assert.throws(() => convergenceLines(likeRound(), ["corten"], forged), /saved verdict differs/);

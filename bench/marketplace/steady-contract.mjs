@@ -31,8 +31,9 @@ export const timedStartup = "marketplace cold start/v1: created app, sidecar pol
  * 1. Fewer than 2h windows, or fewer than smoothing: no reading (too-few-windows).
  * 2. tail = median of the last holdSeconds, previous = median of the holdSeconds before them,
  *    head = median of the first holdSeconds. tail = 0: no reading (no-throughput).
- * 3. previous or head > tail * (1 + tolerance): not within tolerance at the end, lower at the end
- *    (slower-at-end), whatever the last windows do.
+ * 3. previous or head > tail * (1 + tolerance): not within tolerance at the end
+ *    (earlier-above-tail: the 60 s before the last, or the first 60 s, has a median more than 5%
+ *    above the last 60 s median), whatever the last windows do.
  * 4. smoothed[j] is the median of three consecutive windows centered on j, clamped to the pass.
  * 5. The run is the longest suffix in which every window lies within tail * (1 +/- windowTolerance)
  *    and every smoothed value within tail * (1 +/- tolerance).
@@ -41,10 +42,13 @@ export const timedStartup = "marketplace cold start/v1: created app, sidecar pol
  *    the least-squares line through windows s..n-1 changes by at most tolerance * tail. The reading
  *    is "within the stated tolerance from the window ending at (s + 1) * window length s": the
  *    onset is reported at the window's end, so it is never less than one window.
- * 7. Otherwise not within tolerance at the end: higher at the end (still-rising: a run shorter than
- *    holdSeconds with tail > previous * (1 + tolerance), or a longer run whose line rises), lower
- *    at the end (slower-at-end: a longer run whose line falls), or within it for less than
- *    holdSeconds (short-steady).
+ * 7. Otherwise not within tolerance at the end. A run shorter than holdSeconds is short, or
+ *    short-above-previous when also tail > previous * (1 + tolerance). A longer run with no onset
+ *    is trend-up or trend-down by the sign of the least-squares line through the whole run. Each
+ *    reason names the comparison that decided it; verdictText says it in those terms. None of them
+ *    says how the last window moved: a pass whose last window halved after a climb is short-above-
+ *    previous, since that window leaves the run empty and the last 60 s median is still above the
+ *    60 s before it.
  * The bounds, then: every window within 10% of the tail median, every three-window median within
  * 5%, and a least-squares change of at most 5% from the onset to the end. What that does not
  * detect, by construction (steady.test.mjs pins each case):
@@ -56,8 +60,8 @@ export const timedStartup = "marketplace cold start/v1: created app, sidecar pol
  *   after it is under 5% of the tail.
  * - A shift in the last window under 10% is not detected: nineteen windows at 1000 then one at
  *   1090 reads within tolerance from the window ending at 15 s, since the tail median is still 1000.
- * - A pass that started faster reads as lower at the end even if it then held: four windows at
- *   1100 then sixteen at 1000 is not within tolerance, since its first 60 s ran 10% above the tail.
+ * - A pass that started faster is not within tolerance even if it then held: four windows at
+ *   1100 then sixteen at 1000 reads that the median of its first 60 s is more than 5% above the tail.
  * - The onset resolution is one window, and readings from passes with different window lengths
  *   are not comparable: the medians, the run and the onset all move with the window length.
  * p95 and p99 are kept per window as evidence; the rule reads throughput only.
@@ -237,7 +241,7 @@ export function flattenPoint(windows, rule = flattenRule) {
   const tail = median(rps.slice(n - h)), previous = median(rps.slice(n - 2 * h, n - h)), head = median(rps.slice(0, h));
   if (tail === 0) return { withinTolerance: false, reason: "no-throughput", tailRps: 0 };
   const evidence = { tailRps: tail, previousRps: previous, headRps: head };
-  if (previous > tail * (1 + t) || head > tail * (1 + t)) return { withinTolerance: false, reason: "slower-at-end", ...evidence };
+  if (previous > tail * (1 + t) || head > tail * (1 + t)) return { withinTolerance: false, reason: "earlier-above-tail", ...evidence };
   const within = (r, band) => r >= tail * (1 - band) && r <= tail * (1 + band);
   const smoothed = rps.map((_, j) => { const c = Math.min(Math.max(j, 1), n - 2); return median(rps.slice(c - 1, c + 2)); });
   let run = n;
@@ -245,8 +249,8 @@ export function flattenPoint(windows, rule = flattenRule) {
   for (let s = run; s <= n - h; s++) {
     if (within(rps[s], t) && Math.abs(fittedChange(rps.slice(s))) <= t * tail) return { withinTolerance: true, window: s, fromSeconds: windows[s].startSeconds + size, ...evidence };
   }
-  if (n - run < h) return { withinTolerance: false, reason: tail > previous * (1 + t) ? "still-rising" : "short-steady", ...evidence };
-  return { withinTolerance: false, reason: fittedChange(rps.slice(run)) > 0 ? "still-rising" : "slower-at-end", ...evidence };
+  if (n - run < h) return { withinTolerance: false, reason: tail > previous * (1 + t) ? "short-above-previous" : "short", ...evidence };
+  return { withinTolerance: false, reason: fittedChange(rps.slice(run)) > 0 ? "trend-up" : "trend-down", ...evidence };
 }
 
 const cellKey = (c) => `${c.app} ${c.source} ${c.target}`;
@@ -387,10 +391,33 @@ export function validateSoak(s) {
 const pct = (x) => `${x * 100}%`;
 /** The tolerance reading in words: its bounds and what it does not detect. */
 export const ruleText = `a screening reading of throughput, not a certificate of steady state. "Within the stated tolerance from the window ending at N s" means that from that window to the end of the pass, at least ${flattenRule.holdSeconds} s, every window's throughput was within ${pct(flattenRule.windowTolerance)} of the median of the last ${flattenRule.holdSeconds} s (the tail), every three-window median within ${pct(flattenRule.tolerance)}, and the least-squares line through those windows changed by at most ${pct(flattenRule.tolerance)} of the tail, and that neither the first nor the second-to-last ${flattenRule.holdSeconds} s ran more than ${pct(flattenRule.tolerance)} above the tail. Oscillation or drift inside those bounds reads as within tolerance; a shift of under ${pct(flattenRule.windowTolerance)} in the last window is not detected; the onset is resolved to one window and given as that window's end; readings at different window lengths are not comparable. p95 and p99 are kept as evidence and not read.`;
-/** A reading in words. */
-export const verdictText = (v) => v.withinTolerance ? `within the stated tolerance from the window ending at ${v.fromSeconds} s`
-  : { "too-few-windows": "no reading: too few windows", "no-throughput": "no reading: nothing served at the end", "still-rising": "not within tolerance at the end: higher at the end",
-    "slower-at-end": "not within tolerance at the end: lower at the end", "short-steady": `not within tolerance at the end: within it for less than ${flattenRule.holdSeconds} s` }[v.reason];
+/**
+ * A reading in words. An end-state reading says literally what was compared, never how the
+ * throughput moved: "the last 60 s median is more than 5% above the 60 s before it" is a comparison
+ * of two medians, and holds for a pass whose last window fell.
+ */
+export function verdictText(v) {
+  if (v.withinTolerance) return `within the stated tolerance from the window ending at ${v.fromSeconds} s`;
+  const span = `${flattenRule.holdSeconds} s`, by = pct(flattenRule.tolerance), over = (x) => x > v.tailRps * (1 + flattenRule.tolerance);
+  const stretch = `the final stretch in which every window is within ${pct(flattenRule.windowTolerance)} and every three-window median within ${by} of the last ${span} median`;
+  const short = `${stretch} is shorter than ${span}`;
+  const noOnset = `${stretch} lasts at least ${span}, but no window in it that leaves ${span} to the end is both within ${by} of that median and the start of a least-squares line to the end that changes by at most ${by} of it`;
+  const end = {
+    "too-few-windows": "no reading: too few windows",
+    "no-throughput": "no reading: nothing served at the end",
+    "earlier-above-tail": () => {
+      const earlier = [over(v.headRps) ? `the first ${span}` : null, over(v.previousRps) ? `the ${span} before the last ${span}` : null].filter(Boolean);
+      assert.ok(earlier.length > 0, "an earlier-above-tail reading records the earlier median above the tail");
+      return `not within tolerance at the end: the median of ${earlier.join(" and the median of ")} ${earlier.length > 1 ? "are each" : "is"} more than ${by} above the last ${span} median`;
+    },
+    "short-above-previous": `not within tolerance at the end: ${short}, and the last ${span} median is more than ${by} above the ${span} before it`,
+    short: `not within tolerance at the end: ${short}`,
+    "trend-up": `not within tolerance at the end: ${noOnset}; the least-squares line through the whole stretch goes up`,
+    "trend-down": `not within tolerance at the end: ${noOnset}; the least-squares line through the whole stretch does not go up`,
+  }[v.reason];
+  assert.ok(end !== undefined, `unknown reading ${v.reason}`);
+  return typeof end === "function" ? end() : end;
+}
 const cpuRoles = ["app", "load", "api"];
 /**
  * Why a convergence pass is not like-for-like with a timed round, or [] when it is: the same
