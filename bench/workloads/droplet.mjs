@@ -197,18 +197,25 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       };
       const guardDispatch = pinnedRetirement && expiry !== undefined ? () => {
         checkHandoffDelete();
+        if (prepareDelete?.onUnsent) {
+          const now = Date.now();
+          return now >= exitOneFenceFinishedAtMs && now < expiry;
+        }
         fresh();
       } : undefined;
       if (expiry !== undefined) {
-        if (guardDispatch) checkHandoffDelete(false);
+        if (guardDispatch && !prepareDelete?.publishIntent) checkHandoffDelete(false);
         fresh();
       }
       let r;
       const limit = remaining ? Math.min(timeout, remaining()) : timeout;
       if (prepareDelete && expiry !== undefined) {
         assert.ok(!state.deletionIntentAt);
-        prepareDelete.unchanged();
-        state.deletionIntentAt = new Date().toISOString(); save();
+        if (prepareDelete.publishIntent) prepareDelete.publishIntent();
+        else {
+          prepareDelete.unchanged();
+          state.deletionIntentAt = new Date().toISOString(); save();
+        }
       }
       try { r = await run(binary, argv, limit, permittedFailure, expiry, registration, guardDispatch); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
@@ -231,7 +238,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       if (prepareDelete && expiry !== undefined && r.status === 1 && r.deleteNotDispatched === true) {
         // The worker positively acknowledged that its request was never sent.
         // A missing result, timeout, HTTP error or lost acknowledgement cannot clear intent.
-        boundary(); delete state.deletionIntentAt; writeState(state); assert.fail("DELETE not dispatched; fresh collection approval required");
+        if (prepareDelete.onUnsent) prepareDelete.onUnsent();
+        else { boundary(); delete state.deletionIntentAt; writeState(state); }
+        assert.fail("DELETE not dispatched; fresh collection approval required");
       }
       check();
       if (remaining) remaining();
@@ -1148,25 +1157,46 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const bytes = `${JSON.stringify(record, null, 2)}\n`;
     assert.ok(Buffer.byteLength(bytes) <= 65536, "bounded exit-one retirement receipt required");
     const receiptPath = join(local, "failed-native-host.json");
-    durable(originalPath, original);
-    durable(receiptPath, bytes);
-    const originalSnapshot = handoffStateSnapshot(originalPath);
-    const receiptSnapshot = handoffStateSnapshot(receiptPath);
-    assert.ok(originalSnapshot.bytes.equals(original), "exit-one reservation copy changed");
-    // These two files are now accounted for. Maintain the original input and
-    // extraction pins from before SSH, rather than resampling their identity.
-    assertHandoffCustody = (includeTree) => {
-      custody.assertCustody(includeTree, true);
-      const current = handoffStateSnapshot(originalPath);
-      assert.ok(current.bytes.equals(original) && sameStateVersion(current.stat, originalSnapshot.stat), "exit-one reservation copy changed");
-      assert.ok(sameStateVersion(lstatSync(receiptPath, { bigint: true }), receiptSnapshot.stat), "exit-one receipt replaced");
+    const pendingDeleteSha256 = digest(bytes);
+    const deletion = {
+      expiresAt: () => expiry,
+      publishIntent() {
+        // execute has finished the account preflight. Until here a failed
+        // read or an expired fence leaves neither intent nor retirement files.
+        assertHandoffState(); custody.assertCustody();
+        const deletionIntentAt = fresh();
+        durable(originalPath, original);
+        durable(receiptPath, bytes);
+        const originalSnapshot = handoffStateSnapshot(originalPath), receiptSnapshot = handoffStateSnapshot(receiptPath);
+        assert.ok(originalSnapshot.bytes.equals(original), "exit-one reservation copy changed");
+        assertHandoffCustody = (includeTree) => {
+          custody.assertCustody(includeTree, true);
+          const current = handoffStateSnapshot(originalPath);
+          assert.ok(current.bytes.equals(original) && sameStateVersion(current.stat, originalSnapshot.stat), "exit-one reservation copy changed");
+          assert.ok(sameStateVersion(lstatSync(receiptPath, { bigint: true }), receiptSnapshot.stat), "exit-one receipt replaced");
+        };
+        handoffReceiptSha256 = pendingDeleteSha256;
+        checkHandoffDelete(false);
+        Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: handoffReceiptSha256 }, deletionIntentAt });
+        writeState(state);
+      },
+      onUnsent() {
+        const alreadyUncertain = preserveOperationLock;
+        preserveOperationLock = true;
+        checkHandoffDelete();
+        // Keep the exact tentative files under their receipt hash. Restore the
+        // running state with its acknowledged collection ledger intact. An
+        // interruption partway through still leaves a lock or blocked custody.
+        durable(join(local, "failed-native-unsent-" + pendingDeleteSha256 + ".json"), bytes);
+        durable(join(local, "failed-native-unsent-reservation-" + pendingDeleteSha256 + ".json"), original);
+        state.status = "running"; delete state.retirement; delete state.deletionIntentAt;
+        writeState(state);
+        checkHandoffDelete(false);
+        unlinkSync(receiptPath); unlinkSync(originalPath); syncDirectory(local);
+        preserveOperationLock = alreadyUncertain;
+      },
     };
-    handoffReceiptSha256 = digest(bytes);
-    checkHandoffDelete(false);
-    Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: handoffReceiptSha256 },
-      deletionIntentAt: fresh() });
-    save();
-    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, expiry);
+    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, true, deletion);
     await confirmDeleted();
     checkHandoffDelete();
     state.destroyedAt = new Date().toISOString(); save(); return 1;

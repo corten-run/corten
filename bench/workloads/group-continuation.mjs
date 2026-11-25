@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { isBuiltin, registerHooks } from "node:module";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
 import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
@@ -92,8 +92,9 @@ function verifyRetryRetirement(saved, processStart, retainedLocks, exitOne) {
     if (exitOne) {
       assert.equal(saved.outcome, "available", "exit-one retirement still holds custody");
       exitOneReadLocks(local);
-      const { assertCustody } = verifyFailedExitOneRetirement(local, state, evidenceSha256, true);
+      const { record, assertCustody } = verifyFailedExitOneRetirement(local, state, evidenceSha256, true);
       retainedLocks.push(() => { exitOneReadLocks(local); assertCustody(); });
+      return { receiptSha256: evidenceSha256, reservationSha256: record.reservationSha256 };
     } else if (saved.outcome === "available") verifyFailedNativeRetirement(local, state);
     else {
       const sameLocks = historicalChildLocks(saved, processStart);
@@ -166,7 +167,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
   // postedCreates is the census fence and the final-gate snapshot: every earlier
   // provider-errored attempt's posted droplet in any group, settled or contradicted
   // (also after its retirement), refuses a create on its account while it is listed.
-  const createFailures = [], postedCreates = [];
+  const createFailures = [], postedCreates = [], exitOneRetirements = [];
   const retainedLocks = [];
   const setupCensus = (fleet, saved, lock, launch) => {
     const { group, state, stateSha256 } = saved, { round, provider, single } = fleet.manifest;
@@ -259,7 +260,15 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       } else if (terminal(saved)) {
         if (state.status === "retired") {
           if (selected || failedExitOneScope(state)) {
-            try { verifyRetryRetirement(saved, processStart, retainedLocks, exitOne); }
+            try {
+              const retirement = verifyRetryRetirement(saved, processStart, retainedLocks, exitOne);
+              if (retirement) {
+                assert.equal(dirname(fleet.root), root, "exit-one retirement must stay in its original continuation slot");
+                assert.ok(launch, "no original exit-one launch intent");
+                exitOneRetirements.push({ root: fleet.root, round, group, manifestSha256, stateSha256, launch,
+                  accountId: manifest.provider.accountId, id: state.id, ...retirement });
+              }
+            }
             catch (cause) { refuseAdmission("custody-replay", new Error("unresolved custody: selected group retirement is not verified", { cause })); }
             receipt = retirementFile(state.retirement.kind);
           }
@@ -448,6 +457,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       ...(unconfirmed.length ? { unconfirmed } : {}),
       ...(createFailures.length ? { createFailures } : {}),
       ...(postedCreates.length ? { postedCreates } : {}),
+      ...(exitOneRetirements.length ? { exitOneRetirements } : {}),
       ...(peers.length ? { peers: peers.map(({ proof }) => proof) } : {}) } };
   const subject = { indexSha256, verified: proofs.map(({ fleet, snapshot }) => ({ root: fleet.root, round: fleet.manifest.round,
     manifestSha256: fleet.manifestSha256, ...snapshot })),

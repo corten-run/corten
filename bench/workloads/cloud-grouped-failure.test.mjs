@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { accountId, archive, commit, context, harness, metadata, syntheticInspection } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, metadata, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { fleetPlan, reservation, tags } from "./cloud-contract.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { digest, extractArchive, treeHash } from "./cloud-local.mjs";
@@ -83,7 +83,9 @@ function fixture(t, group, flags = {}) {
   const outputRoots = json ? ["bench/json-api/results/j74", mainRoot] : [mainRoot];
   const plan = { schema: "benchmark-isolated-group-campaign/v1", round: measuredRound, commit: measured, order: [group],
     bindings: [{ campaignMode: json ? "dedicated-blr1" : "dedicated", request: { group, round: json ? "j75" : exitOne ? "w78" : handoff ? round : "w37", commit: measured },
-      validation: { artifactRoot: mainRoot } }] };
+      validation: { artifactRoot: mainRoot },
+      ...(exitOne ? { preparation: { fixtures: [] }, execution: { invocation: {
+        executable: "node", argv: ["bench/client-heavy/run.mjs", "--out", mainRoot], cwd: "repository-root", shell: false } } } : {}) }] };
   plan.campaignSha256 = deploymentSha256(plan);
   const nativePayload = "preserved raw failure output\n";
   const nativeEntries = [{ path: "", type: "directory" }, { path: "failure.txt", type: "file", bytes: nativePayload.length, sha256: digest(nativePayload) }];
@@ -103,27 +105,44 @@ function fixture(t, group, flags = {}) {
   const wrapperFiles = metadata().map((e) => e.name === "exit-code" ? { ...e, body: exitOne ? `${flags.rawExit ?? 1}\n` : "2\n" } : e);
   if (exitOne) {
     const phaseDir = "00-client-heavy-timing/", phaseBinding = { group, phase: "timing", artifactRoot: flags.foreignPath ?? mainRoot };
-    const journal = [["native-output-reserved", phaseBinding], ["phase-sealed", { ...phaseBinding, nativeManifestSha256 }],
-      ["group-finished", { group, outcome: status.outcomes[0].outcome, nativeManifestSha256 }],
-      ["stream-sealed", { path: "control-stream-seal.json", sha256: digest(seal), binding }], ["finished", { status }]];
+    const bootstrap = JSON.stringify({ binding, apparatus: reg });
+    const exit = { terminal: true, code: 1, signal: null, success: false, cancelled: false, forced: false, error: null };
+    const inventory = (root) => entries.filter(({ name }) => name.startsWith(root))
+      .map(({ name, body }) => ({ path: name.slice(root.length).replace(/\/$/, ""), type: name.endsWith("/") ? "directory" : "file",
+        ...(body === undefined ? {} : { bytes: Buffer.byteLength(body), sha256: digest(body) }) }))
+      .sort((a, b) => {
+        const left = a.path.split("/"), right = b.path.split("/");
+        for (let i = 0; i < Math.min(left.length, right.length); i++)
+          if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1;
+        return left.length - right.length;
+      });
     entries.push(
+      { name: prefix + "control-bootstrap.json", body: bootstrap },
       { name: prefix + phaseDir }, { name: prefix + phaseDir + "native/" }, { name: prefix + phaseDir + "native/failure.txt", body: nativePayload },
       { name: prefix + phaseDir + "native-manifest.json", body: JSON.stringify({ entries: nativeEntries, sha256: nativeManifestSha256 }) },
+      { name: prefix + phaseDir + "command-0.log", body: "observed exit\n" },
+      { name: prefix + phaseDir + "command-0-host/" }, { name: prefix + phaseDir + "command-0-host/terminal.json",
+        body: JSON.stringify({ terminal: true, attached: true, empty: true, command: exit }) },
       { name: prefix + "control-stream-drain.json", body: JSON.stringify({ schema: "benchmark-control-stream-drain/v1", id: reg.id,
         registrationSha256: digest(JSON.stringify(reg)), host: reg.host, identitiesAbsent: true, monoNs: "2500000",
-        listener: reg.listener, scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] }) },
+        listener: reg.listener, scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] }) });
+    const journal = [["authorized", {}], ["control-admitted", { epoch: "bootstrap", path: "control-bootstrap.json", sha256: digest(bootstrap), binding }],
+      ["started", {}], ["native-output-reserved", phaseBinding],
+      ["command-intent", { group, invocation: plan.bindings[0].execution.invocation }], ["command-started", { pid: 2000 }],
+      ["command-exited", { ...exit,
+        hostManifestSha256: deploymentSha256(inventory(prefix + phaseDir + "command-0-host/")) }],
+      ["phase-sealed", { ...phaseBinding, nativeManifestSha256, phaseManifestSha256: deploymentSha256(inventory(prefix + phaseDir)) }],
+      ["group-finished", { group, outcome: status.outcomes[0].outcome, nativeManifestSha256 }],
+      ["stream-sealed", { path: "control-stream-seal.json", sha256: digest(seal), binding }], ["finished", { status }]];
+    flags.editJournal?.(journal);
+    entries.push(
       ...journal.map(([kind, detail], sequence) => ({ name: prefix + `${String(sequence).padStart(5, "0")}-${kind}.json`,
         body: JSON.stringify({ schema: "benchmark-isolated-campaign-event/v1", kind, sequence,
-          campaign: campaignId, round: measuredRound, campaignSha256: plan.campaignSha256, ...detail }) })));
-    const records = entries.filter(({ name }) => name.startsWith(prefix))
-      .map(({ name, body }) => ({ path: name.slice(prefix.length).replace(/\/$/, ""), type: name.endsWith("/") ? "directory" : "file",
-        ...(body === undefined ? {} : { bytes: Buffer.byteLength(body), sha256: digest(body) }) }));
-    records.sort((a, b) => {
-      const left = a.path.split("/"), right = b.path.split("/");
-      for (let i = 0; i < Math.min(left.length, right.length); i++)
-        if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1;
-      return left.length - right.length;
-    });
+          campaign: campaignId, round: measuredRound, campaignSha256: plan.campaignSha256,
+          status: kind === "finished" ? status : { ...status, state: "active", nextGroup: sequence < 8 ? group : null,
+            outcomes: sequence < 8 ? [] : status.outcomes, uncollectedNativeRoots: sequence >= 3 && sequence <= 7 ? [phaseBinding] : [] },
+          ...detail }) })));
+    const records = inventory(prefix);
     if (!flags.noManifest) entries.push({ name: prefix + "collection-manifest.json",
       body: JSON.stringify({ ...result, manifest: { entries: records, sha256: deploymentSha256(records) } }) });
     entries.push({ name: "control/" }, { name: "control/stream-terminal.json", body: "{}" });
@@ -280,6 +299,12 @@ async function handoffFixture(t, flags = {}) {
   const launched = [], knobs = {};
   let approval;
   const deps = { repo: h.repo, sleep: async () => {}, inspect: () => assert.fail("handoff retirement cannot validate native timing"),
+    interrupted() {
+      if (knobs.afterIntent && h.saved().deletionIntentAt) {
+        const hook = knobs.afterIntent; delete knobs.afterIntent; hook();
+      }
+      return false;
+    },
     write: (line) => { approval = JSON.parse(line); },
     spawn(binary, argv, options) {
       if (binary === "git") {
@@ -320,17 +345,19 @@ async function handoffFixture(t, flags = {}) {
       if (knobs.beforeFinalPending && argv[2] === "get" && f.probes === 2) knobs.beforeFinalPending();
       if (knobs.beforeIntent && argv[2] === "get" && f.probes === (flags.exitOne ? 2 : 3) && !h.saved().deletionIntentAt) knobs.beforeIntent();
       if (knobs.dispatchAccount && argv[0] === "account" && h.saved().deletionIntentAt) knobs.dispatchAccount();
+      if (argv[0] === "account" && f.probes === 2) knobs.finalAccount?.();
       if (knobs.exactRead && argv[2] === "get" && h.saved().deletionIntentAt) knobs.exactRead();
       if (knobs.failExactRead && argv[2] === "get")
         return { status: 1, providerDiagnostic: { code: "get-http", httpStatus: 500 } };
       if (argv[2] === "delete") {
         assert.ok(Number.isSafeInteger(expiry) && Date.now() < expiry && expiry - Date.now() <= 60000);
         assert.ok(existsSync(join(h.local, "failed-native-host.json")));
+        if (knobs.unsent) return { status: 1, stdout: "", stderr: "", deleteNotDispatched: true };
       }
       return f.run("doctl", argv, timeout, allowFail, expiry);
     }, { close: async () => { knobs.close?.(); } }),
   };
-  return { f, launched, knobs,
+  return { f, launched, knobs, deps,
     async preview() { assert.equal(await productionMain([...args, "--print-approval"], deps), 3); return approval; },
     retire: (approved) => productionMain([...args, "--approve-reviewed-merged-ready", approved.approvalSha256], deps) };
 }
@@ -440,7 +467,7 @@ test("exit-one preview refuses unsafe saved scopes before provider access", asyn
   for (const [name, flags, refusal] of [
     ["successful raw exit", { rawExit: 0 }, /failed-native-capture/], ["unknown raw exit", { rawExit: 3 }, /failed-native-capture/],
     ["native validated", { lateSealFailure: true }, /intrinsically failed/], ["pending root", { pending: true }, /pending native output/],
-    ["unaccounted journal root", { foreignPath: "bench/client-heavy/work/foreign" }, /unaccounted native root/],
+    ["unaccounted journal root", { foreignPath: "bench/client-heavy/work/foreign" }, /exit-one command journal/],
     ["incomplete campaign", { noManifest: true }, /collection-manifest/],
     ["wrong registered host", { foreignHostname: true }, /registered host differs/],
     ["unbound known hosts", { legacyKey: true }, /no launch-established host key/],
@@ -457,6 +484,121 @@ test("exit-one preview refuses unsafe saved scopes before provider access", asyn
     writeFileSync(join(f.h.local, lock), "foreign-live-or-retained\n");
     await assert.rejects(preview(), /competing or retained custody/);
     assert.deepEqual(launched, []);
+  });
+});
+
+test("exit-one rejects a rehashed incomplete or contradictory command journal before access", async (t) => {
+  for (const [kind, edit] of [
+    ["no authorization or start", (rows) => rows.splice(0, 3)],
+    ["no command exit", (rows) => rows.splice(6, 1)],
+    ["wrong invocation", (rows) => { rows[4][1].invocation = { command: "wrong" }; }],
+    ["unobserved exit", (rows) => { rows[6][1].terminal = false; }],
+    ["contradictory exit", (rows) => { rows[6][1].success = true; }],
+    ["clean exit contradicts sealed command observation", (rows) => { Object.assign(rows[6][1], { code: 0, success: true }); }],
+  ]) await t.test(kind, async (t) => {
+    const { f, preview, launched } = await handoffFixture(t, { exitOne: true, editJournal: edit });
+    await assert.rejects(preview(), /exit-one command journal/);
+    assert.deepEqual(launched, []);
+    assert.equal(f.h.deletes, 0);
+  });
+});
+
+test("exit-one preflight expiry and positively unsent DELETE require a fresh approval and fence", async (t) => {
+  for (const mode of ["preflight expiry", "dispatch-boundary expiry", "worker unsent"]) await t.test(mode, async (t) => {
+    const { f, preview, retire, knobs } = await handoffFixture(t, { exitOne: true });
+    const { h } = f, first = await preview(), now = Date.now;
+    if (mode === "preflight expiry") {
+      let count = 0;
+      knobs.finalAccount = () => { if (++count === 3) Date.now = () => now() + 60000; };
+    } else if (mode === "dispatch-boundary expiry") knobs.afterIntent = () => { Date.now = () => now() + 60000; };
+    else knobs.unsent = true;
+    try { await assert.rejects(retire(first), mode === "preflight expiry" ? /retirement proof expired/ : /DELETE not dispatched/); }
+    finally { Date.now = now; knobs.finalAccount = undefined; knobs.unsent = false; }
+    assert.equal(f.probes, 2);
+    assert.equal(h.deletes, 0);
+    assert.equal(h.saved().status, "running");
+    assert.equal(h.saved().deletionIntentAt, undefined);
+    assert.equal(existsSync(join(h.local, "failed-native-host.json")), false);
+    assert.equal(existsSync(join(h.local, "failed-native-reservation.json")), false);
+    const history = readdirSync(h.local).filter((name) => name.startsWith("failed-native-unsent-"));
+    assert.equal(history.length, mode === "preflight expiry" ? 0 : 2);
+    if (history.length) {
+      const name = history.find((name) => /^failed-native-unsent-[a-f0-9]{64}\.json$/.test(name));
+      const bytes = readFileSync(join(h.local, name)), hash = digest(bytes);
+      assert.equal(name, "failed-native-unsent-" + hash + ".json");
+      assert.equal(digest(readFileSync(join(h.local, "failed-native-unsent-reservation-" + hash + ".json"))),
+        JSON.parse(bytes).reservationSha256);
+    }
+    const next = await preview();
+    assert.equal(next.recovery.operation, "observe-terminal-and-retire");
+    assert.notEqual(next.approvalSha256, first.approvalSha256);
+    await assert.rejects(retire(first), /explicit operator-approved exact action required/);
+    assert.equal(await retire(next), 1);
+    assert.equal(f.probes, 4);
+    assert.equal(h.deletes, 1);
+    assert.deepEqual(readFileSync(join(h.local, "results.tgz")), f.wrapper);
+    assert.equal(verifyFailedNativeRetirement(h.local, h.saved()).schema, "benchmark-failed-native-retirement/v3");
+  });
+});
+
+test("the production child refuses changed exit-one custody after the successor fleet intent", async (t) => {
+  for (const changed of ["receipt", "retained lock", "receipt after child intent", "missing binding", "none"]) await t.test(changed, async (t) => {
+    const { f, preview, retire, deps } = await handoffFixture(t, { exitOne: true });
+    assert.equal(await retire(await preview()), 1);
+    const { h, repairCommit } = f, continuation = dirname(f.root), group = "client-heavy", round = "r79";
+    const admitted = await continuationAdmission(continuation, group, { repo: h.repo, inspect: deps.inspect });
+    const root = join(continuation, "client-heavy--r79");
+    mkdirSync(join(root, group), { recursive: true });
+    const manifest = fleetPlan({ round, commit: repairCommit, token: "b".repeat(16), sshKey: "42", provider: { accountId, context },
+      tokens: { [group]: "2".repeat(16) } }, "2026-11-21T00:00:00.000Z", "sfo3", { stagedPlacement: true,
+      single: { group, indexSha256: admitted.indexSha256, checkout: h.repo } });
+    writeFileSync(join(root, "fleet-r79.json"), JSON.stringify(manifest));
+    const fleet = readFleet(root, round), options = fleetChildOptions(fleet, group, "detach");
+    const integrations = { compiler: () => true, roleCheck: async () => [] };
+    const plan = await productionPlan(options, { ...integrations, repo: h.repo, run: async (bin, args) => deps.spawn(bin, args) });
+    if (changed === "missing binding") delete admitted.subject.exitOneRetirements;
+    const subject = { ...f.intent.subject, controllerCommit: repairCommit, stateRoot: root, requestedRoot: root, round,
+      manifestSha256: fleet.manifestSha256, fleet: manifest, continuation: admitted.subject,
+      jobs: [{ group, outcome: "planned", missing: [], options, subject: plan.subject, approvalSha256: plan.approvalSha256 }] };
+    const approvalSha256 = digest(JSON.stringify(subject));
+    writeFileSync(join(root, "launch-intent.json"), JSON.stringify({ ...f.intent, subject, approvalSha256 }));
+    writeFileSync(join(root, ".fleet-operation.lock"), JSON.stringify({ pid: process.pid, approvalSha256 }));
+    writeFileSync(join(continuation, ".continuation-operation.lock"), JSON.stringify({ pid: process.pid, group }));
+    let creates = 0, afterCatalog = 0;
+    const statePath = join(options.stateDir, "groups-r79", "state.json");
+    let changedAfterIntent = false;
+    function interrupted() {
+      if (changed === "receipt after child intent" && !changedAfterIntent && existsSync(statePath)
+          && JSON.parse(readFileSync(statePath)).createIntentAt) {
+        changedAfterIntent = true;
+        appendFileSync(join(h.local, "failed-native-host.json"), "\n");
+      }
+      return false;
+    }
+    const calls = [];
+    const providerFactory = () => Object.assign((argv) => {
+      calls.push(argv);
+      if (argv[0] === "account") {
+        if (afterCatalog && ++afterCatalog === 3) {
+          if (changed === "receipt") appendFileSync(join(h.local, "failed-native-host.json"), "\n");
+          if (changed === "retained lock") writeFileSync(join(h.local, "audit-delivery.lock"), "retained");
+        }
+        return { status: 0, stdout: JSON.stringify({ uuid: userId, droplet_limit: 20 }) };
+      }
+      if (argv[2] === "list") return { status: 0, stdout: "[]" };
+      if (argv[1] === "placement") { afterCatalog = 1; return { status: 0, stdout: JSON.stringify(syntheticPlacement()) }; }
+      assert.equal(argv[2], "create");
+      creates++; throw new Error("synthetic POST reached");
+    }, { close: async () => {} });
+    await assert.rejects(productionMain([round, "--state-dir", options.stateDir, "--detach", "--commit", repairCommit,
+      "--ssh-key", "42", "--account-id", accountId, "--context", context, "--group", group, "--fleet", fleet.path,
+      "--approve-reviewed-merged-ready", plan.approvalSha256], { ...deps, ...integrations, interrupted, providerFactory }),
+    changed === "none" ? /synthetic POST reached/ : /exit-one retirement.*(?:changed or holds custody|not bound)/);
+    assert.ok(afterCatalog >= 3, JSON.stringify(calls));
+    assert.equal(creates, Number(changed === "none"));
+    assert.equal(changedAfterIntent, changed === "receipt after child intent");
+    const state = JSON.parse(readFileSync(statePath));
+    assert.equal(!!state.createIntentAt, ["none", "receipt after child intent"].includes(changed));
   });
 });
 
@@ -485,7 +627,7 @@ test("exit-one retirement refuses foreign allocation, remote drift and local rep
   });
   const { f, preview, retire, knobs } = await handoffFixture(t, { exitOne: true });
   const { h } = f, approved = await preview();
-  knobs.dispatchAccount = () => { appendFileSync(join(h.local, h.saved().evidence, "run.log"), "late change"); };
+  knobs.afterIntent = () => { appendFileSync(join(h.local, h.saved().evidence, "run.log"), "late change"); };
   await assert.rejects(retire(approved), /extraction/);
   assert.ok(h.saved().deletionIntentAt && !h.saved().destroyedAt);
   assert.equal(h.deletes, 0); assert.equal(h.creates, 0);

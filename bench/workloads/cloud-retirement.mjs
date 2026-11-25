@@ -305,40 +305,70 @@ function exitOneCampaign(state, grouped, { extracted, folder }, campaign, plan, 
   assert.ok(Array.isArray(entries) && entries.length <= evidenceEnvelope.nodes && deploymentSha256(entries) === sha256,
     "archived collection manifest differs");
   verifyExitOneManifest(dir, entries);
-  const journal = entries.filter(({ path }) => /^\d{5}-[a-z-]+\.json$/.test(path)).map(({ path }) => path).sort();
-  assert.ok(journal.length >= 3 && journal.at(-1).endsWith("-finished.json") && journal.at(-2).endsWith("-stream-sealed.json")
-    && journal.at(-3).endsWith("-group-finished.json"), "terminal journal missing");
-  for (const [offset, kind] of ["finished", "stream-sealed", "group-finished"].entries()) {
-    const name = journal.at(-1 - offset), event = JSON.parse(read(name));
-    assert.equal(name, `${String(journal.length - 1 - offset).padStart(5, "0")}-${kind}.json`);
-    assert.equal(event.schema, "benchmark-isolated-campaign-event/v1");
-    assert.equal(event.kind, kind); assert.equal(event.sequence, journal.length - 1 - offset);
-    assert.equal(event.campaign, campaign); assert.equal(event.round, state.round); assert.equal(event.campaignSha256, plan.campaignSha256);
-    if (kind === "finished") assert.deepEqual(event.status, status, "finished journal differs");
-    if (kind === "stream-sealed") {
-      assert.equal(event.path, "control-stream-seal.json");
-      assert.equal(event.sha256, grouped.terminal.sealSha256);
-      assert.deepEqual(event.binding, grouped.registration.binding);
-    }
-    if (kind === "group-finished") {
-      assert.equal(event.group, state.group); assert.equal(event.outcome, "failed");
-      assert.match(event.nativeManifestSha256, /^[a-f0-9]{64}$/);
-      assert.equal(event.nativeManifestSha256, status.outcomes[0].nativeManifestSha256);
-    }
-  }
   const phase = "00-client-heavy-timing";
+  const subtree = (root) => entries.filter(({ path }) => path === root || path.startsWith(root + "/"))
+    .map(({ path, ...record }) => ({ path: path.slice(root.length + 1), ...record }));
   const native = `${phase}/native`, nativeManifest = JSON.parse(read(`${phase}/native-manifest.json`));
-  const nativeEntries = entries.filter(({ path }) => path === native || path.startsWith(`${native}/`))
-    .map(({ path, ...record }) => ({ path: path.slice(native.length + 1), ...record }));
+  const nativeEntries = subtree(native);
   assert.ok(isDeepStrictEqual(nativeEntries, nativeManifest.entries) && deploymentSha256(nativeEntries) === nativeManifest.sha256
     && nativeManifest.sha256 === status.outcomes[0].nativeManifestSha256, "archived native manifest differs");
-  for (const [kind, path] of [["native-output-reserved", grouped.phases.timing], ["phase-sealed", grouped.phases.timing]]) {
-    const names = journal.filter(name => name.endsWith(`-${kind}.json`));
-    assert.equal(names.length, 1, "exact Client Heavy phase required");
-    const event = JSON.parse(read(names[0]));
-    assert.equal(event.group, state.group); assert.equal(event.phase, "timing");
-    assert.equal(event.artifactRoot, path, "journal names an unaccounted native root");
-    if (kind === "phase-sealed") assert.equal(event.nativeManifestSha256, nativeManifest.sha256);
+  // r78 has one supervised Client Heavy invocation. Replay its lifecycle,
+  // not its renderer proof or other native qualification evidence.
+  try {
+    const kinds = ["authorized", "control-admitted", "started", "native-output-reserved", "command-intent", "command-started",
+      "command-exited", "phase-sealed", "group-finished", "stream-sealed", "finished"];
+    const names = kinds.map((kind, sequence) => `${String(sequence).padStart(5, "0")}-${kind}.json`);
+    assert.deepEqual(entries.filter(({ path }) => /^\d{5}-[a-z-]+\.json$/.test(path)).map(({ path }) => path), names);
+    const phaseBinding = { group: state.group, phase: "timing", artifactRoot: grouped.phases.timing };
+    const events = names.map((name, sequence) => {
+      const event = JSON.parse(regular(join(dir, name), 1024 * 1024));
+      assert.equal(event.schema, "benchmark-isolated-campaign-event/v1");
+      assert.equal(event.kind, kinds[sequence]); assert.equal(event.sequence, sequence);
+      assert.equal(event.campaign, campaign); assert.equal(event.round, state.round); assert.equal(event.campaignSha256, plan.campaignSha256);
+      const embedded = sequence === 10 ? status : { ...status, state: "active",
+        nextGroup: sequence < 8 ? state.group : null, outcomes: sequence < 8 ? [] : status.outcomes,
+        uncollectedNativeRoots: sequence >= 3 && sequence <= 7 ? [phaseBinding] : [] };
+      assert.deepEqual(event.status, embedded, "embedded status differs");
+      return event;
+    });
+    const [, admission, , reserved, intent, started, command, sealed, finishedGroup, stream] = events;
+    const { preparation, execution } = plan.bindings[0];
+    assert.deepEqual(preparation.fixtures, [], "only the timed invocation was reserved");
+    const invocation = execution.invocation;
+    assert.ok(invocation.executable === "node" && Array.isArray(invocation.argv) && invocation.argv.length > 0
+      && invocation.cwd === "repository-root" && invocation.shell === false, "timed invocation missing");
+    assert.deepEqual(intent.invocation, invocation);
+    assert.equal(intent.group, state.group);
+    assert.ok(Number.isSafeInteger(started.pid) && started.pid > 0);
+    assert.ok(command.terminal === true && command.cancelled === false && command.forced === false
+      && Number.isInteger(command.code) && command.code >= 0 && command.code <= 255
+      && command.signal === null && command.error === null, "normal observed command exit required");
+    assert.equal(command.success, command.code === 0, "command success contradicts exit code");
+    for (const event of [reserved, sealed]) {
+      for (const [key, value] of Object.entries(phaseBinding)) assert.equal(event[key], value);
+      assert.equal(event.transferDestination, undefined);
+    }
+    assert.equal(sealed.nativeManifestSha256, nativeManifest.sha256);
+    assert.equal(sealed.phaseManifestSha256, deploymentSha256(subtree(phase)));
+    for (const [key, value] of Object.entries(status.outcomes[0])) assert.deepEqual(finishedGroup[key], value);
+    assert.ok(entries.some(({ path, type }) => path === phase + "/command-0.log" && type === "file"), "command log missing");
+    const hostRoot = phase + "/command-0-host", host = subtree(hostRoot);
+    assert.ok(host.length > 1 && command.hostManifestSha256 === deploymentSha256(host), "command observations differ from journal");
+    const terminal = JSON.parse(regular(join(dir, hostRoot, "terminal.json"), 1024 * 1024));
+    assert.ok(terminal.terminal === true && terminal.attached === true && terminal.empty === true);
+    for (const key of ["terminal", "code", "signal", "success", "cancelled", "forced", "error"])
+      assert.equal(terminal.command[key], command[key], "archived command exit differs from journal");
+    assert.equal(stream.path, "control-stream-seal.json");
+    assert.equal(stream.sha256, grouped.terminal.sealSha256);
+    assert.deepEqual(stream.binding, grouped.registration.binding);
+    assert.equal(admission.epoch, "bootstrap");
+    assert.equal(admission.path, "control-bootstrap.json");
+    assert.deepEqual(admission.binding, grouped.registration.binding);
+    const bootstrap = read("control-bootstrap.json");
+    assert.equal(digest(bootstrap), admission.sha256);
+    assert.deepEqual(JSON.parse(bootstrap).apparatus, grouped.registration);
+  } catch (cause) {
+    throw new Error("exit-one command journal is missing or contradictory", { cause });
   }
   assert.deepEqual(readdirSync(extracted).sort(), ["campaign", "control", "exit-code", "host.txt", "run.log"],
     "unexpected original archive root");

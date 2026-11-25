@@ -1317,9 +1317,12 @@ launch intent, exact reservation, account and allocation, launch key, registered
 boot, sealed campaign and original archive and extraction hashes. Use the exact
 new approval hash with `--approve-reviewed-merged-ready`. The locked controller
 requires a source-bound raw exit 1, a finished failed group (not a native-validated
-group), an intact collection manifest and stream seal/drain, and no pending
-native roots, validation, deletion intent or competing custody. It compares the
-original tar members to the bound extraction before contacting the host.
+group), an intact collection manifest and stream seal/drain, and the complete
+r78 journal from authorization and bootstrap admission through the observed
+command exit, phase seal and campaign finish. No pending native roots, validation,
+deletion intent or competing custody may remain. This check replays the command
+lifecycle, not native qualification. It compares the original tar members to the
+bound extraction before contacting the host.
 
 Both host observations use the launch-pinned key and the current same-account
 allocation. The read-only probe requires the original boot and job controls, an
@@ -1330,15 +1333,25 @@ the same root inventory and rehashes the original archive within the existing
 60-second DELETE proof window; it never repacks, downloads or runs native
 validation. A mismatch or incomplete observation preserves custody.
 
-The receipt and durable deletion intent permit at most one DELETE; only an
-authenticated exact-ID 404 on the saved account records completion. If a DELETE
+The account preflight must finish within the proof window before the controller
+writes the retirement files and durable deletion intent. Only an explicit
+local pre-dispatch refusal or a positive not-dispatched acknowledgement from
+the private worker can return to fresh approval and two new host observations.
+The already acknowledged control ledger stays intact, and any tentative
+retirement files are retained as unsent history, not as proof of deletion. These
+checks permit at most one dispatched DELETE; only an authenticated exact-ID 404
+on the saved account records completion. If DELETE dispatch or acknowledgement
 is uncertain but the operation lock settled, preview again at the same repair
 commit. Require operation `reconcile-absence-only` and approve that new hash;
 it may only check absence, with no SSH or repeat DELETE. An unexplained prior
 receipt without its intent, interrupted publication or retained lock requires
 operator inspection, never automatic takeover. Fleet and continuation treat
 the attempt as unqualified and do not admit a successor before confirmed
-absence. No timings or result are accepted by this route.
+absence. A successor approval binds the retired attempt's exact state, launch
+intent and retirement receipt. The child rechecks them and the absence of
+retained custody before create intent and again before dispatch; the saved ID
+must also still be absent from the same-account census. No timings or result
+are accepted by this route.
 
 ### Earlier Failed Native Migrations
 

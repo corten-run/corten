@@ -11,7 +11,8 @@ import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verify
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { createContradiction, createErroredCustody, readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
-  exitOneReadLocks, failedExitOneCandidate, verifyFailedExitOneRetirement, verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+  exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyHistoricalFailedNativeRetirement,
+  verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function fleetRoot(path, repo) {
@@ -363,6 +364,28 @@ export function recheckCreateErroredAttempt(root, row) {
   verifyCreateErrored(saved.local, saved.state);
   assert.equal(saved.state.createErrored.evidenceSha256, row.receiptSha256, "prior create failure receipt changed");
   assert.ok(saved.state.createErrored.dropletId === row.dropletId && saved.state.provider.accountId === row.accountId, "prior create failure changed");
+}
+
+// Admission already replayed the archive. At dispatch only recheck the exact
+// retirement custody that the approval consumed, without replaying native data.
+export function recheckExitOneRetirement(root, row) {
+  try {
+    assert.equal(dirname(row.root), root);
+    const fleet = readFleet(row.root, row.round, { priorSelection: true });
+    assert.equal(fleet.manifestSha256, row.manifestSha256);
+    assert.equal(readLaunchIntent(fleet).sha256, row.launch);
+    const saved = readGroup(fleet, row.group), { state, local } = saved;
+    assert.ok(saved.outcome === "available" && saved.stateSha256 === row.stateSha256
+      && failedExitOneScope(state) && state.status === "retired" && state.destroyedAt && state.retirement.kind === "native-failed");
+    assert.equal(state.provider.accountId, row.accountId);
+    assert.equal(state.id, row.id);
+    assert.equal(state.retirement.evidenceSha256, row.receiptSha256);
+    assert.equal(digest(regular(join(local, "failed-native-host.json"), 65536)), row.receiptSha256);
+    assert.equal(digest(regular(join(local, "failed-native-reservation.json"), 1024 * 1024)), row.reservationSha256);
+    exitOneReadLocks(local);
+  } catch (cause) {
+    throw new Error("prior exit-one retirement changed or holds custody; do not create", { cause });
+  }
 }
 // A posted create is contradicted by a recorded reappearance, a witness or reappearance stage
 // beside it, or a contradicted bind (retired or not).
