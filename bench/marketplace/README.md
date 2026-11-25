@@ -185,8 +185,14 @@ beside its ownership label. Like a timed round, a pass refuses to start without 
 generated fixture (`node bench/marketplace/fixtures.mjs`). It reads that fixture once into a copy
 in the pass's own folder (`mounted-fixture`), checks and hashes the copy, and mounts only the copy,
 read-only, for the upstream and every app, so an edit to the original during a pass cannot change
-what a later cell serves; the copy is hashed again before the pass can be complete and removed at
-teardown. A container's log (`cold.log`, `app.log`) keeps its stderr as well as its stdout. Results
+what a later cell serves; the copy is hashed again before the pass can be complete. Teardown removes
+the copy only once every container of the pass is confirmed removed, and keeps it otherwise, since a
+container may still mount it; a copy that could not be removed makes the pass incomplete. A
+container's log (`cold.log`, `app.log`) is written straight to its file with its stderr as well as
+its stdout, and is not read back. The cold probe's readiness and result are read from its stdout
+alone, at most 4,096 bytes of it (`coldOutput`): one readiness line, then one result line with
+exactly the fields `bench/catalog/cold.mjs` writes and the path it polled; anything else fails the
+cold start, and what the probe wrote, stderr included, is in `cold.log`. Results
 go to `results/convergence/<name>/` and `results/soak/<name>/`, outside Git like other raw output.
 Every container is read, logged, sampled and removed by the ID Docker printed for it, after its
 owner label is checked; teardown also removes, by ID, anything else carrying the pass's owner label.
@@ -332,9 +338,12 @@ marker's ID, an action and a nanosecond time, so none of its rows is used), clea
 clean and nothing else showed one, and not established when the stream was unavailable and
 nothing else showed one; the container states and the memory samples are read independently of
 it. What the `docker stats` and `docker events` clients write is bounded (`clientLimits` in
-[steady-run.mjs](steady-run.mjs): bytes read, characters in one row, rows read): past a limit that
-observation is unavailable at once, its client is stopped through its own bounded stop, and the
-pass goes on to its teardown as usual; a client's stderr past its limit is not kept. Latency intervals start at the k6 engine's start; memory
+[steady-run.mjs](steady-run.mjs): bytes read, bytes in one row, rows read, all counted on what the
+client wrote, blank rows and escape sequences included): past a limit that observation is
+unavailable at once, no wait on the event stream succeeds any more (not even for a marker row read
+before the limit was passed), its client is stopped through its own bounded stop, and the pass goes
+on to its teardown as usual. Any stderr from either client, up to the moment its pipes close or are
+released after its stop, makes that observation unavailable; stderr past its limit is not kept. Latency intervals start at the k6 engine's start; memory
 samples are stamped on the workstation clock from the moment the load's `docker start` was issued,
 in intervals of their own of the same length, which lead the latency intervals by the load
 container's startup; restart events use the Docker daemon's clock. The report states both clocks.

@@ -24,8 +24,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { platform, release, tmpdir } from "node:os";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { platform, release } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cpuSettings, imageProvenance, readLoadSummary } from "./run-contract.mjs";
@@ -46,6 +46,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
 const fixtureDir = join(here, "fixtures");
 const containerId = /^[a-f0-9]{64}$/;
+const ansi = /\x1b\[[0-9;]*[A-Za-z]/g;
 // The first line of an error, bounded: what cleanup.json and run.log keep.
 export const firstLine = (error) => String(error?.message ?? error).split("\n", 1)[0].slice(0, 500);
 // A failure's code (failureCodes): the first one given to the error is kept, so the innermost
@@ -69,9 +70,11 @@ export function knownK6Metrics(summary) {
 
 /**
  * What the docker stats and docker events clients may make this runner keep: bytes of output read,
- * characters in one row (a complete one or the unterminated rest), rows read, and bytes of stderr
- * kept. Past the first three the observation is unavailable and its client is stopped through its
- * own bounded stop; stderr past its limit is not kept (any stderr already fails the observation).
+ * bytes in one row (a complete one or the unterminated rest), rows read, and bytes of stderr kept.
+ * The first three are counted on the bytes the client wrote, every row counted, blank or not, before
+ * anything is stripped from it. Past one of them the observation is unavailable and its client is
+ * stopped through its own bounded stop; stderr past its limit is not kept (any stderr, until the
+ * client's pipes close or are released, already fails the observation).
  * A soak of at most 62 minutes gets roughly one stats row a second, a few hundred bytes each, and
  * a handful of event rows, so the limits are far above an ordinary pass.
  */
@@ -98,6 +101,8 @@ const stderrTail = (limit) => {
  * from cleaning up. A second stop() returns the first one's result. `now` stamps each sample.
  * Output past `limits` (clientLimits.stats) fails the sampler at once: what it read is no longer
  * kept, and it stops itself through the same stop(), whose result a later stop() returns.
+ * A row's escape sequences (docker stats clears the screen between refreshes) are stripped only
+ * after the row has been counted and measured.
  * @returns {{ stop(): Promise<{summary: object, samples: object}> }}
  */
 export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs = 2000, boundMs = 5000, now = Date.now, limits = clientLimits.stats }) {
@@ -109,33 +114,33 @@ export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs 
   // Rows that are not readable or name another container are counted, not quoted; stderr is kept
   // in its own raw file.
   const stderr = stderrTail(limits.stderr);
-  let buffer = "", raw = "", bytes = 0, rows = 0, overflowed = false, stderrSeen = false, unreadable = 0, foreign = 0, stopping = false, closed = false, settled, sampler;
+  let buffer = Buffer.alloc(0), raw = [], bytes = 0, rows = 0, overflowed = false, stderrSeen = false, unreadable = 0, foreign = 0, stopping = false, closed = false, settled, sampler;
   const overflow = (what) => {
     if (overflowed) return;
-    overflowed = true; buffer = "";
+    overflowed = true; buffer = Buffer.alloc(0);
     failed(`docker stats ${what}, so its memory samples are unavailable`);
     sampler.stop().catch(() => {});
   };
   child.stdout.on("data", (chunk) => {
     if (overflowed) return;
     if ((bytes += chunk.length) > limits.bytes) return overflow(`wrote more than ${limits.bytes} bytes`);
-    const data = chunk.toString().replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
-    raw += data; buffer += data;
-    for (let end; (end = buffer.indexOf("\n")) >= 0;) {
-      if (end > limits.line) return overflow(`wrote a row longer than ${limits.line} characters`);
-      const line = buffer.slice(0, end).trim();
-      buffer = buffer.slice(end + 1);
-      if (!line) continue;
+    raw.push(chunk); buffer = Buffer.concat([buffer, chunk]);
+    for (let end; (end = buffer.indexOf(0x0a)) >= 0;) {
+      if (end > limits.line) return overflow(`wrote a row longer than ${limits.line} bytes`);
       if (++rows > limits.rows) return overflow(`wrote more than ${limits.rows} rows`);
+      const line = buffer.subarray(0, end).toString().replace(ansi, "").trim();
+      buffer = buffer.subarray(end + 1);
+      if (!line) continue;
       try {
         const s = JSON.parse(line);
         if (!Object.hasOwn(samples, s?.ID)) { foreign++; continue; }
         samples[s.ID].push({ t: now(), cpu: parseFloat(s.CPUPerc), mem: memoryMiB(s.MemUsage.split("/")[0]) });
       } catch { unreadable++; }
     }
-    if (buffer.length > limits.line) overflow(`wrote a row longer than ${limits.line} characters`);
+    if (buffer.length > limits.line) overflow(`wrote a row longer than ${limits.line} bytes`);
   });
-  child.stderr.on("data", (chunk) => { if (!stopping) { stderrSeen = true; stderr.add(chunk); } });
+  // Until the pipes close or are released, stop() included: an error written after TERM counts.
+  child.stderr.on("data", (chunk) => { stderrSeen = true; stderr.add(chunk); });
   child.on("error", (error) => failed(`docker stats could not run (${typeof error?.code === "string" && /^[A-Z0-9_]{1,32}$/.test(error.code) ? error.code : "error"})`));
   const done = new Promise((resolve) => child.on("close", (code) => { closed = true; if (!stopping) failed(`docker stats stopped early: ${code}`); resolve(true); }));
   const signal = (name) => { try { child.kill(name); } catch {} };
@@ -157,11 +162,11 @@ export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs 
           failed(`docker stats did not settle within ${boundMs} ms of stop; its pipes were released`);
           child.stdout.destroy(); child.stderr.destroy(); child.unref?.();
         }
-        writeFileSync(file, raw);
+        writeFileSync(file, Buffer.concat(raw));
         if (stderrSeen) { writeFileSync(`${file}.stderr`, stderr.text()); failed(`docker stats wrote to stderr (kept in ${basename(file)}.stderr)`); }
         if (unreadable) failed(`${unreadable} docker stats row${unreadable === 1 ? " was" : "s were"} not readable`);
         if (foreign) failed(`${foreign} docker stats row${foreign === 1 ? "" : "s"} named a container this pass does not sample`);
-        if (buffer.trim().length) failed("stats ended with an incomplete JSON record");
+        if (buffer.toString().replace(ansi, "").trim().length) failed("stats ended with an incomplete JSON record");
         if (errors.length) throw Object.assign(new Error(errors.join("; ")), { errors });
         const summary = Object.fromEntries(ids.map((id) => [id, summarizeSamples(samples[id])]));
         writeFileSync(`${file}.json`, JSON.stringify({ summary, samples }, null, 2));
@@ -186,7 +191,8 @@ export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs 
  * stopped, wrote to stderr or held its pipes. A second stop() returns the first one's result.
  * A marker row counts as a start, or as the fence's die, only by readEvents's own test (markerIs).
  * Output past `limits` (clientLimits.events) makes the stream unavailable at once: its waits fail,
- * what it read is no longer kept, and it stops itself through the same stop().
+ * what it read is no longer kept, and it stops itself through the same stop(). Once the stream has
+ * failed in any way, no wait succeeds, not even one a row read before the failure satisfied.
  */
 export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2000, boundMs = 5000, markerMs = 10_000, limits = clientLimits.events }) {
   assert.ok(containerId.test(app) && containerId.test(marker), "the event stream follows immutable container IDs");
@@ -197,11 +203,11 @@ export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2
   // second: the second start's nanoseconds (null when its time is not one); fenced: null until the
   // marker's next row after that start decides it, then whether it was that start's later exit.
   // refusal: why a wait fails once the stream has overflowed.
-  let text = "", buffer = "", bytes = 0, rows = 0, overflowed = false, refusal = null, stderrSeen = false, starts = 0, second = null, fenced = null, stopping = false, closed = false, settled, stream;
+  let chunks = [], buffer = Buffer.alloc(0), bytes = 0, rows = 0, overflowed = false, refusal = null, stderrSeen = false, starts = 0, second = null, fenced = null, stopping = false, closed = false, settled, stream;
   const release = (message) => { for (const w of waiting.splice(0)) { clearTimeout(w.timer); w.reject(new Error(message)); } };
   const overflow = (what) => {
     if (overflowed) return;
-    overflowed = true; buffer = ""; refusal = `docker events ${what}`;
+    overflowed = true; buffer = Buffer.alloc(0); refusal = `docker events ${what}`;
     errors.push(`docker events ${what}, so the stream is unavailable`);
     release(refusal);
     stream.stop().catch(() => {});
@@ -209,24 +215,24 @@ export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2
   child.stdout.on("data", (chunk) => {
     if (overflowed) return;
     if ((bytes += chunk.length) > limits.bytes) return overflow(`wrote more than ${limits.bytes} bytes`);
-    const data = chunk.toString();
-    text += data; buffer += data;
-    for (let end; (end = buffer.indexOf("\n")) >= 0;) {
-      if (end > limits.line) return overflow(`wrote a row longer than ${limits.line} characters`);
+    chunks.push(chunk); buffer = Buffer.concat([buffer, chunk]);
+    for (let end; (end = buffer.indexOf(0x0a)) >= 0;) {
+      if (end > limits.line) return overflow(`wrote a row longer than ${limits.line} bytes`);
       if (++rows > limits.rows) return overflow(`wrote more than ${limits.rows} rows`);
-      const line = buffer.slice(0, end).replace(/\r$/, "");
+      const line = buffer.subarray(0, end).toString().replace(/\r$/, "");
       if (line.startsWith(`${marker}|`)) {
         const rest = line.slice(marker.length + 1), cut = rest.lastIndexOf("|"), action = cut < 0 ? rest : rest.slice(0, cut), nanos = cut < 0 ? "" : rest.slice(cut + 1);
         const at = /^[1-9]\d{0,19}$/.test(nanos) ? BigInt(nanos) : null;
         if (starts >= 2) fenced ??= markerIs(action, "die") && at !== null && second !== null && at > second;
         else if (markerIs(action, "start") && ++starts === 2) second = at;
       }
-      buffer = buffer.slice(end + 1);
+      buffer = buffer.subarray(end + 1);
     }
-    if (buffer.length > limits.line) return overflow(`wrote a row longer than ${limits.line} characters`);
+    if (buffer.length > limits.line) return overflow(`wrote a row longer than ${limits.line} bytes`);
     for (const w of [...waiting]) if (w.ready()) { clearTimeout(w.timer); waiting.splice(waiting.indexOf(w), 1); w.resolve(); }
   });
-  child.stderr.on("data", (chunk) => { if (!stopping) { stderrSeen = true; stderr.add(chunk); } });
+  // Until the pipes close or are released, stop() included: an error written after TERM counts.
+  child.stderr.on("data", (chunk) => { stderrSeen = true; stderr.add(chunk); });
   child.on("error", (error) => { errors.push(`docker events could not run (${typeof error?.code === "string" && /^[A-Z0-9_]{1,32}$/.test(error.code) ? error.code : "error"})`); release("docker events could not run"); });
   const done = new Promise((resolve) => child.on("close", (code) => {
     closed = true;
@@ -235,8 +241,10 @@ export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2
   }));
   const signal = (name) => { try { child.kill(name); } catch {} };
   const wait = (ready, what) => {
+    // A failed stream (overflowed, could not run, ended early) answers no wait, even a cached one.
+    if (errors.length) return Promise.reject(new Error(refusal ?? "docker events stopped before it showed the marker"));
     if (ready()) return Promise.resolve();
-    if (closed || errors.length) return Promise.reject(new Error(refusal ?? "docker events stopped before it showed the marker"));
+    if (closed) return Promise.reject(new Error("docker events stopped before it showed the marker"));
     return new Promise((resolve, reject) => {
       const w = { ready, resolve, reject };
       w.timer = setTimeout(() => { waiting.splice(waiting.indexOf(w), 1); reject(new Error(`docker events did not show ${what} within ${markerMs} ms`)); }, markerMs);
@@ -264,6 +272,7 @@ export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2
           errors.push(`docker events did not settle within ${boundMs} ms of stop; its pipes were released`);
           child.stdout.destroy(); child.stderr.destroy(); child.unref?.();
         }
+        const text = Buffer.concat(chunks).toString();
         writeFileSync(file, text);
         if (stderrSeen) { writeFileSync(`${file}.stderr`, stderr.text()); errors.push(`docker events wrote to stderr (kept in ${basename(file)}.stderr)`); }
         if (errors.length) throw Object.assign(new Error(errors.join("; ")), { errors });
@@ -277,21 +286,18 @@ export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2
 /**
  * The Docker runner steady.mjs gives runSteady, over Catalog's commandRunner `command`. ownedResources
  * asks for a container's log with `combined: true`, since Docker writes a container's stdout and
- * stderr to its own two streams; commandRunner returns only stdout when a command succeeds, so a
- * combined call has the runner write both streams, in the order they arrived, to a private file,
- * and returns that file's text. Every other call reaches the runner with its options unchanged, and
- * commandRunner itself is not changed, so no timed command is.
+ * stderr to its own two streams. A pass keeps a log only as a raw file, so a combined call must name
+ * that `file`: the runner writes both streams to it as they arrive and nothing is read back
+ * (commandRunner returns only stdout, and with `capture: false` none). A call with `combined: false`
+ * returns the container's stdout alone, as commandRunner keeps it. Every other call reaches the
+ * runner with its options unchanged, and commandRunner itself is not changed, so no timed command is.
  */
-export function combinedRunner(command, binary = "docker", { tmp = tmpdir() } = {}) {
+export function combinedRunner(command, binary = "docker") {
   return async (args, { combined = false, ...options } = {}) => {
     if (!combined) return command(binary, args, options);
-    assert.equal(options.file, undefined, "a combined command keeps its output in its own file");
-    const dir = mkdtempSync(join(tmp, "marketplace-steady-log-"));
-    try {
-      const file = join(dir, "output");
-      await command(binary, args, { ...options, file });
-      return readFileSync(file, "utf8");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+    assert.ok(typeof options.file === "string", "a combined container log is written to its own file, never read back");
+    await command(binary, args, { ...options, capture: false });
+    return "";
   };
 }
 
@@ -300,6 +306,30 @@ async function waitHealth(url, { timeout = 20_000, now = Date.now, sleep = (ms) 
     try { const response = await fetch(url, { signal: AbortSignal.timeout(1000) }); await response.text(); if (response.ok) return; } catch {}
   }
   throw new Error("marketplace upstream did not start");
+}
+/**
+ * The cold probe's stdout (bench/catalog/cold.mjs): `catalog-probe-ready`, then once it has its
+ * first 200 a JSON line with exactly first200At, successfulRequestMs, bytes, attempts and the path
+ * it polled. Only stdout is read, and only up to coldOutputBytes of it; stderr, and stdout past that,
+ * reach cold.log alone. Returns null until the probe is ready, true once it is ready without a
+ * result, or the validated result.
+ */
+export const coldOutputBytes = 4096;
+export function coldOutput(stdout, path) {
+  assert.ok(typeof stdout === "string" && Buffer.byteLength(stdout) <= coldOutputBytes, `the cold probe wrote more than ${coldOutputBytes} bytes to stdout; its output is in cold.log`);
+  const lines = stdout.split("\n");
+  if (lines[0] !== "catalog-probe-ready") { assert.ok(stdout === "", "the cold probe's stdout is not its readiness line; its output is in cold.log"); return null; }
+  if (lines.length === 1) return true;
+  assert.equal(lines.length, 2, "the cold probe's stdout is not one readiness line and one result line; its output is in cold.log");
+  let result;
+  try { result = JSON.parse(lines[1]); } catch { assert.fail("the cold probe's result line is not JSON; its output is in cold.log"); }
+  const ok = result !== null && typeof result === "object" && !Array.isArray(result)
+    && Object.keys(result).sort().join() === "attempts,bytes,first200At,path,successfulRequestMs"
+    && typeof result.first200At === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(result.first200At) && Number.isFinite(Date.parse(result.first200At))
+    && Number.isFinite(result.successfulRequestMs) && result.successfulRequestMs >= 0
+    && Number.isSafeInteger(result.bytes) && result.bytes >= 0 && Number.isSafeInteger(result.attempts) && result.attempts >= 1 && result.path === path;
+  assert.ok(ok, "the cold probe's result line is not first200At, successfulRequestMs, bytes, attempts and its path; its output is in cold.log");
+  return result;
 }
 // The fixture's bytes checked as run.mjs checks them before a timed round, and their SHA-256.
 const currentFixture = (bytes) => checkFixture(bytes, records(), validateMarketplace);
@@ -312,14 +342,15 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
  * into a copy in this pass's own folder (mounted-fixture); `fixture(bytes)` checks that copy's bytes
  * and gives their hash, and the upstream and every app mount the copy read-only, never the original,
  * so an edit to the original during the pass cannot change what a later cell serves. The copy is
- * hashed again at the end (a pass whose copy changed fails), and removed at teardown.
+ * hashed again at the end (a pass whose copy changed fails), and removed at teardown once every
+ * container is confirmed removed (`removeCopy`; a copy it fails to remove fails the pass).
  * @param {object} p
  * @param {object} p.options parseSteadyArgs output
  * @param {(args: string[], options?: object) => Promise<string>} p.docker bounded docker runner (commandRunner)
  * @param {(args: string[]) => Promise<string>} p.git
  */
 export async function runSteady({ options, folder, runId, docker, git, interrupted = () => false, env = process.env, clock = runClock(), window = reconcileWindow,
-  fixture = currentFixture, fixtureFile = join(fixtureDir, "marketplace.json"), upstreamReady = waitHealth, spawnStats = spawn, statsBounds = {}, spawnEvents = spawn, eventBounds = {}, print = console.log }) {
+  fixture = currentFixture, fixtureFile = join(fixtureDir, "marketplace.json"), removeCopy = (path) => rmSync(path, { recursive: true, force: true }), upstreamReady = waitHealth, spawnStats = spawn, statsBounds = {}, spawnEvents = spawn, eventBounds = {}, print = console.log }) {
   const convergence = options.kind === "convergence";
   const seconds = options.minutes * 60;
   const cpus = cpuSettings(env);
@@ -397,23 +428,26 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       probe = await owned.container(["--network", network, ...cpus.load.args, "--memory", "256m", ...mount, nodeImage, "node", "/bench/catalog/cold.mjs", `http://${name}:8080`, path, String(options.startupTimeout)], `${name}-probe`);
       await owned.start(probe);
       retain(join(raw, "probe-container.json"), containerReceipt(await owned.inspect(probe)));
+      // Readiness and the result come from the probe's stdout alone (coldOutput); both of its
+      // streams go to cold.log, written straight to that file and never read back.
+      const stdout = async () => coldOutput(await owned.logs(probe, { combined: false }), path);
       const deadline = clock.now() + 10_000;
-      while (!(await owned.logs(probe)).includes("catalog-probe-ready")) {
+      while ((await stdout()) === null) {
         if (interrupted()) throw new Error("interrupted");
         if (clock.now() > deadline) throw new Error("cold sidecar did not become ready");
         await clock.sleep(50);
       }
       await owned.start(app);
       const exit = await owned.docker(["wait", probe], { timeout: (options.startupTimeout + 5) * 1000 });
-      const output = await owned.logs(probe);
-      writeFileSync(join(raw, "cold.log"), output);
-      // The probe's output is in cold.log; the record says only whether it exited 0.
+      await owned.logs(probe, { file: join(raw, "cold.log") });
+      // The record says only whether it exited 0.
       assert.ok(exit === "0", `cold probe ${/^\d{1,3}$/.test(exit) ? `exited ${exit}` : "returned no exit status"}; its output is in cold.log`);
-      const result = parsed(output.split("\n").findLast((line) => line.startsWith("{")) ?? "", "the cold probe's result line");
+      const result = await stdout();
+      assert.ok(typeof result === "object", "the cold probe exited 0 without a result line; its output is in cold.log");
       const info = await owned.inspect(app);
       const ms = Date.parse(result.first200At) - Date.parse(info.State.StartedAt);
       assert.ok(ms >= 0 && ms <= options.startupTimeout * 1000, "invalid Docker-host cold clock");
-      retain(join(raw, "cold.json"), { ...result, path, first200MsFromContainerStart: ms, containerStartedAt: info.State.StartedAt });
+      retain(join(raw, "cold.json"), { ...result, first200MsFromContainerStart: ms, containerStartedAt: info.State.StartedAt });
     } finally { await settle([probe], left); }
   }
   // One adapter, source and target: a fresh container, the cold start, one long k6 pass. Before it
@@ -504,7 +538,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     } finally {
       if (sampler) { try { await sampler.stop(); } catch {} }
       if (stream) { try { await stream.stop(); } catch {} }
-      if (app) { try { writeFileSync(join(raw, "app.log"), await owned.logs(app)); } catch (e) { log(`${cell.app} ${cell.source} ${cell.target}: app log unavailable: ${e.message}`); } }
+      if (app) { try { await owned.logs(app, { file: join(raw, "app.log") }); } catch (e) { log(`${cell.app} ${cell.source} ${cell.target}: app log unavailable: ${e.message}`); } }
       await settle([k6, marker, app], left);
     }
   }
@@ -663,8 +697,6 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     let cleanup;
     try { cleanup = await owned.teardown(); } catch (e) { keep("teardown", e); cleanup = { ...owned.record, complete: false, failures: [...owned.record.failures, { resource: runId, error: firstLine(e) }] }; }
     retain(join(folder, "cleanup.json"), cleanup);
-    // The fixture copy, once no container of this pass should still mount it.
-    try { rmSync(fixtureCopy, { recursive: true, force: true }); } catch (e) { keep("removing the mounted fixture copy", e); log("the mounted fixture copy was not removed (detail in errors.log)"); }
     // What a saved reader checks before it counts the pass (steady-contract.mjs passEvidence): counts,
     // and the names and labels this pass gave its own creates. cleanup.json keeps the whole record.
     const ids = (list) => (Array.isArray(list) ? list.filter((id) => containerId.test(id)) : []);
@@ -677,6 +709,16 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     summary.cleanup = { complete: cleanup.complete === true && accounted, remaining: cleanup.remaining ? { containers: ids(cleanup.remaining.containers), networks: ids(cleanup.remaining.networks) } : null,
       created: cleanup.created.length, removed: cleanup.removed.length, recovered: cleanup.recovered.length, failures: cleanup.failures.length,
       unacknowledged: cleanup.unacknowledged.map((a) => ({ name: savedValue("runId", a.name), label: savedValue("attemptLabel", a.label), outcome: ["removed", "not removed"].includes(a.outcome) ? a.outcome : "unconfirmed" })) };
+    // The fixture copy is removed only once every container that may mount it is confirmed removed;
+    // otherwise it is kept for whatever still mounts it. A copy that was not removed fails the pass.
+    if (!summary.cleanup.complete) log("the mounted fixture copy is kept, since a container of this pass may still mount it");
+    else {
+      try { removeCopy(fixtureCopy); } catch (e) {
+        keep("removing the mounted fixture copy", e);
+        summary.failures.push({ stage: "teardown", code: "error" });
+        log("teardown FAILED (error): the mounted fixture copy was not removed (detail in errors.log)");
+      }
+    }
     summary.finishedAt = new Date().toISOString();
     summary.complete &&= !interrupted() && summary.failures.length === 0 && summary.cleanup.complete;
     if (summary.complete) {

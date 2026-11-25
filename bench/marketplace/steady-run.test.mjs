@@ -5,10 +5,10 @@ import test, { after } from "node:test";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clientLimits, combinedRunner, eventStream, memorySampler, runSteady } from "./steady-run.mjs";
+import { clientLimits, coldOutput, coldOutputBytes, combinedRunner, eventStream, memorySampler, runSteady } from "./steady-run.mjs";
 import { convergenceLines, eventFormat, intervalSchedule, ownerLabelKey, parseSteadyArgs, timedStartup, validateConvergence, validateSoak } from "./steady-contract.mjs";
 import { steadyReport } from "./steady-report.mjs";
 import { resultSchema } from "./run-contract.mjs";
@@ -61,13 +61,15 @@ function k6Export(counts, { graceFailed = 0, windowFailed = {}, clockMs = 120_00
  * docker restart: the same ID and RestartCount, a new StartedAt). Its clock is the runner's
  * (`now`): a load run moves it on by `startupMs` before the container's StartedAt and by `runMs`
  * (by default the engine clock `clockMs`, written to the clock file) before its FinishedAt.
- * `override(args, state)` answers a command first: an Error is thrown, a string returned, undefined
- * leaves it to the daemon. It publishes container events (start, and the app's oom, die or kill when
+ * `override(args, state)` answers a command first: an Error is thrown, a string returned (for docker
+ * logs, the container's stdout), undefined leaves it to the daemon. A docker logs call with `file`
+ * appends both of the container's streams to it and returns nothing; `combined: false` returns its
+ * stdout alone. `probeStderr` is what each cold probe writes to stderr. It publishes container events (start, and the app's oom, die or kill when
  * the load does that to it, or `duringLoad(state)` emits) to every events client listening, as
  * `emit(id, action)`; `inspected(info, container)` may change an inspect answer.
  */
 function fakeDocker({ exportFor, withhold = () => false, failRemove = () => false, oomOnLoad = false, restartOnLoad = false, loadMs = 0, clockMs = 120_000, runMs = clockMs, startupMs = 0, override = () => undefined,
-  duringLoad = () => {}, inspected = (info) => info } = {}) {
+  duringLoad = () => {}, inspected = (info) => info, probeStderr = "" } = {}) {
   const containers = new Map(), networks = new Map(), calls = [], late = [];
   let next = 1;
   const id = () => (next++).toString(16).padStart(64, "0");
@@ -86,11 +88,16 @@ function fakeDocker({ exportFor, withhold = () => false, failRemove = () => fals
   state.emit = (cid, action) => { const nanos = (BigInt(state.now()) * 1_000_000n).toString(); for (const listener of state.listeners) listener(cid, action, nanos); };
   state.app = () => [...containers.values()].find((c) => c.kind === "app");
   const iso = () => new Date(state.now()).toISOString();
+  // A container's log, as docker logs gives it: to a file, stdout alone, or both streams.
+  const logged = (stdout, stderr, options) => {
+    if (options.file) { appendFileSync(options.file, stdout + stderr); return ""; }
+    return options.combined === false ? stdout : stdout + stderr;
+  };
   state.docker = async (args, options = {}) => {
-    calls.push({ args, cleanup: options.cleanup === true });
+    calls.push({ args, cleanup: options.cleanup === true, file: options.file, combined: options.combined });
     const answer = override(args, state);
     if (answer instanceof Error) throw answer;
-    if (typeof answer === "string") return answer;
+    if (typeof answer === "string") return args[0] === "logs" ? logged(answer, "", options) : answer;
     const [command, ...rest] = args;
     switch (command) {
       case "version": return "27.5.1";
@@ -145,9 +152,10 @@ function fakeDocker({ exportFor, withhold = () => false, failRemove = () => fals
       }
       case "logs": {
         const c = get(rest[0]);
-        if (c.kind !== "probe") return "app log";
+        if (c.kind !== "probe") return logged("app log\n", "", options);
         const app = byName(c.name.slice(0, -"-probe".length));
-        return app?.state.Running ? `catalog-probe-ready\n${JSON.stringify({ first200At: new Date(Date.parse(app.state.StartedAt) + 5).toISOString() })}` : "catalog-probe-ready";
+        const result = { first200At: new Date(Date.parse(app?.state.StartedAt) + 5).toISOString(), successfulRequestMs: 1.5, bytes: 10, attempts: 2, path: c.args.at(-2) };
+        return logged(app?.state.Running ? `catalog-probe-ready\n${JSON.stringify(result)}` : "catalog-probe-ready", probeStderr, options);
       }
       case "wait": return "0";
       case "rm": {
@@ -530,7 +538,8 @@ test("Docker's and k6's own output never reaches summary.json or cleanup.json; i
   const saved = (dir) => readFileSync(join(dir, "summary.json"), "utf8") + readFileSync(join(dir, "cleanup.json"), "utf8");
   const clean = (dir) => { const text = saved(dir); assert.ok(!text.includes(canary) && !text.includes(token), text); };
   // A cold probe that exits 1 with untrusted output.
-  const cold = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args) => args[0] === "wait" ? "1" : args[0] === "logs" && args[1] === cold.ids["marketplace-test-run-corten-probe"] ? `catalog-probe-ready\n${canary} ${token}` : undefined });
+  const cold = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => args[0] === "wait" ? "1" : args[0] === "logs" && args[1] === cold.ids["marketplace-test-run-corten-probe"]
+    ? `catalog-probe-ready${state.calls.some((c) => c.args[0] === "wait") ? `\n${canary} ${token}` : ""}` : undefined });
   const a = await run(cold, options, folder("cold"));
   assert.equal(a.cells[0].failure, "cold-start");
   assert.ok(errorsOf(folder("cold")).includes("cold probe exited 1; its output is in cold.log"));
@@ -825,7 +834,7 @@ test("a stats or events client's output past its limits makes that observation u
   const bounds = { graceMs: 1000, boundMs: 2000 };
   // stats: one unterminated row longer than a row may be, more bytes than it may write, and more rows.
   const cases = [
-    ["line", ["x".repeat(5000)], { line: 1024 }, /^docker stats wrote a row longer than 1024 characters, so its memory samples are unavailable$/],
+    ["line", ["x".repeat(5000)], { line: 1024 }, /^docker stats wrote a row longer than 1024 bytes, so its memory samples are unavailable$/],
     ["bytes", [`${row}\n`, "y".repeat(4096), "z".repeat(4096)], { bytes: 6000 }, /^docker stats wrote more than 6000 bytes, so its memory samples are unavailable$/],
     ["rows", Array(5).fill(`${row}\n`), { rows: 2 }, /^docker stats wrote more than 2 rows, so its memory samples are unavailable$/],
   ];
@@ -851,10 +860,10 @@ test("a stats or events client's output past its limits makes that observation u
   const stream = eventStream({ app, marker, file: folder("events.log"), spawn: events.spawn, markerMs: 10_000, ...bounds, limits: { ...clientLimits.events, line: 1024 } });
   await stream.marker(1);
   const started = Date.now();
-  await assert.rejects(stream.marker(2), /^Error: docker events wrote a row longer than 1024 characters$/);
+  await assert.rejects(stream.marker(2), /^Error: docker events wrote a row longer than 1024 bytes$/);
   assert.ok(Date.now() - started < 2000, "not left waiting for its markerMs");
   assert.deepEqual(events.spawned[0].child.kills, ["SIGTERM"]);
-  await assert.rejects(stream.stop(), (error) => { assert.deepEqual(error.errors, ["docker events wrote a row longer than 1024 characters, so the stream is unavailable"]); return true; });
+  await assert.rejects(stream.stop(), (error) => { assert.deepEqual(error.errors, ["docker events wrote a row longer than 1024 bytes, so the stream is unavailable"]); return true; });
   for (const [name, chunks, limits] of [["rows", Array(4).fill(`${marker}|start|1\n`), { rows: 3 }], ["bytes", [`${marker}|start|1\n`, "w".repeat(3000), "w".repeat(3000)], { bytes: 4000 }]]) {
     const client = rawClient(chunks);
     const s = eventStream({ app, marker, file: folder(`events-${name}.log`), spawn: client.spawn, markerMs: 10_000, ...bounds, limits: { ...clientLimits.events, ...limits } });
@@ -875,8 +884,8 @@ test("a soak whose stats and events clients overflow keeps its other observation
   const [cell] = s.cells;
   assert.deepEqual([cell.memory.unavailable, cell.restarts.eventStream, cell.restarts.restarted], ["memory sampling failed", "unavailable", null]);
   const errors = errorsOf(folder("overflow"));
-  assert.match(errors, /docker stats wrote a row longer than 1024 characters, so its memory samples are unavailable/);
-  assert.match(errors, /docker events wrote a row longer than 1024 characters/);
+  assert.match(errors, /docker stats wrote a row longer than 1024 bytes, so its memory samples are unavailable/);
+  assert.match(errors, /docker events wrote a row longer than 1024 bytes/);
   assert.ok(!readFileSync(join(folder("overflow"), "summary.json"), "utf8").includes("eeee"));
   assert.equal(s.cleanup.complete, true);
   assert.equal(fake.containers.size, 0);
@@ -926,20 +935,157 @@ test("every container mounts a private copy of the verified fixture, so editing 
   assert.ok(!missingDocker.calls.some((c) => c.args[0] === "create"), "no container was created");
 });
 
-test("a container log through the CLI's runner keeps stderr as well as stdout; every other command reaches Catalog's runner unchanged", async (t) => {
+test("a container log through the CLI's runner goes straight to its file with stderr as well as stdout and is never read back; every other command reaches Catalog's runner unchanged", async (t) => {
   const { command } = commandRunner({ cwd: process.cwd() });
   const script = ["-e", "process.stdout.write('out-line\\n'); process.stderr.write('err-line\\n')"];
   // Catalog's runner itself returns only stdout on success, whatever option it is given.
   assert.equal(await command(process.execPath, script, { combined: true, timeout: 20_000 }), "out-line");
   const tmp = mkdtempSync(join(tmpdir(), "steady-combined-"));
   t.after(() => rmSync(tmp, { recursive: true, force: true }));
-  const runner = combinedRunner(command, process.execPath, { tmp });
-  const both = await runner(script, { combined: true, cleanup: true, timeout: 20_000 });
+  const runner = combinedRunner(command, process.execPath);
+  const file = join(tmp, "app.log");
+  assert.equal(await runner(script, { combined: true, cleanup: true, timeout: 20_000, file }), "", "nothing is read back");
+  const both = readFileSync(file, "utf8");
   assert.ok(both.includes("out-line\n") && both.includes("err-line\n"), JSON.stringify(both));
+  // A log several MiB long reaches its file whole and is still not returned.
+  const big = join(tmp, "big.log");
+  assert.equal(await runner(["-e", "process.stdout.write('x'.repeat(3 * 2 ** 20)); process.stderr.write('tail')"], { combined: true, timeout: 20_000, file: big }), "");
+  assert.equal(statSync(big).size, 3 * 2 ** 20 + 4);
+  // A combined log with nowhere to go is refused before anything runs.
+  await assert.rejects(runner(script, { combined: true, timeout: 20_000 }), /a combined container log is written to its own file, never read back/);
+  // combined: false is the container's stdout alone.
+  assert.equal(await runner(script, { combined: false, timeout: 20_000 }), "out-line");
   assert.equal(await runner(script, { timeout: 20_000 }), "out-line");
-  assert.deepEqual(readdirSync(tmp), [], "its private output file is removed");
   const calls = [];
   const recorded = combinedRunner(async (binary, args, options) => { calls.push([binary, args, options]); return "ok"; });
   await recorded(["ps", "-q"], { timeout: 5, cleanup: true, file: "load.log" });
-  assert.deepEqual(calls, [["docker", ["ps", "-q"], { timeout: 5, cleanup: true, file: "load.log" }]]);
+  await recorded(["logs", "x"], { combined: true, timeout: 5, file: "app.log" });
+  assert.deepEqual(calls, [["docker", ["ps", "-q"], { timeout: 5, cleanup: true, file: "load.log" }], ["docker", ["logs", "x"], { timeout: 5, file: "app.log", capture: false }]]);
+});
+
+test("the cold probe's readiness and result come from its stdout alone, bounded and validated; its stderr stays in cold.log", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t18", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  // A JSON diagnostic on stderr naming a first 200 a minute late: it is not the result.
+  const late = JSON.stringify({ first200At: "2099-01-01T00:00:00.000Z", successfulRequestMs: 1, bytes: 1, attempts: 1, path: "/marketplace/en-US/item_1" });
+  const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), probeStderr: `${late}\n` });
+  const s = await run(fake, options, folder("stderr"));
+  assert.equal(s.complete, true, JSON.stringify([s.failures, s.cells]));
+  const raw = join(folder("stderr"), "fixture", "corten", "page");
+  assert.equal(JSON.parse(readFileSync(join(raw, "cold.json"), "utf8")).first200MsFromContainerStart, 5);
+  assert.ok(readFileSync(join(raw, "cold.log"), "utf8").includes(late), "both streams are in cold.log");
+  assert.equal(readFileSync(join(raw, "app.log"), "utf8"), "app log\n");
+  // Every log is read as stdout alone or written to its own file; none is read back combined.
+  for (const c of fake.calls.filter((x) => x.args[0] === "logs")) assert.ok(c.combined === false || typeof c.file === "string", JSON.stringify(c));
+  // A result line with an extra field, the wrong path or no attempts, or more stdout than the
+  // bound, fails the cold start; the raw output is still in cold.log.
+  const result = (extra) => JSON.stringify({ first200At: new Date().toISOString(), successfulRequestMs: 1, bytes: 1, attempts: 1, path: "/marketplace/en-US/item_1", ...extra });
+  const cases = [["extra", result({ note: 1 })], ["path", result({ path: "/other" })], ["attempts", result({ attempts: 0 })], ["long", "x".repeat(coldOutputBytes)]];
+  for (const [name, line] of cases) {
+    const bad = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => args[0] === "logs" && args[1] === state.ids["marketplace-test-run-corten-probe"]
+      ? `catalog-probe-ready${state.calls.some((c) => c.args[0] === "wait") ? `\n${line}` : ""}` : undefined });
+    const b = await run(bad, options, folder(name));
+    assert.deepEqual([b.cells[0].failure, b.cells[0].verdict], ["cold-start", null], name);
+    assert.ok(existsSync(join(folder(name), "fixture", "corten", "page", "cold.log")), name);
+  }
+  assert.match(errorsOf(folder("long")), new RegExp(`the cold probe wrote more than ${coldOutputBytes} bytes to stdout`));
+  // The parser on its own.
+  assert.equal(coldOutput("", "/p"), null);
+  assert.equal(coldOutput("catalog-probe-ready", "/p"), true);
+  assert.throws(() => coldOutput("noise", "/p"), /not its readiness line/);
+  assert.throws(() => coldOutput("catalog-probe-ready\n{}\n{}", "/p"), /not one readiness line and one result line/);
+});
+
+test("the mounted fixture copy is kept while a container may still mount it, and a copy that could not be removed fails the pass", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t19", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  // A load container that cannot be removed: cleanup is unconfirmed, so the copy stays.
+  const stuck = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), failRemove: (name) => name === "marketplace-test-run-k6" }), options, folder("stuck"));
+  assert.equal(stuck.cleanup.complete, false);
+  assert.equal(stuck.complete, false);
+  assert.ok(existsSync(join(folder("stuck"), "mounted-fixture", "marketplace.json")), "the copy a container may still mount is kept");
+  // Cleanup confirmed, but the copy's removal fails: the pass is not complete.
+  const denied = await run(fakeDocker({ exportFor: () => k6Export(flat(8)) }), options, folder("denied"), {
+    removeCopy: () => { throw Object.assign(new Error("EACCES: permission denied, rmdir 'mounted-fixture'"), { code: "EACCES" }); } });
+  assert.equal(denied.cleanup.complete, true);
+  assert.deepEqual([denied.complete, denied.failures], [false, [{ stage: "teardown", code: "error" }]]);
+  assert.match(errorsOf(folder("denied")), /EACCES/);
+  assert.ok(!readFileSync(join(folder("denied"), "summary.json"), "utf8").includes("EACCES"));
+  // An ordinary pass removes it.
+  let removed = null;
+  const ok = await run(fakeDocker({ exportFor: () => k6Export(flat(8)) }), options, folder("ok"), { removeCopy: (path) => { removed = path; rmSync(path, { recursive: true, force: true }); } });
+  assert.equal(ok.complete, true, JSON.stringify(ok.failures));
+  assert.equal(removed, join(folder("ok"), "mounted-fixture"));
+  assert.ok(!existsSync(removed));
+});
+
+// A client that writes `chunks` as rawClient does and, when signalled, writes `onTerm` to stderr
+// before its pipes close.
+function termNoise(chunks, onTerm) {
+  const client = rawClient(chunks);
+  const spawn = (binary, args) => {
+    const child = client.spawn(binary, args), kill = child.kill;
+    child.kill = (signal) => { if (!child.ended) child.stderr.write(onTerm); return kill(signal); };
+    return child;
+  };
+  return { spawn, spawned: client.spawned };
+}
+
+test("stderr a stats or events client writes between its stop's TERM and its pipes closing fails that observation", async (t) => {
+  const folder = folderOf(t);
+  const app = "a".repeat(64), marker = "b".repeat(64);
+  const row = JSON.stringify({ ID: app, Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" });
+  const stats = termNoise([`${row}\n`], "Error response from daemon: connection reset\n");
+  const sampler = memorySampler({ ids: [app], file: folder("stats.log"), seconds: 5, spawn: stats.spawn, graceMs: 1000, boundMs: 2000 });
+  await settledTurns();
+  await assert.rejects(sampler.stop(), /docker stats wrote to stderr \(kept in stats\.log\.stderr\)/);
+  assert.equal(readFileSync(folder("stats.log.stderr"), "utf8"), "Error response from daemon: connection reset\n");
+  const events = termNoise([`${marker}|start|1\n`], "error during connect\n");
+  const stream = eventStream({ app, marker, file: folder("events.log"), spawn: events.spawn, graceMs: 1000, boundMs: 2000 });
+  await stream.marker(1);
+  await assert.rejects(stream.stop(), /docker events wrote to stderr \(kept in events\.log\.stderr\)/);
+  // Without stderr, the same clients settle.
+  const quietStats = rawClient([`${row}\n`]);
+  const fine = memorySampler({ ids: [app], file: folder("fine.log"), seconds: 5, spawn: quietStats.spawn, graceMs: 1000, boundMs: 2000 });
+  await settledTurns();
+  assert.equal((await fine.stop()).samples[app].length, 1);
+});
+
+test("a client's row and line limits are counted on the bytes it wrote, blank rows and escape sequences included, and a failed stream answers no wait from its cache", async (t) => {
+  const folder = folderOf(t);
+  const app = "a".repeat(64), marker = "b".repeat(64);
+  const row = JSON.stringify({ ID: app, Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" });
+  const bounds = { graceMs: 1000, boundMs: 2000 };
+  const cases = [
+    // Blank rows count: four of them and a sample are five rows.
+    ["blank", ["\n\n\n\n", `${row}\n`], { rows: 2 }, /^docker stats wrote more than 2 rows, so its memory samples are unavailable$/],
+    // docker stats's screen clears count toward the row's length before they are stripped.
+    ["ansi", [`${"\x1b[2J\x1b[H".repeat(150)}${row}\n`], { line: 1024 }, /^docker stats wrote a row longer than 1024 bytes, so its memory samples are unavailable$/],
+    // A row's length is its bytes: 600 two-byte characters are 1,200.
+    ["bytes", [`${"\u00e9".repeat(600)}\n`], { line: 1024 }, /^docker stats wrote a row longer than 1024 bytes, so its memory samples are unavailable$/],
+  ];
+  for (const [name, chunks, limits, message] of cases) {
+    const client = rawClient(chunks);
+    const sampler = memorySampler({ ids: [app], file: folder(`${name}.log`), seconds: 5, spawn: client.spawn, ...bounds, limits: { ...clientLimits.stats, ...limits } });
+    await settledTurns();
+    await assert.rejects(sampler.stop(), (error) => { assert.deepEqual(error.errors.map((e) => message.test(e)), [true], `${name}: ${error.message}`); return true; });
+  }
+  // Within the limits, the same escape sequences are stripped and the sample read.
+  const plain = rawClient([`\x1b[2J\x1b[H${row}\n`]);
+  const read = memorySampler({ ids: [app], file: folder("plain.log"), seconds: 5, spawn: plain.spawn, ...bounds });
+  await settledTurns();
+  assert.equal((await read.stop()).samples[app].length, 1);
+  // events: both marker starts and the fence's die arrive, then a row past the limit. Neither the
+  // marker's second start nor the fence, both seen before it, may still be answered.
+  const events = rawClient([`${marker}|start|1\n${marker}|start|2\n${marker}|die|3\n`, "\u00e9".repeat(600)]);
+  const stream = eventStream({ app, marker, file: folder("events.log"), spawn: events.spawn, markerMs: 10_000, ...bounds, limits: { ...clientLimits.events, line: 1024 } });
+  await settledTurns();
+  await assert.rejects(stream.marker(2), /^Error: docker events wrote a row longer than 1024 bytes$/);
+  await assert.rejects(stream.fence(), /^Error: docker events wrote a row longer than 1024 bytes$/);
+  await assert.rejects(stream.stop(), /so the stream is unavailable/);
+  const blank = rawClient([`${marker}|start|1\n\n\n`]);
+  const counted = eventStream({ app, marker, file: folder("events-blank.log"), spawn: blank.spawn, markerMs: 10_000, ...bounds, limits: { ...clientLimits.events, rows: 2 } });
+  await settledTurns();
+  await assert.rejects(counted.marker(1), /^Error: docker events wrote more than 2 rows$/);
+  await assert.rejects(counted.stop(), /so the stream is unavailable/);
 });

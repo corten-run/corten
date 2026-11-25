@@ -175,7 +175,8 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
     async start(id) { await inspect(work, id); same(await work(["start", id]), id, `docker start did not confirm ${id}`); },
     // Start and attach; the container's own exit status is the command's.
     async attach(id, deadline) { await inspect(work, id); return work(["start", "-a", id], { timeout: deadline }); },
-    async logs(id) { await inspect(clean, id); return clean(["logs", id], { combined: true }); },
+    // `options` reach the caller's runner (steady-run.mjs gives a file, or asks for stdout alone).
+    async logs(id, options = {}) { await inspect(clean, id); return clean(["logs", id], { combined: true, ...options }); },
     remove,
     has: (id) => pending.has(id),
     async teardown() {
