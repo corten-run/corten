@@ -290,12 +290,12 @@ preserving its raw bytes.
 Exit 0 means native evidence replay passed; exit 2 means required
 observations are missing; exit 1 means malformed or contradictory evidence.
 For a gated negative attempt, the retained upstream and checker image references are checked
-against the pins of the checkout that loads `verify.mjs`, so such an attempt measured before a
-pin moved fails from a newer checkout. The replay error names the pin it expected and the
-measured commit, but `verify.mjs` reports it only as invalid or contradictory evidence
-([#2026 Bench evidence checks still print a saved tool image through assert's diff, and the Catalog verifier drops the pin hint](https://github.com/corten-run/corten/issues/2026)).
-Complete and timed evidence does not compare these references with the checkout's pins; replay
-it from a checkout of its measured commit all the same.
+against the pins of the checkout that loads `verify.mjs`, and the k6 reference is checked wherever
+k6 was recorded, so evidence measured before a pin moved fails from a newer checkout. `verify.mjs`
+reports that refusal as it is: the pin it expected and the measured commit to verify from, never
+the saved reference. Every other failure stays "native evidence invalid or contradictory".
+Complete and timed evidence does not compare the upstream and checker references with the
+checkout's pins; replay it from a checkout of its measured commit all the same.
 This is not host-isolation or independent source-audit approval. Those remain
 separate campaign gates. Old summaries remain reportable, but cannot acquire the
 new raw proof retroactively; images not built in the native run are not qualified
