@@ -398,6 +398,16 @@ A collect refusal with a supported operator route keeps its own stage through th
 wrapper instead: `setup-watcher-proof-missing`, `setup-host-proof-refused`,
 `offline-never-started`, `create-errored-contradicted` or
 `create-contradiction-unpublished`.
+After the archive is extracted, collect marks which native replay check stopped:
+`collect-native-evidence-refused` (checks of the extracted directory and its
+saved exit marker, or post-replay integrity), `collect-native-replay-start`,
+`collect-native-replay-deadline`, `collect-native-replay-interrupted`,
+`collect-native-replay-refused` (worker rejected), or
+`collect-native-report-refused` (replay prerequisites or the report did not
+bind to the reservation and terminal check). These stages do not authorize
+retirement or change the replay deadline.
+Initial archive scanning and extraction, and the grouped path's first exit
+marker read, still report `controller-collect`.
 The stage identifies the failing operation, not its cause or whether a host exists.
 Only an own data property from that vocabulary crosses the worker boundary;
 unknown values and accessors are not forwarded. It adds no retry, cleanup or
@@ -695,6 +705,33 @@ unqualified, not as a missing handoff or a native workload failure. Excess
 probes, other SSH packets at the fence, a changed rule, or an actual unexpected
 login/guardian intrusion still refuse the phase. The fence reopens at phase end;
 the service's stop hook removes it on an interrupted phase.
+
+The campaign passes the rule set to `nft` as one argument: a single atomic
+batch that refuses an existing table, followed by the same readback and policy
+check. It never feeds rules on standard input: Node gives a spawned child a
+socket there, and Noble's nftables 1.0.9 refuses `nft -f -` on a socket
+(`Not a regular file: "/dev/stdin"`, exit 1) while accepting the same rules
+from a shell pipe. The hosted SSH ingress check
+(`scripts/benchmark-ssh-ingress-ci.sh`, run as root on Ubuntu 24.04) keeps that
+socket-stdin install as a negative that must fail with nft's socket refusal and
+leave no fence (only on nftables 1.0.9; 1.0.6 and 1.1.3 accept a socket), then
+installs through the production call. The same refusal was reproduced in an
+Ubuntu 24.04.5 root filesystem with nftables 1.0.9 and Node 26.13.1, where
+r62's measured `beginOfflineWindow` refuses on its first call with the same
+message. That shows r62's measured module cannot install the fence on Noble's
+nftables 1.0.9, consistent with r62's pre-timing halt in
+[#2033 Marketplace r62 halts before timing with native SSH fence unavailable after offline handoff](https://github.com/corten-run/corten/issues/2033);
+it was not reproduced on a benchmark host. It is separate from the
+post-terminal failure in
+[#2051 Marketplace r65 completes timing but the post-terminal drain probe refuses](https://github.com/corten-run/corten/issues/2051).
+r62 remains an invalid attempt.
+
+A fence refusal names only a fixed step and class, never host text: an `nft`
+call failure names its operation (`install`, `install readback`,
+`close readback` or `remove`) and outcome (`error=`, `signal=` or `exit=`),
+and a readback that does not parse or verify is `install readback invalid`,
+`install readback policy mismatch`, or the same for `close readback`. A
+refusal after the install leaves the fence for the unit's stop hook.
 
 For first qualification, arrange the independent audit rendezvous before
 timing. For JSON's untimed preparation or mixed's pre-build audit wait, use
@@ -1258,6 +1295,112 @@ controller checks the unit is idle, saves the campaign and native output roots
 (including evidence of absence), verifies the local copies, and checks the
 host and roots again. A changed or live host is retained. Neither the wrapper
 archive nor the later capture qualifies the group or supplies timing results.
+
+### Retire An Already Captured Handoff Failure
+
+Ordinary collection still keeps a host when the native outcome is
+`native-validated` but the wrapper exits 2. For a closed, settled single-group
+monitor with the original measured-controller capture already saved, use the
+same `--retire-failed-native` action from a clean, reviewed, merged descendant
+that passes the source comparison above. Preview from that checkout:
+
+```sh
+node bench/workloads/droplet.mjs "$round" --state-dir "$state_dir" \
+  --retire-failed-native --print-approval
+```
+
+Require recovery policy `grouped-handoff-failure-existing-custody-only`. Compare
+its measured and capture controller commits, host and account, launch and
+monitor identities, reservation and capture digests, and both archive digests
+against the already collected attempt. Run the same command with
+`--approve-reviewed-merged-ready <approvalSha256>` instead of `--print-approval`.
+The controller checks that exact approval again under the operation lock,
+reproduces the original capture script hash, and verifies both retained archives
+and extracted trees before contacting the host. Revoked or unsettled monitor
+custody, competing or retained locks, and unexplained prior retirement traces
+are refusals, not grounds to take over, recapture or repack.
+
+The action uses the existing fresh full rehash, final quiescence and ownership
+fences, and bounded DELETE. Before intent and dispatch it rechecks the held
+lock, verified custody file identities, both extraction inventories, and the
+approved capture and retirement receipt. These checks read metadata and small
+records, not archive or extraction payloads, inside the same proof deadline.
+The handoff controller checks the approved reservation bytes and file identity
+before every state write, including SSH requests and acknowledgements, and only
+advances that expectation after publishing its own verified replacement.
+Unexpected state is not repaired or overwritten; the operation lock is retained.
+It records the merged repair commit separately from the unchanged original
+capture. If DELETE was uncertain and the operation lock was released cleanly,
+take a new preview at the same repair commit. With a recorded deletion intent,
+the action can only verify exact authenticated absence. It rechecks local
+custody under the held lock after that observation, before recording completion,
+whether DELETE was acknowledged or this is an absence-only retry. It cannot
+repeat DELETE, qualify the group, promote the wrapper exit, or publish the
+native output.
+
+### Retire The Sealed Client Heavy Exit 1
+
+For [#2082 Benchmark r78 Client Heavy: ordinary collection keeps a paid terminal host after binding its failed archive](https://github.com/corten-run/corten/issues/2082),
+use the same separate `--retire-failed-native --print-approval` command, not another
+`--collect`. This policy is limited to monitored, dedicated, staged single-group
+Client Heavy r78 measured at `7c13920f87b6baa6c7f967027d2eff9358201e4c`. Use a
+clean, independently reviewed, merged descendant that passes the committed
+source comparison above. The measured checkout, archive and extraction remain
+unchanged.
+
+Require policy `r78-client-heavy-sealed-exit-one-retirement-only` and operation
+`observe-terminal-and-retire`. Check the preview against this attempt's consumed
+launch intent, exact reservation, account and allocation, launch key, registered
+boot, sealed campaign and original archive and extraction hashes. Use the exact
+new approval hash with `--approve-reviewed-merged-ready`. The locked controller
+requires a source-bound raw exit 1, a finished failed group (not a native-validated
+group), an intact collection manifest and stream seal/drain, and the complete
+r78 journal from authorization and bootstrap admission through the observed
+command exit, phase seal and campaign finish. The sealed host observation must
+name the same campaign, invocation, leader PID and start ticks, registered boot
+and delegated cgroup. Its samples must show that leader in that group between
+empty boundary samples, with each recorded process in only one cgroup per
+sample. No pending native roots, validation, deletion intent or competing
+custody may remain. This checks the command lifecycle, not renderer or native
+qualification. It compares the original tar members to the bound extraction
+before contacting the host.
+
+Both host observations use the launch-pinned key and the current same-account
+allocation. The read-only probe requires the original boot and job controls, an
+idle terminal unit with exit 1, no active benchmark work and no unaccounted
+Client Heavy work roots. It checks the still-original wrapper archive and live
+campaign/control/output roots against the held bytes. The final fence keeps
+the same root inventory and rehashes the original archive within the existing
+60-second DELETE proof window; it never repacks, downloads or runs native
+validation. A mismatch or incomplete observation preserves custody.
+
+The account preflight must finish within the proof window before the controller
+writes the retirement files and durable deletion intent. Only an explicit
+local pre-dispatch refusal or a positive not-dispatched acknowledgement from
+the private worker can return to fresh approval and two new host observations.
+The already acknowledged control ledger stays intact, and any tentative
+retirement files are retained as unsent history, not as proof of deletion. These
+checks permit at most one dispatched DELETE; only an authenticated exact-ID 404
+on the saved account records completion. If DELETE dispatch or acknowledgement
+is uncertain but the operation lock settled, preview again at the same repair
+commit. Require operation `reconcile-absence-only` and approve that new hash;
+it may only check absence, with no SSH or repeat DELETE. The same local custody
+check runs after the provider worker closes, before publishing absence or
+releasing the operation lock. If custody drifts, keep the lock and leave new
+absence unrecorded, even if the provider read itself throws. An unexplained prior
+receipt without its intent, interrupted publication or retained lock requires
+operator inspection, never automatic takeover. Fleet and continuation treat
+the attempt as unqualified and do not admit a successor before confirmed
+absence. A successor approval binds the retired attempt's exact state, launch
+intent and retirement receipt. The receipt binds a local metadata fingerprint
+of the verified archive and extraction. The child rechecks these bindings and
+the absence of retained custody before create intent and again before dispatch,
+without rereading archive or extraction payloads. Keep the original files in
+place; replaced or moved evidence may not match that fingerprint. The saved
+ID must also still be absent from the same-account census. No timings or result
+are accepted by this route.
+
+### Earlier Failed Native Migrations
 
 The shared `cloud-retirement.mjs:failedNativePolicy` allowlist also admits only the
 exact `catalog-page` attempt measured at

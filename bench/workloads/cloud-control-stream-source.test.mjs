@@ -13,6 +13,7 @@ function kernel(mode) {
 test("actual fixed guardian registers and pins exact socket ancestry, streams audit pending, seals and proves terminal disappearance", () => {
   const result = kernel("normal"), registration = result.registration;
   assert.equal(result.failed, false); assert.equal(result.terminal, true); assert.equal(result.invalid, false);
+  assert.equal(result.drainStatus, 0);
   assert.deepEqual(result.pinned, [10, 20, 21]); assert.equal(result.auditPublished, true); assert.ok(result.seal);
   verifyApparatus(result.binding, registration, { host: registration.host, monoNs: registration.createdMonoNs, members: registration.members, listener: registration.listener });
   assert.equal(verifyStreamDrain(result.binding, registration, result.drain).remoteDrained, true);
@@ -42,5 +43,8 @@ for (const mode of ["lost-lease", "new-child", "namespace", "affinity", "unknown
     assert.ok(fault); assert.equal(fault[1], result.registration.id);
     if (mode === "unknown-login") assert.match(guardianSource.split("\n")[Number(fault[2]) - 1], /foreign SSH\/login participant/);
   });
-for (const mode of ["drain-survivor", "drain-unknown"])
-  test("actual guardian refuses disappearance proof: " + mode, () => { const result = kernel(mode); assert.equal(result.terminal, true); assert.equal(result.drain, null); });
+for (const [mode, status] of [["drain-survivor", 3], ["drain-listener", 254], ["drain-scope", 254], ["drain-unknown", 254]])
+  test("actual guarded probe withholds disappearance proof: " + mode, () => {
+    const result = kernel(mode);
+    assert.equal(result.terminal, true); assert.equal(result.drain, null); assert.equal(result.drainStatus, status);
+  });

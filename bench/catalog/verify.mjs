@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { rawSchema, replayCatalog } from "./raw.mjs";
 import { timedRawSchema } from "./timed.mjs";
 import { workerRawSchema } from "./apparatus.mjs";
+import { ImagePinRefusal } from "../load-tool.mjs";
 
 const full = (value, pattern) => typeof value === "string" && pattern.exec(value)?.[0] === value;
 export function savedReader(folder) {
@@ -79,8 +80,10 @@ export function validateSaved({ folder, round, commit, expectedContractSha256 })
     return { status: "verified", complete: true, round, commit, report,
       scope: "native saved evidence replay; host isolation and independent source audit are separate campaign gates" };
   } catch (error) {
+    // A pin refusal's message names only the checkout's pin and the checked commit; any other
+    // failure may carry saved text, so it stays generic.
     return { status: error.missing || error.code === "ENOENT" ? "blocked" : "invalid", complete: false,
-      errors: [error.missing ? "required native observation missing" : "native evidence invalid or contradictory"] };
+      errors: [error.missing ? "required native observation missing" : error instanceof ImagePinRefusal ? error.message : "native evidence invalid or contradictory"] };
   }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
