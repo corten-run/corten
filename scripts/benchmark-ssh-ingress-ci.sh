@@ -89,17 +89,24 @@ test "$(forks)" -eq 6
 # an observed probe from an idle window; it is not a claim of zero timing cost.
 node=$1
 # Root-cause control for the r62 setup failure: Node gives a spawnSync child a
-# socket for piped stdin, and this nft refuses `nft -f -` on a socket. Feeding
-# the same rules that way must fail and must leave no native fence behind.
-"$node" --input-type=module -e '
-  import assert from "node:assert/strict";
-  import {spawnSync} from "node:child_process";
-  import {offlineFenceRules} from "./bench/workloads/isolated/control-admission.mjs";
-  const r = spawnSync("/usr/bin/taskset", ["-c", "0", "/usr/sbin/nft", "-f", "-"], {input: offlineFenceRules, encoding: "utf8"});
-  assert.ok(!r.error && r.signal === null && Number.isSafeInteger(r.status), "nft did not run");
-  assert.notEqual(r.status, 0, "nft accepted rules on socket stdin");
-'
-if /usr/sbin/nft list table inet corten_bench_native >/dev/null 2>&1; then echo 'socket-stdin install left a native fence' >&2; exit 1; fi
+# socket for piped stdin, and Noble's nft 1.0.9 refuses `nft -f -` on a socket.
+# Feeding the same rules that way must fail for that reason and leave no native
+# fence behind. Other nft versions (1.0.6, 1.1.3) accept a socket, so the
+# control runs only where the refusal it keeps is the one r62's hosts had.
+if /usr/sbin/nft --version | grep -q '^nftables v1\.0\.9 '; then
+  "$node" --input-type=module -e '
+    import assert from "node:assert/strict";
+    import {spawnSync} from "node:child_process";
+    import {offlineFenceRules} from "./bench/workloads/isolated/control-admission.mjs";
+    const r = spawnSync("/usr/bin/taskset", ["-c", "0", "/usr/sbin/nft", "-f", "-"], {input: offlineFenceRules, encoding: "utf8"});
+    assert.ok(!r.error && r.signal === null && Number.isSafeInteger(r.status), "nft did not run");
+    assert.notEqual(r.status, 0, "nft accepted rules on socket stdin");
+    assert.match(r.stderr, /Not a regular file/, "nft refused socket stdin for another reason");
+  '
+  if /usr/sbin/nft list table inet corten_bench_native >/dev/null 2>&1; then echo 'socket-stdin install left a native fence' >&2; exit 1; fi
+else
+  echo "socket-stdin control skipped: $(/usr/sbin/nft --version | head -n 1) is not nftables 1.0.9" >&2
+fi
 install_fence() { "$node" --input-type=module -e 'import {installOfflineFence} from "./bench/workloads/isolated/control-admission.mjs"; installOfflineFence()'; }
 install_fence
 sample() { /usr/sbin/nft -j -a list table inet corten_bench_native; }
