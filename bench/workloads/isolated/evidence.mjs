@@ -201,6 +201,8 @@ export function inspectEvidence(binding, root) {
       options: binding.execution.effectiveOptions, cpus: binding.resources.expectedCpus }, inspectCatalog);
     report = rawProofBlocked(group, diagnosticNativeReport, inspectRawSupport(group, summary, root, before));
   } else if (group === "json-api") {
+    // The opt-in c-16 binding requests JSON_API_LOAD_LAYOUT; a default binding requests none and its result records none.
+    assert.equal(summary.measurement?.loadLayout, binding.resources.requestedCpuEnv?.JSON_API_LOAD_LAYOUT, "JSON API load layout differs from binding");
     report = inspectBoundJson(summary, { load: reader(root), commit, verifyBoundProducer: (value) => verifyJsonProducer(binding, value) });
     assert.equal(report.attemptComplete, true, "strict JSON native attempt incomplete");
   } else {
