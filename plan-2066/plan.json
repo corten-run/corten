@@ -1,0 +1,75 @@
+{
+  "plan": 1,
+  "name": "shutdown-poll-once-2066",
+  "base": "c6e9be955bedd2766795eab240e061c1b14ee5d0",
+  "head": "415cef7026e326c89c1bda2edd7aa580b1bb93ab",
+  "probe": {
+    "dir": "probe",
+    "tree": ["Cargo.toml", "Cargo.lock", "README.md", "crates", "docs"],
+    "toolchain": "1.100.0",
+    "env": { "ZSTD_SYS_USE_PKG_CONFIG": "1" },
+    "build": "cargo build --release",
+    "binary": "release/probe",
+    "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:65536 PROBE_ALLOCATOR=jemalloc $BIN $PORT plain"
+  },
+  "host": {
+    "cpuModel": null,
+    "cpus": { "server": 2, "load": [4, 5], "driver": 7 }
+  },
+  "load": { "threads": 2, "connections": 64, "seconds": 3 },
+  "R": 8,
+  "placementSeconds": 600,
+  "pilot": { "K": 100 },
+  "workloads": [
+    {
+      "name": "plain",
+      "declared": "GET /private with no request header of its own, jemalloc preloaded: the record page for one visitor, about 6 KB, not kept. Touched: every wake of the connection's task polls the wait for shutdown on the base and loads one flag on the head. Margin +1%, no floor; no reduction claimed.",
+      "request": { "path": "/private", "headers": [] },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112501,
+      "reads": ["margin"],
+      "reduction": null,
+      "recordsSpread": false
+    },
+    {
+      "name": "unstaged",
+      "declared": "GET /unstaged with no request header of its own, jemalloc preloaded: a short text from a route outside the app's stages, the cheapest request the probe has. Touched, as every request is. Margin +1%, no floor; no reduction claimed.",
+      "request": { "path": "/unstaged", "headers": [] },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112502,
+      "reads": ["margin"],
+      "reduction": null,
+      "recordsSpread": false
+    },
+    {
+      "name": "plainglibc",
+      "declared": "The request of plain to the same binary started with no preload, so on glibc's allocator. Touched as plain is; read because the one count in the tree that is a rise is glibc's. Margin +1%, no floor; no reduction claimed.",
+      "request": { "path": "/private", "headers": [] },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112503,
+      "reads": ["margin"],
+      "reduction": null,
+      "recordsSpread": false,
+      "start": "env PROBE_ALLOCATOR=glibc $BIN $PORT plain"
+    },
+    {
+      "name": "unstagedglibc",
+      "declared": "The request of unstaged to the same binary started with no preload, so on glibc's allocator. Touched as unstaged is; read because the one count in the tree that is a rise is glibc's. Margin +1%, no floor; no reduction claimed.",
+      "request": { "path": "/unstaged", "headers": [] },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112504,
+      "reads": ["margin"],
+      "reduction": null,
+      "recordsSpread": false,
+      "start": "env PROBE_ALLOCATOR=glibc $BIN $PORT plain"
+    }
+  ]
+}

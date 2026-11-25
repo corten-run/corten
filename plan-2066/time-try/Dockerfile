@@ -1,0 +1,2 @@
+FROM base-1
+ENV LD_PRELOAD=

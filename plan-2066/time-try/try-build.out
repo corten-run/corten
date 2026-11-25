@@ -1,0 +1,8 @@
+build base-1 exit 0 in 86 s
+FROM base-1
+ENV LD_PRELOAD=
+build base-1-glibc exit 0
+base-1:latest sha256:cb434d422ceb115954d3d7c69d43dfb30a6ee1c7d86b48052a6a6346eb7fe255 129542228 ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin","LD_PRELOAD=libjemalloc.so.2","MALLOC_CONF=background_thread:true,tcache_max:524288","HOST=0.0.0.0","PORT=8080"]
+base-1-glibc:latest sha256:be30f396c03745db986f6d924d98aebc11589f264b06c54976949df59788aa99 129542342 ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin","LD_PRELOAD=","MALLOC_CONF=background_thread:true,tcache_max:524288","HOST=0.0.0.0","PORT=8080"]
+TRY-BUILD-DONE
+/root/stage-a/try/try-build.sh: line 23: $'\r': command not found

@@ -1,0 +1,18 @@
+DRY RUN: K=6; a test of the scripts, read for nothing
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+== base: c6e9be955bedd2766795eab240e061c1b14ee5d0, 19:21:55
+warning: `placement-example` (bin "probe") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 1m 27s
+base: the captured link run again without a pad, with its map, is byte-identical to the build's own binary
+base e6b58a689410a69871acd8d805c87a623c257a37cc6adc434003244adee2150d 4357632 bytes
+base built in 89 s
+== head: 415cef7026e326c89c1bda2edd7aa580b1bb93ab, 19:23:24
+warning: `placement-example` (bin "probe") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 1m 28s
+head: the captured link run again without a pad, with its map, is byte-identical to the build's own binary
+head a722345540f036ff8176093fcea7fa0a07cc85de5f76b01c5d01196923c82e97 4358040 bytes
+head built in 90 s
+base: 0 input sections of .text aligned beyond 16 bytes
+head: 0 input sections of .text aligned beyond 16 bytes
+20 binaries, no two of one side with the same sha256; placements linked and checked in 15 s
+BUILD-DONE

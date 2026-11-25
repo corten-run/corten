@@ -1,0 +1,133 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 141B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/rust:1-trixie
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/2] FROM docker.io/library/rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8
+#4 resolve docker.io/library/rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8 0.0s done
+#4 CACHED
+
+#5 [2/2] RUN apt-get update -q && apt-get install -y -q nodejs && rm -rf /var/lib/apt/lists/*
+#5 0.298 Get:1 http://deb.debian.org/debian trixie InRelease [140 kB]
+#5 0.316 Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+#5 0.316 Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+#5 0.362 Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9679 kB]
+#5 0.434 Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [1108 B]
+#5 0.436 Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [311 kB]
+#5 1.311 Fetched 10.2 MB in 1s (9854 kB/s)
+#5 1.311 Reading package lists...
+#5 2.019 Reading package lists...
+#5 2.757 Building dependency tree...
+#5 2.958 Reading state information...
+#5 3.191 The following additional packages will be installed:
+#5 3.192   libcares2 libnode115 libuv1t64 node-acorn node-balanced-match
+#5 3.192   node-brace-expansion node-cjs-module-lexer node-corepack node-minimatch
+#5 3.193   node-undici node-xtend nodejs-doc
+#5 3.194 Suggested packages:
+#5 3.194   npm
+#5 3.287 The following NEW packages will be installed:
+#5 3.288   libcares2 libnode115 libuv1t64 node-acorn node-balanced-match
+#5 3.288   node-brace-expansion node-cjs-module-lexer node-corepack node-minimatch
+#5 3.288   node-undici node-xtend nodejs nodejs-doc
+#5 3.324 0 upgraded, 13 newly installed, 0 to remove and 39 not upgraded.
+#5 3.324 Need to get 20.1 MB of archives.
+#5 3.324 After this operation, 85.2 MB of additional disk space will be used.
+#5 3.324 Get:1 http://deb.debian.org/debian trixie/main amd64 libcares2 amd64 1.34.9-1~deb13u1 [103 kB]
+#5 3.328 Get:2 http://deb.debian.org/debian trixie/main amd64 libuv1t64 amd64 1.50.0-2 [154 kB]
+#5 3.330 Get:3 http://deb.debian.org/debian trixie/main amd64 node-xtend all 4.0.2-3 [3932 B]
+#5 3.330 Get:4 http://deb.debian.org/debian trixie/main amd64 node-corepack all 0.24.0-5 [712 kB]
+#5 3.334 Get:5 http://deb.debian.org/debian trixie/main amd64 nodejs amd64 20.19.2+dfsg-1+deb13u3 [355 kB]
+#5 3.337 Get:6 http://deb.debian.org/debian trixie/main amd64 node-acorn all 8.8.1+ds+~cs25.17.7-2 [128 kB]
+#5 3.339 Get:7 http://deb.debian.org/debian trixie/main amd64 node-cjs-module-lexer all 1.2.3+dfsg-1 [30.6 kB]
+#5 3.339 Get:8 http://deb.debian.org/debian trixie/main amd64 node-balanced-match all 2.0.0-1 [4872 B]
+#5 3.339 Get:9 http://deb.debian.org/debian trixie/main amd64 node-brace-expansion all 2.0.1+~1.1.0-2 [8012 B]
+#5 3.339 Get:10 http://deb.debian.org/debian trixie/main amd64 node-minimatch all 9.0.3-6 [76.8 kB]
+#5 3.339 Get:11 http://deb.debian.org/debian trixie/main amd64 node-undici all 7.3.0+dfsg1+~cs24.12.11-1 [333 kB]
+#5 3.341 Get:12 http://deb.debian.org/debian trixie/main amd64 libnode115 amd64 20.19.2+dfsg-1+deb13u3 [12.1 MB]
+#5 3.414 Get:13 http://deb.debian.org/debian trixie/main amd64 nodejs-doc all 20.19.2+dfsg-1+deb13u3 [6088 kB]
+#5 3.677 debconf: unable to initialize frontend: Dialog
+#5 3.677 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#5 3.677 debconf: falling back to frontend: Readline
+#5 3.686 debconf: unable to initialize frontend: Readline
+#5 3.686 debconf: (This frontend requires a controlling tty.)
+#5 3.686 debconf: falling back to frontend: Teletype
+#5 3.691 debconf: unable to initialize frontend: Teletype
+#5 3.691 debconf: (This frontend requires a controlling tty.)
+#5 3.691 debconf: falling back to frontend: Noninteractive
+#5 4.443 Fetched 20.1 MB in 0s (146 MB/s)
+#5 4.481 Selecting previously unselected package libcares2:amd64.
+#5 4.481 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 26060 files and directories currently installed.)
+#5 4.578 Preparing to unpack .../00-libcares2_1.34.9-1~deb13u1_amd64.deb ...
+#5 4.585 Unpacking libcares2:amd64 (1.34.9-1~deb13u1) ...
+#5 4.623 Selecting previously unselected package libuv1t64:amd64.
+#5 4.624 Preparing to unpack .../01-libuv1t64_1.50.0-2_amd64.deb ...
+#5 4.628 Unpacking libuv1t64:amd64 (1.50.0-2) ...
+#5 4.666 Selecting previously unselected package node-xtend.
+#5 4.666 Preparing to unpack .../02-node-xtend_4.0.2-3_all.deb ...
+#5 4.669 Unpacking node-xtend (4.0.2-3) ...
+#5 4.699 Selecting previously unselected package node-corepack.
+#5 4.702 Preparing to unpack .../03-node-corepack_0.24.0-5_all.deb ...
+#5 4.705 Unpacking node-corepack (0.24.0-5) ...
+#5 4.775 Selecting previously unselected package nodejs.
+#5 4.778 Preparing to unpack .../04-nodejs_20.19.2+dfsg-1+deb13u3_amd64.deb ...
+#5 4.782 Unpacking nodejs (20.19.2+dfsg-1+deb13u3) ...
+#5 4.829 Selecting previously unselected package node-acorn.
+#5 4.832 Preparing to unpack .../05-node-acorn_8.8.1+ds+~cs25.17.7-2_all.deb ...
+#5 4.835 Unpacking node-acorn (8.8.1+ds+~cs25.17.7-2) ...
+#5 4.883 Selecting previously unselected package node-cjs-module-lexer.
+#5 4.886 Preparing to unpack .../06-node-cjs-module-lexer_1.2.3+dfsg-1_all.deb ...
+#5 4.890 Unpacking node-cjs-module-lexer (1.2.3+dfsg-1) ...
+#5 4.919 Selecting previously unselected package node-balanced-match.
+#5 4.922 Preparing to unpack .../07-node-balanced-match_2.0.0-1_all.deb ...
+#5 4.926 Unpacking node-balanced-match (2.0.0-1) ...
+#5 4.954 Selecting previously unselected package node-brace-expansion.
+#5 4.957 Preparing to unpack .../08-node-brace-expansion_2.0.1+~1.1.0-2_all.deb ...
+#5 4.961 Unpacking node-brace-expansion (2.0.1+~1.1.0-2) ...
+#5 4.989 Selecting previously unselected package node-minimatch.
+#5 4.992 Preparing to unpack .../09-node-minimatch_9.0.3-6_all.deb ...
+#5 4.995 Unpacking node-minimatch (9.0.3-6) ...
+#5 5.042 Selecting previously unselected package node-undici.
+#5 5.045 Preparing to unpack .../10-node-undici_7.3.0+dfsg1+~cs24.12.11-1_all.deb ...
+#5 5.055 Unpacking node-undici (7.3.0+dfsg1+~cs24.12.11-1) ...
+#5 5.133 Selecting previously unselected package libnode115:amd64.
+#5 5.136 Preparing to unpack .../11-libnode115_20.19.2+dfsg-1+deb13u3_amd64.deb ...
+#5 5.140 Unpacking libnode115:amd64 (20.19.2+dfsg-1+deb13u3) ...
+#5 5.587 Selecting previously unselected package nodejs-doc.
+#5 5.587 Preparing to unpack .../12-nodejs-doc_20.19.2+dfsg-1+deb13u3_all.deb ...
+#5 5.591 Unpacking nodejs-doc (20.19.2+dfsg-1+deb13u3) ...
+#5 5.790 Setting up libuv1t64:amd64 (1.50.0-2) ...
+#5 5.800 Setting up node-cjs-module-lexer (1.2.3+dfsg-1) ...
+#5 5.809 Setting up node-balanced-match (2.0.0-1) ...
+#5 5.819 Setting up node-brace-expansion (2.0.1+~1.1.0-2) ...
+#5 5.827 Setting up libcares2:amd64 (1.34.9-1~deb13u1) ...
+#5 5.836 Setting up nodejs-doc (20.19.2+dfsg-1+deb13u3) ...
+#5 5.845 Setting up node-undici (7.3.0+dfsg1+~cs24.12.11-1) ...
+#5 5.860 Setting up node-minimatch (9.0.3-6) ...
+#5 5.869 Setting up node-xtend (4.0.2-3) ...
+#5 5.879 Setting up node-acorn (8.8.1+ds+~cs25.17.7-2) ...
+#5 5.888 Setting up node-corepack (0.24.0-5) ...
+#5 5.896 Setting up libnode115:amd64 (20.19.2+dfsg-1+deb13u3) ...
+#5 5.905 Setting up nodejs (20.19.2+dfsg-1+deb13u3) ...
+#5 5.925 update-alternatives: using /usr/bin/nodejs to provide /usr/bin/js (js) in auto mode
+#5 5.932 Processing triggers for libc-bin (2.41-12+deb13u4) ...
+#5 DONE 6.4s
+
+#6 exporting to image
+#6 exporting layers
+#6 exporting layers 3.4s done
+#6 exporting manifest sha256:42e10b2cdc53d4c2a2c3e906e4a7e4f40544ff58aaccc842d4d8956e46206632 0.0s done
+#6 exporting config sha256:cc16ffe067eaf8ffa0a588cdaa51a439a5195af1a447ab386e442560e83b7427 0.0s done
+#6 exporting attestation manifest sha256:0a83cc5b6da4f445bf0b5dbb72fa865c972920ad5d426e46ee8253248599de6f 0.0s done
+#6 exporting manifest list sha256:fc9afea4872ca8beb73c8a7a5eefffa4943b3cf8ddfc2378e8a884af11fc6f95 0.0s done
+#6 naming to docker.io/library/sa-try-node:latest done
+#6 unpacking to docker.io/library/sa-try-node:latest
+#6 unpacking to docker.io/library/sa-try-node:latest 0.6s done
+#6 DONE 4.1s

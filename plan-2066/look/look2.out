@@ -1,0 +1,92 @@
+2066 plain: HTTP/1.1 200 OK; allocator ALLOCATOR jemalloc; two starts of base: headers same; base and head: headers same, body same (6124 bytes)
+2066 unstaged: HTTP/1.1 200 OK; allocator ALLOCATOR jemalloc; two starts of base: headers same; base and head: headers same, body same (2 bytes)
+2066 plainglibc: HTTP/1.1 200 OK; allocator ALLOCATOR glibc; two starts of base: headers same; base and head: headers same, body same (6124 bytes)
+2066 unstagedglibc: HTTP/1.1 200 OK; allocator ALLOCATOR glibc; two starts of base: headers same; base and head: headers same, body same (2 bytes)
+2067 text: HTTP/1.1 200 OK; allocator ALLOCATOR jemalloc; two starts of base: headers same; base and head: headers same, body same (2 bytes)
+2067 api: HTTP/1.1 200 OK; allocator ALLOCATOR jemalloc; two starts of base: headers same; base and head: headers same, body same (2 bytes)
+2067 plain: HTTP/1.1 200 OK; allocator ALLOCATOR jemalloc; two starts of base: headers same; base and head: headers same, body same (6124 bytes)
+--- headers of each answer (base, first start)
+== 2066-plain
+HTTP/1.1 200 OK
+content-type: text/html; charset=utf-8
+vary: corten, accept
+vary: accept-encoding
+corten-shell: a0f708e6a9a70edd
+content-security-policy: default-src 'self'; script-src 'self' 'sha256-unwAHX/TzefptTPCSzgHI4NbL0yr+G0YCMsktyelKPU='; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+x-frame-options: DENY
+cross-origin-opener-policy: same-origin
+permissions-policy: accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), window-management=()
+cache-control: private, no-cache
+content-length: 6124
+
+== 2066-plainglibc
+HTTP/1.1 200 OK
+content-type: text/html; charset=utf-8
+vary: corten, accept
+vary: accept-encoding
+corten-shell: a0f708e6a9a70edd
+content-security-policy: default-src 'self'; script-src 'self' 'sha256-unwAHX/TzefptTPCSzgHI4NbL0yr+G0YCMsktyelKPU='; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+x-frame-options: DENY
+cross-origin-opener-policy: same-origin
+permissions-policy: accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), window-management=()
+cache-control: private, no-cache
+content-length: 6124
+
+== 2066-unstaged
+HTTP/1.1 200 OK
+content-type: text/plain; charset=utf-8
+x-content-type-options: nosniff
+content-security-policy: sandbox
+content-length: 2
+
+== 2066-unstagedglibc
+HTTP/1.1 200 OK
+content-type: text/plain; charset=utf-8
+x-content-type-options: nosniff
+content-security-policy: sandbox
+content-length: 2
+
+== 2067-api
+HTTP/1.1 200 OK
+content-type: text/plain; charset=utf-8
+content-security-policy: default-src 'none'; frame-ancestors 'none'
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+x-frame-options: DENY
+cross-origin-opener-policy: same-origin
+cache-control: private, no-cache
+vary: accept-encoding
+content-length: 2
+
+== 2067-plain
+HTTP/1.1 200 OK
+content-type: text/html; charset=utf-8
+vary: corten, accept
+vary: accept-encoding
+corten-shell: a310e4e6a9282deb
+content-security-policy: default-src 'self'; script-src 'self' 'sha256-unwAHX/TzefptTPCSzgHI4NbL0yr+G0YCMsktyelKPU='; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+x-frame-options: DENY
+cross-origin-opener-policy: same-origin
+permissions-policy: accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), window-management=()
+cache-control: private, no-cache
+content-length: 6124
+
+== 2067-text
+HTTP/1.1 200 OK
+content-type: text/plain; charset=utf-8
+content-security-policy: default-src 'self'; script-src 'self' 'sha256-unwAHX/TzefptTPCSzgHI4NbL0yr+G0YCMsktyelKPU='; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+x-frame-options: DENY
+cross-origin-opener-policy: same-origin
+cache-control: private, no-cache
+vary: accept-encoding
+content-length: 2
+
+LOOK2-DONE

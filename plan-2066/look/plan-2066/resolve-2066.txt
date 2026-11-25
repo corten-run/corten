@@ -1,0 +1,11 @@
+plan shutdown-poll-once-2066, sha256 3ae4997360f4788a936666c3b7e6472cb3401ae82833aa32c1c179eafabaaabe: base c6e9be955bedd2766795eab240e061c1b14ee5d0, head 415cef7026e326c89c1bda2edd7aa580b1bb93ab
+gated plain (DRY RUN: a test of the scripts, read for nothing): K = 6 placements, R = 2 recorded pairs each after one that is not, 1 s turns; comparisons aa-plain and change-plain
+thresholds: the margin (+1%, no floor): read by this run
+the A/A records no placement spread
+the bound is the 6th smallest of the 6 placement medians, the lower bound the 1st; the order is drawn from seed 2026112501
+pads p (base and head in the change, the A/A's first side): 320 15120 25824 40624 10304 21008
+pads q (the A/A's second side): 22848 12160 38336 27648 12880 2192
+12 distinct sizes from 320 to 40624 bytes; p by 64-byte-line phase (0, 16, 32, 48): 2, 2, 1, 1, by quarter of a page: 2, 1, 2, 1; q: 4, 2, 0, 0 and 1, 1, 2, 2
+the pairs: 6 ordered combinations of the line phases of p and q; q - p mod 4096 takes 6 distinct values, 1, 2, 2, 1 by quarter of a page (at least 0 asked in each)
+inputs: sha256 48bed34b7444dd0836ace5f3eb43f3626b02d1cc8462fd61b5e8e12763df8878 over the 3 files the plan names by path (the probe's, the request script), each listed with its own
+written: /look/w-2066/plan

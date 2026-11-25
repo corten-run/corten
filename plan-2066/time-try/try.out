@@ -1,0 +1,64 @@
+== base-1, --cpus 1: pid 2270088, /app/server
+   environment: LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 
+   lines of the memory map that name libjemalloc: 5
+   mapped: /usr/lib/x86_64-linux-gnu/libjemalloc.so.2
+   threads: 6: corten-clock x1, jemalloc_bg_thd x3, server x1, tokio-rt-worker x1, 
+   answer: 200, 8821 bytes
+== base-1-glibc, --cpus 1: pid 2270457, /app/server
+   environment: LD_PRELOAD= MALLOC_CONF=background_thread:true,tcache_max:524288 
+   lines of the memory map that name libjemalloc: 0
+   threads: 3: corten-clock x1, server x1, tokio-rt-worker x1, 
+   answer: 200, 8821 bytes
+== base-1, --cpuset-cpus 0-3: pid 2270841, /app/server
+   environment: LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 
+   lines of the memory map that name libjemalloc: 5
+   mapped: /usr/lib/x86_64-linux-gnu/libjemalloc.so.2
+   threads: 10: corten-clock x1, jemalloc_bg_thd x4, server x1, tokio-rt-worker x4, 
+   answer: 200, 8821 bytes
+== base-1-glibc, --cpuset-cpus 0-3: pid 2271272, /app/server
+   environment: LD_PRELOAD= MALLOC_CONF=background_thread:true,tcache_max:524288 
+   lines of the memory map that name libjemalloc: 0
+   threads: 6: corten-clock x1, server x1, tokio-rt-worker x4, 
+   answer: 200, 8821 bytes
+--- answers
+je-1 and gl-1: headers but Date same, body same
+je-4 and gl-4: headers but Date same, body same
+je-1 and je-4: headers but Date same, body same
+headers of je-1:
+HTTP/1.1 200 OK
+content-type: application/json
+content-security-policy: default-src 'none'; frame-ancestors 'none'
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+x-frame-options: DENY
+cross-origin-opener-policy: same-origin
+cache-control: private, no-cache
+vary: accept-encoding
+content-length: 8821
+
+2ca2c739462943cf2364751bb1f68166031028b51c3e058726a0db61a8c317cd  /root/stage-a/try/answers/gl-1.body
+2ca2c739462943cf2364751bb1f68166031028b51c3e058726a0db61a8c317cd  /root/stage-a/try/answers/gl-4.body
+2ca2c739462943cf2364751bb1f68166031028b51c3e058726a0db61a8c317cd  /root/stage-a/try/answers/je-1.body
+2ca2c739462943cf2364751bb1f68166031028b51c3e058726a0db61a8c317cd  /root/stage-a/try/answers/je-4.body
+--- ab.mjs with no image
+/usr/bin/docker: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linu
+build sa-try-node exit 0
+v20.19.2
+one CPU, the default:
+ab.mjs exit 0
+four CPUs:
+ab.mjs exit 0
+a wrong encoding name, to show the check is live:
+  if (Object.keys(encodings).length !== wanted.length) throw new Error("AB_ENCODINGS names one of identity, browser, br");
+Error: AB_ENCODINGS names one of identity, browser, br
+ab.mjs exit 1
+sa-try-ab-1: summary.json tools.json 
+   summary.json: []
+sa-try-ab-4: summary.json tools.json 
+   summary.json: []
+sa-try-ab-x: tools.json 
+    "image": "grafana/k6@sha256:70949facc324f13a8903d24ee5b817ff32aca02bda3458389611e6aa4b38a097",
+    "platform": "linux/amd64",
+    "version": "2.4.0",
+TRY-DONE
+/root/stage-a/try/try.sh: line 73: $'\r': command not found
