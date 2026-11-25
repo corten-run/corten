@@ -4,6 +4,7 @@
 // long k6 pass (window-load.js) whose answers are counted per window.
 //   convergence: a closed loop (64 users, 5 minutes in 15 s windows by default); the flatten rule
 //                in steady-contract.mjs names the window each adapter stopped getting faster in.
+//                A pass with a failed request, or whose app stopped, gets no verdict.
 //   soak:        a fixed rate (150 requests/second, 30 minutes in 60 s intervals by default), with
 //                memory at the start and end, p99 per interval and any restart.
 // node bench/marketplace/steady.mjs convergence w3 --group production --build

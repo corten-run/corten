@@ -177,9 +177,9 @@ measures only the adapters that saved timed round admitted; without it every sel
 runs and the report says admission was not checked. `--minutes`, `--window` (convergence),
 `--interval` (soak), `--vus`, `--rate`, `--targets` and `--sources` change the defaults. Results
 go to `results/convergence/<name>/` and `results/soak/<name>/`, outside Git like other raw output.
-The convergence pass for the production group's seven candidates is four passes of five
-minutes each, so a little over two hours plus image builds (estimated, not measured); it needs
-repeating only when an adapter's runtime or framework version changes.
+For the production group's seven candidates a convergence pass is 28 five-minute passes, about
+two and a half hours with container starts, plus image builds (estimated, not measured); it
+needs repeating only when an adapter's runtime or framework version changes.
 
 A convergence pass keeps each window's throughput, p95 and p99, and applies one stated rule
 (`flattenRule` in [steady-contract.mjs](steady-contract.mjs)): compare the median throughput of the
