@@ -2247,9 +2247,9 @@ drawn in place, draws as usual, and the read starts again later at the new addre
 the page whose `navigate` listener cancels the replace refuses the address: the runtime then
 reloads the page at the entry's address rather than leave the answer under it. A GET pressed
 while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer, as
-any submit of the form does, and is sent only if the user is still on that page. A form's
-submits are kept by its id, so a press of the form a read drew in its place drops a GET the
-form sent before. Two marked forms are not ordered against each other: their answers are drawn
+any submit of the form does, and is sent only if the user is still on that page. A press of
+the form a read drew in place of the one pressed drops a GET that one sent, found by the form's
+id, as a press of the same form does. Two marked forms are not ordered against each other: their answers are drawn
 as they come.
 
 Which mark a filter takes depends on what its change redraws. One that changes most of what the

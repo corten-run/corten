@@ -3227,10 +3227,10 @@ addEventListener("pagehide", () => (left += 1));
  * so a version or a count the answer wrote goes out with it. Only after a 2xx (a bare 204 or 205
  * too) or a 422: a refusal of the form's state (409, 410), a 5xx, another answer the runtime does
  * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
- * late reply never patches a page it was not meant for. Kept by the form's id, so a form a read
- * drew in place of the one pressed (a patch must give it the same id) is the same form: a newer
- * press of it drops a read the old one sent, and waits for its write.
- * @type {Map<HTMLFormElement | string, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
+ * late reply never patches a page it was not meant for. A read the form sent before a read drew
+ * it again in place (a patch must give it the same id) is dropped by a press of the new one too,
+ * by that id; a write is not, nor waited for: it may be the page's before a navigation.
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 /** The forms that have sent a submit ({@link sayFailed}). @type {WeakSet<HTMLFormElement>} */
@@ -3330,8 +3330,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   const fields = new URLSearchParams(entries);
   // A file by its size and time too: another file of the same name is a new submit.
   const key = `${method} ${url.href} ${fields} ${Array.from(data.values(), (v) => (typeof v === "string" ? "" : `${v.size}/${v.lastModified}`))}`;
-  const slot = idOf(form) || form;
-  const previous = submits.get(slot);
+  const previous = submits.get(form);
   if (previous?.write) {
     // Sent once the write's answer is in; the same values as the write's again send nothing. A
     // button that waits is busy with the write's marks, one it replaced no longer.
@@ -3359,7 +3358,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   });
   const pending = { key, controller, write: method !== "GET", went: false, answered: false, n: 0, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
-  submits.set(slot, pending);
+  submits.set(form, pending);
   /** @type {RequestInit} */
   // This runtime draws a write's own page whole, which a server sends only to one that says so, as
   // an HTTP preference (RFC 7240): a runtime from before gets `<main>`, and a server from before
@@ -3377,6 +3376,9 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   // The submit this one replaces ends once this one holds the marks they share, so the form and a
   // button sending again are not cleared and marked again.
   previous?.controller.abort();
+  // So does a read the form this one was drawn in place of sent: an older press of the same form.
+  const id = idOf(form);
+  if (id) for (const [was, sending] of submits) if (was !== form && !sending.write && idOf(was) === id) sending.controller.abort();
   // A write can change any page, so nothing fetched before it is reused, nor anything prefetched
   // while it was on its way (which may predate it, or use up a notice it sets).
   const forget = () => {
@@ -3417,11 +3419,11 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     // or a body cut off on the way keeps the key, so a retry is the same submission.
     // Only the submit still in flight for the form renews its key: a newer one of the same form
     // (which aborted this one) went with this key, and its answer is still to come.
-    const renew = () => res.status < 500 && submits.get(slot)?.controller === controller && renewSubmitKeys(form);
+    const renew = () => res.status < 500 && submits.get(form)?.controller === controller && renewSubmitKeys(form);
     const location_ = res.headers.get("corten-location");
     if (location_) {
       renew();
-      submits.delete(slot);
+      submits.delete(form);
       if (navigation) {
         if (method !== "GET") undrawn.add(++writesIn);
         // The page it sends the browser to keeps the marks until it is drawn.
@@ -3542,10 +3544,10 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   } finally {
     // Cleared when this submit ends, but not those a newer submit of the form or the page a
     // redirect sends the browser to marked again (theirs, cleared when they end).
-    const current = submits.get(slot)?.controller === controller;
+    const current = submits.get(form)?.controller === controller;
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
     if (current) {
-      submits.delete(slot);
+      submits.delete(form);
       // In a task of its own, after the answer is drawn; not into a page being left.
       const { next, nextWithin } = pending;
       if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next, nextWithin));

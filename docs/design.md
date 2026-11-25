@@ -10575,9 +10575,9 @@ rules something out.
     is drawn in place; one the runtime cannot draw in place (another layout) loads the page in
     full, as for any form, and that load is of the entry's address. The rest is the runtime's
     ordinary `data-patch` form: Corten's redirect (`corten-location`) is followed as a
-    navigation, its submits are ordered as any form's are, by its id, so a press of the form a read
-    drew in place of the one pressed drops the read that one sent, and two marked forms' answers
-    are drawn as they come, the address that of the last one that moved it. The route at each such address
+    navigation, its submits are ordered as any form's are, a press dropping a read the form sent
+    before a read drew it again in place (found by its id, which a patch requires), and two marked
+    forms' answers are drawn as they come, the address that of the last one that moved it. The route at each such address
     answers its part with `req.patch_or`, drawing all that the address changes, a link or form
     that carries the address included (a `keep_query` form's hidden inputs are the query it was
     drawn with); a route whose patch appends (Load more) is not one to mark. Without the Navigation
@@ -10631,14 +10631,18 @@ rules something out.
       one request in a case a page's own script chose (README conflict order 1 above 2). Nor
       replacing the address before the answer is drawn, which could see the veto first: the
       address would then move for an answer whose patch skips an element or that loads in full.
-    - Keeping each pending submit by the form element, as any `data-patch` form's was before:
-      a form a read drew in place of the pressed one was another form, so a press of it did not
-      drop the older read, whose answer, coming last, drew over the newer one's and took the
-      address.
+    - Finding an older submit by the form element alone, as the build before this one did: a form
+      a read drew in place of the pressed one was another form, so a press of it did not drop the
+      older read, whose answer, coming last, drew over the newer one's and took the address. Nor
+      keeping every submit by the form's id, which this round tried first: a write pressed as a
+      navigation to the same page began then made a press of the form that page drew wait for it,
+      though that page is another visit (the smoke's write-failure case caught it). Only a read
+      is dropped by id; a write is neither dropped nor waited for across a redraw.
 
-    What it costs: the runtime every page loads is 820 bytes larger raw (46,502 to 47,322), 338
-    with gzip (16,718 to 17,056) and 308 with brotli (15,106 to 15,414), paid once a release by
-    every user. A `data-patch` submit reads one attribute and its form's id; only a marked GET
+    What it costs: the runtime every page loads is 893 bytes larger raw (46,502 to 47,395), 357
+    with gzip (16,718 to 17,075) and 329 with brotli (15,106 to 15,435), paid once a release by
+    every user. A `data-patch` submit reads one attribute and its form's id, and looks through the
+    submits on their way (rarely more than one) for a read of that id; only a marked GET
     captures its visit and entry, compares them where it could draw and builds an address, which
     it reads back once after the replace. A patch tracks whether it placed every element as it
     walks them, without a separate scan, and a navigation the runtime takes to a page, a
