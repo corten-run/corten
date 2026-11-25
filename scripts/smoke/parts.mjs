@@ -1,4 +1,4 @@
-import { base, engine, skip, check, cleanUp } from "./helpers.mjs";
+import { base, engine, skip, check, cleanUp, steps } from "./helpers.mjs";
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -85,26 +85,32 @@ export async function partReads(page, browser, swaps, noSwaps) {
       check("a slow part whose read failed links to the page with it read in, in place of its line", failed.failed === "" && failed.busy === null && !failed.line && failed.link, JSON.stringify(failed));
       // Followed only when shown, so a link that is not fails the checks, not the run. Pressed in the
       // page: a loaded Firefox's click can run out of its time before it lands, and then the page never
-      // left (#2035). The page it opens commits within 5 s from just before the press (the wait for
-      // it has what is left of them once the press task returns), and has its part read in within
-      // 5 s of the check seeing that commit.
+      // left (#2035). The page it opens commits within 5 s from just before the press: the press task
+      // and the wait for the commit share those 5 s, and either one that settles after them fails the
+      // press, as one that never returns does. The page then has its part read in within 5 s of the
+      // check seeing that commit.
       let opened = false;
       let listed = false;
       if (failed.link) {
-        const since = performance.now();
-        const pressed = await held.evaluate(() => {
-          const link = /** @type {HTMLAnchorElement | null} */ (document.querySelector("#picks a"));
-          link?.click();
-          return !!link;
-        });
-        opened =
-          pressed &&
-          (await held
-            .waitForURL((url) => url.search === "?picks=true", { waitUntil: "commit", timeout: Math.max(1, 5000 - (performance.now() - since)) })
-            .then(
-              () => true,
-              () => false,
-            ));
+        const until = performance.now() + 5000;
+        const press = steps(5000, "the page the link opens did not commit within 5 s of the press");
+        opened = await press
+          .step(() =>
+            held.evaluate(() => {
+              const link = /** @type {HTMLAnchorElement | null} */ (document.querySelector("#picks a"));
+              link?.click();
+              return !!link;
+            }),
+          )
+          .then(
+            (pressed) =>
+              pressed &&
+              press.step(() => held.waitForURL((url) => url.search === "?picks=true", { waitUntil: "commit", timeout: Math.max(1, until - performance.now()) })).then(() => true),
+          )
+          .then(
+            (committed) => committed === true,
+            () => false,
+          );
         listed =
           opened &&
           (await held

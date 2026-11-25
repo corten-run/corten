@@ -382,8 +382,9 @@ extended.
 
 The watchlist's write-page checks on a page that reads itself again (`/smoke/written/again`)
 find and press their buttons in one page task, and require each write to reach the stand-in
-within five seconds counted from just before the page is asked to press: the wait for the write
-has what is left of them once the press task returns. That page swaps `<main>` about a second
+within five seconds counted from just before the page is asked to press: the press task and the
+wait for the write share those five seconds, and a press task that has not returned by then, or
+returns after them, fails the press. That page swaps `<main>` about a second
 after it loads and whenever its answer changes, so a click that found the button before a swap
 can reach no button and send nothing
 ([#2035 Five more Firefox smoke cases fail intermittently under load](https://github.com/corten-run/corten/issues/2035)).
@@ -398,8 +399,14 @@ drawn, which it tells from the write's own page by a mark the stand-in puts in e
 after the write (the read asked within five seconds, its answer drawn within five seconds of the
 check seeing it asked). A write's own `<main>` they wait for is noted the moment it is drawn,
 within five seconds of the check seeing the write sent, since the page's next read draws the form
-over it a second later. The whole-poll stylesheet case requires its write, that write's page, the
-poll's request for the held stylesheet (within five seconds from just before the press), the
+over it a second later; where a case also waits for the brand that write changed, the brand and
+that `<main>` share those five seconds. The checks that a failure stays shown while the page
+reads itself again require the page's next read of itself, asked within five seconds, to be a
+navigation whose `<main>` is drawn within five seconds of the check seeing it asked, which a mark
+the stand-in puts in each navigation's `<main>` shows (a request alone is not a draw), and the
+failure still shown 500 ms after that draw. The whole-poll stylesheet case requires its write,
+that write's page, the poll's request for the held stylesheet (within five seconds from just
+before the press), the
 failing write and its failure in turn, then the next read after the hold is let go asked as a
 navigation and its answer drawn, which a mark the stand-in puts in each navigation's `<main>`
 shows, both within five seconds of the release. It does not make a press once a step before it
@@ -409,18 +416,24 @@ answer, which runs once its headers came, says it cut (or gave) the body; with a
 that wrapper must be asked for the first write's body within five seconds of the check seeing the
 first write sent. These cases, and the check that a write's patch answered before a navigation is
 drawn by that page, close their page in a `finally` too, the latter after letting go of the
-script it holds; one cleanup step that fails does not skip the next. That check counts only the
+script it holds; one cleanup step that fails does not skip the next. The page these checks make
+is closed by the helper that makes it if its route or its load fails, before a case holds it.
+That check counts only the
 reads of the page it goes back to, since the page that comes can prefetch the link left under the
 pointer. The check that a page part's answer that asks again takes the place of the page's tag
 needs an answer that asks: the write lands 1.5 s after it is sent and the part's first read comes
 a second after the page loads, so a loaded browser can find it landed. A first read that finds it
 landed is answered as the server answers one while it lands (its status line saying so, and a tag
 asking again from the same address); the check requires an answer that asked, and every later read
-is the server's. Each answer's status line carries its place among them, so the check that the
-part stops starts its 2.2 s without reads only once an answer that does not ask again has drawn
-`Saved.`, within five seconds. The link a failed slow part shows is pressed in the page too; the
-page it opens must commit within five seconds counted from just before the press, and have its
-part read in within five seconds of the check seeing that commit.
+is the server's. Each read takes its place among them as it reaches the stand-in, and its
+answer's status line carries that place, so the check that the part stops starts its 2.2 s
+without reads only once an answer that does not ask again has drawn `Saved.`, within five
+seconds, and requires that no read came after the one whose answer drew it, counted from that
+read rather than from when the check saw the draw. Its route and request listener on the shared
+page are removed however it ends. The link a failed slow part shows is pressed in the page too;
+the page it opens must commit within five seconds counted from just before the press, a budget
+the press task shares, and have its part read in within five seconds of the check seeing that
+commit.
 
 The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
 same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a
