@@ -489,13 +489,18 @@ budget the press task shares, and have its part read in within five seconds of t
 commit.
 
 The account page's posts without JavaScript (the name, the refused name and the picture) each
-press their button only once the page the previous post led to has loaded. That load, the press,
-the post being sent, its answer and the load of the page it leads to share 30 seconds counted from
-just before the first of them, the timeout each wait had alone before; a step that fails, runs out
-of that time or settles only after it fails the post's check with the step that did not happen,
-instead of stopping the smoke with a wait that timed out and no reason
+press their button only once the page the previous post led to has loaded. That load, the post
+being sent, its answer, the load of the page it leads to and the press returning share 30 seconds
+counted from just before the first of them, the timeout each wait had alone before; a step that
+fails, runs out of that time or settles only after it fails the post's check with the step that
+did not happen, instead of stopping the smoke with a wait that timed out and no reason
 ([#2078 The no-JavaScript refused-name smoke case can lose its press under load and time out after 30 s with no reason](https://github.com/corten-run/corten/issues/2078)).
-No later post is pressed once one has failed.
+The post is the main frame's navigation sent as a POST after the press, and its answer and the
+page that loads must be that request's own (the page the last of its redirects brought), so a click
+that returns only after its post was answered is named as that, not as a press that sent nothing.
+No later post is pressed once one has failed or the check of what it did has, so a post never
+starts from a page other than the one its check names. Their context is closed in a `finally`,
+making, setting up and closing it each bounded to five seconds.
 
 The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
 same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a
