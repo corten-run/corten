@@ -2951,6 +2951,15 @@ rules something out.
     Playwright 1.65.1 on Linux (tag `evidence/stage-header-checks-2002`), and 2026-11-24, the
     instruction counts with a listed line and with curl's (tags
     `evidence/stage-header-checks-2002` and `evidence/stage-header-checks-2002-review`);
+    2026-11-25, at `af17ca8da` (this change merged with main `65419e4e1`, with round 20's test and
+    guide fixes) against that main, built with Rust 1.100.0 in a Debian 12 image other than round
+    18's (three rounds alternating the two builds, every run within 2.1 of the others): the
+    plain page 124 more (15,803.7 against 15,679.6), the `cookie` page 415 more (18,983.5 against
+    18,568.5), a tool's answer from an endpoint whose `Tools::auth` found its caller 834 more
+    (28,933.8 against 28,099.8) and the unstaged route 12 more (6,526.5 against 6,514.5). Main's
+    plain, `cookie` and tool counts are within 0.1 of round 18's for main `657c2fae3`, so main's
+    later commits left those paths as they were. These are instructions in process, not cycles, as
+    below;
     2026-11-24, at `b3e4ae44e` (round 19's code, which marks an unstaged route's answer that sets a
     cookie) against main `657c2fae3` and round 18's head `0737e881d`, built with Rust 1.100.0 in
     another image than round 18's, so against main only these three builds compare (three rounds
