@@ -2253,18 +2253,20 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     builds every image inside one 90-minute limit that all of them share; it is not Spring's
     own, and `builds.test.mjs` checks only that Spring's Maven runs alone fit in it. Two
     enclosing limits are checked as sums: the Catalog parity job's 95 minutes cover the Spring
-    test and proof steps' own limits and the image's Maven runs in both shared runners' builds
-    (1h18m40s), which leaves 16m20s for the rest of the job, none of which has a limit of its
-    own; and an unattended round's 90-minute build call for an app (`round.mjs`) covers one
-    20-minute measured build when Spring opts into the Docker rebuild benchmark
+    test and proof steps' own limits and the image's Maven runs in both shared runners' builds,
+    counting each step whose condition runs it for Spring (1h18m40s), which leaves 16m20s for
+    the rest of the job, which the sum does not reserve; and an unattended round's 90-minute
+    build call for an app (`round.mjs`), at which `run-all.mjs` stops it, covers one 20-minute
+    measured build when Spring opts into the Docker rebuild benchmark
     (`BENCH_DOCKER_REBUILD_APPS`), a limit the call's other builds share.
     The retries and bounds change Spring's build-cost inputs, its retries when a
     download fails transiently and what a successful build logs, not its dependency pins, what it
     downloads or the jar it builds; their performance effect was not measured. Two timed paths see
     it differently: the Docker rebuild benchmark builds this Dockerfile, so it times the bounded,
     verbose Maven runs, while the build-cost recipe in `builds.mjs` still runs quiet Maven without
-    the bound, inside only its two-hour per-command deadline, but copies `.mvn`, so only its retry
-    policy changes. Hosted CI still
+    the bound, inside only its two-hour per-command deadline (longer than the image's 18m20s of
+    Maven, which `builds.test.mjs` checks), but copies `.mvn`, so only its retry policy changes.
+    Hosted CI still
     downloads Spring's dependencies from Central on each run: both shared runners
     (`bench/catalog/run.mjs`, `bench/marketplace/run.mjs`) build with a plain `docker build` that
     imports and exports no layer cache, so the first build on a fresh hosted runner starts cold.

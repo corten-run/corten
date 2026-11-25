@@ -503,10 +503,14 @@ function rebuildCallUses(/** @type {string} */ source) {
 /**
  * Whether the shared Catalog and Marketplace launcher (bench/catalog/output.mjs) stops a command at
  * the timeout its caller passed: one deadline timer, on the parameter as given, never reassigned.
+ * Its command function sets two timers, that deadline and the pipe release a stop arms, and no other.
  */
 function launcherForwards(/** @type {string} */ source) {
+  const start = source.indexOf("async function command("), end = source.indexOf("\n  return { command,", start);
+  const body = start >= 0 && end > start ? source.slice(start, end) : "";
   return (source.match(/async function command\(binary, args, \{ timeout = \d+, /g) ?? []).length === 1 &&
-    source.split('setTimeout(() => stop("deadline"), timeout);').length === 2 &&
+    (body.match(/\bsetTimeout\(/g) ?? []).length === 2 && body.split("release = setTimeout(() => {").length === 2 &&
+    body.split('timer = setTimeout(() => stop("deadline"), timeout);').length === 2 &&
     (source.match(/(?<![\w.])timeout\s*(?:[-+*/%]|\?\?|\|\||&&)?=(?!=)/g) ?? []).length === 1;
 }
 
@@ -547,18 +551,55 @@ function buildDeadlineIs(/** @type {string} */ source, /** @type {typeof otherSp
 }
 
 /**
+ * Whether a parity step's `if` runs it for Spring, for the forms catalog.yml uses: `always()`,
+ * `matrix.app == '<app>'` (or `!=`) and `contains(fromJSON('[...]'), matrix.app)`, joined by `&&`.
+ * A matrix term false for Spring decides the condition; any other form fails rather than guess.
+ */
+function runsForSpring(/** @type {string | undefined} */ condition) {
+  if (condition === undefined) return true;
+  /** @type {string[]} */
+  const terms = [];
+  let depth = 0, from = 0;
+  for (let i = 0; i < condition.length; i++) {
+    if (condition[i] === "(") depth += 1;
+    else if (condition[i] === ")") depth -= 1;
+    else if (depth === 0 && condition.startsWith(" && ", i)) { terms.push(condition.slice(from, i)); from = i + 4; }
+  }
+  terms.push(condition.slice(from));
+  /** @type {string[]} */
+  const unknown = [];
+  for (const term of terms.map((t) => t.trim())) {
+    const app = /^matrix\.app (==|!=) '([\w-]+)'$/.exec(term);
+    const listed = /^contains\(fromJSON\('(\[[^']*\])'\), matrix\.app\)$/.exec(term);
+    const runs = app ? (app[2] === "spring") === (app[1] === "==") : listed ? JSON.parse(listed[1]).includes("spring") : term === "always()" ? true : undefined;
+    if (runs === false) return false;
+    if (runs === undefined) unknown.push(term);
+  }
+  assert.equal(unknown.length, 0, `cannot tell whether a parity step runs for Spring: if: ${condition}`);
+  return true;
+}
+
+const springTestStepName = "Test native Spring alert persistence and source boundaries";
+
+/**
  * Spring's bounded work in the parity job against the job's timeout-minutes, both in seconds: each
- * step that runs only for Spring at its own timeout-minutes, and each shared runner step that builds
- * images (`--build`) at the image's Maven runs with their kill grace. Fails when the job's timeout
- * would not cover them.
+ * step whose `if` runs it for Spring at its own timeout-minutes, and each shared runner step that
+ * builds images (`--build`) for Spring at the image's Maven runs with their kill grace. Fails when
+ * the job's timeout would not cover them, or a build step's own timeout would not cover its Maven.
  */
 function springParity(/** @type {string} */ workflowText, /** @type {number} */ imageSeconds) {
   const job = parseYaml(workflowText).jobs.parity;
-  /** @type {{ if?: string, run?: string, "timeout-minutes"?: unknown }[]} */
-  const steps = job.steps;
-  const own = steps.filter((step) => step.run && /\bspring\b/.test(step.if ?? ""));
-  const builds = steps.filter((step) => /^node bench\/(catalog|marketplace)\/run\.mjs .*--build\b/.test(step.run ?? ""));
-  assert.ok(own.length && builds.length, "the parity job has Spring's own steps and the shared runners' image builds");
+  /** @type {{ name?: string, id?: string, if?: string, run: string, "timeout-minutes"?: unknown }[]} */
+  const steps = job.steps.filter((/** @type {{ if?: string, run?: string }} */ step) => step.run && runsForSpring(step.if));
+  const builds = steps.filter((step) => /^node bench\/(catalog|marketplace)\/run\.mjs .*--build\b/.test(step.run));
+  assert.deepEqual(builds.map((step) => step.run.split(" ")[1]).sort(), ["bench/catalog/run.mjs", "bench/marketplace/run.mjs"],
+    "the parity job builds Spring's image once in each shared runner");
+  for (const step of builds) {
+    if (step["timeout-minutes"] !== undefined) assert.ok(imageSeconds <= stepSeconds(step), `${step.name}: its timeout stops before the image's Maven runs can`);
+  }
+  const own = steps.filter((step) => step.if !== undefined && !builds.includes(step));
+  assert.ok(own.some((step) => step.name === springTestStepName) && own.some((step) => step.id === "spring_proof"),
+    "the parity job runs Spring's test and proof steps for Spring");
   const spent = own.reduce((sum, step) => sum + stepSeconds(step), 0) + builds.length * imageSeconds;
   const limit = stepSeconds(job);
   assert.ok(spent <= limit, `the parity job's ${limit / 60} minutes do not cover Spring's bounded steps and image builds (${spent} s)`);
@@ -577,10 +618,39 @@ function rebuildParentMinutes(/** @type {ReturnType<typeof calls>} */ list, /** 
   return builds[0][1];
 }
 
+/**
+ * The deadline, in seconds, build.mjs gives each measured step (`docker start -a`), the only bound on
+ * the build-cost recipe's Maven, which has none of its own: written once, passed on by the wrapper.
+ * Fails when it is shorter than the image's Maven runs are allowed.
+ */
+function measuredStepSeconds(/** @type {string} */ source, /** @type {number} */ imageSeconds) {
+  assert.equal(source.split("const hour = 3_600_000;").length, 2, "build.mjs's hour moved");
+  assert.equal(source.split('spawnSync("docker", args, { encoding: "utf8", maxBuffer: 256 * 2 ** 20, timeout: options.timeout ?? hour, input: options.input });').length, 2,
+    "build.mjs's docker wrapper does not pass on the timeout it is given");
+  const starts = [...source.matchAll(/docker\(\["start", "-a", container\], \{ timeout: (\d+) \* (hour|60_000) \}\);/g)];
+  assert.ok(starts.length === 1 && (source.match(/"start"/g) ?? []).length === 1, "build.mjs starts its measured steps other than in its one bounded call");
+  const seconds = Number(starts[0][1]) * (starts[0][2] === "hour" ? 3600 : 60);
+  assert.ok(imageSeconds <= seconds, "build.mjs's measured step stops before the image's Maven runs can");
+  return seconds;
+}
+
+/**
+ * Whether run-all.mjs stops an unattended build call at the limit `calls()` gives it: round.mjs's
+ * buildStep passes each call's limit on unchanged, and the watchdog compares the call's time with it.
+ */
+function watchdogUses(/** @type {string} */ runAll, /** @type {string} */ round) {
+  return runAll.split("const minute = 60_000;").length === 2 && runAll.split("const all = calls(").length === 2 &&
+    runAll.split("await buildStep(all, built, { minutes: () => (Date.now() - stepStarted) / minute, call,").length === 2 &&
+    runAll.split("const call = (/** @type {number} */ limit, /** @type {string[]} */ args) =>").length === 2 &&
+    runAll.split("if (Date.now() - started > limit * minute) stopped =").length === 2 &&
+    !/(?<![\w.])limit\s*(?:[-+*/%]|\?\?|\|\||&&)?=(?!=)/.test(runAll) &&
+    round.split("for (const [step, limit, ...args] of all) {").length === 2 && round.split("const { stopped, code } = await call(limit, args);").length === 2;
+}
+
 /** The parity job's Spring test and proof steps. */
 function springSteps(/** @type {string} */ workflowText) {
   const steps = parseYaml(workflowText).jobs.parity.steps;
-  const testStep = steps.find((/** @type {{ name?: string }} */ step) => step.name === "Test native Spring alert persistence and source boundaries");
+  const testStep = steps.find((/** @type {{ name?: string }} */ step) => step.name === springTestStepName);
   const proofStep = steps.find((/** @type {{ id?: string }} */ step) => step.id === "spring_proof");
   assert.ok(testStep && proofStep, "the parity job has the Spring test and proof steps");
   return { testStep, proofStep };
@@ -629,6 +699,19 @@ test("Spring bounds each Maven run inside the image build or step that contains 
   assert.equal(rebuildParentMinutes(round, "spring"), 90);
   const shortened = round.map((call) => call[0] === "build" ? /** @type {typeof call} */ ([call[0], 15, ...call.slice(2)]) : call);
   assert.throws(() => rebuildParentMinutes(shortened, "spring"), /ends before one measured Docker rebuild/);
+  // run-all.mjs stops that call at the limit calls() gave it. The limit is the whole call's, which
+  // every build it runs shares; this does not say they all fit in it.
+  const runAll = readFileSync(join(repo, "bench/fullstack/run-all.mjs"), "utf8");
+  const roundSource = readFileSync(join(repo, "bench/fullstack/round.mjs"), "utf8");
+  assert.ok(watchdogUses(runAll, roundSource), "run-all.mjs does not stop a build call at the limit calls() gives it");
+  assert.ok(!watchdogUses(runAll.replace("started > limit * minute", "started > Math.min(limit, 15) * minute"), roundSource), "accepted a clamped watchdog");
+  assert.ok(!watchdogUses(runAll, roundSource.replace("await call(limit, args);", "await call(Math.min(limit, 15), args);")), "accepted a clamped build call limit");
+  // The build-cost recipe runs quiet Maven with no bound of its own, so only build.mjs's two-hour
+  // deadline on each measured step stops it; that is longer than the image's Maven runs are allowed.
+  const buildCost = readFileSync(join(repo, "bench/fullstack/build.mjs"), "utf8");
+  assert.equal(measuredStepSeconds(buildCost, image), 2 * 3600);
+  assert.throws(() => measuredStepSeconds(buildCost.replace("{ timeout: 2 * hour }", "{ timeout: 15 * 60_000 }"), image), /stops before the image's Maven runs can/);
+  assert.throws(() => measuredStepSeconds(buildCost.replace("timeout: options.timeout ?? hour,", "timeout: Math.min(options.timeout ?? hour, 15 * 60_000),"), image), /does not pass on/);
   assert.ok(!buildCallUses(catalogRunner.replace('await docker(["build",', 'await docker(["image", "build", "."], { timeout: 15 * 60 * 1000 });\n        await docker(["build",')), "accepted a docker image build call");
   assert.ok(!buildCallUses(catalogRunner.replace('const docker = (args, opts) => command("docker", args, opts);', 'const docker = (args, opts) => command("docker", args, { ...opts, timeout: 15 * 60 * 1000 });')), "accepted a clamped docker wrapper");
   // Both runners' command comes from the shared launcher, which keeps the timeout it was given.
@@ -640,7 +723,8 @@ test("Spring bounds each Maven run inside the image build or step that contains 
     launcher.replace('setTimeout(() => stop("deadline"), timeout);', 'setTimeout(() => stop("deadline"), Math.min(timeout, 15 * 60_000));'),
     launcher.replace(signature, `${signature}    timeout = Math.min(timeout, 15 * 60_000);\n`),
     launcher.replace(signature, `${signature}    timeout ??= 15 * 60_000;\n`),
-  ]) assert.ok(!launcherForwards(clamped), "accepted a clamped launcher timeout");
+    launcher.replace('timer = setTimeout(() => stop("deadline"), timeout);', 'timer = setTimeout(() => stop("deadline"), timeout);\n    setTimeout(() => stop("deadline"), 15 * 60_000);'),
+  ]) assert.ok(!launcherForwards(clamped), "accepted a clamped launcher timeout or a second deadline");
   // Mixed Production, the hardening evidence check and JSON API build the same image under their own
   // deadlines: 20 minutes leaves a nominal 1m40s beside the image's Maven runs, 60 minutes half an hour.
   for (const build of otherSpringBuilds) {
@@ -659,7 +743,7 @@ test("Spring bounds each Maven run inside the image build or step that contains 
 
   // The parity job's 95 minutes cover Spring's test (30) and proof (12) steps and both shared runners'
   // builds at the image's Maven runs (18m20s each): 1h18m40s, which leaves 16m20s for checkout,
-  // npm ci, the fixtures, the image builds outside Maven and the checks, none of which has a limit.
+  // npm ci, the fixtures, the image builds outside Maven and the checks, which the sum does not reserve.
   const workflowText = readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8").replace(/\r/g, "");
   assert.equal(springParity(workflowText, image), 16 * 60 + 20);
   assert.ok(workflowText.includes("\n    timeout-minutes: 95\n"), "the parity job's timeout moved");
@@ -668,6 +752,16 @@ test("Spring bounds each Maven run inside the image build or step that contains 
   assert.ok(workflowText.includes(proofLimit), "the proof step's timeout moved");
   assert.throws(() => springParity(workflowText.replace(proofLimit, "        timeout-minutes: 30\n"), image), /do not cover Spring's/);
   assert.throws(() => springParity(workflowText.replace(proofLimit, ""), image), /not a positive integer/);
+  // A step counts only when its condition runs it for Spring; a build step's own timeout covers its Maven.
+  const catalogBuild = "      - name: Build and verify both catalog sources\n        run:";
+  const springTestIf = `      - name: ${springTestStepName}\n        if: matrix.app == 'spring'\n`;
+  assert.ok(workflowText.includes(catalogBuild) && workflowText.includes(springTestIf), "the Catalog build or Spring test step moved");
+  for (const [from, to, refusal] of /** @type {[string, string, RegExp][]} */ ([
+    [catalogBuild, catalogBuild.replace("\n        run:", "\n        if: matrix.app == 'gin'\n        run:"), /once in each shared runner/],
+    [springTestIf, springTestIf.replace("==", "!="), /runs Spring's test and proof steps/],
+    [catalogBuild, catalogBuild.replace("\n        run:", "\n        timeout-minutes: 15\n        run:"), /stops before the image's Maven runs can/],
+    [catalogBuild, catalogBuild.replace("\n        run:", "\n        if: matrix.app == 'spring' || matrix.app == 'gin'\n        run:"), /cannot tell whether/],
+  ])) assert.throws(() => springParity(workflowText.replace(from, to), image), refusal, `accepted ${to}`);
 
   // The transport proof: two Maven runs, each with its own bound, and two minutes to report, inside the step.
   checkSpringProofStep(proofStep);
@@ -675,7 +769,7 @@ test("Spring bounds each Maven run inside the image build or step that contains 
   assert.ok(request < proof.bound, "one throttled request fits a proof run");
   assert.ok(proof.runs * proof.seconds + 2 * 60 <= stepSeconds(proofStep), "both proof runs and two minutes to report fit the step");
 
-  // The proof starts from the native tests' Maven repository, so it does not fetch theirs again.
+  // Both steps name the same Maven volume.
   const volume = "type=volume,source=cb-spring-m2,target=/root/.m2";
   assert.ok(testStep.run.includes(`--mount ${volume}`) && proofStep.run.includes(`--mount ${volume}`));
 });
