@@ -11,9 +11,22 @@ const digest = (value) => createHash("sha256").update(value).digest("hex");
 const same = (a, b) => ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every((key) => a[key] === b[key]);
 const codes = new Set(["ENOENT", "EEXIST", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ETIMEDOUT", "ERR_ASSERTION"]);
 const failures = new WeakMap();
+const startupReaders = new Map();
 
 // Only diagnostics created by this writer may be copied into a campaign halt.
 export const hostStorageFailure = (error) => failures.get(error);
+
+// Only the current command's startup is tracked. Take the diagnostic once
+// when supervision returns, even if the writer still owns outstanding I/O.
+export function trackHostStorageStartup(directory) {
+  assert.ok(!startupReaders.has(directory));
+  const startup = {};
+  startupReaders.set(directory, startup);
+  return (timedOut) => {
+    startupReaders.delete(directory);
+    return startup.read?.(timedOut);
+  };
+}
 
 /** One FIFO; credits include the in-flight frame until its writes finish. */
 export function hostDurableWriter(directory) {
@@ -21,9 +34,14 @@ export function hostDurableWriter(directory) {
   const directories = new Map([directory, processes].map((path) => [physical(path), lstatSync(path)]));
   const handles = new Set(), records = new Map();
   let file, error, operation = "sample-open", closing = false, finalizing = false, complete = false, active = false, cleanup;
+  let cancelled, interruptedStage;
   let bytes = 0, queuedBytes = 0, frames = 0, pendingRecords = 0, samples = 0;
   let tail;
+  const startup = startupReaders.get(directory);
+  if (startup) startup.read = (timedOut) => hostStorageFailure(error)
+    ?? (timedOut && interruptedStage ? Object.freeze({ operation: interruptedStage, code: "ETIMEDOUT" }) : undefined);
   function fail(cause, at = operation, limit) {
+    if (cancelled && cause === cancelled) return error ?? cancelled;
     if (!error) {
       const code = cause?.code;
       const diagnostic = Object.freeze({ operation: at, code: codes.has(code) ? code : "unknown", ...(limit ? { limit } : {}) });
@@ -32,9 +50,9 @@ export function hostDurableWriter(directory) {
     }
     return error;
   }
-  function timeout(at = active ? operation : "storage-wait") { return fail({ code: "ETIMEDOUT" }, at); }
+  function timeout(at = active ? operation : "storage-wait") { return error ?? cancelled ?? fail({ code: "ETIMEDOUT" }, at); }
   function overLimit(limit) { return fail({ code: "ERR_ASSERTION" }, "storage-admission", limit); }
-  function healthy() { if (error) throw error; }
+  function healthy() { if (error || cancelled) throw error ?? cancelled; }
   async function opened(path, flags) {
     const handle = await open(path, flags, 0o600); handles.add(handle); return handle;
   }
@@ -52,13 +70,15 @@ export function hostDurableWriter(directory) {
     assert.ok(same(info, await lstat(path)), "host observation file replaced");
     return info;
   }
-  async function syncDirectory(path) {
+  async function syncDirectory(path, closeOperation) {
+    const syncOperation = operation;
     await guardDirectory(path); healthy();
     if (process.platform === "win32") return;
     const handle = await opened(path, "r");
     try { healthy(); await handle.sync(); healthy(); }
     catch (cause) { throw fail(cause); }
-    finally { await close(handle); }
+    finally { operation = closeOperation; await close(handle); }
+    operation = syncOperation;
     await guardDirectory(path);
   }
   async function write(handle, value) {
@@ -143,24 +163,30 @@ export function hostDurableWriter(directory) {
               operation = "process-record-sync"; healthy(); await handle.sync(); healthy();
               await guardFile(handle, path);
             } catch (cause) { throw fail(cause); }
-            finally { await close(handle); }
-            operation = "process-directory-sync"; await syncDirectory(processes); healthy();
+            finally { operation = "process-record-close"; await close(handle); }
+            operation = "process-directory-sync"; await syncDirectory(processes, "process-directory-close"); healthy();
           }
           operation = "sample-write";
           await guardDirectory(directory); await guardFile(file, join(directory, "samples.jsonl"));
           await write(file, sample); samples++;
         })).finally(() => { queuedBytes -= size; frames--; pendingRecords -= entries.length; });
-      } catch (cause) { fail(cause, "storage-admission"); stop(); throw error; }
+      } catch (cause) { const failure = fail(cause, "storage-admission"); stop(); throw failure; }
     },
     drain() { return wait(tail); },
-    abort() { fail(null, "storage-abort"); return stop(); },
+    abort() {
+      if (!cancelled) {
+        if (startup && active) interruptedStage = operation;
+        cancelled = new Error("host observation storage cancelled");
+      }
+      return stop();
+    },
     async finish() {
       assert.equal(finalizing, false); finalizing = true; closing = true;
-      if (!error) tail = tail.then(() => timed(async () => {
+      if (!error && !cancelled) tail = tail.then(() => timed(async () => {
         operation = "sample-sync"; healthy(); await guardFile(file, join(directory, "samples.jsonl"));
         await file.sync(); healthy();
         operation = "sample-close"; await close(file);
-        operation = "sample-directory-sync"; await syncDirectory(directory); healthy();
+        operation = "sample-directory-sync"; await syncDirectory(directory, "sample-directory-close"); healthy();
         operation = "process-record-verify";
         for (const [key, expected] of records) {
           await guardDirectory(processes); healthy();
@@ -170,13 +196,14 @@ export function hostDurableWriter(directory) {
             assert.equal(digest(value), expected, "initial host observation record mutated");
             assert.ok(same(before, await guardFile(handle, path))); healthy();
           } catch (cause) { throw fail(cause); }
-          finally { await close(handle); }
+          finally { operation = "process-record-close"; await close(handle); }
+          operation = "process-record-verify";
         }
       }));
       try {
         await wait(tail); await wait(stop()); healthy(); complete = true;
         return { bytes, samples };
-      } catch (cause) { fail(cause); stop(); throw error; }
+      } catch (cause) { const failure = fail(cause); stop(); throw failure; }
     },
   });
 }

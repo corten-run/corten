@@ -155,20 +155,22 @@ test("legitimate short writes preserve every initial byte and sample byte", asyn
   assert.equal(fs.readFileSync(join(f.directory, "processes", `${record(1).key}.json`), "utf8"), record(1).value);
 });
 
-for (const [name, operation, matches] of [
+for (const [name, operation, matches, stage] of [
   ["record open", "open", isRecord], ["record write", "write", isRecord], ["record sync", "sync", isRecord],
-  ["record close", "close", isRecord], ["process directory sync", "sync", (p) => p.endsWith("processes")],
-  ["process directory close", "close", (p) => p.endsWith("processes")],
+  ["record close", "close", isRecord, "process-record-close"], ["process directory sync", "sync", (p) => p.endsWith("processes")],
+  ["process directory close", "close", (p) => p.endsWith("processes"), "process-directory-close"],
   ["sample write", "write", isSamples], ["sample sync", "sync", isSamples], ["sample close", "close", isSamples],
   ["record verification", "readFile", isRecord],
   ["sample directory sync", "sync", (p) => p.endsWith("host")],
+  ["sample directory close", "close", (p) => p.endsWith("host"), "sample-directory-close"],
 ]) test(`${name} failure is sticky, sanitized and releases owned handles`, {
   skip: process.platform === "win32" && name.includes("directory") && "Windows does not fsync directories",
 }, async (t) => {
   const f = await storageControl(t); let injected = false;
   f.before = (step, path) => { if (!injected && step === operation && matches(path)) { injected = true; throw ioError(); } };
   f.writer.enqueue([record(1)], "sample\n");
-  await assert.rejects(f.writer.finish(), (error) => error.message === "host observation storage incomplete" && error.code === "EIO");
+  await assert.rejects(f.writer.finish(), { message: "host observation storage incomplete", code: "EIO",
+    ...(stage ? { operation: stage } : {}) });
   await f.writer.settled;
   assert.equal(injected, true); assert.equal(f.writer.state().complete, false);
   assert.equal(f.writer.state().openFiles, 0); assert.equal(f.live.size, 0);

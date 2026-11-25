@@ -15,7 +15,7 @@ import { observeHost, sampleAuditClock, udevSettleCandidates, udevSettleMs, udev
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
 import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
-import { hostStorageFailure } from "./host-durable-writer.mjs";
+import { hostStorageFailure, trackHostStorageStartup } from "./host-durable-writer.mjs";
 import { composePhase } from "./composition.mjs";
 import { prepareMixedAudit, replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { nativeControlPartition, verifyStreamAudit } from "./control-stream.mjs";
@@ -118,7 +118,10 @@ export function createCampaign({ authorize }) {
     const observerStop = new AbortController();
     const commandSignal = signal ? AbortSignal.any([signal, observerStop.signal]) : observerStop.signal;
     const number = c.commandIndex++, path = `${directory}/command-${number}.log`, fd = openSync(join(c.directory, path), "wx", 0o600);
-    let result, observer, hostManifestSha256, pid, startupStorageFailure;
+    const hostDirectory = join(c.directory, directory, `command-${number}-host`);
+    const startupDiagnostic = trackHostStorageStartup(hostDirectory);
+    let result, observer, hostManifestSha256, pid;
+    let startupInterruptedByCommand = false;
     try {
       event(c, "command-intent", { group: binding.request.group, invocation });
       if (compilerTarget) compilerTarget.settled = false;
@@ -128,22 +131,27 @@ export function createCampaign({ authorize }) {
         log(bytes) { let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset, bytes.length - offset); assert.ok(n > 0); offset += n; } },
         async onStart(value, startupSignal) {
           pid = value; event(c, "command-started", { pid });
+          const interrupted = () => { startupInterruptedByCommand = commandSignal.aborted; };
+          startupSignal.addEventListener("abort", interrupted, { once: true });
           try {
             observer = await beginLifetime({ campaign: c.handle.id, binding, invocation,
-              directory: join(c.directory, directory, `command-${number}-host`), command: number, pid, signal: commandSignal, startupSignal,
+              directory: hostDirectory, command: number, pid, signal: commandSignal, startupSignal,
               onFault() { observerStop.abort(); } });
             startupSignal.throwIfAborted();
             await observer.attach(pid);
             startupSignal.throwIfAborted();
           } catch (error) {
-            // Supervision keeps its generic setup error; retain only the writer's
-            // separately branded diagnostic for the failed campaign.
-            startupStorageFailure = hostStorageFailure(error);
             observer?.dispose(); observer = undefined; throw error;
-          }
+          } finally { startupSignal.removeEventListener("abort", interrupted); }
         },
       });
-    } finally { try { fsyncSync(fd); } finally { closeSync(fd); } }
+    } finally {
+      // Use the existing supervisor deadline outcome, not elapsed time or a
+      // new timer. An external cancellation is not a writer timeout.
+      const storage = startupDiagnostic(!startupInterruptedByCommand && result?.error === "native host observation setup incomplete");
+      if (!observer && storage) c.startupStorageFailure = storage;
+      try { fsyncSync(fd); } finally { closeSync(fd); }
+    }
     c.files.push({ path, sha256: digest(readRegular(join(c.directory, path))) });
     const settled = compilerTarget ? () => { compilerTarget.settled = true; } : undefined;
     if (observer) {
@@ -152,8 +160,6 @@ export function createCampaign({ authorize }) {
         path: `${directory}/command-${number}-host/${file.path}`, sha256: file.sha256 });
     } else if (result.terminal) settled?.(); // The gate never admitted this child.
     event(c, "command-exited", { ...result, ...(hostManifestSha256 ? { hostManifestSha256 } : {}) });
-    // A failed setup has no host manifest and cannot pass the proof gates below.
-    if (startupStorageFailure) c.startupStorageFailure = startupStorageFailure;
     assert.equal(result.terminal, true, "native process is not observed terminal");
     const lifetime = hostManifestSha256 ? inspectLifetime(binding, invocation,
       join(c.directory, directory, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result }) : null;

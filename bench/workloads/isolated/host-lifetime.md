@@ -233,11 +233,14 @@ an empty cgroup nor an eventual successful fsync clears a prior storage failure.
 during startup: the first writer operation, its allowlisted code (or
 `unknown`), and, only for a quota refusal, the first exceeded limit
 (`total-bytes`, `queued-bytes`, `queued-frames` or `queued-records`).
-A timed-out wait identifies the active writer stage if one is known,
-distinguishing the final sample fsync from closing its descriptor. These labels
-do not contain exception text, paths or process details. A frame limit reports
-a full queue, not why the writer fell behind. No terminal seal is published on
-this path.
+A timed-out wait identifies the active writer stage if one is known. Record,
+directory and final sample closes are distinct from sync. Startup retains the
+writer's first fault even if cleanup later fails. When the supervisor reports
+its setup deadline and interrupts a pending writer, the halt can name the stage
+without waiting for I/O or treating ordinary cancellation as a storage fault.
+These labels do not contain exception text, paths or process details. A frame
+limit reports a full queue, not why the writer fell behind. No terminal seal
+is published on this path.
 
 Fully observed and flushed cancelled/forced evidence retains the old contract:
 it can be collected as explicitly nonqualifying evidence, never a clean success.
