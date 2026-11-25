@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check, within, steps, pollFor } from "./helpers.mjs";
+import { base, shadowing, skip, check, within, steps, pollFor, cleanUp } from "./helpers.mjs";
 
 export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
   // A page that waits for a write (ReadAgain) reads itself again until the write is in,
@@ -41,39 +41,27 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         (r.headers()["corten"] === "action" ? parts : whole).push(r.url());
       };
       const url = await pending();
-      // The page's own tag, as the server drew it, so the check below can tell it from the one an
-      // answer put in its place. And the first answer whose status line the page draws as `Saved.`,
-      // noted the moment it is drawn (its `data-smoke-read`, below), so a later answer that draws
-      // `Saved.` again before the check looks is not taken for it.
-      await page.addInitScript(() => {
-        document.addEventListener("DOMContentLoaded", () => {
-          (/** @type {any} */ (window)).__pageTag = document.querySelector("main template[data-corten-read-again][data-from]");
-        });
-        if (location.pathname !== "/alerts") return;
-        new MutationObserver((_, observer) => {
-          const status = document.getElementById("alert-status");
-          if (status?.textContent !== "Saved." || !status.hasAttribute("data-smoke-read")) return;
-          (/** @type {any} */ (window)).__firstSaved = status.getAttribute("data-smoke-read");
-          observer.disconnect();
-        }).observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-smoke-read"] });
-      });
       // The write lands 1.5 s after it is sent and the part is first read 1 s after the page has
       // loaded, so a loaded browser's first read can find it landed, and then no answer asks again
       // (#2035). The first read is then answered as the server answers one while the write lands:
       // its status line saying so, and the tag asking again from the same address. A later read is
       // the server's own.
       const from = new URL(url).pathname + new URL(url).search;
+      // The address the tag the first drawn answer put on the page is moved to (`moved` below).
+      const movedFrom = `${from}&smoke-moved=1`;
       // Each part read takes its place in `answers` (its ordinal) the moment it reaches the stand-in,
       // and its answer's status line is marked with it (`data-smoke-read`), so the check can tell
       // which read's answer the page drew last, and which reads came after it.
-      /** Each part read in the order it came, then its answer: whether it asked again, and whether the stand-in gave it. @type {{ asks: boolean, standIn: boolean }[]} */
+      /** Each part read in the order it came (its address), then its answer: whether it asked again, and whether the stand-in gave it. @type {{ url: string, asks: boolean, standIn: boolean }[]} */
       const answers = [];
-      const partReads = (/** @type {URL} */ u) => u.pathname + u.search === from;
+      const partReads = (/** @type {URL} */ u) => u.pathname + u.search === from || u.pathname + u.search === movedFrom;
       const partRead = async (/** @type {import("@playwright/test").Route} */ route) => {
         const request = route.request();
         if (request.method() !== "GET" || request.headers()["corten"] !== "action") return route.fallback();
         const at = answers.length;
-        answers.push({ asks: false, standIn: false });
+        const asked = new URL(request.url());
+        const address = asked.pathname + asked.search;
+        answers.push({ url: address, asks: false, standIn: false });
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
         const headers = res.headers();
@@ -84,11 +72,43 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const standIn = at === 0 && res.ok() && saving !== body && !body.includes("data-corten-read-again");
         const answer = standIn ? `${saving}<template data-corten-read-again="1" data-from="${from}"></template>` : body;
         const marked = answer.replace('<p id="alert-status"', `<p data-smoke-read="${at}" id="alert-status"`);
-        answers[at] = { asks: answer.includes("data-corten-read-again"), standIn };
+        answers[at] = { url: address, asks: answer.includes("data-corten-read-again"), standIn };
         await route.fulfill({ status: res.status(), headers, body: marked });
       };
-      // The route and the listener on the shared page are removed however the case ends.
+      /** The init script below, removed with the route and listener. @type {import("@playwright/test").Disposable | undefined} */
+      let script;
+      // The route, the listener, the init script and its observer on the shared page are removed
+      // however the case ends.
       try {
+        // The page's own tag, as the server drew it, so the check below can tell it from the one an
+        // answer put in its place. The first answer the page draws whose tag asks again has that tag
+        // moved to `movedFrom` the moment it is drawn, so the check can tell the tag on the page,
+        // which a script may change, from the answer's. And the first answer whose status line the
+        // page draws as `Saved.`, noted the moment it is drawn (its `data-smoke-read`, below), so a
+        // later answer that draws `Saved.` again before the check looks is not taken for it.
+        script = await page.addInitScript((movedFrom) => {
+          const w = /** @type {any} */ (window);
+          document.addEventListener("DOMContentLoaded", () => {
+            w.__pageTag = document.querySelector("main template[data-corten-read-again][data-from]");
+          });
+          if (location.pathname !== "/alerts") return;
+          const observer = new MutationObserver(() => {
+            const status = document.getElementById("alert-status");
+            const read = status?.getAttribute("data-smoke-read");
+            if (!status || read == null) return;
+            if (w.__moved === undefined) {
+              const tag = document.querySelector("main template[data-corten-read-again][data-from]");
+              if (tag && tag !== w.__pageTag) {
+                tag.setAttribute("data-from", movedFrom);
+                w.__moved = read;
+              }
+            }
+            if (w.__firstSaved === undefined && status.textContent === "Saved.") w.__firstSaved = read;
+            if (w.__moved !== undefined && w.__firstSaved !== undefined) observer.disconnect();
+          });
+          w.__smokeObserver = observer;
+          observer.observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-smoke-read"] });
+        }, movedFrom);
         try {
           // Inside the guard: Playwright registers the handler before it awaits the browser's setup.
           await page.route(partReads, partRead);
@@ -114,7 +134,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           }));
           check("reading a page's part keeps the document, its history entry and the form", kept.marker === 8 && kept.entries === entries && kept.above === "123.45", JSON.stringify(kept));
           // The part's answer that asked again put its tag in the page's tag's place: one tag, the
-          // last read's, and not the page's own (whose address is the same here).
+          // last read's, and not the page's own (whose address is the same here). And the tag on the
+          // page is the one its next read is made from: the first drawn answer's, moved to
+          // `movedFrom` as it was drawn, sends the read after that answer's to `movedFrom`, where a
+          // read made from the answer's own tag, as it came, would go to `from`.
           const tagged = await page.evaluate(() => {
             const all = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"));
             const first = (/** @type {any} */ (window)).__pageTag;
@@ -122,13 +145,15 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               tags: all.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
               pageTag: !!first,
               pageTagGone: !!first && !first.isConnected && !all.includes(first),
+              moved: /** @type {string | undefined} */ ((/** @type {any} */ (window)).__moved) ?? null,
             };
           });
           const tags = tagged.tags;
+          const movedRead = tagged.moved === null ? null : (answers[Number(tagged.moved) + 1]?.url ?? null);
           check(
             "a page part's answer that asks again takes the place of the tag that asked",
-            answers.some((a) => a.asks) && tags.length === 1 && tags[0] === parts.at(-1) && tagged.pageTag && tagged.pageTagGone,
-            `${JSON.stringify({ ...tagged, answers })} after ${parts.at(-1)}`,
+            answers.some((a) => a.asks) && tags.length === 1 && tags[0] === parts.at(-1) && tagged.pageTag && tagged.pageTagGone && movedRead === movedFrom,
+            `${JSON.stringify({ ...tagged, movedRead, movedFrom, answers })} after ${parts.at(-1)}`,
           );
           // Quiet only once an answer that does not ask again has drawn `Saved.`, within 5 s from
           // before the wait for it above: reads that stopped after an answer that asked again are not
@@ -176,7 +201,16 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           for (const name of ["a page's part reached by the runtime's navigation is read again, not the page", "navigating away stops a page's part reads"]) skip(name, noSwaps);
         }
       } finally {
-        page.off("request", onPart);
+        await cleanUp(
+          () => page.off("request", onPart),
+          () =>
+            within(
+              5000,
+              "the case's observer was not disconnected within 5 s",
+              page.evaluate(() => (/** @type {any} */ (window)).__smokeObserver?.disconnect()),
+            ),
+          () => script?.dispose(),
+        );
       }
     }
 

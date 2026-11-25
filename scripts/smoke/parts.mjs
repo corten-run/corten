@@ -1,4 +1,4 @@
-import { base, engine, skip, check, cleanUp, steps } from "./helpers.mjs";
+import { base, engine, skip, check, cleanUp, steps, within } from "./helpers.mjs";
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -38,7 +38,8 @@ export async function partReads(page, browser, swaps, noSwaps) {
     let reads = 0;
     /** Lets go of each read the route holds: its request is aborted and its handler returns. @type {(() => Promise<void>)[]} */
     const holds = [];
-    // The held reads are let go, the route removed and the page closed however the case ends.
+    // The held reads are let go, the route removed and the page closed however the case ends. Letting
+    // go is bounded, so a hold whose abort never settles does not keep the route or page.
     try {
       // The runtime's read of the part is the page's own address, asked with `corten: action`.
       await held.route(`${base}/`, (route) => {
@@ -129,7 +130,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
       );
     } finally {
       await cleanUp(
-        () => Promise.all(holds.splice(0).map((release) => release())),
+        () => within(5000, "the held reads were not let go within 5 s", Promise.all(holds.splice(0).map((release) => release()))),
         () => held.unrouteAll({ behavior: "ignoreErrors" }),
         () => held.context().close(),
       );
