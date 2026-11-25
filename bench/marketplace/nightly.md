@@ -114,8 +114,8 @@ are not guaranteed to finish by the morning check.
    unchanged. Change the warmup only by a separate reviewed
    change from a saved like-for-like convergence pass, and keep convergence and soak passes out
    of the nightly ([Convergence and soak passes](README.md#convergence-and-soak-passes)).
-   The droplet job does not run them. A soak says its fixed rate held only when every interval
-   sustained it, and a restart "no" only when its live event stream was read with a marker's
+   The droplet job does not run them. A soak says its fixed rate held only when it matched the
+   schedule within tolerance in every recorded interval, and a restart "no" only when its live event stream was read with a marker's
    starts around the load and nothing observed shows a restart; Docker can drop events for a
    slow subscriber, so the event stream detects an update or restart and cannot show there was
    none, and both reports say so beside any reading. A report with `--convergence` compares the pass with the round

@@ -10,12 +10,23 @@ import { convergenceSchema, failureCodes, flattenRule, hasReading, parseSaved, r
 // value that matched its saved pattern. A host's CPU model is saved only as its SHA-256, and this
 // report never prints it.
 const ms = (v) => (v === null ? "-" : v.toFixed(1));
+// The cells with a reading: a convergence cell whose tolerance reading is not itself "no reading"
+// (hasReading), and a soak cell that did not fail (its figures are always there).
+const readCount = (s) => s.cells.filter((c) => (s.schema === convergenceSchema ? hasReading(c) : c.failure === undefined)).length;
+// How each cell was started, stated as having happened only for the cells with a reading; a pass
+// with none states the procedure, since a failed cell may have failed before its container started.
+const startLine = (s) => {
+  const read = readCount(s), all = s.cells.length;
+  return read === 0
+    ? `No cell has a reading. The pass's procedure gives each adapter, source and target a fresh container started by ${startups[s.startup]}, with windows on the k6 engine's clock from the start of the load, which follows that first 200.`
+    : `${read === all ? "Each cell" : `Each cell with a reading (${read} of ${all})`} ran in a fresh container started by ${startups[s.startup]}; windows are the k6 engine's clock from the start of the load, which follows that first 200.`;
+};
 const header = (s, title) => [`# Marketplace ${title} ${s.name}`, "",
   `Commit: \`${s.commit}\`. CPU model: ${s.host.cpuModelSha256 ? "recorded as its SHA-256 only, not printed (its text is in the raw host.txt)" : "not recorded"} (online CPUs ${s.host.onlineCpus ?? "not recorded"}). Window: ${s.startedAt} to ${s.finishedAt}.`,
   s.admission ? `Adapters: those timed round ${s.admission.round} (commit \`${s.admission.commit}\`, summary SHA-256 ${s.admission.summarySha256}) admitted, of ${s.admission.selected.join(", ")}.`
     : `Adapters: ${s.options.apps.join(", ")}, as selected; no timed round's admission was checked.`,
   s.options.group ? `Group ${s.options.group}: its images and container settings.` : "No group: the ungrouped images and container settings, not a group's timed configuration.",
-  `Each adapter, source and target ran in a fresh container started by ${startups[s.startup]}; windows are the k6 engine's clock from the start of the load, which follows that first 200.`,
+  startLine(s),
   `This is not a timed round and ranks nothing: ${s.schema === soakSchema ? "it reports, for each cell with a reading, the adapter's memory at the start and end and its p99 by interval as figures, with no criterion for whether they held, whether the fixed rate held, any observed evidence that the app restarted, and the app's observed exit, signal and OOM events that qualify for the cell (below)" : "it gives, for each cell with a reading, the adapter's throughput by window and whether the end of the pass stayed within a stated tolerance"}, not how fast it is beside another.`];
 // What a reading rests on, scoped to the cells with one: a failed cell (one that failed `settings`
 // or `unconfirmed`, say) did not pass these checks, a convergence cell whose tolerance reading is
@@ -23,8 +34,7 @@ const header = (s, title) => [`# Marketplace ${title} ${s.name}`, "",
 // them, as report.mjs --convergence (convergenceLines) does. A soak cell that did not fail always
 // has its figures, so it is a reading.
 const checksLines = (s) => {
-  const convergence = s.schema === convergenceSchema;
-  const read = s.cells.filter((c) => (convergence ? hasReading(c) : c.failure === undefined)).length, all = s.cells.length;
+  const read = readCount(s), all = s.cells.length;
   if (read === 0) return [];
   // The saved text names its own scope (cells with a reading); the count says how many that is.
   return [`Container checks (${read === all ? `every cell has a reading` : `${read} of ${all} cells have a reading`}): ${s.measurement.containerChecks}.`];
@@ -74,7 +84,7 @@ export function soakReport(s) {
     const growth = m.growthMiB === null ? "unavailable" : `${m.growthMiB >= 0 ? "+" : ""}${m.growthMiB.toFixed(1)} MiB (${m.growthPct.toFixed(1)}%)`;
     lines.push(`| ${c.app} | ${c.source} | ${c.target} | ${c.rate.held ? "held" : "not held"} | ${mib(m.startMiB)} | ${mib(m.endMiB)} | ${growth} | ${ms(c.p99.first)} / ${ms(c.p99.last)} / ${ms(c.p99.max)} | ${c.failedRequests} | ${seen.length ? seen.join(", ") : "none"} | ${restarted} |`);
   }
-  lines.push("", `Fixed rate: "held" means the rate was sustained throughout: k6 dropped no iteration, recorded at least the schedule's floor(1e9 / rate) ns arrivals over the soak (${s.options.windows * s.options.windowSeconds} s, from slot 0) less the allowance of one second of arrivals plus the boundary slot (for an iteration the engine's stop cut off), and in every interval started a number of iterations, by the k6 engine's clock, within that allowance of the interval's own share of the schedule. A soak whose requests arrived early and left later intervals short did not hold it. The counts below are k6's own.`);
+  lines.push("", `Fixed rate: "held" means the rate matched the schedule within tolerance in every recorded interval: k6 dropped no iteration, recorded at least the schedule's floor(1e9 / rate) ns arrivals over the soak (${s.options.windows * s.options.windowSeconds} s, from slot 0) less the allowance of one second of arrivals plus the boundary slot (for an iteration the engine's stop cut off), and in every interval started a number of iterations, by the k6 engine's clock, within that allowance of the interval's own share of the schedule. A soak whose requests arrived early and left later intervals short did not hold it. The counts below are k6's own.`);
   for (const c of s.cells.filter((x) => x.failure === undefined)) {
     const a = c.rate, short = a.intervals.filter((i) => !i.held);
     lines.push("", `${c.app} ${c.source} ${c.target}: k6 recorded ${a.requests} requests and dropped ${a.droppedIterations} iterations; the schedule has at most ${a.scheduled} arrivals, so ${a.shortfall} are not accounted for (allowance ${a.allowance}). ${a.intervals.length - short.length} of ${a.intervals.length} intervals held the rate${short.length ? `; not held: ${short.map((i) => `interval ${i.index} from ${i.startSeconds} s, ${i.arrivals} arrivals of ${i.scheduled} scheduled`).join("; ")}` : ""}.`);

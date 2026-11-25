@@ -118,7 +118,7 @@ test("alert probe runner removes what it created, each by ID after confirming it
   assert.deepEqual(outcome.cleanup.created.map((e) => [e.kind, e.name]), [["network", "alert-probe-test-net"], ["container", "alert-probe-test-upstream"],
     ["container", "alert-probe-test-fixture"], ["container", "alert-probe-test-fixture-probe"], ["container", "alert-probe-test-api"], ["container", "alert-probe-test-api-probe"]]);
   assert.equal(outcome.cleanup.removed.length, 6);
-  assert.deepEqual(outcome.cleanup.remaining, { containers: [], networks: [] });
+  assert.deepEqual(outcome.cleanup.remaining, { containers: 0, networks: 0 });
   assert.equal(docker.containers.size + docker.networks.size, 0);
   for (const c of outcome.cleanup.created) assert.match(c.id, hex);
   // The app and the upstream join the network by the ID its create returned.
@@ -145,7 +145,7 @@ test("a name collision with a foreign container is refused and the foreign conta
   assert.ok(docker.containers.has(foreign.id), "the foreign container survives");
   assert.ok(!docker.calls.some(({ args }) => args.includes(foreign.id)), "the run never inspected, logged or removed it");
   assert.equal(outcome.cleanup.complete, false);
-  assert.deepEqual(outcome.cleanup.remaining, { containers: [], networks: [] }, "nothing this run acknowledged remains");
+  assert.deepEqual(outcome.cleanup.remaining, { containers: 0, networks: 0 }, "nothing this run acknowledged remains");
   assert.ok(!outcome.cleanup.created.some((e) => e.name === foreign.name));
   // Asked directly to remove the foreign ID, the owner check refuses and the refusal fails teardown.
   const owned = ownedResources({ docker, runId: "alert-probe-test" });
@@ -163,7 +163,7 @@ test("a failed removal stays pending, is retried and fails the teardown", async 
   assert.equal(retried.passed, false);
   assert.equal(retried.cleanup.complete, false);
   assert.match(retried.cleanup.failures[0].resource, /^container alert-probe-test-api [0-9a-f]{64}$/);
-  assert.deepEqual(retried.cleanup.remaining, { containers: [], networks: [] });
+  assert.deepEqual(retried.cleanup.remaining, { containers: 0, networks: 0 });
   assert.equal(flaky.containers.size + flaky.networks.size, 0);
   // Always fails: it stays, and so does the network it is attached to; both are reported.
   const stuck = fakeDocker({ faults: {
@@ -173,8 +173,7 @@ test("a failed removal stays pending, is retried and fails the teardown", async 
   const failed = await probeRun(t, stuck);
   assert.equal(failed.passed, false);
   assert.equal(failed.cleanup.complete, false);
-  assert.equal(failed.cleanup.remaining.containers.length, 1);
-  assert.equal(failed.cleanup.remaining.networks.length, 1);
+  assert.deepEqual(failed.cleanup.remaining, { containers: 1, networks: 1 });
   assert.ok(failed.cleanup.failures.some((f) => /survived teardown/.test(f.error)));
   assert.equal(stuck.containers.size, 1);
   assert.equal(stuck.networks.size, 1);
@@ -333,9 +332,10 @@ test("a failed label lookup is kept, and the owner-label sweep still removes con
   } });
   const outcome = await probeRun(t, docker);
   assert.equal(outcome.passed, false);
-  assert.ok(outcome.cleanup.failures.some((f) => /Cannot connect to the Docker daemon/.test(f.error)), "the lookup error is kept");
+  assert.ok(outcome.cleanup.failures.some((f) => f.resource === `unacknowledged creates labelled ${attemptKey}` && f.error === "a docker container listing failed; its output is not kept"), "the lookup failure is kept");
+  assert.ok(!JSON.stringify(outcome.cleanup).includes("Cannot connect"), "its client's diagnostic is not");
   assert.deepEqual(outcome.cleanup.recovered.map((e) => e.kind), ["container"], "the owner-label sweep found the container");
-  assert.deepEqual(outcome.cleanup.remaining, { containers: [], networks: [] });
+  assert.deepEqual(outcome.cleanup.remaining, { containers: 0, networks: 0 });
   assert.equal(docker.containers.size + docker.networks.size, 0);
   assert.equal(docker.calls.filter(({ args }) => args[0] === "network" && args[1] === "rm").length, 1, "the network was removed once, after its container");
   assert.equal(outcome.cleanup.complete, false, "the attempt's own lookup failed, so its cleanup is not confirmed");
@@ -372,6 +372,55 @@ test("a cleanup listing with a noncanonical ID is refused before anything in it 
   assert.equal((await owned.teardown()).complete, true);
 });
 
+test("a foreign full ID in an owner-label listing is never removed, and neither the cleanup record nor its errors name it", async () => {
+  const docker = fakeDocker();
+  // A canonical 64-hex ID of a container this run did not create, which the sweep's listing returns.
+  const foreign = randomBytes(32).toString("hex");
+  docker.containers.set(foreign, { id: foreign, name: "someone-else", labels: { other: "owner" }, args: [] });
+  const sweep = `label=${ownerKey}=alert-probe-test`;
+  const listing = Object.assign(async (args, opts) => {
+    const out = await docker(args, opts);
+    return args[0] === "ps" && args.includes(sweep) ? [out, foreign].filter(Boolean).join("\n") : out;
+  }, { calls: docker.calls, time: docker.time });
+  const owned = ownedResources({ docker: listing, runId: "alert-probe-test" });
+  const network = await owned.network("alert-probe-test-net");
+  const app = await owned.container(["--network", network, "img"], "alert-probe-test-app");
+  const record = await owned.teardown();
+  assert.ok(docker.containers.has(foreign), "the foreign container survives");
+  assert.ok(!docker.calls.some(({ args }) => args[0] === "rm" && args.includes(foreign)), "it was never removed");
+  assert.equal(record.complete, false);
+  assert.ok(!JSON.stringify(record).includes(foreign), `the record names the foreign ID: ${JSON.stringify(record)}`);
+  assert.deepEqual(record.remaining, { containers: 1, networks: 0 }, "what survived is counted, not listed");
+  assert.ok(record.failures.some((f) => f.error === "refusing unowned container; its ID is not kept"), JSON.stringify(record.failures));
+  assert.ok(record.failures.some((f) => f.error === "owned resources survived teardown: 1 container and 0 networks"), JSON.stringify(record.failures));
+  // What the run created is still removed, and named, by its own ID.
+  assert.deepEqual(record.removed.map((e) => e.id).sort(), [network, app].sort());
+  assert.equal(docker.containers.size + docker.networks.size, 1);
+  checkCalls(docker);
+});
+
+test("a failed listing keeps a fixed message, never the client's diagnostic or the filter it echoes", async () => {
+  const canary = "listing-canary-5d1e";
+  const sweep = `label=${ownerKey}=alert-probe-test`;
+  // Both owner-label listings fail with a diagnostic that echoes their filter and a canary.
+  const docker = fakeDocker({ faults: {
+    ps: (args) => args.includes(sweep) ? Object.assign(new Error(`docker ps -a: exit 1\nError response from daemon: invalid filter '${sweep}' ${canary}`), { status: 1 }) : "run",
+    "network ls": (args) => args.includes(sweep) ? Object.assign(new Error(`docker network ls: exit 1\nError response from daemon: invalid filter '${sweep}' ${canary}`), { status: 1 }) : "run",
+  } });
+  const owned = ownedResources({ docker, runId: "alert-probe-test" });
+  await owned.container(["--network", await owned.network("alert-probe-test-net"), "img"], "alert-probe-test-app");
+  const record = await owned.teardown();
+  const saved = JSON.stringify(record);
+  assert.ok(!saved.includes(canary), `the record keeps the client's diagnostic: ${saved}`);
+  assert.ok(!saved.includes("label=") && !saved.includes("Error response"), `the record keeps the echoed filter: ${saved}`);
+  assert.ok(record.failures.some((f) => f.error === "a docker container listing failed (exit 1); its output is not kept"), JSON.stringify(record.failures));
+  assert.ok(record.failures.some((f) => f.error === "a docker network listing failed (exit 1); its output is not kept"), JSON.stringify(record.failures));
+  assert.equal(record.remaining, null, "nothing could be counted");
+  assert.equal(record.complete, false);
+  // What the run created was still removed by its own ID.
+  assert.equal(docker.containers.size + docker.networks.size, 0);
+  checkCalls(docker);
+});
 test("an answer from Docker that is not the confirmation expected is refused with a fixed message that does not quote it", async () => {
   const canary = "f".repeat(65);
   // Each case changes one answer: an rm that confirms something else, an inspect naming another
@@ -511,7 +560,7 @@ test("what an attempt's label found is removed, or confirmed absent, by its own 
       const [made] = (kind === "network" ? docker.networks : docker.containers).keys();
       const record = await owned.teardown();
       const [attempt] = record.unacknowledged;
-      assert.deepEqual(attempt.ids, [made], at);
+      assert.equal(attempt.found, 1, at);
       // Every removal and lookup of it is by its own ID.
       assert.ok(docker.calls.some(({ args }) => args.includes(`id=${made}`)), `${at}: looked up by its ID`);
       if (removable) {
@@ -556,7 +605,7 @@ test("a network an attempt's own label found is removed by its ID even when the 
   const [made] = docker.networks.keys();
   const record = await owned.teardown();
   const [attempt] = record.unacknowledged;
-  assert.deepEqual([attempt.ids, attempt.outcome], [[made], "removed"]);
+  assert.deepEqual([attempt.found, attempt.outcome], [1, "removed"]);
   assert.deepEqual(record.recovered.map((e) => e.id), [made]);
   assert.equal(docker.networks.size, 0, "the network its label found is removed");
   assert.ok(docker.calls.some(({ args }) => args.includes(`id=${made}`)), "looked up by its own ID");

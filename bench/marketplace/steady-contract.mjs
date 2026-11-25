@@ -704,7 +704,7 @@ function passEvidence(s, schema) {
   // Cleanup must be confirmed: no failure, nothing left with the owner label and every create Docker
   // acknowledged confirmed removed (cleanup.json keeps the whole record).
   const k = s.cleanup;
-  assert.ok(k?.complete === true && Array.isArray(k.remaining?.containers) && Array.isArray(k.remaining?.networks) && k.remaining.containers.length === 0 && k.remaining.networks.length === 0
+  assert.ok(k?.complete === true && k.remaining?.containers === 0 && k.remaining?.networks === 0
     && Array.isArray(k.unacknowledged), "a pass whose cleanup is not confirmed complete is not evidence");
   assert.ok(k.failures === 0, "a pass whose cleanup failed is not evidence");
   fields(k, ["complete", "remaining", "created", "removed", "recovered", "failures", "unacknowledged"], "the pass's cleanup");

@@ -212,7 +212,7 @@ test("a convergence pass starts each cell with the timed round's cold start and 
   assert.deepEqual(s.cells.map((c) => [c.target, c.verdict.withinTolerance, c.verdict.fromSeconds, c.failedRequests, c.requests, c.iterations]), [["page", true, 15, 0, 120_000, 120_000], ["json", true, 15, 0, 120_000, 120_000]]);
   assert.equal(s.startup, timedStartup);
   assert.equal(s.finishedCommit, commit);
-  assert.deepEqual(s.cleanup, { complete: true, remaining: { containers: [], networks: [] }, created: 12, removed: 12, recovered: 0, failures: 0, unacknowledged: [] });
+  assert.deepEqual(s.cleanup, { complete: true, remaining: { containers: 0, networks: 0 }, created: 12, removed: 12, recovered: 0, failures: 0, unacknowledged: [] });
   // The host's CPU model is saved only as the SHA-256 of its text; the text is in host.txt alone.
   assert.deepEqual([s.host.kernel, s.host.cpuModelSha256, s.host.onlineCpus, s.fixtureSha256, s.tools.upstream.imageId, s.tools.k6.imageId], ["6.8.0-test", sha256("Synthetic CPU"), "0-7", "f".repeat(64), upstreamImageId, k6ImageId]);
   assert.ok(!readFileSync(join(folder("c"), "summary.json"), "utf8").includes("Synthetic CPU"));
@@ -245,7 +245,7 @@ test("a convergence pass starts each cell with the timed round's cold start and 
     if (c.args[0] === "rm") assert.ok(isId(c.args.at(-1)), c.args.join(" "));
   }
   const cleanup = JSON.parse(readFileSync(join(folder("c"), "cleanup.json"), "utf8"));
-  assert.equal(cleanup.complete, true); assert.deepEqual(cleanup.remaining, { containers: [], networks: [] });
+  assert.equal(cleanup.complete, true); assert.deepEqual(cleanup.remaining, { containers: 0, networks: 0 });
   assert.equal(fake.containers.size, 0); assert.equal(fake.networks.size, 0);
   // A round with the same inputs is like-for-like with what the runner recorded.
   const round = { schema: resultSchema, commit, options: { warmup: 10, startupTimeout: 120 }, host: { cpu: "Synthetic CPU", release: s.host.kernel, onlineCpus: s.host.onlineCpus }, measurement: s.measurement,
@@ -329,7 +329,7 @@ test("a create whose ID Docker withholds is not reported clean, and no further c
   assert.ok(!fake.calls.some((c) => c.args[0] === "create" && c.args[2] === "marketplace-test-run-aspnet"));
   const cleanup = cleanupOf(folder("withheld"));
   assert.equal(cleanup.complete, false);
-  assert.deepEqual(cleanup.remaining, { containers: [], networks: [] }, "the scans found nothing, and that is not taken as clean");
+  assert.deepEqual(cleanup.remaining, { containers: 0, networks: 0 }, "the scans found nothing, and that is not taken as clean");
   assert.deepEqual(cleanup.unacknowledged.map((a) => [a.name, a.outcome]), [["marketplace-test-run-k6", "unconfirmed"]]);
   assert.ok(cleanup.failures.some((f) => /cleanup is unconfirmed/.test(f.error)));
   assert.equal(s.cleanup.complete, false);
@@ -1550,6 +1550,42 @@ test("a soak's app that started again after the launch check and before the load
   validateSoak(during);
 });
 
+test("a foreign full ID in a cleanup listing stays out of cleanup.json and summary.json", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t45", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const sweep = `label=${ownerLabelKey}=marketplace-test-run`;
+  // A canonical ID of a container this pass did not create, which the owner-label listing returns.
+  const foreign = "e".repeat(64);
+  const listed = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => (args[0] === "ps" && args.includes(sweep)
+    ? [...[...state.containers.values()].filter((c) => c.labels[ownerLabelKey] === "marketplace-test-run").map((c) => c.id), foreign].join("\n") : undefined) });
+  listed.containers.set(foreign, { id: foreign, name: "someone-else", kind: "foreign", labels: { other: "owner" }, args: [], image: "x", imageId: "x", state: { Running: true } });
+  const s = await run(listed, options, folder("foreign"));
+  assert.ok(listed.containers.has(foreign), "the foreign container survives");
+  assert.ok(!listed.calls.some((c) => c.args[0] === "rm" && c.args.includes(foreign)), "it was never removed");
+  for (const file of ["cleanup.json", "summary.json"]) assert.ok(!readFileSync(join(folder("foreign"), file), "utf8").includes(foreign), `${file} names the foreign ID`);
+  assert.deepEqual(s.cleanup.remaining, { containers: 1, networks: 0 }, "what survived is counted, not listed");
+  assert.equal(s.cleanup.complete, false);
+  assert.equal(s.complete, false);
+  assert.ok(cleanupOf(folder("foreign")).failures.some((f) => f.error === "refusing unowned container; its ID is not kept"));
+});
+
+test("a failed cleanup listing whose client diagnostic echoes its filter keeps that diagnostic in errors.log only", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t46", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const sweep = `label=${ownerLabelKey}=marketplace-test-run`;
+  const canary = "listing-canary-5d1e";
+  const failing = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args) => (args[0] === "ps" && args.includes(sweep)
+    ? new Error(`Error response from daemon: invalid filter '${sweep}' ${canary}`) : undefined) });
+  const f = await run(failing, options, folder("failing"));
+  for (const file of ["cleanup.json", "summary.json", "run.log"]) {
+    const text = readFileSync(join(folder("failing"), file), "utf8");
+    assert.ok(!text.includes(canary) && !text.includes("invalid filter"), `${file} keeps the listing's diagnostic`);
+  }
+  assert.ok(cleanupOf(folder("failing")).failures.some((x) => x.error === "a docker container listing failed; its output is not kept"), JSON.stringify(cleanupOf(folder("failing")).failures));
+  assert.ok(errorsOf(folder("failing")).includes(canary), "the raw diagnostic is in errors.log");
+  assert.equal(f.cleanup.remaining, null);
+  assert.equal(f.cleanup.complete, false);
+});
 test("a create whose acknowledgement was lost counts as cleaned up only once what its label found is removed by its own ID; until then the fixture copy is kept", async (t) => {
   const folder = folderOf(t);
   const options = parseSteadyArgs(["convergence", "t44", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
@@ -1562,7 +1598,7 @@ test("a create whose acknowledgement was lost counts as cleaned up only once wha
   const s = await run(stuck, options, folder("stuck"));
   assert.equal(s.cells[0].failure, "container");
   const cleanup = cleanupOf(folder("stuck"));
-  assert.deepEqual(cleanup.unacknowledged.map((a) => [a.name, a.outcome, a.ids?.length]), [["marketplace-test-run-k6", "not removed", 1]]);
+  assert.deepEqual(cleanup.unacknowledged.map((a) => [a.name, a.outcome, a.found]), [["marketplace-test-run-k6", "not removed", 1]]);
   assert.equal(cleanup.complete, false);
   assert.ok(cleanup.failures.some((f) => /not each removed or confirmed absent by its own ID/.test(f.error)));
   assert.equal(s.cleanup.complete, false);

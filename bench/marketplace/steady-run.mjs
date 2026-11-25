@@ -852,8 +852,9 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     try { cleanup = await owned.teardown(); } catch (e) { keep("teardown", e); cleanup = { ...owned.record, complete: false, failures: [...owned.record.failures, { resource: runId, error: firstLine(e) }] }; }
     retain(join(folder, "cleanup.json"), cleanup);
     // What a saved reader checks before it counts the pass (steady-contract.mjs passEvidence): counts,
-    // and the names and labels this pass gave its own creates. cleanup.json keeps the whole record.
-    const ids = (list) => (Array.isArray(list) ? list.filter((id) => containerId.test(id)) : []);
+    // and the names and labels this pass gave its own creates. cleanup.json keeps the whole record,
+    // which counts what survived teardown rather than listing it (ownedResources).
+    const count = (n) => (Number.isSafeInteger(n) && n >= 0 ? n : null);
     // Complete only when every acknowledged create is among the resources confirmed removed by its
     // ID, whatever the record's own flag says (a create Docker did not acknowledge is recovered by
     // its label instead; passEvidence checks the counts of both).
@@ -864,7 +865,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     // confirmed absent, by its own ID (ownedResources teardown): otherwise a container may still mount the copy.
     const attempts = Array.isArray(cleanup.unacknowledged) && cleanup.unacknowledged.every((a) => a?.outcome === "removed");
     if (cleanup.complete === true && !attempts) log("cleanup not confirmed: a create Docker did not acknowledge was not confirmed removed (cleanup.json)");
-    summary.cleanup = { complete: cleanup.complete === true && accounted && attempts, remaining: cleanup.remaining ? { containers: ids(cleanup.remaining.containers), networks: ids(cleanup.remaining.networks) } : null,
+    summary.cleanup = { complete: cleanup.complete === true && accounted && attempts, remaining: cleanup.remaining ? { containers: count(cleanup.remaining.containers), networks: count(cleanup.remaining.networks) } : null,
       created: cleanup.created.length, removed: cleanup.removed.length, recovered: cleanup.recovered.length, failures: cleanup.failures.length,
       unacknowledged: cleanup.unacknowledged.map((a) => ({ name: savedValue("runId", a.name), label: savedValue("attemptLabel", a.label), outcome: ["removed", "not removed"].includes(a.outcome) ? a.outcome : "unconfirmed" })) };
     // The fixture copy is removed only once every container that may mount it is confirmed removed;

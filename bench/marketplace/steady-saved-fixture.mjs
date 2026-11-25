@@ -14,7 +14,7 @@ export function savedPass(options, cells, { commit = "c".repeat(40), host = {}, 
   const saved = savedOptions(options), kind = saved.kind, created = passCreates + cells.length * cellCreates[kind];
   return { schema: kind === "convergence" ? convergenceSchema : soakSchema, name: saved.name, runId: `marketplace-${kind}-${saved.name}-0123456789`, options: saved,
     ...(kind === "convergence" ? { rule: flattenRule } : {}), startedAt: "2026-11-20T00:00:00.000Z", finishedAt: "2026-11-20T01:00:00.000Z", complete: true, failures: [],
-    cleanup: { complete: true, remaining: { containers: [], networks: [] }, created, removed: created, recovered: 0, failures: 0, unacknowledged: [] }, cells, admission: null, startup: timedStartup,
+    cleanup: { complete: true, remaining: { containers: 0, networks: 0 }, created, removed: created, recovered: 0, failures: 0, unacknowledged: [] }, cells, admission: null, startup: timedStartup,
     host: { platform: "linux", release: "6.8.0-test", node: "v26.13.1", docker: "27.5.1", kernel: "6.8.0-test", cpuModelSha256: cpuModelDigest("Synthetic test only"), onlineCpus: "0-7", ...host },
     scope: passScope[kind],
     measurement: { cpus: cpuSettings(pinnedEnv), appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", clock: windowClock, containerChecks, ...(kind === "soak" ? { memoryClock: soakMemoryClock } : {}), ...measurement },

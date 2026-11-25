@@ -260,7 +260,7 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.failures = [{ stage: "suite", code: "error" }]; }, /suite failure/],
     [(v) => { v.cleanup.failures = 1; }, /cleanup failed/],
     [(v) => { v.cleanup.complete = false; }, /cleanup is not confirmed complete/],
-    [(v) => { v.cleanup.remaining.containers = ["a".repeat(64)]; }, /cleanup is not confirmed complete/],
+    [(v) => { v.cleanup.remaining.containers = 1; }, /cleanup is not confirmed complete/],
     [(v) => { v.cleanup.unacknowledged = [{ name: "x-k6", label: "l", outcome: "unconfirmed" }]; }, /create Docker did not acknowledge/],
     [(v) => { delete v.cleanup; }, /cleanup is not confirmed complete/],
     // Complete, with counts that do not show every acknowledged create removed by its ID: none or
@@ -467,6 +467,9 @@ test("a report states its container checks only for the cells with a reading, an
     assert.doesNotMatch(text, /^Container checks/m, name);
     assert.doesNotMatch(text, /matched what the pass records|delivered no update/, name);
     assert.doesNotMatch(text, /event stream for its app/, name);
+    // Nor does it say a cell ran in a fresh container: it states the procedure instead.
+    assert.doesNotMatch(text, /ran in a fresh container/, name);
+    assert.match(text, /^No cell has a reading\. The pass's procedure gives each adapter, source and target a fresh container started by the timed round's cold start/m, name);
   }
   // A pass with one failed cell among readings scopes the line to the cells with a reading.
   const { containerChecks } = convergencePass().measurement;
@@ -475,6 +478,8 @@ test("a report states its container checks only for the cells with a reading, an
   validateConvergence(partial);
   assert.ok(convergenceReport(partial).split("\n").includes(`Container checks (7 of 8 cells have a reading): ${containerChecks}.`));
   assert.ok(convergenceReport(convergencePass()).split("\n").includes(`Container checks (every cell has a reading): ${containerChecks}.`));
+  assert.match(convergenceReport(partial), /^Each cell with a reading \(7 of 8\) ran in a fresh container started by the timed round's cold start/m);
+  assert.match(convergenceReport(convergencePass()), /^Each cell ran in a fresh container started by the timed round's cold start/m);
 });
 
 test("a soak report's opening promises only what its table reports: observed restart evidence and qualifying events, for cells with a reading", () => {
@@ -593,7 +598,8 @@ test("a soak says held only when every interval sustained the fixed rate, and na
   assert.match(text, /^\| corten \| fixture \| page \| not held \|/m);
   assert.match(text, /0 of 30 intervals held the rate; not held: interval 0 from 0 s, 270001 arrivals of 9001 scheduled; interval 1 from 60 s, 0 arrivals of 9000 scheduled;/);
   assert.match(text, /the fixed 150 requests\/second was not held, so this is not a fixed-rate result/);
-  assert.match(text, /"held" means the rate was sustained throughout/);
+  assert.match(text, /"held" means the rate matched the schedule within tolerance in every recorded interval:/);
+  assert.doesNotMatch(text, /sustained throughout/);
   // A saved soak that claims it held, or forges an interval's claim or schedule, is refused: the reader recomputes them from the arrivals.
   for (const mutate of [(v) => { v.cells[0].rate.held = true; }, (v) => { for (const i of v.cells[0].rate.intervals) i.held = true; }, (v) => { v.cells[0].rate.intervals[1].scheduled = 0; v.cells[0].rate.intervals[1].held = true; },
     (v) => { v.cells[0].rate.intervals.pop(); }, (v) => { delete v.cells[0].rate.intervals; }])

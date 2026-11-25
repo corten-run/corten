@@ -215,7 +215,10 @@ resources confirmed removed by its ID and every ID found by an attempt's label w
 confirmed absent that way; otherwise the fixture copy is kept. A
 create Docker did not acknowledge ends the pass at the step that made it, even when teardown finds
 it by its label and removes it, so the pass is incomplete; the record of it stays in `cleanup.json`
-and in that summary, for diagnosis. A saved pass is refused, whatever its `complete` flag says,
+and in that summary, for diagnosis. Both name an ID only once the pass has it from its own create
+or has confirmed its owner label on it: what survived teardown is counted, not listed, and a
+failure on an ID a listing returned, or of a listing itself, is a fixed message (Docker's own
+output stays in `errors.log`). A saved pass is refused, whatever its `complete` flag says,
 unless its removed count equals its acknowledged creates (each is removed by its ID), it has no
 unacknowledged create and recovered nothing by its label, and its acknowledged creates are the
 ones its cells imply: four for the pass
@@ -466,7 +469,8 @@ The fixed rate is reconciled against its schedule: k6's constant-arrival-rate st
 per tick of floor(1e9 / rate) ns from slot 0, at most floor(duration / tick) + 1 over the soak.
 `window-load.js` also counts each iteration in the interval k6's engine started it in
 (`window_N_arrivals`), and the soak saves those counts with each interval's share of the
-schedule. The report says "held" only when the rate was sustained throughout: k6 dropped no
+schedule. The report says "held" only when the rate matched the schedule within tolerance in every recorded
+interval: k6 dropped no
 iteration, its recorded requests fall short of the schedule by at most one second of arrivals plus
 the boundary slot (the allowance for an iteration the engine's stop cut off), and every interval's
 arrivals are within that same allowance of its share of the schedule. A soak whose 270,000
@@ -716,7 +720,11 @@ keeps a bounded diagnostic (case, POST chain, document requests, ready state, me
 document tail) for each failure. Its containers and network carry the run's owner label and
 are removed by the IDs their creation returned after confirming that label; a removal that
 fails or an owner that cannot be confirmed fails the run, and `cleanup.json` records the
-outcome. The app and upstream join the network by its ID. Extra `--label` keys may not be the
+outcome. Catalog Contract uploads that record even when the run fails, so it names an ID only once
+the run has it from its own create or has confirmed its owner label on it: an ID a listing
+returned that is not confirmed as the run's is never named, a failure on it is recorded as a fixed
+message, what survived teardown is counted rather than listed, and a listing that fails is recorded
+by its kind and exit status alone, never with its client's diagnostic, which can echo the filter. The app and upstream join the network by its ID. Extra `--label` keys may not be the
 owner key `run.corten.marketplace.alert-probe` or a key in its dot-delimited namespace
 (`run.corten.marketplace.alert-probe.*`); other keys, even with the same literal prefix, are
 ordinary. A create that returns no ID, whatever its error (a daemon error can follow a create

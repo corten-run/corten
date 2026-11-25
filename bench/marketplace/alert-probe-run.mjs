@@ -89,6 +89,10 @@ export function runClock({ total = Infinity, reserve = teardownReserve, now = Da
 // (bench/catalog/output.mjs commandRunner) still runs them; the probe's own docker ignores it.
 // `describe` turns an error into the text the record keeps; the probe keeps a bounded message, and
 // steady-run.mjs keeps only the first line it composes, with the rest in its raw errors.log.
+// The record is published (the probe's cleanup.json is a CI artifact, and a pass copies its counts
+// into summary.json), so it names an ID only once this run has it from its own create or has
+// confirmed the run's owner label on it. An ID a listing returned is untrusted until then: a failure
+// on it, a listing's own failure and what survived teardown are recorded as fixed messages and counts.
 export function ownedResources({ docker, runId, labels = [], timeout = commandTimeout, clock = runClock(), window = reconcileWindow, owner: key = ownerKey, describe = brief }) {
   const attempt = `${key}.create`;
   const owner = ["--label", `${key}=${runId}`], extra = callerLabels(labels, key);
@@ -96,6 +100,15 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
   let attempts = 0;
   const record = { runId, ownerLabel: `${key}=${runId}`, created: [], removed: [], recovered: [], unacknowledged: [], failures: [], remaining: null };
   const fail = (resource, error) => record.failures.push({ resource, error: describe(error) });
+  // IDs the record may name: returned by this run's own create, or confirmed to carry its owner label.
+  const known = new Set();
+  // IDs removed, or confirmed absent, by their own ID, whether or not the record may name them.
+  const gone = new Set();
+  // What each unacknowledged create's own label found, kept here: the record keeps only how many.
+  const found = new Map();
+  // An error whose message is fixed and names no ID, filter or Docker output (`unnamed`), so it may
+  // be recorded against an ID the record does not name.
+  const fixed = (message, unnamed = message) => Object.assign(new Error(message), { unnamed });
   // Every command is bounded by its own timeout and by its phase's share of the run deadline: work
   // stops at the reserve, cleanup at the end. A command with no time left is not sent.
   const within = (left, phase = {}) => async (args, options = {}) => {
@@ -105,8 +118,9 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
   };
   const work = within(clock.work), clean = within(clock.cleanup, { cleanup: true });
   const confirm = (kind, info, id) => {
-    same(info?.Id, id, `${kind} ${id}: inspect returned a different object`);
-    same((kind === "container" ? info.Config?.Labels : info.Labels)?.[key], runId, `refusing unowned ${kind} ${id}`);
+    if (info?.Id !== id) throw fixed(`${kind} ${id}: inspect returned a different object`, `${kind}: inspect returned a different object; its ID is not kept`);
+    if ((kind === "container" ? info.Config?.Labels : info.Labels)?.[key] !== runId) throw fixed(`refusing unowned ${kind} ${id}`, `refusing unowned ${kind}; its ID is not kept`);
+    known.add(id);
     return info;
   };
   const inspect = async (call, id) => confirm("container", dockerJson(await call(["container", "inspect", id]), "docker container inspect")[0], id);
@@ -114,13 +128,22 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
   // otherwise noncanonical entry could name another object, so the whole listing is refused
   // before anything in it is inspected or removed, and the caller keeps the failure. The refusal
   // names only the kind of listing and how many entries were refused: the entries and the filter
-  // are left out, since an answer that is not an ID is untrusted and the record is published.
+  // are left out, since an answer that is not an ID is untrusted and the record is published. A
+  // listing that fails is recorded the same way, by its kind and exit status alone: its client's
+  // diagnostic can echo the filter and the daemon's answer (steady-run.mjs keeps it in errors.log).
   const list = async (kind, filter, call = clean) => {
-    const found = ids(await call(kind === "network" ? ["network", "ls", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]
-      : ["ps", "-a", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]));
-    const odd = found.filter((id) => !/^[0-9a-f]{64}$/.test(id)).length;
-    if (odd) throw new Error(`a docker ${kind} listing returned ${odd} ${odd === 1 ? "entry" : "entries"} that ${odd === 1 ? "is" : "are"} not a full container or network ID; nothing in it is inspected or removed`);
-    return found;
+    let text;
+    try {
+      text = await call(kind === "network" ? ["network", "ls", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]
+        : ["ps", "-a", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]);
+    } catch (error) {
+      const why = error?.sent === false ? "was not sent, the run deadline is spent" : `failed${Number.isSafeInteger(error?.status) ? ` (exit ${error.status})` : ""}`;
+      throw Object.assign(fixed(`a docker ${kind} listing ${why}; its output is not kept`), error?.sent === false ? { sent: false } : {});
+    }
+    const listed = ids(text);
+    const odd = listed.filter((id) => !/^[0-9a-f]{64}$/.test(id)).length;
+    if (odd) throw fixed(`a docker ${kind} listing returned ${odd} ${odd === 1 ? "entry" : "entries"} that ${odd === 1 ? "is" : "are"} not a full container or network ID; nothing in it is inspected or removed`);
+    return listed;
   };
   // A create is acknowledged only by the ID it returns. Without one (an error, even from the daemon,
   // a deadline, a lost connection) Docker may have made the resource or may still make it, even
@@ -138,21 +161,27 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
       record.unacknowledged.push({ kind, name, label, error: `docker ${kind} create returned no full ID` });
       assert.fail(`docker ${kind} create ${name} returned no ID`);
     }
-    pending.set(id, { kind, id, name }); record.created.push({ kind, id, name, label });
+    known.add(id); pending.set(id, { kind, id, name }); record.created.push({ kind, id, name, label });
     return id;
   }
   // Whether `id` still exists, from a lookup by that ID (as bench/fullstack/idle-close.mjs present):
   // only an empty answer is absence, and exactly that ID is presence. Any other answer (another
   // full ID, or several) leaves the removal unconfirmed, a teardown failure; the message names the
-  // ID that was asked for, already validated, and never the one returned.
+  // ID that was asked for, already validated, and never the one returned (nor that one, where the
+  // record may not name it).
   const present = async (kind, id) => {
-    const found = await list(kind, `id=${id}`);
-    if (!found.length) return false;
-    if (found.length !== 1 || found[0] !== id) throw new Error(`a docker ${kind} lookup by ID ${id} returned another object; its removal is unconfirmed`);
+    const listed = await list(kind, `id=${id}`);
+    if (!listed.length) return false;
+    if (listed.length !== 1 || listed[0] !== id) throw fixed(`a docker ${kind} lookup by ID ${id} returned another object; its removal is unconfirmed`, `a docker ${kind} lookup by ID returned another object; its removal is unconfirmed and its ID is not kept`);
     return true;
   };
+  // Removes, or confirms absent, the resource with this ID. A failure is recorded against the ID only
+  // if the record may name it; otherwise against what kind of resource a listing returned, with the
+  // error's fixed message (or, for any other error, a fixed one), and a resource confirmed absent
+  // without its owner label confirmed is counted without its ID.
   async function remove(id, { recovered = false } = {}) {
     const entry = pending.get(id) ?? { kind: "container", id, name: null };
+    const named = () => known.has(id);
     try {
       if (entry.kind === "network") {
         if (await present("network", id)) {
@@ -163,10 +192,14 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
         await inspect(clean, id);
         same(await clean(["rm", "-f", "-v", id]), id, `docker rm did not confirm ${id}`);
       }
-      pending.delete(id);
-      (recovered ? record.recovered : record.removed).push(entry);
+      pending.delete(id); gone.add(id);
+      (recovered ? record.recovered : record.removed).push(named() ? entry : { kind: entry.kind, id: null, name: entry.name });
       return true;
-    } catch (error) { fail(`${entry.kind} ${entry.name ?? "unregistered"} ${id}`, error); return false; }
+    } catch (error) {
+      if (named()) fail(`${entry.kind} ${entry.name ?? "unregistered"} ${id}`, error);
+      else record.failures.push({ resource: `${entry.kind} a listing returned, its owner label not confirmed`, error: error?.unnamed ?? `its owner label could not be confirmed, so it was not removed; its ID is not kept` });
+      return false;
+    }
   }
   return {
     record,
@@ -196,13 +229,13 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
       const end = clock.now() + searched;
       const look = within(() => Math.min(clock.cleanup(), end - clock.now()), { cleanup: true });
       try {
-        const missing = () => record.unacknowledged.filter((attempt) => !attempt.ids);
+        const missing = () => record.unacknowledged.filter((attempt) => !found.has(attempt));
         const open = () => end - clock.now() >= 1;
         while (missing().length && open()) {
           for (const attempt of missing()) {
             if (!open()) break;
-            const found = await list(attempt.kind, `label=${attempt.label}`, look);
-            if (found.length) attempt.ids = found;
+            const listed = await list(attempt.kind, `label=${attempt.label}`, look);
+            if (listed.length) { found.set(attempt, listed); attempt.found = listed.length; }
           }
           const last = end - Math.min(lastLook, searched / 2);
           if (!missing().length || clock.now() >= last) break;
@@ -211,10 +244,9 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
       } catch (error) { fail(`unacknowledged creates labelled ${attempt}`, error); }
       // Each ID an attempt's own label found and not yet removed: removed, or confirmed absent, by
       // that ID (remove looks it up by ID first), never left to the owner-label sweep's listing.
-      const removed = () => new Set([...record.removed, ...record.recovered].map((entry) => entry.id));
       const settleFound = async (kind) => {
-        for (const attempt of record.unacknowledged) if (attempt.kind === kind) for (const id of attempt.ids ?? []) {
-          if (removed().has(id)) continue;
+        for (const attempt of record.unacknowledged) if (attempt.kind === kind) for (const id of found.get(attempt) ?? []) {
+          if (gone.has(id)) continue;
           if (!pending.has(id)) pending.set(id, { kind, id, name: null });
           await remove(id, { recovered: true });
         }
@@ -233,17 +265,20 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
       // As for containers: a failed owner-label listing does not keep a network an attempt's own
       // label found from being removed, or confirmed absent, by its ID.
       await settleFound("network");
+      // What survived is counted, not listed: an ID in this listing is not confirmed as the run's.
       try {
-        record.remaining = { containers: await list("container", label), networks: await list("network", label) };
-        assert.deepEqual(record.remaining, { containers: [], networks: [] }, "owned resources survived teardown");
+        const remaining = { containers: (await list("container", label)).length, networks: (await list("network", label)).length };
+        record.remaining = remaining;
+        const count = (n, kind) => `${n} ${kind}${n === 1 ? "" : "s"}`;
+        if (remaining.containers || remaining.networks) throw new Error(`owned resources survived teardown: ${count(remaining.containers, "container")} and ${count(remaining.networks, "network")}`);
       } catch (error) { fail(`resources labelled ${record.ownerLabel}`, error); }
       // An empty scan does not prove an unacknowledged create will never land; only finding and
       // removing what it made does. Found but not each removed or confirmed absent by its ID: not complete.
-      const gone = removed();
       for (const attempt of record.unacknowledged) {
-        attempt.outcome = !attempt.ids ? "unconfirmed" : attempt.ids.every((id) => gone.has(id)) ? "removed" : "not removed";
+        const ids = found.get(attempt);
+        attempt.outcome = !ids ? "unconfirmed" : ids.every((id) => gone.has(id)) ? "removed" : "not removed";
         if (attempt.outcome === "not removed") fail(`${attempt.kind} ${attempt.name} (${attempt.label})`, "what its create made was found by its label but not each removed or confirmed absent by its own ID");
-        if (!attempt.ids) fail(`${attempt.kind} ${attempt.name} (${attempt.label})`, `its create was not acknowledged and nothing with that label was found in ${searched} ms; Docker may still make it, so its cleanup is unconfirmed`);
+        if (!ids) fail(`${attempt.kind} ${attempt.name} (${attempt.label})`, `its create was not acknowledged and nothing with that label was found in ${searched} ms; Docker may still make it, so its cleanup is unconfirmed`);
       }
       record.complete = record.failures.length === 0;
       return record;
