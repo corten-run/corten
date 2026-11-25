@@ -37,6 +37,40 @@ and an image name. It checks both fixture/API sources, JS/no-JS native forms,
 same-cookie-jar readback, locale validation, isolation and concurrent writes.
 It is test-only, not a shared application backend or a performance measurement.
 
+## Matched profile parity
+
+The matched profile's existing 10-second request deadline still returns 503
+and drops the in-flight handler and upstream read. The deadline response now
+has a short `text/plain` body. This addresses the missing Content-Type in Mixed
+Production r69, where the upstream reads were already cancelled.
+
+The r65 Marketplace checks exposed separate gaps. In the matched profile,
+missing or failed record JSON reads and a wrong method on the record endpoint
+return Problem Details. The router still decides which methods are allowed.
+An upstream error on the page returns HTML with the existing 500 status.
+`GET /health/live` answers without reading the record source.
+
+The matched script policy still permits evaluation for Topcoat's native runtime,
+and the adapter does not yet check the configured Host allowlist. Neither r65
+source is requalified by these changes. The r65 deadline, body/header limits
+and connection cap that were not probed are not diagnosed here.
+See the [recorded qualification outcomes](https://github.com/corten-run/corten/issues/1305#issuecomment-7147850444).
+
+On a Linux build runner, from this app directory with the pinned Topcoat CLI:
+
+```sh
+cargo build --release --locked
+topcoat asset bundle --release
+node tests/check-parity.mjs target/release/item-page-topcoat
+```
+
+The probe uses the actual bundled binary and a loopback record source. It
+checks both source modes, error representations and liveness, plus the real
+deadline and one upstream cancellation in each API locale. It does not qualify
+the app for load or replace the shared browser and hardening checks.
+
+## Alert write handling
+
 Alert writes reject malformed record identities and ratings. The existing native
 page resolves its full view and preflights native HTML materialization before
 committing; it still returns a Topcoat view, retaining native page/frame delivery.
