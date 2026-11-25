@@ -9,13 +9,15 @@ Pending entries are in [changelog.d/](changelog.d/).
 
 ## 0.3.0 (2026-11-25)
 
-Upgrading from 0.2.0: each of the 35 entries under [Breaking changes](#breaking-changes) says what
+Upgrading from 0.2.0: each of the 40 entries under [Breaking changes](#breaking-changes) says what
 to change. The largest are that the app keeps a `Public` page, and `Public` JSON, text and files
 of 1,024 bytes or more, for its shared lifetime instead of running the handler for every request
 (`App::kept_answers`); that a write answering its own page is drawn whole with its layout reads,
-and a direct patch comes from `req.action()`; and that `html!` and component stylesheets refuse
-more markup and selectors a browser would read differently, while values a script reads move from
-`data-` attributes to typed refs (copied `corten-ui` kits update with `corten ui add --merge`).
+and a direct patch comes from `req.action()`; that `html!` refuses a path in the app written as
+text in a URL attribute (`href="/items"`), which links to the route instead; and that `html!` and
+component stylesheets refuse more markup and selectors a browser would read differently, while
+values a script reads move from `data-` attributes to typed refs (copied `corten-ui` kits update
+with `corten ui add --merge`).
 `corten build --profile-from` makes a profile-guided release build, which the image `corten new`
 writes can use. Apps need Rust 1.89 or later and, with scripts, TypeScript 6.0 or later;
 `corten-cluster` apps move to async-nats 0.53. Entries about `bench/` and CI change nothing an app
@@ -109,7 +111,7 @@ builds against.
   `patch_or`, `invalid` and `invalid_with` keep their APIs; the plain-request debug guard still
   covers explicit mode overrides and raw marked responses.
 
-- **Breaking:** For tables using a copied kit `SortHeader` or a custom header with `rows::sort`, declare `let cell = refs();` in the table's component, replace `data-sort={value}` with `ref={cell.with(value)}` on the cell, and change that column's handler to `rows::sortByNumber(event, target, cell)` or `rows::sortByText(event, target, cell)`. Headers that sort by cell contents or on the server do not need to change. ComboBox search terms now use an internal typed ref; its Rust API is unchanged.
+- **Breaking:** For tables using a copied kit `SortHeader` or a custom header with `rows::sort`, declare `let cell = refs();` in the table's component, replace `data-sort={value}` with `ref={cell.with(value)}` on the cell, and change that column's handler to `rows::sortByNumber(event, target, cell)` or `rows::sortByText(event, target, cell)`. Headers that sort by cell contents or on the server do not need to change. ComboBox search terms now use an internal typed ref; its Rust API is unchanged. The table kit entry below then adds the table's head after `target`, so the final call is `rows::sortByNumber(event, target, head, cell)` (`rows.js`: `event, link, head, cells`).
 
 - **Breaking:** `Types::components` now declares named `ToJson` handler arguments and their
   nested types, so they no longer need `Types::add`. TypeScript generation fails if a handler
@@ -160,8 +162,8 @@ builds against.
 - **Breaking:** The app keeps a `Public` body (JSON, text, a file) of 1,024 bytes or more whatever its type, also without `compress`: a `Public` PNG or PDF is held for its lifetime and its handler no longer runs for each request. Upgrade such a route as a kept page above, and send a large file that never changes at a URL that names its content (`Public::immutable`), which is not kept.
   ([#1877 The tag's hash is a third of a request for a file the app does not compress: about 2.5 instructions a byte, made again for every answer that is not kept](https://github.com/corten-run/corten/issues/1877))
 
-- **Breaking:** A `Public` page is no longer kept when its handler takes an input Corten does not fill: an `Option` of one, or a `Form` before the last argument. The hidden trait behind `Params` is sealed, and a `Form` of a type Corten cannot read no longer compiles in a `Public` handler. [#1803 A hand-written impl of a doc-hidden route trait can read a header under Params](https://github.com/corten-run/corten/issues/1803)
-  To keep such a page, take the input without `Option` and put a `Form` last. A `Form` in a `Public` handler needs a type that implements `serde::Deserialize`, and a route needs `#[derive(Route)]` rather than a hand-written impl of the hidden trait.
+- **Breaking:** A `Public` page is no longer kept when its handler takes an input Corten does not fill: an `Option` of one, or a `Form` before the last argument. A hand-written `ReadPath` impl (the hidden trait behind `Params`) no longer compiles; a `Form` type in a `Public` handler must implement `serde::de::DeserializeOwned`. [#1803 A hand-written impl of a doc-hidden route trait can read a header under Params](https://github.com/corten-run/corten/issues/1803)
+  To keep such a page, take the input without `Option` and put a `Form` last. Give a `Form` an owned type that derives `serde::Deserialize`, and a route `#[derive(Route)]` rather than a hand-written `ReadPath` impl.
 
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including
   names with expression values), hand-written `data-key` (write `key={..}`), and visible HTML
@@ -194,6 +196,15 @@ builds against.
   when it is sent
   ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409),
   [design Choice 54](docs/design.md#choice-html-parse-refusals)).
+
+- **Breaking:** `FeedUrl<Row>` now requires `Row` to resolve to the declarations `corten::types` generates
+  (`import("../types/app").Row`), as `ScreenUrl<Data>` does. A local typedef, an import from
+  another module, or an undeclared row name does not compile; generated imports and their
+  aliases keep the feed's row type tied to the server's. Before, the name alone picked the Rust
+  type, so `@param {FeedUrl<Level>}` compiled with no declaration of `Level` in the script. To
+  upgrade, import the row from the generated declarations,
+  `/** @import { Level } from "../types/app" */` (the path from the script to the app's
+  `types/app`), or write `FeedUrl<import("../types/app").Level>`.
 
 - **Breaking (for `#![deny(warnings)]` builds):** `Day::midnight_utc` is deprecated for
   `day.start(Utc)`, the same instant, so a crate that denies warnings and calls it no longer
@@ -448,6 +459,38 @@ builds against.
   ([design Choice 25](docs/design.md#choice-axum-router), migration step 1)
   ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
 
+- **Breaking:** `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
+  `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
+  value that starts with one `/` (or `\`), or is `http:` or `https:` without the `//` of a
+  host, such as `href="/items"`, `href={"/items"}` or `action="/watch"`, is a compile error that
+  names the fix, as the type-safety guide already said of every link. This breaks an app that
+  wrote one. To migrate, link to the route, `href={url::Items}` (a `#[derive(Route)]` struct;
+  `url::Item { id: &id }` for one with parameters, `url::Items.at(Id)` for a place on a page),
+  and name a static file by its constant, `src={req.asset(Static::LOGO_SVG)}`
+  (`href={(req.asset(Static::SPRITE_SVG), "#arrow")}` with a fragment, a tuple that keeps a
+  `srcset`'s descriptors, and for `ping` a tuple that keeps the spaces between its URLs). A path
+  on this origin that the app does not route, such as another service behind the same proxy or
+  `/oauth2/sign_out`, is a `corten::Local`,
+  `href={Local::parse("/oauth2/sign_out").expect("a path on this site")}`, which keeps a query
+  and `#fragment`: an explicit opt-out the compiler takes on trust, since a `Local` of a path the
+  app routes compiles too. A fragment (`#top`), a full URL, `mailto:`,
+  `tel:` and `//host` still compile. Any other expression in braces is not checked, so a path
+  built there (`href={format!("/items/{id}")}`, a tuple of its parts) still builds: replace it
+  with a route too. The views guide and the `html!` docs no longer show the hand-built path, and the guides
+  say where the check holds
+  ([#1232 The guides say a path written as text does not compile for any link, but html! takes href="/items" and href={("/items/", &id)}, and the views guide teaches the second](https://github.com/corten-run/corten/issues/1232)).
+
+- **Breaking:** `App::max_connections` counts a switched connection, a WebSocket after its `101` or a tunnel
+  after a `2xx` to `CONNECT`, until its route drops the socket: the cap's permit is held by the
+  socket hyper hands to the route. Before, it was given back at the switch, so a client that
+  opened connections and switched them was not bounded by the cap. This breaks an app that sets
+  the cap and keeps sockets open: its WebSockets and tunnels now count against the cap, and once
+  they fill it, new connections wait until one closes. To migrate, raise the cap by the most
+  sockets the app keeps open, with room left for health probes, which wait behind a full cap like
+  any other connection, and end idle ones in the route (a deadline from the last frame heard, with
+  pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
+  ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
+
 - A patch answered by a handler in an area (`Area::components`) brings the area's stylesheet:
   the answer links its handler's section stylesheets after its elements, as a navigation's
   answer does, and the runtime loads the ones the page lacks with the patch's modules before it
@@ -481,9 +524,45 @@ builds against.
   health check or app test that expects the old status sees the new one; update what it expects
   ([#1239 A WebSocket route's refusals lack the headers the standards require: a 426 has no Upgrade, and a handshake of another version gets a 400 without Sec-WebSocket-Version](https://github.com/corten-run/corten/issues/1239)).
 
-### Other changes
+- **Breaking:** A typed link no longer writes a path value that would open another page: `.` or `..`, which a
+  browser resolves away (`url::Item { id: ".." }` linked to `/`, and a `{*rest}` key
+  `public/../private/x` to `/files/private/x`), and an empty value first or last in the path,
+  before text in its segment, or as a whole `{*rest}` value, where the router has no segment for
+  it (`/{user}/posts` with an empty `user` wrote `/%2Fposts`, which a `/{slug}` route read as the
+  slug `/posts`). A debug build panics when such a link is written, naming the route by its
+  module path (`shop::url::Item`) and the field; a release build writes `%FF` after the value
+  (`/items/..%FF`), which the route answers with a 400, and logs that as an error once for each
+  route and field, counting only a refusal written while the subscriber takes an error event of
+  Corten's, as Corten's default subscriber and a level or target filter do (a subscriber that
+  filters on an event's message text or its line can disagree with that check either way: a
+  refusal it drops still uses up the one line, and one it would log may never be logged).
+  Values that only contain dots (`a.b`, `.hidden`) are written as before, and so is an empty
+  value between two segments. A route path with a `.` or `..` segment, or that text after a
+  parameter, no longer compiles, nor does a hand-written `Route` whose `WRITTEN` has that text
+  or whose `PATH` in an area or an API has such a segment; a hand-written `Route` at the app's
+  top level is not checked for a dot segment in its `PATH`, and the values a hand-written
+  `write_href` writes are not checked. The check costs a whole-segment value a comparison of its
+  length, and one of two bytes or fewer a look at its first byte, and a `{*rest}` value with a
+  dot a second read (docs/design.md#limit-path-values)
+  ([#1241 A typed link writes a path value of . or .. as it is, so the browser resolves it away: an item with id .. links to /, and a rest key public/../private/x links to /files/private/x](https://github.com/corten-run/corten/issues/1241)). To upgrade, write
+  a route path as a browser resolves it (`/a/../b` is `/b`), give a parameter followed by `.` or
+  `..` text of its own (`/sitemap/{page}.xml`), and refuse `.`, `..` and empty values where the app
+  accepts a value it later links by.
 
-- The dedicated Mixed Production benchmark selects Django's Granian ASGI build and checks that the recorded image and runtime command match that selection. Other Django benchmark groups keep their existing deployment. [#1304 Benchmark parity: Django in approved workload groups](https://github.com/corten-run/corten/issues/1304)
+- **Breaking:** A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
+  `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and
+  `slot` are classes of the file (`class={Slot}`). Before, the prelude was copied as written, so
+  `@scope (.list)` matched no element and every rule in it was dead, and it compiled. Under a
+  root at the top of the file that names one of its classes, rules start anywhere (`:scope`,
+  `li`), since they match only under the root; under any other root
+  (`@scope ([data-theme="dark"])`) each rule starts at one of the classes, as before. `@scope`
+  with no root, a pseudo-element in the root or limit, or another prelude, each of which the
+  browser drops or scopes outside the component, does not compile
+  ([#1237 A component stylesheet's @scope prelude is copied unprefixed, so @scope (.list) matches nothing and its rules never apply, and it compiles](https://github.com/corten-run/corten/issues/1237)). To upgrade, give each
+  `@scope` a root, such as one of the file's classes (`@scope (.list)`), and put a pseudo-element
+  in a rule inside the block rather than in its root or limit.
+
+### Other changes
 
 - A failed catalog benchmark app start or log collection now saves a receipt (client lifetime, partial log hash, and the owned container's state and events) before cleanup, and a client whose pipes outlive it no longer hangs the runner. [#1487 Catalog parity CI: detached TanStack container start exceeds 30-second command bound](https://github.com/corten-run/corten/issues/1487)
 
@@ -535,6 +614,8 @@ builds against.
 - Card-market's push smoke checks Chromium's display, the plain-data destination, and a
   pending `waitUntil` promise that later fulfills, without listing notifications or retrying.
   ([#1747 card-market's push smoke misses both sends of a message on CI runners far more often than its 1-in-500 estimate, failing the required browser job](https://github.com/corten-run/corten/issues/1747))
+
+- The dedicated Mixed Production benchmark selects Django's Granian ASGI build and checks that the recorded image and runtime command match that selection. Other Django benchmark groups keep their existing deployment. [#1304 Benchmark parity: Django in approved workload groups](https://github.com/corten-run/corten/issues/1304)
 
 - The staged page's future size test passes again after shared header reads moved the request's page
   snapshot into the stage future; no app behavior changed.
@@ -1369,11 +1450,6 @@ builds against.
   in direct CLI errors, without reflecting raw exceptions or changing recovery,
   cleanup or benchmark acceptance rules.
 
-- `FeedUrl<Row>` now requires `Row` to resolve to the declarations `corten::types` generates
-  (`import("../types/app").Row`), as `ScreenUrl<Data>` does. A local typedef, an import from
-  another module, or an undeclared row name does not compile; generated imports and their
-  aliases keep the feed's row type tied to the server's.
-
 - A handler is given a form's control by its `#[derive(Fields)]` field,
   `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:
   `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for
@@ -1761,7 +1837,7 @@ builds against.
   benchmark families. The localized-marketplace selection reuses existing strict gates;
   native qualification and complete group measurements remain separate from source registration.
 
-### Added
+#### Added
 
 - `corten::script::Keyed` and `corten::script::NoKey`: the fourth type parameter of `Ref`,
   which says whether a ref's elements have a `key={..}`, so a handler parameter typed
@@ -2153,7 +2229,7 @@ builds against.
   site looks in the checkout for every file or directory the page links to in the repository
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
-### Changed
+#### Changed
 
 - Debug builds stop a render in which two elements of a ref in one render of its component have
   keys the browser reads as equal (`key={true}` and `key=""` are one, and so are a carriage
@@ -2228,36 +2304,6 @@ builds against.
   command in its image and build recipe. Historical full-stack results retain
   their original dependency-reproducibility caveat.
 
-- `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
-  `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
-  value that starts with one `/` (or `\`), or is `http:` or `https:` without the `//` of a
-  host, such as `href="/items"`, `href={"/items"}` or `action="/watch"`, is a compile error that
-  names the fix, as the type-safety guide already said of every link. This breaks an app that
-  wrote one. To migrate, link to the route, `href={url::Items}` (a `#[derive(Route)]` struct;
-  `url::Item { id: &id }` for one with parameters, `url::Items.at(Id)` for a place on a page),
-  and name a static file by its constant, `src={req.asset(Static::LOGO_SVG)}`
-  (`href={(req.asset(Static::SPRITE_SVG), "#arrow")}` with a fragment, a tuple that keeps a
-  `srcset`'s descriptors, and for `ping` a tuple that keeps the spaces between its URLs). A path
-  on this origin that the app does not route, such as another service behind the same proxy or
-  `/oauth2/sign_out`, is a `corten::Local`,
-  `href={Local::parse("/oauth2/sign_out").expect("a path on this site")}`, which keeps a query
-  and `#fragment`: an explicit opt-out the compiler takes on trust, since a `Local` of a path the
-  app routes compiles too. A fragment (`#top`), a full URL, `mailto:`,
-  `tel:` and `//host` still compile. Any other expression in braces is not checked, so a path
-  built there (`href={format!("/items/{id}")}`, a tuple of its parts) still builds: replace it
-  with a route too. The views guide and the `html!` docs no longer show the hand-built path, and the guides
-  say where the check holds
-  ([#1232 The guides say a path written as text does not compile for any link, but html! takes href="/items" and href={("/items/", &id)}, and the views guide teaches the second](https://github.com/corten-run/corten/issues/1232)).
-- `App::max_connections` counts a switched connection, a WebSocket after its `101` or a tunnel
-  after a `2xx` to `CONNECT`, until its route drops the socket: the cap's permit is held by the
-  socket hyper hands to the route. Before, it was given back at the switch, so a client that
-  opened connections and switched them was not bounded by the cap. This breaks an app that sets
-  the cap and keeps sockets open: its WebSockets and tunnels now count against the cap, and once
-  they fill it, new connections wait until one closes. To migrate, raise the cap by the most
-  sockets the app keeps open, with room left for health probes, which wait behind a full cap like
-  any other connection, and end idle ones in the route (a deadline from the last frame heard, with
-  pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
-  ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
 - A request reads what its area or API sets (deadline, body limit, CSP and shell key,
   middleware, its API) from the route it matched: `App::router` resolves each area's and API's
   once, with those of the areas and APIs around it, and gives it to each of their routes, where
@@ -2292,7 +2338,7 @@ builds against.
   served there
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
-### Fixed
+#### Fixed
 
 - Catalog timed-load evidence initializes its four outcome counter series once
   per active VU and increments only the classified outcome per request. Preserve
@@ -2368,27 +2414,6 @@ builds against.
   its Dockerfile; one that takes the change starts its next build with empty caches, and the old
   ones stay on the builder until `docker builder prune`
   ([#1345 The Dockerfile template's target cache has no id, so every app's build on a host waits for every other's](https://github.com/corten-run/corten/issues/1345)).
-- A typed link no longer writes a path value that would open another page: `.` or `..`, which a
-  browser resolves away (`url::Item { id: ".." }` linked to `/`, and a `{*rest}` key
-  `public/../private/x` to `/files/private/x`), and an empty value first or last in the path,
-  before text in its segment, or as a whole `{*rest}` value, where the router has no segment for
-  it (`/{user}/posts` with an empty `user` wrote `/%2Fposts`, which a `/{slug}` route read as the
-  slug `/posts`). A debug build panics when such a link is written, naming the route by its
-  module path (`shop::url::Item`) and the field; a release build writes `%FF` after the value
-  (`/items/..%FF`), which the route answers with a 400, and logs that as an error once for each
-  route and field, counting only a refusal written while the subscriber takes an error event of
-  Corten's, as Corten's default subscriber and a level or target filter do (a subscriber that
-  filters on an event's message text or its line can disagree with that check either way: a
-  refusal it drops still uses up the one line, and one it would log may never be logged).
-  Values that only contain dots (`a.b`, `.hidden`) are written as before, and so is an empty
-  value between two segments. A route path with a `.` or `..` segment, or that text after a
-  parameter, no longer compiles, nor does a hand-written `Route` whose `WRITTEN` has that text
-  or whose `PATH` in an area or an API has such a segment; a hand-written `Route` at the app's
-  top level is not checked for a dot segment in its `PATH`, and the values a hand-written
-  `write_href` writes are not checked. The check costs a whole-segment value a comparison of its
-  length, and one of two bytes or fewer a look at its first byte, and a `{*rest}` value with a
-  dot a second read (docs/design.md#limit-path-values)
-  ([#1241 A typed link writes a path value of . or .. as it is, so the browser resolves it away: an item with id .. links to /, and a rest key public/../private/x links to /files/private/x](https://github.com/corten-run/corten/issues/1241)).
 
 - `#[derive(FromJson)]` reads its `#[serde(..)]` once, and writes its reader and the
   `Deserialize` it falls back to from that one reading, as Choice 26 says. A `transparent` struct
@@ -2436,16 +2461,6 @@ builds against.
   does not, in the page loaded and in one a client navigation drew; and that a stream answered
   with a 204 shows the link, which opens the page with the picks
   ([#1264 A slow part a <corten-live> stream sends once has no answer without JavaScript: its placeholder stays for good](https://github.com/corten-run/corten/issues/1264)).
-- A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
-  `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and
-  `slot` are classes of the file (`class={Slot}`). Before, the prelude was copied as written, so
-  `@scope (.list)` matched no element and every rule in it was dead, and it compiled. Under a
-  root at the top of the file that names one of its classes, rules start anywhere (`:scope`,
-  `li`), since they match only under the root; under any other root
-  (`@scope ([data-theme="dark"])`) each rule starts at one of the classes, as before. `@scope`
-  with no root, a pseudo-element in the root or limit, or another prelude, each of which the
-  browser drops or scopes outside the component, does not compile
-  ([#1237 A component stylesheet's @scope prelude is copied unprefixed, so @scope (.list) matches nothing and its rules never apply, and it compiles](https://github.com/corten-run/corten/issues/1237)).
 - A `2xx` to `CONNECT` keeps its connection busy as a `101` does, so `App::header_timeout` no
   longer closes a tunnel once the timeout has passed from when it opened, whether it is carrying
   traffic or idle: as on a WebSocket, idle limits on the tunnel are the route's, and
@@ -2501,7 +2516,7 @@ builds against.
   not rolled back. The page as loaded is a variant of its own, `Loaded`, for which no event is sent
   ([#1243 deck-builder's DeckAnswered carries the save outcome as a String, so a renamed outcome still builds and the script's branch silently stops matching](https://github.com/corten-run/corten/issues/1243)).
 
-### Documentation
+#### Documentation
 
 - The forms guide no longer pairs a radio group with a plain enum field: a radio group drawn
   with none checked sends nothing, so its field is `Option<Enum>` and the handler adds the
