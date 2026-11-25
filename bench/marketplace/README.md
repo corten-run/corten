@@ -154,6 +154,51 @@ passes with `--duration 15 --warmup 10 --rate 150`, pinned to app CPU 1, upstrea
 and load-generator CPUs 4-7. These are short measurement windows: publish medians and ranges,
 not a guaranteed finish by 7 am or an unsupported claim about small differences.
 
+### Convergence and soak passes
+
+Nothing saved yet shows that each adapter has stopped getting faster by the end of the timed
+10-second warmup, or that its memory and tail latency hold over time
+([#1851 Load phases run 15 s after a 10 s warmup, and nothing shows the JIT runtimes had reached steady state or that any app's memory holds over time](https://github.com/corten-run/corten/issues/1851)).
+Two passes, separate from the timed rounds, collect that evidence. Neither changes a timed
+phase, the warmup, the rate, the droplet job or a saved round, and neither is part of the nightly.
+
+```sh
+# One closed loop per adapter, source and target: 64 users for 5 minutes in 15 s windows.
+node bench/marketplace/steady.mjs convergence w3 --group production --build
+# A fixed 150 requests/second for 30 to 60 minutes, in 60 s intervals.
+node bench/marketplace/steady.mjs soak w4 --group production --minutes 30
+node bench/marketplace/steady-report.mjs bench/marketplace/results/convergence/w3/summary.json
+```
+
+Each adapter, source and target gets a fresh container, started as `run.mjs` starts it, a
+readiness request and one long k6 pass (`window-load.js`: the timed requests and checks, with
+each answer counted in the window it completed in). `--admitted-from <round>/summary.json`
+measures only the adapters that saved timed round admitted; without it every selected adapter
+runs and the report says admission was not checked. `--minutes`, `--window` (convergence),
+`--interval` (soak), `--vus`, `--rate`, `--targets` and `--sources` change the defaults. Results
+go to `results/convergence/<name>/` and `results/soak/<name>/`, outside Git like other raw output.
+The convergence pass for the production group's seven candidates is four passes of five
+minutes each, so a little over two hours plus image builds (estimated, not measured); it needs
+repeating only when an adapter's runtime or framework version changes.
+
+A convergence pass keeps each window's throughput, p95 and p99, and applies one stated rule
+(`flattenRule` in [steady-contract.mjs](steady-contract.mjs)): compare the median throughput of the
+last four windows with the four before; more than 5% higher means the adapter was still getting
+faster when the pass ended. Otherwise it flattened at the first window of the longest final run
+whose three-window medians stay within 5% below that tail, provided the run holds at least four
+windows. A pass with a failed request, or whose app stopped, gets no verdict. A soak reports
+memory at the start and the end (the median sample in the first and last interval), p99 per
+interval, failed requests and any restart, stop or OOM kill.
+
+The timed warmup is to be set from a saved convergence pass: `steady-report.mjs` prints the
+shortest warmup the pass supports, the latest flatten window's start over every adapter, source
+and target, or none if any never flattened. Changing the nightly's `--warmup` is its own reviewed
+change to the droplet contract. `report.mjs <summary.json> --convergence <pass>/summary.json`
+states which pass a round's report used, each measured adapter's flatten window and whether the
+round's warmup reaches the slowest; without `--convergence` the report says no convergence
+evidence exists for that round, as it does for every saved round today. No such pass has been
+run, so nothing here says whether any adapter is warm after 10 seconds.
+
 ### Splitting a round across droplets
 
 A round's wall time grows with every candidate, so a named group's round can be split across

@@ -6,6 +6,7 @@ import { apps, locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { aggregate, appStop, cpuSettings, phases, resultSchema, sources, stageAggregate, timedProfilesFor, v4Schema, v5Schema } from "./run-contract.mjs";
 import { report, validateSummary } from "./report.mjs";
+import { convergenceSchema, flattenPoint, flattenRule } from "./steady-contract.mjs";
 import { compare, comparisonKey } from "./compare.mjs";
 import { groupApps } from "./groups.mjs";
 import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, produceBoundedQualification, qualification, qualificationSettings } from "./feature-contract.mjs";
@@ -194,7 +195,10 @@ test("r20 still validates and renders its actual per-locale measurements", () =>
   const saved = (name) => readFileSync(new URL(`./results/r20/${name}`, import.meta.url), "utf8");
   const s = JSON.parse(saved("summary.json"));
   assert.equal(s.schema, v5Schema);
-  assert.equal(report(s), saved("report.md").replaceAll("\r\n", "\n"));
+  // The saved report, plus only the statement that no convergence evidence exists for r20 (#1851).
+  const original = saved("report.md").replaceAll("\r\n", "\n"), at = original.indexOf("\n\n## ", original.indexOf("Warning: Short 15s phase windows"));
+  assert.ok(at > 0);
+  assert.equal(report(s), `${original.slice(0, at)}\n\nConvergence evidence: none exists for this round. Nothing saved shows that each measured adapter had stopped getting faster by the end of its 10s warmup; the timed numbers may include warming.${original.slice(at)}`);
   // The regression key produced by the v5 reader for this saved round.
   assert.equal(comparisonKey(s), "ac1de5eaa9eabbfd993d3dc68eab0526eed883f240a2aac9cf2988e759b3d853");
   const next = grouped("production", "r21");
@@ -593,4 +597,31 @@ test("a v3 baseline compares with a v4 round, and a stop in the v4 round is a ne
   assert.deepEqual(row("corten", "fixture-en-US-page", "sat64").stopped, { baseline: null, current: null });
   assert.equal(row("corten", "fixture-en-US-page", "sat64").metrics.rps.percentChange, 0);
   assert.equal(compare(asV3(synthetic(v4Schema), "r20"), baseline).compatible, true, "two v3 rounds still compare");
+});
+
+test("the report states the convergence pass it used, or that none exists for the round", () => {
+  const s = grouped("production", "r21");
+  const probes = boundedQualificationProbes("api"); delete probes.page.headers["content-security-policy"];
+  // Corten and ASP.NET Core are measured; the other candidates are excluded, not timed.
+  for (const app of ["nextjs", "fastapi", "express", "topcoat", "leptos"]) Object.assign(s.apps[app], { runs: {}, phases: {} }).qualification.api = produceBoundedQualification(probes, "api");
+  validateSummary(s);
+  const none = report(s);
+  assert.match(none, /^Convergence evidence: none exists for this round\. Nothing saved shows that each measured adapter had stopped getting faster by the end of its 30s warmup/m);
+  const windows = (rps) => rps.map((r, index) => ({ index, startSeconds: index * 15, seconds: 15, requests: r * 15, failed: 0, rps: r, p95: 5, p99: 9 }));
+  const options = { kind: "convergence", name: "w5", apps: ["corten", "aspnet"], sources: ["fixture", "api"], targets: ["page", "json"], minutes: 3, windowSeconds: 15, windows: 12, vus: 64 };
+  const convergence = { schema: convergenceSchema, name: "w5", options, rule: flattenRule, commit: s.commit, dirty: false, complete: true, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z",
+    host: { cpu: "Synthetic test only" }, cells: options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) => {
+      const w = windows(app === "aspnet" ? [300, 600, 900, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000] : Array(12).fill(1000));
+      return { app, source, target, windows: w, tail: 0, unrecorded: 0, verdict: flattenPoint(w) };
+    }))) };
+  const text = report(s, { convergence });
+  assert.doesNotMatch(text, /none exists for this round/);
+  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v1, rule marketplace-flatten\/v1\), measured at commit `a{40}`, this round's commit/m);
+  assert.match(text, /^Flatten: aspnet api json: window 3 \(45 s\)\.$/m);
+  assert.match(text, /^The slowest measured adapter flattened at 45 s \(aspnet fixture page\); this round's 30s warmup is shorter than that point\./m);
+  // Only the convergence lines differ: the timed tables are the same with or without evidence.
+  const strip = (t) => t.replace(/\n\n(?:Convergence evidence|Flatten|The slowest|No convergence|Not every)[^\n]*/g, "");
+  assert.equal(strip(text), strip(none));
+  const tampered = structuredClone(convergence); tampered.cells[2].verdict.window = 0;
+  assert.throws(() => report(s, { convergence: tampered }), /saved verdict differs/);
 });

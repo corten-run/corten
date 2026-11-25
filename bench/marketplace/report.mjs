@@ -11,6 +11,7 @@ import { admitted, boundedFeatureProfile, boundedQualificationSettings, featureP
 import { aggregateCold, cpuSettings, loadPhases, parsePart, phases, readableSchemas, resultSchema, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfilesFor, v3Schema, v5Schema } from "./run-contract.mjs";
 import { betweenDroplets, cleanOutcome, differText, outcomeFields, subjectMetrics } from "./split.mjs";
 import { maxStatsSamples } from "./raw-contract.mjs";
+import { convergenceLines } from "./steady-contract.mjs";
 const finite = (n, min = 0) => assert.ok(Number.isFinite(n) && n >= min, "missing/invalid measurement");
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "missing/invalid timestamp"); return n; };
 function loadEvidence(p) {
@@ -230,7 +231,11 @@ export function validateSummary(s) {
   for (const app of selected) validateApp(s, s.apps[app], ...(windows[app] ?? [start, end]), v3, validateQualificationRecord);
   return s;
 }
-export function report(s) {
+/**
+ * A validated round as Markdown. `convergence` is a saved convergence pass (steady.mjs) the report
+ * states it used; without one the report says none exists for the round (#1851).
+ */
+export function report(s, { convergence = null } = {}) {
   validateSummary(s);
   const part = s.options.part, split = s.split;
   // A part's candidates are its share; a whole or merged round's are its group's.
@@ -272,6 +277,7 @@ export function report(s) {
   if (s.options.duration < 60) warnings.push(`Short ${s.options.duration}s phase windows (${s.options.warmup}s warmup): variability and sampling limits matter; not comparable to manual 60s phases with 30s warmup.`);
   if (Object.values(s.measurement.cpus).some((c) => !c.cpuset)) warnings.push("CPU quotas without disjoint pinning do not prove CPU isolation.");
   for (const warning of warnings) lines.push("", `Warning: ${warning}`);
+  for (const line of convergenceLines(s, apps, convergence)) lines.push("", line);
   // The rows of every table: a split round's, each droplet's Corten and its admitted candidates,
   // each beside its own Corten (#816); otherwise the measured adapters, in the group's order.
   const rows = split ? split.parts.flatMap((p) => p.apps.filter((app) => app === splitSubject || admitted(s.apps[app])).map((app) => ({ app, a: app === splitSubject ? p.corten : s.apps[app],
@@ -339,6 +345,8 @@ function betweenLines(s, cell) {
   return lines;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  assert.equal(process.argv.length, 3, "usage: node bench/marketplace/report.mjs summary.json");
-  console.log(report(JSON.parse(readFileSync(process.argv[2], "utf8"))));
+  const args = process.argv.slice(2);
+  assert.ok(args.length === 1 || (args.length === 3 && args[1] === "--convergence"), "usage: node bench/marketplace/report.mjs summary.json [--convergence convergence-summary.json]");
+  const convergence = args.length === 3 ? JSON.parse(readFileSync(args[2], "utf8")) : null;
+  console.log(report(JSON.parse(readFileSync(args[0], "utf8")), { convergence }));
 }

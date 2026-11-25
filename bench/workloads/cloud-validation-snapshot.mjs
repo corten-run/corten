@@ -111,6 +111,7 @@ export const validationPaths = Object.freeze([
   "bench/marketplace/run-contract.mjs",
   "bench/marketplace/saved-files.mjs",
   "bench/marketplace/split.mjs",
+  "bench/marketplace/steady-contract.mjs",
   "bench/marketplace/validate.mjs",
   "bench/mixed-production/build-context.mjs",
   "bench/mixed-production/capture.mjs",

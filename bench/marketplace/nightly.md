@@ -106,7 +106,11 @@ are not guaranteed to finish by the morning check.
    does not predict equal throughput. Native algorithms need not be identical.
 3. Nightly uses three rotated passes, 10 seconds warmup and 15 seconds per fixed-rate,
    64-user and 256-user phase, fixed rate 150 requests/second. These are shorter than manual
-   defaults. Publish medians and min/max, not unsupported small-difference claims.
+   defaults. Publish medians and min/max, not unsupported small-difference claims. No saved
+   evidence yet shows each adapter at steady state after the 10-second warmup: the report says
+   so for every round. Set the warmup from a saved convergence pass, and keep convergence and
+   soak passes out of the nightly ([Convergence and soak passes](README.md#convergence-and-soak-passes)).
+   The droplet job does not run them.
 4. Dedicated c-8: CPU 0 system, 1 app, 2-3 upstream, 4-7 generator, with recorded quotas and
    disjoint pinning. The single Node upstream can saturate one core despite its two-core
    quota. Report upstream CPU at least 80% and app CPU below 95% as limits, across phases.
