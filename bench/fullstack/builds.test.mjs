@@ -601,6 +601,7 @@ function buildDeadlineIs(/** @type {string} */ source, /** @type {typeof otherSp
  * Whether a parity step's `if` runs it for Spring, for the forms catalog.yml uses: `always()`,
  * `matrix.app == '<app>'` (or `!=`) and `contains(fromJSON('[...]'), matrix.app)`, joined by `&&`.
  * A matrix term false for Spring decides the condition; any other form fails rather than guess.
+ * Names compare as Actions compares strings, ignoring case, so `!= 'Spring'` skips Spring.
  */
 function runsForSpring(/** @type {string | undefined} */ condition) {
   if (condition === undefined) return true;
@@ -618,7 +619,8 @@ function runsForSpring(/** @type {string | undefined} */ condition) {
   for (const term of terms.map((t) => t.trim())) {
     const app = /^matrix\.app (==|!=) '([\w-]+)'$/.exec(term);
     const listed = /^contains\(fromJSON\('(\[[^']*\])'\), matrix\.app\)$/.exec(term);
-    const runs = app ? (app[2] === "spring") === (app[1] === "==") : listed ? JSON.parse(listed[1]).includes("spring") : term === "always()" ? true : undefined;
+    const spring = (/** @type {unknown} */ name) => typeof name === "string" && name.toLowerCase() === "spring";
+    const runs = app ? spring(app[2]) === (app[1] === "==") : listed ? JSON.parse(listed[1]).some(spring) : term === "always()" ? true : undefined;
     if (runs === false) return false;
     if (runs === undefined) unknown.push(term);
   }
@@ -812,10 +814,17 @@ test("Spring bounds each Maven run inside the image build or step that contains 
   // A step counts only when its condition runs it for Spring; a build step's own timeout covers its Maven.
   const catalogBuild = "      - name: Build and verify both catalog sources\n        run:";
   const springTestIf = `      - name: ${springTestStepName}\n        if: matrix.app == 'spring'\n`;
-  assert.ok(workflowText.includes(catalogBuild) && workflowText.includes(springTestIf), "the Catalog build or Spring test step moved");
+  const proofIf = "        id: spring_proof\n        if: matrix.app == 'spring'\n";
+  assert.ok(workflowText.includes(catalogBuild) && workflowText.includes(springTestIf) && workflowText.includes(proofIf), "the Catalog build, Spring test or proof step moved");
+  // Actions ignores case, so these still run the proof for spring and leave the sum as it is.
+  for (const to of ["        id: spring_proof\n        if: matrix.app == 'Spring'\n", "        id: spring_proof\n        if: contains(fromJSON('[\"SPRING\"]'), matrix.app)\n"]) {
+    assert.equal(springParity(workflowText.replace(proofIf, to), image), 16 * 60 + 20, `refused ${to.trim()}`);
+  }
   for (const [from, to, refusal] of /** @type {[string, string, RegExp][]} */ ([
     [catalogBuild, catalogBuild.replace("\n        run:", "\n        if: matrix.app == 'gin'\n        run:"), /once in each shared runner/],
     [springTestIf, springTestIf.replace("==", "!="), /runs Spring's test and proof steps/],
+    [proofIf, proofIf.replace("== 'spring'", "!= 'Spring'"), /runs Spring's test and proof steps/],
+    [proofIf, proofIf.replace("matrix.app == 'spring'", "contains(fromJSON('[\"gin\"]'), matrix.app)"), /runs Spring's test and proof steps/],
     [catalogBuild, catalogBuild.replace("\n        run:", "\n        timeout-minutes: 15\n        run:"), /stops before the image's Maven runs can/],
     [catalogBuild, catalogBuild.replace("\n        run:", "\n        if: matrix.app == 'spring' || matrix.app == 'gin'\n        run:"), /cannot tell whether/],
   ])) assert.throws(() => springParity(workflowText.replace(from, to), image), refusal, `accepted ${to}`);

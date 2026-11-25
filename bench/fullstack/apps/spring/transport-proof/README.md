@@ -4,8 +4,9 @@ Transport proof for [#1302 Benchmark parity: Spring Boot in approved workload gr
 This is not a marketplace port, a Mixed qualification result, or a deployment
 choice. The original Spring build and benchmark selection still use MVC/Tomcat.
 
-From the repository root on a POSIX host with JDK 27, Maven (the app image uses
-Maven 3.10) and `timeout` from coreutils, explicitly opt in to both probes:
+From the repository root on a POSIX host with JDK 27, Maven 3.10 (the app image's;
+`.mvn/maven.config` needs 3.9.2 or later for `${session.rootDirectory}`) and `timeout`
+from coreutils, explicitly opt in to both probes:
 
 ```sh
 spring=bench/fullstack/apps/spring
