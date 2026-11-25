@@ -2237,9 +2237,20 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     40 seconds or the registry's Retry-After up to 40 seconds (a longer Retry-After ends the retries
     at once; it is not shortened to 40), and a retryable I/O error up to four times
     (`apps/spring/.mvn/maven.config`); one request waits at most 160 seconds between its
-    retries. Its image also bounds each Maven run, the dependency download at 15 minutes and
-    `package` at 3, and runs both without `-q`, so a successful image build also logs differently:
-    each transfer and Maven's progress. `package` stays online. Two cold local builds saw it make
+    retries. The retries alone did not keep a hosted runner building: Central still answered its
+    dependency download with 429 after them
+    ([parity (spring) job, 2026-11-25](https://github.com/corten-run/corten/actions/runs/45688904356/job/139486660000)).
+    So Spring's Maven reaches Central through Google's public mirror of it,
+    `https://maven-central.storage-download.googleapis.com/maven2/`, which Maven's mirror guidance
+    lists (`apps/spring/.mvn/settings.xml`, a mirror of `central` only, which `maven.config`
+    names), with strict checksums (`--strict-checksums`): a download whose bytes do not match the
+    checksum the mirror serves, or that has none, fails instead of warning. This is a host change,
+    not a dependency change: the same coordinates and versions. A checksum from the same mirror
+    cannot catch a mirror that serves other bytes with a matching checksum. A cold local image
+    build on 2026-11-25 downloaded all 747 of its files (POMs and jars) from the mirror and none
+    from Central, in 63 seconds (measured once, on a workstation). Its image also bounds each
+    Maven run, the dependency download at 15 minutes and `package` at 3, and runs both without
+    `-q`, so a successful image build also logs differently: each transfer and Maven's progress. `package` stays online. Two cold local builds saw it make
     no transfers after the download, in 41 and 59 seconds, so its 3-minute bound is provisional,
     and its margin on a hosted runner is unverified: one request's 160 seconds of retries plus the
     packaging could exceed it. Each Maven bound fits the deadline that directly contains it, which
@@ -2259,10 +2270,10 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     build call for an app (`round.mjs`), at which `run-all.mjs` stops it, covers one 20-minute
     measured build when Spring opts into the Docker rebuild benchmark
     (`BENCH_DOCKER_REBUILD_APPS`), a limit the call's other builds share.
-    The retries and bounds change Spring's build-cost inputs, its retries when a
-    download fails transiently and what a successful build logs, not its dependency pins, what it
-    downloads or the jar it builds; their performance effect was not measured. Two timed paths see
-    it differently: the Docker rebuild benchmark builds this Dockerfile, so it times the bounded,
+    The mirror, retries and bounds change Spring's build-cost inputs, the host it downloads
+    from, its retries when a download fails transiently and what a successful build logs, not its
+    dependency pins, what it downloads or the jar it builds; their performance effect was not
+    measured. Two timed paths see it differently: the Docker rebuild benchmark builds this Dockerfile, so it times the bounded,
     verbose Maven runs, while the build-cost recipe in `builds.mjs` still runs quiet Maven without
     the bound. Run directly, `build.mjs` stops a measured step at its two-hour per-command
     deadline. In an unattended round `run-all.mjs` also stops the app's whole build call at its
@@ -2270,20 +2281,18 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     it returns, so a quiet step meets whichever of the three comes first, which a step started late
     in the call can be the call limit. The two-hour deadline and the idle cutoff are longer than the
     image's 18m20s of Maven, which `builds.test.mjs` checks; the call limit is shared by the call's
-    builds. It copies `.mvn`, so only its retry
-    policy changes.
-    Hosted CI still
-    downloads Spring's dependencies from Central on each run: both shared runners
-    (`bench/catalog/run.mjs`, `bench/marketplace/run.mjs`) build with a plain `docker build` that
-    imports and exports no layer cache, so the first build on a fresh hosted runner starts cold.
+    builds. It copies `.mvn`, so only its download host, checksum policy and retry policy change.
+    Hosted CI still downloads Spring's dependencies from Central, through the mirror, on each run:
+    both shared runners (`bench/catalog/run.mjs`, `bench/marketplace/run.mjs`) build with a
+    plain `docker build` that imports and exports no layer cache, so the first build on a fresh hosted runner starts cold.
     Later builds in the same job, such as the second runner's or the Spring test stage's, may reuse
     the layers that job's Docker already built. A CI-only Buildx invocation could keep a cache
     across runs on a separate cache-capable builder without changing the official commands. We decline that as
     a tradeoff: it adds a second builder and a cache store to CI, its cache would serve only that
-    invocation's build while the runners' builds stay cold, and the bounded retries already address
-    the throttling that issue reported. Within one CI job, the transport proof reuses the Maven
-    repository of the Spring tests before it and can still fetch what that lacks, such as the
-    dependencies its WebFlux POM adds.
+    invocation's build while the runners' builds stay cold, and the mirror, with the bounded
+    retries, is how a cold build avoids the throttling that issue reported. Within one CI job, the
+    transport proof reuses the Maven repository of the Spring tests before it and can still fetch
+    what that lacks, such as the dependencies its WebFlux POM adds, through the same mirror.
     The rebuild keeps each tool's cache, which favors the tools
     that keep one; a Docker build without a cache mount starts each rebuild without it. Each
     rebuild runs in a new container, so a build server (.NET's, Gradle-style daemons) does not

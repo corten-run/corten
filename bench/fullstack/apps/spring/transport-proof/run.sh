@@ -33,9 +33,10 @@ cp "$proof/pom.xml" "$work/webflux/"
 cp -R "$app/.mvn" "$work/webflux/"
 cp -R "$proof/src" "$work/webflux/"
 
-# Each Maven run has a fixed budget (#1763): with .mvn/maven.config's per-request retries it ends
-# well inside hosted CI's 12-minute step, which leaves time to write both reports. Maven logs each
-# transfer, so a run stopped here names the one in flight.
+# Each copy has the app's .mvn, so it reaches Maven Central through the same mirror, with strict
+# checksums, as the image does (#1763). Each Maven run has a fixed budget: with .mvn/maven.config's
+# per-request retries it ends well inside hosted CI's 12-minute step, which leaves time to write both
+# reports. Maven logs each transfer, so a run stopped here names the one in flight.
 maven_seconds=270
 
 run_probe() {

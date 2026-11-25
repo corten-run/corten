@@ -1,7 +1,9 @@
 FROM maven:3.10-eclipse-temurin-27@sha256:a83dca2f65c72ace081f55a63231adbd6d88741caa4fdc68f7d5c9e450d1070c AS build
 WORKDIR /src
 COPY pom.xml ./
-# .mvn/maven.config retries each 429 or 503 from Maven Central a bounded number of times (#1763).
+# .mvn/maven.config retries each 429 or 503 a bounded number of times, and reaches Maven Central
+# through Google's mirror of it with strict checksums (.mvn/settings.xml), after hosted runners were
+# rate limited by Central past every retry (#1763): a host change, not a dependency change.
 # Each Maven run below also has a total bound, inside the image build's hour, and logs each
 # transfer so a stopped build names the one in flight. It changes how dependencies are fetched,
 # never which. package stays online: two cold local builds saw it fetch nothing after go-offline,

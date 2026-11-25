@@ -15,6 +15,9 @@ sh "$spring/transport-proof/run.sh" "$spring" "$evidence"
 
 Use a new empty evidence directory for each run. The runner refuses a nonempty
 directory before starting either probe and does not remove any existing reports.
+Both copies take the app's `.mvn`, so their Maven reaches Maven Central through Google's
+mirror of it with strict checksums, as the image's does
+([#1763 Catalog CI: Spring image build could not resolve the pinned Maven parent POM](https://github.com/corten-run/corten/issues/1763)).
 Each Maven run is sent SIGTERM at 270 seconds and killed if it is still running 10 seconds
 later, so with the app's per-request retries (`.mvn/maven.config`) both runs fit hosted CI's
 12-minute step, 9m20s with their kill grace, which leaves a nominal 2m40s for setup and the

@@ -348,6 +348,15 @@ const springRetries = [
   "-Daether.transport.http.retryHandler.interval=10000",
   "-Daether.transport.http.retryHandler.intervalMax=40000",
 ];
+// Maven Central is reached through Google's public mirror of it (#1763): Central rate limited hosted
+// runners past every bounded retry. maven.config names the app's own settings by Maven's root
+// directory, so the transport proof's copies, run with -f from another directory, each read their
+// own, and its strict checksums fail a download whose bytes do not match the checksum the mirror
+// serves, or that has none. The coordinates and versions Maven resolves are unchanged; only the
+// host is.
+const springSettings = "--settings=${session.rootDirectory}/.mvn/settings.xml";
+const springConfig = [...springRetries, springSettings, "--strict-checksums"];
+const springMirror = { id: "google-maven-central", mirrorOf: "central", url: "https://maven-central.storage-download.googleapis.com/maven2/" };
 const springInstallInputs = ["WORKDIR /src", "COPY pom.xml ./", "COPY .mvn ./.mvn"];
 const springTestBuild = "docker build --target build -t cb-spring-tests bench/fullstack/apps/spring";
 const springTestMaven = /^docker run --rm --cpus 2 --memory 2g --mount type=volume,source=cb-spring-m2,target=\/root\/\.m2 cb-spring-tests timeout --verbose --kill-after=(\d+[smh]?) (\d+[smh]?) mvn -B test$/;
@@ -435,6 +444,26 @@ function springRequestWaitSeconds(/** @type {string[]} */ lines) {
   return Math.max(linear, count * max) / 1000;
 }
 
+/** The mirrors a Maven settings file declares, past XML comments: each one's id, mirrorOf and url. */
+function mirrorsOf(/** @type {string} */ xml) {
+  const plain = xml.replace(/<!--[\s\S]*?-->/g, "");
+  return [...plain.matchAll(/<mirror>([\s\S]*?)<\/mirror>/g)].map((mirror) => Object.fromEntries(["id", "mirrorOf", "url"]
+    .map((key) => [key, new RegExp(`<${key}>\\s*([^<]*?)\\s*</${key}>`).exec(mirror[1])?.[1]])));
+}
+
+/**
+ * Spring's .mvn: maven.config's lines exactly (retries, the app's settings and strict checksums),
+ * and settings that declare one mirror, of Central only, at Google's URL, and nothing else, such
+ * as a profile adding a repository or a proxy.
+ */
+function checkSpringMaven(/** @type {string[]} */ config, /** @type {string} */ settings) {
+  assert.deepEqual(config, springConfig, "Spring's maven.config changed: its retries, its settings or its strict checksums");
+  assert.deepEqual(mirrorsOf(settings), [springMirror], "Spring's Maven reaches Central other than through Google's mirror alone");
+  const rest = settings.replace(/<!--[\s\S]*?-->/g, "").replace(/<\?xml[^>]*\?>/, "").replace(/<mirrors>[\s\S]*<\/mirrors>/, "")
+    .replace(/<settings\b[^>]*>/, "").replace("</settings>", "");
+  assert.equal(rest.trim(), "", "Spring's Maven settings declare more than its mirror");
+}
+
 function checkSpringInstall(/** @type {string[]} */ lines) {
   const install = lines.findIndex((line) => line.startsWith("RUN ") && springImageMaven.exec(line.slice(4))?.[3] === "dependency:go-offline");
   assert.ok(install >= 0, "expected the exact bounded Spring dependency download with no RUN mount");
@@ -473,7 +502,8 @@ function springProof(/** @type {string} */ script) {
   const bound = /^maven_seconds=(\d+)$/.exec(settings[0]);
   assert.ok(bound, `the proof sets maven_seconds other than to a number: ${settings[0]}`);
   assert.ok(commands.indexOf(settings[0]) < commands.indexOf(springProofProbes[0]), "the proof sets maven_seconds before its first probe");
-  // Each copy builds with the app's .mvn, so its Maven retries each 429 or 503 as the image does.
+  // Each copy builds with the app's .mvn, so its Maven retries each 429 or 503, reaches Central through
+  // Google's mirror and checks checksums strictly, as the image does.
   for (const mode of ["mvc", "webflux"]) {
     const copy = `cp -R "$app/.mvn" "$work/${mode}/"`;
     assert.ok(commands.includes(copy) && commands.indexOf(copy) < commands.indexOf(springProofProbes[0]),
@@ -671,7 +701,7 @@ test("Spring bounds each Maven run inside the image build or step that contains 
   const image = springMavenSeconds(dockerfile);
 
   const config = readFileSync(join(spring, ".mvn/maven.config"), "utf8").split("\n").filter(Boolean);
-  assert.deepEqual(config, springRetries, "Spring's Maven retry budget changed");
+  checkSpringMaven(config, readFileSync(join(spring, ".mvn/settings.xml"), "utf8"));
   const request = springRequestWaitSeconds(config);
   assert.equal(request, 160, "one request waits at most 4 * 40 s, or 10 + 20 + 30 + 40 s without Retry-After");
   assert.equal(springRequestWaitSeconds(["-Daether.transport.http.retryHandler.count=6",
@@ -867,6 +897,44 @@ test("Spring's Maven bound checks refuse a zero, an unbounded or extra run, a bo
   ])) {
     assert.ok(script.includes(from), `the proof no longer has ${from.trim()}`);
     assert.throws(() => springProof(script.replace(from, to)), refusal, `accepted ${to.trim()}`);
+  }
+});
+
+test("Spring reaches Central only through Google's mirror, and fails a checksum mismatch", () => {
+  const spring = join(repo, "bench/fullstack/apps/spring");
+  const config = readFileSync(join(spring, ".mvn/maven.config"), "utf8").replace(/\r/g, "");
+  const settings = readFileSync(join(spring, ".mvn/settings.xml"), "utf8").replace(/\r/g, "");
+  const lines = (/** @type {string} */ text) => text.split("\n").filter(Boolean);
+  checkSpringMaven(lines(config), settings);
+  const mirror = settings.slice(settings.indexOf("    <mirror>"), settings.indexOf("</mirror>\n") + "</mirror>\n".length);
+  assert.ok(mirror.startsWith("    <mirror>") && mirror.endsWith("</mirror>\n"), "Spring's mirror moved");
+  for (const [from, to] of /** @type {[string, string][]} */ ([
+    [mirror, ""],
+    ["<mirrorOf>central</mirrorOf>", "<mirrorOf>*</mirrorOf>"],
+    ["<mirrorOf>central</mirrorOf>", "<mirrorOf>central,*</mirrorOf>"],
+    ["<mirrorOf>central</mirrorOf>", "<mirrorOf>google</mirrorOf>"],
+    ["<id>google-maven-central</id>", "<id>central</id>"],
+    ["https://maven-central.storage-download.googleapis.com/maven2/", "https://repo.maven.apache.org/maven2/"],
+    ["https://maven-central.storage-download.googleapis.com/maven2/", "http://maven-central.storage-download.googleapis.com/maven2/"],
+    [mirror, `${mirror}${mirror.replace("google-maven-central", "second").replace(">central<", ">*<")}`],
+    [mirror, `<!-- ${mirror} -->`],
+    ["</mirrors>", "</mirrors>\n  <profiles><profile><id>more</id><repositories><repository><id>more</id><url>https://example.com/maven2/</url></repository></repositories></profile></profiles>"],
+    ["</mirrors>", "</mirrors>\n  <proxies><proxy><host>proxy.example.com</host></proxy></proxies>"],
+  ])) {
+    assert.ok(settings.includes(from), `Spring's Maven settings no longer have ${from.trim()}`);
+    assert.throws(() => checkSpringMaven(lines(config), settings.replace(from, to)), /through Google's mirror alone|more than its mirror/, `accepted ${to.trim()}`);
+  }
+  for (const [from, to] of /** @type {[string, string][]} */ ([
+    ["--strict-checksums\n", ""],
+    ["--strict-checksums\n", "--lax-checksums\n"],
+    ["--strict-checksums\n", "--strict-checksums\n--lax-checksums\n"],
+    [`${springSettings}\n`, ""],
+    [`${springSettings}\n`, "--settings=.mvn/settings.xml\n"],
+    [`${springSettings}\n`, `${springSettings}\n--global-settings=${"${session.rootDirectory}"}/.mvn/global.xml\n`],
+    ["-Daether.transport.http.retryHandler.count=4\n", ""],
+  ])) {
+    assert.ok(config.includes(from), `Spring's maven.config no longer has ${from.trim()}`);
+    assert.throws(() => checkSpringMaven(lines(config.replace(from, to)), settings), /maven\.config changed/, `accepted ${to.trim() || "no line"}`);
   }
 });
 
