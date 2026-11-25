@@ -2570,9 +2570,10 @@ rules something out.
     is not IPv6 or has a zone. It adds work to an unstaged route, so this was read again
     as it was for the host check's 494. The same change stopped searching the headers for `Host`
     where it is the first line, where RFC 9110 (7.2) asks a client to write it, and it reads a
-    `Host` no name holds with the cheapest reader of those counted (below): in line where the
-    request is read, the port taken off the value's end and the name read four bytes at a look,
-    with what only a refused request runs held out of line. Counted over a
+    `Host` no name holds with one of the two cheapest readers of those counted (below; the other,
+    eight bytes at a look, counted within 11 of it either way): in line where the request is
+    read, the port taken off the value's end and the name read four bytes at a look, with what
+    only a refused request runs held out of line. Counted over a
     socket at `5c7b006dc` (below), each build in turn and main built a second time as the
     control: an unstaged request with `Host` first costs 126 fewer than before in an app that names
     its hosts; one with `Host` second 19 more, and 49 more with it the last of a browser's eight
