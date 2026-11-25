@@ -2496,7 +2496,26 @@ rules something out.
     headers, and an unstaged one still gets its sandbox. About 3,500 cycles a request (3% on
     this page) is no reason to take the document headers away. No flag has a measured case.
     Where the declaration shows an answer cannot use a group, leave out that work case by case,
-    each in its own change with its own measured cost. `unstaged` is no stage at all, which
+    each in its own change with its own measured cost. One case is taken where the answer shows
+    it, at the last stage: an answer that brings no header, or its `Content-Type` alone, is
+    given its scope's lines (the security headers and `Cache-Control`) in one pass
+    (`Applied::ready`), where the stages look each up and insert it. That is a second path to
+    the same lines, taken for what it saves a short answer (Stands on), and it is not a second
+    list of them: a scope's lines are what the stages themselves give an empty answer, made
+    once when the router is built, and the pass leaves to the stages every answer they would
+    treat differently (one with a header that is not its type, a request that took its nonce,
+    a page with a style block, a document or a worker's script where the policy has a line for
+    those). Two tests hold it equal to the stages:
+    `an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert` gives each of 47 kinds
+    of answer, under 11 policies and in four scopes, to the pass and to the stages, compares
+    the lines and their order, and asserts which kinds the pass takes;
+    `an_answer_given_its_scope_s_lines_in_one_pass_is_sent_as_one_each_line_is_inserted_into`
+    compares every answer of an app with pages, an area and APIs outside and inside the area,
+    through the router, with the same app's answer when a middleware's one more line sends it
+    through the stages. Neither fails when the pass is never taken, since what is sent is the
+    same: the counts in [the app guide](guide/app.md#the-request-path) show that it is. An
+    answer the pass does not take pays the test that tells it apart (a page and a 404 page 6
+    to 27 instructions, Stands on). `unstaged` is no stage at all, which
     listings-feed's sequence route uses; its lane chooses nothing, only the checks no route goes
     without, the same for every unstaged route ([Choice 25](#choice-axum-router), step 2).
     Nor the stages rewritten as combinators, measured
@@ -2690,7 +2709,21 @@ rules something out.
     `deflate, gzip, br` ([Choice 32](#choice-stream-coding)), which is not in the list and is
     parsed as before; Safari was not tried); bet (the line reaches the app as the browser sent
     it; behind a proxy that rewrites `Accept-Encoding` the list matches nothing and a request
-    pays its three comparisons before the parse, which was not checked behind one); value
+    pays its three comparisons before the parse, which was not checked behind one); measured
+    (the one pass at the last stage, callgrind, release, jemalloc, `fad2caf29` against main
+    `c9666dc96`. Over one keep-alive connection to a benchmark app the repository does not
+    hold, 1,240 requests less 240 over 1,000, the median of three counts, two rounds of each
+    build, before and then after: a short text from a route under an API 19,171 and 19,170,
+    then 18,855 and 18,861; the same answering a `POST` 24,042 and 24,054, then 23,734 and
+    23,735; a short text from a page scope 18,071 and 18,078, then 17,631 in both; the first
+    and the third with a browser's request headers 24,716 and 24,709, then 24,395 and 24,390,
+    and 26,737 and 26,743, then 26,288 and 26,290; a 12 KB page, which does not take the pass,
+    43,500 and 43,501, then 43,506 and 43,512, and compressed for a browser 221,963 and
+    221,962, then 221,980 and 221,981; allocations a request the same in every case. In
+    process with `crates/corten/tests/router_cost.rs`, three runs each: text from a route with
+    a parameter 10,694 to 10,244, text under an API 8,207 to 7,895, text answering a `POST`
+    11,075 to 10,625, and the 404 page, which does not take it, 15,322 to 15,343; with glibc
+    12,207 to 11,716, 9,518 to 9,155, 12,682 to 12,235 and 17,078 to 17,105); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
@@ -2739,8 +2772,18 @@ rules something out.
     browser Playwright runs sends another line (the list then takes it, and drops one no
     browser sends), or when requests are found to reach apps with the line rewritten more often
     than not.
+    Take the one pass at the last stage out, so that every answer is given each line by the
+    stages again, when it saves the short answers that take it fewer than about 150
+    instructions (`router_cost.rs` with jemalloc: 450 on its text and 312 under an API at
+    `fad2caf29`); or when an answer is found that the pass and the stages send differently; or
+    when a stage comes to read something of an answer or its request that the pass's two tests
+    cannot vary, so that nothing would hold the two paths equal.
 
-    Last checked: 2026-11-23, the stages' reads of a request under an API, read in the code at
+    Last checked: 2026-11-24, the one pass at the last stage: its counts over a socket and with
+    `router_cost.rs` at `fad2caf29` against `c9666dc96`, and its two tests against twelve ways
+    of breaking it, of which eleven fail one or both and the twelfth, the pass never taken,
+    fails neither and shows in the counts alone;
+    2026-11-23, the stages' reads of a request under an API, read in the code at
     `91e193bce` (which stopped looking up the mode's two headers there; the lookup counts above
     were not taken again); 2026-11-23, each engine's `Accept-Encoding` over HTTP and HTTPS, by
     Playwright 1.65.1 on Linux (tag `evidence/stage-header-checks-2002`), and 2026-11-24, the
