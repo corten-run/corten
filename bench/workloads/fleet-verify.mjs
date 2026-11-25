@@ -11,7 +11,8 @@ import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verify
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { createContradiction, createErroredCustody, readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
-  verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+  exitOneEvidenceFingerprint, exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyHistoricalFailedNativeRetirement,
+  verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function fleetRoot(path, repo) {
@@ -364,6 +365,32 @@ export function recheckCreateErroredAttempt(root, row) {
   assert.equal(saved.state.createErrored.evidenceSha256, row.receiptSha256, "prior create failure receipt changed");
   assert.ok(saved.state.createErrored.dropletId === row.dropletId && saved.state.provider.accountId === row.accountId, "prior create failure changed");
 }
+
+// Admission already replayed the archive. At dispatch only recheck the exact
+// retirement custody that the approval consumed, without replaying native data.
+export function recheckExitOneRetirement(root, row) {
+  try {
+    assert.equal(dirname(row.root), root);
+    const fleet = readFleet(row.root, row.round, { priorSelection: true });
+    assert.equal(fleet.manifestSha256, row.manifestSha256);
+    assert.equal(readLaunchIntent(fleet).sha256, row.launch);
+    const saved = readGroup(fleet, row.group), { state, local } = saved;
+    assert.ok(saved.outcome === "available" && saved.stateSha256 === row.stateSha256
+      && failedExitOneScope(state) && state.status === "retired" && state.destroyedAt && state.retirement.kind === "native-failed");
+    assert.equal(state.provider.accountId, row.accountId);
+    assert.equal(state.id, row.id);
+    assert.equal(state.retirement.evidenceSha256, row.receiptSha256);
+    const receipt = regular(join(local, "failed-native-host.json"), 65536);
+    assert.equal(digest(receipt), row.receiptSha256);
+    assert.equal(digest(regular(join(local, "failed-native-reservation.json"), 1024 * 1024)), row.reservationSha256);
+    const { evidenceFingerprint } = JSON.parse(receipt);
+    assert.ok(typeof evidenceFingerprint === "string" && /^[a-f0-9]{64}$/.test(evidenceFingerprint)
+      && evidenceFingerprint === exitOneEvidenceFingerprint(local, state));
+    exitOneReadLocks(local);
+  } catch (cause) {
+    throw new Error("prior exit-one retirement changed or holds custody; do not create", { cause });
+  }
+}
 // A posted create is contradicted by a recorded reappearance, a witness or reappearance stage
 // beside it, or a contradicted bind (retired or not).
 export const postedContradiction = (saved) => !!saved.state?.createErrored?.reappeared || !!saved.state?.createContradicted
@@ -520,12 +547,18 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
           const historicalCheck = historicalLocks && (() => {
             assert.ok(historicalLocks(), "historical child locks changed");
           });
-          if (historicalCheck) verifyHistoricalFailedNativeRetirement(job.local, s, historicalCheck);
+          let exitOneCheck;
+          if (failedExitOneCandidate(job.local, s)) {
+            exitOneReadLocks(job.local);
+            const { record, assertCustody } = verifyFailedExitOneRetirement(job.local, s, s.retirement.evidenceSha256, true);
+            assert.equal(record.launchIntentSha256, readLaunchIntent(fleet).sha256, "exit-one launch intent differs");
+            exitOneCheck = () => { exitOneReadLocks(job.local); assertCustody(); };
+          } else if (historicalCheck) verifyHistoricalFailedNativeRetirement(job.local, s, historicalCheck);
           else verifyFailedNativeRetirement(job.local, s);
           assert.equal(digest(regular(join(job.local, "state.json"), 1024 * 1024)), job.stateSha256, "retirement changed during verification");
           if (historicalCheck) historicalCheck();
           else if (retained) assert.ok(noRecovery() && !retainedInvalidOwner(job.local, s), "retained lock owner changed during verification");
-          retirements.push({ group, index: result.groups.length, stateSha256: job.stateSha256, retained, historicalLocks, historicalCheck });
+          retirements.push({ group, index: result.groups.length, stateSha256: job.stateSha256, retained, historicalLocks, historicalCheck, exitOneCheck });
           add({ group, outcome: s.destroyedAt ? "native-failed-retired" : "cleanup-pending", id: s.id }); continue;
         }
         const setup = s.retirement.kind === "setup-failed";
@@ -562,7 +595,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
   } catch { evidenceError = "fleet-evidence-changed-or-duplicated"; }
   // A later sibling's replay may have overlapped failed-host recovery. Rebind
   // the status to the verified state and receipt, not the earlier display row.
-  for (const { group, index, stateSha256, retained, historicalLocks, historicalCheck } of retirements) {
+  for (const { group, index, stateSha256, retained, historicalLocks, historicalCheck, exitOneCheck } of retirements) {
     try {
       const job = readGroup(fleet, group);
       if (present(join(job.local, "stream-recovery.lock"))
@@ -573,6 +606,8 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
       assert.equal(job.outcome, retained ? "busy" : "available");
       assert.equal(job.stateSha256, stateSha256);
       assert.equal(digest(regular(join(job.local, "failed-native-host.json"))), job.state.retirement.evidenceSha256);
+      exitOneCheck?.();
+      if (exitOneCheck) retainCheck?.(exitOneCheck);
       if (historicalCheck) retainCheck?.(historicalCheck);
     } catch { result.groups[index] = { group, outcome: "uncertain", error: "group-retirement-changed" }; }
   }
