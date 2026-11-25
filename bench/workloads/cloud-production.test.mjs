@@ -900,6 +900,23 @@ test("approved running collect observes once; terminal blocked collect retains e
   }
 });
 
+test("production collect preserves closed replay stages but not private inspector evidence", async (t) => {
+  const privateText = "SYNTHETIC_PRIVATE_REPLAY";
+  for (const [stage, inspect] of [
+    ["collect-native-replay-start", () => { throw new Error(privateText); }],
+    ["collect-native-replay-refused", async () => { throw new Error(privateText); }],
+    ["collect-native-report-refused", async () => ({ invalidReport: privateText })],
+  ]) await t.test(stage, async (child) => {
+    const p = productionHarness(child, { active: false }); p.h.seed();
+    p.deps.inspect = inspect;
+    const approval = await p.approve();
+    await assert.rejects(productionMain(approval, p.deps), (error) =>
+      error.controllerStage === stage && publicError(error) === `${publicError()} Controller stage: ${stage}.`);
+    assert.equal(p.h.deletes, 0);
+    assert.ok(existsSync(join(p.h.local, "results.tgz")));
+  });
+});
+
 test("approval binds saved identity and detects state changes during merge verification", async (t) => {
   const flags = {}, p = productionHarness(t, flags); p.h.seed(); const approval = await p.approve();
   flags.afterFetch = () => p.h.change((s) => { s.token = "f".repeat(16); });
