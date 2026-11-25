@@ -9,7 +9,7 @@ Pending entries are in [changelog.d/](changelog.d/).
 
 ## 0.3.0 (2026-11-25)
 
-Upgrading from 0.2.0: each of the 54 entries under
+Upgrading from 0.2.0: each of the 55 entries under
 [Breaking changes](https://github.com/corten-run/corten/blob/v0.3.0/CHANGELOG.md#breaking-changes)
 says what to change; those marked "debug builds only" fail an app's debug builds and its own tests,
 not its release build. The largest are that the app keeps a `Public` page, and `Public` JSON, text and files
@@ -31,6 +31,8 @@ builds against.
 
 - **Breaking:** Both `allow_origin` setters refuse at startup what no browser sends (no scheme,
   a path, `?`, `#`, `file`, `null`), and `https://x:443` matches `https://x` ([#2090 Policy::allow_origin stores any string and compares it to Origin as typed, so a value with no scheme, a path or a default port is a 403 for every write from that site instead of a startup error, while Api::allow_origin checks its value](https://github.com/corten-run/corten/issues/2090)).
+  Write each allowed origin as a browser sends it in `Origin`: a scheme, a host and a port only
+  (`https://partner.example`, `https://partner.example:8443`), with no path, query or fragment.
 - **Breaking:** Move layout values an app skipped when `req.mode.swaps()` to a `LayoutRead` so
   they are drawn on a write's own whole page. An `Ahead` is for a read the page itself awaits.
   `corten::testing` now sends the whole-page preference for `.mode(Mode::Action)`, so tests that
