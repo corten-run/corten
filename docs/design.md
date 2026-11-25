@@ -9267,7 +9267,8 @@ rules something out.
     before `main` gave a band is read without one, so nobody is held to a rule `main` did not
     show them and no reading changes what it decided. The band is the same whatever reads the
     workload, `bench/fullstack/count.mjs` or a probe, so nothing is gained against it by
-    choosing one. The test gives what it gives with a spread of the setup's own. A negative
+    choosing one (but for the catalog's two targets, below). The test gives what it gives with a
+    spread of the setup's own. A negative
     control keeps [design Choice 71](#choice-layout-floor)'s rule. Each threshold a plan
     declared for a workload, its margin and a reduction, is tested on its own distance: one
     outside stays as one build read it, whatever a placement run then reads, and one inside is
@@ -9320,19 +9321,17 @@ rules something out.
     change's cost on a touched workload, each side at K placements with an A/A that says what
     the run resolves. A count on one build of each side inside the band says where the image's
     code landed, not what the change costs (The default band, above), and it had no reading
-    across placements to go to. `page` and `json` are still counted, once for that plan, with
-    `count.mjs`: one build of
-    each side, declared in the plan before its first turn with its pairs and its checks, and
-    each bound reported with where its distance from +1% lands against the default band as
-    `main` prints it when the plan is declared. The count is kept for what a probe is not: it
+    across placements to go to. What is still counted and when it is declared, what binds, what
+    a count inside the band is reported as and where a failed count goes are in
+    [Pull requests](../CONTRIBUTING.md#pull-requests) (item 2, with the default band) and are
+    not said again here; these are the reasons. The count is kept for what a probe is not: it
     is the only reading of the change in the catalog's own image, and outside the band it binds
-    as it did, a distance above the band a miss whatever the probe read, and one below it
-    meeting the margin. Inside is reported as "inside the default band: not decided" and, for
-    these two workloads under such a plan, does not keep the pull request from passing. No win
-    is claimed from either count. A count is not taken again for its result, since one taken
-    until it lands outside the band would be chosen by its result, as a placement run again
-    for its result would be; one that fails (a failed request, a counter under 100%, too few
-    pairs) returns to the maintainer, and the author runs nothing again.
+    for the margin as it did, whatever the probe read. It is declared before the plan's first
+    turn and before it is taken, so it is not chosen by its result, and a count an earlier plan
+    of the pull request took is a later plan's too, since a second count could not clear the
+    first and could leave the pull request two binding readings of one target that disagree.
+    A count is not taken again for its result, since one taken until it lands outside the band
+    would be chosen by its result, as a placement run again for its result would be.
 
     The limit of that case: the catalog's image is never read across placements. A cost that
     only that image shows, and that leaves the count's distance inside the band (for the
@@ -9343,8 +9342,7 @@ rules something out.
     code that only the catalog's image runs and no probe has, the two targets are held as any
     other workload is: inside does not pass, and the reading across placements they would go to
     is still to build. A plan declared before the case was on `main` is read by the rule as it
-    then stood; the four pull requests' plans go by the decision, which says what Pull requests
-    now does.
+    then stood; the four pull requests' plans go by the decision as it was posted.
 
     How many placements. A plan declares each workload's K before the run, for at most a 5% chance
     that an A/A of a commit against itself fails one of its two readings, sized from an eligible
@@ -10147,9 +10145,9 @@ rules something out.
     one build of each side of the catalog's image inside the default band is a reading
     placement has been seen to account for, as any single build's is, so it says where the
     image's code landed, while the change read across placements on a probe workload on its
-    path is the reading this Choice takes for a change's cost; outside the band the count
-    binds as any single build does; and a count declared before the plan's first turn and
-    taken once is not chosen by its result);
+    path is the reading this Choice takes for a change's cost; and a count declared before the
+    plan's first turn and before it is taken, and taken once for a pull request, is not chosen
+    by its result);
     bet
     (moving the whole of the code by declared offsets varies placement about as much as real
     changes do, though a real change moves only the code after it and by sizes no plan chose, so

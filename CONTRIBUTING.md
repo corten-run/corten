@@ -524,13 +524,13 @@ establish a general ranking.
       **and** cycles per request under equivalent load on a quiet Linux bench host.
       For changes exercised by the catalog item page or item JSON, use
       [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs) with target `page` or `json` and
-      one repeat per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`).
-      Use a fresh round name each time and tag each build in turn with the image name the script
-      expects (how the two targets are read under a plan that reads the change across placements
-      on a probe is said with the default band, below). Otherwise, measure the affected route
-      with an equivalent under-load test; an
-      unaffected route does not count. Alternate the two release builds, verify the response bytes
-      and headers before measuring, and report any failed requests.
+      one repeat per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`); how
+      the two targets are read under a plan that reads the change across placements on a probe
+      is said with the default band, below. Use a fresh round name each time and tag each build
+      in turn with the image name the script expects. Otherwise, measure the affected route with
+      an equivalent under-load test; an unaffected route does not count. Alternate the two
+      release builds, verify the response bytes and headers before measuring, and report any
+      failed requests.
 
       Compare the change in **user plus kernel cycles per request within each pair** against
       the smallest worthwhile reduction, declared before running. A run's plan, with everything
@@ -674,19 +674,19 @@ establish a general ranking.
       workloads across placements on a probe, each on the path the change touches (an unaffected
       route does not count, as above), those workloads are what item 2 asks of the change's
       cycles, held as the plan declares them and as this item says: no margin, A/A or placement
-      is loosened. `page` and `json` are still counted, once for that plan, with `count.mjs`:
-      one build of each side, declared in the plan before its first turn with its pairs and its
-      checks, and each bound reported with where its distance from +1% lands against the default
-      band as `main` prints it when the plan is declared. Outside the band binds, as above: a
-      distance above it is a miss, and one below it meets the margin. Inside is reported as
-      "inside the default band: not decided" and, for these two workloads under such a plan,
-      does not keep the pull request from passing. No win is claimed from either count. A count
-      is not taken again for its result, and one that fails (a failed request, a counter under
-      100%, too few pairs) returns to the maintainer; the author runs nothing again. Under a
-      plan that reads no such workload across placements on a probe, the two targets are held
-      as any other workload is, and inside does not pass. A plan declared before this case was
-      on `main` is read by the rule as it then stood, but for the four pull requests the Choice
-      names, whose plans go by the maintainer's decision it records.
+      is loosened. `page` and `json`, whichever the change exercises, are still counted, once
+      for that plan, with `count.mjs`: one build of each side, declared in the plan with its
+      pairs and its checks before the plan's first turn and before the count is taken, and each
+      bound reported with where its distance from +1% lands against the default band as `main`
+      prints it when the plan is declared; a count an earlier plan of the pull request declared
+      and took is this plan's too and is not taken again. Outside the band binds for the margin,
+      as above: a distance above it is a miss, and one below it meets the margin. Inside is
+      reported as "inside the default band: not decided" and, for these two workloads under such
+      a plan, does not keep the pull request from passing. No win is claimed from either count.
+      A count is not taken again for its result, and one that fails (a failed request, a counter
+      under 100%, too few pairs) returns to the maintainer and does not pass until the
+      maintainer decides; the author runs nothing again. A plan declared before this case was on
+      `main` is read by the rule as it then stood (the Choice names four exceptions).
       A workload with no single-build bound (a run that failed, too few pairs)
       does not pass, as before, and a control the plan declared keeps
       [design Choice 71](docs/design.md#choice-layout-floor)'s rule. Item 2's other requirements
