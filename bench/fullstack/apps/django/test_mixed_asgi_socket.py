@@ -1,6 +1,7 @@
 """Loopback checks for both Granian interfaces and the running candidate image."""
 from contextlib import contextmanager
 import gzip
+from http.client import HTTPResponse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -185,23 +186,46 @@ class SocketFixture(unittest.TestCase):
         self.assertGreaterEqual(elapsed, 0, "upstream closed before the caller aborted")
         return elapsed
 
-    def assert_abort(self, port, locale, record_id, *, body=False, expect_closed=True):
+    @contextmanager
+    def held_request(self, port, locale, record_id, *, body):
         held = self.upstream.held[record_id] = HeldRead(body=body)
         path = f"/marketplace/{locale}/{record_id}"
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
                 client.sendall(f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\ntraceparent: {TRACE}\r\n\r\n".encode())
                 self.assertTrue(held.started.wait(2), "upstream request did not start")
-                self.assertFalse(select.select([client], [], [], 0.05)[0], "early response before abort")
-                abort_at = monotonic()  # Before the shutdown syscall, not after a possible pause.
-                client.shutdown(socket.SHUT_RDWR)
+                self.assertFalse(select.select([client], [], [], 0.05)[0], "early response during the hold")
+                yield client, held, path
+        finally:
+            held.release.set()
+
+    def assert_abort(self, port, locale, record_id, *, body=False, expect_closed=True):
+        with self.held_request(port, locale, record_id, body=body) as (client, held, path):
+            abort_at = monotonic()  # Before the shutdown syscall, not after a possible pause.
+            client.shutdown(socket.SHUT_RDWR)
+            client.close()
             elapsed = self.close_elapsed(held, abort_at)
             observed = "not observed by the cutoff" if elapsed is None else f"{elapsed:.3f} s after abort"
             print(f"{path}: upstream EOF/reset {observed} (expect within 0.500 s: {expect_closed})", flush=True)
             self.assertEqual(elapsed is not None and elapsed <= CLEANUP_SECONDS, expect_closed,
                              f"{path}: upstream EOF/reset at {elapsed!r} s after abort")
-        finally:
+
+    def assert_connected(self, port, locale, record_id, *, body=False):
+        with self.held_request(port, locale, record_id, body=body) as (client, held, _):
+            # Start at the point where the other probe aborts, then hold through its entire cleanup window.
+            release_at = monotonic() + CLEANUP_SECONDS
+            while (remaining := release_at - monotonic()) > 0:
+                self.assertFalse(select.select([client], [], [], remaining)[0],
+                                 "connected caller received data or EOF before upstream release")
+            self.assertIsNone(held.closed_at, "upstream closed while the caller stayed connected")
             held.release.set()
+            with HTTPResponse(client) as response:
+                response.begin()
+                self.assertEqual(response.status, 200)
+                self.assertTrue(response.getheader("Content-Type", "").startswith("text/html"))
+                page = response.read()
+            self.assertIn(f'<html lang="{locale}">'.encode(), page)
+            self.assertTrue(page.rstrip().endswith(b"</html>"), "incomplete marketplace HTML")
 
     def assert_whole_read_deadline(self, held, response_elapsed):
         self.assertTrue(held.closed.wait(CLEANUP_SECONDS), "deadline did not close the held upstream")
@@ -227,15 +251,18 @@ class MixedAsgiSocketTests(SocketFixture):
             with self.subTest(asgi=asgi), native_app(asgi, self.upstream.server_port) as (base, port):
                 cases = list(zip(LOCALES, ("request_1", "request_4", "request_40")))
                 cases.append(("en-US", "held_body"))
+                expected_reads = []
                 for locale, record_id in cases:
                     with self.subTest(locale=locale, record_id=record_id):
-                        self.assert_abort(port, locale, record_id, body=record_id == "held_body", expect_closed=asgi)
+                        body = record_id == "held_body"
+                        self.assert_abort(port, locale, record_id, body=body, expect_closed=asgi)
+                        if asgi:
+                            self.assert_connected(port, locale, record_id, body=body)
                     recovered = requests.get(base + "/api/marketplace/item_1", timeout=2)
                     self.assertEqual(recovered.json(), RECORD)
-                self.assertEqual(self.upstream.reads, [
-                    row for _, record_id in cases
-                    for row in ((f"/marketplace/records/{record_id}", TRACE), ("/marketplace/records/item_1", None))
-                ])
+                    expected_reads.extend([(f"/marketplace/records/{record_id}", TRACE)] * (2 if asgi else 1))
+                    expected_reads.append(("/marketplace/records/item_1", None))
+                self.assertEqual(self.upstream.reads, expected_reads)
                 self.upstream.reads.clear()
                 for locale in LOCALES:
                     page = requests.get(base + f"/marketplace/{locale}/item_1?sort=desc&offers=all",
@@ -313,7 +340,8 @@ class ShippedAsgiSocketTests(SocketFixture):
         base = "http://127.0.0.1:8080"
         self.assertTrue(wait_until_ready(base), "the image's default command did not start the app")
         self.assert_abort(8080, "en-US", "request_1")
-        self.assertEqual(self.upstream.reads, [("/marketplace/records/request_1", TRACE)])
+        self.assert_connected(8080, "en-US", "request_1")
+        self.assertEqual(self.upstream.reads, [("/marketplace/records/request_1", TRACE)] * 2)
         # A write through the running server also requires the shipped migration to have run.
         with requests.Session() as client:
             path = base + "/marketplace/en-US/item_1"
