@@ -73,23 +73,71 @@ function inspectChromiumProcess(processIdentity, processRole, pid, parentImage, 
     productionRole: productionRole.status !== "ok" ? "unreadable" : productionRole.value === "--type=renderer" ? "renderer" : "not-renderer" };
 }
 
+async function within(operation, milliseconds) {
+  let timer;
+  try {
+    return await Promise.race([Promise.resolve().then(operation), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Chromium witness operation deadline")), milliseconds);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+function shutdownBrowser(server, milliseconds = 4000) {
+  let finishing;
+  return () => finishing ??= (async () => {
+    try { await within(() => server.close(), milliseconds); }
+    catch {
+      await within(() => server.kill(), milliseconds);
+      throw new Error("Chromium witness required forced browser shutdown");
+    }
+  })();
+}
+
+test("renderer witness kills its owned browser once if graceful shutdown stalls", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let closes = 0, kills = 0;
+  const close = shutdownBrowser({
+    close() { closes++; return new Promise(() => {}); },
+    async kill() { kills++; },
+  }, 25);
+  const attempt = close();
+  const failed = assert.rejects(attempt, { message: "Chromium witness required forced browser shutdown" });
+  assert.equal(close(), attempt);
+  await Promise.resolve();
+  assert.equal(closes, 1);
+  t.mock.timers.tick(25);
+  await failed;
+  assert.equal(kills, 1);
+});
+
 test("Linux Chromium renderer witness with one visible page", { skip: process.platform !== "linux", timeout: 45000 }, async (t) => {
-  let launched, context, stage = "launch", report, failed = false, closeFailed = false;
+  let stop, stage = "launch", report, failed = false, closeFailed = false;
   try {
     const { chromium } = await import("playwright");
     const { launchBrowser } = await import("./launch.mjs");
     const { processIdentity, processRole } = await import("../workloads/isolated/host-lifetime.mjs");
-    launched = await launchBrowser(chromium);
+    const launched = await launchBrowser({
+      async launchServer(options) {
+        const server = await chromium.launchServer({ ...options, timeout: 8000 });
+        stop = shutdownBrowser(server);
+        return { wsEndpoint: () => server.wsEndpoint(), process: () => server.process(), close: stop };
+      },
+      connect: (endpoint) => chromium.connect(endpoint, { timeout: 5000 }),
+    });
     stage = "visible page";
-    context = await launched.browser.newContext({ viewport: { width: 1100, height: 800 }, serviceWorkers: "block" });
-    const page = await context.newPage();
-    await page.setContent("<main>Renderer witness</main>", { timeout: 5000 });
-    assert.ok(await page.evaluate(() => document.visibilityState === "visible" && document.querySelector("main").checkVisibility()));
+    await within(async () => {
+      const context = await launched.browser.newContext({ viewport: { width: 1100, height: 800 }, serviceWorkers: "block" });
+      const page = await context.newPage();
+      await page.setContent("<main>Renderer witness</main>", { timeout: 5000 });
+      assert.ok(await page.evaluate(() => document.visibilityState === "visible" && document.querySelector("main").checkVisibility()));
+    }, 8000);
 
     stage = "process inventory";
     // Chromium identifies renderer candidates independently of procfs or the role parser.
-    const cdp = await launched.browser.newBrowserCDPSession();
-    const { processInfo } = await cdp.send("SystemInfo.getProcessInfo");
+    const { processInfo } = await within(async () => {
+      const cdp = await launched.browser.newBrowserCDPSession();
+      return cdp.send("SystemInfo.getProcessInfo");
+    }, 8000);
     const pid = launched.process.pid, validPid = (id) => Number.isSafeInteger(id) && id > 0;
     assert.ok(validPid(pid) && Array.isArray(processInfo) && processInfo.length <= 64);
     const renderers = processInfo.filter(({ type }) => type === "renderer").map(({ id }) => id);
@@ -113,8 +161,9 @@ test("Linux Chromium renderer witness with one visible page", { skip: process.pl
     // Playwright and filesystem errors can contain raw args and executable paths.
     failed = true;
   } finally {
-    try { await context?.close(); } catch { closeFailed = true; }
-    try { await launched?.close(); } catch { closeFailed = true; }
+    // Closing the owned server also closes its contexts; never wait on a
+    // context request before closing the process that serves that request.
+    try { await stop?.(); } catch { closeFailed = true; }
   }
   if (closeFailed) t.diagnostic("Chromium renderer witness cleanup failed");
   assert.ok(!failed, `Chromium renderer witness failed at ${stage}`);
@@ -123,5 +172,6 @@ test("Linux Chromium renderer witness with one visible page", { skip: process.pl
   assert.ok(report.parentMatchesInventory && parent.process === "stable" && parent.sameBrowserImage && parent.sameCgroup
     && parent.productionRole === "not-renderer", "browser parent negative control failed");
   assert.ok(renderers.some((p) => p.process === "stable" && p.sameBrowserImage && p.sameCgroup && p.listed !== false
-    && p.productionRole === "renderer"), "no live Chromium renderer matched the observer's role and scope");
+    && p.cmdline.renderer === "embedded" && p.cmdline.role === null && p.productionRole === "renderer"),
+  "no live Chromium renderer exercised the rewritten-title path in the observed scope");
 });
