@@ -404,8 +404,14 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   withTerminal.samples[appName].push(terminal);
   withTerminal.summary[appName] = summarizeSamples(withTerminal.samples[appName]);
   const terminalLog = (CPUPerc, MemUsage) => cleanLog + JSON.stringify({ Name: appName, CPUPerc, MemUsage }) + "\n";
+  const beyondDouble = "9".repeat(309), conversionOverflow = `1${"0".repeat(308)}GiB`;
   for (const [label, cpu, memory, expected] of [
     ["accepts a well-formed terminal zero", "0.00%", "0B / 0B"],
+    ["rejects a non-finite displayed CPU", `${beyondDouble}%`, "0B / 0B", /non-finite Docker CPU display/],
+    ["rejects a non-finite displayed memory usage", "0.00%", `${beyondDouble}B / 0B`, /non-finite Docker memory quantity/],
+    ["rejects a non-finite displayed memory limit", "0.00%", `0B / ${beyondDouble}B`, /non-finite Docker memory quantity/],
+    ["rejects memory usage that overflows during conversion", "0.00%", `${conversionOverflow} / 0B`, /non-finite Docker memory conversion/],
+    ["rejects a memory limit that overflows during conversion", "0.00%", `0B / ${conversionOverflow}`, /non-finite Docker memory conversion/],
     ["rejects a missing memory limit despite matching samples and aggregate", "0.00%", "0B", /memory display missing its limit/],
     ["rejects a malformed memory limit despite matching samples and aggregate", "0.00%", "0B / 0..0B", /invalid Docker memory display/],
     ["rejects garbled CPU text despite matching samples and aggregate", "0.00% invalid", "0B / 0B", /invalid Docker CPU display/],

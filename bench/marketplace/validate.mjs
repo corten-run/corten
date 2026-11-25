@@ -38,9 +38,13 @@ function cpuBudget(c, milliseconds, onlineCpus) {
 function displayedMemory(value) {
   const m = /^\s*(\d+(?:\.(\d+))?)\s*(B|[KMGT]i?B)\s*$/.exec(value);
   assert.ok(m, "invalid Docker memory display");
+  const quantity = Number(m[1]);
+  assert.ok(Number.isFinite(quantity), "non-finite Docker memory quantity");
   // Docker BytesSize uses %.4g: omitted trailing zeroes do not reduce precision.
-  const magnitude = Math.floor(Math.log10(Number(m[1]) || 1));
-  return { mib: memoryMiB(value), rounding: memoryMiB(`1${m[3]}`) * 10 ** (magnitude - 3) / 2 };
+  const magnitude = Math.floor(Math.log10(quantity || 1));
+  const mib = memoryMiB(value), rounding = memoryMiB(`1${m[3]}`) * 10 ** (magnitude - 3) / 2;
+  assert.ok(Number.isFinite(mib) && Number.isFinite(rounding), "non-finite Docker memory conversion");
+  return { mib, rounding };
 }
 
 /** Returns the validated summary, or throws MARKETPLACE_EVIDENCE_INVALID (also for missing raw).
@@ -326,12 +330,13 @@ function replay({ folder, round, commit }) {
             assert.ok(Object.hasOwn(history, name), "unexpected stats participant");
             assert.ok(history[name].length < maxStatsSamples, "stats log exceeds sample bound");
             assert.match(cpuDisplay, /^\d+(?:\.\d+)?%$/, "invalid Docker CPU display");
+            assert.ok(Number.isFinite(cpu), "non-finite Docker CPU display");
             assert.equal(memory.length, 2, "memory display missing its limit");
             const usage = displayedMemory(memory[0]), limit = displayedMemory(memory[1]);
             if (!stop) {
               // Docker reports one logical CPU as 100%, rounded to two decimals.
               // Samples can burst beyond quota; only the whole host is a bound.
-              assert.ok(Number.isFinite(cpu) && cpu <= onlineCpus.size * 100 + 0.005, "sampled CPU exceeds physical host capacity");
+              assert.ok(cpu <= onlineCpus.size * 100 + 0.005, "sampled CPU exceeds physical host capacity");
               const c = name === coldApp.name ? raw.app : raw.upstream;
               const expected = c.memoryBytes / 2 ** 20;
               assert.ok(Math.abs(limit.mib - expected) <= limit.rounding + 1e-12, "memory display limit differs from container");
