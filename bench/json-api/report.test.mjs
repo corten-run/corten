@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 import { reader, writer } from "./artifacts.mjs";
 import { descriptor, k6Image, nodeImage, sha256 } from "./contract.mjs";
 import { inspectJson, renderJson } from "./report.mjs";
@@ -227,10 +228,19 @@ test("rehashing raw fixture reads, runtime budgets or phase clocks cannot bypass
 test("portable report reads hash-bound artifacts, rejects unsafe paths and strictly fails incomplete evidence", () => {
   const folder = mkdtempSync(join(tmpdir(), "json-api-report-")), here = dirname(fileURLToPath(import.meta.url));
   try {
-    for (const [path, bytes] of base.artifacts) writeFileSync(join(folder, path), bytes);
-    const file = join(folder, "summary.json"); writeFileSync(file, JSON.stringify(base.summary));
+    const noHooks = join(folder, "empty-hooks"); mkdirSync(noHooks);
+    const git = (...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+      "-c", "commit.gpgsign=false", "-c", `core.hooksPath=${noHooks}`, ...args], {
+      cwd: folder, env: fixtureGitEnv(), timeout: 5000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    git("init", "-q");
+    git("commit", "--allow-empty", "-qm", "legacy benchmark source");
+    const commit = git("rev-parse", "HEAD"), legacy = result([], { commit });
+    for (const [path, bytes] of legacy.artifacts) writeFileSync(join(folder, path), bytes);
+    const file = join(folder, "summary.json"); writeFileSync(file, JSON.stringify(legacy.summary));
     const run = () => {
-      const child = spawnSync(process.execPath, [join(here, "report.mjs"), file, "--require-complete"], { encoding: "utf8", windowsHide: true, timeout: 15000 });
+      const child = spawnSync(process.execPath, [join(here, "report.mjs"), file, "--require-complete", "--commit", commit],
+        { cwd: folder, encoding: "utf8", windowsHide: true, timeout: 15000 });
       assert.ifError(child.error);
       assert.equal(child.signal, null, `report child terminated by ${child.signal}: ${child.stderr}`);
       return child;
@@ -238,7 +248,7 @@ test("portable report reads hash-bound artifacts, rejects unsafe paths and stric
     const good = run(); assert.equal(good.status, 0, good.stderr); assert.match(good.stdout, /COMPLETE/);
     // Full-matrix rejection mutations are replayed above. The CLI also needs to
     // handle genuinely partial evidence without a second full successful replay.
-    const s = copy(); s.dirtyAfter = true; s.apps = {}; writeFileSync(file, JSON.stringify(s));
+    const s = structuredClone(legacy.summary); s.dirtyAfter = true; s.apps = {}; writeFileSync(file, JSON.stringify(s));
     const partial = run(); assert.equal(partial.status, 1, partial.stderr);
     assert.match(partial.stdout, /INCOMPLETE: not a baseline/);
     assert.match(partial.stdout, /provenance: tree dirty after run/);

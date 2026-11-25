@@ -1,19 +1,34 @@
-// Read-only: never starts a server, Docker, or an external process.
+// Read-only: the strict CLI also checks the requested local Git object.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
-import { cpuSettings, descriptor, identity, k6Image, nodeImage, payloads, phases, runtimeContext, schema, sha256, timingPlan, verifyImage, verifyImageExecution, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
+import { cpuSettings, descriptor, identity, k6Image, nodeImage, payloads, phases, runtimeContext, scheduledProducerMarker, scheduledProducerSchema, schema, sha256, timingPlan, verifyImage, verifyImageExecution, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
 import { reader } from "./artifacts.mjs";
 import { functionalVerifier, verifyFunctionalFailure, verifyFunctionalLiveness, verifyAggregates, verifyRun } from "./evidence.mjs";
 import { spread } from "../fullstack/passes.mjs";
 import { verifyK6Provenance } from "../load-tool.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { timedSummarySchema, timedCaseProjection } from "./timed-outcomes.mjs";
-import { verifyProducer } from "./production.mjs";
+import { legacyProducerSchema, verifyProducer } from "./production.mjs";
 import { replayTimedRun } from "./evidence.mjs";
 
-export function inspectJson(summary, { load, commit } = {}) {
+export function producerPolicyAtCommit(commit, repo = process.cwd()) {
+  assert.ok(typeof commit === "string" && /^[a-f0-9]{40}$/.test(commit), "full measured commit required for strict reporting");
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));
+  const result = spawnSync("git", ["--no-replace-objects", "-C", repo, "ls-tree", "-z", `${commit}^{commit}`, "--", scheduledProducerMarker], {
+    env: { ...env, GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0" }, encoding: "utf8", windowsHide: true,
+    timeout: 5000, maxBuffer: 16 * 1024, stdio: ["ignore", "pipe", "ignore"],
+  });
+  assert.ok(result.status === 0 && !result.error, "cannot read strict JSON producer policy at measured commit");
+  if (!result.stdout) return legacyProducerSchema;
+  assert.ok(/^100(?:644|755) blob [a-f0-9]{40}\t/.test(result.stdout) && result.stdout.split("\t")[1] === scheduledProducerMarker + "\0",
+    "invalid committed JSON load sampler marker");
+  return scheduledProducerSchema;
+}
+
+export function inspectJson(summary, { load, commit, requiredProducer } = {}) {
   const timed = summary.schema === timedSummarySchema;
   assert.ok(summary.schema === schema || timed, "not a json-api result schema");
   assert.deepEqual(summary.group, descriptor(), "JSON group contract/selection differs");
@@ -41,6 +56,8 @@ export function inspectJson(summary, { load, commit } = {}) {
       && Date.parse(summary.finishedAt) >= Date.parse(summary.startedAt), "missing/invalid terminal clock");
   });
   check("configuration", () => {
+    if (requiredProducer === scheduledProducerSchema || (requiredProducer && timed))
+      assert.ok(timed && summary.producer?.schema === requiredProducer, "JSON producer differs from the measured commit policy");
     if (timed) verifyProducer(summary.producer);
     assert.deepEqual(summary.timingPlan, timingPlan(summary.options), "missing/wrong effective timing plan");
     for (const [key, max] of [["duration", 300], ["warmup", 120], ["rate", 10000], ["startupTimeout", 300]]) {
@@ -269,7 +286,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       else if (args[i] === "--commit" && commit === undefined && /^[0-9a-f]{40}$/.test(args[i + 1] ?? "")) commit = args[++i];
       else throw new Error(`unknown/duplicate report argument ${args[i]}`);
     }
-    const report = inspectJson(JSON.parse(readFileSync(file, "utf8")), { load: reader(dirname(file)), commit });
+    const summary = JSON.parse(readFileSync(file, "utf8"));
+    const report = inspectJson(summary, { load: reader(dirname(file)), commit,
+      requiredProducer: strict ? producerPolicyAtCommit(commit ?? summary.commit) : undefined });
     console.log(renderJson(report)); if (strict && !report.baseline) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

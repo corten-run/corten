@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
-import { startLoadResourceCapture } from "./load-resource-capture.mjs";
+import { finalizeLoadResourceCapture, startLoadResourceCapture } from "./load-resource-capture.mjs";
 import { replayScheduledLoadResources } from "./load-resource-proof.mjs";
+import { life } from "./production.mjs";
 
 const [id, ...extra] = process.argv.slice(2);
 assert.equal(process.platform, "linux", "run on the host of the local Linux Docker daemon");
@@ -28,17 +29,16 @@ async function inspect(exact) {
 }
 assert.equal((await inspect(id)).State.Status, "created");
 const sampler = startLoadResourceCapture({ id, inspect });
-let capture;
+let settlement;
 try { await docker(["container", "start", "--attach", id], 15000); }
 finally {
-  capture = await sampler.stop();
+  settlement = await sampler.stop();
 }
-const terminal = (await inspect(id)).State;
-assert.ok(terminal.Status === "exited" && terminal.Pid === 0 && terminal.ExitCode === 0, "probe lifecycle changed");
+const info = await inspect(id), terminal = life(info);
+assert.ok(info.State.Pid === 0 && terminal.exitCode === 0, "probe lifecycle changed");
+const capture = finalizeLoadResourceCapture(settlement, terminal);
 // Simulate late receipt for every row. Replay receives only the saved acquisition proof.
 await sleep(120);
-const result = replayScheduledLoadResources(JSON.parse(JSON.stringify(capture)), {
-  containerId: id, startedAt: terminal.StartedAt, finishedAt: terminal.FinishedAt,
-}, { memoryBytes, quota });
+const result = replayScheduledLoadResources(JSON.parse(JSON.stringify(capture)), terminal, { memoryBytes, quota });
 assert.ok(result.cpuMaxPctUpper > 0 && result.loadHasHeadroom, "synthetic probe needs observable CPU below its headroom threshold");
 console.log(JSON.stringify({ scope: "synthetic-production-load-sampler", result }));

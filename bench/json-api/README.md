@@ -143,8 +143,10 @@ includes the complete final millisecond and must fit in Docker's nanosecond
 lifetime, with no grace. Slots start one second after the rounded-up Docker start
 timestamp. Replay derives the schedule from the exact lifetime and requires a
 complete acquisition for each full slot. A final partial slot can contribute a
-sample only if the entire acquisition fits. The existing five-second bound applies
-at both edges and across gaps. At least two observations are needed for a timed
+sample only if the entire acquisition fits. A process or cgroup disappearance
+in that optional slot is resolved by the exact clean terminal Docker receipt,
+never by an intermediate status or without the required full slots. The existing
+five-second bound applies at both edges and across gaps. At least two observations are needed for a timed
 phase to qualify; a very short diagnostic run may end too early to prove headroom.
 CPU is the upper bound on percent of a core: the difference in cgroup
 `usage_usec` divided by the shortest possible elapsed interval (times 100 after
@@ -247,6 +249,8 @@ exact fixed-offer and zero-error checks. Current isolated campaigns require v2 e
 a self-declared v1 schema cannot bypass the producer-to-measured-commit join.
 The current producer binds the load sampler and its replay source to the measured
 commit. That commit cannot fall back to the legacy Docker-stats load policy.
+The standalone `--require-complete` report also reads the measured Git commit in
+the repository it is run from; an unavailable commit refuses strict reporting.
 Thresholds, rates, VUs, durations, budgets,
 the full nine-app/four-profile roster and pass rotation are unchanged.
 

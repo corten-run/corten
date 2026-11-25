@@ -216,8 +216,10 @@ test('phase joins both samplers before saving a native command failure', async (
     async observe() { return { participants: { load: { containerId: loadId } } }; },
     async counters() { return {}; },
     sample() { return { async stop() { appStopped = true; throw new Error('app stats failed'); } }; },
-    sampleLoad(id) { assert.equal(id, loadId); return { async stop() { loadStopped = true; return sampled; } }; },
+    sampleLoad(id) { assert.equal(id, loadId); return { async stop() { loadStopped = true; return { capture: sampled }; } }; },
     async execute() { throw commandFailure; },
+    async reads() { return {}; },
+    async copy() { throw new Error('no command artifacts'); },
     write(path, raw) {
       assert.ok(appStopped && loadStopped);
       result = raw;
@@ -226,6 +228,40 @@ test('phase joins both samplers before saving a native command failure', async (
   };
   await assert.rejects(capturePhase({ folder, path: 'joined', stage: 'sat64', config: loadConfig(options, 'sat64'),
     expected: {}, options, tools: { node: {}, k6: {} }, context: {}, io }), /^Error: native command: command deadline$/);
-  assert.deepEqual(result.captureErrors, ['native command: command deadline', 'app stats failed']);
+  assert.deepEqual(result.captureErrors, ['native command: command deadline', 'app stats failed',
+    'load capture lacks the exact clean terminal lifetime', 'no command artifacts']);
   assert.equal(result.loadResources, sampled);
+});
+
+test('load sampler failure retains the acquired prefix, terminal observation, k6 summary and clock', async (t) => {
+  const folder = mkdtempSync(join(tmpdir(), 'json-load-failure-'));
+  t.after(() => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true, force: true }); });
+  mkdirSync(join(folder, 'partial'));
+  const options = { duration: 1, warmup: 1, rate: 3 }, loadId = 'a'.repeat(64), f = phaseFixture('sat64');
+  const capture = { schema: loadResourceCaptureSchema, live: { id: loadId, pid: 42 }, rows: [{ sequence: 0 }] };
+  const before = { participants: { load: { containerId: loadId } } }, after = { liveness: { load: { containerId: loadId, status: 'exited' } } };
+  let result, observations = 0;
+  const io = {
+    async observe() { return observations++ ? after : before; },
+    async counters() { return {}; },
+    sample() { return { async stop() { return { app: [], upstream: [] }; } }; },
+    sampleLoad(id) { assert.equal(id, loadId); return { async stop() { return { capture, error: new Error('invalid CPU counter') }; } }; },
+    async execute() { return { ...f.command, exit: { ...f.command.exit, code: 99 }, stdoutBytes: 0 }; },
+    async reads() { return {}; },
+    async copy(path, target) { writeFileSync(target, JSON.stringify(path.includes('summary') ? f.summary : f.clock)); },
+    write(path, raw) { result = raw; return { path }; },
+  };
+  await assert.rejects(capturePhase({ folder, path: 'partial', stage: 'sat64', config: loadConfig(options, 'sat64'),
+    expected: {}, options, tools: { node: {}, k6: {} }, context: {}, io }), (error) => {
+    assert.match(error.message, /invalid CPU counter/);
+    assert.equal(error.phase.metrics, null);
+    return true;
+  });
+  assert.equal(result.after, after);
+  assert.equal(result.command.exit.code, 99);
+  assert.equal(result.loadResources, capture);
+  assert.deepEqual(result.k6, f.summary);
+  assert.deepEqual(result.clock, f.clock);
+  assert.deepEqual(Object.keys(result.files).sort(), ['clock', 'stderr', 'stdout', 'summary']);
+  assert.deepEqual(result.captureErrors, ['invalid CPU counter']);
 });

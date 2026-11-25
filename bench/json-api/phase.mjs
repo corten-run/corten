@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { closeSync, fstatSync, openSync, readSync, statfsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readFixedStreamSync } from "./fixed-stream.mjs";
+import { finalizeLoadResourceCapture } from "./load-resource-capture.mjs";
 import { captureLimits, deriveProductionPhase } from "./production.mjs";
 import { timedPhaseSchema } from "./timed-outcomes.mjs";
 import { sha256 } from "./contract.mjs";
@@ -21,14 +22,18 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
   const raw = { schema: timedPhaseSchema, identity: expected, phase: stage, config,
     tools: { nodeImageId: tools.node.imageId, k6ImageId: tools.k6.imageId }, captureErrors: [], priorTailUnobserved };
   const prefix = `${path}/${stage}`, output = join(folder, `${prefix}-events.jsonl`), log = join(folder, `${prefix}-stderr.jsonl`);
-  let sampler, loadSampler, countersBefore, failure, stream;
+  let sampler, loadSampler, loadResult, countersBefore, failure, stream;
+  const sampleErrors = [];
+  const firstLine = (error) => String(error?.message ?? error).split("\n", 1)[0].slice(0, 512);
   async function joinSamplers() {
     const active = [sampler, loadSampler]; sampler = loadSampler = undefined;
     const results = await Promise.allSettled(active.map(async (s) => s?.stop()));
     if (active[0] && results[0].status === "fulfilled") raw.samples = results[0].value;
-    if (active[1] && results[1].status === "fulfilled") raw.loadResources = results[1].value;
-    const failed = results.filter((result) => result.status === "rejected");
-    if (failed.length) throw new Error(failed.map(({ reason }) => String(reason?.message ?? reason).split("\n", 1)[0].slice(0, 512)).join("; "));
+    if (active[1] && results[1].status === "fulfilled") {
+      loadResult = results[1].value;
+      raw.loadResources = loadResult.capture;
+    }
+    for (const result of results) if (result.status === "rejected") sampleErrors.push(firstLine(result.reason));
   }
   try {
     const free = statfsSync(folder);
@@ -44,6 +49,10 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
     catch (error) { failure = error; raw.command = { exit: error.exit ?? null, clock: error.clock ?? null, ioErrors: error.ioErrors ?? [error.message] }; }
     finally { await joinSamplers(); }
     const countersAfter = await io.counters(); raw.after = await io.observe();
+    if (loadResult) {
+      try { raw.loadResources = finalizeLoadResourceCapture(loadResult, raw.after.liveness?.load); }
+      catch (error) { sampleErrors.push(firstLine(error)); }
+    }
     raw.counters = Object.fromEntries(Object.keys(countersBefore).map((role) => [role, { before: countersBefore[role], after: countersAfter[role] }]));
     const settled = await io.reads();
     raw.upstreamReads = { before: raw.before.upstreamReads, after: raw.after.upstreamReads, settled: settled.upstreamReads };
@@ -68,15 +77,17 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
       raw.files.stdout = { path: `${prefix}-events.jsonl`, bytes: 0, sha256: sha256(bytes) };
     }
     if (failure) throw failure;
+    if (sampleErrors.length) throw new Error(sampleErrors[0]);
     const metrics = deriveProductionPhase(raw, expected, stage, options, tools, context, { stream, native, priorTailUnobserved });
     return { raw: io.write(`${prefix}.json`, raw), metrics };
   } catch (error) {
     // A native command fault is the cause; a capture check it provoked (no closed
     // stdout count, an empty fixed stream) is kept after it, never in its place.
     // Only the command's first line is kept: its stderr is a bounded artifact.
-    const cause = failure && `native command: ${String(failure?.message ?? failure).split("\n", 1)[0].slice(0, 512)}`;
+    const cause = failure && `native command: ${firstLine(failure)}`;
     if (cause) raw.captureErrors.push(cause);
-    if (error !== failure) raw.captureErrors.push(error.message);
+    raw.captureErrors.push(...sampleErrors);
+    if (error !== failure && !sampleErrors.includes(error.message)) raw.captureErrors.push(error.message);
     const thrown = cause ? new Error(cause) : error;
     thrown.phase = { raw: io.write(`${prefix}.json`, raw), metrics: null };
     throw thrown;

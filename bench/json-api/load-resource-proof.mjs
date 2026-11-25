@@ -13,6 +13,7 @@ const positive = (n) => natural(n) && n > 0;
 const containerId = (id) => typeof id === "string" && /^[a-f0-9]{64}$/.test(id);
 const objectId = (id) => typeof id === "string" && /^\d{1,20}:[1-9]\d{0,19}$/.test(id);
 const fdPath = (fd) => `/proc/self/fd/${fd}`;
+export class LoadResourceLifetimeEnded extends Error {}
 
 function pathParts(path, id) {
   assert.ok(containerId(id) && typeof path === "string" && path.length <= 4096 && path.startsWith("/"), "invalid load cgroup path");
@@ -96,12 +97,15 @@ function processSnapshot(proc, pid) {
   // /proc/PID/stat's comm may contain spaces and parentheses; starttime is field 22.
   const fields = stat.slice(close + 2).trimEnd().split(" ");
   assert.ok(stat.startsWith(`${pid} (`) && close > 0 && stat[close + 1] === " "
-    && /^[1-9]\d{0,19}$/.test(fields[19] ?? "") && /^[RSDTtIWPK]$/.test(fields[0]), "load process identity unavailable");
+    && /^[1-9]\d{0,19}$/.test(fields[19] ?? ""), "load process identity unavailable");
+  if (/^[ZXx]$/.test(fields[0])) throw new LoadResourceLifetimeEnded("load process identity unavailable at exit");
+  assert.ok(/^[RSDTtIWPK]$/.test(fields[0]), "load process identity unavailable");
   const path = /^0::(\/[^\n]+)\n$/.exec(proc.read("cgroup"))?.[1];
   return { pid, processObject, startTicks: fields[19], path };
 }
 function groupSnapshot(group) {
   const mount = fullMount(group.mount()), groupObject = group.identity(), populated = lines(group.read("cgroup.events"), "populated");
+  if (populated.length === 1 && populated[0] === "populated 0") throw new LoadResourceLifetimeEnded("load cgroup not populated at exit");
   assert.deepEqual(populated, ["populated 1"], "load cgroup not populated");
   return { mount, groupObject, populated: true };
 }

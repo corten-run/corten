@@ -11,6 +11,7 @@ export { aggregate, phases };
 export const schema = "json-api-results/v1";
 export const timedSchema = "json-api-results/v2";
 export const scheduledProducerSchema = "json-api-producer/v3";
+export const scheduledProducerMarker = "bench/json-api/load-resource-capture.mjs";
 export const timedReceiptSchema = "json-api-native-audit/v2";
 export const auditBundleSchemas = Object.freeze(["json-api-native-audits/v1", "json-api-native-audits/v2"]);
 export const receiptSchema = "json-api-native-audit/v1";

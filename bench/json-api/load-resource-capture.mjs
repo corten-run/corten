@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { timestampNs } from "./fixed-stream.mjs";
-import { acquireLoadResources, loadResourceCaptureSchema, loadResourceFirstSlot, loadResourcePeriodMs } from "./load-resource-proof.mjs";
+import { acquireLoadResources, LoadResourceLifetimeEnded, loadResourceCaptureSchema, loadResourceFirstSlot, loadResourcePeriodMs } from "./load-resource-proof.mjs";
 
 const maxRows = 360;
 const msNs = (ms) => BigInt(ms) * 1_000_000n;
@@ -14,8 +14,8 @@ function stateOf(info, id) {
   return s;
 }
 
-// Only the initial and ENOENT reconciliation observations use Docker. During
-// the window, the acquisition itself brackets the PID and cgroup identities.
+// Only the initial observation uses Docker. During the window, acquisition
+// brackets the PID and cgroup identities; exact terminal replay settles the edge.
 export function startLoadResourceCapture({ id, inspect, acquire = acquireLoadResources,
   now = Date.now, monotonic = () => performance.now(), wait = delay }) {
   assert.ok(typeof id === "string" && /^[a-f0-9]{64}$/.test(id), "load resource capture requires an exact container ID");
@@ -48,29 +48,49 @@ export function startLoadResourceCapture({ id, inspect, acquire = acquireLoadRes
       let row;
       try { row = acquire({ id, pid: capture.live.pid, sequence }); }
       catch (error) {
-        const end = now();
-        if (error?.code !== "ENOENT") throw error;
-        const terminal = stateOf(await inspect(id), id);
-        if (terminal.Status !== "exited" || terminal.Running !== false || terminal.Pid !== 0 || ![0, 99].includes(terminal.ExitCode)
-          || terminal.StartedAt !== capture.live.startedAt) throw error;
-        const finished = timestampNs(terminal.FinishedAt);
-        // ENOENT alone is not a terminal observation. Only the same load's
-        // final partial slot may disappear; replay still requires all full slots.
-        if (finished <= timestampNs(capture.live.startedAt)
-          || finished >= msNs(slot + loadResourcePeriodMs) || finished >= msNs(end + 1)) throw error;
-        break;
+        if (error?.code !== "ENOENT" && !(error instanceof LoadResourceLifetimeEnded)) throw error;
+        return { capture, ending: { sequence, begin, error } };
       }
       capture.rows.push(row);
     }
-    return capture;
+    return { capture };
   }
   // A fast sampler failure belongs to stop(), which the phase always joins;
   // do not leave an unhandled rejection while the native command is active.
-  const settled = collect().then((value) => ({ value }), (error) => ({ error }));
+  const settled = collect().catch((error) => ({ capture, error }));
   return { async stop() {
     controller.abort();
-    const result = await settled;
-    if ("error" in result) throw result.error;
-    return result.value;
+    return settled;
   } };
+}
+
+export function finalizeLoadResourceCapture({ capture, ending, error }, terminal) {
+  if (error) throw error;
+  assert.ok(terminal && capture?.live && terminal.containerId === capture.live.id
+    && terminal.startedAt === capture.live.startedAt && terminal.status === "exited" && terminal.running === false
+    && terminal.oomKilled === false && terminal.dead === false && terminal.paused === false && terminal.restarting === false
+    && terminal.restartCount === 0 && terminal.error === "" && [0, 99].includes(terminal.exitCode),
+  "load capture lacks the exact clean terminal lifetime");
+  const firstAt = loadResourceFirstSlot(capture.live.startedAt), finished = timestampNs(terminal.finishedAt);
+  const span = finished - msNs(firstAt), period = msNs(loadResourcePeriodMs);
+  if (span < 0n) {
+    if (ending) throw ending.error;
+    return capture;
+  }
+  const full = Number(span / period), partial = span % period !== 0n;
+  const slot = firstAt + full * loadResourcePeriodMs;
+  if (ending) {
+    const attemptedSlot = firstAt + ending.sequence * loadResourcePeriodMs;
+    // A speculative wake on/after the terminal boundary can only report
+    // disappearance once all mandatory slots have already been captured.
+    if (ending.sequence < full || ending.sequence > full + Number(partial) || capture.rows.length !== ending.sequence
+      || ending.begin < attemptedSlot || ending.begin >= attemptedSlot + loadResourcePeriodMs) throw ending.error;
+  }
+  const tail = capture.rows.at(-1);
+  // A genuine read in the terminal partial slot can round past the recorded
+  // exit. Do not publish that optional read or remove any earlier/full slot.
+  if (partial && capture.rows.length === full + 1 && tail?.sequence === full
+    && tail.begin.at >= slot && tail.end.at < slot + loadResourcePeriodMs && msNs(tail.end.at + 1) > finished)
+    return { ...capture, rows: capture.rows.slice(0, -1) };
+  return capture;
 }

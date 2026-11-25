@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { startLoadResourceCapture } from "./load-resource-capture.mjs";
-import { loadResourceCaptureSchema } from "./load-resource-proof.mjs";
+import { finalizeLoadResourceCapture, startLoadResourceCapture } from "./load-resource-capture.mjs";
+import { LoadResourceLifetimeEnded, loadResourceCaptureSchema } from "./load-resource-proof.mjs";
 
 const id = "a".repeat(64), epoch = Date.parse("2026-11-24T23:00:00Z"), stamp = (ms) => new Date(epoch + ms).toISOString();
 function info(status, edits = {}) {
   return { Id: id, RestartCount: 0, State: { Status: status, Running: status === "running", Pid: status === "running" ? 42 : 0,
     OOMKilled: false, Dead: false, Restarting: false, Paused: false, Error: "", ExitCode: 0,
     StartedAt: stamp(0), FinishedAt: stamp(2999), ...edits } };
+}
+function terminal(edits = {}) {
+  return { containerId: id, status: "exited", running: false, startedAt: stamp(0), finishedAt: "2026-11-24T23:00:03.000500Z",
+    oomKilled: false, dead: false, paused: false, restarting: false, restartCount: 0, exitCode: 0, error: "", ...edits };
 }
 
 function fixture({ observations = [info("created"), info("running")], collect, nextWait = (ms) => ms } = {}) {
@@ -27,7 +31,7 @@ function fixture({ observations = [info("created"), info("running")], collect, n
 test("created to running obtains the exact PID and samples anchored slots; stop cancels the next wait", async () => {
   const f = fixture({ collect({ sequence }, stop) { if (sequence === 1) void stop(); return { sequence }; } });
   await new Promise(setImmediate);
-  assert.deepEqual(await f.capture.stop(), { schema: loadResourceCaptureSchema, live: { id, pid: 42, startedAt: stamp(0) },
+  assert.deepEqual((await f.capture.stop()).capture, { schema: loadResourceCaptureSchema, live: { id, pid: 42, startedAt: stamp(0) },
     rows: [{ sequence: 0 }, { sequence: 1 }] });
   assert.deepEqual(f.ids, [id, id]);
   assert.deepEqual(f.argumentsSeen, [{ id, pid: 42, sequence: 0, at: 1000 }, { id, pid: 42, sequence: 1, at: 2000 }]);
@@ -41,30 +45,47 @@ test("early scheduler wake cannot advance acquisition and a missed slot cannot b
   assert.equal(f.argumentsSeen[0].at, 1000);
   const delayed = fixture({ observations: [info("running")], nextWait: (ms) => ms + 1000 });
   await new Promise(setImmediate);
-  await assert.rejects(delayed.capture.stop(), /missing or excess/);
+  assert.match((await delayed.capture.stop()).error.message, /missing or excess/);
   assert.deepEqual(delayed.argumentsSeen, []);
 });
 
-test("ENOENT can reconcile only an exact, clean terminal partial slot; other failures are preserved", async () => {
+test("disappearance defers to the exact terminal receipt; no required slot or other fault can be ignored", async () => {
   const vanished = Object.assign(new Error("synthetic process vanished"), { code: "ENOENT" });
-  for (const [terminal, accepted] of [
-    [info("exited"), true],
-    [info("exited", { ExitCode: 99 }), true],
-    [info("exited", { FinishedAt: stamp(4000) }), false],
-    [info("exited", { StartedAt: stamp(1) }), false],
-    [info("exited", { OOMKilled: true }), false],
-    [info("exited", { FinishedAt: stamp(3050) }), false],
-    [{ ...info("exited"), Id: "b".repeat(64) }, false],
-    [info("running"), false],
-  ]) {
-    const f = fixture({ observations: [info("running"), terminal], collect(args) { if (args.sequence === 2) throw vanished; return args; } });
+  for (const fault of [vanished, new LoadResourceLifetimeEnded("cgroup unpopulated")]) {
+    const f = fixture({ observations: [info("running")], collect(args) {
+      if (args.sequence === 2) throw fault;
+      const at = epoch + 1000 * (args.sequence + 1);
+      return { ...args, begin: { at }, end: { at } };
+    } });
     await new Promise(setImmediate);
-    if (accepted) assert.equal((await f.capture.stop()).rows.length, 2);
-    else await assert.rejects(f.capture.stop());
-    assert.deepEqual(f.ids, [id, id]);
+    const result = await f.capture.stop();
+    assert.deepEqual(f.ids, [id], "no race against an intermediate Docker status");
+    assert.equal(finalizeLoadResourceCapture(result, terminal()).rows.length, 2);
+    assert.equal(finalizeLoadResourceCapture(result, terminal({ exitCode: 99 })).rows.length, 2);
+    for (const ms of [2999, 3000]) assert.equal(finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(ms) })).rows.length, 2);
+    for (const edits of [{ finishedAt: stamp(4000) }, { startedAt: stamp(1) }, { oomKilled: true },
+      { finishedAt: stamp(1999) }, { containerId: "b".repeat(64) }, { running: true }]) {
+      assert.throws(() => finalizeLoadResourceCapture(result, terminal(edits)));
+    }
   }
   const fault = fixture({ observations: [info("running")], collect() { throw new Error("untrusted memory counter"); } });
   await new Promise(setImmediate);
-  await assert.rejects(fault.capture.stop(), /untrusted memory counter/);
+  const result = await fault.capture.stop();
+  assert.throws(() => finalizeLoadResourceCapture(result, terminal()), /untrusted memory counter/);
   assert.deepEqual(fault.ids, [id]);
+});
+
+test("a successfully read partial slot with a bracket crossing the exact finish is omitted only from that slot", async () => {
+  const f = fixture({ observations: [info("running")], collect({ sequence }, stop) {
+    if (sequence === 2) void stop();
+    const at = epoch + 1000 * (sequence + 1);
+    return { sequence, begin: { at }, end: { at } };
+  } });
+  await new Promise(setImmediate);
+  const result = await f.capture.stop();
+  assert.equal(result.capture.rows.length, 3);
+  assert.equal(finalizeLoadResourceCapture(result, terminal()).rows.length, 2);
+  assert.equal(finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(3001) })).rows.length, 3);
+  assert.equal(finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(4000) })).rows.length, 3, "never trim a full slot");
+  assert.equal(result.capture.rows.length, 3, "original candidate is not changed");
 });

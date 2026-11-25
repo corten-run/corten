@@ -11,7 +11,7 @@ import { groupDescriptor } from "../../catalog/group.mjs";
 import { reader } from "../../json-api/artifacts.mjs";
 import { inspectJson } from "../../json-api/report.mjs";
 import { producerSourceNames } from "../../json-api/production.mjs";
-import { scheduledProducerSchema } from "../../json-api/contract.mjs";
+import { scheduledProducerMarker, scheduledProducerSchema } from "../../json-api/contract.mjs";
 import { timedSummarySchema } from "../../json-api/timed-outcomes.mjs";
 import { validateSummary } from "../../marketplace/report.mjs";
 import { admitted, boundedFeatureProfile } from "../../marketplace/feature-contract.mjs";
@@ -163,7 +163,7 @@ export function verifyJsonProducer(binding, summary) {
   assert.ok(Array.isArray(files), "JSON bound sources missing");
   const sources = new Map(files.map((row) => [row.path, row.sha256]));
   assert.equal(sources.size, files.length, "duplicate bound source");
-  if (sources.has("bench/json-api/load-resource-capture.mjs")) assert.ok(summary.producer.schema === scheduledProducerSchema,
+  if (sources.has(scheduledProducerMarker)) assert.ok(summary.producer.schema === scheduledProducerSchema,
     "JSON producer cannot downgrade the bound load-resource capture");
   for (const name of names) {
     const path = `bench/json-api/${name}`;
