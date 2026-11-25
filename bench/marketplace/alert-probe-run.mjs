@@ -46,12 +46,13 @@ const brief = (error) => String(error?.message ?? error).slice(0, 2048);
 // with the owner key or a key in its dot-delimited namespace (`${ownerKey}.*`, which holds the
 // attempt key) would take the resource out of this run's ownership checks and label scans; it is
 // refused before any Docker command. Other keys, even with the same literal prefix, are ordinary.
-export function callerLabels(labels) {
+// `key` is the owner key of the resources they go on (steady-run.mjs passes its own).
+export function callerLabels(labels, key = ownerKey) {
   assert.ok(Array.isArray(labels) && labels.length % 2 === 0, "labels are --label KEY=VALUE pairs");
   for (let i = 0; i < labels.length; i += 2) {
-    const key = /^([\w.-]+)=[\w.:/-]*$/.exec(labels[i + 1] ?? "")?.[1];
-    assert.ok(labels[i] === "--label" && key, `labels are --label KEY=VALUE pairs, not ${labels[i]} ${labels[i + 1]}`);
-    assert.ok(key !== ownerKey && !key.startsWith(`${ownerKey}.`), `--label ${key} is reserved for the probe's ownership labels`);
+    const label = /^([\w.-]+)=[\w.:/-]*$/.exec(labels[i + 1] ?? "")?.[1];
+    assert.ok(labels[i] === "--label" && label, `labels are --label KEY=VALUE pairs, not ${labels[i]} ${labels[i + 1]}`);
+    assert.ok(label !== key && !label.startsWith(`${key}.`), `--label ${label} is reserved for the ${key === ownerKey ? "probe's " : ""}ownership labels`);
   }
   return labels;
 }
@@ -73,23 +74,27 @@ export function runClock({ total = Infinity, reserve = teardownReserve, now = Da
 // It is looked for at teardown by its attempt label within a bounded window; what it made is removed
 // by label-confirmed ID, and if nothing appears its cleanup is reported unconfirmed and fails the
 // teardown, since Docker may still make it.
-export function ownedResources({ docker, runId, labels = [], timeout = commandTimeout, clock = runClock(), window = reconcileWindow }) {
-  const owner = ["--label", `${ownerKey}=${runId}`], extra = callerLabels(labels);
+// `owner` is the owner label key; each create's attempt label is `${owner}.create`. Cleanup-phase
+// commands are sent with `cleanup: true`, so a runner that refuses new work after an interrupt
+// (bench/catalog/output.mjs commandRunner) still runs them; the probe's own docker ignores it.
+export function ownedResources({ docker, runId, labels = [], timeout = commandTimeout, clock = runClock(), window = reconcileWindow, owner: key = ownerKey }) {
+  const attempt = `${key}.create`;
+  const owner = ["--label", `${key}=${runId}`], extra = callerLabels(labels, key);
   const pending = new Map();
   let attempts = 0;
-  const record = { runId, ownerLabel: `${ownerKey}=${runId}`, created: [], removed: [], recovered: [], unacknowledged: [], failures: [], remaining: null };
+  const record = { runId, ownerLabel: `${key}=${runId}`, created: [], removed: [], recovered: [], unacknowledged: [], failures: [], remaining: null };
   const fail = (resource, error) => record.failures.push({ resource, error: brief(error) });
   // Every command is bounded by its own timeout and by its phase's share of the run deadline: work
   // stops at the reserve, cleanup at the end. A command with no time left is not sent.
-  const within = (left) => async (args, options = {}) => {
+  const within = (left, phase = {}) => async (args, options = {}) => {
     const remaining = Math.floor(left());
     if (remaining <= 0) throw Object.assign(new Error(`docker ${args.slice(0, 2).join(" ")}: not sent, the run deadline is spent`), { sent: false });
-    return docker(args, { ...options, timeout: Math.min(options.timeout ?? timeout, remaining) });
+    return docker(args, { ...options, ...phase, timeout: Math.min(options.timeout ?? timeout, remaining) });
   };
-  const work = within(clock.work), clean = within(clock.cleanup);
+  const work = within(clock.work), clean = within(clock.cleanup, { cleanup: true });
   const confirm = (kind, info, id) => {
     assert.equal(info?.Id, id, `${kind} ${id}: inspect returned a different object`);
-    assert.equal((kind === "container" ? info.Config?.Labels : info.Labels)?.[ownerKey], runId, `refusing unowned ${kind} ${id}`);
+    assert.equal((kind === "container" ? info.Config?.Labels : info.Labels)?.[key], runId, `refusing unowned ${kind} ${id}`);
     return info;
   };
   const inspect = async (call, id) => confirm("container", JSON.parse(await call(["container", "inspect", id]))[0], id);
@@ -100,7 +105,7 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
   // after teardown has looked, so the attempt is kept for teardown to account for. Only a create
   // that was never sent is left out.
   async function create(kind, command, name) {
-    const label = `${attemptKey}=${runId}-${++attempts}`;
+    const label = `${attempt}=${runId}-${++attempts}`;
     let id;
     try { id = await work(command([...owner, "--label", label, ...extra])); } catch (error) {
       if (error.sent !== false) record.unacknowledged.push({ kind, name, label, error: brief(error) });
@@ -147,7 +152,7 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
       // Containers before networks: Docker will not remove a network that still has one attached.
       const pendingOf = (kind) => [...pending.values()].filter((entry) => entry.kind === kind).map((entry) => entry.id).reverse();
       for (const id of pendingOf("container")) await remove(id);
-      const label = `label=${ownerKey}=${runId}`;
+      const label = `label=${key}=${runId}`;
       const searched = Math.max(0, Math.min(window, Math.floor(clock.cleanup())));
       // An unacknowledged create may still be under way in the daemon: look for each by its own
       // label until it appears or the window ends, so what it made is removed below with the rest.
@@ -155,7 +160,7 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
       // final lookup. A failed lookup ends the search and is kept; the owner-label sweep below does
       // not depend on it.
       const end = clock.now() + searched;
-      const look = within(() => Math.min(clock.cleanup(), end - clock.now()));
+      const look = within(() => Math.min(clock.cleanup(), end - clock.now()), { cleanup: true });
       try {
         const missing = () => record.unacknowledged.filter((attempt) => !attempt.ids);
         const open = () => end - clock.now() >= 1;
@@ -169,7 +174,7 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
           if (!missing().length || clock.now() >= last) break;
           await clock.sleep(Math.min(500, last - clock.now()));
         }
-      } catch (error) { fail(`unacknowledged creates labelled ${attemptKey}`, error); }
+      } catch (error) { fail(`unacknowledged creates labelled ${attempt}`, error); }
       try {
         for (const id of await list("container", label)) await remove(id, { recovered: !pending.has(id) });
       } catch (error) { fail(`containers labelled ${record.ownerLabel}`, error); }
