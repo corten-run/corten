@@ -120,8 +120,11 @@ finalization. Historical result paths, standalone commands and the archive layou
 `campaign-contract.mjs` retains the complete registry and hashes the actual nine source
 procedure files alongside all measured sources. The production map uses native defaults
 except the existing marketplace-short-window, explicit native-feed-measure for both live
-groups and new mixed-production-measure. Mixed adds --measure --profile matched as the
-native README specifies. The older mixed-measure remains the default-profile recipe,
+groups and mixed-production-measure in the legacy full campaign. Dedicated Mixed
+campaigns use `mixed-production-django-asgi`: the same `--measure --profile matched`,
+plus the fixed `--django-deployment django-granian-asgi` selection. The build and
+audit bind that deployment for both sources, without changing the measured workload
+or its gates. The older mixed-measure remains the default-profile recipe,
 unchanged. Numeric defaults come from native parsers, not new CLI constants. Dedicated
 client-heavy campaigns bind `client-heavy-comparison-v1` from the measured source; the
 legacy full campaign retains client-heavy's single-sample diagnostic recipe. Browser
