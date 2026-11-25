@@ -3,7 +3,7 @@
 // Usage: <bin> <port> <api|pages>
 //   api, an app with an API and no pages:
 //     GET, POST /baseline11  typed query parameters in (and a number in the body), a short String out
-//     GET /unstaged11        the same GET from a route that says `unstaged`
+//     GET /unstaged11        the same answer from a route that says `unstaged`, which reads no body
 //     GET /pipeline          a route that says `unstaged`, a short str out
 //   pages, an app without an API:
 //     GET /page              a page of about 12 KB
@@ -48,6 +48,8 @@ async fn baseline(Params(at): Params<url::Baseline>, body: String) -> String {
     (at.a.unwrap_or(0) + at.b.unwrap_or(0) + number).to_string()
 }
 
+/// The sum of the query values. Not `baseline` on another route: a handler of a route that says
+/// `unstaged` cannot take the body, so this one differs from it by the stages and by reading one.
 async fn baseline_unstaged(Params(at): Params<url::BaselineUnstaged>) -> String {
     (at.a.unwrap_or(0) + at.b.unwrap_or(0)).to_string()
 }
