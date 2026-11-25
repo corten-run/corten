@@ -50,8 +50,10 @@ function k6Export(counts, { graceFailed = 0, windowFailed = {}, clockMs = 120_00
  * docker restart: the same ID and RestartCount, a new StartedAt). Its clock is the runner's
  * (`now`): a load run moves it on by `startupMs` before the container's StartedAt and by `runMs`
  * (by default the engine clock `clockMs`, written to the clock file) before its FinishedAt.
+ * `override(args, state)` answers a command first: an Error is thrown, a string returned, undefined
+ * leaves it to the daemon.
  */
-function fakeDocker({ exportFor, withhold = () => false, failRemove = () => false, oomOnLoad = false, restartOnLoad = false, loadMs = 0, clockMs = 120_000, runMs = clockMs, startupMs = 0 } = {}) {
+function fakeDocker({ exportFor, withhold = () => false, failRemove = () => false, oomOnLoad = false, restartOnLoad = false, loadMs = 0, clockMs = 120_000, runMs = clockMs, startupMs = 0, override = () => undefined } = {}) {
   const containers = new Map(), networks = new Map(), calls = [], late = [];
   let next = 1;
   const id = () => (next++).toString(16).padStart(64, "0");
@@ -70,6 +72,9 @@ function fakeDocker({ exportFor, withhold = () => false, failRemove = () => fals
   const iso = () => new Date(state.now()).toISOString();
   state.docker = async (args, options = {}) => {
     calls.push({ args, cleanup: options.cleanup === true });
+    const answer = override(args, state);
+    if (answer instanceof Error) throw answer;
+    if (typeof answer === "string") return answer;
     const [command, ...rest] = args;
     switch (command) {
       case "version": return "27.5.1";
@@ -224,7 +229,7 @@ test("a convergence cell whose app was restarted in place during the load gets n
   // A docker restart: the same container ID and RestartCount 0, a new StartedAt, running again.
   const s = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), restartOnLoad: true }), options, folder("restart"));
   assert.equal(s.cells[0].verdict, null);
-  assert.match(s.cells[0].failure, /stopped, restarted, was replaced or was OOM-killed during the pass: before .*"startedAt":"([^"]+)".*after .*"startedAt":"(?!\1)/);
+  assert.equal(s.cells[0].failure, "app container stopped, restarted, was replaced or was OOM-killed during the pass: another StartedAt");
 });
 
 test("a failure answered during k6's graceful stop, or in a window, gives the cell no verdict", async (t) => {
@@ -244,7 +249,7 @@ test("a convergence cell whose app was OOM-killed during the load gets no verdic
   const options = parseSteadyArgs(["convergence", "t3", "--apps", "corten", "--sources", "fixture", "--targets", "json", "--minutes", "2"], apps, groupApps);
   const s = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), oomOnLoad: true }), options, folder("oom"));
   assert.equal(s.cells[0].verdict, null);
-  assert.match(s.cells[0].failure, /stopped, restarted, was replaced or was OOM-killed.*"oomKilled":true/);
+  assert.equal(s.cells[0].failure, "app container stopped, restarted, was replaced or was OOM-killed during the pass: not running, OOM-killed or not recorded");
 });
 
 test("a create whose ID Docker withholds is not reported clean, and no further cell is measured", async (t) => {
@@ -329,11 +334,15 @@ test("the memory sampler refuses names and settles at its bound when something h
   const folder = folderOf(t);
   const id = "a".repeat(64);
   assert.throws(() => memorySampler({ ids: ["marketplace-test-run-corten"], file: folder("x.log"), seconds: 10, spawn: statsClient().spawn }), /immutable container IDs/);
-  // A row keyed by anything but the sampled ID is an error, not a sample.
-  const named = statsClient({ rows: () => [{ ID: "marketplace-test-run-corten", CPUPerc: "1%", MemUsage: "1MiB / 1GiB" }] });
+  // A row keyed by anything but the sampled ID is an error, not a sample, and is counted, not quoted.
+  const canary = "b".repeat(65);
+  const named = statsClient({ rows: () => [{ ID: canary, CPUPerc: "1%", MemUsage: "1MiB / 1GiB" }, { ID: id, CPUPerc: "1%", MemUsage: `${canary} / 1GiB` }] });
   const sampler = memorySampler({ ids: [id], file: folder("named.log"), seconds: 10, spawn: named.spawn });
   await new Promise((resolve) => setTimeout(resolve, 20));
-  await assert.rejects(sampler.stop(), /unexpected stats container marketplace-test-run-corten/);
+  await assert.rejects(sampler.stop(), (error) => {
+    assert.equal(error.message, "1 docker stats row was not readable; 1 docker stats row named a container this pass does not sample");
+    return true;
+  });
   // A stand-in still holding the client's pipes after TERM and KILL: stop() settles at its bound.
   const held = statsClient({ rows: () => [{ ID: id, CPUPerc: "1%", MemUsage: "1MiB / 1GiB" }], holds: true });
   const stuck = memorySampler({ ids: [id], file: folder("held.log"), seconds: 10, spawn: held.spawn, graceMs: 10, boundMs: 60 });
@@ -352,4 +361,34 @@ test("the memory sampler refuses names and settles at its bound when something h
   await new Promise((resolve) => setTimeout(resolve, 20));
   const result = await good.stop();
   assert.deepEqual(result.samples[id].map((x) => x.mem), [64, 65]);
+});
+
+test("Docker's and k6's own output never reaches summary.json or cleanup.json; it stays in the raw errors.log", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t9", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  // Plausible but wrong: one hex digit too many, and a name-like token.
+  const canary = "d".repeat(65), token = "leaked-canary-token";
+  const saved = (dir) => readFileSync(join(dir, "summary.json"), "utf8") + readFileSync(join(dir, "cleanup.json"), "utf8");
+  const clean = (dir) => { const text = saved(dir); assert.ok(!text.includes(canary) && !text.includes(token), text); };
+  // A cold probe that exits 1 with untrusted output.
+  const cold = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args) => args[0] === "wait" ? "1" : args[0] === "logs" && args[1] === cold.ids["marketplace-test-run-corten-probe"] ? `catalog-probe-ready\n${canary} ${token}` : undefined });
+  const a = await run(cold, options, folder("cold"));
+  assert.equal(a.cells[0].failure, "cold probe exited 1; its output is in cold.log");
+  clean(folder("cold"));
+  // A k6 summary with a metric this load does not define, named by the canary.
+  const k6 = await run(fakeDocker({ exportFor: () => { const e = k6Export(flat(8)); e.metrics[`${token}_${canary}`] = { count: 1, rate: 1 / 120 }; return e; } }), options, folder("metric"));
+  assert.equal(k6.cells[0].failure, "the k6 summary export has 1 metric this load does not define");
+  clean(folder("metric"));
+  // A removal that fails with Docker's own text after the first line: the record keeps the first line.
+  const stuck = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => args[0] === "rm" && args[3] === state.ids["marketplace-test-run-k6"] ? new Error(`docker rm -f: exit 1\n${canary} ${token}`) : undefined });
+  const b = await run(stuck, options, folder("rm"));
+  assert.equal(b.complete, false);
+  assert.ok(b.cleanupFailures.some((f) => f.error === "docker rm -f: exit 1"), JSON.stringify(b.cleanupFailures));
+  clean(folder("rm"));
+  assert.ok(readFileSync(join(folder("rm"), "errors.log"), "utf8").includes(canary), "the full error is kept raw");
+  // An image inspect answering something that is not JSON: the JSON.parse excerpt is not saved.
+  const odd = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args) => args[0] === "image" && args[2] === "cb-marketplace-corten" ? `${token} ${canary}` : undefined }), options, folder("json"));
+  assert.equal(odd.failures[0].error, "docker image inspect of cb-marketplace-corten is not JSON");
+  clean(folder("json"));
+  assert.ok(readFileSync(join(folder("json"), "errors.log"), "utf8").includes(token));
 });

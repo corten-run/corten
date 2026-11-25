@@ -13,12 +13,15 @@
 // k6: its version is read from a container this pass creates and removes like any other, and each
 // load's engine clock and counters are checked by load-evidence.mjs validateLoadExecution, as a
 // timed round's are, before any window is read.
+// Saved text: summary.json and cleanup.json keep only fixed messages or the first line this runner
+// or its command runner composes. Docker's and k6's own output (stderr, a malformed answer, a JSON
+// parse excerpt) is untrusted and is never quoted there; the full error goes to the raw errors.log.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { hostname, platform, release } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cpuSettings, imageProvenance, readLoadSummary } from "./run-contract.mjs";
 import { admitted, boundedFeatureProfile, boundedQualificationSettings } from "./feature-contract.mjs";
@@ -37,6 +40,19 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
 const fixtureDir = join(here, "fixtures");
 const containerId = /^[a-f0-9]{64}$/;
+// The first line of an error, bounded: what a saved record keeps.
+export const firstLine = (error) => String(error?.message ?? error).split("\n", 1)[0].slice(0, 500);
+// The metrics window-load.js and k6 itself export. A summary with any other name is refused with a
+// count before a validator can quote the name.
+const k6Metrics = new Set(["http_reqs", "http_req_duration", "http_req_duration{expected_response:true}", "http_req_blocked", "http_req_connecting", "http_req_tls_handshaking",
+  "http_req_sending", "http_req_waiting", "http_req_receiving", "http_req_failed", "iterations", "iteration_duration", "dropped_iterations", "vus", "vus_max", "checks",
+  "data_sent", "data_received", "window_tail_requests"]);
+export function knownK6Metrics(summary) {
+  assert.ok(summary && typeof summary.metrics === "object" && summary.metrics !== null && !Array.isArray(summary.metrics), "the k6 summary export has no metrics");
+  const unknown = Object.keys(summary.metrics).filter((name) => !k6Metrics.has(name) && !/^window_(0|[1-9]\d{0,2})_(requests|failed|duration)$/.test(name)).length;
+  assert.equal(unknown, 0, `the k6 summary export has ${unknown} metric${unknown === 1 ? "" : "s"} this load does not define`);
+  return summary;
+}
 
 /**
  * Samples memory of containers by their immutable IDs with docker stats (--no-trunc, so each row's
@@ -53,7 +69,9 @@ export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs 
   const samples = Object.fromEntries(ids.map((id) => [id, []]));
   const errors = [];
   const failed = (message) => errors.push(message);
-  let buffer = "", raw = "", stopping = false, closed = false, settled;
+  // Rows that are not readable or name another container are counted, not quoted; stderr is kept
+  // in its own raw file.
+  let buffer = "", raw = "", stderr = "", unreadable = 0, foreign = 0, stopping = false, closed = false, settled;
   child.stdout.on("data", (chunk) => {
     const data = chunk.toString().replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
     raw += data; buffer += data;
@@ -63,13 +81,13 @@ export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs 
       if (!line) continue;
       try {
         const s = JSON.parse(line);
-        if (!samples[s.ID]) throw new Error(`unexpected stats container ${String(s.ID).slice(0, 80)}`);
+        if (!Object.hasOwn(samples, s?.ID)) { foreign++; continue; }
         samples[s.ID].push({ t: now(), cpu: parseFloat(s.CPUPerc), mem: memoryMiB(s.MemUsage.split("/")[0]) });
-      } catch (e) { failed(e.message); }
+      } catch { unreadable++; }
     }
   });
-  child.stderr.on("data", (chunk) => { if (!stopping) failed(chunk.toString()); });
-  child.on("error", (error) => failed(error.message));
+  child.stderr.on("data", (chunk) => { if (!stopping) stderr += chunk.toString(); });
+  child.on("error", (error) => failed(`docker stats could not run (${typeof error?.code === "string" && /^[A-Z0-9_]{1,32}$/.test(error.code) ? error.code : "error"})`));
   const done = new Promise((resolve) => child.on("close", (code) => { closed = true; if (!stopping) failed(`docker stats stopped early: ${code}`); resolve(true); }));
   const signal = (name) => { try { child.kill(name); } catch {} };
   const timer = setTimeout(() => { failed("stats sampler exceeded its deadline"); signal("SIGTERM"); }, seconds * 1000);
@@ -91,6 +109,9 @@ export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs 
           child.stdout.destroy(); child.stderr.destroy(); child.unref?.();
         }
         writeFileSync(file, raw);
+        if (stderr) { writeFileSync(`${file}.stderr`, stderr); failed(`docker stats wrote to stderr (kept in ${basename(file)}.stderr)`); }
+        if (unreadable) failed(`${unreadable} docker stats row${unreadable === 1 ? " was" : "s were"} not readable`);
+        if (foreign) failed(`${foreign} docker stats row${foreign === 1 ? "" : "s"} named a container this pass does not sample`);
         if (buffer.trim().length) failed("stats ended with an incomplete JSON record");
         if (errors.length) throw Object.assign(new Error(errors.join("; ")), { errors });
         const summary = Object.fromEntries(ids.map((id) => [id, summarizeSamples(samples[id])]));
@@ -139,8 +160,27 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
   const log = (message) => { const line = `${new Date().toISOString()} ${message}`; print(line); appendFileSync(join(folder, "run.log"), `${line}\n`); };
   const retain = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2));
+  // The full text of an error (a command's stderr, a validator's detail) goes here, raw, never to
+  // summary.json or cleanup.json.
+  const keep = (where, error) => appendFileSync(join(folder, "errors.log"), `${new Date().toISOString()} ${where}: ${error?.stack ?? error}\n`);
+  // Every Docker command's error is reduced to its first line, which the command runner composes
+  // from this pass's own arguments and the exit; the rest (Docker's own output) stays in errors.log.
+  const ownDocker = async (args, opts) => {
+    try { return await docker(args, opts); } catch (error) {
+      if (error && typeof error === "object") {
+        keep(`docker ${args.slice(0, 2).join(" ")}`, error);
+        try { error.message = firstLine(error); error.stack = `${error.name ?? "Error"}: ${error.message}`; } catch {}
+      }
+      throw error;
+    }
+  };
+  // Parsing an answer: a JSON.parse message quotes the input, so it and the answer (bounded) are
+  // kept in errors.log only.
+  const parsed = (text, what) => {
+    try { return JSON.parse(text); } catch (error) { keep(what, `${error.message}\n${String(text).slice(0, 4096)}`); throw new Error(`${what} is not JSON`); }
+  };
   const callerLabels = options.labels.flatMap((l) => ["--label", l]);
-  const owned = ownedResources({ docker, runId, labels: callerLabels, clock, window, owner: ownerLabelKey });
+  const owned = ownedResources({ docker: ownDocker, runId, labels: callerLabels, clock, window, owner: ownerLabelKey, describe: firstLine });
   const mount = ["-v", `${join(repo, "bench")}:/bench:ro`];
   const upstreamName = `${runId}-upstream`;
   let network;
@@ -176,8 +216,9 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       const exit = await owned.docker(["wait", probe], { timeout: (options.startupTimeout + 5) * 1000 });
       const output = await owned.logs(probe);
       writeFileSync(join(raw, "cold.log"), output);
-      assert.equal(exit, "0", `cold probe: ${output.slice(-2048)}`);
-      const result = JSON.parse(output.split("\n").findLast((line) => line.startsWith("{")));
+      // The probe's output is in cold.log; the record says only whether it exited 0.
+      assert.ok(exit === "0", `cold probe ${/^\d{1,3}$/.test(exit) ? `exited ${exit}` : "returned no exit status"}; its output is in cold.log`);
+      const result = parsed(output.split("\n").findLast((line) => line.startsWith("{")) ?? "", "the cold probe's result line");
       const info = await owned.inspect(app);
       const ms = Date.parse(result.first200At) - Date.parse(info.State.StartedAt);
       assert.ok(ms >= 0 && ms <= options.startupTimeout * 1000, "invalid Docker-host cold clock");
@@ -211,10 +252,15 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       const loadInfo = await owned.inspect(k6);
       retain(join(raw, "load-container.json"), containerReceipt(loadInfo));
       assert.equal(loadInfo.State.ExitCode, 0, "k6 exited with an error");
-      const k6Summary = await retainLoadEvidence(owned.docker, k6, raw, "load");
+      let k6Summary;
+      try { k6Summary = await retainLoadEvidence(owned.docker, k6, raw, "load"); } catch (error) {
+        keep("retaining the k6 summary export", error); throw new Error("the k6 summary export could not be retained or is not JSON");
+      }
+      // Only names window-load.js and k6 define, before any validator can quote one.
+      knownK6Metrics(k6Summary);
       // The engine clock must cover the pass inside the container's own run, and every counter's
       // rate must be its count over that clock, as validate.mjs requires of a timed phase.
-      validateLoadExecution({ load: containerReceipt(loadInfo), summary: k6Summary, clock: JSON.parse(readFileSync(join(raw, "load-clock.json"), "utf8")), start: phaseStartMs, end: clock.now(), seconds });
+      validateLoadExecution({ load: containerReceipt(loadInfo), summary: k6Summary, clock: parsed(readFileSync(join(raw, "load-clock.json"), "utf8"), "the k6 engine clock export"), start: phaseStartMs, end: clock.now(), seconds });
       // k6's aggregate: every request, including those answered during the graceful stop.
       const load = readLoadSummary(k6Summary);
       const { windows, tail, unrecorded, requests, iterations } = readWindows(k6Summary, options);
@@ -229,7 +275,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
         assert.equal(load.failed, 0, `${load.failed} requests failed in k6's aggregate, which includes the graceful stop; no verdict`);
         return Object.assign(cell, { windows, tail, unrecorded, requests, iterations, failedRequests: load.failed, verdict: flattenPoint(windows) });
       }
-      if (statsError) throw new Error(`memory samples failed: ${statsError.message}; container ${JSON.stringify(state(after))}`);
+      if (statsError) { keep("memory samples", statsError); throw new Error(`memory samples failed: ${firstLine(statsError)}`); }
       const startedMs = Date.parse(loadInfo.State.StartedAt);
       const samples = stats.samples[app].map((s) => ({ atSeconds: (s.t - memoryOriginMs) / 1000, mib: s.mem }));
       // Docker's event times and StartedAt are both the daemon's clock.
@@ -249,9 +295,9 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   // for like every other.
   async function k6Tool() {
     let image;
-    try { image = JSON.parse(await owned.docker(["image", "inspect", k6Image]))[0]; } catch {
+    try { image = parsed(await owned.docker(["image", "inspect", k6Image]), "docker image inspect of k6")[0]; } catch {
       await owned.docker(["pull", k6Image], { timeout: 5 * 60 * 1000, file: join(folder, "pull-k6.log") });
-      image = JSON.parse(await owned.docker(["image", "inspect", k6Image]))[0];
+      image = parsed(await owned.docker(["image", "inspect", k6Image]), "docker image inspect of k6")[0];
     }
     assert.match(image?.Id ?? "", /^sha256:[a-f0-9]{64}$/, "missing k6 image ID");
     let probe, output;
@@ -304,7 +350,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
         assert.equal(await git(["rev-parse", "HEAD"]), summary.commit, "HEAD changed during image build");
         assert.equal(await git(["status", "--porcelain"]), "", "checkout changed during image build");
       }
-      const info = JSON.parse(await owned.docker(["image", "inspect", image]))[0];
+      const info = parsed(await owned.docker(["image", "inspect", image]), `docker image inspect of ${image}`)[0];
       imageProvenance(info.Config.Labels, summary.commit, false);
       if (options.group) assert.equal(info.Config.Labels["run.corten.marketplace.profile"], boundedFeatureProfile, "image lacks the required feature profile; rebuild with --build");
       images[app] = imageReceipt(info);
@@ -337,7 +383,8 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       } catch (e) {
         // This cell has no verdict; the pass goes on to the next one if its containers are gone.
         for (const key of Object.keys(cell)) if (!["app", "source", "target"].includes(key)) delete cell[key];
-        cell.failure = e.message ?? String(e);
+        keep(`${app} ${source} ${target}`, e);
+        cell.failure = firstLine(e);
         if (convergence) cell.verdict = null;
         log(`${app} ${source} ${target} FAILED: ${cell.failure}`);
       }
@@ -351,11 +398,12 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     assert.equal(await git(["status", "--porcelain"]), "", "checkout changed during the pass");
     summary.complete = !interrupted();
   } catch (e) {
-    summary.failures.push({ stage: "suite", error: e.stack ?? String(e) });
-    log(`suite FAILED: ${e.message ?? e}`);
+    keep("suite", e);
+    summary.failures.push({ stage: "suite", error: firstLine(e) });
+    log(`suite FAILED: ${firstLine(e)} (detail in errors.log)`);
   } finally {
     let cleanup;
-    try { cleanup = await owned.teardown(); } catch (e) { cleanup = { ...owned.record, complete: false, failures: [...owned.record.failures, { resource: runId, error: String(e?.message ?? e) }] }; }
+    try { cleanup = await owned.teardown(); } catch (e) { keep("teardown", e); cleanup = { ...owned.record, complete: false, failures: [...owned.record.failures, { resource: runId, error: firstLine(e) }] }; }
     retain(join(folder, "cleanup.json"), cleanup);
     summary.cleanupFailures = cleanup.failures;
     // What a saved reader checks before it counts the pass (steady-contract.mjs passEvidence).

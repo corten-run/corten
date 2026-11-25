@@ -132,7 +132,7 @@ test("readWindows keeps every window's throughput and latency and accounts for e
   for (const [summary, pattern] of [
     [k6Summary([150, 150], { extra: { http_reqs: { count: 400, rate: 1 }, iterations: { count: 400 } } }), /account for every request/],
     [k6Summary([150, 150], { extra: { http_reqs: { count: 250, rate: 1 }, iterations: { count: 250 } } }), /account for every request/],
-    [k6Summary([150, 150], { extra: { window_2_requests: { count: 1, rate: 1 } } }), /unexpected k6 window metric/],
+    [k6Summary([150, 150], { extra: { window_2_requests: { count: 1, rate: 1 } } }), /^Error: 1 k6 window metric is not among this pass's windows$/],
     [k6Summary([150, 150], { failed: { 0: 151 } }), /more failures than requests/],
     [k6Summary([150, 150], { extra: { window_1_duration: { "p(95)": 30, "p(99)": 20 } } }), /p95\/p99/],
   ]) assert.throws(() => readWindows(summary, { windows: 2, windowSeconds: 15 }), pattern);

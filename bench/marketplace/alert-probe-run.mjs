@@ -41,6 +41,14 @@ export const docker = async (args, { timeout = commandTimeout, combined = false 
 };
 const ids = (text) => text.split("\n").map((line) => line.trim()).filter(Boolean);
 const brief = (error) => String(error?.message ?? error).slice(0, 2048);
+// Docker's JSON answer, or a fixed error that says what was expected and nothing of what came back:
+// a malformed answer is untrusted and must not reach a saved record (a JSON.parse message quotes it).
+export function dockerJson(text, what) {
+  try { return JSON.parse(text); } catch { throw new Error(`${what} returned output that is not JSON`); }
+}
+// A check on an answer from Docker that fails with only its own message: strict assert.equal would
+// append Docker's answer (`'...' !== '<id>'`), which the record's bounded message would then keep.
+const same = (actual, expected, message) => { if (actual !== expected) throw new Error(message); };
 
 // Labels from the caller go on every resource. Docker keeps a key's last value, so a caller label
 // with the owner key or a key in its dot-delimited namespace (`${ownerKey}.*`, which holds the
@@ -77,13 +85,15 @@ export function runClock({ total = Infinity, reserve = teardownReserve, now = Da
 // `owner` is the owner label key; each create's attempt label is `${owner}.create`. Cleanup-phase
 // commands are sent with `cleanup: true`, so a runner that refuses new work after an interrupt
 // (bench/catalog/output.mjs commandRunner) still runs them; the probe's own docker ignores it.
-export function ownedResources({ docker, runId, labels = [], timeout = commandTimeout, clock = runClock(), window = reconcileWindow, owner: key = ownerKey }) {
+// `describe` turns an error into the text the record keeps; the probe keeps a bounded message, and
+// steady-run.mjs keeps only the first line it composes, with the rest in its raw errors.log.
+export function ownedResources({ docker, runId, labels = [], timeout = commandTimeout, clock = runClock(), window = reconcileWindow, owner: key = ownerKey, describe = brief }) {
   const attempt = `${key}.create`;
   const owner = ["--label", `${key}=${runId}`], extra = callerLabels(labels, key);
   const pending = new Map();
   let attempts = 0;
   const record = { runId, ownerLabel: `${key}=${runId}`, created: [], removed: [], recovered: [], unacknowledged: [], failures: [], remaining: null };
-  const fail = (resource, error) => record.failures.push({ resource, error: brief(error) });
+  const fail = (resource, error) => record.failures.push({ resource, error: describe(error) });
   // Every command is bounded by its own timeout and by its phase's share of the run deadline: work
   // stops at the reserve, cleanup at the end. A command with no time left is not sent.
   const within = (left, phase = {}) => async (args, options = {}) => {
@@ -93,19 +103,21 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
   };
   const work = within(clock.work), clean = within(clock.cleanup, { cleanup: true });
   const confirm = (kind, info, id) => {
-    assert.equal(info?.Id, id, `${kind} ${id}: inspect returned a different object`);
-    assert.equal((kind === "container" ? info.Config?.Labels : info.Labels)?.[key], runId, `refusing unowned ${kind} ${id}`);
+    same(info?.Id, id, `${kind} ${id}: inspect returned a different object`);
+    same((kind === "container" ? info.Config?.Labels : info.Labels)?.[key], runId, `refusing unowned ${kind} ${id}`);
     return info;
   };
-  const inspect = async (call, id) => confirm("container", JSON.parse(await call(["container", "inspect", id]))[0], id);
+  const inspect = async (call, id) => confirm("container", dockerJson(await call(["container", "inspect", id]), "docker container inspect")[0], id);
   // A listing is used only if every ID in it is a full 64-hex Docker ID: a short, prefixed or
   // otherwise noncanonical entry could name another object, so the whole listing is refused
-  // before anything in it is inspected or removed, and the caller keeps the failure.
+  // before anything in it is inspected or removed, and the caller keeps the failure. The refusal
+  // names only the kind of listing and how many entries were refused: the entries and the filter
+  // are left out, since an answer that is not an ID is untrusted and the record is published.
   const list = async (kind, filter, call = clean) => {
     const found = ids(await call(kind === "network" ? ["network", "ls", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]
       : ["ps", "-a", "--no-trunc", "--filter", filter, "--format", "{{.ID}}"]));
-    const odd = found.filter((id) => !/^[0-9a-f]{64}$/.test(id));
-    assert.equal(odd.length, 0, `docker ${kind} listing for ${filter} returned noncanonical IDs ${JSON.stringify(odd.slice(0, 3)).slice(0, 300)}; nothing in it is inspected or removed`);
+    const odd = found.filter((id) => !/^[0-9a-f]{64}$/.test(id)).length;
+    if (odd) throw new Error(`a docker ${kind} listing returned ${odd} ${odd === 1 ? "entry" : "entries"} that ${odd === 1 ? "is" : "are"} not a full container or network ID; nothing in it is inspected or removed`);
     return found;
   };
   // A create is acknowledged only by the ID it returns. Without one (an error, even from the daemon,
@@ -116,11 +128,12 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
     const label = `${attempt}=${runId}-${++attempts}`;
     let id;
     try { id = await work(command([...owner, "--label", label, ...extra])); } catch (error) {
-      if (error.sent !== false) record.unacknowledged.push({ kind, name, label, error: brief(error) });
+      if (error.sent !== false) record.unacknowledged.push({ kind, name, label, error: describe(error) });
       throw error;
     }
     if (!/^[0-9a-f]{64}$/.test(id)) {
-      record.unacknowledged.push({ kind, name, label, error: `returned no ID: ${JSON.stringify(id.slice(0, 200))}` });
+      // What came back instead is not kept: it is untrusted, and this record is published.
+      record.unacknowledged.push({ kind, name, label, error: `docker ${kind} create returned no full ID` });
       assert.fail(`docker ${kind} create ${name} returned no ID`);
     }
     pending.set(id, { kind, id, name }); record.created.push({ kind, id, name, label });
@@ -131,12 +144,12 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
     try {
       if (entry.kind === "network") {
         if ((await list("network", `id=${id}`)).includes(id)) {
-          confirm("network", JSON.parse(await clean(["network", "inspect", id]))[0], id);
-          assert.equal(await clean(["network", "rm", id]), id, `docker network rm did not confirm ${id}`);
+          confirm("network", dockerJson(await clean(["network", "inspect", id]), "docker network inspect")[0], id);
+          same(await clean(["network", "rm", id]), id, `docker network rm did not confirm ${id}`);
         }
       } else if ((await list("container", `id=${id}`)).includes(id)) {
         await inspect(clean, id);
-        assert.equal(await clean(["rm", "-f", "-v", id]), id, `docker rm did not confirm ${id}`);
+        same(await clean(["rm", "-f", "-v", id]), id, `docker rm did not confirm ${id}`);
       }
       pending.delete(id);
       (recovered ? record.recovered : record.removed).push(entry);
@@ -150,7 +163,7 @@ export function ownedResources({ docker, runId, labels = [], timeout = commandTi
     network: (name) => create("network", (labels) => ["network", "create", ...labels, name], name),
     container: (args, name) => create("container", (labels) => ["create", "--name", name, ...labels, ...args], name),
     inspect: (id) => inspect(work, id),
-    async start(id) { await inspect(work, id); assert.equal(await work(["start", id]), id, `docker start did not confirm ${id}`); },
+    async start(id) { await inspect(work, id); same(await work(["start", id]), id, `docker start did not confirm ${id}`); },
     // Start and attach; the container's own exit status is the command's.
     async attach(id, deadline) { await inspect(work, id); return work(["start", "-a", id], { timeout: deadline }); },
     async logs(id) { await inspect(clean, id); return clean(["logs", id], { combined: true }); },

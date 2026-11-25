@@ -178,10 +178,12 @@ const count = (summary, name) => {
 export function readWindows(summary, { windows, windowSeconds }) {
   integer(windows, 1, maxWindows, "windows"); integer(windowSeconds, 1, 3600, "windowSeconds");
   const names = Object.keys(summary?.metrics ?? {});
-  for (const name of names.filter((n) => n.startsWith("window_") && n !== "window_tail_requests")) {
+  // Counted, not quoted: a name this load does not define is untrusted output.
+  const unexpected = names.filter((n) => n.startsWith("window_") && n !== "window_tail_requests").filter((name) => {
     const m = /^window_(0|[1-9]\d*)_(requests|failed|duration)$/.exec(name);
-    assert.ok(m && Number(m[1]) < windows, `unexpected k6 window metric ${name}`);
-  }
+    return !(m && Number(m[1]) < windows);
+  }).length;
+  if (unexpected) throw new Error(`${unexpected} k6 window metric${unexpected === 1 ? " is" : "s are"} not among this pass's windows`);
   const rows = Array.from({ length: windows }, (_, index) => {
     const requests = count(summary, `window_${index}_requests`), failed = count(summary, `window_${index}_failed`);
     assert.ok(failed <= requests, `window ${index}: more failures than requests`);
@@ -208,10 +210,11 @@ export function readWindows(summary, { windows, windowSeconds }) {
  * from before and after the load.
  */
 export function heldThrough(before, after) {
-  const state = (i) => ({ id: i.Id, startedAt: i.State.StartedAt, restartCount: i.RestartCount, running: i.State.Running, oomKilled: i.State.OOMKilled, exitCode: i.State.ExitCode });
   assert.ok(typeof before.Id === "string" && typeof before.State?.StartedAt === "string", "the app's instance before the load is not recorded");
-  assert.ok(after.Id === before.Id && after.State.StartedAt === before.State.StartedAt && after.State.Running === true && after.State.OOMKilled === false && after.RestartCount === before.RestartCount,
-    `app container stopped, restarted, was replaced or was OOM-killed during the pass: before ${JSON.stringify(state(before))}, after ${JSON.stringify(state(after))}`);
+  // The message names which checks failed, never Docker's values (the receipts keep those).
+  const changed = [after.Id !== before.Id && "another container ID", after.State?.StartedAt !== before.State.StartedAt && "another StartedAt", after.State?.Running !== true && "not running",
+    after.State?.OOMKilled !== false && "OOM-killed or not recorded", after.RestartCount !== before.RestartCount && "another RestartCount"].filter(Boolean);
+  assert.ok(changed.length === 0, `app container stopped, restarted, was replaced or was OOM-killed during the pass: ${changed.join(", ")}`);
 }
 /** The iterations k6 dropped because it could not start them on time (constant-arrival-rate), 0 when none. */
 export function readDropped(summary) { return count(summary, "dropped_iterations"); }

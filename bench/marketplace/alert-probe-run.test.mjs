@@ -313,8 +313,9 @@ test("a failed label lookup is kept, and the owner-label sweep still removes con
   checkCalls(docker);
 });
 
-test("a cleanup listing with a noncanonical ID is refused before anything in it is inspected, and the teardown fails", async () => {
-  for (const odd of ["abc123", "A".repeat(64), `${"0".repeat(64)}x`]) {
+test("a cleanup listing with a noncanonical ID is refused before anything in it is inspected, and nothing of it is kept", async () => {
+  // Plausible canaries: one hex digit short or long of an ID, an uppercase ID, and a name-like token.
+  for (const odd of ["e".repeat(63), "e".repeat(65), "E".repeat(64), "marketplace-canary-7f3a"]) {
     const docker = fakeDocker();
     // The owner-label sweep's listing also returns an entry that is not a full 64-hex ID.
     const listing = Object.assign(async (args, opts) => {
@@ -326,7 +327,11 @@ test("a cleanup listing with a noncanonical ID is refused before anything in it 
     await owned.container(["--network", network, "img"], "alert-probe-test-app");
     const record = await owned.teardown();
     assert.ok(!docker.calls.some(({ args }) => args.includes(odd)), `nothing was inspected or removed as ${odd}`);
-    assert.ok(record.failures.some((f) => f.error.includes("noncanonical IDs") && f.error.includes(JSON.stringify(odd).slice(1, 20))), JSON.stringify(record.failures));
+    assert.ok(record.failures.some((f) => f.error === "a docker container listing returned 1 entry that is not a full container or network ID; nothing in it is inspected or removed"), JSON.stringify(record.failures));
+    // Neither the entry nor the filter that produced it reaches the record (cleanup.json) or an error.
+    const saved = JSON.stringify(record);
+    assert.ok(!saved.includes(odd) && !saved.toLowerCase().includes(odd.toLowerCase().slice(0, 40)), "the record does not echo the listing entry");
+    assert.ok(!record.failures.some((f) => f.error.includes(`label=${ownerKey}`)), "the record does not echo the listing filter");
     assert.equal(record.complete, false);
     // What the run created was still removed by its own ID.
     assert.equal(docker.containers.size + docker.networks.size, 0);
@@ -336,6 +341,32 @@ test("a cleanup listing with a noncanonical ID is refused before anything in it 
   const docker = fakeDocker(), owned = ownedResources({ docker, runId: "alert-probe-test" });
   await owned.container(["--network", await owned.network("alert-probe-test-net"), "img"], "alert-probe-test-app");
   assert.equal((await owned.teardown()).complete, true);
+});
+
+test("an answer from Docker that is not the confirmation expected is refused with a fixed message that does not quote it", async () => {
+  const canary = "f".repeat(65);
+  // Each case changes one answer: an rm that confirms something else, an inspect naming another
+  // object, and an inspect that is not JSON.
+  const cases = [
+    [(args) => args[0] === "rm" ? canary : undefined, /^docker rm did not confirm [0-9a-f]{64}$/],
+    [(args) => args[0] === "container" && args[1] === "inspect" ? JSON.stringify([{ Id: canary, Config: { Labels: {} } }]) : undefined, /^container [0-9a-f]{64}: inspect returned a different object$/],
+    [(args) => args[0] === "container" && args[1] === "inspect" ? `${canary} {` : undefined, /^docker container inspect returned output that is not JSON$/],
+  ];
+  for (const [answer, expected] of cases) {
+    const docker = fakeDocker();
+    let created = false;
+    const lying = Object.assign(async (args, opts) => {
+      const out = await docker(args, opts);
+      return created ? (answer(args) ?? out) : out;
+    }, { calls: docker.calls });
+    const owned = ownedResources({ docker: lying, runId: "alert-probe-test" });
+    await owned.container(["img"], "alert-probe-test-app");
+    created = true;
+    const record = await owned.teardown();
+    assert.equal(record.complete, false);
+    assert.ok(record.failures.some((f) => expected.test(f.error)), JSON.stringify(record.failures));
+    assert.ok(!JSON.stringify(record).includes(canary), "the record does not quote Docker's answer");
+  }
 });
 
 test("caller labels cannot set the owner or attempt key, and are refused before any Docker command", async (t) => {
