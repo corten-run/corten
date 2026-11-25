@@ -121,6 +121,45 @@ merged-controller recovery actions still have their exact eligibility and
 approval requirements. Do not rewrite a saved reservation or reuse its approval.
 Do not compare timings across placements.
 
+### JSON API c-16 Placement (Opt-In, Not Yet Wired)
+
+[#2057 JSON API r67 has insufficient apparatus headroom during fast adapters' warmups](https://github.com/corten-run/corten/issues/2057)
+found that on a `c-8` the uncapped warmup drives k6 (quota 4, CPUs 4-7) to its
+headroom bound while one fast app core is not saturated.
+`bench/json-api/placement.mjs` defines an opt-in layout for a `c-16` host that
+gives only the load generator more CPUs. It reuses the pins of catalog's
+`c16-generator-v1` under JSON API's own name:
+
+| CPUs | Role | Budget |
+| --- | --- | --- |
+| 0 | host: driver, control apparatus | unpinned host work, as today |
+| 1 | app | quota 1, unchanged |
+| 2-3 | upstream (one Node process) | quota 2, unchanged |
+| 4-15 | k6, plus the cold probe and resource sampler that use the load set today | quota 12 (default: 4 on CPUs 4-7) |
+
+The selector is `JSON_API_LOAD_LAYOUT=json-c16-generator-v1` together with exactly
+`JSON_API_APP_CPUS=1`, `JSON_API_API_CPUS=2-3` and `JSON_API_LOAD_CPUS=4-15`.
+Any other value, an empty value or another pin refuses, and the runner side refuses
+a host with fewer than 16 logical CPUs before any container starts. Without the
+selector the CPU settings are exactly the default contract's. Catalog's
+`--load-layout c16-generator-v1` stays catalog-only.
+
+Once wired, a result records its placement twice: `measurement.cpus` keeps each
+role's quota and cpuset as it does today, and an opt-in result adds
+`measurement.loadLayout: "json-c16-generator-v1"`. `recordedPlacement` accepts a
+quota-12 load only with that marker and refuses the marker with any other CPUs. Default results
+carry no marker, so their saved bytes and replay do not change.
+
+No fence changes. The load headroom bound is already 80% of the k6 quota (320% on
+the default, 960% on `c-16`); the upstream bounds stay below 80% of one core, both
+sampled and counted. The Corten API warmups that failed on the upstream's sampled
+peak are a separate, open constraint: more k6 cores do not address it.
+
+Nothing selects this layout yet. `bench/json-api/run.mjs` and `report.mjs` still
+use the default contract, and the fleet has no `c-16` JSON API job or campaign mode,
+so no reservation, job or run can use it. Wiring it is separate reviewed work. Do
+not compare JSON API timings across the two placements.
+
 A fleet binds the complete current registry to one dedicated host per group. The
 hosts run in parallel; contenders and phases within a group retain their native
 ordering, correctness checks and measurement settings apart from the catalog
