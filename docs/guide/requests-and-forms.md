@@ -1223,7 +1223,10 @@ read drew over the form, the event goes to the form in its place: the one with i
 `data-patch`, with the same `action` and `method`, drawn with no navigation to another address
 since the press, that has sent no submit itself. A page a submit's answer draws (a `GET`
 `data-patch` form's `<main>`, a write's own page) is the page on screen, even while the address
-already shows a navigation still on its way, and these rules still pick the form. Any other form,
+already shows a navigation still on its way, and these rules still pick the form. One limit follows:
+a `GET` `data-patch` form whose `action` is another path draws that path's `<main>` without counting
+as a navigation to another address, so a form there with the same `id`, `action` and `method`
+hears the failure of the page it drew over ([Choice 74](../design.md#choice-failure-in-place)). Any other form,
 one of another page with the same `id` among them, does not get it: the event goes to the
 document, where `on:document:corten:error` hears it, since an event on a form no longer in the
 page reaches no handler. corten-ui's
