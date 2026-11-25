@@ -696,6 +696,33 @@ probes, other SSH packets at the fence, a changed rule, or an actual unexpected
 login/guardian intrusion still refuse the phase. The fence reopens at phase end;
 the service's stop hook removes it on an interrupted phase.
 
+The campaign passes the rule set to `nft` as one argument: a single atomic
+batch that refuses an existing table, followed by the same readback and policy
+check. It never feeds rules on standard input: Node gives a spawned child a
+socket there, and Noble's nftables 1.0.9 refuses `nft -f -` on a socket
+(`Not a regular file: "/dev/stdin"`, exit 1) while accepting the same rules
+from a shell pipe. The hosted SSH ingress check
+(`scripts/benchmark-ssh-ingress-ci.sh`, run as root on Ubuntu 24.04) keeps that
+socket-stdin install as a negative that must fail with nft's socket refusal and
+leave no fence (only on nftables 1.0.9; 1.0.6 and 1.1.3 accept a socket), then
+installs through the production call. The same refusal was reproduced in an
+Ubuntu 24.04.5 root filesystem with nftables 1.0.9 and Node 26.13.1, where
+r62's measured `beginOfflineWindow` refuses on its first call with the same
+message. That shows r62's measured module cannot install the fence on Noble's
+nftables 1.0.9, consistent with r62's pre-timing halt in
+[#2033 Marketplace r62 halts before timing with native SSH fence unavailable after offline handoff](https://github.com/corten-run/corten/issues/2033);
+it was not reproduced on a benchmark host. It is separate from the
+post-terminal failure in
+[#2051 Marketplace r65 completes timing but the post-terminal drain probe refuses](https://github.com/corten-run/corten/issues/2051).
+r62 remains an invalid attempt.
+
+A fence refusal names only a fixed step and class, never host text: an `nft`
+call failure names its operation (`install`, `install readback`,
+`close readback` or `remove`) and outcome (`error=`, `signal=` or `exit=`),
+and a readback that does not parse or verify is `install readback invalid`,
+`install readback policy mismatch`, or the same for `close readback`. A
+refusal after the install leaves the fence for the unit's stop hook.
+
 For first qualification, arrange the independent audit rendezvous before
 timing. For JSON's untimed preparation or mixed's pre-build audit wait, use
 the existing [read-only owned-host observation](#independent-native-audits)
