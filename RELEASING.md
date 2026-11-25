@@ -25,8 +25,10 @@ keeping or changing the cadence. No schedule is in effect until approved.
    version bump. Until a trend run reads `main` against the last release, take
    [`bench/request-cost`](bench/request-cost/README.md)'s counts of the candidate and of the
    last release's tag and record both in the release-preparation pull request, or that its
-   probe does not build against that tag. A case that counts over 2% more is no gate: it
-   reopens [design Choice 76](docs/design.md#choice-counted-or-measured).
+   probe does not build against that tag. The first release to record them is the baseline:
+   the changes before it were not counted. From the release after it, a case that counts over
+   2% more is no gate: it reopens
+   [design Choice 76](docs/design.md#choice-counted-or-measured).
 3. Make the changelog explain what users get and what they need to do. Ship related breaking
    changes as one coherent upgrade, with updated guides and migration steps, not successive
    releases that leave users between APIs. Before 1.0, a release that changes the API bumps the

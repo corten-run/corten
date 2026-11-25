@@ -528,7 +528,7 @@ establish a general ranking.
 
       Work around the handler (routing, middleware and other stages, headers read or
       written, future sizes, allocations or copies per request) is counted, unless it is one of
-      the kinds below, which are measured; `main` is also read for what adds up (Trend)
+      the kinds below, which are measured; `main` is to be read for what adds up (Trend)
       ([design Choice 76](docs/design.md#choice-counted-or-measured)). The description says
       which on a line of its own, `Request path: counted` or `Request path: measured`.
 
@@ -539,12 +539,15 @@ establish a general ranking.
       2. A change to when a task is woken, a timer is set or a system call is made.
       3. A change to the size or layout of a structure a request touches. A future is one only
          when its size is shown to have changed: where a change edits an `async` body, the
-         description gives the stage's and the handler's as the test `staged_page_future_sizes`
-         (`crates/corten/src/router.rs`) prints them in a release build of base and of head. A
-         future that test does not print is taken as unchanged.
+         description gives the stage's and the handler's for base and for head, as the test
+         `staged_page_future_sizes` (`crates/corten/src/router.rs`, built on x86-64 Linux
+         only) prints them:
+         `cargo test --release -p corten-run --lib -- staged_page_future_sizes --nocapture`.
+         A future that test does not print is taken as unchanged.
       4. A change of allocator, toolchain or build profile.
       5. A change whose changed code no case of the kit runs as the requests it is for do.
-      6. A count over the budget, or allocations or idle memory that rise (Counted, below).
+      6. A count over the budget, allocations or idle memory that rise, or a case the kit
+         cannot count (Counted, below).
       7. A change whose reason is a win in cycles, time or requests a second.
 
       **Counted.** Build base and head with
@@ -556,8 +559,9 @@ establish a general ranking.
       rise: each idle reading is taken three times on each build, and head's median is not
       above base's by more than base's three span. The description gives every figure of every
       run for both builds, and says why the change is none of the kinds above, which the review
-      accepts. No run is taken again for its result. One the kit refuses gives no figure and is
-      given with the kit's reason, and a case without a figure does not pass. A cost inside the
+      accepts. No run is taken again for its result. A run the kit refuses gave no figure, so
+      it may be taken again, and the description gives the refusal and the kit's reason for
+      it; a case that still cannot be counted sends the change to measured. A cost inside the
       budget is weighed in review against what the change is for. A saving is claimed in
       instructions, not as a CPU-cost win. This is all point 2.1 asks of a counted change: no
       cycles and no plan. Points 2.2 to 2.4 ask of it what they ask of any change.

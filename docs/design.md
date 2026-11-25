@@ -10705,7 +10705,8 @@ rules something out.
     own, since the kit prints one figure a run and its page records one binary at 2,641 to
     2,645 bytes a connection between runs: three runs a build, and a rise only when head's
     median is above base's by more than base's three span. No run is taken again for its
-    result, as no count or placement of the measured way is.
+    result, as no count or placement of the measured way is; a run the kit refuses gave no
+    figure, so taking it again is not that.
 
     What is given up: a counted change has no cycles reading. The gate keeps +1% on a workload
     the change touches however flat its instructions, "since a change to the data a request
@@ -10795,7 +10796,9 @@ rules something out.
 
     Revisit when: the kit's counts of a release's candidate against the last release's tag,
     which [RELEASING.md](../RELEASING.md#readiness-checkpoints) has a release take, are over 2%
-    more in a case (four budgets, a proposal as the budget is), or cannot be taken because the
+    more in a case (four budgets, a proposal as the budget is) at a release after the first to
+    record them, whose count is the baseline, the changes before it not having been counted,
+    or cannot be taken because the
     probe does not build against that tag, so nothing bounds what counted costs add up to;
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
