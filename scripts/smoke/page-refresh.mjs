@@ -495,7 +495,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                       return `${step} failed: ${String(/** @type {Error} */ (error)?.message ?? error).split("\n")[0]}`;
                     }
                   };
-                  return within(5000, "its release did not settle within 5 s", reply())
+                  // The timer is armed before `reply` starts, with what is left of the same 5 s, so a slow
+                  // start of its fetch does not stretch them.
+                  return within(Math.max(0, deadline - performance.now()), "its release did not settle within 5 s", Promise.resolve().then(reply))
                     .catch((/** @type {Error} */ error) => {
                       over = true;
                       // Its fulfill was sent, and it or the browser's end of the read has not
