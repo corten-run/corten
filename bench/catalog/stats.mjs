@@ -94,8 +94,9 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
   child.once("close", (code, signal) => {
     closed = true;
     clearTimeout(escalation); clearTimeout(release);
-    // Signal delivery can succeed for a child that has already exited. Require
-    // the matching wait status, not just a successful kill() and a closed pipe.
+    // Require the expected shutdown signature, not just kill() and closed pipes.
+    // A matching status cannot tell who sent the signal before the child was reaped.
+    // The evidence readers separately check that the samples cover the required window.
     if (!stopSent || forced || code !== null || signal !== stopSignal) infrastructure("client-process");
     settle();
   });

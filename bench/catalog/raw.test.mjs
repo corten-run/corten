@@ -1204,8 +1204,8 @@ test("stats retains its raw prefix and fails when an exited client's pipes never
 
 const samplerStopSignal = process.platform === "win32" ? "SIGTERM" : "SIGHUP";
 for (const scenario of ["EOF before stop", "connect during stop", "nonzero during stop", "unsolicited zero exit",
-  "zero exit racing requested signal", "requested signal", "numeric signal status", "wrong signal"]) {
-  test(`stats transport and exit attribution: ${scenario}`, async (t) => {
+  "same signal observed before stop", "zero exit racing requested signal", "expected shutdown signature", "numeric signal status", "wrong signal"]) {
+  test(`stats transport and shutdown: ${scenario}`, async (t) => {
     const folder = mkdtempSync(join(tmpdir(), "catalog-stats-transport-")), path = join(folder, "stats.log");
     const fake = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), unref() {} });
     const close = (code, signal = null) => { fake.emit("exit", code, signal); fake.emit("close", code, signal); };
@@ -1235,9 +1235,10 @@ for (const scenario of ["EOF before stop", "connect during stop", "nonzero durin
     fake.stdout.write('{"Name":"app","CPUPerc":"50%","MemUsage":"8MiB / 1GiB"}\n');
     if (scenario === "EOF before stop") fake.stderr.write("unexpected EOF\n");
     if (scenario === "unsolicited zero exit") close(0);
+    if (scenario === "same signal observed before stop") close(null, samplerStopSignal);
     if (scenario === "zero exit racing requested signal") setImmediate(() => close(0));
     const stopping = sampler.stop();
-    if (scenario === "requested signal") {
+    if (scenario === "expected shutdown signature") {
       assert.equal((await stopping).app.samples, 1);
       assert.deepEqual(phaseEnd(seen), { pass: 1, phase: "fixed", exitCode: 1, oomKilled: false });
     } else {

@@ -298,9 +298,10 @@ than three passes only there; of two passes each number is the lower of its colu
 values, not a median. The stop is the app's only when the container stopped after the phase
 began, the CPU counter sidecar and, for the HTTP source, the upstream are the same running
 containers, Docker recorded no kill, stop or restart of the app, and no phase step failed.
-An ordinary app exit does not require samples after the exit. It does require clean sampler
-shutdown when sampling was active: even a zero client exit before the requested stop, any
-client stderr, an incomplete record, or a sampler deadline fails the phase. Replay refuses
+An ordinary app exit does not require samples after the exit. When sampling was active, the
+client must return the expected shutdown status; a matching signal cannot establish who sent
+it before the client was reaped. A client exit observed before the stop request, any client
+stderr, an incomplete record, or a sampler deadline fails the phase. Replay refuses
 recorded faults and rechecks the Docker CPU and memory display format, finite values after unit
 conversion, and the matching sample summary even when the app stopped. A well-formed terminal
 zero (such as `0.00%` and `0B / 0B`) is allowed for a stopped phase. Only phases that did not
