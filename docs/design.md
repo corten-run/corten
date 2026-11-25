@@ -6580,16 +6580,33 @@ rules something out.
     before speed, one way to do each thing and a small default surface, README Values).
 
     Revisit when: a change to the connection task raises a plain HTTP request above the
-    24,287.261 instructions accepted here on the same harness (that count is the baseline; the
-    2.1 above is not a regression still to fix); a compiler or code change lets the one loop poll
-    the plain task at the 24,285.154 it cost before, which removes the residual; an app needs a
-    connection value that cannot be cheaply cloned or shared; or the framework changes its
-    connection service or request-extension ownership model.
+    17,552.817 instructions it counts at `9060dfb2a` on the harness as Last checked built it again
+    (that count is the baseline now: the 24,287.261 accepted here was the request's whole count on
+    2026-11-17, later work on the request path has lowered it since, and the connection's wait for
+    shutdown, polled only when it was woken, took 218 more off; the 2.1 above is not a regression
+    still to fix); a count finds the one loop polling the plain task for more than those 2.1
+    instructions above what it costs without the metadata path (the rerun of Last checked, on a
+    later compiler, counts the two the same, so the residual is not seen there and nothing is left
+    for a compiler or code change to remove); an app needs a connection value that cannot be
+    cheaply cloned or shared; or the framework changes its connection service or
+    request-extension ownership model.
 
     Last checked: 2026-11-17, before `6c5f17b11` (merged as `b08c48d23`), and the metadata
     path's Rust sources matching `caebfa19d` in the counts above, the connection-info
     integration tests and handshake bounds test, the `Public` compile-fail doctest, and the
-    OpenAPI test of a documented route taking it.
+    OpenAPI test of a documented route taking it; 2026-11-25, the plain HTTP count alone, on the
+    harness built again from the description above, since the one those counts were made with is
+    not in the repository (a crate of its own with one typed `GET /` answering `served`, served by
+    `corten::serve` on a current-thread runtime, default features off, thin LTO and one codegen
+    unit, glibc's allocator, a client outside Callgrind that sends the request line and `host`
+    alone on one socket and checks every status and body, three rounds alternating, 200 requests
+    from 1,200 over 1,000, Callgrind 3.24.0 and rustc 1.100.0 with Tokio 1.54.1, so a count here is
+    not one of the counts above): `6c5f17b11` 23,073.241 instructions (range
+    23,073.221-23,077.401) and `caebfa19d` 23,073.192 (range 23,073.121-23,073.754), which is no
+    residual, and the rerun cannot say whether the later compiler or the rebuilt harness is why,
+    then `main` at `8d5160be2` 17,771.037 (range 17,770.049-17,771.622) and `9060dfb2a`, where a
+    connection's wait for shutdown is polled only when it was woken, 17,552.817 (range
+    17,552.342-17,552.875), with the TLS counts not taken again.
 
 61. <a id="choice-access-logs"></a>**Access logging is an opt-in `App` switch, off in every app the template's included,
     and an event through the existing tracing subscriber after the response is finished.**
