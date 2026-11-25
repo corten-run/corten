@@ -210,8 +210,10 @@ audit. This module adds no new trusted native validator and ships no actual pass
 
 For JSON, use the existing `inspectJson` in `bench/json-api/report.mjs` with the contained
 artifact reader and expected full commit, and inspect its whole-matrix rows/warnings, native
-source/runtime/image provenance and derived measurements. Check-only results are not timed
-baselines. The native source audit remains an unsigned operator trust boundary. A future
+source/runtime/image provenance and derived measurements. Run from a repository with that
+commit locally available: inspection checks its producer policy and source blobs.
+Check-only results are not timed baselines. The native source audit remains an unsigned
+operator trust boundary. A future
 deployment adapter must bind those native results to this descriptor, not just copy saved
 `complete` flags. Other groups need their own native validators; none are auto-certified here.
 
