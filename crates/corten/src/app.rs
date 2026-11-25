@@ -2224,6 +2224,8 @@ pub(crate) struct Scope {
     /// the policy, else the app's. An API's answers keep their own CSP and send its referrer policy.
     csp: Arc<Csp>,
     shell: u64,
+    /// The lines the stages give its answers that bring none of them ([`Applied::lines`]).
+    lines: http::HeaderMap,
     /// Its middleware, after the app's: each area's around it, outermost first, then its API's
     /// (with the APIs' around it).
     middleware: crate::middleware::Stack,
@@ -2263,6 +2265,7 @@ impl Scopes {
                 mount: None,
                 deadline: around.iter().rev().find_map(|area| area.deadline).unwrap_or(deadline),
                 body_limit: around.iter().rev().find_map(|area| area.body_limit).unwrap_or(body_limit),
+                lines: policy.lines(&csp, true),
                 csp,
                 shell,
                 middleware: around.iter().flat_map(|area| area.middleware.iter().cloned()).collect(),
@@ -2279,13 +2282,15 @@ impl Scopes {
                 mount.body_limit.or_else(|| around.iter().rev().find_map(|area| area.body_limit)).unwrap_or(body_limit);
             let middleware = around.iter().flat_map(|area| area.middleware.iter()).chain(steps.iter()).cloned().collect();
             let prefix = mount.prefix.clone();
-            let scope = Scope { own: false, mount: Some(mount), deadline, body_limit, csp, shell, middleware };
+            let lines = policy.lines(&csp, false);
+            let scope = Scope { own: false, mount: Some(mount), deadline, body_limit, csp, shell, lines, middleware };
             prefixed.push((prefix, Arc::new(scope)));
         }
         prefixed.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
         let app = |own| {
             let csp = policy.csp.clone();
-            Arc::new(Scope { own, mount: None, deadline, body_limit, csp, shell: 0, middleware: Default::default() })
+            let lines = policy.lines(&csp, true);
+            Arc::new(Scope { own, mount: None, deadline, body_limit, csp, shell: 0, lines, middleware: Default::default() })
         };
         Scopes { own_paths, own: app(true), app: app(false), prefixed }
     }
@@ -2683,10 +2688,15 @@ impl<S: Steps> Layer<S> {
         if foreign {
             res.headers_mut().insert(header::ALLOW, http::HeaderValue::from_static(""));
         }
-        // First: the security headers reserve room for `Cache-Control` and `Vary` too.
-        self.policy.headers(&mut res, nonce.as_ref(), csp, vary);
-        if mount.is_none() {
-            self.policy.document(&mut res, csp, mode.swaps());
+        // An answer that brings none of its scope's lines is given them all in one pass; any
+        // other has each inserted.
+        let ready = self.policy.ready(&mut res, &scope.lines, nonce.as_ref(), csp);
+        if !ready {
+            // First: the security headers reserve room for `Cache-Control` and `Vary` too.
+            self.policy.headers(&mut res, nonce.as_ref(), csp, vary);
+            if mount.is_none() {
+                self.policy.document(&mut res, csp, mode.swaps());
+            }
         }
         let nonced = nonce.as_ref().is_some_and(|slot| slot.taken().is_some());
         let seen = Seen {
@@ -2700,7 +2710,9 @@ impl<S: Steps> Layer<S> {
         };
         // Corten's own routes (assets, the runtime) are settled the same way: they say what they
         // are, and anything that does not gets the default.
-        cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+        if !ready {
+            cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+        }
         // A live stream's fragments carry no mark, so under `corten dev` it logs a key one draws
         // when its headers as sent let a shared cache keep it.
         #[cfg(debug_assertions)]
