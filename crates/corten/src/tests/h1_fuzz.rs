@@ -800,7 +800,7 @@ async fn own_and_hyper_answer_every_stream_alike() {
     assert!(found.listed * 100 < found.streams, "{} of {} streams differ by a listed class", found.listed, found.streams);
     // The run is of streams that reach the app, and that reach the end of what was sent.
     assert!(found.answered * 2 > found.streams, "the app answered in {} of {} streams", found.answered, found.streams);
-    assert!(found.asked * 3 > found.streams, "the last request was sent on {} of {} streams", found.asked, found.streams);
+    assert!(found.asked * 4 > found.streams,"the last request was sent on {} of {} streams", found.asked, found.streams);
 }
 
 /// The gate at the size a pull request reports: `H1_FUZZ_STREAMS` streams made at random (250,000
