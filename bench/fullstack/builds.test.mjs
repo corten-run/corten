@@ -10,7 +10,7 @@ import { test } from "node:test";
 import { parse as parseYaml } from "yaml";
 import { allApps } from "./apps.mjs";
 import { buildRow, cargoBuilds, changeOf, contextOf, copyFilter, crateCost, dockerfileOf, oomKills, compiledIn, ranARun, ranSteps, readStep, rebuildTimeoutMs, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
-import { compiledFirst } from "./round.mjs";
+import { calls, compiledFirst } from "./round.mjs";
 import { imageBuildTimeoutMs as catalogBuildTimeoutMs } from "../catalog/contract.mjs";
 import { imageBuildTimeoutMs as marketplaceBuildTimeoutMs } from "../marketplace/run-contract.mjs";
 
@@ -339,8 +339,10 @@ test("Next.js bounds the locked image install before copying app source or build
 // Maven's retries of a 429 or 503 are per request (.mvn/maven.config), and a cold Spring build makes
 // hundreds of them, so every Maven run in the image and in hosted CI also has its own positive bound,
 // which ends inside the image build or step that directly contains it, with time left to report the
-// transfer it stopped on (#1763). The parity job's total is bounded by its own timeout-minutes, not
-// by a sum of these.
+// transfer it stopped on (#1763). The parity job's timeout-minutes also covers the sum of Spring's
+// bounded steps and image builds in it. These checks guard against accidental changes, not against a
+// deliberately adversarial rewrite such as a shell function that shadows timeout or a Docker call
+// spelled another way.
 const springRetries = [
   "-Daether.transport.http.retryHandler.count=4",
   "-Daether.transport.http.retryHandler.interval=10000",
@@ -471,6 +473,12 @@ function springProof(/** @type {string} */ script) {
   const bound = /^maven_seconds=(\d+)$/.exec(settings[0]);
   assert.ok(bound, `the proof sets maven_seconds other than to a number: ${settings[0]}`);
   assert.ok(commands.indexOf(settings[0]) < commands.indexOf(springProofProbes[0]), "the proof sets maven_seconds before its first probe");
+  // Each copy builds with the app's .mvn, so its Maven retries each 429 or 503 as the image does.
+  for (const mode of ["mvc", "webflux"]) {
+    const copy = `cp -R "$app/.mvn" "$work/${mode}/"`;
+    assert.ok(commands.includes(copy) && commands.indexOf(copy) < commands.indexOf(springProofProbes[0]),
+      `the proof copies .mvn into its ${mode} project before its first probe`);
+  }
   return { runs: springProofProbes.length, bound: durationSeconds(bound[1]), seconds: durationSeconds(bound[1]) + durationSeconds(run[1]) };
 }
 
@@ -490,6 +498,16 @@ function rebuildCallUses(/** @type {string} */ source) {
   return calls.length === 2 && (source.match(/"build"/g) ?? []).length === 1 &&
     source.includes('const r = run("docker", args, timeout);') && source.includes('spawnSync(cmd, args, { encoding: "utf8", maxBuffer: 256 * 2 ** 20, timeout });') &&
     /^[^;]*?, \.\.\.extra, context\], rebuildTimeoutMs\);/.test(calls[1]);
+}
+
+/**
+ * Whether the shared Catalog and Marketplace launcher (bench/catalog/output.mjs) stops a command at
+ * the timeout its caller passed: one deadline timer, on the parameter as given, never reassigned.
+ */
+function launcherForwards(/** @type {string} */ source) {
+  return (source.match(/async function command\(binary, args, \{ timeout = \d+, /g) ?? []).length === 1 &&
+    source.split('setTimeout(() => stop("deadline"), timeout);').length === 2 &&
+    (source.match(/(?<![\w.])timeout\s*(?:[-+*/%]|\?\?|\|\||&&)?=(?!=)/g) ?? []).length === 1;
 }
 
 /** Whether a runner builds images in one docker build call, bounded by its contract's imageBuildTimeoutMs. */
@@ -515,7 +533,9 @@ const otherSpringBuilds = [
     builds: 2, seconds: 20 * 60, forward: "", shorter: ["20 * 60 * 1000", "15 * 60 * 1000"] },
   { runner: "bench/json-api/run.mjs", call: '{ timeout: 60 * 60 * 1000, file: join(folder, `build-${app}-${payload}.log`) });',
     builds: 1, seconds: 60 * 60, forward: 'const docker = (args, opts) => command("docker", args, opts);', shorter: ["60 * 60 * 1000", "15 * 60 * 1000"] },
-  // The defaults and legacy Live rounds build every image in one remote setup step of 90 minutes.
+  // The defaults and legacy Live rounds build every image in one remote setup step of 90 minutes, a
+  // limit all those images share, not Spring's own: this checks only that it is passed on and that
+  // Spring's Maven runs alone fit inside it.
   { runner: "bench/fullstack/droplet.mjs", call: '].join(" && "), 90));', builds: 0, seconds: 90 * 60,
     forward: "`flock -w ${limit * 60} /tmp/droplet.lock timeout -k 30 ${limit * 60} bash -c ${quote(script)}`,", shorter: ["), 90));", "), 15));"] },
 ];
@@ -524,6 +544,37 @@ const otherSpringBuilds = [
 function buildDeadlineIs(/** @type {string} */ source, /** @type {typeof otherSpringBuilds[number]} */ build) {
   return source.split(build.call).length === 2 && (source.match(/"build"/g) ?? []).length === build.builds &&
     (build.forward === "" || source.split(build.forward).length === 2);
+}
+
+/**
+ * Spring's bounded work in the parity job against the job's timeout-minutes, both in seconds: each
+ * step that runs only for Spring at its own timeout-minutes, and each shared runner step that builds
+ * images (`--build`) at the image's Maven runs with their kill grace. Fails when the job's timeout
+ * would not cover them.
+ */
+function springParity(/** @type {string} */ workflowText, /** @type {number} */ imageSeconds) {
+  const job = parseYaml(workflowText).jobs.parity;
+  /** @type {{ if?: string, run?: string, "timeout-minutes"?: unknown }[]} */
+  const steps = job.steps;
+  const own = steps.filter((step) => step.run && /\bspring\b/.test(step.if ?? ""));
+  const builds = steps.filter((step) => /^node bench\/(catalog|marketplace)\/run\.mjs .*--build\b/.test(step.run ?? ""));
+  assert.ok(own.length && builds.length, "the parity job has Spring's own steps and the shared runners' image builds");
+  const spent = own.reduce((sum, step) => sum + stepSeconds(step), 0) + builds.length * imageSeconds;
+  const limit = stepSeconds(job);
+  assert.ok(spent <= limit, `the parity job's ${limit / 60} minutes do not cover Spring's bounded steps and image builds (${spent} s)`);
+  return limit - spent;
+}
+
+/**
+ * The limit, in minutes, run-all.mjs gives an app's build.mjs call, which also runs the Docker
+ * rebuild benchmark's measured builds when that app opts in (BENCH_DOCKER_REBUILD_APPS). Fails when
+ * it would not cover one measured build.
+ */
+function rebuildParentMinutes(/** @type {ReturnType<typeof calls>} */ list, /** @type {string} */ app) {
+  const builds = list.filter(([step, , script, , name]) => step === "build" && script === "build.mjs" && name === app);
+  assert.equal(builds.length, 1, `${app}: an unattended round has no single build call`);
+  assert.ok(rebuildTimeoutMs < builds[0][1] * 60_000, `${app}: its build call ends before one measured Docker rebuild can`);
+  return builds[0][1];
 }
 
 /** The parity job's Spring test and proof steps. */
@@ -572,8 +623,24 @@ test("Spring bounds each Maven run inside the image build or step that contains 
     assert.ok(!rebuildCallUses(rebuild.replace("...extra, context], rebuildTimeoutMs);", to)), `accepted ${to}`);
   }
   assert.ok(!rebuildCallUses(rebuild.replace('const r = run("docker", args, timeout);', 'const r = run("docker", args, Math.min(timeout, 15 * minute));')), "accepted a clamped launcher timeout");
+  // An unattended round's build call for Spring (round.mjs, 90 minutes) covers one 20-minute measured
+  // build when Spring opts into the rebuild; the call's other builds share that limit with it.
+  const round = calls("r1", "1", ["spring"], ["http://spring"]);
+  assert.equal(rebuildParentMinutes(round, "spring"), 90);
+  const shortened = round.map((call) => call[0] === "build" ? /** @type {typeof call} */ ([call[0], 15, ...call.slice(2)]) : call);
+  assert.throws(() => rebuildParentMinutes(shortened, "spring"), /ends before one measured Docker rebuild/);
   assert.ok(!buildCallUses(catalogRunner.replace('await docker(["build",', 'await docker(["image", "build", "."], { timeout: 15 * 60 * 1000 });\n        await docker(["build",')), "accepted a docker image build call");
   assert.ok(!buildCallUses(catalogRunner.replace('const docker = (args, opts) => command("docker", args, opts);', 'const docker = (args, opts) => command("docker", args, { ...opts, timeout: 15 * 60 * 1000 });')), "accepted a clamped docker wrapper");
+  // Both runners' command comes from the shared launcher, which keeps the timeout it was given.
+  const launcher = readFileSync(join(repo, "bench/catalog/output.mjs"), "utf8");
+  assert.ok(launcherForwards(launcher), "bench/catalog/output.mjs: its command does not stop at the caller's timeout as given");
+  const signature = /async function command\(binary, args, \{ timeout = \d+, [^\n]*\{\n/.exec(launcher)?.[0] ?? "";
+  assert.ok(signature, "the launcher's command signature moved");
+  for (const clamped of [
+    launcher.replace('setTimeout(() => stop("deadline"), timeout);', 'setTimeout(() => stop("deadline"), Math.min(timeout, 15 * 60_000));'),
+    launcher.replace(signature, `${signature}    timeout = Math.min(timeout, 15 * 60_000);\n`),
+    launcher.replace(signature, `${signature}    timeout ??= 15 * 60_000;\n`),
+  ]) assert.ok(!launcherForwards(clamped), "accepted a clamped launcher timeout");
   // Mixed Production, the hardening evidence check and JSON API build the same image under their own
   // deadlines: 20 minutes leaves a nominal 1m40s beside the image's Maven runs, 60 minutes half an hour.
   for (const build of otherSpringBuilds) {
@@ -589,6 +656,18 @@ test("Spring bounds each Maven run inside the image build or step that contains 
   // The native test step builds the test stage (both of the image's Maven runs) and runs the tests,
   // so their bounds stop before the step's own, with a minute left for pulling images.
   assert.ok(springTestStepSeconds(testStep, image) + 60 <= stepSeconds(testStep), "the native test step outlasts its build's and tests' Maven bounds");
+
+  // The parity job's 95 minutes cover Spring's test (30) and proof (12) steps and both shared runners'
+  // builds at the image's Maven runs (18m20s each): 1h18m40s, which leaves 16m20s for checkout,
+  // npm ci, the fixtures, the image builds outside Maven and the checks, none of which has a limit.
+  const workflowText = readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8").replace(/\r/g, "");
+  assert.equal(springParity(workflowText, image), 16 * 60 + 20);
+  assert.ok(workflowText.includes("\n    timeout-minutes: 95\n"), "the parity job's timeout moved");
+  assert.throws(() => springParity(workflowText.replace("\n    timeout-minutes: 95\n", "\n    timeout-minutes: 75\n"), image), /do not cover Spring's/);
+  const proofLimit = "        timeout-minutes: 12\n";
+  assert.ok(workflowText.includes(proofLimit), "the proof step's timeout moved");
+  assert.throws(() => springParity(workflowText.replace(proofLimit, "        timeout-minutes: 30\n"), image), /do not cover Spring's/);
+  assert.throws(() => springParity(workflowText.replace(proofLimit, ""), image), /not a positive integer/);
 
   // The transport proof: two Maven runs, each with its own bound, and two minutes to report, inside the step.
   checkSpringProofStep(proofStep);
@@ -679,6 +758,8 @@ test("Spring's Maven bound checks refuse a zero, an unbounded or extra run, a bo
     [proofMaven, `${proofMaven}    "mvn" -B -f "$project/pom.xml" dependency:tree\n`, /more than its one bounded command/],
     [probe, `${probe.trimEnd()} || run_probe webflux WebFluxDisconnectHttpTest || result=1\n`, /only in its definition and its two probes/],
     [probe, `${probe}run_probe webflux WebFluxDisconnectHttpTest || result=1\n`, /only in its definition and its two probes/],
+    ['cp -R "$app/.mvn" "$work/mvc/"\n', "", /copies \.mvn into its mvc project/],
+    ['cp -R "$app/.mvn" "$work/webflux/"\n', "", /copies \.mvn into its webflux project/],
   ])) {
     assert.ok(script.includes(from), `the proof no longer has ${from.trim()}`);
     assert.throws(() => springProof(script.replace(from, to)), refusal, `accepted ${to.trim()}`);

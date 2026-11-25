@@ -2248,10 +2248,16 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     `mvn test` inside its 30 minutes, the transport proof's two 270-second runs inside its
     12-minute step, and the image's Maven runs inside each 20-minute measured build of the Docker
     rebuild benchmark (`docker-rebuild.mjs`), a nominal 1m40s left for the rest, and in the image
-    builds of Mixed Production, the hardening evidence check (20 minutes each), JSON API
-    (60 minutes) and the setup step of a default or legacy Live round on a droplet
-    (`droplet.mjs`), which builds every image inside one 90-minute limit. The Catalog parity
-    job's total is bounded by its own `timeout-minutes`, not by a sum of these.
+    builds of Mixed Production, the hardening evidence check (20 minutes each) and JSON API
+    (60 minutes). The setup step of a default or legacy Live round on a droplet (`droplet.mjs`)
+    builds every image inside one 90-minute limit that all of them share; it is not Spring's
+    own, and `builds.test.mjs` checks only that Spring's Maven runs alone fit in it. Two
+    enclosing limits are checked as sums: the Catalog parity job's 95 minutes cover the Spring
+    test and proof steps' own limits and the image's Maven runs in both shared runners' builds
+    (1h18m40s), which leaves 16m20s for the rest of the job, none of which has a limit of its
+    own; and an unattended round's 90-minute build call for an app (`round.mjs`) covers one
+    20-minute measured build when Spring opts into the Docker rebuild benchmark
+    (`BENCH_DOCKER_REBUILD_APPS`), a limit the call's other builds share.
     The retries and bounds change Spring's build-cost inputs, its retries when a
     download fails transiently and what a successful build logs, not its dependency pins, what it
     downloads or the jar it builds; their performance effect was not measured. Two timed paths see
@@ -2261,12 +2267,15 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     policy changes. Hosted CI still
     downloads Spring's dependencies from Central on each run: both shared runners
     (`bench/catalog/run.mjs`, `bench/marketplace/run.mjs`) build with a plain `docker build` that
-    imports and exports no layer cache. A CI-only Buildx invocation could keep a cache across runs
-    on a separate cache-capable builder without changing the official commands. We decline that as
+    imports and exports no layer cache, so the first build on a fresh hosted runner starts cold.
+    Later builds in the same job, such as the second runner's or the Spring test stage's, may reuse
+    the layers that job's Docker already built. A CI-only Buildx invocation could keep a cache
+    across runs on a separate cache-capable builder without changing the official commands. We decline that as
     a tradeoff: it adds a second builder and a cache store to CI, its cache would serve only that
     invocation's build while the runners' builds stay cold, and the bounded retries already address
     the throttling that issue reported. Within one CI job, the transport proof reuses the Maven
-    repository of the Spring tests before it.
+    repository of the Spring tests before it and can still fetch what that lacks, such as the
+    dependencies its WebFlux POM adds.
     The rebuild keeps each tool's cache, which favors the tools
     that keep one; a Docker build without a cache mount starts each rebuild without it. Each
     rebuild runs in a new container, so a build server (.NET's, Gradle-style daemons) does not

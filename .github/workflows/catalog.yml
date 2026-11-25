@@ -239,8 +239,9 @@ jobs:
         run: |
           docker build --target build -t cb-spring-tests bench/fullstack/apps/spring
           # Maven's retries are per request (.mvn/maven.config), so the whole run has a budget too,
-          # and it logs each transfer to name one in flight (#1763). The proof below starts from this
-          # volume, the image's Maven repository plus what these tests fetched, not from Central again.
+          # and it logs each transfer to name one in flight (#1763). The proof below reuses this
+          # volume, the image's Maven repository plus what these tests fetched, and can still fetch
+          # from Central what it lacks, such as the dependencies its WebFlux POM adds.
           docker run --rm --cpus 2 --memory 2g --mount type=volume,source=cb-spring-m2,target=/root/.m2 \
             cb-spring-tests timeout --verbose --kill-after=10s 10m mvn -B test
       - name: Probe Spring HTTP disconnect behavior with Reactor Netty
