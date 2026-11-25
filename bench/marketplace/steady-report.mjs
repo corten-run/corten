@@ -10,8 +10,9 @@ const header = (s, title) => [`# Marketplace ${title} ${s.name}`, "",
   `Commit: \`${s.commit}\`. CPU: ${s.host.cpu} (online CPUs ${s.host.onlineCpus ?? "not recorded"}). Window: ${s.startedAt} to ${s.finishedAt}.`,
   s.admission ? `Adapters: those timed round ${s.admission.round} (commit \`${s.admission.commit}\`, summary SHA-256 ${s.admission.summarySha256}) admitted, of ${s.admission.selected.join(", ")}.`
     : `Adapters: ${s.options.apps.join(", ")}, as selected; no timed round's admission was checked.`,
+  s.options.group ? `Group ${s.options.group}: its images and container settings.` : "No group: the ungrouped images and container settings, not a group's timed configuration.",
   "Each adapter, source and target ran in a fresh container started as a timed round starts it; windows are the k6 engine's clock from the start of the load, which begins after readiness.",
-  "This is not a timed round and ranks nothing: it says when each adapter stopped changing, not how fast it is beside another."];
+  `This is not a timed round and ranks nothing: ${s.schema === soakSchema ? "it says whether each adapter's memory, tail latency and process held at a fixed rate" : "it says when each adapter stopped changing"}, not how fast it is beside another.`];
 /** A convergence pass as Markdown, with its flatten windows and the warmup it supports. */
 export function convergenceReport(s) {
   validateConvergence(s);

@@ -132,6 +132,8 @@ test("a saved convergence pass validates, recomputes every verdict and supports 
   assert.match(text, /^corten fixture page req\/s by window: 1000\.0, 1000\.0/m);
   assert.match(text, /^corten fixture page p95 ms by window: \d/m);
   assert.match(text, /^corten fixture page p99 ms by window: \d/m);
+  assert.match(text, /it says when each adapter stopped changing/);
+  assert.match(text, /^No group: the ungrouped images and container settings, not a group's timed configuration\.$/m);
   assert.equal(steadyReport(s), text);
   for (const mutate of [
     (v) => { v.cells[0].verdict = { ...v.cells[0].verdict, window: 4 }; },
@@ -175,6 +177,12 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   const text = soakReport(s);
   assert.match(text, /^\| corten \| fixture \| page \| 50\.0 \| 80\.0 \| \+30\.0 MiB \(60\.0%\) \| 20\.0 \/ 80\.0 \/ 80\.0 \| 0 \| no \|$/m);
   assert.match(text, /those timed round w2 .* admitted, of corten, aspnet/);
+  // The soak says what a soak shows, not the convergence pass's "stopped changing".
+  assert.match(text, /it says whether each adapter's memory, tail latency and process held at a fixed rate/);
+  assert.doesNotMatch(text, /stopped changing/);
+  assert.match(text, /^No group: /m);
+  const grouped = structuredClone(s); grouped.options.group = "production";
+  assert.match(soakReport(grouped), /^Group production: its images and container settings\.$/m);
   assert.equal(steadyReport(s), text);
   const bad = structuredClone(s); bad.cells[0].memory.growthMiB = 0; assert.throws(() => validateSoak(bad), /memory/);
   assert.throws(() => steadyReport({ schema: "marketplace-results/v6" }), /not a/);
