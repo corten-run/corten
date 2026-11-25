@@ -48,12 +48,15 @@ pub fn app(source: Source) -> App {
     let app = app_with(source, Keys { partners: Partners::parse(&keys("API_KEYS")), agents: &keys("AGENT_TOKENS") }, writes);
     // The most connections held open at once (`MAX_CONNECTIONS`), so many idle or slow clients
     // cannot hold every socket the process may open; no limit unless set.
-    match std::env::var("MAX_CONNECTIONS") {
+    let app = match std::env::var("MAX_CONNECTIONS") {
         Ok(n) => {
             app.max_connections(n.trim().parse().ok().filter(|&n| n > 0).expect("MAX_CONNECTIONS is a whole number above zero"))
         }
         Err(_) => app,
-    }
+    };
+    // Requests without a body on Corten's own HTTP/1.1 connection (`OWN_HTTP1`, any value), which
+    // the browser test runs against as well; hyper's unless set.
+    app.own_http1(std::env::var_os("OWN_HTTP1").is_some())
 }
 
 /// Who may call the JSON routes: partners by API key, agents by token (`AGENT_TOKENS`, comma
