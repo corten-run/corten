@@ -10,7 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { validateCampaign, freeze, jsonPhase, mixedPhase, offlineAuditRemainingMs, verifyOfflineAuditStart } from "./campaign-contract.mjs";
 import { verifyWorkingSources } from "./worker.mjs";
 import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, publishDurable, readRegular, syncDirectory, transferEvidence, tree } from "./evidence.mjs";
-import { interruptedByStartupDeadline, supervise } from "./process.mjs";
+import { startupOutcome, supervise } from "./process.mjs";
 import { observeHost, sampleAuditClock, terminalClockPolicy, udevSettleCandidates, udevSettleMs, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
@@ -120,8 +120,16 @@ export function createCampaign({ authorize }) {
     const commandSignal = signal ? AbortSignal.any([signal, observerStop.signal]) : observerStop.signal;
     const number = c.commandIndex++, path = `${directory}/command-${number}.log`, fd = openSync(join(c.directory, path), "wx", 0o600);
     const hostDirectory = join(c.directory, directory, `command-${number}-host`);
-    const startupDiagnostic = trackHostStorageStartup(hostDirectory);
-    let result, observer, hostManifestSha256, pid, attached = false;
+    let startupDiagnostic = trackHostStorageStartup(hostDirectory);
+    let result, observer, hostManifestSha256, pid, attachmentComplete = false;
+    function disposeObserver() {
+      const rejected = observer; observer = undefined;
+      rejected?.dispose();
+    }
+    function captureStartupDiagnostic(timedOut) {
+      const storage = startupDiagnostic?.(timedOut); startupDiagnostic = undefined;
+      if (storage && startupOutcome(result) !== "accepted") c.startupStorageFailure = storage;
+    }
     try {
       event(c, "command-intent", { group: binding.request.group, invocation });
       if (compilerTarget) compilerTarget.settled = false;
@@ -129,6 +137,10 @@ export function createCampaign({ authorize }) {
         env: { PATH: "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(), LANG: "C.UTF-8", TZ: "UTC",
           GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", ...binding.resources.requestedCpuEnv, ...compilerTarget?.env }, signal: commandSignal,
         log(bytes) { let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset, bytes.length - offset); assert.ok(n > 0); offset += n; } },
+        onStartupRejected(outcome) {
+          try { disposeObserver(); }
+          finally { if (outcome === "deadline") captureStartupDiagnostic(true); }
+        },
         async onStart(value, startupSignal, checkStartup) {
           pid = value; event(c, "command-started", { pid });
           try {
@@ -138,28 +150,23 @@ export function createCampaign({ authorize }) {
             checkStartup();
             await observer.attach(pid);
             checkStartup();
-            attached = true;
+            attachmentComplete = true;
           } catch (error) {
-            observer?.dispose(); observer = undefined; throw error;
+            disposeObserver(); throw error;
           }
         },
       });
     } finally {
-      const expired = interruptedByStartupDeadline(result);
-      const storage = startupDiagnostic(expired);
-      if (storage && (!attached || expired)) c.startupStorageFailure = storage;
-      try {
-        // The supervisor can reject setup after attachment's own final check.
-        if (expired && attached) { attached = false; observer.dispose(); }
-      } finally { try { fsyncSync(fd); } finally { closeSync(fd); } }
+      try { captureStartupDiagnostic(false); }
+      finally { try { fsyncSync(fd); } finally { closeSync(fd); } }
     }
     c.files.push({ path, sha256: digest(readRegular(join(c.directory, path))) });
     const settled = compilerTarget ? () => { compilerTarget.settled = true; } : undefined;
-    if (attached) {
+    if (startupOutcome(result) === "accepted") {
       const manifest = await observer.finish(result, retainTerminalClock, settled); hostManifestSha256 = manifest.sha256;
       for (const file of manifest.entries.filter((e) => e.type === "file")) c.files.push({
         path: `${directory}/command-${number}-host/${file.path}`, sha256: file.sha256 });
-    } else if (result.terminal && !observer) settled?.(); // No live attachment owns setup.
+    } else if (result.terminal && !attachmentComplete) settled?.(); // No completed attachment owns setup.
     event(c, "command-exited", { ...result, ...(hostManifestSha256 ? { hostManifestSha256 } : {}) });
     assert.equal(result.terminal, true, "native process is not observed terminal");
     const lifetime = hostManifestSha256 ? inspectLifetime(binding, invocation,

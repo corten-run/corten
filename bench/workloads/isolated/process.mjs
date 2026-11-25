@@ -5,31 +5,43 @@ import { fileURLToPath } from "node:url";
 
 export const limits = Object.freeze({ readyMs: 30000, runMs: 36 * 60 * 60 * 1000, stopMs: 120000, killMs: 5000 });
 const bootstrap = fileURLToPath(new URL("./bootstrap.mjs", import.meta.url));
-const startupDeadlineResults = new WeakSet();
-export const interruptedByStartupDeadline = (result) => startupDeadlineResults.has(result);
+// The live observer's admission is not part of the serialized command result.
+const startupOutcomes = new WeakMap();
+export const startupOutcome = (result) => startupOutcomes.get(result);
 
 /** Supervision is bounded; force/IPC uncertainty is never a clean successful exit. */
-export function supervise(invocation, { cwd, env, log, signal, onStart }, deadlines = limits) {
+export function supervise(invocation, { cwd, env, log, signal, onStart, onStartupRejected }, deadlines = limits) {
   assert.equal(invocation.executable, "node");
   assert.equal(invocation.shell, false);
   assert.ok(Array.isArray(invocation.argv) && invocation.argv.length > 0);
   return new Promise((resolve) => {
-    let child, ready = false, settled = false, cancelled = false, forced = false, error = null, exited = false, observed = false;
+    let child, ready = false, settled = false, cancelled = false, forced = false, error = null, exited = false;
     let code = null, exitSignal = null, timer, stopTimer, killTimer, setupTimer, pendingTerminal;
     const startup = new AbortController();
-    let startupCutoff, setupPending = true, setupExpired = false, deadlineInterrupted = false;
-    function noteStartupDeadline() {
-      if (setupPending && !startup.signal.aborted) deadlineInterrupted = true;
+    // Rejection stops capture immediately, but the callback remains owned until
+    // it returns or its original join bound expires.
+    let startupCutoff, setupPending = true, setupExpired = false, admission;
+    function rejectStartup(outcome = "interrupted") {
+      const first = admission === undefined;
+      if (first) admission = outcome;
+      startup.abort();
+      if (first) {
+        try { onStartupRejected?.(outcome); }
+        catch { error ??= "native host observation disposal failed"; }
+      }
     }
-    function expireReady() { noteStartupDeadline(); cancel(); }
+    function expireReady() { if (setupPending) expireSetup(); else requestStop(); }
     function expireSetup() {
-      if (!setupPending || settled) return;
+      if (!setupPending || setupExpired || settled) return;
       setupExpired = true; error ??= "native host observation setup incomplete";
-      noteStartupDeadline(); startup.abort(); cancel();
+      rejectStartup("deadline"); requestStop();
       if (pendingTerminal !== undefined) finish(pendingTerminal);
     }
     function expireElapsedSetup() {
-      if (!startup.signal.aborted && performance.now() >= startupCutoff) expireSetup();
+      if (setupPending && admission === undefined && performance.now() >= startupCutoff) {
+        expireSetup(); return true;
+      }
+      return false;
     }
     function checkStartup() {
       expireElapsedSetup();
@@ -37,13 +49,15 @@ export function supervise(invocation, { cwd, env, log, signal, onStart }, deadli
     }
     const finish = (terminal) => {
       if (settled) return;
-      startup.abort();
       // Child close does not transfer an outstanding observation callback to
       // nobody. Join it up to the original startup deadline, never a renewed one.
       if (setupPending && !setupExpired) {
+        pendingTerminal = terminal;
+        if (expireElapsedSetup()) return;
         error ??= "native leader closed before host observation setup";
-        pendingTerminal = terminal; return;
+        rejectStartup(); return;
       }
+      rejectStartup();
       settled = true;
       clearTimeout(timer); clearTimeout(stopTimer); clearTimeout(killTimer); clearTimeout(setupTimer);
       signal?.removeEventListener("abort", cancel);
@@ -55,9 +69,7 @@ export function supervise(invocation, { cwd, env, log, signal, onStart }, deadli
       }
       const result = { terminal, code, signal: exitSignal, cancelled, forced, error,
         success: terminal && code === 0 && !cancelled && !forced && error === null };
-      // Attribution only; do not add fields to command evidence or change the
-      // startup signal's reason. An earlier exit or abort remains the first.
-      if (deadlineInterrupted) startupDeadlineResults.add(result);
+      startupOutcomes.set(result, admission);
       resolve(result);
     };
     const send = (message) => {
@@ -67,9 +79,12 @@ export function supervise(invocation, { cwd, env, log, signal, onStart }, deadli
       } catch (failure) { error ??= failure.message; if (!cancelled) cancel(); }
     };
     function cancel() {
+      if (!expireElapsedSetup()) requestStop();
+    }
+    function requestStop() {
       if (settled || cancelled) return;
       cancelled = true;
-      startup.abort();
+      rejectStartup();
       if (ready) send({ type: "cancel", signal: "SIGTERM" });
       stopTimer = setTimeout(() => {
         if (settled) return;
@@ -87,7 +102,7 @@ export function supervise(invocation, { cwd, env, log, signal, onStart }, deadli
       }, deadlines.stopMs);
     }
     function start() {
-      if (!ready || !observed || settled || cancelled || exited || startup.signal.aborted) return;
+      if (!ready || admission !== "accepted" || settled || cancelled || exited || startup.signal.aborted) return;
       if (performance.now() >= startupCutoff) { expireReady(); return; }
       clearTimeout(timer); timer = setTimeout(cancel, deadlines.runMs);
       send({ type: "start" });
@@ -110,7 +125,7 @@ export function supervise(invocation, { cwd, env, log, signal, onStart }, deadli
         if (settled || message?.type !== "ready" || ready) return;
         ready = true;
         if (cancelled) send({ type: "cancel", signal: "SIGTERM" });
-        else start();
+        else if (!expireElapsedSetup()) start();
       });
       child.on("disconnect", () => {
         if (exited || settled) return;
@@ -118,7 +133,10 @@ export function supervise(invocation, { cwd, env, log, signal, onStart }, deadli
         clearTimeout(timer);
         timer = setTimeout(() => { error ??= "native IPC disconnected without exit"; cancel(); }, deadlines.readyMs);
       });
-      child.once("exit", (value, reason) => { exited = true; code = value; exitSignal = reason; startup.abort(); });
+      child.once("exit", (value, reason) => {
+        exited = true; code = value; exitSignal = reason;
+        if (!expireElapsedSetup()) rejectStartup();
+      });
       child.once("close", (value, reason) => { code = value; exitSignal = reason; finish(true); });
       startupCutoff = performance.now() + deadlines.readyMs;
       timer = setTimeout(expireReady, deadlines.readyMs);
@@ -131,10 +149,11 @@ export function supervise(invocation, { cwd, env, log, signal, onStart }, deadli
         // A setup continuation can run before the already-due timer callback.
         expireElapsedSetup();
         setupPending = false; clearTimeout(setupTimer);
-        observed = true;
+        admission ??= "accepted";
         if (pendingTerminal !== undefined) { finish(pendingTerminal); return; }
         start();
       }, () => {
+        expireElapsedSetup();
         setupPending = false; clearTimeout(setupTimer);
         error ??= "native host observation setup failed"; cancel();
         if (pendingTerminal !== undefined) finish(pendingTerminal);

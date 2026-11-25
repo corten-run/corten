@@ -332,10 +332,15 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
     };
   }
   if (lifetimeStartup) {
-    lifetimeStartup.child = child;
+    const startup = lifetimeStartup;
+    startup.child = child;
     const send = child.send.bind(child);
     child.send = (message, callback) => {
-      if (message.type === "cancel") { callback?.(null); queueMicrotask(() => child.close(0)); return; }
+      if (message.type === "cancel") {
+        callback?.(null);
+        if (startup.onCancel) startup.onCancel(); else queueMicrotask(() => child.close(0));
+        return;
+      }
       return send(message, callback);
     };
   }
@@ -902,7 +907,7 @@ for (const [fault, shutdown = "drained"] of [
 });
 
 for (const kind of ["fault", "fault then cleanup failure", "cancel", "cancel then fault", "deadline", "cancel through deadline",
-  "deadline then cancel", "exit through deadline", "attachment deadline"])
+  "deadline then cancel", "deadline then fault", "exit through deadline", "attachment deadline"])
 test(`actual campaign startup storage: ${kind} preserves only a real writer diagnostic`, { timeout: 15000 }, async (t) => {
   t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
   const s = setupGroup("client-heavy"); s.plan.round = "r21";
@@ -923,6 +928,7 @@ test(`actual campaign startup storage: ${kind} preserves only a real writer diag
     : held ? f.pause("open", (path) => path === sample) : null;
   const before = f.before;
   const deadline = kind.includes("deadline"), earlyCancel = kind.startsWith("cancel"), lateCancel = kind === "deadline then cancel";
+  const lateFault = kind === "deadline then fault";
   if (deadline) t.mock.timers.enable({ apis: ["setTimeout"] });
   if (kind === "fault then cleanup failure") {
     const rmdir = fs.rmdirSync;
@@ -937,7 +943,7 @@ test(`actual campaign startup storage: ${kind} preserves only a real writer diag
   }
   f.before = async (step, path) => {
     await before(step, path);
-    if (step === "open" && path === sample && (!held || kind === "cancel then fault")) { openFaults++; throw ioError(); }
+    if (step === "open" && path === sample && (!held || kind === "cancel then fault" || lateFault)) { openFaults++; throw ioError(); }
   };
   const advancing = s.campaign.advance(h, { signal: parent.signal }).then(
     () => { settled = true; }, (error) => { settled = true; return error; });
@@ -951,7 +957,8 @@ test(`actual campaign startup storage: ${kind} preserves only a real writer diag
     assert.equal(run.started, false); assert.equal(run.cancels, 1);
     assert.equal(parent.signal.aborted, earlyCancel || lateCancel); assert.equal(settled, false);
     assert.throws(() => s.campaign.stop(h), /wait for owned command shutdown/);
-    if (!deadline) pause?.release();
+    if (!deadline || lateFault) pause?.release();
+    if (lateFault) await new Promise((resolve) => setImmediate(resolve));
     run.child.close(0);
     const error = await advancing;
     const files = readdirSync(h.directory);
@@ -973,7 +980,7 @@ test(`actual campaign startup storage: ${kind} preserves only a real writer diag
       assert.ok(f.live.size > 0, "the writer still owns the held fsync");
       assert.equal(f.removed, false);
     }
-    assert.equal(openFaults, code === "EIO" ? 1 : 0);
+    assert.equal(openFaults, code === "EIO" || lateFault ? 1 : 0);
     assert.equal(cleanupFaults, kind === "fault then cleanup failure" ? 1 : 0);
     if (cleanupFaults) assert.equal(f.removed, false);
     assert.ok(!/PRIVATE_(?:STORAGE|CLEANUP)_DETAIL/.test(halted));
@@ -1100,21 +1107,30 @@ for (const stop of ["cancel", "close"]) for (const failure of [false, true]) tes
 for (const boundary of ["before attach", "after attach", "after attachment check"]) {
   test(`campaign startup cutoff without dispatching timers: ${boundary}`, { timeout: 10000 }, async (t) => {
     const s = setupGroup("client-heavy"), h = await begin(s);
-    let elapsed = 100, readsUntilCutoff = Infinity, enter, release;
+    let elapsed = 100, readsUntilCutoff = Infinity, enter, release, onCancel;
     t.mock.method(performance, "now", () => elapsed + (readsUntilCutoff-- <= 0 ? 30000 : 0));
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const entered = new Promise((resolve) => { enter = resolve; });
     const gate = new Promise((resolve) => { release = resolve; });
+    const cancelled = new Promise((resolve) => { onCancel = resolve; });
     const expire = () => { elapsed += 30000; };
-    const owner = lifetimeStartup = { enter, gate, attached: 0, disposed: 0, onAttach() {
+    const owner = lifetimeStartup = { enter, gate, onCancel, attached: 0, disposed: 0, onAttach() {
       if (boundary === "after attach") expire();
       if (boundary === "after attachment check") readsUntilCutoff = 1;
     } };
-    const advancing = s.campaign.advance(h).then(() => null, (error) => error);
+    let returned = false;
+    const advancing = s.campaign.advance(h).then(() => null, (error) => error).finally(() => { returned = true; });
+    let closed = false;
+    function close() { if (!closed && owner.child) { closed = true; owner.child.close(0); } }
     try {
       await entered;
       if (boundary === "before attach") expire();
       release();
+      await cancelled;
+      assert.equal(returned, false, "the child has not drained");
+      assert.equal(owner.disposed, 1, "rejection disposes before child shutdown");
+      assert.equal(existsSync(join(owner.directory, "terminal.json")), false);
+      close();
       assert.match((await advancing)?.message ?? "", /lifetime or cleanup unproven/);
       assert.equal(owner.attached, boundary === "before attach" ? 0 : 1);
       assert.equal(owner.disposed, 1);
@@ -1128,9 +1144,30 @@ for (const boundary of ["before attach", "after attach", "after attachment check
       assert.equal(state.state, "preserved-uncertain");
       assert.equal(state.uncollectedNativeRoots.length, 1);
       assert.equal(calls.length, 1);
-    } finally { release(); await advancing; }
+    } finally { release(); close(); await advancing; }
   });
 }
+
+for (const cancelled of [false, true]) test(`campaign admitted startup seals ${cancelled ? "drained cancellation" : "healthy exit"}`, async () => {
+  const s = setupGroup("catalog-page"); s.plan.bindings[0].preparation.fixtures = [];
+  const h = await begin(s);
+  abort = new AbortController();
+  if (cancelled) mode = "abort-native";
+  const owner = lifetimeStartup = { enter() {}, gate: Promise.resolve(), attached: 0, disposed: 0, onCancel() {} };
+  const status = await s.campaign.advance(h, { signal: abort.signal });
+  assert.equal(owner.attached, 1);
+  assert.equal(owner.disposed, 0, "an accepted attachment is not disposed during runtime cancellation or exit");
+  const seal = JSON.parse(readFileSync(join(owner.directory, "terminal.json"), "utf8"));
+  assert.equal(seal.unforced, !cancelled);
+  const exit = readdirSync(h.directory).find((name) => name.endsWith("-command-exited.json"));
+  const result = JSON.parse(readFileSync(join(h.directory, exit), "utf8"));
+  assert.equal(result.success, !cancelled);
+  assert.equal(result.cancelled, cancelled);
+  assert.match(result.hostManifestSha256, /^[0-9a-f]{64}$/);
+  assert.equal(status.state, cancelled ? "preserved-uncertain" : "finished");
+  assert.equal(status.uncollectedNativeRoots.length, 0);
+  assert.equal(calls.length, 1);
+});
 
 for (const group of groupNames) test(`${group}: one complete group runs and replays without inventing other groups`, async () => {
   const s = setupGroup(group), h = await begin(s); mode = "complete";
