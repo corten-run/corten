@@ -163,8 +163,9 @@ division: end statements with `;` and keep a division on the line it continues.
    A filter or scope whose answer is one part of the screen is a GET `data-patch` form marked
    `data-address`, its route answering with `req.patch_or(part, page)`: as the patch is drawn,
    the address it asked for replaces the current history entry's (no entry is added, so Back
-   goes to the page before the screen). An answer from an earlier visit does not draw; an empty
-   or incomplete patch, a drawn 5xx or a page answer leaves the address. Pick `data-keep-place`
+   goes to the page before the screen). An answer that comes after the user left the page (a
+   link, Back or Forward) does not draw; an empty or incomplete patch or a drawn 5xx leaves the
+   address, and a page answer drawn in place moves it as a patch does. Pick `data-keep-place`
    when the change redraws most of the page (a list's results), `data-address` when it redraws
    one part of a screen whose rest is costly to read. The patch draws everything the address
    changes, the form included, and any link or form that carries the scope (a `keep_query`

@@ -493,14 +493,17 @@ async function markedPatchVisits(browser, errors) {
     return { sent, release, clear: () => page.unroute(url) };
   };
 
-  // Submit from the still-visible page after a visit starts, before its page can draw: the answer
-  // neither draws nor replaces the entry the navigation is making, nor cancels the navigation.
+  // Submit from the still-visible page after a visit starts, before its page can draw: the answer,
+  // which comes while the navigation waits, neither draws nor replaces the entry the navigation is
+  // making, nor cancels the navigation.
   const pending = await hold(month, "nav");
   const before = await state();
   await startMonth();
   const navSent = await pending.sent;
   await trackForm();
+  const weekAnswer = page.waitForResponse((r) => r.url() === week && r.request().headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
   await press("Week");
+  const actionAnswered = await weekAnswer;
   const actionDone = await finished();
   const still = await state();
   pending.release();
@@ -509,12 +512,14 @@ async function markedPatchVisits(browser, errors) {
   const after = await state();
   check(
     "a marked patch from the visible page cannot draw or cancel a pending visit",
-    navSent && actionDone && still.shown === "all" && still.index <= before.index + 1 && still.at !== "?scope=week" && navDone === "finished" &&
+    navSent && actionAnswered && actionDone && still.shown === "all" && still.index <= before.index + 1 && still.at !== "?scope=week" && navDone === "finished" &&
       after.shown === "month" && after.at === "?scope=month" && after.index === before.index + 1,
-    JSON.stringify({ navSent, actionDone, still, navDone, after, before }),
+    JSON.stringify({ navSent, actionAnswered, actionDone, still, navDone, after, before }),
   );
 
-  // Two ordinary form answers swap in byte-identical pages. The second is still a different visit.
+  // Another form's answer, a page, drawn in place while a marked answer is on its way, twice and
+  // byte-identical: the page on screen is still the visit, on the same entry, so the marked answer
+  // draws and puts its address in the entry.
   await page.goto(home);
   const ordinary = `${home}?scope=ordinary`;
   // The server's own page answer, its `corten-page` and `corten-shell` headers included, for each.
@@ -552,8 +557,8 @@ async function markedPatchVisits(browser, errors) {
   await page.unroute(ordinary);
   const identical = await state();
   check(
-    "a marked patch does not draw after a byte-identical page swap",
-    firstDraw && markedSent && secondDraw && markedDone && identical.shown === "all" && identical.at === "",
+    "a marked patch draws and puts its address in the entry after another form's page is drawn in place",
+    firstDraw && markedSent && secondDraw && markedDone && identical.shown === "week" && identical.at === "?scope=week",
     JSON.stringify({ firstDraw, markedSent, secondDraw, markedDone, identical }),
   );
 
@@ -595,6 +600,64 @@ async function markedPatchVisits(browser, errors) {
     JSON.stringify({ saveSent, retryHeld, queuedNav, retried, queued }),
   );
 
+  // The page reading itself again (`ReadAgain`, here a tag put in the screen's head) is the same
+  // visit on the same entry: Week, pressed while the read is on its way, draws, and its address takes
+  // the entry's place, which cancels the read; the read starts again later, at that address.
+  await page.goto(home);
+  const reading = await hold(home, "nav");
+  await page.route(home, async (route) => {
+    if (route.request().resourceType() !== "document") return route.fallback();
+    // Uncompressed: Firefox's route.fetch reads a compressed body it was not sent as empty.
+    const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+    const body = (await res.text()).replace("</head>", '<noscript data-corten-read-again="1"></noscript></head>');
+    await route.fulfill({ response: res, body });
+  });
+  await page.goto(home);
+  const readSent = await reading.sent;
+  const readOnItsWay = await page.evaluate(() => !!(/** @type {any} */ (window).navigation.transition));
+  await trackForm();
+  const againAnswer = page.waitForResponse((r) => r.url() === week && r.request().headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  const readAgain = page.waitForRequest((r) => r.url() === week && r.headers()["corten"] === "nav", { timeout: 5000 }).then(() => true, () => false);
+  await press("Week");
+  const againAnswered = await againAnswer;
+  const againDone = await finished();
+  const duringRead = await state();
+  const readCancelled = await page.evaluate(() => !(/** @type {any} */ (window).navigation.transition));
+  reading.release();
+  const readLater = await readAgain;
+  await page.unroute(home);
+  await reading.clear();
+  const afterRead = await state();
+  check(
+    "a marked patch pressed while the page reads itself again draws and puts its address in the entry, and the read starts again there",
+    readSent && readOnItsWay && againAnswered && againDone && duringRead.at === "?scope=week" && duringRead.shown === "week" && duringRead.entries === afterRead.entries &&
+      readCancelled && readLater && afterRead.at === "?scope=week" && afterRead.shown === "week",
+    JSON.stringify({ readSent, readOnItsWay, againAnswered, againDone, duringRead, readCancelled, readLater, afterRead }),
+  );
+
+  // Back to an entry of the same page that differs by its `#id` alone, which the runtime does not
+  // take (nothing to read), is another entry all the same: an answer on its way draws nothing, and
+  // puts its address in neither entry.
+  await page.goto(home);
+  await page.evaluate(() => /** @type {any} */ (window).navigation.navigate("#smoke-address").finished);
+  const fragment = await hold(week, "action");
+  await trackForm();
+  await press("Week");
+  const fragmentSent = await fragment.sent;
+  const backTo = await page.evaluate(() => /** @type {any} */ (window).navigation.back().finished.then(() => location.hash, (/** @type {Error} */ e) => e.name));
+  fragment.release();
+  const fragmentDone = await finished();
+  await fragment.clear();
+  const fragmentBack = await page.evaluate(() => {
+    const nav = /** @type {any} */ (window).navigation;
+    return { at: location.search + location.hash, shown: document.querySelector("#smoke-address output")?.textContent, ahead: nav.entries()[nav.currentEntry.index + 1]?.url ?? "" };
+  });
+  check(
+    "a marked patch on its way when Back goes to an entry of the page that differs by its #id draws nothing and puts no address in history",
+    fragmentSent && backTo === "" && fragmentDone && fragmentBack.at === "" && fragmentBack.shown === "all" && fragmentBack.ahead === `${home}#smoke-address`,
+    JSON.stringify({ fragmentSent, backTo, fragmentDone, fragmentBack }),
+  );
+
   const patch = async (/** @type {number} */ status, /** @type {string} */ body) => {
     await page.goto(home);
     const start = await state();
@@ -610,11 +673,38 @@ async function markedPatchVisits(browser, errors) {
   const missing = await patch(200, '<p id="missing-scope">Missing</p>');
   const partial = await patch(200, '<template id="smoke-address" data-remove></template><p id="smoke-address">Too late</p>');
   const ordered = await patch(200, '<section id="smoke-address"><output id="new-scope">First</output></section><output id="new-scope">Second</output>');
+  // A removal of an element the page no longer has is done: what it asks for is the case.
+  const gone = await patch(200, '<template id="smoke-address-gone" data-remove></template><section id="smoke-address"><output>Kept</output></section>');
+  const goneAlone = await patch(200, '<template id="smoke-address-gone" data-remove></template>');
   check(
     "a marked patch puts its address in the entry only when it draws and skips no element",
     [empty, missing, partial].every((p) => p.done && p.at === "" && p.added === 0) && empty.shown === "all" && missing.shown === "all" && partial.shown === null &&
       ordered.done && ordered.at === "?scope=week" && ordered.added === 0 && ordered.shown === "Second",
     JSON.stringify({ empty, missing, partial, ordered }),
+  );
+  check(
+    "a marked patch that removes an element the page no longer has puts its address in the entry",
+    [gone, goneAlone].every((p) => p.done && p.at === "?scope=week" && p.added === 0) && gone.shown === "Kept" && goneAlone.shown === "all",
+    JSON.stringify({ gone, goneAlone }),
+  );
+
+  // A page answer (`corten-page`, `<main>`) is the page at the address asked for too: it is drawn
+  // in place, and the address takes the entry's place.
+  const weekPage = await fetch(week, { headers: { corten: "nav" } });
+  const weekMarkup = await weekPage.text();
+  const pageHeaders = Object.fromEntries(["corten-page", "corten-shell", "content-type"].flatMap((name) => (weekPage.headers.has(name) ? [[name, weekPage.headers.get(name) ?? ""]] : [])));
+  await page.goto(home);
+  const pageStart = await state();
+  await page.route(week, (route) => (route.request().headers()["corten"] === "action" ? route.fulfill({ headers: pageHeaders, body: weekMarkup }) : route.continue()));
+  await trackForm();
+  await press("Week");
+  const pageDone = await finished();
+  await page.unroute(week);
+  const pageEnd = await state();
+  check(
+    "a marked form's page answer is drawn in place and puts its address in the entry",
+    "corten-page" in pageHeaders && pageDone && pageEnd.at === "?scope=week" && pageEnd.shown === "week" && pageEnd.entries === pageStart.entries,
+    JSON.stringify({ pageHeaders, pageDone, pageStart, pageEnd }),
   );
 
   const failed = await patch(500, '<section id="smoke-address"><output>Failed</output></section>');

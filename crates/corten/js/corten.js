@@ -1100,7 +1100,8 @@ async function apply(html, signal, sent, took, own, asked, within, here, done) {
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
   let again;
-  // Whether it put something in, and whether it skipped an element that found no place.
+  // Whether it drew something (an element in, or one out that is gone, as a removal of one the page
+  // no longer has leaves it), and whether it skipped an element that found no place.
   let placed = false;
   let skipped = false;
   // Whether it removes a nav link, which can leave another of its nav current.
@@ -1121,9 +1122,9 @@ async function apply(html, signal, sent, took, own, asked, within, here, done) {
           if (parent) changedIn(parent, ["x", id, []]);
           replacements?.set(target, null);
           elementOwn.remove.call(target);
-          placed = true;
           if (up) focusNear(up);
-        } else skipped = true;
+        }
+        placed = true;
       } else if (!target) {
         skipped = true;
         console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
@@ -1589,9 +1590,11 @@ function focusNear(el, root, fresh) {
  * @param {string} [drew] the address (`pageKey`) a navigation drew the page for; none for a
  *   submit's page, which stays the page on screen
  * @param {() => boolean} [here] a marked answer draws only on the visit it was sent from ({@link send})
+ * @param {() => void} [done] called in the same task once the page is drawn: a `data-address`
+ *   form's answer puts its address in the entry there ({@link send})
  * @returns {Promise<boolean>} false when it loaded the page in full instead, or drew nothing
  */
-async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html), wholePoll, drew, here) {
+async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html), wholePoll, drew, here, done) {
   preload(content);
   const [, styled] = await Promise.all([modulesOf(content), stylesOf(content)]);
   signal?.throwIfAborted();
@@ -1630,8 +1633,6 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
       parts.push([old, part]);
     }
   }
-  // Another visit, even when its markup is the same.
-  pageVisit += 1;
   const title = content.querySelector("title");
   if (title) {
     document.title = textOf(title) ?? "";
@@ -1678,6 +1679,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   swapped = html;
   swappedWhole = "";
   shown = notice?.has("d") ? (notice.get("m") ?? "") : null;
+  done?.();
   markCurrent(kept);
   readAgainLater();
   readPartsAgain(main);
@@ -2618,8 +2620,14 @@ function readLater(seconds, wanted, read) {
  */
 // The Navigation API, where the browser has it.
 const navigation = /** @type {Navigation | undefined} */ (window.navigation);
-/** The visit on screen: a navigation the runtime takes starts the next, and so does a page drawn. */
+/**
+ * The visit on screen: each navigation the runtime takes to a page (a link, Back, a redirect it
+ * follows) starts the next as it begins. A page drawn in place on the same entry (a form's answer,
+ * the page reading itself again) is the same visit.
+ */
 let pageVisit = 0;
+/** The signal of the navigation that started the visit, while it may still be on its way. @type {AbortSignal | null} */
+let moving = null;
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -2775,6 +2783,8 @@ function fragmentOf(fragment) {
 
 // Only this module has these symbol keys; another script's info has none of them.
 navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ event) => {
+  // Any navigate aborts the one on its way: none is on its way to another page but this one, if it is.
+  moving = null;
   // A script's history.pushState or replaceState (a tab that puts itself in the address) is the
   // page's own: nothing to fetch. Back and forward between pages this runtime swapped are
   // same-document traversals too, and do need the page.
@@ -2789,9 +2799,9 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
     event.navigationType === "reload" ||
     sourceIn(event, "[data-reload]");
   if (skip) return;
-  pageVisit += 1;
   const url = new URL(event.destination.url);
   const again = event.info?.[READ_AGAIN];
+  if (!again) (pageVisit += 1), (moving = event.signal);
   // The dwell of the link followed ends: the server may answer with another page (a redirect),
   // which a prefetch of the link would fetch again. A read again leaves a dwell over another link.
   if (!again) clearTimeout(hoverTimer);
@@ -3221,8 +3231,23 @@ const submits = new Map();
 /** The forms that have sent a submit ({@link sayFailed}). @type {WeakSet<HTMLFormElement>} */
 const sentFrom = new WeakSet();
 
-/** The visit a marked GET waiting for a write was pressed on, by where it was pressed. @type {WeakMap<Set<string>, number>} */
+/** Whether the visit a marked GET waiting for a write was pressed on is still on screen, by where it was pressed. @type {WeakMap<Set<string>, () => boolean>} */
 const queuedVisits = new WeakMap();
+
+/**
+ * Whether the visit on screen now is still on screen ({@link pageVisit}) on the history entry it
+ * has now: false once the runtime takes a navigation to another page (Back, a link), or the entry
+ * changes without one (Back to a `#id` of the page, a script's `pushState`). A page drawn in
+ * place, the page reading itself again or a `replaceState` keeps both. Pressed while a navigation
+ * to another page is on its way, for none: the page on screen is being left.
+ * @returns {() => boolean}
+ */
+function onThisVisit() {
+  if (navigation?.transition && moving && !moving.aborted) return () => false;
+  const visit = pageVisit;
+  const key = navigation?.currentEntry?.key;
+  return () => visit === pageVisit && key === navigation?.currentEntry?.key;
+}
 
 /** The preference (`Prefer`, RFC 7240) by which a submit says this runtime draws a write's own page whole. */
 const DRAWS_WHOLE = "corten-draws=whole";
@@ -3286,9 +3311,10 @@ function asking(form, submitter) {
  *   for a write's answer, which read it at the press
  */
 async function send(form, submitter, sends, within = asking(form, submitter)) {
-  // A `data-address` GET's answer is the page at its address, for the visit it was sent from; one
-  // sent while a navigation is under way is for none (the page on screen is being left).
-  const origin = sends.method === "get" && hasAttr(form, "data-address") ? (navigation?.transition ? -1 : pageVisit) : undefined;
+  // A `data-address` GET's answer is the page at its address, for the visit it was sent from. One
+  // that comes once the user has left that visit draws nothing and says nothing, as a submit a
+  // navigation cuts off: the page it was for, and the form it would say so on, are gone.
+  const here = sends.method === "get" && hasAttr(form, "data-address") ? onThisVisit() : undefined;
   sentFrom.add(form);
   const turn = turns;
   const data = new FormData(form, submitter);
@@ -3305,7 +3331,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     const waiting = previous.next;
     previous.next = previous.key === key ? undefined : (submitter ?? null);
     previous.nextWithin = within;
-    if (origin !== undefined) queuedVisits.set(within, origin);
+    if (here) queuedVisits.set(within, here);
     if (waiting && waiting !== previous.next && waiting !== previous.by && busyBy.get(waiting) === previous.mine) formCall(waiting, "removeAttribute", "aria-busy");
     if (previous.next) previous.busy.push(previous.next), busyBy.set(previous.next, previous.mine), formCall(previous.next, "setAttribute", "aria-busy", "true");
     return;
@@ -3354,7 +3380,6 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   forget();
   // The writes answered before this one is sent, which its own page, if it answers with one, draws.
   const through = writesIn;
-  const here = origin === undefined ? undefined : () => origin === pageVisit;
   try {
     // A multipart write whose form has an `on:corten:progress` handler goes by XMLHttpRequest, which
     // reports how much of the body is sent; fetch does not. Any other submit is a fetch.
@@ -3425,19 +3450,21 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       if (here && !here()) return;
       renew();
       signal.throwIfAborted();
+      // A marked form's answer drawn whole, a patch or a page, is the page at the address it asked
+      // for (the redirect's, with the `#id` of its action, which fetch leaves out), in place of the
+      // entry's: as the browser's own GET puts it in, without adding an entry. A 5xx is no such page.
+      const done =
+        here && res.status < 500
+          ? () => {
+              const to = res.url + url.hash;
+              // Not if what it drew started another visit (a script that navigates as it connects).
+              if (here() && to !== location.href) history.replaceState(history.state, "", to);
+            }
+          : undefined;
       if (res.headers.has("corten-patch")) {
-        // A marked form's patch drawn whole is the page at the address it asked for (the redirect's,
-        // with the `#id` of its action, which fetch leaves out), in place of the entry's: as the
-        // browser's own GET puts it in, without adding an entry. A 5xx is no such page.
-        const done =
-          here && res.status < 500
-            ? () => {
-                const to = res.url + url.hash;
-                // Not if what it drew started another visit (a script that navigates as it connects).
-                if (here() && to !== location.href) history.replaceState(history.state, "", to);
-              }
-            : undefined;
         await apply(body, signal, sent, res.ok, undefined, undefined, within, here, done);
+        // Dropped, the visit left while it waited for its modules, or left as it drew: nothing more.
+        if (here && !here()) return;
         // In: what it drew is current until a page made before it is drawn over it.
         if (!signal.aborted) undrawn.delete(write);
       } else {
@@ -3446,7 +3473,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
         // own page is whole, as the page a write redirects to is, so what the write changed around
         // `<main>` (a count the layout reads) is drawn as a browser without JavaScript draws it.
         if (res.headers.has("corten-page")) {
-          if (!(await swapPage(body, signal, false, notice, null, undefined, undefined, undefined, here)) && here) return;
+          if (!(await swapPage(body, signal, false, notice, null, undefined, undefined, undefined, here, done)) && here) return;
           announce(notice);
         } else if (await swapDocument(body, signal, notice, false, false, true, { through, write })) announce(notice);
       }
@@ -3568,8 +3595,8 @@ function sayFailed(form, detail, turn) {
  */
 function sendAgain(form, submitter, within) {
   // A marked GET pressed on a visit the page has since left is not sent.
-  const origin = within && queuedVisits.get(within);
-  if (origin !== undefined && origin !== pageVisit) return;
+  const here = within && queuedVisits.get(within);
+  if (here && !here()) return;
   const now = inPlaceOf(form);
   if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
   const all = /** @type {HTMLElement[]} */ (Array.from(formProperty(now, "elements")));
