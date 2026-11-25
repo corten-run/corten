@@ -1,9 +1,12 @@
 // Focused production v2 review controls. Each test builds at most one synthetic roster.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
+import { inspect } from "node:util";
+import { reader, writer } from "./artifacts.mjs";
 import { inspectJson, renderJson } from "./report.mjs";
 import { descriptor, loadConfig, runtimeContext } from "./contract.mjs";
 import { capturePhase } from "./phase.mjs";
@@ -17,6 +20,31 @@ const scratch = (t, name) => {
   t.after(() => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true, force: true }); });
   return folder;
 };
+
+test("saved artifact reference refusals do not reflect keys or digests", async (t) => {
+  const folder = scratch(t, "json-v2-artifact-"), load = reader(folder);
+  const good = writer(folder)("receipt.json", { ok: true });
+  const bytes = { ...good, bytes: Buffer.byteLength(JSON.stringify({ ok: true }, null, 2)) };
+  assert.deepEqual(load(good), { ok: true });
+  assert.deepEqual(JSON.parse(load.bytes(bytes, 512)), { ok: true });
+  const key = "SAVED_ARTIFACT_KEY_CANARY", digest = "f3".repeat(32);
+  const malformed = "SAVED_ARTIFACT_TEXT_CANARY";
+  writeFileSync(join(folder, "invalid.json"), malformed);
+  const invalid = { path: "invalid.json", sha256: createHash("sha256").update(malformed).digest("hex") };
+  const stream = { encoding: "identity", bytes: 1, sha256: digest, events: 1, points: 1, metrics: 1, firstNs: "1", lastNs: "1" };
+  for (const [label, read, canary, message] of [
+    ["JSON key", () => load({ ...good, [key]: true }), key, "artifact reference must bind path and hash"],
+    ["byte key", () => load.bytes({ ...bytes, [key]: true }, 512), key, "raw byte reference required"],
+    ["stream reference key", () => load.stream({ path: good.path, receipt: stream, [key]: true }), key, "full raw stream reference required"],
+    ["JSON digest", () => load({ ...good, sha256: digest }), digest, "raw artifact digest differs"],
+    ["malformed JSON", () => load(invalid), malformed, "invalid raw artifact JSON"],
+    ["byte digest", () => load.bytes({ ...bytes, sha256: digest }, 512), digest, "raw byte digest differs"],
+    ["stream receipt key", () => load.stream({ path: good.path, receipt: { ...stream, [key]: true } }), key, "event fields differ"],
+    ["stream receipt digest", () => load.stream({ path: good.path, receipt: { ...stream, sha256: key } }), key, "raw stream receipt hash required"],
+  ]) await t.test(label, () => {
+    assert.throws(read, (error) => error.message === message && !inspect(error).includes(canary));
+  });
+});
 
 test("review F2: an expired native command keeps its bounded first-line cause, not a later capture assertion", async (t) => {
   const folder = scratch(t, "json-v2-cause-");
@@ -99,6 +127,17 @@ test("load lifetime encloses measured nanoseconds, fixed events and active gener
   const replay = () => replayTimedRun(run, run.identity, args[0], f.load, args[1], args[2], native);
   const derive = (r) => deriveProductionPhase(r, run.identity, "fixed", ...args, { stream, native });
   assert.equal(replay().phases.fixed.targetOutcome, "failed");
+  for (const [role, field, keys] of [["load", "startedAt", ["before"]], ["load", "finishedAt", ["before"]],
+    ["app", "finishedAt", ["before", "after"]], ["upstream", "finishedAt", ["before", "after"]]]) {
+    for (const value of ["0001-01-01T00:00:00Z", "0001-01-01T00:00:00.000000000Z", ["0001-01-01T00:00:00Z"],
+      "not a Docker timestamp", "0001-01-01T00:00:00.000000001Z", raw.after.liveness.load.finishedAt]) {
+      const bad = structuredClone(raw);
+      for (const key of keys) bad[key].liveness[role][field] = value;
+      if (value === "0001-01-01T00:00:00Z" || value === "0001-01-01T00:00:00.000000000Z")
+        assert.equal(derive(bad).targetOutcome, "failed");
+      else assert.throws(() => derive(bad), /clock (?:missing|must be unset)|RFC3339 nanosecond event timestamp required/, `${role} ${field}`);
+    }
+  }
   for (const change of [(s) => { s.liveness.upstream.containerId = s.participants.upstream.containerId = "9".repeat(64); },
     (s) => { s.liveness.upstream.startedAt = new Date(Date.parse(s.liveness.upstream.startedAt) + 1).toISOString(); }]) {
     const bad = structuredClone(raw); change(bad.before); change(bad.after); saved.raw = f.put(bad);
