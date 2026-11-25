@@ -531,7 +531,10 @@ establish a general ranking.
       and headers before measuring, and report any failed requests.
 
       Compare the change in **user plus kernel cycles per request within each pair** against
-      the smallest worthwhile reduction, declared before running. Report the number of pairs,
+      the smallest worthwhile reduction, declared before running. A run's plan, with everything
+      item 2 has declared before a run, is declared when it is posted on its pull request or
+      issue, or pushed under a tag, and names the commits it reads (a change's base and head); a
+      plan older than this sentence on `main` is declared as it was. Report the number of pairs,
       best, median and range, and the per-pair changes. Report the user and kernel split and,
       when adding or moving code, user L1 instruction-cache misses per request as diagnostics.
       The counter records perf's running percentage and requires a reported 100% for every
@@ -552,7 +555,8 @@ establish a general ranking.
       its result, and a plan that made +1% decisive before this exception existed stays bound by
       it. This single-build reading and the CPU-win rule above do not decide a touched workload
       whose single-build bound's distance from its threshold is inside its recorded placement
-      spread, or one read across placements; both are decided as described below.
+      spread or, where none applies, the default band, or one read across placements; both are
+      decided as described below.
 
       A negative control whose bound is at or above +1% but under the layout floor that applies
       to it may go ahead when its user instructions pass a screen: the median of the paired
@@ -644,16 +648,25 @@ establish a general ranking.
       and 3 s turns) and the CPU model (each recorded spread names its own: a Xeon Platinum 8358
       for the first run's two, an 8280 for the second's one). A
       run that differs in any has no recorded spread for the workload
-      until a placement run on its setup records one. The test is one: a single-build bound's
+      until a placement run on its setup records one, and is tested until then against the
+      **default band**: from the lowest low end to the highest high end among the spreads the
+      Choice records, as the Choice prints the band on `main` when the plan is declared (-2.98%
+      to +3.33% today), whatever a later run records and whatever reads the workload,
+      `bench/fullstack/count.mjs` as much as a probe. The test is one: a single-build bound's
       distance from its threshold (the bound less +1% for the margin; the bound plus the smallest
-      worthwhile reduction for a CPU-cost win) is **inside** a spread that applies when it is at
-      or above the spread's lowest and at or below its highest, and **outside** otherwise. Inside
+      worthwhile reduction for a CPU-cost win) is **inside** the spread that applies, or the
+      default band where none does, when it is at
+      or above its lowest and at or below its highest, and **outside** otherwise. Inside
       does not decide, a pass as much as a miss, and a win no more than a loss: the pull request
-      reports it as "inside the placement spread: not decided", which does not pass and claims no
+      reports it as "inside the placement spread: not decided" (or "inside the default band"),
+      which does not pass and claims no
       win, and reads the workload across placements in a run whose plan is written before that
-      run. Outside, or with no spread that applies to the run's setup, the single-build bound is
+      run. Outside, the single-build bound is
       the reading by the rules above, binding by policy, not because placement is shown unable to
-      move it. A workload with no single-build bound (a run that failed, too few pairs)
+      move it. Each threshold a plan declared for a workload, its margin and a reduction, is
+      tested on its own distance: one outside stays as one build read it, whatever a placement
+      run then reads, and that run reads only those left inside.
+      A workload with no single-build bound (a run that failed, too few pairs)
       does not pass, as before, and a control the plan declared keeps
       [design Choice 71](docs/design.md#choice-layout-floor)'s rule. Item 2's other requirements
       apply to a run read across placements as to any other: every counter at 100%; the user and
@@ -704,7 +717,8 @@ establish a general ranking.
          per-pair change B / A - 1 read as A / B - 1), since a list whose placements happened to
          run faster would lower one reading's bound and raise the other's. Its bounds in the two
          readings are what the run can resolve, and its lowest and highest placement median as
-         recorded are the spread the Choice records for the workload. If either bound is at or
+         recorded are the spread the Choice records for the workload, if the plan declares
+         before the run that it records one. If either bound is at or
          above +1%, the workload is **not resolved**, and not resolved does not pass, whatever the
          change's own bound. Only a complete, resolved A/A records or replaces a spread, through a
          pull request that changes the Choice; a run reads the spread recorded in the Choice on
@@ -764,8 +778,10 @@ establish a general ranking.
       fewer than R valid pairs, leaves its comparison with no bound, which does not pass; no
       placement is rerun, replaced or dropped for its result. A layout floor never applies to a
       workload read across placements. A single-build run stays valid, and binding for each
-      workload its plan read that way whose distance from its threshold is outside the spread, by
-      the test above, or that has no spread that applies (a control
+      workload its plan read that way whose distance from its threshold is outside the spread or
+      the default band, by the test above, or that had no spread that applied under a plan
+      declared before the Choice on `main` gave a default band, which the band does not test
+      (a control
       keeps [design Choice 71](docs/design.md#choice-layout-floor)'s rule): a placement
       run declared after it does not clear such a miss. The benefit side may use the same protocol
       if the plan declares it, with its smallest worthwhile reduction, before the run: a CPU-cost

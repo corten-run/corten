@@ -371,6 +371,14 @@ mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
 mutation, permit a retry or authorize cleanup; saved reservations, launch intents
 and the existing settlement/lock rules remain authoritative.
 
+`account-capacity` is a code-only launch refusal: the complete census for the
+verified account reached or exceeded its valid droplet limit. The direct CLI and
+grouped receipt expose neither the limit nor the inventory. This guard stops
+before create intent, POST or bootstrap; it does not free capacity, permit a
+retry or change reservation custody. A malformed limit or a separate refusal
+to cover the reserved fleet does not carry this code. The code does not identify
+the failing guard of an older launch whose receipt lacks it.
+
 Create-link refusals distinguish three consumed-field predicates:
 `create-link-shape` (actions is not an array), `create-link-count` (not exactly one
 entry) and `create-link-id` (missing or invalid positive safe-integer ID).
