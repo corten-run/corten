@@ -13,6 +13,8 @@ import { acknowledgedBootstrapSeal, guardianSha256, guardianSource } from "./clo
 import { verifyControlSetupQuery } from "./cloud-control-session.mjs";
 import { verifyControlWatcher } from "./isolated/control-admission.mjs";
 import { verifyStreamDrain, verifyStreamSeal } from "./isolated/control-stream.mjs";
+import { storageLimits } from "./isolated/host-durable-writer.mjs";
+import { processIdentity } from "./isolated/host-lifetime.mjs";
 import { campaignRounds, jsonPreparationRound, nativeArtifactRoot } from "./registry.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { cancellationState, mixedDigest, mixedWait, originalMixedControls, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
@@ -300,7 +302,7 @@ function exitOneLifetime(directory, state, grouped, campaign, binding, pid, comm
       && (!terminal.terminalClock || terminal.terminalClock.bootId === bootId));
     assert.ok(posix.isAbsolute(parent) && posix.normalize(parent) === parent && posix.basename(parent) === state.unit
       && typeof path === "string" && path.startsWith(parent + "/") && /^native-0-[a-f0-9]{16}$/.test(path.slice(parent.length + 1)));
-    assert.ok(leaderIdentity === undefined || leaderIdentity.pid === pid && /^\d+$/.test(leaderIdentity.startTicks));
+    assert.ok(leaderIdentity?.pid === pid && typeof leaderIdentity.startTicks === "string" && /^\d+$/.test(leaderIdentity.startTicks));
     const ancestors = [];
     for (let p = parent; ; p = posix.dirname(p)) { ancestors.push(p); if (p === "/") break; }
     for (const row of [context, terminal]) assert.ok(isDeepStrictEqual(row.ancestors.map(a => a.path), ancestors));
@@ -308,17 +310,31 @@ function exitOneLifetime(directory, state, grouped, campaign, binding, pid, comm
     for (const key of ["terminal", "code", "signal", "success", "cancelled", "forced", "error"])
       assert.ok(terminal.command[key] === command[key]);
 
-    const samples = regular(join(directory, "samples.jsonl")).toString();
-    assert.ok(samples.endsWith("\n") && Number.isSafeInteger(terminal.samples) && terminal.samples >= 3);
+    const samples = regular(join(directory, "samples.jsonl")), records = new Map();
+    assert.ok(samples.at(-1) === 10 && Number.isSafeInteger(terminal.samples) && terminal.samples >= 3);
+    // The writer's lifetime budget counts samples and each process record once.
+    let remaining = storageLimits.bytes - samples.length;
+    function processRecord(key) {
+      assert.ok(typeof key === "string" && key.length === 64 && /^[a-f0-9]{64}$/.test(key));
+      if (!records.has(key)) {
+        const bytes = regular(join(directory, "processes", key + ".json"), Math.min(1024 * 1024, remaining));
+        remaining -= bytes.length;
+        const { stat, cgroup } = JSON.parse(bytes);
+        const { pid, startTicks } = processIdentity(stat);
+        assert.ok(Number.isSafeInteger(pid) && pid > 0 && typeof cgroup === "string");
+        records.set(key, { pid, startTicks, cgroup });
+      }
+      return records.get(key);
+    }
     let observed = false, last = -1, count = 0;
     for (let start = 0; start < samples.length;) {
-      const end = samples.indexOf("\n", start);
+      const end = samples.indexOf(10, start);
       assert.ok(++count <= terminal.samples);
-      const { at, groups, processes } = JSON.parse(samples.slice(start, end));
+      const { at, groups, processes } = JSON.parse(samples.subarray(start, end));
       start = end + 1;
-      assert.ok(Number.isSafeInteger(at) && at >= last && Array.isArray(processes));
+      assert.ok(Number.isSafeInteger(at) && at >= last && Array.isArray(groups) && Array.isArray(processes));
       last = at;
-      const boundary = count === 1 || start === samples.length, paths = new Set();
+      const boundary = count === 1 || start === samples.length, paths = new Set(), members = new Map();
       if (boundary) assert.ok(processes.length === 0);
       for (const group of groups) {
         const name = group.path, files = group.files;
@@ -326,20 +342,25 @@ function exitOneLifetime(directory, state, grouped, campaign, binding, pid, comm
           && posix.normalize(name) === name && !paths.has(name));
         paths.add(name);
         const pids = files["cgroup.procs"].trim().split("\n").filter(Boolean);
-        assert.ok(pids.every(value => /^[1-9]\d*$/.test(value)));
         if (boundary) assert.ok(!pids.length
           && files["cgroup.events"].split("\n").filter(row => row.startsWith("populated ")).join("\n") === "populated 0");
-        if (!observed && name === path && pids.includes(String(pid))) {
-          observed = processes.some(key => {
-            assert.ok(typeof key === "string" && /^[a-f0-9]{64}$/.test(key));
-            const process = read(`processes/${key}.json`);
-            const stat = /^(\d+) \(.*\) [A-Za-z] (.*)$/.exec(process.stat?.trim() ?? "");
-            return stat?.[1] === String(pid) && (leaderIdentity === undefined || stat[2].split(" ")[18] === leaderIdentity.startTicks)
-              && (process.cgroup === `0::${path}\n` || process.cgroup === `0::${path}`);
-          });
+        for (const value of pids) {
+          const member = Number(value);
+          assert.ok(/^[1-9]\d*$/.test(value) && Number.isSafeInteger(member) && !members.has(member));
+          members.set(member, name);
         }
       }
       assert.ok(paths.has(path));
+      for (const key of processes) {
+        const process = processRecord(key), member = members.get(process.pid);
+        assert.ok(member !== undefined && (process.cgroup === `0::${member}\n` || process.cgroup === `0::${member}`));
+        members.delete(process.pid);
+        if (process.pid === pid) {
+          assert.equal(process.startTicks, leaderIdentity.startTicks);
+          observed ||= member === path;
+        }
+      }
+      assert.ok(members.size === 0);
     }
     assert.ok(count === terminal.samples && observed);
   } catch {

@@ -1320,9 +1320,10 @@ requires a source-bound raw exit 1, a finished failed group (not a native-valida
 group), an intact collection manifest and stream seal/drain, and the complete
 r78 journal from authorization and bootstrap admission through the observed
 command exit, phase seal and campaign finish. The sealed host observation must
-name the same campaign, invocation, leader, registered boot and delegated
-cgroup. Its samples must show the leader in that group between empty boundary
-samples. No pending native roots, validation, deletion intent or competing
+name the same campaign, invocation, leader PID and start ticks, registered boot
+and delegated cgroup. Its samples must show that leader in that group between
+empty boundary samples, with each recorded process in only one cgroup per
+sample. No pending native roots, validation, deletion intent or competing
 custody may remain. This checks the command lifecycle, not renderer or native
 qualification. It compares the original tar members to the bound extraction
 before contacting the host.
@@ -1346,9 +1347,10 @@ checks permit at most one dispatched DELETE; only an authenticated exact-ID 404
 on the saved account records completion. If DELETE dispatch or acknowledgement
 is uncertain but the operation lock settled, preview again at the same repair
 commit. Require operation `reconcile-absence-only` and approve that new hash;
-it may only check absence, with no SSH or repeat DELETE. If local custody drifts
-while settling a published intent, keep the operation lock and leave absence
-unrecorded, even if the provider read itself throws. An unexplained prior
+it may only check absence, with no SSH or repeat DELETE. The same local custody
+check runs after the provider worker closes, before publishing absence or
+releasing the operation lock. If custody drifts, keep the lock and leave new
+absence unrecorded, even if the provider read itself throws. An unexplained prior
 receipt without its intent, interrupted publication or retained lock requires
 operator inspection, never automatic takeover. Fleet and continuation treat
 the attempt as unqualified and do not admit a successor before confirmed

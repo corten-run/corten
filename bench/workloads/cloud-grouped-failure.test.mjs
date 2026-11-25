@@ -112,7 +112,7 @@ function fixture(t, group, flags = {}) {
     const host = {
       "binding.json": { schema: "benchmark-isolated-host-lifetime/v1", campaign: campaignId, group, round: "w78", commit: measured,
         bindingSha256: deploymentSha256(plan.bindings[0]), invocation: plan.bindings[0].execution.invocation, bootId: reg.host.bootId,
-        parent, path, command: 0, leaderPid: 2000, leaderIdentity: { pid: 2000, startTicks: "1234" }, ancestors },
+        parent, path, command: 0, leaderPid: 2000, leaderIdentity: { pid: 2000, startTicks: "1234", comm: "node" }, ancestors },
       "terminal.json": { terminal: true, attached: true, empty: true, command: exit, bootId: reg.host.bootId, ancestors, samples: 3 },
       "samples.jsonl": [false, true, false].map((live, at) => ({ at, processes: live ? ["a".repeat(64)] : [],
         groups: [{ path, files: { "cgroup.procs": live ? "2000\n" : "", "cgroup.events": live ? "populated 1\n" : "populated 0\n" } }] })),
@@ -529,15 +529,35 @@ test("exit-one refuses rehashed missing or contradictory host lifetime observati
     ["no binding", host => { delete host["binding.json"]; }],
     ["no samples", host => { delete host["samples.jsonl"]; }],
     ["unrelated boot", host => { host["terminal.json"].bootId = "f".repeat(36); }],
+    ["missing leader start identity", host => { delete host["binding.json"].leaderIdentity; }],
+    ["wrong leader start ticks", host => { host["binding.json"].leaderIdentity.startTicks = "9999"; }],
     ["no observed leader", host => { host["samples.jsonl"][1].groups[0].files["cgroup.procs"] = "2001\n"; }],
     ["leader record outside the command", host => { host[`processes/${"a".repeat(64)}.json`].cgroup = "0::/other\n"; }],
     ["unrelated sample cgroup", host => { host["samples.jsonl"][1].groups[0].path += "-other"; }],
+    ["leader listed in two cgroups", host => {
+      const sample = host["samples.jsonl"][1], duplicate = structuredClone(sample.groups[0]);
+      duplicate.path += "/other"; sample.groups.push(duplicate);
+    }],
+    ["malformed reference after a valid leader", host => {
+      host["samples.jsonl"][1].processes.push("../terminal");
+    }],
   ]) await t.test(kind, async (t) => {
     const { f, preview, launched } = await handoffFixture(t, { exitOne: true, editHost });
     await assert.rejects(preview(), /exit-one command journal/);
     assert.deepEqual(launched, []);
     assert.equal(f.h.deletes, 0);
   });
+});
+
+test("exit-one accepts repeated references to the same process across samples", async (t) => {
+  const { preview, launched } = await handoffFixture(t, { exitOne: true, editHost(host) {
+    const samples = host["samples.jsonl"];
+    samples.splice(2, 0, { ...structuredClone(samples[1]), at: 2 });
+    samples[3].at = 3;
+    host["terminal.json"].samples = 4;
+  } });
+  assert.equal((await preview()).recovery.operation, "observe-terminal-and-retire");
+  assert.deepEqual(launched, []);
 });
 
 test("exit-one retains the operation lock when custody changes after DELETE dispatch", async (t) => {
@@ -562,6 +582,37 @@ test("exit-one retains the operation lock when custody changes after DELETE disp
     assert.deepEqual(readFileSync(join(h.local, "operation.lock")), ownedLock);
     if (mode === "absence-only collect")
       assert.ok(launched.slice(before).every((row) => row[0] === "provider" && row.includes("get")));
+  });
+});
+
+test("exit-one retains custody when evidence changes during provider close", async (t) => {
+  for (const mode of ["normal DELETE", "absence-only", "uncertain DELETE", "unsent DELETE"]) await t.test(mode, async (t) => {
+    const { f, preview, retire, knobs, launched } = await handoffFixture(t,
+      { exitOne: true, deleteLost: mode === "uncertain DELETE" || mode === "absence-only" });
+    const { h } = f, lock = join(h.local, "operation.lock");
+    if (mode === "absence-only") await assert.rejects(retire(await preview()), /acknowledgement lost/);
+    const approved = await preview(), before = launched.length;
+    if (mode === "unsent DELETE") knobs.unsent = true;
+    let held, destroyedAtDuringClose;
+    knobs.close = () => {
+      delete knobs.close;
+      held = readFileSync(lock);
+      const saved = h.saved();
+      destroyedAtDuringClose = saved.destroyedAt;
+      const path = mode === "absence-only" ? join(saved.evidence, "run.log")
+        : mode === "uncertain DELETE" ? "failed-native-host.json" : "results.tgz";
+      appendFileSync(join(h.local, path), "close-time drift");
+    };
+    await assert.rejects(retire(approved), mode === "uncertain DELETE" ? /exit-one receipt replaced/ : /custody changed/);
+    assert.ok(held);
+    assert.equal(destroyedAtDuringClose, undefined);
+    assert.equal(h.saved().destroyedAt, undefined);
+    assert.equal(h.deletes, mode === "unsent DELETE" ? 0 : 1);
+    assert.equal(!!h.saved().deletionIntentAt, mode !== "unsent DELETE");
+    assert.deepEqual(readFileSync(lock), held);
+    if (mode === "absence-only")
+      assert.ok(launched.slice(before).every(row => row[0] === "provider" && row.includes("get")));
+    await assert.rejects(preview(), /competing or retained custody/);
   });
 });
 

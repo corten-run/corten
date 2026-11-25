@@ -88,7 +88,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const groupedHandoff = recoveryApproval?.policy === handoffRetirementPolicy;
   const groupedExitOne = recoveryApproval?.policy === failedExitOnePolicy, pinnedRetirement = groupedHandoff || groupedExitOne;
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
-  let assertHandoffLock, assertHandoffCustody, handoffReceiptSha256, expectedHandoffState;
+  let assertHandoffLock, assertHandoffCustody, handoffReceiptSha256, expectedHandoffState, afterSettle;
   let exitOneFenceFinishedAtMs;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
@@ -789,7 +789,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       }
       finally {
         if (!preserveOperationLock) {
-          if (expectedHandoffState !== undefined) assertHandoffState();
+          if (afterSettle) afterSettle();
+          else if (expectedHandoffState !== undefined) assertHandoffState();
           else assertHandoffLock?.();
           unlinkSync(lock); syncDirectory(local);
         }
@@ -1112,39 +1113,41 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(launchIntentSha256, recovery.intent.launch, "approved exit-one launch changed");
       assert.equal(fleetManifestSha256, recovery.fleetManifestSha256, "approved exit-one fleet changed");
     };
-    const settle = async (dispatch) => {
-      try {
-        if (dispatch) await dispatch();
+    let absenceConfirmedAt;
+    const pin = (assertCustody, receiptSha256) => {
+      assertHandoffCustody = assertCustody;
+      handoffReceiptSha256 = receiptSha256;
+      afterSettle = () => {
         checkHandoffDelete();
-        await confirmDeleted();
-        checkHandoffDelete();
-        if (!state.destroyedAt) { state.destroyedAt = new Date().toISOString(); save(); }
-        return 1;
-      } catch (error) {
-        // A failed provider call can hide a concurrent loss of custody. Once
-        // intent is durable, release only if the exact evidence is still ours.
-        if (state.deletionIntentAt) {
-          try { checkHandoffDelete(); }
-          catch { preserveOperationLock = true; }
+        if (absenceConfirmedAt !== undefined && !state.destroyedAt) {
+          state.destroyedAt = absenceConfirmedAt;
+          save();
         }
-        throw error;
-      }
+      };
+    };
+    const settleAbsence = async (dispatch) => {
+      if (dispatch) await dispatch();
+      checkHandoffDelete();
+      await confirmDeleted();
+      checkHandoffDelete();
+      absenceConfirmedAt = new Date().toISOString();
+      return 1;
     };
     if (state.status === "retired") {
       const { record, assertCustody } = verifyFailedExitOneRetirement(local, state, state.retirement.evidenceSha256, true);
       assert.equal(record.controllerCommit, controllerCommit, "original exit-one retirement controller required");
       assertLaunch(record);
-      assertHandoffCustody = assertCustody;
-      handoffReceiptSha256 = state.retirement.evidenceSha256;
-      return settle();
+      pin(assertCustody, state.retirement.evidenceSha256);
+      return settleAbsence();
     }
     assert.notEqual(controllerCommit, state.commit, "repair source must be distinct from measured source");
     const custody = verifyFailedExitOneCustody(local, state, { pin: true });
+    pin(custody.assertCustody);
     assertLaunch(custody);
     const { grouped, launchIntentSha256, fleetManifestSha256 } = custody;
     const evidenceFingerprint = exitOneEvidenceFingerprint(local, state);
     await verifyArchiveTree(archive, join(local, state.evidence), state.archiveSha256);
-    check(); assertHandoffState(); custody.assertCustody();
+    check(); checkHandoffDelete();
     const probe = async (first) => {
       const script = failedNativeScript(state, first?.snapshotSha256 ?? null, first ?? null, grouped);
       const response = await ssh(script, first ? 60000 : 11 * 60000);
@@ -1153,11 +1156,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         proof: failedExitOneObservation(response.stdout, state, startedAtMs, finishedAtMs, custody) };
     };
     const observation = await probe();
-    custody.assertCustody(); assertHandoffState();
+    checkHandoffDelete();
     const fence = await probe(observation.proof);
     const withoutTime = ({ observedAtMs, ...rest }) => rest;
     assert.deepEqual(withoutTime(fence.proof), withoutTime(observation.proof), "exit-one proof changed before deletion");
-    await own(); check(); assertHandoffState(); custody.assertCustody();
+    await own(); check(); checkHandoffDelete();
     const expiry = fence.startedAtMs + 60000;
     exitOneFenceFinishedAtMs = fence.finishedAtMs;
     const fresh = () => {
@@ -1178,19 +1181,18 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       publishIntent() {
         // execute has finished the account preflight. Until here a failed
         // read or an expired fence leaves neither intent nor retirement files.
-        assertHandoffState(); custody.assertCustody();
+        checkHandoffDelete();
         const deletionIntentAt = fresh();
         durable(originalPath, original);
         durable(receiptPath, bytes);
         const originalSnapshot = handoffStateSnapshot(originalPath), receiptSnapshot = handoffStateSnapshot(receiptPath);
         assert.ok(originalSnapshot.bytes.equals(original), "exit-one reservation copy changed");
-        assertHandoffCustody = (includeTree) => {
+        pin((includeTree) => {
           custody.assertCustody(includeTree, true);
           const current = handoffStateSnapshot(originalPath);
           assert.ok(current.bytes.equals(original) && sameStateVersion(current.stat, originalSnapshot.stat), "exit-one reservation copy changed");
           assert.ok(sameStateVersion(lstatSync(receiptPath, { bigint: true }), receiptSnapshot.stat), "exit-one receipt replaced");
-        };
-        handoffReceiptSha256 = pendingDeleteSha256;
+        }, pendingDeleteSha256);
         checkHandoffDelete(false);
         Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: handoffReceiptSha256 }, deletionIntentAt });
         writeState(state);
@@ -1208,10 +1210,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         writeState(state);
         checkHandoffDelete(false);
         unlinkSync(receiptPath); unlinkSync(originalPath); syncDirectory(local);
+        pin(custody.assertCustody);
         preserveOperationLock = alreadyUncertain;
       },
     };
-    return settle(() => execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, true, deletion));
+    return settleAbsence(() => execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, true, deletion));
   }
   return {
     get state() { return state ? structuredClone(state) : undefined; }, local,
