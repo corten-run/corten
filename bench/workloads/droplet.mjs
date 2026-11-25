@@ -11,7 +11,7 @@ import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remot
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash, withVerifiedArchive } from "./cloud-local.mjs";
 import { campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
-import { inspectCampaign } from "./cloud-validation.mjs";
+import { collectRefusal, inspectCampaign } from "./cloud-validation.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
@@ -787,21 +787,32 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   async function validateEvidence() {
     state.fullGroupQualified = false;
-    const extracted = join(local, state.evidence); physical(extracted);
-    assert.equal(treeHash(extracted), state.evidenceSha256, "evidence changed; preserve host");
-    const markerBytes = regular(join(extracted, "exit-code"), 16);
-    assert.ok(markerBytes.every((b) => b < 128), "invalid exit marker bytes");
-    const marker = markerBytes.toString("ascii");
-    full(marker, /(?:0|[1-9]\d{0,2})\n/, "invalid exit marker");
-    const exitCode = Number(marker.trim()); assert.ok(exitCode <= 255);
+    let extracted, exitCode;
+    try {
+      extracted = join(local, state.evidence); physical(extracted);
+      assert.equal(treeHash(extracted), state.evidenceSha256, "evidence changed; preserve host");
+      const markerBytes = regular(join(extracted, "exit-code"), 16);
+      assert.ok(markerBytes.every((b) => b < 128), "invalid exit marker bytes");
+      const marker = markerBytes.toString("ascii");
+      full(marker, /(?:0|[1-9]\d{0,2})\n/, "invalid exit marker");
+      exitCode = Number(marker.trim()); assert.ok(exitCode <= 255);
+    } catch (error) {
+      // Keep the local error for in-process callers; the public boundary only emits the stage.
+      throw Object.assign(error, { controllerStage: "collect-native-evidence-refused" });
+    }
     let report;
     let outcome;
     try {
       if (state.fleet?.single?.offlineHandoff) assert.ok(offlineBootstrapAck(), "offline bootstrap acknowledgement missing");
-      report = await inspectCampaign(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }), {
-        ...(options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect }),
-        interrupted, preserveLock: () => { preserveOperationLock = true; },
-      });
+    } catch { throw collectRefusal("collect-native-report-refused"); }
+    let replay;
+    try {
+      replay = options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect };
+    } catch { throw collectRefusal("collect-native-replay-start"); }
+    report = await inspectCampaign(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }), {
+      ...replay, interrupted, preserveLock: () => { preserveOperationLock = true; },
+    });
+    try {
       check();
       assert.ok(state.control?.monitor?.phase !== "invalid" || report.status !== "verified", "lost monitor cannot qualify");
       outcome = campaignOutcome(report, state, exitCode);
@@ -811,9 +822,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         assert.equal(terminal.nativeTerminal, true); assert.equal(terminal.campaign, report.campaign);
         assert.equal(terminal.sealSha256, report.supervisedTerminal.sealSha256);
       }
-    } catch { throw new Error("native campaign validation unavailable or invalid; evidence/host preserved"); }
+    } catch { throw collectRefusal("collect-native-report-refused"); }
     // Never retain/print native assertion messages: they may contain private raw values.
-    assert.equal(treeHash(extracted), state.evidenceSha256, "validator mutated evidence"); verifyArchive();
+    try {
+      assert.equal(treeHash(extracted), state.evidenceSha256, "validator mutated evidence"); verifyArchive();
+    } catch (error) {
+      throw Object.assign(error, { controllerStage: "collect-native-evidence-refused" });
+    }
     Object.assign(state, outcome, { exitCode, validation: { status: report.status, campaign: report.campaign, collectionIntegrity: report.collectionIntegrity } });
   }
   const deletedCode = () => state.validation.status === "verified" && state.exitCode === 0 ? 0 : 1; // Intrinsic evidence only, never readiness.
