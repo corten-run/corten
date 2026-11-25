@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { rng } from "./model.mjs";
+import { gauss, rng } from "./model.mjs";
 import { DRAWS, eligibility, failing, LIMIT, SEED, sizeByRule } from "./pilot.mjs";
 import { shuffled } from "./schedule.mjs";
 import { readPilot } from "./size.mjs";
@@ -112,6 +112,11 @@ test("eligibility: complete, no drift over the run's order, zero inside the inte
   // All of them above zero: zero is outside the interval.
   const off = eligibility({ complete: true, medians: mixed.map((x) => x + 0.02) });
   assert.deepEqual([off.zero.inside, off.eligible], [false, false]);
+  // The normal model is kept unless a test rejects normality at 5%: forty normal draws keep
+  // both models, and the same draws skewed keep the smoothed resample alone.
+  const u = rng(5), bell = Array.from({ length: 40 }, () => 0.005 * gauss(u));
+  assert.deepEqual(eligibility({ complete: true, medians: bell }).models, ["normal", "smoothed"]);
+  assert.deepEqual(eligibility({ complete: true, medians: bell.map((x) => Math.exp(400 * x) / 100) }).models, ["smoothed"]);
 });
 
 // The fourth run's A/A (tag evidence/placement-sizing-1999, results/aa-old, 100 placements of 8
@@ -149,4 +154,10 @@ test("the sizing check gives the counts the Choice quotes from the fourth run's 
   const none = sizeByRule(pilot, e.models, { from: 70, to: 70 });
   assert.equal(none.K, null);
   assert.deepEqual(none.tried, [{ K: 70, counts: [{ model: "smoothed", failing: 12134, rank: 43 }] }]);
+  // Under each model kept: at 69 the smoothed resample passes and the normal model does not, so
+  // were both kept 69 would not be a K. Each K tried is handed on as the scan goes.
+  const seen = [], both = sizeByRule(pilot, ["normal", "smoothed"], { from: 69, to: 69, each: (t) => seen.push(t.K) });
+  assert.deepEqual(both.tried[0].counts.map((c) => c.failing <= LIMIT), [false, true]);
+  assert.equal(both.K, null);
+  assert.deepEqual(seen, [69]);
 });

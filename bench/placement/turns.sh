@@ -7,27 +7,28 @@
 # Usage: turns.sh <out dir> <workload> <pairs> <binary A> <binary B>
 # Environment, all of it the work directory's plan (run.sh and verify.sh set it):
 #   KIT         this directory
-#   START       the command that serves HTTP on 127.0.0.1:$PORT from $BIN, run under taskset
+#   START       the command that serves HTTP on 127.0.0.1:$PORT from $BIN, run under taskset with
+#               an environment of PATH, HOME, PORT and BIN alone (env -i)
 #   REQ_PATH    the request's path; HEADERS, a file of its header lines, one a line
 #   SCRIPT      the wrk script, whose done() prints
 #               "RESULT <requests> <connect> <read> <write> <status> <timeout>" (get.lua)
 #   MASK        the sed script that masks the header values the plan names; MASK_JSON, the plan's
-#               mask, for the values it states (mask.mjs)
+#               mask, for the ranges it states (mask.mjs)
 #   STATUS      the status every compared answer must have
 #   EXPECT      empty, or a file holding the exact text of answers/diff.txt that the change makes
 #               by design; without it A and B must answer the same
 #   WARMUP      unrecorded pairs before the recorded ones
 #   TURN        seconds of load in a turn; WRK_T and WRK_C, wrk's threads and connections
 #   CPU_SERVER  the CPU every server is pinned to; CPU_LOAD, wrk's CPUs
-#   EVENTS      the perf events counted over each turn; every one must be counted once, numeric
-#               and running 100% of the turn
+#   EVENTS      the perf events counted over each turn; every one must be counted once, a count
+#               above zero, and running 100% of the turn
 # A compared answer is the status line, every header line but Date after MASK, and the body as
 # received, byte for byte. A turn in which wrk reports an error of any kind, or a counter is
-# missing, not a number or under 100%, fails the placement and records nothing.
+# missing, not a number, zero or under 100%, fails the placement and records nothing.
 # Writes <out dir>/counts-<workload>.csv (pair,version,requests and a column per event),
 # raw-<workload>.log (every turn's perf and wrk output), answers/ and serve-{A,B}.log.
 set -eu
-[ $# -eq 5 ] || { sed -n '2,26p' "$0"; exit 2; }
+[ $# -eq 5 ] || { sed -n '2,27p' "$0"; exit 2; }
 out=$1; workload=$2; pairs=$3; abin=$4; bbin=$5
 status=$STATUS; warmup=$WARMUP; secs=$TURN; mask=$MASK; events=$EVENTS; cpu=$CPU_SERVER; load=$CPU_LOAD; path=$REQ_PATH
 columns=$(echo "$events" | tr ',' '\n' | sed 's/[^A-Za-z0-9]/_/g' | paste -sd, -)
@@ -36,8 +37,8 @@ csv=$out/counts-$workload.csv; raw=$out/raw-$workload.log; ans=$out/answers
 rm -rf "$ans"; mkdir -p "$ans"; : >"$raw"
 fail() { echo "turns: $workload: $*" >&2; exit 1; }
 
-start() { # <A|B> <port> <binary>; the server's pid is then $!
-    PORT=$2 BIN=$3 taskset -c "$cpu" sh -c "exec $START" >/dev/null 2>>"$out/serve-$1.log" &
+start() { # <A|B> <port> <binary>; the server's pid is then $!. Its environment is PATH, HOME, PORT and BIN and what the plan's start command sets, none of the caller's.
+    env -i PATH="$PATH" HOME="$HOME" PORT="$2" BIN="$3" taskset -c "$cpu" sh -c "exec $START" >/dev/null 2>>"$out/serve-$1.log" &
 }
 aport=18081; bport=18082
 for port in $aport $bport; do
@@ -83,7 +84,7 @@ answer $bport "$ans/B"
 for f in "$ans/A.headers" "$ans/B.headers"; do
     head -1 "$f" | grep -q "^HTTP/[0-9.]* $status " || fail "$(head -1 "$f") in $f, not status $status"
 done
-node "$KIT/mask.mjs" stated "$MASK_JSON" "$ans/A.raw-headers" "$ans/A-again.raw-headers" "$ans/B.raw-headers" || fail "a masked header is not what the plan states"
+node "$KIT/mask.mjs" stated "$MASK_JSON" "$ans/A.raw-headers" "$ans/A-again.raw-headers" "$ans/B.raw-headers" || fail "a masked header is not within the range the plan states"
 cmp -s "$ans/A.headers" "$ans/A-again.headers" || fail "two answers of A differ in their headers after the mask: $ans/A*.headers"
 cmp -s "$ans/A.body" "$ans/A-again.body" || fail "two answers of A differ in their bodies: $ans/A*.body"
 diffs=$ans/diff.txt
@@ -121,7 +122,7 @@ turn() { # <pair> <base|head>: A's turns are the CSV's base rows, B's its head r
         sel='BEGIN { n = e; sub(/:u$/, "", n) } $3 == e || $3 == n'
         [ "$(awk -F, -v e="$ev" "$sel" "$out/turn.perf" | wc -l)" = 1 ] || fail "$ev not reported once in pair $pair_ $version_: $(cat "$out/turn.perf")"
         v=$(awk -F, -v e="$ev" "$sel { print \$1 }" "$out/turn.perf")
-        case "$v" in ''|*[!0-9]*) fail "unusable counter $ev in pair $pair_ $version_: $(cat "$out/turn.perf")";; esac
+        case "$v" in ''|0|*[!0-9]*) fail "unusable counter $ev in pair $pair_ $version_ (not a count above zero): $(cat "$out/turn.perf")";; esac
         pct=$(awk -F, -v e="$ev" "$sel { print \$5 }" "$out/turn.perf")
         [ "$(awk -v p="$pct" 'BEGIN { print (p + 0 >= 100) }')" = 1 ] || fail "counter under 100% in pair $pair_ $version_: $ev $pct"
         values="$values,$v"

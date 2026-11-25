@@ -158,6 +158,10 @@ test("a made-up side: its record, origins less directories, and nothing refused"
   assert.deepEqual(refusals(lay(UNPADDED)), []);
   // Rust code after the first aligned section, and in another output section.
   has(refusals(lay([...UNPADDED, S("/t/release/deps/probe.probe.0.rcgu.o", ".text._ZN5probe4late17h0123456789abcdefE", 10, 16)])), "at or after the first section aligned beyond 16 bytes");
+  // "At or after": a Rust-named section that is itself the first one aligned beyond 16 bytes,
+  // with Rust code before it, which is not refused, and none after.
+  const itself = refusals(lay([...UNPADDED.slice(0, 3), S("/t/release/deps/probe.probe.0.rcgu.o", ".text._ZN5probe4fast17h0123456789abcdefE", 64, 32), UNPADDED[5]]));
+  assert.deepEqual(itself, [".text._ZN5probe4fast17h0123456789abcdefE [probe.probe.0.rcgu.o] is named for a Rust-mangled symbol and lies at or after the first section aligned beyond 16 bytes"]);
   assert.throws(() => record(readMap("no map\n")), /no \.text/);
 });
 
@@ -201,6 +205,14 @@ test("the map check refuses each way a placement can differ from its unpadded li
   has(why(placed(p, n, UNPADDED, { textAt: 0x202000 })), ".text begins at 0x202000, not 0x201000");
   // A size that is none of the four, though it puts .data where the rule says.
   has(why(placed(p, n + 64), n + 64), `a second pad of ${n + 64} bytes is not one of`);
+  // A section of the same name, size and alignment from another file.
+  has(why(placed(p, n, UNPADDED.map((s, i) => (i === 5 ? { ...s, file: "/t/release/build/z/out/libz.a(crc.o)" } : s)))), "input section 5 differs: /t/release/build/c/out/libc.a(crc.o):(.text.crc)");
+  // The first pad first in .text, of its size, and 16 bytes past .text's start.
+  has(why(placed(p, n, UNPADDED, { nudge: (i) => (i === 0 ? 16 : 0) })), `not the first pad of ${p} bytes at its start`);
+  // The second pad last, of its size, and aligned beyond 16 bytes.
+  has(why(lay([pad(p), ...UNPADDED, { ...pad2(n), align: 32 }])), `not the second pad of ${n} bytes aligned to 16`);
+  // An unpadded link that LLD's rule does not give: the check stands on both maps.
+  has(check(lay(UNPADDED, { nudge: (i) => (i === 2 ? 16 : 0) }), placed(p, n), p, n).why, "1 input sections of the unpadded .text do not begin at the first multiple");
 });
 
 // The first point's check, from nm's symbols.
@@ -230,4 +242,8 @@ test("a placement's functions: its side's and the pad, the pad first, each moved
   assert.deepEqual(why(two, 320, true), []);
   has(why(two), "only in the placement");
   has(why([["corten_layout_pad", at], ...moved(320)], 320, true), "not corten_layout_pad and corten_layout_pad2");
+  // A name defined more than once has no one address: it is counted and left out of the shift.
+  const named = [...FNS, ["helper", 0x201900], ["helper", 0x201a00]];
+  const twice = compare(symbols(nm(named)), symbols(nm([["corten_layout_pad", at], ...moved(320, named.slice(0, 5)), ["helper", 0x209000]])), at, 320);
+  assert.deepEqual([twice.ok, twice.functions, twice.repeated], [true, 4, 1]);
 });

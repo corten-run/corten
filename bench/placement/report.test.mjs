@@ -2,7 +2,8 @@
 // a workload is reported in (CONTRIBUTING.md, Pull requests, item 2) and what is refused.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
@@ -10,10 +11,12 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { readMap, record } from "./map.mjs";
 import { problems as maskProblems, sed, starts, stated, values } from "./mask.mjs";
-import { rng } from "./model.mjs";
-import { declaration, problems, resolve } from "./plan.mjs";
+import { gauss, rng } from "./model.mjs";
+import { pads } from "./pads.mjs";
+import { LIMIT } from "./pilot.mjs";
+import { declaration, inputs, problems, resolve } from "./plan.mjs";
 import { report, sizing } from "./report.mjs";
-import { shuffled, sides } from "./schedule.mjs";
+import { schedule, shuffled, sides } from "./schedule.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const EXAMPLE = JSON.parse(readFileSync(join(here, "example", "plan.json"), "utf8"));
@@ -51,6 +54,21 @@ test("the example plan is usable, and each field that is not is named", () => {
   bad((p) => { p.workloads[0].reads = ["margin", "reduction"]; }, "reads the reduction and declares none");
   bad((p) => { delete p.workloads[0].recordsSpread; }, "recordsSpread");
   assert.deepEqual(problems(plan((p) => { p.pilot = { K: 60, why: "the setup's last pilot spread 0.6%" }; p.workloads[0].reduction = 0.02; })), []);
+  // A K given as a number says which A/A it was sized from; a K from the pilot has nothing to say.
+  bad((p) => { p.workloads[0].K = 30; }, "sizedFrom, which eligible A/A a K given as a number was sized from");
+  bad((p) => { p.workloads[0].sizedFrom = "the last run's A/A"; }, "and only with such a K");
+  assert.deepEqual(problems(plan((p) => { p.workloads[0].K = 30; p.workloads[0].sizedFrom = "aa-plain of run 0f8fad5b, under the tag evidence/x"; })), []);
+  // A field the kit does not read is refused: a misspelled field is not a field left out.
+  bad((p) => { p.extra = 1; }, 'the plan: "extra" is not a field of a plan');
+  bad((p) => { p.probe.environment = {}; }, 'probe: "environment" is not a field of a plan');
+  bad((p) => { p.host.cpu = "x"; }, 'host: "cpu" is not a field of a plan');
+  bad((p) => { p.host.cpus.spare = 9; }, 'host.cpus: "spare" is not a field of a plan');
+  bad((p) => { p.load.duration = 3; }, 'load: "duration" is not a field of a plan');
+  bad((p) => { p.pilot.reason = "x"; }, 'pilot: "reason" is not a field of a plan');
+  bad((p) => { p.workloads[0].starts = "$BIN $PORT"; }, 'workload plain: "starts" is not a field of a plan');
+  bad((p) => { p.workloads[0].expects = "expect.txt"; }, 'workload plain: "expects" is not a field of a plan');
+  bad((p) => { p.workloads[0].request.method = "POST"; }, 'workload plain: request: "method" is not a field of a plan');
+  bad((p) => { p.workloads[0].mask = [{ header: "age", value: "3" }]; }, "age has a field other than header and range");
 });
 
 test("a part's numbers come from the plan: K, the rank, the pad lists, the order", () => {
@@ -71,48 +89,64 @@ test("a part's numbers come from the plan: K, the rank, the pad lists, the order
   assert.ok(declaration(dry)[0].includes("DRY RUN"));
   assert.throws(() => resolve(EXAMPLE, "gated", "other"));
   assert.throws(() => resolve(plan((p) => { delete p.pilot; p.workloads[0].K = 30; }), "pilot", "plain"), /no pilot/);
+  // A number for K is declared with what the plan says it was sized from.
+  assert.ok(declaration(resolve(plan((p) => { p.workloads[0].K = 30; p.workloads[0].sizedFrom = "aa-plain of run 0f8fad5b"; }), "gated", "plain"))[0].includes("K = 30 placements (the plan's number, which it says was sized from: aa-plain of run 0f8fad5b), R = 8"));
+  // Lists that miss the fourth point's rule are refused, whatever made them.
+  const twice = (K) => { const { P, Q } = pads(K); return { P, Q: [P[1], ...Q.slice(1)] }; };
+  assert.throws(() => resolve(EXAMPLE, "pilot", "plain", { lists: twice }), /the pad lists for K = 100 miss the fourth point's rule: a size repeats/);
 });
 
-test("the mask: only named headers, each differing between two starts or held to its stated value", () => {
+test("the mask: only named headers, each differing between two starts, one with a range held to it as well", () => {
   const one = "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\nETag: W/\"abc\"\r\nage: 3\r\n\r\n", two = one.replace("abc", "def");
   assert.deepEqual(values(one, "etag"), ['W/"abc"']);
   assert.equal(sed([{ header: "ETag" }]), "s/^[Ee][Tt][Aa][Gg]:.*$/etag: <masked>/\n");
   assert.deepEqual(starts([{ header: "etag" }], one, two), []);
   has(starts([{ header: "etag" }], one, one), "only a value that differs between starts is masked");
   has(starts([{ header: "x-key" }], one, two), "sent it 0 and 0 times");
-  // A value the cost depends on is checked against the plan's range or value, not accepted as any number.
-  assert.deepEqual(starts([{ header: "age", range: [0, 3] }], one, one), []);
+  // A value the cost depends on is masked only if it differs between starts too, and is then
+  // checked against the plan's range, not accepted as any number.
+  has(starts([{ header: "age", range: [0, 3] }], one, two), 'age: two starts of one binary both sent "3"; only a value that differs between starts is masked');
+  assert.deepEqual(starts([{ header: "age", range: [0, 3] }], one, one.replace("age: 3", "age: 2")), []);
   assert.deepEqual(stated([{ header: "age", range: [0, 3] }], one), []);
   has(stated([{ header: "age", range: [0, 2] }], one), '"3", not a number from 0 to 2');
-  has(stated([{ header: "age", value: "4" }], one), '"3", not "4"');
+  has(stated([{ header: "age", range: [0, 3] }], one.replace("age: 3", "age: soon")), '"soon", not a number from 0 to 3');
   has(stated([{ header: "age", range: [0, 3] }], "HTTP/1.1 200 OK\r\n\r\n"), "sent 0 times, not once");
   has(maskProblems([{ header: "age", range: [3, 0] }]), "range");
+  // One stated value cannot differ between two starts, so the kit takes a range alone.
+  has(maskProblems([{ header: "age", value: "3" }]), "a field other than header and range");
   has(maskProblems([{ header: "etag" }, { header: "ETag" }]), "named twice");
   assert.deepEqual(maskProblems([]), []);
 });
 
 // Results as run.sh leaves them, for a plan with K = 5 and R = 2 (the bound is the 5th of 5, the
-// largest placement median, and the lower bound the smallest). change(c, i) is the change every
-// pair of placement i of comparison c shows.
+// largest placement median, and the lower bound the smallest) and a pilot of 30. change(c, i) is
+// the change every pair of placement i of comparison c shows: a number, for user and kernel
+// cycles alike, or { u, k } for each. sizedFrom: results given to plan.mjs as --sized-from; dry:
+// the dry run's variables (DRY_K and the others); model: the host's CPU model.
 const row = (at, size, align, rest) => `${at.toString(16)} ${at.toString(16)} ${size.toString(16)} ${align} ${rest}`;
 const MAP = (align, late = ".text.crc") => [row(0x1000, 0x400, 64, ".text"), row(0x1000, 0x40, 16, "        /usr/lib/Scrt1.o:(.text)"), row(0x1000, 0, 1, "                _start"),
   row(0x1040, 0x100, align, "        /t/out/libc.a(compress.o):(.text.fill)"), row(0x1040, 0, 1, "                fill"), row(0x1140, 0x20, 16, `        /t/out/libc.a(crc.o):(${late})`), row(0x1140, 0, 1, "                crc"),
   row(0x3000, 0x40, 8, ".data")].join("\n") + "\n";
 let made = 0;
-function results({ part = "gated", change = () => 0, edit = () => {}, align = 16, map = MAP(align), touch = () => {} } = {}) {
+const PROBE = "fn main() {}\n";
+const numbered = (edit = () => {}) => (p) => { p.R = 2; p.workloads[0].K = 5; p.workloads[0].sizedFrom = "an A/A made up for a test"; p.pilot = { K: 30, why: "made up for a test" }; edit(p); };
+function results({ part = "gated", change = () => 0, edit = () => {}, align = 16, map = MAP(align), touch = () => {}, sizedFrom = null, dry = null, model = "Made-up CPU" } = {}) {
   const dir = join(tmp, `run-${++made}`), work = join(dir, "work"), res = join(work, "results");
-  mkdirSync(join(dir, "probe"), { recursive: true });
-  writeFileSync(join(dir, "plan.json"), JSON.stringify(plan((p) => { p.R = 2; p.workloads[0].K = 5; p.pilot = { K: 30, why: "made up for a test" }; edit(p); }), null, 1));
-  const env = { ...process.env };
-  delete env.DRYRUN;
-  const made_ = spawnSync(process.execPath, [join(here, "plan.mjs"), join(dir, "plan.json"), part, "plain", work], { encoding: "utf8", env });
+  mkdirSync(join(dir, "probe", "src"), { recursive: true });
+  writeFileSync(join(dir, "probe", "src", "main.rs"), PROBE);
+  writeFileSync(join(dir, "plan.json"), JSON.stringify(plan(numbered(edit)), null, 1));
+  const env = { ...process.env, ...(dry ? { DRYRUN: "1", ...dry } : {}) };
+  if (!dry) delete env.DRYRUN;
+  const made_ = spawnSync(process.execPath, [join(here, "plan.mjs"), join(dir, "plan.json"), part, "plain", work, ...(sizedFrom ? ["--sized-from", sizedFrom] : [])], { encoding: "utf8", env });
   assert.equal(made_.status, 0, made_.stderr);
   const r = JSON.parse(readFileSync(join(work, "plan", "resolved.json"), "utf8")), second = align > 16;
   cpSync(join(work, "plan"), join(res, "plan"), { recursive: true });
+  cpSync(join(dir, "probe"), join(res, "probe"), { recursive: true });
   const put = (f, text) => { mkdirSync(dirname(join(res, f)), { recursive: true }); writeFileSync(join(res, f), text); };
+  if (dry) put("DRYRUN", "DRY RUN: a test of the scripts, read for nothing\n");
   put("run-id", "0f8fad5b-d9cb-469f-a165-70867728950e\n");
   put("schedule.txt", readFileSync(join(work, "plan", "schedule.txt")));
-  put("host-id.txt", "model Made-up CPU\nmicrocode 0x1\nkernel 6.12.0\nos Debian GNU/Linux 13 (trixie)\n");
+  put("host-id.txt", `model ${model}\nmicrocode 0x1\nkernel 6.12.0\nos Debian GNU/Linux 13 (trixie)\n`);
   const sha = (name) => Buffer.from(name.padEnd(32, ".")).toString("hex"), used = new Set();
   for (const c of r.comparisons) for (let i = 1; i <= r.K; i++) for (const b of sides(c, i, r.P, r.Q)) used.add(b);
   put("sha256.txt", [...r.sides, ...used].map((b) => `${b} ${sha(b)} 1000 bytes\n`).join(""));
@@ -129,26 +163,41 @@ function results({ part = "gated", change = () => 0, edit = () => {}, align = 16
     const [A, B] = sides(s.comparison, s.i, r.P, r.Q), p = join(s.comparison, `p${String(s.i).padStart(3, "0")}`), x = change(s.comparison, s.i);
     put(join(p, "placement.txt"), [`comparison ${s.comparison} placement ${s.i} workload plain`, `A ${A} ${sha(A)}`, `B ${B} ${sha(B)}`, "run 0f8fad5b-d9cb-469f-a165-70867728950e", `plan ${r.plan}`, `seq ${s.seq}`, `started ${t(100 * s.seq)}`, `ended ${t(100 * s.seq + 90)}`].join("\n") + "\n");
     put(join(p, "answers", "verdict.txt"), "answers: same\n");
-    const line = (pair, version, f) => `${pair},${version},100000,${Math.round(3e9 * f)},${Math.round(1e9 * f)},9000000000,2000000\n`;
-    put(join(p, "counts-plain.csv"), "pair,version,requests,cycles_u,cycles_k,instructions_u,L1_icache_load_misses_u\n" + Array.from({ length: r.R }, (_, k) => (k % 2 ? line(k + 1, "head", 1 + x) + line(k + 1, "base", 1) : line(k + 1, "base", 1) + line(k + 1, "head", 1 + x))).join(""));
+    const u = typeof x === "number" ? x : x.u, k_ = typeof x === "number" ? x : x.k;
+    const line = (pair, version, on) => `${pair},${version},100000,${Math.round(3e9 * (1 + on * u))},${Math.round(1e9 * (1 + on * k_))},9000000000,2000000\n`;
+    put(join(p, "counts-plain.csv"), "pair,version,requests,cycles_u,cycles_k,instructions_u,L1_icache_load_misses_u\n" + Array.from({ length: r.R }, (_, k) => (k % 2 ? line(k + 1, "head", 1) + line(k + 1, "base", 0) : line(k + 1, "base", 0) + line(k + 1, "head", 1))).join(""));
   }
   touch(res, put, r);
   return res;
 }
 const near = (got, want) => assert.ok(Math.abs(got - want) < 1e-6, `${got} is not ${want}`);
+/** What follows every reading of a K the kit did not check, as these made-up plans' K = 5 is not. */
+const U = "; K not checked by the kit";
+// The order the pilot's 30 placements run in, and 30 medians of a spread (in hundredths of a
+// percent a step), shuffled over it: alike over time and centred on zero, so eligible.
+const ORDER = schedule("pilot", "plain", 30, EXAMPLE.workloads[0].seed).map((s) => s.i), MIX = shuffled(30, rng(11));
+const even = (step = 1) => (c, i) => (step * (MIX[ORDER.indexOf(i)] - 15.5)) / 10000;
+/** The same medians rising through the run, the k-th placement run showing (k - 15.5) steps: not alike over time. */
+const DRIFT = (c, i) => (ORDER.indexOf(i) - 14.5) / 10000;
+/** Thirty normal draws at a spread and a K where one kept model's count passes and the other's does not. */
+const SPLIT = { seed: 3, sd: 0.004, K: 7, passes: [false, true] };
 
 test("pass: the change's bound under +1% and the A/A resolved in both readings", () => {
   const r = report(results({ change: (c, i) => (c === "aa-plain" ? (i - 3) / 1000 : 0.002 + i / 1000) }));
   assert.equal(r.exit, 0);
-  assert.deepEqual([r.json.gated.resolution, r.json.gated.margin, r.json.gated.reading], ["resolved", "meets +1%", "pass"]);
+  assert.deepEqual([r.json.gated.resolution, r.json.gated.margin, r.json.gated.reading], ["resolved", "meets +1%", `pass${U}`]);
   // A/A medians -0.2% to +0.2%: bounds +0.2% as recorded and (1 / 0.998 - 1) with the labels swapped.
   near(r.json.gated.aaBound, 0.002);
   near(r.json.gated.aaBoundSwapped, 1 / 0.998 - 1);
   near(r.json.gated.aaMin, -0.002);
   near(r.json.gated.changeBound, 0.007);
   near(r.json.gated.changeMedian, 0.005);
-  for (const word of ["`plain`: **pass**", "| change-plain | 5 of 5 | +0.50% | +0.70% |", "A/A: **resolved**", "The margin is +1% with no floor.", "the plan declares no reduction for this workload, so none is read", "this A/A records no placement spread", "## Code aligned beyond 16 bytes", "Neither side has such a section", "the 5th smallest of the 5 placement medians and the lower bound the 1st", "cycles, kernel", "L1 instruction-cache misses, user", "K = 5 is the plan's number"]) assert.ok(r.md.includes(word), word);
+  for (const word of ["| change-plain | 5 of 5 | +0.50% | +0.70% |", "A/A: **resolved**", "The margin is +1% with no floor.", "the plan declares no reduction for this workload, so none is read", "this A/A records no placement spread", "## Code aligned beyond 16 bytes", "Neither side has such a section", "the 5th smallest of the 5 placement medians and the lower bound the 1st", "cycles, kernel", "L1 instruction-cache misses, user"]) assert.ok(r.md.includes(word), word);
   assert.ok(!r.md.includes("DRY RUN"));
+  // Nothing checked this plan's K, a number: no reading is a bare pass, and report.json says so.
+  for (const word of ["`plain`: **pass; K not checked by the kit** (meets +1%).", "| **meets +1%; K not checked by the kit** |", "K = 5 is the plan's number, which the plan says was sized from: an A/A made up for a test. **The kit did not check it**"]) assert.ok(r.md.includes(word), word);
+  assert.ok(!/\*\*(pass|meets \+1%)\*\*/.test(r.md));
+  assert.deepEqual([r.json.sized, r.json.sizedFrom], [null, "an A/A made up for a test"]);
   // The split is reported as cycles are: user and kernel move alike in these made-up counts.
   near(r.json["change-plain"].measures["cycles, user"].recorded.bound, 0.007);
   near(r.json["change-plain"].measures["instructions, user"].recorded.bound, 0);
@@ -157,19 +206,29 @@ test("pass: the change's bound under +1% and the A/A resolved in both readings",
 test("miss: the change's bound at or above +1% with a resolved A/A", () => {
   const r = report(results({ change: (c, i) => (c === "change-plain" && i === 4 ? 0.012 : 0) }));
   assert.equal(r.exit, 0);
-  assert.deepEqual([r.json.gated.margin, r.json.gated.reading], ["misses +1%", "miss"]);
-  assert.ok(r.md.includes("`plain`: **miss**"));
+  assert.deepEqual([r.json.gated.margin, r.json.gated.reading], ["misses +1%", `miss${U}`]);
+  assert.ok(r.md.includes(`\`plain\`: **miss${U}**`));
+});
+
+test("the gate is user and kernel cycles together: a change that lowers one and raises the other", () => {
+  // User cycles (3 of every 4) fall 2% and kernel cycles rise 12%: +1.50% a request in every
+  // placement, a miss, though user cycles alone would pass.
+  const r = report(results({ change: (c) => (c === "change-plain" ? { u: -0.02, k: 0.12 } : 0) }));
+  near(r.json.gated.changeBound, 0.015);
+  assert.deepEqual([r.json.gated.margin, r.json.gated.reading], ["misses +1%", `miss${U}`]);
+  near(r.json["change-plain"].measures["cycles, user"].recorded.bound, -0.02);
+  near(r.json["change-plain"].measures["cycles, kernel"].recorded.bound, 0.12);
 });
 
 test("not resolved: an A/A bound at or above +1% in either reading, whatever the change's bound", () => {
   const up = report(results({ change: (c, i) => (c === "aa-plain" ? (i === 2 ? 0.015 : 0) : -0.05) }));
-  assert.deepEqual([up.json.gated.resolution, up.json.gated.margin, up.json.gated.reading], ["not resolved", "not resolved: does not pass", "not resolved"]);
-  assert.ok(up.md.includes("`plain`: **not resolved**"));
+  assert.deepEqual([up.json.gated.resolution, up.json.gated.margin, up.json.gated.reading], ["not resolved", "not resolved: does not pass", `not resolved${U}`]);
+  assert.ok(up.md.includes(`\`plain\`: **not resolved${U}**`));
   // A list that ran faster lowers the recorded bound and raises the swapped one.
   const down = report(results({ change: (c, i) => (c === "aa-plain" ? (i === 2 ? -0.015 : 0) : -0.05) }));
   near(down.json.gated.aaBound, 0);
   near(down.json.gated.aaBoundSwapped, 1 / 0.985 - 1);
-  assert.equal(down.json.gated.reading, "not resolved");
+  assert.equal(down.json.gated.reading, `not resolved${U}`);
 });
 
 test("no bound: a placement that failed leaves its comparison without one, and nothing passes", () => {
@@ -177,10 +236,10 @@ test("no bound: a placement that failed leaves its comparison without one, and n
   const cut = (c) => (res, put) => { put(join(c, "p003", "placement.txt"), readFileSync(join(res, c, "p003", "placement.txt"), "utf8").replace(/ended .*\n$/, "")); };
   const change = report(results({ touch: cut("change-plain") }));
   assert.equal(change.exit, 1);
-  assert.deepEqual([change.json.gated.margin, change.json.gated.reading, change.json.gated.changeBound], ["no bound: does not pass", "no bound", null]);
+  assert.deepEqual([change.json.gated.margin, change.json.gated.reading, change.json.gated.changeBound], ["no bound: does not pass", `no bound${U}`, null]);
   assert.ok(change.md.includes("**change-plain has no bound** (4 of 5 placements read; none is rerun, replaced or dropped)"));
   const aa = report(results({ touch: cut("aa-plain") }));
-  assert.deepEqual([aa.json.gated.resolution, aa.json.gated.margin, aa.json.gated.reading], ["no bound", "the A/A has no bound: does not pass", "no bound"]);
+  assert.deepEqual([aa.json.gated.resolution, aa.json.gated.margin, aa.json.gated.reading], ["no bound", "the A/A has no bound: does not pass", `no bound${U}`]);
   // Fewer than R valid pairs; a placement that never ran; counts that are not this kit's.
   const short = report(results({ touch: (res, put) => { put(join("change-plain", "p001", "counts-plain.csv"), readFileSync(join(res, "change-plain", "p001", "counts-plain.csv"), "utf8").split("\n").slice(0, 3).join("\n") + "\n"); } }));
   has(short.json.problems["change-plain"], "p001: pairs 1, not 1..2");
@@ -188,16 +247,47 @@ test("no bound: a placement that failed leaves its comparison without one, and n
   has(gone.json.problems["aa-plain"], "p005: no placement.txt");
   const other = report(results({ touch: (res, put) => put(join("change-plain", "p002", "answers", "verdict.txt"), "answers: differ\n") }));
   has(other.json.problems["change-plain"], "p002: its two binaries' answers were not compared and passed");
-  assert.equal(other.json.gated.reading, "no bound");
+  assert.equal(other.json.gated.reading, `no bound${U}`);
+  // A row read twice, a counter that counted nothing, and a placement another run left.
+  const csv = join("change-plain", "p004", "counts-plain.csv"), rows = (res) => readFileSync(join(res, csv), "utf8").split("\n");
+  const twice = report(results({ touch: (res, put) => { const l = rows(res); put(csv, [...l.slice(0, 2), l[1], ...l.slice(2)].join("\n")); } }));
+  has(twice.json.problems["change-plain"], "p004: pair 1 base: 2 rows");
+  assert.equal(twice.json.gated.changeBound, null);
+  for (const column of [2, 3, 4, 5, 6]) {
+    const zero = report(results({ touch: (res, put) => { const l = rows(res); l[1] = l[1].split(",").map((v, j) => (j === column ? "0" : v)).join(","); put(csv, l.join("\n")); } }));
+    has(zero.json.problems["change-plain"], "p004: unusable row 1,base,");
+    assert.deepEqual([zero.exit, zero.json.gated.reading], [1, `no bound${U}`]);
+  }
+  const txt = join("aa-plain", "p002", "placement.txt");
+  const left = report(results({ touch: (res, put) => put(txt, readFileSync(join(res, txt), "utf8").replace("run 0f8fad5b", "run 1f8fad5b")) }));
+  has(left.json.problems["aa-plain"], 'p002: placement.txt line 4 is "run 1f8fad5b-d9cb-469f-a165-70867728950e", not "run 0f8fad5b-d9cb-469f-a165-70867728950e"');
+  assert.equal(left.json.gated.resolution, "no bound");
+});
+
+test("no bound at K = 30: 29 placements have a rank, and an incomplete comparison still has no bound", () => {
+  const thirty = (p) => { p.workloads[0].K = 30; };
+  const whole = report(results({ edit: thirty, change: (c, i) => (c === "aa-plain" ? 0 : i / 10000) }));
+  // The 20th smallest of 30 changes of 0.01% to 0.30%.
+  near(whole.json.gated.changeBound, 0.002);
+  assert.equal(whole.json.gated.reading, `pass${U}`);
+  const r = report(results({ edit: thirty, change: (c, i) => (c === "aa-plain" ? 0 : i / 10000), touch: (res) => rmSync(join(res, "change-plain", "p030"), { recursive: true }) }));
+  assert.equal(r.exit, 1);
+  assert.deepEqual([r.json.gated.changeBound, r.json.gated.margin, r.json.gated.reading], [null, "no bound: does not pass", `no bound${U}`]);
+  for (const m of Object.values(r.json["change-plain"].measures)) assert.deepEqual([m.recorded.bound, m.recorded.lower, m.swapped.bound, m.swapped.lower], [null, null, null, null]);
+  for (const word of ["**change-plain has no bound** (29 of 30 placements read; none is rerun, replaced or dropped)", "| change-plain | 29 of 30 | +0.15% | none |", `\`plain\`: **no bound${U}** (no bound: does not pass).`]) assert.ok(r.md.includes(word), word);
+  // The A/A incomplete: nothing resolves, whatever the change's bound.
+  const aa = report(results({ edit: thirty, touch: (res) => rmSync(join(res, "aa-plain", "p001"), { recursive: true }) }));
+  assert.deepEqual([aa.json.gated.aaBound, aa.json.gated.aaBoundSwapped, aa.json.gated.resolution, aa.json.gated.reading], [null, null, "no bound", `no bound${U}`]);
 });
 
 test("the benefit side is read only when the plan declares a reduction", () => {
   const edit = (p) => { p.workloads[0].reduction = 0.02; p.workloads[0].reads = ["margin", "reduction"]; };
   const won = report(results({ edit, change: (c, i) => (c === "aa-plain" ? (i - 3) / 1000 : -0.03 + i / 1000) }));
-  assert.equal(won.json.gated.win, "reduction established");
+  assert.equal(won.json.gated.win, `reduction established${U}`);
   assert.ok(won.md.includes("a smallest worthwhile reduction of 2.00%: the change's bound -2.50% against -2.00%"));
-  assert.equal(report(results({ edit, change: (c, i) => (c === "aa-plain" ? (i - 3) / 1000 : -0.024 + i / 1000) })).json.gated.win, "reduction not established");
-  assert.equal(report(results({ edit, change: (c, i) => (c === "aa-plain" ? (i === 1 ? -0.021 : 0) : -0.04) })).json.gated.win, "not resolved: no win");
+  assert.ok(won.md.includes(`with the labels swapped: **reduction established${U}**.`));
+  assert.equal(report(results({ edit, change: (c, i) => (c === "aa-plain" ? (i - 3) / 1000 : -0.024 + i / 1000) })).json.gated.win, `reduction not established${U}`);
+  assert.equal(report(results({ edit, change: (c, i) => (c === "aa-plain" ? (i === 1 ? -0.021 : 0) : -0.04) })).json.gated.win, `not resolved: no win${U}`);
 });
 
 test("code aligned beyond 16 bytes: each side's sections and list, and every placement's second pad", () => {
@@ -225,6 +315,15 @@ test("refused: results a failed, misconfigured or altered run could leave", () =
   refused({ touch: (res) => rmSync(join(res, "maps", "head.map.gz")) }, "head: no unpadded map or no record from it");
   refused({ touch: (res, put) => put("record-base.json", '{"inputs":4,"alignments":{"16":4},"aligned":[],"sectionsBefore":4,"list":[]}\n') }, "record-base.json is not what its map gives");
   refused({ touch: (res, put) => put("DRYRUN", "DRY RUN\n") }, "do not agree on whether this is a dry run");
+  // What the plan names by path is kept with the results and is what plan.mjs listed: a probe
+  // edited, a file added to it or left out, and another request script are each refused.
+  const other = "are not the files plan.mjs resolved";
+  refused({ touch: (res, put) => put(join("probe", "src", "main.rs"), PROBE + "// edited\n") }, other);
+  refused({ touch: (res, put) => put(join("probe", "build.rs"), PROBE) }, other);
+  refused({ touch: (res) => rmSync(join(res, "probe"), { recursive: true }) }, other);
+  refused({ touch: (res, put) => put(join("plan", "request.lua"), "wrk.method = \"POST\"\n") }, other);
+  refused({ touch: (res, put) => put(join("plan", "expect.txt"), "1c1\n") }, other);
+  refused({ touch: (res) => rmSync(join(res, "plan", "request.lua")) }, `no ${join("plan", "request.lua")} in the results`);
   // A side whose map shows it has no reading across placements.
   refused({ map: MAP(128) }, "has no reading across placements: 1 input sections of .text are aligned beyond 64 bytes");
   refused({ align: 32, map: MAP(32, ".text._ZN3crc3crc17h0123456789abcdefE") }, "is named for a Rust-mangled symbol and lies at or after the first section aligned beyond 16 bytes");
@@ -233,61 +332,165 @@ test("refused: results a failed, misconfigured or altered run could leave", () =
 });
 
 test("a pilot is read for its spread and sizes a K only when it is eligible", () => {
-  // Medians rising through the run: not alike over time, so it sizes nothing.
-  let order;
-  const rising = results({ part: "pilot", touch: (res, put, r) => { order = r.schedule.map((s) => s.i); }, change: (c, i) => i / 100000 });
-  const r = report(rising);
-  assert.equal(r.exit, 0);
-  assert.ok(r.md.includes("A pilot is read only for this spread"));
-  assert.equal(order.length, 30);
-  // Medians by run order: the k-th placement run shows (k - 15.5) hundredths of a percent.
-  const drift = (run) => (c, i) => (run.indexOf(i) - 14.5) / 10000;
-  const drifting = report(results({ part: "pilot", change: drift(order) }));
+  // Medians by run order, the k-th placement run showing (k - 15.5) hundredths of a percent: not
+  // alike over time, so it sizes nothing.
+  const drifting = report(results({ part: "pilot", change: DRIFT }));
+  assert.equal(drifting.exit, 0);
+  assert.ok(drifting.md.includes("A pilot is read only for this spread"));
   assert.equal(drifting.json.pilot.sizing.ok, false);
   assert.ok(drifting.md.includes("an A/A that is not eligible sizes nothing"));
   assert.ok(drifting.md.includes("30 of 30 placements read. Placement medians: median +0.00%, standard deviation 0.09%"));
   // The same medians in a shuffled order are eligible; the check at a K is made at that K itself.
-  const mix = shuffled(30, rng(11)), even = results({ part: "pilot", change: (c, i) => (mix[order.indexOf(i)] - 15.5) / 10000 });
-  const at = sizing(even, 5);
+  const pilot = results({ part: "pilot", change: even() });
+  const at = sizing(pilot, 5);
   assert.ok(at.lines.some((l) => l.startsWith("eligible: yes")), at.lines.join("\n"));
-  assert.deepEqual([at.ok, at.K, at.workload, at.R], [true, 5, "plain", 2]);
+  assert.deepEqual([at.ok, at.K, at.workload, at.R, at.model], [true, 5, "plain", 2, "Made-up CPU"]);
   assert.ok(at.counts.every((m) => m.failing === 0 && m.rank === 5));
   assert.ok(at.lines.at(-1).startsWith("K = 5: failing draws of 200000 (seed 1983) against at most 10000:"));
-  assert.equal(sizing(even, 4).ok, false);
+  assert.equal(sizing(pilot, 4).ok, false);
   // An incomplete A/A, and results that are refused, size nothing.
-  assert.equal(sizing(results({ part: "pilot", change: (c, i) => (mix[order.indexOf(i)] - 15.5) / 10000, touch: (res) => rmSync(join(res, "pilot-plain", "p007"), { recursive: true }) }), 5).ok, false);
+  assert.equal(sizing(results({ part: "pilot", change: even(), touch: (res) => rmSync(join(res, "pilot-plain", "p007"), { recursive: true }) }), 5).ok, false);
   assert.equal(sizing(results({ part: "pilot", touch: (res) => rmSync(join(res, "run-id")) }), 5).ok, false);
 });
 
-test("the gated part of a plan sized from its pilot needs that pilot, eligible and under the same plan", () => {
-  const dir = join(tmp, "two-parts"), env = { ...process.env };
+test("a K passes only under each model kept: one model's count over the limit refuses it", () => {
+  // Thirty medians from a normal draw, in a shuffled order: eligible, normality not rejected, so
+  // both models are kept. At this K the two models' counts lie on either side of the limit.
+  const z = Array.from({ length: 30 }, ((u) => () => gauss(u))(rng(SPLIT.seed)));
+  const res = results({ part: "pilot", change: (c, i) => SPLIT.sd * z[MIX[ORDER.indexOf(i)] - 1] });
+  const at = sizing(res, SPLIT.K);
+  assert.ok(at.lines.some((l) => l.startsWith("eligible: yes")), at.lines.join("\n"));
+  assert.deepEqual(at.models, ["normal", "smoothed"]);
+  assert.deepEqual(at.counts.map((m) => m.failing <= LIMIT), SPLIT.passes, JSON.stringify(at.counts));
+  assert.equal(at.ok, false);
+  assert.ok(at.lines.at(-1).endsWith("does not pass; the plan takes no K the models do not allow"));
+});
+
+test("a dry run says what it is on its page and sizes nothing", () => {
+  // A dry pilot of 30 placements whose medians would size a K if it were a run.
+  const dry = results({ part: "pilot", dry: { DRY_K: "30" }, change: even() });
+  const s = sizing(dry, 5);
+  assert.deepEqual([s.ok, s.K, s.counts, s.lines.at(-1)], [false, null, null, "a dry run sizes nothing"]);
+  const page = report(dry);
+  assert.ok(page.md.includes("**DRY RUN: a test of the scripts, read for nothing. No figure below is a measurement of anything.**"));
+  assert.deepEqual([page.json.dry, page.json.pilot.sizing.ok, page.json.pilot.sizing.K], [true, false, null]);
+  assert.ok(page.md.includes("- a dry run sizes nothing"));
+  // A dry gated part: its K is the dry run's, and nothing checked it.
+  const gated = report(results({ dry: {} }));
+  for (const word of ["**DRY RUN: a test of the scripts, read for nothing.", "K = 6 is the dry run's, not one the plan declares or the sizing check passed.", `\`plain\`: **pass${U}**`]) assert.ok(gated.md.includes(word), word);
+  assert.deepEqual([gated.json.dry, gated.json.K, gated.json.sized], [true, 6, null]);
+});
+
+const RUN = "0f8fad5b-d9cb-469f-a165-70867728950e";
+/** A plan in two parts: the workload's K is the pilot's to give. */
+const sized = (p) => { p.workloads[0].K = "pilot"; delete p.workloads[0].sizedFrom; };
+
+test("a plan in two parts: the gated part takes its K from its pilot, and its readings carry no note", () => {
+  const pilot = results({ part: "pilot", edit: sized, change: even() });
+  const res = results({ edit: sized, sizedFrom: pilot, change: (c, i) => (c === "aa-plain" ? (i - 3) / 1000 : 0.002 + i / 1000) });
+  const saved = JSON.parse(readFileSync(join(res, "plan", "resolved.json"), "utf8"));
+  assert.deepEqual([saved.K, saved.declaredK, saved.sized.K, saved.sized.from, saved.sized.model, saved.sized.models], [5, "pilot", 5, RUN, "Made-up CPU", ["normal", "smoothed"]]);
+  assert.ok(readFileSync(join(res, "plan", "resolved.sh"), "utf8").includes("SIZED_MODEL='Made-up CPU'\n"));
+  const r = report(res);
+  assert.equal(r.exit, 0);
+  assert.deepEqual([r.json.gated.reading, r.json.sized.K, r.json.sized.from, r.json.sizedFrom], ["pass", 5, RUN, null]);
+  for (const word of ["`plain`: **pass** (meets +1%).", `K = 5 is the smallest at which the sizing check passes from run ${RUN}: normal 0 failing draws of 200000, smoothed 0 failing draws of 200000, against at most 10000.`]) assert.ok(r.md.includes(word), word);
+  assert.ok(!r.md.includes("not checked by the kit") && !r.md.includes("did not check"));
+  // A K given as a number, checked at that K itself from an A/A of this kit on the plan's setup.
+  const aa = results({ part: "pilot", change: even() });
+  const checked = report(results({ sizedFrom: aa }));
+  assert.deepEqual([checked.json.gated.reading, checked.json.sized.K, checked.json.sizedFrom], ["pass", 5, "an A/A made up for a test"]);
+  assert.ok(checked.md.includes(`K = 5 is the plan's number (which it says was sized from: an A/A made up for a test), checked at that K itself from run ${RUN}: normal 0 failing draws`));
+  // The A/A was read on one CPU model and the run is on another: not the A/A's setup.
+  const moved = report(results({ edit: sized, sizedFrom: pilot, model: "Another CPU" }));
+  assert.equal(moved.exit, 2);
+  has(moved.json.refused, 'K was checked from an A/A read on "Made-up CPU", and this run\'s host is "Another CPU"');
+});
+
+test("--sized-from: each result that does not size this plan's K is refused in its own words", () => {
+  const env = { ...process.env };
   delete env.DRYRUN;
+  let n = 0;
+  // plan.mjs on a plan made here as the results above are, on their probe unless another is given.
+  const resolved = (edit, from, { probe = PROBE, part = "gated" } = {}) => {
+    const dir = join(tmp, `sized-${++n}`);
+    mkdirSync(join(dir, "probe", "src"), { recursive: true });
+    writeFileSync(join(dir, "probe", "src", "main.rs"), probe);
+    writeFileSync(join(dir, "plan.json"), JSON.stringify(plan(numbered(edit)), null, 1));
+    const r = spawnSync(process.execPath, [join(here, "plan.mjs"), join(dir, "plan.json"), ...(part ? [part, "plain", join(dir, "work")] : []), ...(from ? ["--sized-from", from] : [])], { encoding: "utf8", env });
+    return { status: r.status, out: r.stdout, err: r.stderr, written: existsSync(join(dir, "work", "plan")) };
+  };
+  const refused = (r, word) => { assert.equal(r.status, 1, r.out); assert.ok(r.err.includes(word), `no "${word}" in: ${r.err}`); assert.equal(r.written, false, word); };
+  const taken = (r, ...words) => { assert.equal(r.status, 0, r.err); for (const w of words) assert.ok(r.out.includes(w), `no "${w}" in: ${r.out}`); assert.equal(r.written, true); };
+  const pilot = results({ part: "pilot", edit: sized, change: even() });
+
+  // A plan in two parts: the pilot, eligible, under this plan file and on the files it names.
+  taken(resolved(sized, pilot), "K = 5, the smallest from 5 to 254 at which every kept model's count of failing draws is at most 10000 of 200000", "gated plain: K = 5 placements (from the pilot, by the sizing rule), R = 2", "inputs: sha256 ");
+  refused(resolved(sized), "plain: K is undefined: a workload sized from its pilot needs that pilot's results (--sized-from)");
+  refused(resolved((p) => { sized(p); p.workloads[0].declared = "the same workload in other words"; }, pilot), "not this plan file: the pilot and the gated run are two parts of one plan");
+  refused(resolved((p) => { sized(p); p.R = 3; }, pilot), "holds workload plain at R = 2, not plain at R = 3");
+  refused(resolved(sized, pilot, { probe: PROBE + "// edited since the pilot\n" }), "the probe, the request script or the expected answer changed since the pilot, and the two parts are one plan");
+  refused(resolved(sized, results({ part: "pilot", edit: sized, change: DRIFT })), "sizes no K for plain: the workload is not read across placements under this plan");
+  refused(resolved(sized, results({ part: "pilot", edit: sized, change: even(), touch: (res) => rmSync(join(res, "pilot-plain", "p007"), { recursive: true }) })), "sizes no K for plain");
+  refused(resolved(sized, results({ part: "pilot", edit: sized, touch: (res) => rmSync(join(res, "run-id")) })), "is not a run's results this kit reads");
+  refused(resolved(sized, pilot, { part: "pilot" }), "a pilot is sized from nothing");
+
+  // A K given as a number: checked at that K itself from an A/A of this kit, on this plan's
+  // setup; without one, resolved and said to be unchecked.
+  const aa = results({ part: "pilot", change: even() }), same = () => {};
+  taken(resolved(same, aa), "K = 5: failing draws of 200000 (seed 1983) against at most 10000: normal 0 (the 5th), smoothed 0 (the 5th): passes", "(the plan's number, which it says was sized from: an A/A made up for a test)");
+  assert.ok(!resolved(same, aa).out.includes("not checked by the kit"));
+  taken(resolved(same), "K = 5 is not checked by the kit: no --sized-from names results of this kit to check it from");
+  // The same medians forty times as wide: K = 5 does not pass.
+  refused(resolved(same, results({ part: "pilot", change: even(40) })), "does not pass K = 5 for plain: the plan takes no K the sizing check does not allow");
+  // An A/A read under another plan sizes this one only on this plan's setup.
+  const setup = (edit, word, probe) => refused(resolved(edit, aa, { probe }), `was read on another setup than this plan's: its ${word}`);
+  setup((p) => { p.load.connections = 128; }, "load differs");
+  setup((p) => { p.workloads[0].start = "$BIN $PORT other"; }, "start differs");
+  setup((p) => { p.probe.start = "$BIN $PORT other"; }, "start differs");
+  setup((p) => { p.workloads[0].request.headers = ["Accept-Encoding: gzip"]; }, "request differs");
+  setup((p) => { p.workloads[0].mask = [{ header: "etag" }]; }, "mask differs");
+  setup(same, "probe or request script differs", PROBE + "// another probe\n");
+  setup((p) => { p.load.threads = 4; p.workloads[0].request.path = "/unstaged"; }, "request, load differ");
+  // What a plan declares before any part is resolved includes the inputs' digest.
+  taken({ ...resolved(sized, null, { part: null }), written: true }, "pilot plain: K = 30 placements, R = 2", "plain: inputs: sha256 ");
+});
+
+test("the inputs: every file the plan names by path, listed with its SHA-256 as sha256sum reads it", () => {
+  const res = results(), list = readFileSync(join(res, "plan", "inputs.sha256"), "utf8");
+  const sha = (text) => createHash("sha256").update(text).digest("hex");
+  assert.equal(list, `${sha(readFileSync(join(here, "get.lua")))}  plan/request.lua\n${sha(PROBE)}  probe/src/main.rs\n`);
+  const saved = JSON.parse(readFileSync(join(res, "plan", "resolved.json"), "utf8"));
+  assert.equal(saved.inputs, sha(list));
+  assert.ok(readFileSync(join(res, "plan", "resolved.sh"), "utf8").includes(`INPUTS_SHA='${sha(list)}'\n`));
+  const r = report(res);
+  assert.equal(r.json.inputs, sha(list));
+  assert.ok(r.md.includes(`plan sha256 ${saved.plan}, inputs sha256 ${sha(list)} (the 2 files the plan names by path`));
+  // The list is of the files as they are, sorted by path, with the expected answer when there is one.
+  const got = inputs(join(res, "probe"), join(res, "plan", "request.lua"), join(res, "run-id"));
+  assert.deepEqual([got.files, got.text], [3, `${sha(RUN + "\n")}  plan/expect.txt\n${list}`]);
+  // A probe's directory with a Cargo.lock of its own is refused: build.sh puts each side's there.
+  const dir = join(tmp, "locked");
   mkdirSync(join(dir, "probe"), { recursive: true });
-  writeFileSync(join(dir, "plan.json"), JSON.stringify(plan((p) => { p.R = 2; p.pilot = { K: 30, why: "made up for a test" }; })));
-  const run = (...args) => spawnSync(process.execPath, [join(here, "plan.mjs"), join(dir, "plan.json"), ...args], { encoding: "utf8", env });
-  const none = run("gated", "plain", join(dir, "gated"));
-  assert.equal(none.status, 1);
-  assert.ok(none.stderr.includes("a workload sized from its pilot needs that pilot's results (--sized-from)"), none.stderr);
-  // A pilot run under another plan file is not this plan's first part.
-  const other = run("gated", "plain", join(dir, "gated"), "--sized-from", results({ part: "pilot" }));
-  assert.equal(other.status, 1);
-  assert.ok(/not eligible|not this plan file|sizes no K/.test(other.stderr + other.stdout), other.stderr);
-  assert.equal(run("pilot", "plain", join(dir, "pilot")).status, 0);
-  assert.ok(readFileSync(join(dir, "pilot", "plan", "resolved.sh"), "utf8").includes("K='30'\n"));
-  assert.equal(run().status, 0);
-  assert.equal(run("gated").status, 1);
+  writeFileSync(join(dir, "probe", "Cargo.lock"), "");
+  writeFileSync(join(dir, "plan.json"), JSON.stringify(plan(numbered())));
+  const env = { ...process.env };
+  delete env.DRYRUN;
+  const locked = spawnSync(process.execPath, [join(here, "plan.mjs"), join(dir, "plan.json"), "gated", "plain", join(dir, "work")], { encoding: "utf8", env });
+  assert.equal(locked.status, 1);
+  assert.ok(locked.stderr.includes("the probe's directory holds a Cargo.lock"), locked.stderr);
 });
 
 test("each threshold the plan declares is stated on its own, and the spread only as the plan declares", () => {
   const quiet = (c, i) => (c === "aa-plain" ? (i - 3) / 1000 : -0.03 + i / 1000);
   // The margin stayed as one build read it; this run reads the reduction alone.
   const win = report(results({ change: quiet, edit: (p) => { p.workloads[0].reduction = 0.02; p.workloads[0].reads = ["reduction"]; } }));
-  assert.deepEqual([win.json.gated.margin, win.json.gated.reading, win.json.gated.win], ["not read", "not read", "reduction established"]);
+  assert.deepEqual([win.json.gated.margin, win.json.gated.reading, win.json.gated.win], ["not read", "not read", `reduction established${U}`]);
   assert.ok(win.md.includes("- The margin, `plain`: not read by this run: it stays as one build read it, whatever this run reads."));
   assert.ok(win.md.includes("| the margin is not read |"));
   // The reduction stayed as one build read it; this run reads the margin alone.
   const margin = report(results({ change: quiet, edit: (p) => { p.workloads[0].reduction = 0.02; } }));
-  assert.deepEqual([margin.json.gated.reading, margin.json.gated.win], ["pass", "not read"]);
+  assert.deepEqual([margin.json.gated.reading, margin.json.gated.win], [`pass${U}`, "not read"]);
   assert.ok(margin.md.includes("- A CPU-cost win, a smallest worthwhile reduction of 2.00%: not read by this run"));
   // An A/A records a spread only if its plan says so before the run, and only complete and resolved.
   const records = (p) => { p.workloads[0].recordsSpread = true; };
@@ -297,7 +500,7 @@ test("each threshold the plan declares is stated on its own, and the spread only
   assert.ok(report(results({ edit: records, change: (c, i) => (c === "aa-plain" && i === 1 ? 0.02 : 0) })).md.includes("It is not a complete, resolved A/A, so it records none."));
   assert.ok(report(results({ change: quiet })).md.includes("the plan declares that this A/A records no placement spread, so it records none whatever it read."));
   // The declaration a plan's pull request lists says the same before the run.
-  const lines = declaration(resolve(plan((p) => { p.workloads[0].reduction = 0.02; p.workloads[0].K = 30; }), "gated", "plain"));
+  const lines = declaration(resolve(plan((p) => { p.workloads[0].reduction = 0.02; p.workloads[0].K = 30; p.workloads[0].sizedFrom = "an A/A made up for a test"; }), "gated", "plain"));
   assert.equal(lines[1], "thresholds: the margin (+1%, no floor): read by this run; a smallest worthwhile reduction of 2.00%: not read by this run, so it stays as one build read it");
   assert.equal(lines[2], "the A/A records no placement spread");
 });

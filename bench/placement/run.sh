@@ -16,11 +16,14 @@
 #   change-<w>   (part gated) base-p<p_i> against head-p<p_i>: the change, each side moved by the
 #                same pad
 # In order:
-#   host         the plan's CPU model, when it names one, and its CPUs; then the plan's counters
-#                counted for a process attached to as a turn's server is, each at 100%
+#   host         the plan's CPU model, when it names one, the CPU model of the A/A the K was
+#                checked from, when it was, and the plan's CPUs; then the plan's counters counted
+#                for a process attached to as a turn's server is, each above zero and at 100%
 #   record       what build.sh checked is copied into the results before any turn: the binaries'
 #                SHA-256s, each placement's layout check, each side's unpadded map and its record
-#                of sections aligned beyond 16 bytes, and the second pads' lines when there are any
+#                of sections aligned beyond 16 bytes, the second pads' lines when there are any,
+#                the probe's source as built with the request script and the expected answer
+#                (checked again against plan/inputs.sha256), and each build's environment
 #   verify       every placement answers as its side's unpadded binary (verify.sh); a failure
 #                stops the run
 #   placements   in the plan's seeded order (results/schedule.txt), each one run of turns.sh under
@@ -34,7 +37,9 @@
 # Every placement's placement.txt names the comparison, its two binaries with their SHA-256s, the
 # run's id, the plan's SHA-256 and its place in the schedule, and gets its "ended" line only when
 # all its pairs are in; report.mjs reads no placement that lacks any of them. A results directory
-# that already holds anything is refused.
+# that already holds anything is refused: a part is run once (CONTRIBUTING.md#pull-requests: "no
+# placement is rerun, replaced or dropped for its result"). run.sh cannot see another work
+# directory or host, so that a plan's part has not been run elsewhere is the author's to keep.
 set -u
 RES=
 finish() { # <exit code> <outcome: what>
@@ -49,12 +54,13 @@ trap 'finish 143 "killed: run.sh got TERM"' TERM
 [ $# -eq 1 ] && [ -f "$1/plan/resolved.sh" ] || finish 2 "refused: usage: run.sh <work dir>   (after plan.mjs and build.sh)"
 . "$1/plan/resolved.sh"
 B=$WORK/bin; PL=$WORK/plan
-[ -z "$(ls -A "$WORK/results" 2>/dev/null)" ] || finish 1 "refused: $WORK/results is not empty: move it away first"
-[ "$(cat "$B/built-for.txt" 2>/dev/null)" = "plan $PLAN_SHA part $PART workload $W K $K dry $DRY" ] || finish 1 "refused: bin/ was built for '$(cat "$B/built-for.txt" 2>/dev/null)', not this plan's part $PART, workload $W, K $K: run build.sh"
+[ -z "$(ls -A "$WORK/results" 2>/dev/null)" ] || finish 1 "refused: $WORK/results already holds a run's results, and a part is run once: no placement is rerun, replaced or dropped for its result. Keep them; only results whose progress.log has no 'turns start' line turned nothing"
+[ "$(cat "$B/built-for.txt" 2>/dev/null)" = "plan $PLAN_SHA inputs $INPUTS_SHA part $PART workload $W K $K dry $DRY" ] || finish 1 "refused: bin/ was built for '$(cat "$B/built-for.txt" 2>/dev/null)', not this plan's part $PART, workload $W, K $K and inputs: run build.sh"
 [ "$(sha256sum "$PL/plan.json" | cut -d' ' -f1)" = "$PLAN_SHA" ] || finish 1 "refused: plan/plan.json is not the plan plan.mjs resolved"
 command -v timeout >/dev/null || finish 1 "refused: no timeout command (coreutils) to bound a placement"
 model=$(awk -F': *' '/^model name/ { print $2; exit }' /proc/cpuinfo)
 [ -z "$CPU_MODEL" ] || case "$model" in *"$CPU_MODEL"*) ;; *) finish 1 "refused: this host's CPU is '$model', not the plan's '$CPU_MODEL'" ;; esac
+[ -z "$SIZED_MODEL" ] || [ "$model" = "$SIZED_MODEL" ] || finish 1 "refused: this host's CPU is '$model', and K was checked from an A/A read on '$SIZED_MODEL': an A/A sizes a run on its own setup"
 for c in $CPU_SERVER $(echo "$CPU_LOAD" | tr ',' ' ') $CPU_DRIVER; do taskset -c "$c" true 2>/dev/null || finish 1 "refused: no CPU $c to pin to"; done
 RES=$WORK/results
 mkdir -p "$RES"
@@ -73,17 +79,21 @@ busy=$!
 perf stat -x, -e "$EVENTS" -p $busy -o "$pf/counts.perf" -- sleep 1 >/dev/null 2>&1 || ok=0
 kill $busy 2>/dev/null; wait $busy 2>/dev/null
 for e in $(echo "$EVENTS" | tr ',' ' '); do
-    awk -F, -v e="$e" 'BEGIN { n = e; sub(/:u$/, "", n) } ($3 == e || $3 == n) && $1 ~ /^[0-9]+$/ && $5 + 0 >= 100 { ok++ } END { exit ok != 1 }' "$pf/counts.perf" 2>/dev/null || ok=0
+    awk -F, -v e="$e" 'BEGIN { n = e; sub(/:u$/, "", n) } ($3 == e || $3 == n) && $1 ~ /^[0-9]+$/ && $1 + 0 > 0 && $5 + 0 >= 100 { ok++ } END { exit ok != 1 }' "$pf/counts.perf" 2>/dev/null || ok=0
 done
-[ $ok = 1 ] || { cat "$pf/counts.perf" 2>/dev/null; finish 1 "perf-preflight-failed: perf cannot count $EVENTS at 100% here (results/preflight/counts.perf)"; }
+[ $ok = 1 ] || { cat "$pf/counts.perf" 2>/dev/null; finish 1 "perf-preflight-failed: perf cannot count $EVENTS, each above zero and at 100%, here (results/preflight/counts.perf)"; }
 
 # What build.sh checked, in the results before any turn, so a report has it whatever happens later.
 cp "$B/sha256.txt" "$B/built-for.txt" "$RES/"
 mkdir -p "$RES/layout" "$RES/maps" && cp "$B"/layout/*.txt "$RES/layout/"
 for s in $SIDES; do
-    cp "$B/record-$s.json" "$RES/"; cp "$WORK/maps/$s.map.gz" "$RES/maps/"; cp "$WORK/capture/$s/args.json" "$RES/link-$s.json"
+    cp "$B/record-$s.json" "$RES/"; cp "$WORK/maps/$s.map.gz" "$RES/maps/"; cp "$WORK/capture/$s/args.json" "$RES/link-$s.json"; cp "$WORK/build-$s.env" "$RES/"
 done
 [ ! -f "$B/second-pads.txt" ] || { cp "$B/second-pads.txt" "$RES/"; cp "$WORK/maps/placements.sha256" "$RES/maps/"; }
+# The probe's source as build.sh built it, beside the request script and the expected answer in
+# plan/: the files the plan names by path, still what plan.mjs listed.
+sed -n 's/^[0-9a-f]*  \(probe\/.*\)$/\1/p' "$PL/inputs.sha256" | while IFS= read -r f; do mkdir -p "$RES/$(dirname "$f")"; cp "$WORK/$f" "$RES/$f"; done
+(cd "$RES" && sha256sum --quiet -c plan/inputs.sha256) >"$RES/inputs-check.txt" 2>&1 || { cat "$RES/inputs-check.txt"; finish 1 "refused: the probe as built, the request script or the expected answer is not what plan.mjs resolved (plan/inputs.sha256)"; }
 { date -u; lscpu; echo; grep -H . /sys/devices/system/cpu/cpu*/topology/thread_siblings_list; echo
   echo "perf_event_paranoid $(cat /proc/sys/kernel/perf_event_paranoid) nmi_watchdog $(cat /proc/sys/kernel/nmi_watchdog 2>/dev/null) randomize_va_space $(cat /proc/sys/kernel/randomize_va_space) (runs as $(id -un))"
   echo "os: $([ -f /etc/os-release ] && . /etc/os-release && echo "$PRETTY_NAME"); kernel $(uname -r)"
@@ -91,7 +101,8 @@ done
   echo "base .comment: $(readelf -p .comment "$B/base" 2>/dev/null | sed -n 's/^ *\[ *[0-9a-f]*\] *//p' | paste -sd';' -)"
   echo "base $BASE"; case " $SIDES " in *" head "*) echo "head $HEAD" ;; esac
   echo "started as: $START"
-  echo "plan $PLAN_SHA: part $PART, workload $W, K=$K placements, R=$R recorded pairs each after 1 unrecorded, $TURN s turns, wrk -t$WRK_T -c$WRK_C, $EVENTS"
+  echo "every server's environment is PATH=$PATH, HOME=$HOME, PORT and BIN alone (env -i), with what that command sets (verify/server-env.txt); each build's is build-<side>.env"
+  echo "plan $PLAN_SHA, inputs $INPUTS_SHA: part $PART, workload $W, K=$K placements, R=$R recorded pairs each after 1 unrecorded, $TURN s turns, wrk -t$WRK_T -c$WRK_C, $EVENTS"
   echo "every turn on a fresh start; server CPU $CPU_SERVER, wrk CPUs $CPU_LOAD, driver and perf CPU $CPU_DRIVER; a placement's time limit $PLACEMENT_SECONDS s"
   echo "run $RUN_ID"
   [ "$DRY" = 0 ] || echo "DRY RUN: read for nothing"; } >"$RES/host.txt" 2>&1

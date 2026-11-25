@@ -62,6 +62,13 @@ test("lists that break the rule are named for what they break", () => {
   // of a page: two quarters of a page have none.
   const p16 = Array.from({ length: 16 }, (_, i) => 4096 + 16 * (i % 4) + 64 * i), q16 = p16.map((p, i) => p + 16 * Math.floor(i / 4) + 64 * (i + 1));
   assert.ok(problems(p16, q16).some((w) => w.includes("fewer than 2 in one")), problems(p16, q16).join("; "));
+  // The floor is an eighth of K: of 32 pairs, three differences in a quarter of a page are too
+  // few, though a sixteenth of K is two. Five of the first quarter's eight move to the second.
+  const q = [...Q];
+  let moved = 0;
+  for (let i = 0; i < 32 && moved < 5; i++) if ((((q[i] - P[i]) % 4096) + 4096) % 4096 < 1024) { q[i] += 1024; moved++; }
+  assert.deepEqual(coverage(P, q).diffQuarters, [3, 13, 8, 8]);
+  assert.ok(problems(P, q).some((w) => w.includes("q - p mod 4096 by quarter of a page is 3, 13, 8, 8: fewer than 4 in one")), problems(P, q).join("; "));
 });
 
 test("a schedule is a seeded order: the same every time, another with another seed", () => {

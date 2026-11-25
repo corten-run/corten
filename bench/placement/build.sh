@@ -9,7 +9,11 @@
 # For each side the plan's paths of that commit are put at <work dir>/work (git archive), its
 # Cargo.lock beside a copy of the probe (<work dir>/probe), and the plan's build command run there
 # with a copy of wrap/ first on PATH, so the `cc` rustc runs records the probe's final link
-# (link-capture.mjs) and then runs it. A pad of n bytes is one function nothing calls,
+# (link-capture.mjs) and then runs it. The probe's copy, the request script and the expected
+# answer must be, file for file, what plan.mjs listed (plan/inputs.sha256), or nothing is built.
+# The build's environment is none of the caller's: PATH, HOME, where rustup and cargo keep their
+# files when the caller says, the toolchain, the kit's own three variables and the plan's
+# probe.env, kept as build-<side>.env. A pad of n bytes is one function nothing calls,
 # corten_layout_pad, of n bytes of int3 in a section of its own aligned to 16 and kept through
 # --gc-sections; pads/order.txt is a symbol ordering file naming that function alone. Then, each
 # stopping the build:
@@ -30,8 +34,9 @@
 #      shift (layout.mjs --second);
 #   6. no two binaries of one side have the same SHA-256.
 # A refusal (3 or 5) ends with a line "REFUSED: ..." in bin/refused.txt and exit 3: that side
-# does not pass and shows no win, and nothing is turned. Writes bin/, maps/, pads/, capture/ and
-# build-<side>.log under the work directory, and ends with BUILD-DONE.
+# does not pass and shows no win, and nothing is turned. 3 refuses before any placement is linked;
+# 5 can only be seen as the placements are linked. Writes bin/, maps/, pads/, capture/,
+# build-<side>.log and build-<side>.env under the work directory, and ends with BUILD-DONE.
 set -eu
 [ $# -eq 1 ] && [ -f "$1/plan/resolved.sh" ] || { echo "usage: build.sh <work dir>   (after plan.mjs wrote <work dir>/plan/)" >&2; exit 2; }
 . "$1/plan/resolved.sh"
@@ -46,6 +51,10 @@ rustc -V
 for d in bin maps pads capture work probe wrap target-base target-head; do rm -rf "${WORK:?}/$d"; done
 mkdir -p "$B/layout" "$M" "$WORK/pads" "$WORK/capture" "$WORK/wrap"
 cp -R "$PROBE" "$WORK/probe"
+# What the plan names by path is what plan.mjs listed when it resolved the plan, and no file more.
+[ "$(sha256sum "$WORK/plan/inputs.sha256" | cut -d' ' -f1)" = "$INPUTS_SHA" ] || fail "plan/inputs.sha256 is not the list plan.mjs wrote"
+(cd "$WORK" && sha256sum --quiet -c plan/inputs.sha256) || fail "the probe, the request script or the expected answer is not what plan.mjs resolved (plan/inputs.sha256)"
+[ "$(cd "$WORK" && find probe -type f | LC_ALL=C sort)" = "$(sed -n 's/^[0-9a-f]*  \(probe\/.*\)$/\1/p' "$WORK/plan/inputs.sha256")" ] || fail "the probe's directory holds a file plan.mjs did not list (plan/inputs.sha256)"
 cp "$KIT/wrap/cc" "$WORK/wrap/cc"; chmod +x "$WORK/wrap/cc"
 : >"$B/sha256.txt"
 
@@ -65,10 +74,15 @@ build() { # <side> <commit>
     echo "== $side: $2, $(date -u +%T)"
     rm -rf "${WORK:?}/work"; mkdir -p "$WORK/work" "$WORK/capture/$side"
     # shellcheck disable=SC2086
-    git -C "$REPO" archive "$2" -- $TREE | tar -x -C "$WORK/work"
+    git -C "$REPO" archive -o "$WORK/work.tar" "$2" -- $TREE || fail "$side: git archive of $2 failed"
+    tar -x -f "$WORK/work.tar" -C "$WORK/work" || fail "$side: the archive of $2 did not unpack"
+    rm "$WORK/work.tar"
     [ -f "$WORK/work/Cargo.lock" ] || fail "$side: the plan's tree has no Cargo.lock"
     cp "$WORK/work/Cargo.lock" "$WORK/probe/Cargo.lock"
-    (cd "$WORK/probe" && . "$WORK/plan/build-env.sh" && PATH="$WORK/wrap:$PATH" PLACEMENT_KIT="$KIT" LINK_CAPTURE="$WORK/capture/$side" CARGO_TARGET_DIR="$T" sh -c "$BUILD" >"$WORK/build-$side.log" 2>&1) \
+    set -- PATH="$WORK/wrap:$PATH" HOME="$HOME" RUSTUP_TOOLCHAIN="$TOOLCHAIN" PLACEMENT_KIT="$KIT" LINK_CAPTURE="$WORK/capture/$side" CARGO_TARGET_DIR="$T"
+    [ -z "${RUSTUP_HOME:-}" ] || set -- "$@" RUSTUP_HOME="$RUSTUP_HOME"
+    [ -z "${CARGO_HOME:-}" ] || set -- "$@" CARGO_HOME="$CARGO_HOME"
+    (cd "$WORK/probe" && env -i "$@" sh -c '. "$1" && env | LC_ALL=C sort >"$2" && exec sh -c "$3"' sh "$WORK/plan/build-env.sh" "$WORK/build-$side.env" "$BUILD" >"$WORK/build-$side.log" 2>&1) \
         || { tail -30 "$WORK/build-$side.log" >&2; fail "$side: the build failed"; }
     tail -2 "$WORK/build-$side.log"
     [ -f "$WORK/capture/$side/args.json" ] || fail "$side: no link was captured (the probe's binary is named probe)"
@@ -129,5 +143,5 @@ for s in $SIDES; do
 done
 echo "$(( $(wc -l <"$B/sha256.txt") )) binaries, no two of one side with the same sha256; placements linked and checked in $(( $(date +%s) - started )) s"
 [ "$SECOND" = 0 ] || cat "$B/second-pads.txt"
-echo "plan $PLAN_SHA part $PART workload $W K $K dry $DRY" >"$B/built-for.txt"
+echo "plan $PLAN_SHA inputs $INPUTS_SHA part $PART workload $W K $K dry $DRY" >"$B/built-for.txt"
 echo BUILD-DONE

@@ -5,7 +5,8 @@
 //   node pilot.mjs <results dir> [<K>]
 // prints the eligibility of that part's A/A (report.mjs reads the results), the models kept and,
 // for the K given or else for the smallest K that passes, each kept model's count of failing
-// draws against 10,000 of 200,000.
+// draws against 10,000 of 200,000. A scan for the smallest K prints each K it tries on standard
+// error as it goes.
 //
 // Eligible: every placement of the plan read with all its pairs, in the seeded order saved with
 // the results; neither the lag-1 autocorrelation of the medians in run order nor Spearman's
@@ -44,12 +45,16 @@ export function failing(pilot, models, K) {
   });
 }
 
-/** The smallest K from `from` to `to` at which every kept model's count of failing draws is at most LIMIT. */
-export function sizeByRule(pilot, models, { from = 5, to = 254 } = {}) {
+/**
+ * The smallest K from `from` to `to` at which every kept model's count of failing draws is at
+ * most LIMIT. each: called with every K tried and its counts, since a scan can take minutes.
+ */
+export function sizeByRule(pilot, models, { from = 5, to = 254, each = () => {} } = {}) {
   const tried = [];
   for (let K = from; K <= to; K++) {
     const counts = failing(pilot, models, K);
     tried.push({ K, counts });
+    each(tried.at(-1));
     if (counts.every((c) => c.failing <= LIMIT)) return { K, at: counts, tried, from, to };
   }
   return { K: null, at: null, tried, from, to };

@@ -8,6 +8,9 @@
 //   - a results directory without the run's id, plan, schedule, SHA-256s, host or verify verdicts;
 //   - a plan that is not usable, or whose SHA-256, pad lists, K, R, turn length, seed or seeded
 //     order are not what plan.mjs gives for it;
+//   - a probe, request script or expected answer in the results that is not, file for file, what
+//     plan.mjs listed when it resolved the plan (plan.mjs's inputs);
+//   - a K checked from an A/A read on another CPU model than this run's host;
 //   - a side without its unpadded link's map or its record from that map, a record that is not
 //     what the map gives, or a map that shows the side has no reading across placements;
 //   - a binary a comparison reads that was not verified against its side's unpadded binary, has
@@ -17,7 +20,11 @@
 // A placement leaves its comparison without a bound when its directory, its counts, its
 // placement.txt (the comparison, A and B with the build's SHA-256s, the run, the plan, its place
 // in the schedule, started and ended) or its answers' verdict is missing or not this run's, or
-// its counts are not pairs 1..R each read once on each side.
+// its counts are not pairs 1..R each read once on each side, every count above zero.
+//
+// A gated part's K is checked by the kit only when plan.mjs was given results to check it from
+// (--sized-from). When it was not, report.json's "sized" is null and every reading is followed
+// by "K not checked by the kit": a pass at a K nobody checked is not printed as a pass.
 //
 // What it prints, in cycles a request, user plus kernel, B / A - 1 per pair, a placement's
 // statistic the median of its R pairs:
@@ -35,7 +42,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mapText, readMap, record, refusals } from "./map.mjs";
 import { DRAWS, eligibility, failing, LIMIT, SEED, sizeByRule } from "./pilot.mjs";
-import { EVENTS, K_MAX, K_MIN, problems, resolve } from "./plan.mjs";
+import { EVENTS, inputs, K_MAX, K_MIN, problems, resolve, setup } from "./plan.mjs";
 import { lines as scheduleLines, sides } from "./schedule.mjs";
 import { across, margin, ord, pct, placement, resolution, win } from "./stats.mjs";
 
@@ -59,7 +66,8 @@ function readPairs(file) {
   const rows = rest.map((l) => {
     const [pair, version, ...v] = l.split(",");
     const n = v.map(Number);
-    if (n.length !== 5 || n.some((x) => !Number.isFinite(x) || x < 0) || n[0] <= 0 || n[1] <= 0) throw new Error(`unusable row ${l}`);
+    // A count of zero is a counter that counted nothing, not a turn that cost nothing.
+    if (n.length !== 5 || n.some((x) => !Number.isFinite(x) || x <= 0)) throw new Error(`unusable row ${l}`);
     return { pair, version, requests: n[0], cycles_u: n[1], cycles_k: n[2], instructions_u: n[3], icache_u: n[4] };
   });
   return [...new Set(rows.map((r) => r.pair))].map((pair) => {
@@ -75,7 +83,7 @@ function readPairs(file) {
 /** A results directory as run.sh left it: { refused: [why] } or the run with its placements. */
 export function read(dir) {
   const refused = [];
-  const need = ["run-id", "schedule.txt", "sha256.txt", "host-id.txt", join("plan", "plan.json"), join("plan", "resolved.json"), join("verify", "verdicts.txt")];
+  const need = ["run-id", "schedule.txt", "sha256.txt", "host-id.txt", join("plan", "plan.json"), join("plan", "resolved.json"), join("plan", "request.lua"), join("verify", "verdicts.txt")];
   const missing = need.filter((f) => !existsSync(join(dir, f)));
   if (missing.length) return { refused: [`no ${missing.join(", ")} in the results: not a complete record of a run`] };
   const text = (f) => readFileSync(join(dir, f), "utf8");
@@ -85,6 +93,13 @@ export function read(dir) {
   const bad = problems(plan);
   if (bad.length) return { refused: bad.map((x) => `plan.json: ${x}`) };
   if (saved.plan !== planSha) refused.push(`resolved.json was written for plan ${saved.plan}, not the results' plan.json (${planSha})`);
+  // What the plan names by path, as the results hold it, against the list plan.mjs resolved.
+  const expect = join(dir, "plan", "expect.txt");
+  let list;
+  try { list = inputs(join(dir, "probe"), join(dir, "plan", "request.lua"), existsSync(expect) ? expect : null); } catch (e) { return { refused: [...refused, e.message] }; }
+  if (list.sha256 !== saved.inputs) refused.push(`the results' probe, request script and expected answer are not the files plan.mjs resolved (inputs sha256 ${list.sha256}, resolved ${saved.inputs})`);
+  const hostId = Object.fromEntries(text("host-id.txt").replace(/\n$/, "").split("\n").map((l) => [l.split(" ")[0], l.slice(l.indexOf(" ") + 1).trim()]));
+  if (saved.sized && saved.sized.model !== hostId.model) refused.push(`K was checked from an A/A read on "${saved.sized.model}", and this run's host is "${hostId.model}": an A/A sizes a run on its own setup`);
   const runId = text("run-id").trim();
   if (!/^[0-9a-f-]{36}$/.test(runId)) refused.push("run-id is not a run's id");
   const dry = saved.dry ?? null;
@@ -169,8 +184,7 @@ export function read(dir) {
     if (t.ended < t.started) return { refused: [`${t.c} p${t.i}: ended before it started`] };
     if (j && times[j - 1].ended > t.started) return { refused: [`${t.c} p${t.i} (seq ${t.seq}) started before ${times[j - 1].c} p${times[j - 1].i} (seq ${times[j - 1].seq}) ended: the placements did not run one after another`] };
   }
-  const hostId = Object.fromEntries(text("host-id.txt").replace(/\n$/, "").split("\n").map((l) => [l.split(" ")[0], l.slice(l.indexOf(" ") + 1).trim()]));
-  return { ...r, plan, planSha, runId, hostId, records, second, secondPads, results, sized: saved.sized ?? null };
+  return { ...r, plan, planSha, inputs: list, setup: setup(plan, plan.workloads.find((x) => x.name === W)), runId, hostId, records, second, secondPads, results, sized: saved.sized ?? null };
 }
 
 /** A comparison across placements in one measure: as recorded and with the labels swapped; no bound when incomplete. */
@@ -187,9 +201,9 @@ function reading(r, m) {
  */
 export function sizing(dir, K) {
   const run = read(dir);
-  if (run.refused) return { ok: false, lines: ["sizing: these results are refused:", ...run.refused.map((x) => `  ${x}`)] };
+  if (run.refused) return { ok: false, refused: true, lines: ["sizing: these results are refused:", ...run.refused.map((x) => `  ${x}`)] };
   const c = run.comparisons[0], r = run.results[c];
-  const out = { ok: false, lines: [], K: null, workload: run.workload, R: run.R, plan: run.planSha, run: run.runId, models: null, counts: null };
+  const out = { ok: false, lines: [], K: null, workload: run.workload, R: run.R, plan: run.planSha, inputs: run.inputs, setup: run.setup, model: run.hostId.model, run: run.runId, models: null, counts: null };
   const say = (l) => out.lines.push(l);
   say(`sizing from ${c} of run ${run.runId} (plan ${run.planSha}): ${r.placements.length} of ${run.K} placements read, R = ${run.R}`);
   if (run.dry) { say("a dry run sizes nothing"); return out; }
@@ -204,7 +218,7 @@ export function sizing(dir, K) {
   const pilot = [...r.placements].sort((x, y) => x.i - y.i).map((p) => [p.stats[GATE].median, p.stats[GATE].swapped]);
   const count = (cs) => cs.map((m) => `${m.model} ${m.failing} (the ${ord(m.rank)})`).join(", ");
   if (K === undefined) {
-    const s = sizeByRule(pilot, el.models, { from: K_MIN, to: K_MAX });
+    const s = sizeByRule(pilot, el.models, { from: K_MIN, to: K_MAX, each: (t) => process.stderr.write(`sizing: K = ${t.K}: ${count(t.counts)} failing draws of ${DRAWS}, against at most ${LIMIT}\n`) });
     if (s.K == null) { say(`no K from ${K_MIN} to ${K_MAX} has every kept model's count of failing draws at most ${LIMIT} of ${DRAWS}: the workload is not read across placements on this setup at this R`); return out; }
     say(`K = ${s.K}, the smallest from ${K_MIN} to ${K_MAX} at which every kept model's count of failing draws is at most ${LIMIT} of ${DRAWS} (seed ${SEED}): ${count(s.at)}; at the K's before it: ${s.tried.slice(-4, -1).map((t) => `${t.K}: ${count(t.counts)}`).join("; ") || "none"}`);
     return { ...out, ok: true, K: s.K, counts: s.at };
@@ -223,10 +237,12 @@ export function report(dir) {
   const { dry, part, workload: W, K, R, results, plan } = run, w = plan.workloads.find((x) => x.name === W);
   const out = [`# ${plan.name}: \`${W}\` across placements, ${part === "pilot" ? "the pilot" : "the gated run"}`, ""];
   if (dry) out.push("**DRY RUN: a test of the scripts, read for nothing. No figure below is a measurement of anything.**", "");
-  out.push(`Run ${run.runId}, plan sha256 ${run.planSha}; base ${run.base}${part === "gated" ? `, head ${run.head}` : ""}; CPU ${run.hostId.model ?? "?"}, kernel ${run.hostId.kernel ?? "?"}. K = ${K} placements, R = ${R} recorded pairs in each after one that is not, ${run.seconds} s turns of \`wrk -t${plan.load.threads} -c${plan.load.connections}\`, every turn on a freshly started binary, the order drawn from seed ${run.seed}. Figures are per request, B / A - 1 per pair; a placement's statistic is the median of its pairs; the bound is the ${ord(run.rank)} smallest of the ${K} placement medians and the lower bound the ${ord(run.lowerRank)}. Every recorded turn is one in which wrk reported no failed request and every counter ran 100% of the turn.`, "");
+  out.push(`Run ${run.runId}, plan sha256 ${run.planSha}, inputs sha256 ${run.inputs.sha256} (the ${run.inputs.files} files the plan names by path: the probe's, the request script and any expected answer, kept with these results); base ${run.base}${part === "gated" ? `, head ${run.head}` : ""}; CPU ${run.hostId.model ?? "?"}, kernel ${run.hostId.kernel ?? "?"}. K = ${K} placements, R = ${R} recorded pairs in each after one that is not, ${run.seconds} s turns of \`wrk -t${plan.load.threads} -c${plan.load.connections}\`, every turn on a freshly started binary, the order drawn from seed ${run.seed}. Figures are per request, B / A - 1 per pair; a placement's statistic is the median of its pairs; the bound is the ${ord(run.rank)} smallest of the ${K} placement medians and the lower bound the ${ord(run.lowerRank)}. Every recorded turn is one in which wrk reported no failed request and every counter ran 100% of the turn.`, "");
   out.push(`The workload as the plan declares it: ${w.declared}`, "");
-  if (part === "gated") out.push(dry ? `K = ${K} is the dry run's, not one the plan declares or the sizing check passed.` : run.sized ?`K = ${K} is ${run.declaredK === "pilot" ? "the smallest at which the sizing check passes" : "checked at that K itself"} from run ${run.sized.from}: ${run.sized.counts.map((m) => `${m.model} ${m.failing} failing draws of ${DRAWS}`).join(", ")}, against at most ${LIMIT}.` : `K = ${K} is the plan's number; the kit was not given the A/A it was sized from (plan.mjs --sized-from).`, "");
-  const json = { exit: 0, name: plan.name, run: run.runId, plan: run.planSha, part, workload: W, dry: Boolean(dry), K, R, seed: run.seed, host: run.hostId, base: run.base, head: part === "gated" ? run.head : null, complete: {}, problems: {}, records: run.records, secondPads: [...run.secondPads.values()].map((x) => x.line) };
+  // A K nothing checked is said in every reading: no bare pass for a K nobody checked.
+  const unchecked = run.sized ? "" : "; K not checked by the kit";
+  if (part === "gated") out.push(dry ? `K = ${K} is the dry run's, not one the plan declares or the sizing check passed.` : run.sized ? `K = ${K} is ${run.declaredK === "pilot" ? "the smallest at which the sizing check passes" : `the plan's number (which it says was sized from: ${run.sizedFrom}), checked at that K itself`} from run ${run.sized.from}: ${run.sized.counts.map((m) => `${m.model} ${m.failing} failing draws of ${DRAWS}`).join(", ")}, against at most ${LIMIT}.` : `K = ${K} is the plan's number, which the plan says was sized from: ${run.sizedFrom}. **The kit did not check it**: plan.mjs was given no results to check it from (--sized-from), so whether this K meets the sizing rule is the author's to show, and each reading below says so.`, "");
+  const json = { exit: 0, name: plan.name, run: run.runId, plan: run.planSha, inputs: run.inputs.sha256, part, workload: W, dry: Boolean(dry), K, sizedFrom: run.sizedFrom, sized: part === "gated" ? run.sized : undefined, R, seed: run.seed, host: run.hostId, base: run.base, head: part === "gated" ? run.head : null, complete: {}, problems: {}, records: run.records, secondPads: [...run.secondPads.values()].map((x) => x.line) };
   for (const c of run.comparisons) {
     json.complete[c] = results[c].complete; json.problems[c] = results[c].why;
     if (!results[c].complete) out.push(`**${c} has no bound** (${results[c].placements.length} of ${K} placements read; none is rerun, replaced or dropped): ${results[c].why.join("; ")}.`, "");
@@ -241,20 +257,20 @@ export function report(dir) {
   } else {
     const aa = g[`aa-${W}`], ch = g[`change-${W}`].recorded;
     const res = resolution(aa.recorded, aa.swapped), gate = margin(ch, res);
-    const word = gate === "meets +1%" ? "pass" : gate === "misses +1%" ? "miss" : gate.startsWith("not resolved") ? "not resolved" : "no bound";
+    const word = (gate === "meets +1%" ? "pass" : gate === "misses +1%" ? "miss" : gate.startsWith("not resolved") ? "not resolved" : "no bound") + unchecked;
     const reads = (t) => w.reads.includes(t), left = "not read by this run: it stays as one build read it, whatever this run reads";
     out.push("## Reading", "", "Each threshold the plan declares for the workload is stated on its own. The margin is +1% with no floor.", "",
       "| comparison | placements | median of medians | bound | lower bound | reading |", "| --- | ---: | ---: | ---: | ---: | --- |",
       `| aa-${W}, as recorded | ${results[`aa-${W}`].placements.length} of ${K} | ${fmt(aa.recorded.median)} | ${aa.recorded.bound == null ? "none" : pct(aa.recorded.bound)} | ${fmt(aa.recorded.lower)} | |`,
       `| aa-${W}, labels swapped | | ${fmt(aa.swapped.median)} | ${aa.swapped.bound == null ? "none" : pct(aa.swapped.bound)} | ${fmt(aa.swapped.lower)} | A/A: **${res}** |`,
-      `| change-${W} | ${results[`change-${W}`].placements.length} of ${K} | ${fmt(ch.median)} | ${ch.bound == null ? "none" : pct(ch.bound)} | ${fmt(ch.lower)} | ${reads("margin") ? `**${gate}**` : "the margin is not read"} |`, "",
+      `| change-${W} | ${results[`change-${W}`].placements.length} of ${K} | ${fmt(ch.median)} | ${ch.bound == null ? "none" : pct(ch.bound)} | ${fmt(ch.lower)} | ${reads("margin") ? `**${gate}${unchecked}**` : "the margin is not read"} |`, "",
       `The A/A's lowest and highest placement median as recorded: ${fmt(aa.recorded.min)} to ${fmt(aa.recorded.max)} (standard deviation ${width(aa.recorded.sd)}); the change's: ${fmt(ch.min)} to ${fmt(ch.max)}.`, "",
       `- The margin, \`${W}\`: ${reads("margin") ? `**${word}** (${gate}).` : `${left}.`}`);
     json.gated = { resolution: res, reads: w.reads, margin: reads("margin") ? gate : "not read", reading: reads("margin") ? word : "not read", aaBound: aa.recorded.bound, aaBoundSwapped: aa.swapped.bound, aaLower: aa.recorded.lower, aaLowerSwapped: aa.swapped.lower, aaMin: aa.recorded.min, aaMax: aa.recorded.max, changeMedian: ch.median, changeBound: ch.bound, recordsSpread: w.recordsSpread };
     if (w.reduction == null) out.push("- A CPU-cost win: the plan declares no reduction for this workload, so none is read.");
     else if (!reads("reduction")) { out.push(`- A CPU-cost win, a smallest worthwhile reduction of ${(100 * w.reduction).toFixed(2)}%: ${left}.`); json.gated.win = "not read"; }
     else {
-      const benefit = win(ch, aa.recorded, aa.swapped, w.reduction);
+      const benefit = win(ch, aa.recorded, aa.swapped, w.reduction) + unchecked;
       out.push(`- A CPU-cost win, a smallest worthwhile reduction of ${(100 * w.reduction).toFixed(2)}%: the change's bound ${fmt(ch.bound)} against ${pct(-w.reduction)}, the A/A's lower bound ${fmt(aa.recorded.lower)} as recorded and ${fmt(aa.swapped.lower)} with the labels swapped: **${benefit}**.`);
       json.gated.win = benefit;
     }

@@ -7,8 +7,10 @@
 // pair of those that are neighbours at distinct addresses in the unpadded binary still next to
 // each other in order. A ThinLTO suffix (".llvm.<n>") is not part of a name. With --second, for a
 // run with code aligned beyond 16 bytes: both pads are among the placement's functions and the
-// shift is not asked, since map.mjs's check stands in for it. Prints the counts and a last line
-// of JSON; exits 1 with each reason the placement fails.
+// shift is not asked, since map.mjs's check stands in for it. A name defined more than once in a
+// binary (local functions of one name) has no one address to compare and is left out of the shift
+// and the order; the count of them is printed. Prints the counts and a last line of JSON; exits 1
+// with each reason the placement fails.
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -53,7 +55,9 @@ export function compare(fa, fb, text, pad, second = false) {
     if (rankB.get(byA[i].name) - rankB.get(byA[i - 1].name) === 1) kept++;
   }
   if (kept !== neighbours) why.push(`neighbours still next to each other in order: ${kept} of ${neighbours}`);
-  return { ok: why.length === 0, why, pad, second, functions: both.length, exact, neighbours, neighboursKept: kept, onlyA, onlyB };
+  // Names defined more than once have no one address to compare: they are counted, not checked.
+  const repeated = [...fa].filter(([name, at]) => at == null || fb.get(name) === null).length;
+  return { ok: why.length === 0, why, pad, second, functions: both.length, repeated, exact, neighbours, neighboursKept: kept, onlyA, onlyB };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
@@ -62,7 +66,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (!a || !b || !Number.isInteger(pad)) { console.error("usage: node layout.mjs <unpadded binary> <placement> <pad bytes> [--second]"); process.exit(2); }
   const nm = (bin) => symbols(execFileSync("nm", ["--defined-only", bin], { encoding: "utf8", maxBuffer: 1 << 28 }));
   const r = compare(nm(a), nm(b), textStart(execFileSync("readelf", ["-SW", b], { encoding: "utf8" })), pad, second);
-  console.log(`functions in both: ${r.functions}; moved by exactly the pad: ${r.exact}${second ? " (not asked: the map's check stands in)" : ""}; neighbours kept: ${r.neighboursKept} of ${r.neighbours}; only in the placement: ${r.onlyB.join(", ")}`);
+  console.log(`functions in both: ${r.functions}; names defined more than once in a binary, left out of the shift and the order: ${r.repeated}; moved by exactly the pad: ${r.exact}${second ? " (not asked: the map's check stands in)" : ""}; neighbours kept: ${r.neighboursKept} of ${r.neighbours}; only in the placement: ${r.onlyB.join(", ")}`);
   console.log("JSON " + JSON.stringify({ ...r, onlyA: r.onlyA.length }));
   for (const w of r.why) console.error(`layout.mjs: ${w}`);
   process.exit(r.ok ? 0 : 1);
