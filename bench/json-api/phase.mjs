@@ -63,8 +63,8 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
         timeout: (config.seconds + 25) * 1000 });
     }
     catch (error) { failure = error; raw.command = { exit: error.exit ?? null, clock: error.clock ?? null, ioErrors: error.ioErrors ?? [error.message] }; }
-    // Request sampler shutdown now, but don't charge a pending terminal load
-    // inspect (or pipe drain) to the app/upstream CPU window.
+    // The attached command has already settled. Request sampler shutdown now,
+    // but snapshot CPU before waiting for sampler terminal reads or pipe drains.
     const joining = joinSamplers();
     let countersAfter;
     try { countersAfter = await io.counters(); }

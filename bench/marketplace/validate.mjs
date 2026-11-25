@@ -334,7 +334,13 @@ function replay({ folder, round, commit }) {
             }
             history[name].push({ cpu, mem });
           }
-          const sampled = files.json(`${base}/${phase}-stats.log.json`); exactKeys(sampled.samples, participants); exactKeys(sampled.summary, participants);
+          let sampled;
+          try { sampled = files.json(`${base}/${phase}-stats.log.json`); }
+          catch (error) {
+            if (!(error instanceof SyntaxError)) throw error;
+            throw new Error("invalid Docker stats summary JSON");
+          }
+          exactKeys(sampled.samples, participants); exactKeys(sampled.summary, participants);
           const stats = {};
           for (const name of participants) {
             const samples = sampled.samples[name];

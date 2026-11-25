@@ -163,17 +163,18 @@ test("the stats sampler rejects malformed terminal displays and keeps the origin
   const spawn = t.mock.method(childProcess, "spawn", () => fake);
   syncBuiltinESMExports();
   try {
-    for (const [i, [cpu, memory, refusal]] of [
+    for (const [i, [cpu, memory, refusal, malformed]] of [
       ["0.00%", "0B / 0B"],
       ["0.00% invalid", "0B / 0B", /invalid Docker CPU display/],
       ["0.00%", "0B / 0..0B", /invalid Docker memory display/],
+      [null, null, /invalid Docker stats sample JSON/, "CAPTURESTATSCANARY"],
     ].entries()) {
       fake = child();
       const file = join(folder, `row-${i}.log`), sampler = sampleStats(["app"], file, 10);
-      const line = "  " + JSON.stringify({ Name: "app", CPUPerc: cpu, MemUsage: memory }) + " \n";
+      const line = "  " + (malformed ?? JSON.stringify({ Name: "app", CPUPerc: cpu, MemUsage: memory })) + " \n";
       fake.stdout.write(line);
       if (refusal) {
-        await assert.rejects(sampler.stop(), refusal);
+        await assert.rejects(sampler.stop(), (error) => refusal.test(error.message) && (!malformed || !inspect(error).includes(malformed)));
         assert.throws(() => readFileSync(`${file}.json`), { code: "ENOENT" });
       } else assert.deepEqual((await sampler.stop()).app, { samples: 1, cpuAvgPct: 0, cpuMaxPct: 0, memAvgMiB: 0, memMaxMiB: 0 });
       assert.equal(readFileSync(file, "utf8"), line);
@@ -451,6 +452,10 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   const rows = readFileSync(log, "utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
   const cleanLog = names.map((name) => JSON.stringify(rows.find((row) => row.Name === name))).join("\n") + "\n";
   const cleanStats = JSON.stringify(stats);
+  const canary = "SAVEDSTATSCANARY";
+  const fixedFault = (expected) => (error) => error.code === "MARKETPLACE_EVIDENCE_INVALID"
+    && error.message === `invalid marketplace saved evidence: ${expected}`
+    && error.cause?.message === expected && !inspect(error).includes(canary);
   writeFileSync(log, cleanLog); writeFileSync(statsPath, cleanStats);
   assert.equal(validateSaved(args).complete, true, "a stopped phase needs no samples after the app exited");
   const terminal = { t: Date.parse(raw.app.state.FinishedAt) + 1, cpu: 0, mem: 0 };
@@ -494,6 +499,26 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   });
   const original = readFileSync(path);
   const postExitError = { step: "stats", error: "docker stats stopped early: 1", at: raw.app.state.FinishedAt };
+  await t.test("post-exit stats diagnostics never quote saved text", () => {
+    try {
+      raw.seen.errors = [{ ...postExitError, error: canary + " private stats diagnostic" }];
+      writeFileSync(path, JSON.stringify(raw));
+      assert.throws(() => validateSaved(args), fixedFault("docker stats sample failed"));
+    } finally { writeFileSync(path, original); }
+  });
+  await t.test("malformed raw stats JSON is refused without quoting it", () => {
+    const malformed = canary + "\n";
+    try {
+      writeFileSync(log, cleanLog + malformed);
+      assert.throws(() => validateSaved(args), fixedFault("invalid Docker stats sample JSON"));
+      assert.equal(readFileSync(log, "utf8"), cleanLog + malformed);
+      writeFileSync(log, cleanLog);
+      writeFileSync(statsPath, malformed);
+      assert.throws(() => validateSaved(args), fixedFault("invalid Docker stats summary JSON"));
+      assert.equal(readFileSync(statsPath, "utf8"), malformed);
+    } finally { writeFileSync(log, cleanLog); writeFileSync(statsPath, cleanStats); }
+  });
+  assert.equal(validateSaved(args).complete, true, "the same clean stopped phase still replays");
   raw.seen.errors = [{ ...postExitError, error: "docker stats client pipes did not close within the stop grace" }];
   writeFileSync(path, JSON.stringify(raw));
   assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
@@ -501,7 +526,7 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   raw.seen.errors = [{ ...postExitError, step: "sampler", error: "synthetic pipe-release fault" }];
   writeFileSync(path, JSON.stringify(raw));
   assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
-    && e.cause?.message === "synthetic pipe-release fault");
+    && e.cause?.message === "docker stats sampler infrastructure failed");
   for (const [step, error, expected, kind] of [
     ["stats", "kill EPERM", "docker stats client signal failed"],
     ["sampler", "kill EINVAL", "docker stats client signal failed"],
@@ -515,12 +540,15 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
     assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
       && e.cause?.message === expected && !e.message.includes("synthetic-private-process-detail"), `${step}: ${kind ?? error}`);
   }
-  for (const message of ["docker stats client signal failed", "docker stats client process failed",
-    "unexpected EOF\n", "error during connect: connection refused\n", postExitError.error]) {
+  for (const [message, expected = "docker stats sample failed"] of [
+    ["docker stats client signal failed", "docker stats client signal failed"],
+    ["docker stats client process failed", "docker stats client process failed"],
+    ["unexpected EOF\n"], ["error during connect: connection refused\n"], [postExitError.error],
+  ]) {
     await t.test(`untagged stats fault: ${message.trim()}`, () => {
       raw.seen.errors = [{ ...postExitError, error: message }];
       writeFileSync(path, JSON.stringify(raw));
-      assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID" && e.cause?.message === message);
+      assert.throws(() => validateSaved(args), fixedFault(expected));
     });
   }
   raw.seen.errors = [{ ...postExitError, step: "sampler", kind: "client-stderr", error: "docker stats client wrote to stderr" }];

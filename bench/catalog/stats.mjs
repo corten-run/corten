@@ -29,7 +29,12 @@ function displayedMemory(value) {
   return { mib, rounding };
 }
 export function parseStatsSample(line) {
-  const { Name: name, CPUPerc: cpuDisplay, MemUsage } = JSON.parse(line);
+  let row;
+  // The raw log keeps the row; JSON.parse's error can quote it.
+  try { row = JSON.parse(line); }
+  catch { throw new Error("invalid Docker stats sample JSON"); }
+  if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("invalid Docker stats sample record");
+  const { Name: name, CPUPerc: cpuDisplay, MemUsage } = row;
   if (typeof cpuDisplay !== "string" || !/^\d+(?:\.\d+)?%$/.test(cpuDisplay)) throw new Error("invalid Docker CPU display");
   const cpu = Number(cpuDisplay.slice(0, -1));
   if (!Number.isFinite(cpu)) throw new Error("non-finite Docker CPU display");
@@ -67,7 +72,7 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
       if (!line) continue;
       try {
         const { name, cpu, mem } = parseStatsSample(line);
-        if (!Object.hasOwn(samples, name)) throw new Error(`unexpected stats container ${name}`);
+        if (!Object.hasOwn(samples, name)) throw new Error("unexpected stats container");
         samples[name].push({ t: Date.now(), cpu, mem });
       } catch (e) { observed(e.message); }
     }

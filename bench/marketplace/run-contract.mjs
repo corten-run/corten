@@ -244,9 +244,9 @@ const statsFaultMessage = (kind) => typeof kind === "string" && Object.hasOwn(st
   : "docker stats sampler infrastructure failed";
 const statsFaultMessages = new Set(Object.values(statsInfrastructure));
 export function statsPhaseErrors(error) {
-  if (!Array.isArray(error.errors)) return [{ step: "sampler", error, at: new Date().toISOString() }];
+  if (!Array.isArray(error.errors)) return [{ step: "sampler", error: phaseFailure({ step: "sampler", error }), at: new Date().toISOString() }];
   return error.errors.map(({ kind, message, at }) => kind === "stats"
-    ? { step: "stats", error: new Error(message), at }
+    ? { step: "stats", error: phaseFailure({ step: "stats", error: { message } }), at }
     : { step: "sampler", kind, error: new Error(statsFaultMessage(kind)), at });
 }
 // Earlier receipts flattened Node process errors without their syscall or code. Recognize
@@ -260,11 +260,11 @@ function statsDiagnostic({ step, error, kind }) {
   const syscall = legacyErrno.exec(message)?.[1];
   if (syscall) return statsInfrastructure[syscall === "kill" ? "shutdown-signal" : "client-process"];
   if (step === "stats" && /exceeded its deadline/.test(message)) return statsInfrastructure.deadline;
-  return null;
+  return step === "stats" ? "docker stats sample failed" : statsFaultMessage();
 }
 function phaseFailure(entry) {
   const message = statsDiagnostic(entry);
-  return message && message !== entry.error?.message ? new Error(message) : entry.error;
+  return message === null ? entry.error : new Error(message);
 }
 // Docker actions on the app container that mean something other than the app ended it: the
 // harness itself does none of these to the app during a phase (remove() runs after it).
