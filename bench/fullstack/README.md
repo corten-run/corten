@@ -2248,9 +2248,11 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     `mvn test` inside its 30 minutes, the transport proof's two 270-second runs inside its
     12-minute step, and the image's Maven runs inside each 20-minute measured build of the Docker
     rebuild benchmark (`docker-rebuild.mjs`), a nominal 1m40s left for the rest, and in the image
-    builds of Mixed Production, the hardening evidence check (20 minutes each) and JSON API
-    (60 minutes). The Catalog parity job's total is bounded by its own `timeout-minutes`, not by
-    a sum of these. The retries and bounds change Spring's build-cost inputs, its retries when a
+    builds of Mixed Production, the hardening evidence check (20 minutes each), JSON API
+    (60 minutes) and the setup step of a default or legacy Live round on a droplet
+    (`droplet.mjs`), which builds every image inside one 90-minute limit. The Catalog parity
+    job's total is bounded by its own `timeout-minutes`, not by a sum of these.
+    The retries and bounds change Spring's build-cost inputs, its retries when a
     download fails transiently and what a successful build logs, not its dependency pins, what it
     downloads or the jar it builds; their performance effect was not measured. Two timed paths see
     it differently: the Docker rebuild benchmark builds this Dockerfile, so it times the bounded,

@@ -56,6 +56,9 @@ const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */
   edit: file,
 });
 
+/** How long docker-rebuild.mjs gives each measured image build before it stops it. */
+export const rebuildTimeoutMs = 20 * 60_000;
+
 /**
  * The apps' recipes. `context` is relative to the repository root (empty: the app's directory
  * under bench/fullstack/apps), as is `stage`'s Dockerfile; `edit` and `timings.touch` are relative
@@ -87,9 +90,6 @@ const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */
  * where the list must offer `expect`; `features` are the cargo features an editor sets.
  * @type {Record<string, Recipe>}
  */
-/** How long docker-rebuild.mjs gives each measured image build before it stops it. */
-export const rebuildTimeoutMs = 20 * 60_000;
-
 export const recipes = {
   corten: {
     tools: "rust:1-trixie",

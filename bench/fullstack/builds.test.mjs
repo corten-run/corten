@@ -479,6 +479,7 @@ function checkSpringProofStep(/** @type {{ run: string }} */ step) {
   const commands = shellCommandsOf(step.run);
   assert.equal(wordCount(step.run, "mvn"), 0, "the proof step runs Maven outside the proof script");
   assert.equal(wordCount(step.run, "build"), 0, "the proof step builds an image");
+  assert.equal(wordCount(step.run, "timeout"), 0, "the proof step bounds its run outside the proof script's own limits");
   assert.deepEqual(commands.filter((command) => wordCount(command, "run.sh") > 0), ["exec sh /proof/run.sh /src /evidence"],
     "the proof step runs the proof script exactly once");
 }
@@ -494,23 +495,35 @@ function rebuildCallUses(/** @type {string} */ source) {
 /** Whether a runner builds images in one docker build call, bounded by its contract's imageBuildTimeoutMs. */
 function buildCallUses(/** @type {string} */ runner) {
   const calls = runner.split('await docker(["build",');
-  return calls.length === 2 && (runner.match(/"build"/g) ?? []).length === 1 && /^[^;]*?\], \{ timeout: imageBuildTimeoutMs, file: join\(folder, `build-\$\{app\}\.log`\) \}\);/.test(calls[1]);
+  return calls.length === 2 && (runner.match(/"build"/g) ?? []).length === 1 &&
+    runner.split('const docker = (args, opts) => command("docker", args, opts);').length === 2 && /^[^;]*?\], \{ timeout: imageBuildTimeoutMs, file: join\(folder, `build-\$\{app\}\.log`\) \}\);/.test(calls[1]);
 }
 
 /**
  * Runners that build Spring's Dockerfile outside the shared check-only runners: the exact call that
- * sets each one's build timeout, how many `"build"` arguments its source writes (one build call; the
- * hardening evidence check repeats its arguments), and that timeout in seconds.
+ * sets each one's build deadline, how many `"build"` arguments its source writes (one build call; the
+ * hardening evidence check repeats its arguments; the legacy droplet launcher builds through
+ * apps.mjs), that deadline in seconds, the line that passes the deadline on to the process (the
+ * hardening check gets its Docker from the shared owned-container recorder, not checked here), and
+ * an edit that shortens the deadline.
+ * @type {{ runner: string, call: string, builds: number, seconds: number, forward: string, shorter: [string, string] }[]}
  */
-const otherSpringBuilds = /** @type {[string, string, number, number][]} */ ([
-  ["bench/mixed-production/run.mjs", '"-t", tag, "-f", context.dockerfile, "-"], { timeout: 20 * 60 * 1000, file: join(folder, `${app}-build.log`), input: context.input });', 1, 20 * 60],
-  ["bench/hardening/evidence.mjs", "await docker(args, { input: context.input, settleOnInterrupt: true, timeout: 20 * 60 * 1000, file: log, receipt: command });", 2, 20 * 60],
-  ["bench/json-api/run.mjs", '{ timeout: 60 * 60 * 1000, file: join(folder, `build-${app}-${payload}.log`) });', 1, 60 * 60],
-]);
+const otherSpringBuilds = [
+  { runner: "bench/mixed-production/run.mjs", call: '"-t", tag, "-f", context.dockerfile, "-"], { timeout: 20 * 60 * 1000, file: join(folder, `${app}-build.log`), input: context.input });',
+    builds: 1, seconds: 20 * 60, forward: 'docker = (args, opts) => io.command("docker", args, opts);', shorter: ["20 * 60 * 1000", "15 * 60 * 1000"] },
+  { runner: "bench/hardening/evidence.mjs", call: "await docker(args, { input: context.input, settleOnInterrupt: true, timeout: 20 * 60 * 1000, file: log, receipt: command });",
+    builds: 2, seconds: 20 * 60, forward: "", shorter: ["20 * 60 * 1000", "15 * 60 * 1000"] },
+  { runner: "bench/json-api/run.mjs", call: '{ timeout: 60 * 60 * 1000, file: join(folder, `build-${app}-${payload}.log`) });',
+    builds: 1, seconds: 60 * 60, forward: 'const docker = (args, opts) => command("docker", args, opts);', shorter: ["60 * 60 * 1000", "15 * 60 * 1000"] },
+  // The defaults and legacy Live rounds build every image in one remote setup step of 90 minutes.
+  { runner: "bench/fullstack/droplet.mjs", call: '].join(" && "), 90));', builds: 0, seconds: 90 * 60,
+    forward: "`flock -w ${limit * 60} /tmp/droplet.lock timeout -k 30 ${limit * 60} bash -c ${quote(script)}`,", shorter: ["), 90));", "), 15));"] },
+];
 
-/** Whether a runner's source builds images in its known calls only, with the build timeout written as expected. */
-function buildDeadlineIs(/** @type {string} */ source, /** @type {string} */ call, /** @type {number} */ builds) {
-  return source.split(call).length === 2 && (source.match(/"build"/g) ?? []).length === builds;
+/** Whether a runner builds images in its known calls only, with its deadline written and passed on as expected. */
+function buildDeadlineIs(/** @type {string} */ source, /** @type {typeof otherSpringBuilds[number]} */ build) {
+  return source.split(build.call).length === 2 && (source.match(/"build"/g) ?? []).length === build.builds &&
+    (build.forward === "" || source.split(build.forward).length === 2);
 }
 
 /** The parity job's Spring test and proof steps. */
@@ -560,14 +573,16 @@ test("Spring bounds each Maven run inside the image build or step that contains 
   }
   assert.ok(!rebuildCallUses(rebuild.replace('const r = run("docker", args, timeout);', 'const r = run("docker", args, Math.min(timeout, 15 * minute));')), "accepted a clamped launcher timeout");
   assert.ok(!buildCallUses(catalogRunner.replace('await docker(["build",', 'await docker(["image", "build", "."], { timeout: 15 * 60 * 1000 });\n        await docker(["build",')), "accepted a docker image build call");
+  assert.ok(!buildCallUses(catalogRunner.replace('const docker = (args, opts) => command("docker", args, opts);', 'const docker = (args, opts) => command("docker", args, { ...opts, timeout: 15 * 60 * 1000 });')), "accepted a clamped docker wrapper");
   // Mixed Production, the hardening evidence check and JSON API build the same image under their own
   // deadlines: 20 minutes leaves a nominal 1m40s beside the image's Maven runs, 60 minutes half an hour.
-  for (const [runner, call, builds, seconds] of otherSpringBuilds) {
-    const source = readFileSync(join(repo, runner), "utf8");
-    assert.ok(buildDeadlineIs(source, call, builds), `${runner}: its image build deadline moved or it builds another image`);
-    assert.ok(image < seconds, `${runner}: Spring's bounded Maven runs outlast its build deadline`);
-    assert.ok(!buildDeadlineIs(source.replace(call, call.replace(`${seconds / 60} * 60 * 1000`, "15 * 60 * 1000")), call, builds), `${runner}: accepted a shorter deadline`);
-    assert.ok(!buildDeadlineIs(`${source}\nawait docker(["image", "build", "."]);`, call, builds), `${runner}: accepted a second build`);
+  for (const build of otherSpringBuilds) {
+    const source = readFileSync(join(repo, build.runner), "utf8");
+    assert.ok(buildDeadlineIs(source, build), `${build.runner}: its image build deadline moved, is not passed on, or it builds another image`);
+    assert.ok(image < build.seconds, `${build.runner}: Spring's bounded Maven runs outlast its build deadline`);
+    assert.ok(!buildDeadlineIs(source.replace(build.call, build.call.replace(...build.shorter)), build), `${build.runner}: accepted a shorter deadline`);
+    assert.ok(!buildDeadlineIs(`${source}\nawait docker(["image", "build", "."]);`, build), `${build.runner}: accepted a second build`);
+    if (build.forward) assert.ok(!buildDeadlineIs(source.replace(build.forward, build.forward.replace("opts", "{ ...opts, timeout: 15 * 60 * 1000 }").replace("${limit * 60} bash", "900 bash")), build), `${build.runner}: accepted a clamped deadline`);
   }
 
   const { testStep, proofStep } = springSteps(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
@@ -634,6 +649,9 @@ test("Spring's Maven bound checks refuse a zero, an unbounded or extra run, a bo
     assert.throws(() => checkSpringProofStep(springSteps(workflow.replace(proofExec, `                ${extra}\n${proofExec}`)).proofStep),
       /outside the proof script/, `accepted ${extra}`);
   }
+  assert.ok(workflow.includes("\n          docker run --rm --cpus 2 --memory 2g \\\n            --mount \"type=bind,source=$PWD/bench/fullstack/apps/spring/transport-proof"), "the proof step's launch moved");
+  assert.throws(() => checkSpringProofStep(springSteps(workflow.replace("\n          docker run --rm --cpus 2 --memory 2g \\\n            --mount \"type=bind,source=$PWD/bench/fullstack/apps/spring/transport-proof", "\n          timeout --kill-after=10s 4m docker run --rm --cpus 2 --memory 2g \\\n            --mount \"type=bind,source=$PWD/bench/fullstack/apps/spring/transport-proof")).proofStep),
+    /outside the proof script's own limits/, "accepted an outer timeout on the proof");
   assert.throws(() => checkSpringProofStep(springSteps(workflow.replace(proofExec, `                docker build --target build -t cb-spring-tests bench/fullstack/apps/spring\n${proofExec}`)).proofStep),
     /builds an image/, "accepted an image build in the proof step");
   for (const extra of ["sh /proof/run.sh /src /evidence-2", "\"sh\" \"/proof/run.sh\" /src /evidence-2"]) {
