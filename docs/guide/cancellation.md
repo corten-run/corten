@@ -49,13 +49,20 @@ and leaves it set ([design.md, Choice 74](../design.md#choice-deadline-timer)). 
 whose only request waits, as a proxy that opens one for each request sends them, keeps none. A
 deadline fires when it did. What an app can see of the kept timer:
 
-- A connection that sits idle after its third request that waited, or a later one, is woken
-  once, for nothing, when the time the last such request's deadline was set for comes, and the
-  timer (112 bytes) stays from the second such request until the connection closes.
-- While that timer is set (from the connection's third request that waited until the time its
-  last such request's deadline was set for), a request of the connection that does not wait
-  costs about 210 instructions more (counted on a request of 20,000, so 1% there), tokio
-  working out a timeout each time the thread waits for work. No cycle run has read that request.
+- Every connection holds 128 bytes more, and 240 more from its second request that waited
+  until it closes. A connection that sits idle after its third request that waited, or a later
+  one, is woken once, for nothing, when the time the last such request's deadline was set for
+  comes.
+- While any connection's timer is set (from that connection's third request that waited until
+  the time its last such request's deadline was set for, 30 seconds after it by default), every
+  thread of the runtime that serves it works out a timeout each time it runs out of work and
+  waits, about 190 instructions each time, whichever connection it serves next. A server whose
+  threads wait once a request pays that on every request: on one connection that never waits,
+  beside an idle one that had waited three times, 1% more instructions and 4% more of the
+  server's CPU time a request, about 0.7 microseconds (measured on one machine; no cycle run
+  has read it). A busy server pays less of it, one wait serving many requests, and an app that
+  keeps a timer of its own waiting (a task that sleeps in a loop, a handler's timeout) paid it
+  before this and pays nothing more.
 - A test on tokio's paused clock (`start_paused`) that leaves a served connection open after
   three requests of its have waited sees the clock move to that time when nothing else is due,
   where it stood still before. A test that reads the clock closes the connection first or moves

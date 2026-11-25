@@ -138,9 +138,9 @@ impl<C: Future> Future for Keeps<C> {
     // compiled into its caller, and [`Polling`] owns nothing to drop and reads what it lent from
     // the thread, so putting the thread back is compiled in here too. One that has made its
     // timer lends it and takes it back in every poll, whatever it is serving: a request that
-    // does not wait then costs about 25 instructions more, and while the timer is set (from its
-    // third request to wait until the timer fires) about 185 more again, tokio working out a
-    // timeout each time the thread parks (`docs/design.md#choice-deadline-timer`, cost 1).
+    // does not wait then costs about 25 instructions more. A timer left set costs every
+    // connection of its runtime: about 190 instructions each time the runtime's driver parks,
+    // as a timer of the app's own does (`docs/design.md#choice-deadline-timer`, cost 1).
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<C::Output> {
         let this = self.project();
         // A connection that has made no timer tells the thread only how many of its deadlines
