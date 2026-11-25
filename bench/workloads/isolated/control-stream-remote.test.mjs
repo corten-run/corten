@@ -291,8 +291,8 @@ test("local EOF and expired drain deadline cannot replace an actual terminal app
 test("post-terminal drain logs only the failed check, never raw probe output", async (t) => {
   for (const [fault, reason] of [["invalid", "control invalid"], ["final-wait-abort", "control invalid"],
     ["throw", "probe start"], ["spawn", "probe start"], ["timeout", "probe deadline"], ["buffer", "probe output limit"],
-    ["signal", "probe exit"], ["refused", "probe exit"], ["listener", "probe listener"], ["scope", "probe scope"],
-    ["foreign-login", "probe foreign login"], ["malformed", "invalid proof"], ["wrong-identity", "invalid proof"]]) await t.test(fault, async (t) => {
+    ["signal", "probe exit"], ["refused", "probe exit"], ["other-exit", "probe exit"],
+    ["malformed", "invalid proof"], ["wrong-identity", "invalid proof"]]) await t.test(fault, async (t) => {
     const raw = "SYNTHETIC_PRIVATE_DETAIL";
     let calls = 0;
     const f = await fixture(t, { probe() {
@@ -304,7 +304,7 @@ test("post-terminal drain logs only the failed check, never raw probe output", a
       if (fault === "throw") throw new Error(raw);
       const errorCode = { spawn: "ENOENT", timeout: "ETIMEDOUT", buffer: "ENOBUFS" }[fault];
       const signal = fault === "signal" ? raw : null;
-      const status = errorCode || signal ? null : ({ refused: 254, listener: 4, scope: 5, "foreign-login": 6 }[fault] ?? 0);
+      const status = errorCode || signal ? null : ({ refused: 254, "other-exit": 4 }[fault] ?? 0);
       return { status, error: errorCode && Object.assign(new Error(raw), { code: errorCode }), signal,
         stderr: raw, stdout: fault === "wrong-identity" ? JSON.stringify({ ...f.drain(), id: raw }) : raw };
     } });

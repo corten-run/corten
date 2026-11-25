@@ -121,10 +121,10 @@ After terminal publication, the campaign's fault line distinguishes revoked
 control (`campaign drain control invalid`), a reply that failed parsing or
 verification (`campaign drain invalid proof`), and a failed probe. A probe failure
 uses `campaign drain probe` followed by a fixed category: `start`, `deadline`,
-`output limit`, `exit` (signal or unclassified exit), or the guarded verification stage
-`listener`, `scope`, or `foreign login`. A registered identity still present
-remains pending; exhausting the overall wait is still `campaign drain deadline`,
-not the deadline of an individual probe. No probe output is logged.
+`output limit`, or `exit` (signal or unsuccessful exit). The registered guardian
+remains byte-identical and does not report which internal check refused. A registered
+identity still present remains pending; exhausting the overall wait is still
+`campaign drain deadline`, not the deadline of an individual probe. No probe output is logged.
 The saved [#2051 Marketplace r65 completes timing but the post-terminal drain probe refuses](https://github.com/corten-run/corten/issues/2051)
 predates these categories. Its `campaign drain probe refused` line does not identify
 which check or process failed, and this diagnostic does not qualify that round.

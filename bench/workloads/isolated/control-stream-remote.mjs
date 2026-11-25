@@ -7,7 +7,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { digest, durable, readRegular, syncDirectory } from "./evidence.mjs";
 import { guardianSource } from "../cloud-control-runtime.mjs";
 import { apparatusProof, readApparatus, streamHash, streamLimits, verifyApparatus, verifyStreamDrain, verifyStreamSeal } from "./control-stream.mjs";
-import { streamDrainFailure } from "./control-stream-source.mjs";
 
 // A lease slot is atomically replaced by its sole source-bound writer. A reader
 // may hold the previous unlinked inode, never a partially written replacement.
@@ -167,12 +166,7 @@ export async function superviseControlStream(binding, admission, abort, runtime 
           if (result.error || result.signal || ![0, 3].includes(result.status)) {
             if (result.error?.code === "ETIMEDOUT") stage = "campaign drain probe deadline";
             else if (result.error?.code === "ENOBUFS") stage = "campaign drain probe output limit";
-            else if (!result.error) {
-              if (!result.signal && result.status === streamDrainFailure.listener) stage = "campaign drain probe listener";
-              else if (!result.signal && result.status === streamDrainFailure.scope) stage = "campaign drain probe scope";
-              else if (!result.signal && result.status === streamDrainFailure.foreignLogin) stage = "campaign drain probe foreign login";
-              else stage = "campaign drain probe exit";
-            }
+            else if (!result.error) stage = "campaign drain probe exit";
             assert.fail("apparatus drain uncertain");
           }
           if (result.status === 0) {

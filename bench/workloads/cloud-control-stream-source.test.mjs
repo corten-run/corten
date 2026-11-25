@@ -43,7 +43,7 @@ for (const mode of ["lost-lease", "new-child", "namespace", "affinity", "unknown
     assert.ok(fault); assert.equal(fault[1], result.registration.id);
     if (mode === "unknown-login") assert.match(guardianSource.split("\n")[Number(fault[2]) - 1], /foreign SSH\/login participant/);
   });
-for (const [mode, status] of [["drain-survivor", 3], ["drain-listener", 4], ["drain-scope", 5], ["drain-unknown", 6]])
+for (const [mode, status] of [["drain-survivor", 3], ["drain-listener", 254], ["drain-scope", 254], ["drain-unknown", 254]])
   test("actual guarded probe withholds disappearance proof: " + mode, () => {
     const result = kernel(mode);
     assert.equal(result.terminal, true); assert.equal(result.drain, null); assert.equal(result.drainStatus, status);

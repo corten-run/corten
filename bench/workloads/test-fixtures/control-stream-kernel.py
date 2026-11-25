@@ -184,9 +184,8 @@ if terminal:
     if mode == 'drain-scope': add(999, 1, session)
     if mode == 'drain-unknown': add(999, 1, '/user.slice/user-0.slice/user@0.service')
     drain_output = bytearray()
-    scope['sys'] = types.SimpleNamespace(exit=sys.exit, stdout=types.SimpleNamespace(buffer=types.SimpleNamespace(write=drain_output.extend)))
+    scope['sys'] = types.SimpleNamespace(stdout=types.SimpleNamespace(buffer=types.SimpleNamespace(write=drain_output.extend)))
     try: drain_status = scope['main'](['stream-drain', token])
-    except SystemExit as error: drain_status = error.code
     except Exception: drain_status = 254  # The shipped CLI's generic failure status.
     failed = drain_status not in (0, 3)
     if drain_output: drain = json.loads(drain_output)
