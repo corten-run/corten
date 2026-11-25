@@ -80,8 +80,14 @@ node tests/check-parity.mjs target/release/item-page-topcoat --browser
 
 The browser probe checks the native runtime and readiness scripts, filter and
 offer navigation, and alert POST and readback with and without JavaScript on
-each source, without bypassing CSP. The full Marketplace browser matrix and
-qualification still need to run against the native build.
+each source, without bypassing CSP. In Catalog Contract's Topcoat parity job,
+after the Marketplace check-only build and Playwright image setup, one
+`check-parity.mjs <binary> --browser` invocation runs the HTTP and Chromium probes for
+both matched sources. It takes the release server and its sibling assets from
+`cb-marketplace-topcoat` and runs them with Chromium in the workflow's Playwright
+image, on isolated loopback. Fixture probes must make no upstream requests;
+API browser navigations must read the controlled upstream. This is a focused
+parity check, not the full Marketplace qualification or a timed run.
 
 The probe uses the actual bundled binary and a loopback record source. It
 checks both source modes, error representations and liveness, plus the real

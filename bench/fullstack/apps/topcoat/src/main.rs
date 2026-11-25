@@ -107,8 +107,8 @@ fn matched() -> bool {
 }
 
 #[route(GET "/health/live")]
-async fn live(cx: &Cx) -> &'static str {
-    "ok\n"
+async fn live(cx: &Cx) -> Result<&'static str> {
+    Ok("ok\n")
 }
 
 /// The matched tier's security and cache headers and deadline, run by Topcoat's `TowerLayer` around

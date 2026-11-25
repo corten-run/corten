@@ -31,6 +31,8 @@ for (const [name, paths, apps, json] of [
   ["Express driver used by FastAPI", ["bench/fullstack/apps/express/check-native.mjs"], ["fastapi", "express"], false],
   ["Express app without shared driver changes", ["bench/fullstack/apps/express/package.json"], ["express"], false],
   ["compiled alert helper", ["bench/fullstack/apps/gin/check-alerts.mjs"], ["leptos", "topcoat", "gin", "drogon"], false],
+  ...["src/main.rs", "src/hosts.rs", "tests/check-parity.mjs", "tests/marketplace.json"]
+    .map((path) => [`Topcoat parity input: ${path}`, [`bench/fullstack/apps/topcoat/${path}`], ["topcoat"], false]),
   ["workflow edit", [".github/workflows/catalog.yml"], allApps, true],
   ["docs only", ["docs/design.md", "CHANGELOG.md"], [], false],
   ["JSON-only app", ["bench/fullstack/apps/aspnet-aot/Program.cs"], [], true],

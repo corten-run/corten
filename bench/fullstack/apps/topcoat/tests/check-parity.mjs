@@ -241,7 +241,12 @@ try {
       assert.equal(live.status, 200);
       assert.equal(await live.text(), "ok\n");
       assert.deepEqual(counts, beforeLive, "liveness must not call the upstream");
-      if (browser) await checkBrowser(browser, base, policy);
+      if (browser) {
+        const beforeBrowser = counts.get(record.id)?.requests ?? 0;
+        await checkBrowser(browser, base, policy);
+        if (source === "api") assert.ok((counts.get(record.id)?.requests ?? 0) > beforeBrowser,
+          "matched API browser navigations read the upstream");
+      }
       if (source === "fixture") {
         assert.equal(counts.size, 0, "fixture and liveness probes made no upstream requests");
         return;
@@ -273,7 +278,7 @@ try {
       }));
       assert.equal((await get(`/marketplace/fr-FR/${record.id}`)).status, 200);
     });
-    console.log(`PASS Topcoat matched ${source}: native Marketplace parity probes`);
+    console.log(`PASS Topcoat matched ${source}: native Marketplace HTTP${browser ? " and Chromium (JS on/off)" : ""}`);
   }
   await withApp("fixture", apiPort, async (get, base) => {
     assert.equal(await statusAt(base, pagePath, unknownHost), 200, "the default profile still does not filter Host");
