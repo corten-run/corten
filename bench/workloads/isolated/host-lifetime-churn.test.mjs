@@ -257,6 +257,8 @@ async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs
     t.mock.method(childProcess, "execFileSync", (file, argv, options) => {
       if (argv[1] !== "--hash-open-executables") {
         assert.equal(browser, true, "catalog proof does not query the Docker daemon");
+        assert.equal(file, "docker");
+        if (f.docker) return f.docker(argv);
         assert.deepEqual(argv, ["--host", "unix:///var/run/docker.sock", "container", "ls", "-aq", "--no-trunc"]);
         return "";
       }
@@ -839,18 +841,16 @@ for (const code of ["EIO", "PRIVATE_VENDOR_CODE"]) test("browser gaps retain onl
   (code === "EIO" ? "allowlisted" : "unknown"), async (t) => {
   let faults = 0;
   const f = await fixture(t, [], true, () => { faults++; });
-  const id = "c".repeat(64), exec = childProcess.execFileSync;
+  const id = "c".repeat(64);
   let inspections = 0;
-  t.mock.method(childProcess, "execFileSync", (file, argv, options) => {
-    if (file !== "docker") return exec(file, argv, options);
+  f.docker = (argv) => {
     if (argv.includes("ls")) return id;
     assert.ok(argv.includes("inspect"));
     throw Object.assign(missing(inspections++ ? "ENOENT" : code), {
       stage: "PRIVATE_STAGE", stderr: "PRIVATE_DAEMON", stdout: "PRIVATE_STDOUT",
       argv: ["PRIVATE_ARGV"], path: "PRIVATE_PATH", env: { SAMPLE: "PRIVATE_ENV" },
     });
-  });
-  syncBuiltinESMExports();
+  };
   await f.tick(); const afterGap = faults;
   await f.tick(); const sample = f.samples().at(-1);
   const proof = await f.finish();
@@ -868,18 +868,16 @@ for (const code of ["EIO", "PRIVATE_VENDOR_CODE"]) test("browser gaps retain onl
 for (const mode of ["startup transition", "stable startup", "persistent wrong PID"]) test("browser participant " + mode, async (t) => {
   let faults = 0;
   const f = await fixture(t, [], true, () => { faults++; });
-  const id = "c".repeat(64), pid = 5000, scope = "/system.slice/docker-" + id + ".scope", exec = childProcess.execFileSync;
+  const id = "c".repeat(64), pid = 5000, scope = "/system.slice/docker-" + id + ".scope";
   let listed = true, running = false, statReads = 0, inspections = 0;
-  t.mock.method(childProcess, "execFileSync", (file, argv, options) => {
-    if (file !== "docker") return exec(file, argv, options);
+  f.docker = (argv) => {
     if (argv.includes("ls")) return listed ? id : "";
     assert.deepEqual(argv.slice(-2), ["inspect", id]); inspections++;
     return JSON.stringify([{ Id: id, Image: "sha256:" + "b".repeat(64), RestartCount: 0, State: {
       Status: running ? "running" : "created", Running: running, Pid: running ? pid : 0,
       StartedAt: running ? "start" : "zero", FinishedAt: "zero", OOMKilled: false, ExitCode: 0,
     } }]);
-  });
-  syncBuiltinESMExports();
+  };
   f.override = (path) => {
     if (path === "/sys/fs/cgroup" + scope + "/cgroup.procs") return pid + "\n";
     if (path === "/proc/5000/cgroup") return "0::" + scope + "\n";
