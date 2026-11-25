@@ -1,0 +1,9 @@
+Running 1s test @ http://127.0.0.1:18083/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency   140.69us  281.60us   5.61ms   97.57%
+    Req/Sec     9.00k   814.60     9.89k    54.55%
+  9862 requests in 1.10s, 67.23MB read
+Requests/sec:   8969.29
+Transfer/sec:     61.14MB
+RESULT 9862 0 0 0 0 0

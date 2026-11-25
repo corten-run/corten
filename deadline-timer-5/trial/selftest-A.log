@@ -1,0 +1,7 @@
+1. wrong answer: stopped before any turn (exit 1, no counts file): run-pair: beside: base and head answer differently
+2. failed requests: the turn was not recorded (exit 1, 0 rows): run-pair: beside: errors in pair w1 base: w1 base 18201 0 0 0 18201 0
+3. time limit: stopped (exit 124), no recorded pair, no server left
+5. idle connection: a turn without it was not recorded (exit 1, 0 rows): run-pair: beside: pair w1 base: the idle connection was not set up: IDLE-FAILED: answer 1 is "HTTP/1.1 404 Not Found"
+7. park: 18 made-up records of a server's waits read as they should (18 of 18 cases)
+6. report: 52 made-up results read as they should (52 of 52 cases)
+SELFTEST-OK

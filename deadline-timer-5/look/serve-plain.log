@@ -1,0 +1,3 @@
+ALLOCATOR glibc
+READY plain on 18083
+2026-11-25T15:09:27.198713Z  INFO corten: shutting down

@@ -1,0 +1,5 @@
+strace: Process 789 attached with 4 threads
+strace: Process 792 detached
+strace: Process 791 detached
+strace: Process 789 detached
+strace: Process 793 detached

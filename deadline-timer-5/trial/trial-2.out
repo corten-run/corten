@@ -1,0 +1,94 @@
+6d1d0a830f562ed50465e25aca06dac8773adae89f7f316848d0efefbfcd84d5
+v20.19.2
+strace -- version 6.13
+wrk debian/4.1.0-4+b1 [epoll] Copyright (C) 2012 Will Glozer
+22 of 22 cases
+22 of 22 cases
+== A: the base as both sides, as a dry run names it: park.sh beside and besidemt 18:21:15
+beside rc 0
+base turn 1: 10732 requests, no error; idle connection held; PARK holds: 10733 waits that can block in the turn, 1.00 a request of 10732; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+base turn 2: 11030 requests, no error; idle connection held; PARK holds: 11031 waits that can block in the turn, 1.00 a request of 11030; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+base turn 3: 10917 requests, no error; idle connection held; PARK holds: 10918 waits that can block in the turn, 1.00 a request of 10917; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+head turn 1: 10960 requests, no error; idle connection held; PARK holds: 10961 waits that can block in the turn, 1.00 a request of 10960; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+head turn 2: 11100 requests, no error; idle connection held; PARK holds: 11101 waits that can block in the turn, 1.00 a request of 11100; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+head turn 3: 10905 requests, no error; idle connection held; PARK holds: 10907 waits that can block in the turn, 1.00 a request of 10905; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+park: 6 turns in the state
+besidemt rc 0
+base turn 1: 10529 requests, no error; idle connection held; PARK holds: 10196 waits that can block in the turn, 0.97 a request of 10529; every one with no timeout; 340 more that cannot (a timeout of 0) passed over
+base turn 2: 10991 requests, no error; idle connection held; PARK holds: 10643 waits that can block in the turn, 0.97 a request of 10991; every one with no timeout; 354 more that cannot (a timeout of 0) passed over
+base turn 3: 11094 requests, no error; idle connection held; PARK holds: 10741 waits that can block in the turn, 0.97 a request of 11094; every one with no timeout; 358 more that cannot (a timeout of 0) passed over
+head turn 1: 9776 requests, no error; idle connection held; PARK holds: 9471 waits that can block in the turn, 0.97 a request of 9776; every one with no timeout; 315 more that cannot (a timeout of 0) passed over
+head turn 2: 11048 requests, no error; idle connection held; PARK holds: 10698 waits that can block in the turn, 0.97 a request of 11048; every one with no timeout; 356 more that cannot (a timeout of 0) passed over
+head turn 3: 11015 requests, no error; idle connection held; PARK holds: 10669 waits that can block in the turn, 0.97 a request of 11015; every one with no timeout; 355 more that cannot (a timeout of 0) passed over
+park: 6 turns in the state
+== A: report.mjs on the dry run's results again, with the watched turns' lines as park.mjs now writes them 18:21:35
+report.mjs rc 0
+## Verdicts
+
+The bound is the - of the 3 sorted placement medians (lower bound: the -). The A/A is resolved at +1% in both readings; the change's margin for `beside` is +5%, no floor; no reduction is declared or read.
+
+The state in the counted turns: the head ran -0.3 more user instructions a request than the base at the median across the change's placements (the A/A's two base placements: -0.2). A set timer is declared to show as at least 95: **not shown**, so a change within its margin is not read as declared, which does not pass. The floor turns no miss into anything else.
+
+| comparison | placements | median of medians | bound | bound, labels swapped | reading |
+| --- | ---: | ---: | ---: | ---: | --- |
+| aa-beside | 3 of 3 | +0.66% | none | none | A/A: **not resolved (incomplete)** |
+| change-beside | 3 of 3 | +2.96% | none | | **no bound (incomplete): does not pass** |
+
+## aa-beside: every measure
+== B: park.sh beside, 3 s turns, the base and the real head (no counter read) 18:21:35
+rc 0
+base turn 1: 30977 requests, no error; idle connection held; PARK holds: 30978 waits that can block in the turn, 1.00 a request of 30977; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+base turn 2: 31044 requests, no error; idle connection held; PARK holds: 31045 waits that can block in the turn, 1.00 a request of 31044; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+base turn 3: 31103 requests, no error; idle connection held; PARK holds: 31105 waits that can block in the turn, 1.00 a request of 31103; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+head turn 1: 30648 requests, no error; idle connection held; PARK holds: 30649 waits that can block in the turn, 1.00 a request of 30648; every one with a timeout, from 25253 to 28457 ms; 0 more that cannot (a timeout of 0) passed over
+head turn 2: 30132 requests, no error; idle connection held; PARK holds: 30133 waits that can block in the turn, 1.00 a request of 30132; every one with a timeout, from 25253 to 28457 ms; 0 more that cannot (a timeout of 0) passed over
+head turn 3: 30883 requests, no error; idle connection held; PARK holds: 30884 waits that can block in the turn, 1.00 a request of 30883; every one with a timeout, from 25253 to 28458 ms; 0 more that cannot (a timeout of 0) passed over
+park: 6 turns in the state
+== B: beside: the base's waits read by the head's rule, and the head's by the base's (both must fail) 18:21:57
+PARK FAILED: 30978 of 30978 waits that can block had no timeout, the first at line 1 (none): no timer stood in the wheel where the workload is declared to have the idle connection's
+rc 1
+PARK FAILED: 30649 of 30649 waits that can block had a timeout, the first at line 1 (28457 ms): a timer stood in the wheel where the workload is declared to have none
+rc 1
+  30979 /tmp/b.txt
+  30649 /tmp/h.txt
+0
+0
+1206  epoll_wait(3, [{events=EPOLLIN, data=0x7f8acc826080}], 1024, 28457) = 1
+1206  epoll_wait(3, [{events=EPOLLIN|EPOLLOUT, data=0x7f8acc826880}], 1024, 28352) = 1
+1206  epoll_wait(3, [{events=EPOLLIN|EPOLLOUT, data=0x7f8acc826880}], 1024, 28351) = 1
+  30649 1206
+== B: park.sh besidemt, 3 s turns, the base and the real head (no counter read) 18:21:58
+rc 0
+base turn 1: 29683 requests, no error; idle connection held; PARK holds: 28735 waits that can block in the turn, 0.97 a request of 29683; every one with no timeout; 957 more that cannot (a timeout of 0) passed over
+base turn 2: 30896 requests, no error; idle connection held; PARK holds: 29905 waits that can block in the turn, 0.97 a request of 30896; every one with no timeout; 997 more that cannot (a timeout of 0) passed over
+base turn 3: 31096 requests, no error; idle connection held; PARK holds: 30100 waits that can block in the turn, 0.97 a request of 31096; every one with no timeout; 1003 more that cannot (a timeout of 0) passed over
+head turn 1: 30856 requests, no error; idle connection held; PARK holds: 29866 waits that can block in the turn, 0.97 a request of 30856; every one with a timeout, from 25255 to 28458 ms; 995 more that cannot (a timeout of 0) passed over
+head turn 2: 30650 requests, no error; idle connection held; PARK holds: 29674 waits that can block in the turn, 0.97 a request of 30650; every one with a timeout, from 25254 to 28457 ms; 989 more that cannot (a timeout of 0) passed over
+head turn 3: 30830 requests, no error; idle connection held; PARK holds: 29844 waits that can block in the turn, 0.97 a request of 30830; every one with a timeout, from 25254 to 28457 ms; 994 more that cannot (a timeout of 0) passed over
+park: 6 turns in the state
+== B: besidemt: the base's waits read by the head's rule, and the head's by the base's (both must fail) 18:22:20
+PARK FAILED: 28735 of 28735 waits that can block had no timeout, the first at line 1 (none): no timer stood in the wheel where the workload is declared to have the idle connection's
+rc 1
+PARK FAILED: 29866 of 29866 waits that can block had a timeout, the first at line 1 (28458 ms): a timer stood in the wheel where the workload is declared to have none
+rc 1
+  29692 /tmp/b.txt
+  30861 /tmp/h.txt
+957
+995
+1584  epoll_wait(3, [], 1024, 0)        = 0
+1584  epoll_wait(3, [{events=EPOLLIN|EPOLLOUT, data=0x7fd257a26a80}], 1024, 0) = 1
+1584  epoll_wait(3, [{events=EPOLLIN, data=0x7fd257a26180}], 1024, 28458) = 1
+1584  epoll_wait(3, [{events=EPOLLIN, data=0x7fd257a26180}], 1024, 28354) = 1
+1584  epoll_wait(3, [{events=EPOLLIN|EPOLLOUT|EPOLLRDHUP, data=0x7fd257a26980}], 1024, 28354) = 1
+  30861 1584
+== C: the pilot's tar packed again from the kit's files, in this Debian container 18:22:20
+tar (GNU tar) 1.35
+part pilot; sides base; 50 files listed
+471dc06bf5d7cc16e36c5a87f72e9b43c48213efb307fa5f5b779882372211ab  src-base/
+plan sha256 (plan.env and commits.env): 29e60d68dc3e7a5c1cc92b9493f7a1cd103158e02944a6b120599e912588d874
+kit-files.sha256: 789c07948922a3e8b7eccac1df4ec72819b74fc88008d873df97196081c8a12f
+tar: c70b37987861adc8e7aa0fd089a8a3945a316c437ebe725d93dcf8981a5be632 14899200 bytes
+rc 0
+sent: c70b37987861adc8e7aa0fd089a8a3945a316c437ebe725d93dcf8981a5be632
+container removed
+# K6-DONE 18:22:21

@@ -1,0 +1,198 @@
+213a5cc07cbfaaf46246068850aefd429e176884a4ff7145bae932931e8fb01a
+== A: unpack the pilot's tar 18:09:59
+4342ac7a7d198e2732b420cf14317ef8a91429bc5c8dc56be898e35e151de254
+47
+-rw-r--r-- 1 root root 17803 Nov 25 00:00 /m/dl/run.sh
+-rw-r--r-- 1 root root   677 Nov 25 00:00 /m/dl/wrap/cc
+== A: DRY_GATED_BASE without DRYRUN (must be refused, nothing built) 18:09:59
+plan.sh: DRY_GATED_BASE is 1 and a dry run's alone (DRYRUN=1): refused
+rc 1
+ls: cannot access '/work/m/dl/bin': No such file or directory
+== A: setup.sh beside as a dry run of the gated part with the base as both sides 18:09:59
+rc 0
+setup: debian 13 (Debian GNU/Linux 13 (trixie))
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+DRYRUN: K=3, PADS_P=320 15120 25824, PADS_Q=22848 12160 38336 (not a measurement)
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+DRYRUN of the gated part's scripts with the base as both sides: the head is built from src-base (26ab0e37f753ffc4f9418bc28ad7825a924d08e1); not a measurement, and no cycle of the head is counted
+pads: 6 objects, each one function of its size
+== base: 26ab0e37f753ffc4f9418bc28ad7825a924d08e1, 18:10:11
+base: the captured link run again unpadded, with LLD's map, is byte-identical to cargo's binary
+ALIGNED base: 0 input sections of .text aligned beyond 16 bytes of 3364; widest alignment 16; 0 symbols from the first on
+base ae47f3804498fd0f045e125b4a078ea23a19e9f1e1adc5a954d939312f319f46 4508096 bytes
+base built in 50 s
+== head: 26ab0e37f753ffc4f9418bc28ad7825a924d08e1, 18:11:01
+head: the captured link run again unpadded, with LLD's map, is byte-identical to cargo's binary
+ALIGNED head: 0 input sections of .text aligned beyond 16 bytes of 3364; widest alignment 16; 0 symbols from the first on
+head ae47f3804498fd0f045e125b4a078ea23a19e9f1e1adc5a954d939312f319f46 4508096 bytes
+head built in 50 s
+base pad 320 relinked again is byte-identical
+DRYRUN with the base as both sides: 4 sha256s are shared by a base binary and its head twin
+9 placements: functions moved by exactly their pad 30024 of 30024; neighbours kept 29367 of 29367
+11 binaries, every sha256 distinct; placements relinked in 5 s
+== layout-base-p320.txt
+BUILD-DONE
+SETUP-DONE
+only in A: 0; only in B: 1 (corten_layout_pad)
+BUILD-DONE
+SETUP-DONE
+== A: a changed file of the kit (run.sh must refuse) 18:11:56
+RUN-ENDED refused: a file of the kit is not the one packed: ./report.mjs: FAILED sha256sum: WARNING: 1 computed checksum did NOT match 
+ALL-DONE
+rc 1
+ls: cannot access '/work/m/dl/results': No such file or directory
+== A: run.sh beside, the same dry run 18:11:56
+rc 0
+padlists: plain: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: wait: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: close: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: unstaged: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: after: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: beside: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: besidemt: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+== cycles-deadline-2029-3 gated beside run 8de0e6c7-d896-45db-b925-ddebf8a45131 verify start 18:11:58
+verify: 9 placements answer as their unpadded binary
+== park start 18:12:01
+park: 6 turns in the state
+== check start 18:12:11
+aa-beside: checked 1 requests: same
+change-beside: checked 1 requests: same
+== checks ok 18:12:18; 6 placements to run
+1 aa-beside p003 ok 18:12:28
+2 change-beside p003 ok 18:12:38
+3 change-beside p001 ok 18:12:49
+4 aa-beside p001 ok 18:12:59
+5 aa-beside p002 ok 18:13:09
+6 change-beside p002 ok 18:13:19
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE
+DRY RUN: K=3, R=2, TURN=1; fail seq none; not a measurement; part gated with the base as both sides
+kit cycles-deadline-2029-3
+run 8de0e6c7-d896-45db-b925-ddebf8a45131
+plan 29e60d68dc3e7a5c1cc92b9493f7a1cd103158e02944a6b120599e912588d874
+part gated
+workload beside
+base turn 1: 11058 requests, no error; idle connection held; PARK holds: 11059 waits in the turn, 1.00 a request of 11058; every one with no timeout
+base turn 2: 10190 requests, no error; idle connection held; PARK holds: 10191 waits in the turn, 1.00 a request of 10190; every one with no timeout
+base turn 3: 10966 requests, no error; idle connection held; PARK holds: 10967 waits in the turn, 1.00 a request of 10966; every one with no timeout
+head turn 1: 10619 requests, no error; idle connection held; PARK holds: 10620 waits in the turn, 1.00 a request of 10619; every one with no timeout
+head turn 2: 9862 requests, no error; idle connection held; PARK holds: 9864 waits in the turn, 1.00 a request of 9862; every one with no timeout
+head turn 3: 9743 requests, no error; idle connection held; PARK holds: 9744 waits in the turn, 1.00 a request of 9743; every one with no timeout
+# The deadline's timer, part 2 (the gated run): cycles across placements, workload `beside`
+
+**DRY RUN: a test of the scripts, not a measurement. No figure below is read.** The gated part's scripts with the base as both sides: the "head" below is the base, and no cycle of the head was counted.
+
+Run 8de0e6c7-d896-45db-b925-ddebf8a45131, kit cycles-deadline-2029-3, plan sha256 29e60d68dc3e7a5c1cc92b9493f7a1cd103158e02944a6b120599e912588d874; CPU Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz, kernel 6.12.117+deb13-amd64. K = 3 placements, R = 2 recorded pairs in each after one unrecorded pair, 1 s turns, every turn on a fresh start, order from seed 7406. All figures are user+kernel cycles a request, B / A - 1 per pair; a placement's statistic is the median of its pairs.
+
+No placement is run again, replaced or dropped: one that failed a check, was stopped at its time limit or has other than 2 pairs is left unread and its comparison has no bound (none here). Every recorded turn is one in which wrk reported no error of any kind (a turn with one fails its placement).
+
+## Verdicts
+
+The bound is the - of the 3 sorted placement medians (lower bound: the -). The A/A is resolved at +1% in both readings; the change's margin for `beside` is +5%, no floor; no reduction is declared or read.
+
+The state in the counted turns: the head ran -0.3 more user instructions a request than the base at the median across the change's placements (the A/A's two base placements: -0.2). A set timer is declared to show as at least 95: **not shown**, so a change within its margin is not read as declared, which does not pass. The floor turns no miss into anything else.
+
+| comparison | placements | median of medians | bound | bound, labels swapped | reading |
+| --- | ---: | ---: | ---: | ---: | --- |
+| aa-beside | 3 of 3 | +0.66% | none | none | A/A: **not resolved (incomplete)** |
+| change-beside | 3 of 3 | +2.96% | none | | **no bound (incomplete): does not pass** |
+
+## aa-beside: every measure
+
+| per request | median of medians | bound | lower bound | range of medians | swapped: median | swapped: bound | between sd | within sd | from within |
+== A: selftest.sh beside 18:13:20
+rc 0
+1. wrong answer: stopped before any turn (exit 1, no counts file): run-pair: beside: base and head answer differently
+2. failed requests: the turn was not recorded (exit 1, 0 rows): run-pair: beside: errors in pair w1 base: w1 base 18201 0 0 0 18201 0
+3. time limit: stopped (exit 124), no recorded pair, no server left
+5. idle connection: a turn without it was not recorded (exit 1, 0 rows): run-pair: beside: pair w1 base: the idle connection was not set up: IDLE-FAILED: answer 1 is "HTTP/1.1 404 Not Found"
+7. park: 18 made-up records of a server's waits read as they should (18 of 18 cases)
+6. report: 52 made-up results read as they should (52 of 52 cases)
+SELFTEST-OK
+== A: park.sh besidemt on the same binaries (base as both sides) 18:13:28
+rc 1
+PARK FAILED: line 150 is a wait whose timeout is not read: 9284  epoll_wait(3, [], 1024, 0)        = 0
+PARK FAILED: base turn 1: the server's waits are not the state's (rule: none)
+== B: the made-up gated tar, built as a dry run (base and the real head) 18:13:30
+BASE=26ab0e37f753ffc4f9418bc28ad7825a924d08e1
+HEAD=f8934bc998a7609728826c106cfc57fdd1aef3dd
+f8934bc998a7609728826c106cfc57fdd1aef3dd
+rc 0
+DRYRUN: K=3, PADS_P=320 15120 25824, PADS_Q=22848 12160 38336 (not a measurement)
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+pads: 6 objects, each one function of its size
+== base: 26ab0e37f753ffc4f9418bc28ad7825a924d08e1, 18:13:30
+base: the captured link run again unpadded, with LLD's map, is byte-identical to cargo's binary
+ALIGNED base: 0 input sections of .text aligned beyond 16 bytes of 3364; widest alignment 16; 0 symbols from the first on
+base ae47f3804498fd0f045e125b4a078ea23a19e9f1e1adc5a954d939312f319f46 4508096 bytes
+base built in 50 s
+== head: f8934bc998a7609728826c106cfc57fdd1aef3dd, 18:14:20
+head: the captured link run again unpadded, with LLD's map, is byte-identical to cargo's binary
+ALIGNED head: 0 input sections of .text aligned beyond 16 bytes of 3371; widest alignment 16; 0 symbols from the first on
+head b224501246494e6271dc336808116666c26962e15549978825e61d7fd53b83ff 4512832 bytes
+head built in 51 s
+base pad 320 relinked again is byte-identical
+9 placements: functions moved by exactly their pad 30045 of 30045; neighbours kept 29388 of 29388
+11 binaries, every sha256 distinct; placements relinked in 4 s
+== layout-base-p320.txt
+BUILD-DONE
+== B: park.sh beside, 3 s turns, base and head (no counter read) 18:15:15
+rc 0
+base turn 1: 31110 requests, no error; idle connection held; PARK holds: 31111 waits in the turn, 1.00 a request of 31110; every one with no timeout
+base turn 2: 30846 requests, no error; idle connection held; PARK holds: 30847 waits in the turn, 1.00 a request of 30846; every one with no timeout
+base turn 3: 30902 requests, no error; idle connection held; PARK holds: 30904 waits in the turn, 1.00 a request of 30902; every one with no timeout
+head turn 1: 31002 requests, no error; idle connection held; PARK holds: 31004 waits in the turn, 1.00 a request of 31002; every one with a timeout, from 25254 to 28458 ms
+head turn 2: 30739 requests, no error; idle connection held; PARK holds: 30740 waits in the turn, 1.00 a request of 30739; every one with a timeout, from 25145 to 28349 ms
+head turn 3: 30993 requests, no error; idle connection held; PARK holds: 30994 waits in the turn, 1.00 a request of 30993; every one with a timeout, from 25254 to 28458 ms
+park: 6 turns in the state
+== B: beside: the base's waits read by the head's rule, and the head's by the base's (both must fail) 18:15:38
+PARK FAILED: 31111 of 31111 waits had no timeout, the first at line 1 (none): no timer stood in the wheel where the workload is declared to have the idle connection's
+rc 1
+PARK FAILED: 31004 of 31004 waits had a timeout, the first at line 1 (28458 ms): a timer stood in the wheel where the workload is declared to have none
+rc 1
+  31112 /tmp/b.txt
+  31004 /tmp/h.txt
+12456 epoll_wait(3, [{events=EPOLLIN, data=0x7f9e48e26080}], 1024, -1) = 1
+12456 epoll_wait(3, [{events=EPOLLIN|EPOLLOUT, data=0x7f9e48e26880}], 1024, -1) = 1
+12456 epoll_wait(3, [{events=EPOLLIN|EPOLLOUT, data=0x7f9e48e26880}], 1024, -1) = 1
+12606 epoll_wait(3, [{events=EPOLLIN, data=0x7f028cc26080}], 1024, 28458) = 1
+12606 epoll_wait(3, [{events=EPOLLOUT, data=0x7f028cc26880}], 1024, 28353) = 1
+12606 epoll_wait(3, [{events=EPOLLIN|EPOLLOUT, data=0x7f028cc26880}], 1024, 28353) = 1
+12606 epoll_wait(3, [{events=EPOLLIN|EPOLLOUT, data=0x7f028cc26880}], 1024, 25254) = 1
+12606 epoll_wait(3, [{events=EPOLLIN|EPOLLOUT|EPOLLRDHUP, data=0x7f028cc26880}], 1024, 25254) = 1
+== B: park.sh besidemt, 3 s turns, base and head (no counter read) 18:15:38
+rc 1
+PARK FAILED: line 25 is a wait whose timeout is not read: 12827 epoll_wait(3, [], 1024, 0)        = 0
+PARK FAILED: base turn 1: the server's waits are not the state's (rule: none)
+== B: besidemt: the base's waits read by the head's rule, and the head's by the base's (both must fail) 18:15:42
+gzip: /m/dl/park-besidemt/head-1/strace.txt.gz: No such file or directory
+PARK FAILED: line 25 is a wait whose timeout is not read: 12827 epoll_wait(3, [], 1024, 0)        = 0
+rc 1
+PARK FAILED: 0 waits read, fewer than 100: the turn was not watched
+rc 1
+  30567 /tmp/b.txt
+      0 /tmp/h.txt
+12827 epoll_wait(3, [{events=EPOLLIN, data=0x7f7aa1826180}], 1024, -1) = 1
+12827 epoll_wait(3, [{events=EPOLLIN|EPOLLOUT|EPOLLRDHUP, data=0x7f7aa1826980}], 1024, -1) = 1
+12827 epoll_wait(3, [{events=EPOLLIN, data=0x7f7aa1826180}], 1024, -1) = 1
+== B: threads of each side as the kit starts it 18:15:42
+rc 0
+base as plain: 3 threads: 1 base;1 corten-clock;1 jemalloc_bg_thd
+head as plain: 3 threads: 1 corten-clock;1 head;1 jemalloc_bg_thd
+base as plain-mt: 4 threads: 1 base;1 corten-clock;1 jemalloc_bg_thd;1 tokio-rt-worker
+head as plain-mt: 4 threads: 1 corten-clock;1 head;1 jemalloc_bg_thd;1 tokio-rt-worker
+== C: the pilot's tar packed again from the kit's files, in this Debian container 18:15:44
+tar (GNU tar) 1.35
+part pilot; sides base; 50 files listed
+471dc06bf5d7cc16e36c5a87f72e9b43c48213efb307fa5f5b779882372211ab  src-base/
+plan sha256 (plan.env and commits.env): 29e60d68dc3e7a5c1cc92b9493f7a1cd103158e02944a6b120599e912588d874
+kit-files.sha256: 555f0f2ff2340fa992048058e1596b8ae87708dfea49559d2d72be254219e49a
+tar: 4342ac7a7d198e2732b420cf14317ef8a91429bc5c8dc56be898e35e151de254 14899200 bytes
+rc 0
+sent: 4342ac7a7d198e2732b420cf14317ef8a91429bc5c8dc56be898e35e151de254
+kernel.perf_event_paranoid = 3
+kernel.nmi_watchdog = 0
+container removed
+# K5-DONE 18:15:45

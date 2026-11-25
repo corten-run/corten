@@ -1,0 +1,39 @@
+docker.io/library/node:24-trixie-slim
+node image node:24-trixie-slim: v24.22.3
+== base 26ab0e37f753ffc4f9418bc28ad7825a924d08e1
+Linker: LLD 23.1.5
+maprec rc 0
+1
+ALIGNED base: 0 input sections of .text aligned beyond 16 bytes of 3364; widest alignment 16; 0 symbols from the first on
+ALIGNED base: 0 input sections of .text aligned beyond 16 bytes of 3364; widest alignment 16; 0 symbols from the first on
+== head 850d39ac7894b95ca367e9bf569c92de3c4b3b89
+Linker: LLD 23.1.5
+maprec rc 0
+1
+ALIGNED head: 0 input sections of .text aligned beyond 16 bytes of 3371; widest alignment 16; 0 symbols from the first on
+ALIGNED head: 0 input sections of .text aligned beyond 16 bytes of 3371; widest alignment 16; 0 symbols from the first on
+== head as plain
+first line after 3 tenths of a second
+/private answered 200 in 200 of 200 requests beside the idle connection
+the idle connection's process is alive
+idle.mjs exit 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 2959 ms after its last answer, nothing received since
+IDLE-FAILED: answer 1 is "HTTP/1.1 404 Not Found"
+idle.mjs on a 404 path: exit 1
+idle.mjs whose server ended: exit 1
+IDLE-READY 3 answers of 200 to GET /private on one connection
+IDLE-FAILED: the server closed the idle connection
+== head as plain-mt
+first line after 3 tenths of a second
+/private answered 200 in 200 of 200 requests beside the idle connection
+the idle connection's process is alive
+idle.mjs exit 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3182 ms after its last answer, nothing received since
+IDLE-FAILED: answer 1 is "HTTP/1.1 404 Not Found"
+idle.mjs on a 404 path: exit 1
+idle.mjs whose server ended: exit 1
+IDLE-READY 3 answers of 200 to GET /private on one connection
+IDLE-FAILED: the server closed the idle connection
+# LOOK2-DONE 15:09:35

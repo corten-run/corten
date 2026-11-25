@@ -1,0 +1,78 @@
+# tree of f8934bc998a7609728826c106cfc57fdd1aef3dd 18:23:28
+== clean rc=0: test result: ok. 77 passed; 0 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.51s  18:24:18
+M22: applied to crates/corten/src/deadline.rs
+== M22-run1 rc=101: test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.50s error: test failed, to rerun pass `-p corten-run --lib`  18:24:46
+test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.50s
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... FAILED
+test tests::server::the_first_number_a_connection_is_given_is_none_of_the_states ... FAILED
+thread 'tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits' (341) panicked at crates/corten/src/tests/server.rs:2425:5:
+thread 'tests::server::the_first_number_a_connection_is_given_is_none_of_the_states' (433) panicked at crates/corten/src/tests/server.rs:2447:5:
+== M22-run2 rc=101: test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.51s error: test failed, to rerun pass `-p corten-run --lib`  18:24:57
+test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.51s
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... FAILED
+test tests::server::the_first_number_a_connection_is_given_is_none_of_the_states ... FAILED
+thread 'tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits' (56) panicked at crates/corten/src/tests/server.rs:2425:5:
+thread 'tests::server::the_first_number_a_connection_is_given_is_none_of_the_states' (151) panicked at crates/corten/src/tests/server.rs:2447:5:
+== M22-run3 rc=101: test result: FAILED. 76 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.50s error: test failed, to rerun pass `-p corten-run --lib`  18:25:08
+test result: FAILED. 76 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.50s
+test tests::server::the_first_number_a_connection_is_given_is_none_of_the_states ... FAILED
+thread 'tests::server::the_first_number_a_connection_is_given_is_none_of_the_states' (151) panicked at crates/corten/src/tests/server.rs:2447:5:
+== M22-run4 rc=101: test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.53s error: test failed, to rerun pass `-p corten-run --lib`  18:25:19
+test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.53s
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... FAILED
+test tests::server::the_first_number_a_connection_is_given_is_none_of_the_states ... FAILED
+thread 'tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits' (59) panicked at crates/corten/src/tests/server.rs:2425:5:
+thread 'tests::server::the_first_number_a_connection_is_given_is_none_of_the_states' (151) panicked at crates/corten/src/tests/server.rs:2447:5:
+== M22-run5 rc=101: test result: FAILED. 76 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.54s error: test failed, to rerun pass `-p corten-run --lib`  18:25:31
+test result: FAILED. 76 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.54s
+test tests::server::the_first_number_a_connection_is_given_is_none_of_the_states ... FAILED
+thread 'tests::server::the_first_number_a_connection_is_given_is_none_of_the_states' (151) panicked at crates/corten/src/tests/server.rs:2447:5:
+== M22-run6 rc=101: test result: FAILED. 76 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.54s error: test failed, to rerun pass `-p corten-run --lib`  18:25:42
+test result: FAILED. 76 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.54s
+test tests::server::the_first_number_a_connection_is_given_is_none_of_the_states ... FAILED
+thread 'tests::server::the_first_number_a_connection_is_given_is_none_of_the_states' (151) panicked at crates/corten/src/tests/server.rs:2447:5:
+== M22-run7 rc=101: test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.56s error: test failed, to rerun pass `-p corten-run --lib`  18:25:53
+test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.56s
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... FAILED
+test tests::server::the_first_number_a_connection_is_given_is_none_of_the_states ... FAILED
+thread 'tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits' (58) panicked at crates/corten/src/tests/server.rs:2425:5:
+thread 'tests::server::the_first_number_a_connection_is_given_is_none_of_the_states' (151) panicked at crates/corten/src/tests/server.rs:2447:5:
+== M22-run8 rc=101: test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.55s error: test failed, to rerun pass `-p corten-run --lib`  18:26:04
+test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.55s
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... FAILED
+test tests::server::the_first_number_a_connection_is_given_is_none_of_the_states ... FAILED
+thread 'tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits' (62) panicked at crates/corten/src/tests/server.rs:2425:5:
+thread 'tests::server::the_first_number_a_connection_is_given_is_none_of_the_states' (151) panicked at crates/corten/src/tests/server.rs:2447:5:
+== M22-run9 rc=101: test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.53s error: test failed, to rerun pass `-p corten-run --lib`  18:26:15
+test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.53s
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... FAILED
+test tests::server::the_first_number_a_connection_is_given_is_none_of_the_states ... FAILED
+thread 'tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits' (61) panicked at crates/corten/src/tests/server.rs:2425:5:
+thread 'tests::server::the_first_number_a_connection_is_given_is_none_of_the_states' (151) panicked at crates/corten/src/tests/server.rs:2447:5:
+== M22-run10 rc=101: test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.51s error: test failed, to rerun pass `-p corten-run --lib`  18:26:26
+test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.51s
+test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... FAILED
+test tests::server::the_first_number_a_connection_is_given_is_none_of_the_states ... FAILED
+thread 'tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits' (60) panicked at crates/corten/src/tests/server.rs:2425:5:
+thread 'tests::server::the_first_number_a_connection_is_given_is_none_of_the_states' (151) panicked at crates/corten/src/tests/server.rs:2447:5:
+M22: 10 of 10 runs failed; the tests that failed, by count:       1 test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.50s;      2 test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.51s;      2 test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.53s;      1 test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.55s;      1 test result: FAILED. 75 passed; 2 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.56s;      1 test result: FAILED. 76 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.50s;      2 test result: FAILED. 76 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.54s;      7 test tests::server::a_connection_makes_its_timer_only_when_a_second_deadline_waits ... FAILED;     10 test tests::server::the_first_number_a_connection_is_given_is_none_of_the_states ... FAILED; 18:26:26
+M10: applied to crates/corten/src/deadline.rs
+== M10 rc=101: test result: FAILED. 76 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.51s error: test failed, to rerun pass `-p corten-run --lib`  18:26:54
+test result: FAILED. 76 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.51s
+test tests::server::two_deadlines_in_one_poll_of_a_new_connection_do_not_take_another_connections_timer ... FAILED
+thread 'tests::server::two_deadlines_in_one_poll_of_a_new_connection_do_not_take_another_connections_timer' (434) panicked at crates/corten/src/tests/server.rs:2844:9:
+M14: applied to crates/corten/src/deadline.rs
+== M14 rc=0: test result: ok. 77 passed; 0 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.51s  18:27:25
+M18: applied to crates/corten/src/deadline.rs
+== M18 rc=101: test result: FAILED. 76 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.50s error: test failed, to rerun pass `-p corten-run --lib`  18:27:59
+test result: FAILED. 76 passed; 1 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.50s
+test tests::server::a_deadline_of_the_longest_duration_sets_the_connections_timer_30_years_off ... FAILED
+thread 'tests::server::a_deadline_of_the_longest_duration_sets_the_connections_timer_30_years_off' (349) panicked at /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/time/instant.rs:161:27:
+M21a: applied to crates/corten/src/deadline.rs
+== M21a rc=0: test result: ok. 77 passed; 0 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.54s  18:28:38
+M21b: applied to crates/corten/src/deadline.rs
+== M21b rc=101: error: test failed, to rerun pass `-p corten-run --lib`   process didn't exit successfully: `/target/debug/build/corten-run/03072fc088ecfe1b/out/corten-03072fc088ecfe1b 'tests::server' deadline` (signal: 6, SIGABRT: process abort signal)  18:29:04
+fatal runtime error: thread local panicked on drop, aborting
+M27: applied to crates/corten/src/app.rs
+== M27 rc=0: test result: ok. 77 passed; 0 failed; 2 ignored; 0 measured; 1008 filtered out; finished in 10.53s  18:29:54
+# TESTS-DONE 18:29:54
