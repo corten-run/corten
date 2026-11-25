@@ -10300,6 +10300,104 @@ rules something out.
     2026-11-07, round r16's Chromium browser pass, on `eea6adb`; 2026-11-11, round browser-4 on a
     Xeon Platinum 8358, on `3fb4b1ac`.
 
+74. <a id="choice-data-address"></a>**A GET `data-patch` form marked `data-address` puts the address it asked for in
+    place of the history entry's as its patch is drawn.** A filter or scope that redraws one part
+    of a screen with a GET `data-patch` form left the address as it was: a reload and a bookmark
+    lost the filter, the page's other forms still carried the old one, and the same form without
+    JavaScript loads the page at its address, so the two paths disagreed (README Value 3)
+    ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
+    The mark says what the form already is: its answer is the page at the address it asked for.
+    In the task that draws the patch, before anything else can run (an observer of what it drew,
+    another submit), the runtime calls `history.replaceState` with the response's URL, the
+    redirect's when there was one, and the `#fragment` of the form's `action` or `formaction`,
+    keeping the entry's `history.state` (a fragment a redirect's `Location` names itself is not
+    seen, as `fetch` does not show it, the same as for a link the runtime follows); the same
+    address calls nothing, and a nav link to the new address is marked current, as for a
+    navigation. No entry is added, so Back goes to the page before the screen, and Forward and a
+    reload read the page at the address, as for any entry.
+
+    A marked answer draws only on the visit it was sent from: a navigation the runtime takes
+    (Back, a link, a page reading itself again) or a page drawn in place, even one with the same
+    markup, starts another, and one pressed while a navigation is under way belongs to none. This
+    matters more for a replace than for any other draw: `replaceState` during a navigation the
+    runtime intercepted aborts it, and on another visit it would put this screen's address over
+    that visit's entry. A marked GET waiting for a write of its form is sent only on the visit
+    where it was pressed. The address moves only after the patch draws every element: a dropped
+    answer, a 204, an empty patch or an element with no place leaves it. A drawn 4xx patch (a 422)
+    moves it, being the destination's error view; a 5xx may draw, but is a failed request and never
+    moves it. The rest is the runtime's ordinary `data-patch` form: a page answer is drawn in
+    place and leaves the address, Corten's redirect (`corten-location`) is followed as a
+    navigation, its submits are ordered as any form's are, and two marked forms' answers are drawn
+    as they come, the address that of the last one that moved it. The route at each such address
+    answers its part with `req.patch_or`, drawing all that the address changes, a link or form
+    that carries the address included (a `keep_query` form's hidden inputs are the query it was
+    drawn with); a route whose patch appends (Load more) is not one to mark. Without the Navigation
+    API ([Limit 1](#limit-navigation-api)) it works the same: the replaced entry is the document's
+    own, so a traversal to it loads the page at its address. It is part of the runtime, with no
+    separate module.
+
+    Not chosen: pushing an entry for each answer, as the browser's own form does, which this
+    Choice's earlier builds did
+    ([#1525 A GET data-patch form marked data-address puts the address it asked for in history](https://github.com/corten-run/corten/pull/1525)):
+    their reviews found that Back then left an entry whose unsent draft was lost, that a
+    fragment-only Back with a marked GET on its way let its push drop the Forward entry, and that
+    a push stopped the page reading itself again (`ReadAgain`, which follows the entry's key,
+    which a replace keeps); and Back to a pushed entry read the whole page rather than the patch
+    the HTTP cache holds. Push with Back answered from the patch is a separate change, to be
+    measured
+    ([#2104 A GET data-patch form marked data-address cannot add a history entry that Back answers from the patch it holds](https://github.com/corten-run/corten/issues/2104)).
+    Until it lands, the paths differ on one point: without JavaScript each change is an entry of
+    its own, with it the screen keeps one. `data-keep-place` on the filter's form, Corten's way
+    to apply a filter as it changes: it sends the form as a navigation, so the address follows,
+    each change is an entry and the user's place stays, but each change reads the whole page,
+    11,959 bytes of body against the patch's 829 on the smoke's screen. The two marks are not
+    two ways to do one thing (README Value 5): `data-keep-place` is for a filter that changes
+    most of what the page shows (a list's results), which a page read is the right size for, and
+    `data-address` for one that redraws one part of a screen whose rest costs more to read; the
+    guide says which to pick. A header on the patch's answer that names its address
+    (`corten-location` with replace semantics, as the issue suggested), since the same
+    `patch_or` answers Load more and a filter and only the form knows which it is, and a header
+    of Corten's own where the form's markup can say it needs a reason of its own
+    ([Rule 10](#rule-standard-formats)); changing the address for every GET `data-patch` form,
+    which would give Load more an address that reloads to fewer rows than the screen shows; a
+    module of its own, loaded by the pages with a marked form, as the earlier builds had: what is
+    left is smaller than the hooks a module needs, and a module still loading when the answer
+    comes would draw the patch without its address; and a hook for a script to replace the
+    address, a second way to do what the mark does, with URLs written in scripts (README Value 5).
+
+    What it costs: the runtime every page loads is 539 bytes larger raw (45,676 to 46,215), 244
+    with gzip (16,389 to 16,633) and 210 with brotli (14,796 to 15,006), paid once a release by
+    every user. A `data-patch` submit reads one attribute; only a marked GET captures its visit,
+    compares it where it could draw and builds an address. A patch tracks whether it placed every
+    element as it walks them, without a separate scan, and a page drawn or a navigation taken
+    adds one to a counter. On the server nothing runs that did not: `html!` writes the mark as
+    an attribute and refuses a misplaced one when the markup compiles.
+
+    Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
+    defaults, once for each build; the page's and the patch's bodies, once each); platform
+    (`history.replaceState` changes the current entry's URL, keeps its Navigation API key, fires
+    a `navigate` of type `replace` that the runtime does not intercept, and aborts a navigation
+    the runtime has under way, in Chromium, Firefox and WebKit; the smoke's checks in all three);
+    reasoned (the form's mark says which answers are the page at their address, which neither the
+    handler nor the runtime can tell; a replace in the task that draws leaves nothing able to see
+    the patch without its address; one fenced to its visit cannot touch another visit's entry);
+    value (an address that names what the screen shows is correct output that survives a reload,
+    the README's conflict order 1, above the bytes it costs, its 2; the address the form reaches
+    is the same with and without JavaScript, README Value 3; one mark, no script, README Value 5).
+
+    Revisit when: push with Back answered from the patch
+    ([#2104 A GET data-patch form marked data-address cannot add a history entry that Back answers from the patch it holds](https://github.com/corten-run/corten/issues/2104))
+    is measured, when this Choice weighs an entry for each change again; an app needs each change
+    of such a filter to be an entry Back steps through; a route's type can say that its patch
+    draws the part for its address, when `html!` could refuse marking a form whose route
+    appends, which the guide only asks today; or `replaceState` stops keeping the entry's key or
+    stops aborting a navigation under way in one of the engines.
+
+    Last checked: 2026-11-25, the runtime's size on `6ca02c26e` against main `0bcae7047`, and the
+    page's and the patch's bodies on the same commit; 2026-11-25, the watchlist smoke on the same
+    server in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2, every `data-address`
+    check passing in each.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

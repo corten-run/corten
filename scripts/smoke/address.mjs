@@ -34,6 +34,7 @@ export async function dataAddress(browser) {
     const shown = () => scope.evaluate(() => document.querySelector("#smoke-address output")?.textContent);
     const index = () => scope.evaluate(() => /** @type {any} */ (window).navigation.currentEntry.index);
     const entries = () => scope.evaluate(() => /** @type {any} */ (window).navigation.entries().length);
+    const key = () => scope.evaluate(() => /** @type {any} */ (window).navigation.currentEntry.key);
     /** The address of the entry `by` from the current one, if any. @param {number} by */
     const entryAt = (by) =>
       scope.evaluate((by) => {
@@ -70,7 +71,7 @@ export async function dataAddress(browser) {
     // is drawn. It is the answer's by the time anything else can run after the draw: a mutation
     // observer of the panel the patch put in reads it, and presses Day from there, whose answer
     // takes the entry's place in turn. Neither adds an entry.
-    const first = { index: await index(), entries: await entries() };
+    const first = { index: await index(), entries: await entries(), key: await key() };
     let during = { reading: false, at: "", shown: "" };
     const drawn = await answered(async () => {
       await scope.evaluate(() => {
@@ -116,13 +117,14 @@ export async function dataAddress(browser) {
       at: await at(),
       index: (await index()) - first.index,
       added: (await entries()) - first.entries,
+      sameKey: (await key()) === first.key,
       shown: await shown(),
       before: await entryAt(-1),
     };
     check(
       "a data-address form's patch puts the address it asked for in place of the entry's as it is drawn, before anything else runs, adding no entry",
       replaced.during.reading && replaced.during.at === "/smoke/address" && replaced.during.shown === "all" && replaced.drawn && replaced.atReplace === "week" &&
-        replaced.seenAt === "?scope=week" && replaced.at === "/smoke/address?scope=day" && replaced.index === 0 && replaced.added === 0 && replaced.shown === "day" &&
+        replaced.seenAt === "?scope=week" && replaced.at === "/smoke/address?scope=day" && replaced.index === 0 && replaced.added === 0 && replaced.sameKey && replaced.shown === "day" &&
         replaced.before.endsWith("/smoke/address-elsewhere"),
       JSON.stringify(replaced),
     );
@@ -515,8 +517,11 @@ async function markedPatchVisits(browser, errors) {
   // Two ordinary form answers swap in byte-identical pages. The second is still a different visit.
   await page.goto(home);
   const ordinary = `${home}?scope=ordinary`;
-  const markup = await fetch(home, { headers: { corten: "nav" } }).then((res) => res.text());
-  await page.route(ordinary, (route) => route.fulfill({ headers: { "corten-page": "1", "content-type": "text/html" }, body: markup }));
+  // The server's own page answer, its `corten-page` and `corten-shell` headers included, for each.
+  const answer = await fetch(home, { headers: { corten: "nav" } });
+  const markup = await answer.text();
+  const headers = Object.fromEntries(["corten-page", "corten-shell", "content-type"].flatMap((name) => (answer.headers.has(name) ? [[name, answer.headers.get(name) ?? ""]] : [])));
+  await page.route(ordinary, (route) => route.fulfill({ headers, body: markup }));
   await page.evaluate((action) => {
     const form = document.createElement("form");
     form.action = action;

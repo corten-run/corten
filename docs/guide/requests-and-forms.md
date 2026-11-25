@@ -2202,6 +2202,60 @@ The address does not change with an appended page, so a reload shows the first p
 a list whose length must survive a reload puts it in the address with a link instead.
 `examples/watchlist`'s news page has both.
 
+A filter or scope whose answer is one part of the screen (a panel's period, a chart's range) can
+be a GET `data-patch` form too, so a change reads only what that part shows, not the rest of the
+screen. Mark it `data-address` as well, and its answer is the page at the address it asked for:
+as the patch is drawn, that address takes the place of the current history entry's, a
+`#fragment` of the form's `action` or `formaction` included, and the address of a redirect the
+request followed. No entry is added: Back goes to the page before the screen, not to the scope
+before this one, as after `history.replaceState`. A reload, a bookmark and a shared link then
+reach what the screen shows, and a form that posts without an `action` sends to it. Only an
+answer that draws whole moves the address: a 204, an empty patch, a patch with an element that
+finds no place, a page answer and a 5xx (which may still draw) leave it. A 4xx patch that draws
+(a 422) moves it. An answer that comes once another visit has started (a navigation, Back, a
+page drawn in place) draws nothing, even when the page it was sent from is still on screen, and
+a GET pressed while a Save (`formmethod="post"`) of the form is on its way waits for the Save's
+answer, as any submit of the form does, and is sent only if the visit has not changed. Two marked
+forms are not ordered against each other: their answers are drawn as they come.
+
+Which mark a filter takes depends on what its change redraws. One that changes most of what the
+page shows (a list's results) is a navigation, `data-keep-place`: each change reads the page,
+which is what changes, and adds an entry Back returns to. One that redraws one part of a screen
+whose rest costs more to read (a panel's period beside a long report) is
+`data-patch data-address`: a change reads only the part, and keeps the screen's one entry.
+
+```rust,ignore
+#[component]
+fn ScopePanel<'a>(scope: Scope, rows: &'a [Sale]) -> impl Patch {
+    let f = StrategyQuery::FIELDS;
+    html! {
+        <section id={ScopePanelId}>
+            <form method="get" action={url::Strategy::default()} data-patch data-address>
+                <select name={f.scope}>..</select>
+                <button>"Apply"</button>
+            </form>
+            <SalesTable rows={rows} />
+        </section>
+    }
+}
+```
+
+The handler answers both with `req.patch_or`, the panel with JavaScript and the page otherwise,
+so the patch draws everything an address changes: the part, and the form with it, whose controls
+then show the scope the part does, except a field the user changed and did not send, which keeps
+what they typed as in any patch ([Limit 2](../design.md#limit-whole-element-patches)). A route
+whose patch adds to the page (`view::Append`, Load more's) is not one to mark: its address would
+reload to fewer rows than the screen shows. The page's other links and forms keep the address
+they were drawn with, a form that keeps the address's query (`keep_query`) included: its hidden
+inputs are the query of the route it was drawn with, and do not follow the address. A link or
+form that should carry the scope is drawn by the same patch, `keep_query` too, so it sends the
+scope on screen. Without the Navigation API ([Limit 1](../design.md#limit-navigation-api)) the
+form works the same way. `html!` refuses `data-address` on anything but a `<form>`, on a form
+without `data-patch`, and on one whose `method` is `post` or `dialog`; a `formmethod="post"`
+button in a marked form posts as it would in any other, and leaves the address. A filter whose
+every change should be an entry of its own, which Back steps through, is a navigation for now
+([#2104 A GET data-patch form marked data-address cannot add a history entry that Back answers from the patch it holds](https://github.com/corten-run/corten/issues/2104)).
+
 ## Redirects
 
 After a successful write, `req.redirect(&route)` sends the browser on (post/redirect/get), with
