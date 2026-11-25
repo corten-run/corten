@@ -90,9 +90,19 @@ pub async fn marketplace_json(cx: &Cx) -> Result<Json<Arc<Record>>> {
     Ok(Json(record))
 }
 
-pub fn record_errors<'a>(cx: &'a Cx, body: Body, next: Next<'a>) -> LayerFuture<'a> {
+pub fn matched_responses<'a>(cx: &'a Cx, body: Body, next: Next<'a>) -> LayerFuture<'a> {
     Box::pin(async move {
         match next.run(cx, body).await {
+            Ok(mut response)
+                if try_endpoint(cx).is_some_and(|endpoint| endpoint.path().as_str() == "/marketplace/{locale}/{id}") =>
+            {
+                // Keep the runtime and readiness assets, but this document has no client
+                // expressions, event directives, shards or runtime-managed links.
+                response
+                    .headers_mut()
+                    .insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(crate::MATCHED_MARKETPLACE_CSP));
+                Ok(response)
+            }
             // The matched endpoint is available even for a native 405, without a matched route.
             Err(error)
                 if (error.is::<NotFoundError>() || error.is::<MethodNotAllowedError>() || error.is::<InternalServerError>())

@@ -48,6 +48,19 @@ const COMPONENTS: Asset = asset!("static/components.css");
 const READY: Asset = asset!("static/ready.js");
 const CATALOG: Asset = asset!("static/catalog.css");
 
+macro_rules! matched_csp {
+    ($eval:literal) => {
+        concat!(
+            "default-src 'self'; script-src 'self'",
+            $eval,
+            "; style-src 'self'; img-src 'self' data: https:; object-src 'none'; ",
+            "base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        )
+    };
+}
+const MATCHED_RUNTIME_CSP: &str = matched_csp!(" 'unsafe-eval'");
+const MATCHED_MARKETPLACE_CSP: &str = matched_csp!("");
+
 #[tokio::main]
 async fn main() {
     // Load the fixture (if any) and read API_BASE before listening, like the other apps.
@@ -78,7 +91,7 @@ fn router() -> Router {
     let builder = if matched() {
         builder
             .route(live)
-            .layer(LayerFn::new(None::<&str>, marketplace_view::record_errors))
+            .layer(LayerFn::new(None::<&str>, marketplace_view::matched_responses))
             .layer(profile_layer())
             .layer(hosts::AllowedHosts::from_env())
     } else {
@@ -106,17 +119,14 @@ async fn live(_cx: &Cx) -> &'static str {
 /// after every layer; a cross-site request is refused before any layer runs. Topcoat's defaults
 /// already refuse a body over 2 MiB (413) and a cross-site form post
 /// (403, its origin policy), compress, and close a request head left unfinished at 30 s. Its
-/// runtime compiles the expressions it reads from the page's markup with `new Function`, so the CSP
-/// has `'unsafe-eval'` on every answer this layer sets headers on.
+/// runtime compiles expressions from page markup with `new Function`. Keep that allowance in the
+/// fallback policy; the native Marketplace page uses only ordinary links and forms.
 fn profile_layer() -> impl Layer {
     let header =
         |name: HeaderName, value: &'static str| SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value));
     TowerLayer::new(
         ServiceBuilder::new()
-            .layer(header(
-                header::CONTENT_SECURITY_POLICY,
-                "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
-            ))
+            .layer(header(header::CONTENT_SECURITY_POLICY, MATCHED_RUNTIME_CSP))
             .layer(header(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
             .layer(header(header::REFERRER_POLICY, "strict-origin-when-cross-origin"))
             .layer(header(header::X_FRAME_OPTIONS, "DENY"))

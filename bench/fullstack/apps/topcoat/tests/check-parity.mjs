@@ -8,9 +8,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const [, , binary] = process.argv;
-assert.ok(binary, "usage: node tests/check-parity.mjs PATH_TO_BUNDLED_TOPCOAT_BINARY");
+const [, , binary, ...options] = process.argv;
+assert.ok(binary && (options.length === 0 || (options.length === 1 && options[0] === "--browser")),
+  "usage: node tests/check-parity.mjs PATH_TO_BUNDLED_TOPCOAT_BINARY [--browser]");
 const record = JSON.parse(await readFile(new URL("./marketplace.json", import.meta.url), "utf8"));
+const related = { ...record, id: "item_2", title: "Another <card>" };
+const records = new Map([[record.id, record], [related.id, related]]);
 const folder = await mkdtemp(join(tmpdir(), "topcoat-parity-"));
 const fixture = join(folder, "marketplace.json");
 const counts = new Map();
@@ -27,9 +30,9 @@ const upstream = createServer((req, res) => {
     res.on("close", () => { if (!res.writableFinished) row.cancelled++; });
     return; // Never answer or close this request from the upstream side.
   }
-  const status = id === record.id ? 200 : id === "unavailable" ? 503 : 404;
+  const status = records.has(id) ? 200 : id === "unavailable" ? 503 : 404;
   res.writeHead(status, { "Content-Type": "application/json" })
-    .end(JSON.stringify(status === 200 ? record : { detail: "upstream-only diagnostic" }));
+    .end(JSON.stringify(status === 200 ? records.get(id) : { detail: "upstream-only diagnostic" }));
 });
 
 async function loopback(server) {
@@ -61,7 +64,7 @@ async function withApp(source, apiPort, check, profile = "matched") {
     env: { ...process.env, HOST: "127.0.0.1", PORT: String(port), PROFILE: profile,
       HOSTS: `${ownedHost},fsw-topcoat`,
       ITEM_SOURCE: "api", CATALOG_SOURCE: "api", MARKETPLACE_SOURCE: source,
-      API_BASE: `http://127.0.0.1:${apiPort}`, MARKETPLACE_FIXTURE_PATH: fixture },
+      API_BASE: `http://127.0.0.1:${apiPort}`, MARKETPLACE_FIXTURE_PATH: fixture, MARKETPLACE_PUBLIC_ORIGIN: base },
   });
   let finished = false;
   const exited = new Promise((done) => {
@@ -103,9 +106,81 @@ async function problem(response, status, title) {
   assert.deepEqual(await response.json(), { type: "about:blank", title, status });
 }
 
+const csp = "content-security-policy";
+const strictScript = /(?:^|;\s*)script-src 'self';/;
+
+async function checkBrowser(browser, base, policy) {
+  for (const javaScriptEnabled of [true, false]) {
+    const context = await browser.newContext({ javaScriptEnabled });
+    try {
+      const page = await context.newPage();
+      const errors = [], scripts = new Set();
+      page.on("pageerror", (error) => errors.push(error.message));
+      page.on("console", (message) => {
+        if (message.type() === "error" && /^(?:\[topcoat\])|Content Security Policy/i.test(message.text())) errors.push(message.text());
+      });
+      page.on("response", (response) => {
+        if (response.ok() && response.request().resourceType() === "script") scripts.add(response.url());
+      });
+      await page.addInitScript(() => {
+        document.addEventListener("securitypolicyviolation", (event) => {
+          window.__policyViolations ??= [];
+          window.__policyViolations.push(event.violatedDirective);
+        });
+      });
+      async function checked(response) {
+        assert.equal(response?.status(), 200);
+        const policies = (await response.headersArray()).filter(({ name }) => name.toLowerCase() === csp);
+        assert.deepEqual(policies.map(({ value }) => value), [policy]);
+        if (javaScriptEnabled) {
+          assert.deepEqual(await page.evaluate(() => window.__policyViolations ?? []), []);
+          assert.equal(await page.evaluate(() => typeof window.__hydratedAt), "number");
+        }
+      }
+      async function submit(button) {
+        const [response] = await Promise.all([page.waitForNavigation({ waitUntil: "load" }), button.click()]);
+        await checked(response);
+      }
+
+      await checked(await page.goto(base + pagePath));
+      if (javaScriptEnabled) {
+        const runtime = page.locator("script[type=module][data-topcoat-usize-bits]");
+        assert.ok(scripts.has(new URL(await runtime.getAttribute("src"), page.url()).href),
+          "the native Topcoat module loaded under the page policy");
+      }
+      const filter = page.locator(".marketplace__listings form");
+      await filter.locator("[name=seller]").fill("Al");
+      await submit(filter.locator("button"));
+      assert.equal(new URL(page.url()).searchParams.get("seller"), "Al");
+      assert.equal(await page.locator("[data-listing-id]").count(), 2);
+      await submit(page.locator(".marketplace__more"));
+      assert.equal(await page.locator("[data-offer-id]").count(), 6);
+      assert.equal(await page.locator(".marketplace__contents a").getAttribute("href"), "/marketplace/en-US/item_2");
+
+      const alert = page.locator(".marketplace__alert form");
+      await alert.locator("[name=email]").fill("parity@example.test");
+      await alert.locator("[name=target_price]").fill("12.34");
+      await submit(alert.locator("button"));
+      assert.equal(await page.locator(".marketplace__message").textContent(),
+        'Alert set: we will email parity@example.test when Ember <dragon> & "foil" drops below $12.34.');
+      const readback = await context.request.get(base + "/api/alerts");
+      assert.equal(readback.status(), 200);
+      assert.deepEqual(await readback.json(), [{ item_id: record.id, email: "parity@example.test", target_minor: 1234 }]);
+      await submit(page.locator(".marketplace__contents a"));
+      assert.equal(new URL(page.url()).pathname, "/marketplace/en-US/item_2");
+      assert.equal(await page.locator("h1").textContent(), related.title);
+      assert.deepEqual(errors, [], "browser runtime errors");
+    } finally {
+      await context.close();
+    }
+  }
+}
+
+let browser;
 try {
-  await writeFile(fixture, JSON.stringify({ [record.id]: record }));
+  await writeFile(fixture, JSON.stringify(Object.fromEntries(records)));
   const apiPort = await loopback(upstream);
+  if (options.length) browser = await (await import("playwright")).chromium.launch({ headless: true });
   for (const source of ["fixture", "api"]) {
     await withApp(source, apiPort, async (get, base) => {
       const json = await get(`/api/marketplace/${record.id}`);
@@ -113,6 +188,13 @@ try {
       assert.deepEqual(await json.json(), record);
       const page = await get(pagePath);
       assert.equal(page.status, 200);
+      const policy = page.headers.get(csp);
+      assert.match(policy, strictScript);
+      const home = await get("/");
+      const homePolicy = home.headers.get(csp);
+      assert.match(homePolicy, /script-src 'self' 'unsafe-eval';/);
+      assert.equal(policy, homePolicy.replace(" 'unsafe-eval'", ""), "only the page's eval allowance changes");
+      await home.body.cancel();
       assert.match(await page.text(), /Ember &lt;dragon&gt;/);
       const port = new URL(base).port;
       for (const host of [`127.0.0.1:${port}`, "localhost", `[::1]:${port}`, ownedHost, "fsw-topcoat:8080"]) {
@@ -138,6 +220,9 @@ try {
       assert.equal(await statusAt(base, jsonPath, internal, {
         method: "POST", headers: { Origin: `http://${internal}` },
       }), 405, "same internal Host and Origin pass the native origin check");
+      assert.equal(await statusAt(base, jsonPath, "fsw-topcoat:8080", {
+        method: "POST", headers: { Origin: "https://localhost:8080", "Sec-Fetch-Site": "same-origin" },
+      }), 405, "the edge's rewritten Host does not block a same-origin browser");
       assert.equal(await statusAt(base, jsonPath, internal, {
         method: "POST", headers: { Origin: "http://fsw-topcoat:8080" },
       }), 403, "a different allowed Host is not a trusted cross-origin writer");
@@ -156,6 +241,7 @@ try {
       assert.equal(live.status, 200);
       assert.equal(await live.text(), "ok\n");
       assert.deepEqual(counts, beforeLive, "liveness must not call the upstream");
+      if (browser) await checkBrowser(browser, base, policy);
       if (source === "fixture") {
         assert.equal(counts.size, 0, "fixture and liveness probes made no upstream requests");
         return;
@@ -189,12 +275,18 @@ try {
     });
     console.log(`PASS Topcoat matched ${source}: native Marketplace parity probes`);
   }
-  await withApp("fixture", apiPort, async (_get, base) => {
+  await withApp("fixture", apiPort, async (get, base) => {
     assert.equal(await statusAt(base, pagePath, unknownHost), 200, "the default profile still does not filter Host");
+    const page = await get(pagePath);
+    assert.equal(page.headers.get(csp), null, "the default profile still does not add a CSP");
+    await page.body.cancel();
   }, "");
 } finally {
-  upstream.closeAllConnections();
-  await new Promise((done) => upstream.close(done));
-  await unlink(fixture).catch((error) => { if (error.code !== "ENOENT") throw error; });
-  await rmdir(folder);
+  try { await browser?.close(); }
+  finally {
+    upstream.closeAllConnections();
+    await new Promise((done) => upstream.close(done));
+    await unlink(fixture).catch((error) => { if (error.code !== "ENOENT") throw error; });
+    await rmdir(folder);
+  }
 }

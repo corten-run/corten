@@ -57,9 +57,15 @@ without ports). Requests may include a port. An unknown Host such as r65's
 Forwarded host headers do not affect this check. The native same-origin
 check for writes and the default profile are unchanged.
 
-The matched script policy still permits evaluation for Topcoat's native runtime.
-Neither r65 source is requalified by these changes. The r65 deadline, body/header limits
-and connection cap that were not probed are not diagnosed here.
+Matched Marketplace pages use `script-src 'self'`. They keep the same
+Topcoat runtime and readiness modules. Their links and filter/alert forms
+are ordinary HTML, with no client expression, event directive or shard that
+needs the runtime's `new Function` compiler. Other routes keep the previous
+policy: the native item page uses those features and Topcoat 0.12.1 cannot run
+them under a no-eval CSP without an upstream compiler or runtime change.
+
+Neither r65 source is requalified by these changes. The r65 deadline, body/header
+limits and connection cap that were not probed are not diagnosed here.
 See the [recorded qualification outcomes](https://github.com/corten-run/corten/issues/1305#issuecomment-7147850444).
 
 On a Linux build runner, from this app directory with the pinned Topcoat CLI:
@@ -68,7 +74,14 @@ On a Linux build runner, from this app directory with the pinned Topcoat CLI:
 cargo build --release --locked
 topcoat asset bundle --release
 node tests/check-parity.mjs target/release/item-page-topcoat
+# With the repository's Playwright and Chromium installed:
+node tests/check-parity.mjs target/release/item-page-topcoat --browser
 ```
+
+The browser probe checks the native runtime and readiness scripts, filter and
+offer navigation, and alert POST and readback with and without JavaScript on
+each source, without bypassing CSP. The full Marketplace browser matrix and
+qualification still need to run against the native build.
 
 The probe uses the actual bundled binary and a loopback record source. It
 checks both source modes, error representations and liveness, plus the real
