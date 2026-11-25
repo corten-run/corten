@@ -1693,10 +1693,11 @@ enum NotOrigin {
 /// `scheme` (lowercase) and why a browser never sends it in `Origin`, for one it never does.
 fn never_an_origin(scheme: &str) -> Option<(&'static str, &'static str)> {
     const NULL: &str = "a page loaded from it sends Origin: null";
+    const FILE: &str = "a browser sends Origin: null from it, and file:// would name every local file, not one app (an Electron app registers a standard scheme)";
     const CREATOR: &str = "a document from it has the origin of the page that made it";
     const NO_PAGE: &str = "no page is served from it";
     Some(match scheme {
-        "file" => ("file", NULL),
+        "file" => ("file", FILE),
         "data" => ("data", NULL),
         "blob" => ("blob", CREATOR),
         "javascript" => ("javascript", CREATOR),
@@ -2618,7 +2619,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "no browser sends a file: origin, since a page loaded from it sends Origin: null")]
+    #[should_panic(
+        expected = "no browser sends a file: origin, since a browser sends Origin: null from it, and file:// would name every local file"
+    )]
     fn an_allowed_origin_is_not_a_file_url() {
         let _ = Policy::new().allow_origin("file:///");
     }
