@@ -193,7 +193,7 @@ pub fn Certificate<'a>(req: &'a Req) -> impl Render {
                 <dl class={Heat}>
                     <div>
                         <dt>"Product"</dt>
-                        <dd>"corten-run 0.2"</dd>
+                        <dd>"corten-run 0.3"</dd>
                     </div>
                     <div>
                         <dt>"Measured at"</dt>
