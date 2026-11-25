@@ -542,6 +542,8 @@ export async function pageWrites(page, browser) {
         () => false,
       );
   };
+  /** Whether the browser has the Navigation API, read within 5 s. */
+  const hasNavigation = () => readWithin("whether the browser has the Navigation API", page.evaluate(() => "navigation" in window));
   // A write the server applied whose answer the network lost: the page shows the failure in its
   // layout (as a toaster there does), for the user to send again. The page reading itself again
   // (`ReadAgain`) reads <main> alone and keeps the failure shown, where a whole page, whose header
@@ -551,7 +553,7 @@ export async function pageWrites(page, browser) {
     const failedName = legacy
       ? "a legacy write left undrawn does not make a poll replace the layout after a write failed"
       : "a write that failed in view leaves its change to the layout for the next page, and the page reading itself again keeps the failure shown";
-    if (!(await page.evaluate(() => "navigation" in window))) {
+    if (!(await hasNavigation())) {
       skip(failedName, "without the Navigation API a link is a full load");
       continue;
     }
@@ -590,10 +592,10 @@ export async function pageWrites(page, browser) {
         legacyDrew = legacySent && (await writtenSeen(own)) && "corten-page" in seen.answered;
       }
       // The page's first read of itself after the stand-in failed or answered that write, drawn
-      // with the failure already shown (`nextPollDrawn`), and the failure still shown 500 ms after
-      // that draw.
+      // with the failure already shown (`nextPollDrawn`), and the failure still shown at a look at
+      // least 500 ms after that draw, by the time the page recorded as it drew it.
       const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, seen.settled[follows], "");
-      if (drewAgain) await own.waitForTimeout(500);
+      if (drewAgain && drawn) await own.waitForTimeout(Math.max(0, drawn.time + 500 - Date.now()));
       const kept =
         drewAgain &&
         (await readWithin(
@@ -697,16 +699,19 @@ export async function pageWrites(page, browser) {
   /**
    * When the page noted a held body cut (or given) and the failure shown for it (`__bodyAt`,
    * `__failedAt`, by its clock), and by when they had to come (`by`): 5 s from the body's release,
-   * by the time the page recorded as it let go (`__releasedAt`), or, while it has not let go, 5 s
-   * from the call. Until `by` each look has only what is left before it; then the check looks once
-   * more, that look bounded to 5 s, as one started at or after `by` sees all the page recorded by
-   * then. So it waits at most until 5 s after `by` (5 s from the call, or from a release the page
-   * recorded after it), and the recorded times decide, so a check that looks late neither passes an
-   * outcome that came after `by` nor fails one that came before it.
-   * @param {import("@playwright/test").Page} own
+   * by the time the page recorded as it let go (`__releasedAt`). A release the check already has
+   * (`released`, the time the page returned as it let go) bounds the first look too, so the time the
+   * check took to hear of it is not added; without one, while the page has not said it let go, `by`
+   * is 5 s from the call. Until `by` each look has only what is left before it; then the check looks
+   * once more, that look bounded to 5 s, as one started at or after `by` sees all the page recorded
+   * by then. So it waits at most until 5 s after `by` (10 s from a release it was given, else 5 s
+   * from the call, or from a release the page recorded after it), and the recorded times decide, so
+   * a check that looks late neither passes an outcome that came after `by` nor fails one that came
+   * before it.
+   * @param {import("@playwright/test").Page} own @param {number} [released]
    */
-  const bodyOutcome = async (own) => {
-    const start = Date.now();
+  const bodyOutcome = async (own, released) => {
+    const start = released ?? Date.now();
     const look = () =>
       own.evaluate(() => {
         const state = /** @type {any} */ (window);
@@ -740,7 +745,7 @@ export async function pageWrites(page, browser) {
     ["a cut 503 body keeps the failure visible to polls after a second write's whole page has drawn", true, 503, false],
     ["a completed 503 body keeps the failure visible to polls after a second write's whole page has drawn", true, 503, true],
   ] /** @type {const} */) {
-    if (!(await page.evaluate(() => "navigation" in window))) {
+    if (!(await hasNavigation())) {
       skip(cutBodyName, "without the Navigation API a link is a full load");
       continue;
     }
@@ -899,10 +904,10 @@ export async function pageWrites(page, browser) {
         }
       }
       // The body cut (or given in full) and the failure shown for it, both within 5 s of the body's
-      // release, by the times the page recorded for the three (`bodyOutcome`): the page's first
-      // failure must be the expected one, said once the body was cut (or given), not before, and on
-      // the form that sent the held write.
-      const outcome = await bodyOutcome(own);
+      // release, by the times the page recorded for the three (`bodyOutcome`), counted from the
+      // release the check let go, when it did: the page's first failure must be the expected one,
+      // said once the body was cut (or given), not before, and on the form that sent the held write.
+      const outcome = await bodyOutcome(own, releasedAt?.time);
       const failed =
         outcome.by !== null && outcome.bodyAt !== null && outcome.bodyAt <= outcome.by && outcome.failedAt !== null && outcome.failedAt <= outcome.by;
       const { afterHeaders, errors } = await readWithin(
@@ -914,9 +919,10 @@ export async function pageWrites(page, browser) {
       );
       const expected = String(complete ? 503 : 0);
       const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, overlap ? releasedAt : seen.settled[first], expected);
-      // Looked at again 500 ms after the poll's draw (a later look, not a watch through them): the
-      // failure then shown must still be the body's, not another that took its place.
-      if (drewAgain) await own.waitForTimeout(500);
+      // Looked at again at least 500 ms after the poll's draw, by the time the page recorded as it
+      // drew it (a later look, not a watch through them): the failure then shown must still be the
+      // body's, not another that took its place.
+      if (drewAgain && drawn) await own.waitForTimeout(Math.max(0, drawn.time + 500 - Date.now()));
       const keptAs = drewAgain ? await readWithin("the failure shown 500 ms after the poll", own.evaluate(() => document.querySelector("header")?.getAttribute("data-failed") ?? null)) : null;
       const kept = keptAs === expected;
       const arrived = await toQuoted(own);
@@ -937,7 +943,7 @@ export async function pageWrites(page, browser) {
   // failure in its layout. Reading itself again, the page reads <main> alone, which keeps the
   // failure shown, where a whole page (whose count the second write changed) would draw it away.
   const againName = "after a write's own page that reads itself again, a write that failed in view stays shown while the page reads itself again";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(againName, "without the Navigation API a link is a full load");
+  if (!(await hasNavigation())) skip(againName, "without the Navigation API a link is a full load");
   else {
     // Each whole page after the write is marked with its read's place in `seen.asked` (`watchMarks`),
     // so the check tells the whole read's draw from the write's, which shows the same count.
@@ -998,7 +1004,8 @@ export async function pageWrites(page, browser) {
       // The page's first read of itself after the stand-in failed the second write, drawn with the
       // failure already shown.
       const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, secondWrite === undefined ? undefined : seen.settled[secondWrite], "");
-      if (drewAgain) await own.waitForTimeout(500);
+      // Looked at again at least 500 ms after that draw, by the time the page recorded as it drew it.
+      if (drewAgain && drawn) await own.waitForTimeout(Math.max(0, drawn.time + 500 - Date.now()));
       const kept =
         drewAgain &&
         (await readWithin(
@@ -1026,7 +1033,7 @@ export async function pageWrites(page, browser) {
     }
   }
   const waitingPollName = "a whole poll waiting for its stylesheet does not replace the layout after a write fails";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(waitingPollName, "without the Navigation API the poll reloads");
+  if (!(await hasNavigation())) skip(waitingPollName, "without the Navigation API the poll reloads");
   else {
     const { own, seen } = await writtenPage(
       (body, _writes, headers) =>
@@ -1250,7 +1257,7 @@ export async function pageWrites(page, browser) {
   // comes, but drawn only once the scripts the patch names load. Left by a link in that window,
   // the navigation cuts it off: the next page is read whole, with what the write changed.
   const patchName = "a navigation that leaves a write's patch before it is drawn reads the next page whole";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(patchName, "without the Navigation API a link is a full load");
+  if (!(await hasNavigation())) skip(patchName, "without the Navigation API a link is a full load");
   else {
     const patched = (/** @type {string} */ body, /** @type {number} */ _writes, /** @type {Record<string, string> | undefined} */ headers) => {
       if (!headers) return brand(body);

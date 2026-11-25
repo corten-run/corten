@@ -42,6 +42,8 @@ export async function partReads(page, browser, swaps, noSwaps) {
     /** How the route answers a read; `closing` once the case ends, when it lets each go at once. @type {"hold" | "empty" | "abort" | "closing"} */
     let answer = "hold";
     let reads = 0;
+    /** The reads the route answered with an empty patch, each as it starts to answer it. @type {import("@playwright/test").Request[]} */
+    const emptied = [];
     /** Lets go of each read the route holds: its request is aborted and its handler returns. @type {(() => Promise<void>)[]} */
     const holds = [];
     /** The documents the page loads, counted while a client navigation should load none. */
@@ -62,10 +64,10 @@ export async function partReads(page, browser, swaps, noSwaps) {
           if (answer === "closing") return route.abort().catch(() => {});
           if (answer === "hold") return new Promise((resolve) => holds.push(() => route.abort().catch(() => {}).finally(resolve)));
           if (answer === "abort") return route.abort("internetdisconnected");
+          emptied.push(route.request());
           return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
         }),
       );
-      const read = () => held.waitForResponse((r) => r.request().headers().corten === "action", { timeout: 5000 }).catch(() => {});
       const placeholder = () =>
         readWithin(
           "the slow part's state",
@@ -94,12 +96,24 @@ export async function partReads(page, browser, swaps, noSwaps) {
         check("and so does it in a page a client navigation drew", drawn.line && !drawn.link && drawn.busy === "true" && drawn.reads === 2 && documents === 0, JSON.stringify(drawn));
       } else skip("and so does it in a page a client navigation drew", noSwaps);
       answer = "empty";
-      const emptyRead = read();
+      // The load's own read, answered by the route with its empty patch, and that answer received
+      // within 5 s from just before the load: a read that fails (offline) leaves the same
+      // placeholder, so only a part marked failed after this answer counts.
+      const emptyRead = held
+        .waitForResponse((r) => emptied.includes(r.request()), { timeout: 5000 })
+        .then(
+          (r) => ({ status: r.status(), patch: r.headers()["corten-patch"] ?? null }),
+          () => null,
+        );
       await held.goto(`${base}/`);
-      await emptyRead;
+      const emptyAnswer = await emptyRead;
       await held.waitForFunction(() => !document.querySelector("#picks[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
       const kept = await placeholder();
-      check("a read whose patch leaves the part as it was marks it failed, as it did not bring it", kept.busy === null && kept.failed === "" && !kept.line && kept.link, JSON.stringify(kept));
+      check(
+        "a read whose patch leaves the part as it was marks it failed, as it did not bring it",
+        emptyAnswer !== null && emptyAnswer.status === 200 && emptyAnswer.patch === "1" && kept.busy === null && kept.failed === "" && !kept.line && kept.link,
+        JSON.stringify({ emptyAnswer, ...kept }),
+      );
       answer = "abort";
       await held.goto(`${base}/`);
       await held.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});

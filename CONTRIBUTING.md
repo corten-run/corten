@@ -407,9 +407,10 @@ moment, so a brand drawn by a later whole read does not count.
 The checks that a failure stays shown while the page reads itself again require the page's first
 read of itself after the failure to be a navigation whose `<main>` is drawn, which a mark the
 stand-in puts in each navigation's `<main>` shows (a request alone is not a draw), and the failure
-already shown at that draw and still shown when the check looks again 500 ms after it (a later
-look, not a watch through those 500 ms): a poll drawn before the failure was shown is not one that
-kept it. In the cut-body cases the failure shown at that later look must be the body's own (its
+already shown at that draw and still shown when the check looks again at least 500 ms after it,
+counted from the time the page recorded as it drew it (a later look, not a watch through those
+500 ms): a poll drawn before the failure was shown is not one that kept it. In the cut-body cases
+the failure shown at that later look must be the body's own (its
 status), so another failure that took its place does not count. That first read is taken from the
 moment the stand-in failed (or answered) the write it follows, or from a held body's release, not
 from when the check sees the
@@ -440,7 +441,9 @@ same moment, with nothing in `<main>` busy (the first form, outside it, still wa
 before the first write's body is let go, in a page task that does not wait for the body, bounded
 to five seconds. The body cut (or given in full) and its failure must then both come within five
 seconds of the body's release, by the times the page records as it lets the body go, as the body
-is cut (or given) and as that failure is first shown with nothing busy; until those five seconds
+is cut (or given) and as that failure is first shown with nothing busy. With a second write the
+release time the page returned as the check let the body go bounds the first look too, so the time
+the check took to hear of the release is not added to them. Until those five seconds
 are over each look at the page has only what is left of them, then the check looks once more, that
 look bounded to five seconds, so it waits at most five seconds past them, and a late look neither
 passes an outcome that came after them nor fails one that came in time. The page's first failure
@@ -455,7 +458,8 @@ script it holds; one cleanup step that fails does not skip the next, and removin
 bounded to five seconds, so one that never settles does not keep the page open. Setting a route,
 starting a page's notes of what it draws and listening for its failures are bounded to five seconds
 each too, and so is each read of the page (an `evaluate` or a locator's, one made only for a
-check's details included), here and in the page part, slow part and no-JavaScript post cases below,
+check's details included, and the one that asks whether the browser has the Navigation API), here
+and in the page part, slow part and no-JavaScript post cases below,
 so a read the browser never answers does not keep a case from its `finally`. Making a case's
 context or page and closing its context are bounded to 30 seconds, Playwright's own timeout for an
 action, since a loaded Firefox has taken over five seconds to close one. Each case makes its context
@@ -471,7 +475,11 @@ needs an answer that asks: the write lands 1.5 s after it is sent and the part's
 a second after the page loads, so a loaded browser can find it landed. A first read that finds it
 landed is answered as the server answers one while it lands (its status line saying so, and a tag
 asking again from the same address); the check requires an answer that asked, and every later read
-is the server's. The tag the first drawn answer that asks again puts on the page has its address
+is the server's. Setting the case up and loading the page can take longer than 1.5 s too, and a
+document that says `Saved.` asks for no part at all, so the document the case loads, if it finds
+the write landed, is answered the same way (its status line, its head asking to be read again and
+the tag asking again from the same address, as the server writes them while the write lands).
+The tag the first drawn answer that asks again puts on the page has its address
 moved, the moment it is drawn, to one the server reads the same, and the read after that answer's
 must be made from the moved address: the read is made from the tag on the page, which a script may
 change, not from the answer's own. The read after that answer's is the one the page sent next after
@@ -485,8 +493,11 @@ takes its place among the stand-in's answers as it reaches it, and its answer's 
 that place, so the check that the part stops counts only once the first answer to draw `Saved.`,
 noted the moment it is drawn with the time the page drew it, is one that does not ask again, drawn
 within five seconds counted from before the first check's wait for `Saved.`. It then requires no
-read of the page at all (a hover prefetch aside) in the log after the one whose answer drew it,
-until 2.2 s after that draw by the time the page recorded, not after the check saw it. Its route is
+read of the page at all (a hover prefetch aside) in the log after the one whose answer drew it, as
+the log stands when the check looks, once 2.2 s have passed since that draw by the time the page
+recorded, not since the check saw it. A read sent after the 2.2 s that is in the log by then counts
+too: the log has a read's time as the check heard of it, after the page sent it, so cutting it at
+the 2.2 s could drop a read sent within them. Its route is
 set and removed each within five seconds, and its route, request listener and init script on the
 shared page are removed, and its observer in the page disconnected, however it ends, adding and
 removing the init script each bounded to five seconds; the init script then does nothing in the
@@ -498,7 +509,9 @@ bounded to five seconds, after which its route is removed (bounded the same) and
 the same, as its request listener is removed. The link a failed slow part shows is pressed in the
 page too; the page it opens must commit within five seconds counted from just before the press, a
 budget the press task shares, and have its part read in within five seconds of the check seeing that
-commit.
+commit. The check that a read whose patch leaves the part as it was marks it failed requires that
+load's own read, answered by the route with its empty patch, and that answer received within five
+seconds from just before the load, since a read that fails leaves the same placeholder.
 
 The account page's posts without JavaScript (the name, the refused name and the picture) each
 press their button only once the page the previous post led to has loaded. That load, the post

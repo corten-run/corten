@@ -69,7 +69,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // loaded, so a loaded browser's first read can find it landed, and then no answer asks again
       // (#2035). The first read is then answered as the server answers one while the write lands:
       // its status line saying so, and the tag asking again from the same address. A later read is
-      // the server's own.
+      // the server's own. Setting the case up and loading the page can take longer than 1.5 s too,
+      // and a document that says `Saved.` asks for no part at all, so the document the case loads
+      // is answered the same way if it finds the write landed: its status line saying so, its head
+      // asking to be read again and the tag asking again from the same address, as the server writes
+      // them while the write lands.
       const from = new URL(url).pathname + new URL(url).search;
       // The address the tag the first drawn answer put on the page is moved to (`moved` below).
       const movedFrom = `${from}&smoke-moved=1`;
@@ -83,8 +87,30 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const partReads = (/** @type {URL} */ u) => u.pathname + u.search === from || u.pathname + u.search === movedFrom;
       /** Set once the case is over: the route lets each read through, whether or not its removal is confirmed. */
       let over = false;
+      /** Whether the route has answered the case's document, and whether as the server answers it while the write lands. */
+      let documentAnswered = false;
+      let documentStandIn = false;
+      const savedLine = '<p id="alert-status" role="status">Saved.</p>';
+      const savingLine = '<p id="alert-status" role="status">Saving...</p>';
+      const pendingDocument = async (/** @type {import("@playwright/test").Route} */ route) => {
+        documentAnswered = true;
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        const body = await res.text();
+        documentStandIn = res.ok() && body.includes(savedLine) && !body.includes("data-corten-read-again");
+        const answer = documentStandIn
+          ? body
+              .replace(savedLine, savingLine)
+              .replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>')
+              .replace("</main>", `<template data-corten-read-again="1" data-from="${from}"></template></main>`)
+          : body;
+        await route.fulfill({ status: res.status(), headers, body: answer });
+      };
       const partRead = async (/** @type {import("@playwright/test").Route} */ route) => {
         const request = route.request();
+        if (!over && !documentAnswered && request.method() === "GET" && request.isNavigationRequest()) return pendingDocument(route);
         if (over || request.method() !== "GET" || request.headers()["corten"] !== "action") return route.fallback();
         const at = answers.length;
         const asked = new URL(request.url());
@@ -185,7 +211,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           check(
             "a page's part waiting for a write is read again after a full load, not the page",
             waiting === "Saving..." && status === "Saved." && initial !== null && parts().length > 0 && whole().length === 0 && page.url() === url,
-            `${waiting} -> ${status} after ${parts().length} part and ${whole().length} page reads${whole().length ? ` (${whole().map((e) => address(e)).join(", ")})` : ""}${prefetches().length ? `, and ${prefetches().length} prefetches not counted (${prefetches().map((e) => address(e)).join(", ")})` : ""}${initial ? "" : " (the document loaded not seen)"}`,
+            `${waiting} -> ${status} after ${parts().length} part and ${whole().length} page reads${whole().length ? ` (${whole().map((e) => address(e)).join(", ")})` : ""}${prefetches().length ? `, and ${prefetches().length} prefetches not counted (${prefetches().map((e) => address(e)).join(", ")})` : ""}${initial ? "" : " (the document loaded not seen)"}${documentStandIn ? " (the document found the write landed, and was answered as while it lands)" : ""}`,
           );
           const kept = await readWithin(
             "what the page kept",
@@ -231,9 +257,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           // first to draw `Saved.`, noted as it was drawn, not the one drawn when the check looks (a
           // later read that draws `Saved.` again would hide the read before it). The 2.2 s are
           // counted from that draw, not from when the check saw it, and no read of the page may come
-          // after that answer's own read in the log, whatever its address: a read sent between the
-          // draw and the check seeing it counts against it, as does one at the end of the 2.2 s. A
-          // hover prefetch is no read again, and is named but not counted.
+          // after that answer's own read in the log, whatever its address. The check looks once 2.2 s
+          // have passed since that draw and counts every read in the log by then: a read sent between
+          // the draw and the check seeing it counts against it, as does one at the end of the 2.2 s,
+          // and one sent after them that is in the log when the check looks. The log has a read's
+          // time as the check heard of it, after the page sent it, so it is not cut at the 2.2 s: that
+          // could drop a read sent within them. A hover prefetch is no read again, and is named but
+          // not counted.
           const look = () =>
             page.evaluate(() => /** @type {{ read: string, time: number } | undefined} */ ((/** @type {any} */ (window)).__firstSaved));
           const first =
@@ -252,7 +282,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             quiet
               ? terminal < 0
                 ? `the read whose answer first drew Saved. (${drawn?.read}) is not in the page's reads`
-                : `${later.length} reads after the read whose answer first drew Saved. (${drawn?.read}), to 2.2 s after that draw: ${later.join(", ") || "none"}${prefetched.length ? `; prefetches not counted: ${prefetched.join(", ")}` : ""}`
+                : `${later.length} reads after the read whose answer first drew Saved. (${drawn?.read}), by the check's look at least 2.2 s after that draw: ${later.join(", ") || "none"}${prefetched.length ? `; prefetches not counted: ${prefetched.join(", ")}` : ""}`
               : `no answer that does not ask again was the first to draw Saved., within 5 s (${JSON.stringify({ first, answers })})`,
           );
         } finally {
