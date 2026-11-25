@@ -95,7 +95,7 @@ async fn served<M: crate::Middleware>(
 /// request does: at `8d5160be2` (glibc 2.41) one allocation of 25 to 40 bytes held for the
 /// connection moved it from 20,662 to 21,032 or more, and one of any other size tried, from 1 to
 /// 4,096 bytes, did not move it. With jemalloc preloaded (`LD_PRELOAD=libjemalloc.so.2`) each of
-/// those sizes counted within 9 of none. So a difference between two builds read here with
+/// those sizes counted within 9.1 of none. So a difference between two builds read here with
 /// glibc's allocator is counted again with jemalloc preloaded before it is believed.
 #[tokio::test(flavor = "current_thread")]
 #[ignore]
