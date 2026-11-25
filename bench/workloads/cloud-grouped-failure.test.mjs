@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import fs, { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
@@ -9,7 +10,7 @@ import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { digest, extractArchive, treeHash } from "./cloud-local.mjs";
 import { productionMain, productionPlan } from "./cloud-production.mjs";
 import { remoteFiles } from "./cloud-remote.mjs";
-import { verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
+import { verifyFailedExitOneCustody, verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { fleetChildOptions, readFleet, readGroup, verifyFleet } from "./fleet-verify.mjs";
@@ -89,7 +90,8 @@ function fixture(t, group, flags = {}) {
         executable: "node", argv: ["bench/client-heavy/run.mjs", "--out", mainRoot], cwd: "repository-root", shell: false } } } : {}) }] };
   plan.campaignSha256 = deploymentSha256(plan);
   const nativePayload = "preserved raw failure output\n";
-  const nativeEntries = [{ path: "", type: "directory" }, { path: "failure.txt", type: "file", bytes: nativePayload.length, sha256: digest(nativePayload) }];
+  const nativeEntries = [{ path: "", type: "directory" },
+    ...(flags.emptyNative ? [] : [{ path: "failure.txt", type: "file", bytes: nativePayload.length, sha256: digest(nativePayload) }])];
   const nativeManifestSha256 = deploymentSha256(nativeEntries);
   const attempt = { schema: "benchmark-isolated-campaign-reservation/v1", id: campaignId, commit: measured, campaignSha256: plan.campaignSha256 };
   const status = { schema: "benchmark-isolated-campaign-status/v1", state: closed ? "finished" : "preserved-uncertain", round: measuredRound,
@@ -133,7 +135,8 @@ function fixture(t, group, flags = {}) {
       });
     entries.push(
       { name: prefix + "control-bootstrap.json", body: bootstrap },
-      { name: prefix + phaseDir }, { name: prefix + phaseDir + "native/" }, { name: prefix + phaseDir + "native/failure.txt", body: nativePayload },
+        { name: prefix + phaseDir }, { name: prefix + phaseDir + "native/" },
+        ...(flags.emptyNative ? [] : [{ name: prefix + phaseDir + "native/failure.txt", body: nativePayload }]),
       { name: prefix + phaseDir + "native-manifest.json", body: JSON.stringify({ entries: nativeEntries, sha256: nativeManifestSha256 }) },
       { name: prefix + phaseDir + "command-0.log", body: "observed exit\n" },
       { name: prefix + phaseDir + "command-0-host/" },
@@ -430,6 +433,59 @@ for payload in [b'original', b'modified']:
     else:
         assert payload == b'original'
 `;
+
+test("exit-one custody derives the old native digest without extra payload reads", async (t) => {
+  const f = singleFixture(t, { exitOne: true }, "client-heavy");
+  await f.preserveWrapper();
+  const { h } = f, state = h.saved(), extracted = join(h.local, state.evidence);
+  const campaignRoot = join(extracted, "campaign"), controlRoot = join(extracted, "control");
+  const nativeRoot = join(campaignRoot, `${state.round}-0123456789abcdef`, "00-client-heavy-timing", "native");
+  const path = join(nativeRoot, "failure.txt"), size = lstatSync(path).size;
+  const expected = [treeHash(campaignRoot), treeHash(nativeRoot), treeHash(controlRoot)];
+  for (const pin of [false, true]) {
+    let member, bytes = 0;
+    const { openSync, readSync, closeSync } = fs;
+    const open = t.mock.method(fs, "openSync", function (file, ...args) {
+      const fd = openSync(file, ...args);
+      if (file === path) member = fd;
+      return fd;
+    });
+    const read = t.mock.method(fs, "readSync", function (fd, ...args) {
+      const count = readSync(fd, ...args);
+      if (fd === member) bytes += count;
+      return count;
+    });
+    const close = t.mock.method(fs, "closeSync", function (fd) {
+      if (fd === member) member = undefined;
+      return closeSync(fd);
+    });
+    syncBuiltinESMExports();
+    const started = performance.now();
+    let proof;
+    try {
+      proof = verifyFailedExitOneCustody(h.local, state, { pin });
+      proof.assertCustody();
+    } finally {
+      for (const mock of [open, read, close]) mock.mock.restore();
+      syncBuiltinESMExports();
+    }
+    t.diagnostic(`pin=${pin} native member=${size} B; read=${bytes} B in ${(performance.now() - started).toFixed(1)} ms`);
+    assert.deepEqual([proof.hashes.campaign, proof.hashes.native, proof.hashes.control], expected);
+    assert.equal(proof.hashes.empty, false);
+    // One pass for the wrapper and another for the separate collection manifest.
+    assert.equal(bytes, 2 * size);
+  }
+});
+
+test("exit-one custody retains the empty native directory digest", async (t) => {
+  const f = singleFixture(t, { exitOne: true, emptyNative: true }, "client-heavy");
+  await f.preserveWrapper();
+  const { h } = f, state = h.saved();
+  const { hashes, assertCustody } = verifyFailedExitOneCustody(h.local, state, { pin: true });
+  assert.equal(hashes.native, digest("d\0\0"));
+  assert.equal(hashes.empty, true);
+  assertCustody();
+});
 
 test("bound exit one needs new approval, and continuation waits for exact absence", async (t) => {
   const python = process.platform === "win32" ? "python" : "python3";

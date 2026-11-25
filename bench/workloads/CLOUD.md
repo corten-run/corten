@@ -1363,7 +1363,10 @@ empty boundary samples, with each recorded process in only one cgroup per
 sample. No pending native roots, validation, deletion intent or competing
 custody may remain. This checks the command lifecycle, not renderer or native
 qualification. It compares the original tar members to the bound extraction
-before contacting the host.
+before contacting the host. The verified extraction walk also computes the
+existing campaign, control and native subtree hashes from the same bytes.
+The collection manifest is still replayed separately, and the recheck after
+that replay requires unchanged extraction metadata.
 
 Both host observations use the launch-pinned key and the current same-account
 allocation. The read-only probe requires the original boot and job controls, an
