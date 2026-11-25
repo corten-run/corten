@@ -6,7 +6,7 @@
 //       also writes <work dir>/plan/ for build.sh, verify.sh, run.sh and report.mjs
 // README.md lists the plan's fields. A workload's K is a number, or "pilot": the smallest K at
 // which the sizing check passes from that workload's pilot under this same plan file, whose
-// results --sized-from names (docs/design.md, Choice 72, "How many placements"). With a number,
+// results --sized-from names (docs/design.md#choice-placement-runs, "How many placements"). With a number,
 // --sized-from names the eligible A/A it was sized from and the check is made at that K.
 // DRYRUN=1 in the environment marks the work directory a dry run, a test of the scripts that is
 // read for nothing, with DRY_K (6) placements, DRY_R (2) pairs and DRY_TURN (1) second turns.

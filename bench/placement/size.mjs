@@ -14,7 +14,7 @@
 //       beside pooled residuals (low), leave-one-out residuals (high) and those rescaled, the
 //       figure this kit reads.
 //   node size.mjs --sd 1.97 [--K ...]     the normal model alone at a standard deviation (percent)
-//   node size.mjs --reproduce             the figures corten-run/corten#1999 and design Choice 72
+//   node size.mjs --reproduce             the figures corten-run/corten#1999 and docs/design.md#choice-placement-runs
 //                                         quote, from the saved medians in prior/ (tags
 //                                         evidence/ee7b0b41 and evidence/0c0c599c); exits 1 if one
 //                                         is outside simulation error

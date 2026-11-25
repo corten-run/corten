@@ -1,5 +1,5 @@
 // The statistic and its bounds on hand-worked cases, and the sizing check against the figures the
-// placement sizing kit recorded (docs/design.md, Choice 72, "How many placements").
+// placement sizing kit recorded (docs/design.md#choice-placement-runs, "How many placements").
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -1,5 +1,5 @@
 // map.mjs: what the placement plan's fifth point reads from LLD's maps (-Wl,-Map), gzipped or not
-// (CONTRIBUTING.md, Pull requests, item 2; docs/design.md, Choice 72, "Code aligned beyond 16
+// (CONTRIBUTING.md, Pull requests, item 2; docs/design.md#choice-placement-runs, "Code aligned beyond 16
 // bytes"):
 //   node map.mjs record <unpadded map>          a side's record, as JSON: each input section of
 //                                               .text aligned beyond 16 bytes, in order, and every

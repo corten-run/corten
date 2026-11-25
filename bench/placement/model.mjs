@@ -318,7 +318,7 @@ function failRate(K, draws, seed, draw, margin = 0.01) {
   return { K, rank: j, rate: fail / draws, se: Math.sqrt((fail / draws) * (1 - fail / draws) / draws), meanBound: sumBound / draws, draws };
 }
 /**
- * The normal model of design Choice 72 and analysis/resolve-sim.mjs: K placement medians drawn
+ * The normal model of docs/design.md#choice-placement-runs and analysis/resolve-sim.mjs: K placement medians drawn
  * normal with a common median of zero and standard deviation `s` (a fraction); the swapped reading
  * of a median x is -x.
  */

@@ -1,4 +1,4 @@
-// pilot.mjs: what a plan reads from an A/A to size K (docs/design.md, Choice 72, "How many
+// pilot.mjs: what a plan reads from an A/A to size K (docs/design.md#choice-placement-runs, "How many
 // placements"): whether the A/A is eligible, the models kept, the check of a K at that K itself
 // and the smallest K that passes it. The tests and the models are the placement sizing kit's
 // (model.mjs and size.mjs, unchanged from the tag evidence/placement-sizing-1999).

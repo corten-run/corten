@@ -181,7 +181,7 @@ function reading(r, m) {
 }
 
 /**
- * What an A/A sizes (docs/design.md, Choice 72, "How many placements"): dir is the results of a
+ * What an A/A sizes (docs/design.md#choice-placement-runs, "How many placements"): dir is the results of a
  * pilot, or of a gated run for its A/A. With K, the check at that K itself; without, the smallest
  * K the pads allow at which it passes. ok: the A/A is eligible and the check passes at K.
  */
