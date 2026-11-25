@@ -191,10 +191,16 @@ side's aligned sections, its list and the second pads' lines.
     the CPU model.
     For a K given as a number, whose A/A may be another plan's: the workload's name, R, the
     request, the start command, the load, the mask, the build command and the build's
-    environment, the probe's files and the request script, and the CPU model. Not compared for a
-    number, and so a reviewer's to compare from the two plans and `results/host.txt`: the base
-    and the head (an A/A read earlier is on an earlier base by the rule's design, so the base
-    cannot be asked to match), the tree's paths, the toolchain, the pinned CPUs, the status the
+    environment, the probe's files and the request script, and the CPU model. Those fields are
+    compared as the two plans write them, the order of fields and the case of letters included:
+    a plan whose request, load or mask entry has its fields in another order than the A/A's
+    plan, whose mask names the same headers in another order, or which writes a masked header's
+    name in another case, is refused as another setup though it sets up the same run. The
+    build's environment alone is compared by name, in whatever order each plan writes it. Not
+    compared for a number, and so a reviewer's to compare from the two plans and
+    `results/host.txt`: the base and the head (an A/A read earlier is on an earlier base by the
+    rule's design, so the base cannot be asked to match), the tree's paths, the toolchain, the
+    binary's path under the target directory (`probe.binary`), the pinned CPUs, the status the
     answers must have, the time limit, the expected answer (an A/A has none), and what no plan
     says: the kernel, the host's settings and its neighbours.
 12. It shows that a masked header differs between two starts of the base's unpadded binary, not
@@ -237,7 +243,7 @@ tags `evidence/placement-sizing-1999` (an A/A's counts) and `evidence/placement-
 
 Those tests run no shell script, so what `build.sh`, `run.sh`, `verify.sh` and `turns.sh` refuse
 is held by the selftest alone, on a host that has `perf` and `wrk`, and by nothing in
-`npm run check`. The selftest's `inputs` case holds `build.sh`'s three checks of the files named
+`npm run check`. The selftest's `inputs` case holds `build.sh`'s four checks of the files named
 by path and `run.sh`'s two, `refusals` holds `run.sh`'s refusal of results already there, of
 binaries built for another part and of another CPU model, and `zero` holds the above-zero test
 of the counters before a run and in a turn. Held by a whole run on a host and by no case: the

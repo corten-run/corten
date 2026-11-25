@@ -60,6 +60,9 @@ cp -R "$PROBE" "$WORK/probe"
 [ "$(sha256sum "$WORK/plan/inputs.sha256" | cut -d' ' -f1)" = "$INPUTS_SHA" ] || fail "plan/inputs.sha256 is not the list plan.mjs wrote"
 (cd "$WORK" && sha256sum --quiet -c plan/inputs.sha256) || fail "the probe, the request script or the expected answer is not what plan.mjs resolved (plan/inputs.sha256)"
 [ "$(cd "$WORK" && find probe ! -type d | LC_ALL=C sort)" = "$(sed -n 's/^[0-9a-f]*  \(probe\/.*\)$/\1/p' "$WORK/plan/inputs.sha256")" ] || fail "the probe's directory holds a file or a symbolic link plan.mjs did not list (plan/inputs.sha256)"
+# A listed file that has become a link to the same bytes passes both checks above, and what it
+# points at lies outside what the plan names: plan.mjs refuses a link, and so does this.
+[ -z "$(cd "$WORK" && find probe -type l)" ] || fail "the probe's directory holds a symbolic link where plan.mjs listed a file (plan/inputs.sha256 lists files by what they hold)"
 cp "$KIT/wrap/cc" "$WORK/wrap/cc"; chmod +x "$WORK/wrap/cc"
 : >"$B/sha256.txt"
 

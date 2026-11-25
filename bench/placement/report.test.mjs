@@ -475,6 +475,12 @@ test("--sized-from: each result that does not size this plan's K is refused in i
   setup((p) => { p.probe.build = "cargo build --release --locked"; }, "build differs");
   setup((p) => { p.probe.env.RUSTFLAGS = "-C target-cpu=native"; }, "env differs");
   setup((p) => { delete p.probe.env.ZSTD_SYS_USE_PKG_CONFIG; }, "env differs");
+  // The environment is compared by name, whatever order the two plans write it in; everything
+  // else as written, so the same load with its fields in another order is another setup.
+  const flags = (...names) => (p) => { p.probe.env = Object.fromEntries(names.map((k) => [k, "1"])); };
+  const flagged = results({ part: "pilot", change: even(), edit: flags("ZSTD_SYS_USE_PKG_CONFIG", "A_FLAG") });
+  taken(resolved(flags("A_FLAG", "ZSTD_SYS_USE_PKG_CONFIG"), flagged), "K = 5: failing draws of 200000 (seed 1983) against at most 10000:", "passes");
+  setup((p) => { const { threads, connections, seconds } = p.load; p.load = { seconds, connections, threads }; }, "load differs");
   setup(same, "probe or request script differs", PROBE + "// another probe\n");
   setup((p) => { p.load.threads = 4; p.workloads[0].request.path = "/unstaged"; }, "request, load differ");
   // What a plan declares before any part is resolved includes the inputs' digest.

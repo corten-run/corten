@@ -16,7 +16,8 @@
 #             refuse each that does not, at least one. Nothing is started.
 #   inputs    files the plan names by path that are no longer what plan.mjs listed. build.sh, on
 #             a copy of the plan, must build nothing for a probe with a file edited, for one with
-#             a symbolic link added, and for a list edited; run.sh must refuse a list edited after
+#             a symbolic link added, for one with a listed file made a link to a file of the same
+#             bytes, and for a list edited; run.sh must refuse a list edited after
 #             the build before it makes a results directory, and a probe's copy edited after the
 #             build before any server is started (that last one counts with perf, as every run
 #             does first). Nothing is built, started or turned.
@@ -113,6 +114,8 @@ for case in "$@"; do
         copy "$i/edited" "s|^PROBE=.*|PROBE='$i/probe'|"; builds edited "is not what plan.mjs resolved"
         probe; ln -s "$PL" "$i/probe/selftest-link"
         copy "$i/linked" "s|^PROBE=.*|PROBE='$i/probe'|"; builds linked "holds a file or a symbolic link plan.mjs did not list"
+        probe; cp "$i/probe/$one" "$i/same-bytes"; rm "$i/probe/$one"; ln -s "$i/same-bytes" "$i/probe/$one"
+        copy "$i/swapped" "s|^PROBE=.*|PROBE='$i/probe'|"; builds swapped "holds a symbolic link where plan.mjs listed a file"
         probe
         copy "$i/relisted" "s|^PROBE=.*|PROBE='$i/probe'|"; echo "0  probe/selftest-none" >>"$i/relisted/plan/inputs.sha256"; builds relisted "plan/inputs.sha256 is not the list plan.mjs wrote"
         copy "$i/run-list"; built "$i/run-list"; echo "0  probe/selftest-none" >>"$i/run-list/plan/inputs.sha256"
@@ -122,7 +125,7 @@ for case in "$@"; do
         for s in $SIDES; do ln -s "$WORK/build-$s.env" "$i/run-probe/build-$s.env"; done
         cp -R "$WORK/probe" "$i/run-probe/probe"; echo "edited after build.sh" >>"$i/run-probe/probe/$one"
         refuses inputs "$i/run-probe" refused "the probe as built, the request script or the expected answer is not what plan.mjs resolved"
-        echo "inputs: build.sh built nothing for a probe with $one edited, with a symbolic link added, and with the list edited; run.sh refused a list edited after the build with no results directory made, and a probe's copy edited after the build before any server was started" ;;
+        echo "inputs: build.sh built nothing for a probe with $one edited, with a symbolic link added, with $one made a link to a file of the same bytes, and with the list edited; run.sh refused a list edited after the build with no results directory made, and a probe's copy edited after the build before any server was started" ;;
     refusals)
         r=$out/refusals; mkdir -p "$r"
         copy "$r/again"; built "$r/again"; mkdir "$r/again/results"; echo kept >"$r/again/results/run-id"
