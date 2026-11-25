@@ -835,14 +835,20 @@ test("healthy observation never notifies and retains verified lifetime proof", a
   assert.equal((await f.finish()).status, "verified"); assert.equal(faults, 0);
 });
 
-test("recorded browser participant gaps notify once without clearing failed validation", async (t) => {
+for (const code of ["EIO", "PRIVATE_VENDOR_CODE"]) test("browser gaps retain only the first sanitized diagnostic: " +
+  (code === "EIO" ? "allowlisted" : "unknown"), async (t) => {
   let faults = 0;
   const f = await fixture(t, [], true, () => { faults++; });
   const id = "c".repeat(64), exec = childProcess.execFileSync;
+  let inspections = 0;
   t.mock.method(childProcess, "execFileSync", (file, argv, options) => {
     if (file !== "docker") return exec(file, argv, options);
     if (argv.includes("ls")) return id;
-    assert.ok(argv.includes("inspect")); throw missing("EIO");
+    assert.ok(argv.includes("inspect"));
+    throw Object.assign(missing(inspections++ ? "ENOENT" : code), {
+      stage: "PRIVATE_STAGE", stderr: "PRIVATE_DAEMON", stdout: "PRIVATE_STDOUT",
+      argv: ["PRIVATE_ARGV"], path: "PRIVATE_PATH", env: { SAMPLE: "PRIVATE_ENV" },
+    });
   });
   syncBuiltinESMExports();
   await f.tick(); const afterGap = faults;
@@ -853,6 +859,64 @@ test("recorded browser participant gaps notify once without clearing failed vali
   assert.equal(sample.docker.participants.length, 0);
   assert.equal(inspectBrowserParticipants({ schema: "native-browser-host-subject/v2", participants: [{ id }] }, proof), false);
   assert.equal(f.terminal.observerError, null); assert.equal(f.terminal.observerFailures.count, 0);
+  assert.deepEqual(f.terminal.firstDockerGap, { stage: "inspect-open", code: code === "EIO" ? "EIO" : "unknown" });
+  assert.ok(!JSON.stringify(f.terminal).includes("PRIVATE_"));
+  assert.ok(!JSON.stringify(f.samples()).includes("PRIVATE_"));
+  assert.equal(f.held.size, 0);
+});
+
+for (const mode of ["startup transition", "stable startup", "persistent wrong PID"]) test("browser participant " + mode, async (t) => {
+  let faults = 0;
+  const f = await fixture(t, [], true, () => { faults++; });
+  const id = "c".repeat(64), pid = 5000, scope = "/system.slice/docker-" + id + ".scope", exec = childProcess.execFileSync;
+  let listed = true, running = false, statReads = 0, inspections = 0;
+  t.mock.method(childProcess, "execFileSync", (file, argv, options) => {
+    if (file !== "docker") return exec(file, argv, options);
+    if (argv.includes("ls")) return listed ? id : "";
+    assert.deepEqual(argv.slice(-2), ["inspect", id]); inspections++;
+    return JSON.stringify([{ Id: id, Image: "sha256:" + "b".repeat(64), RestartCount: 0, State: {
+      Status: running ? "running" : "created", Running: running, Pid: running ? pid : 0,
+      StartedAt: running ? "start" : "zero", FinishedAt: "zero", OOMKilled: false, ExitCode: 0,
+    } }]);
+  });
+  syncBuiltinESMExports();
+  f.override = (path) => {
+    if (path === "/sys/fs/cgroup" + scope + "/cgroup.procs") return pid + "\n";
+    if (path === "/proc/5000/cgroup") return "0::" + scope + "\n";
+    if (path === "/proc/5000/stat") {
+      statReads++;
+      if (mode === "persistent wrong PID") return stat(pid + 1);
+      return stat(pid, statReads === 1 && mode === "startup transition" ? "PRIVATE_STARTUP_NAME" : "node");
+    }
+  };
+  f.clock += 100; await f.tick();
+  const created = f.samples().at(-1).docker;
+  assert.deepEqual(created.gaps, []);
+  assert.equal(created.participants[0].container.state.Status, "created");
+  assert.equal(created.participants[0].kernel, null);
+  running = true; f.clock += 100; await f.tick();
+  const stable = mode === "stable startup", observed = f.samples().at(-1).docker;
+  assert.deepEqual(observed.inventory, [id]); assert.deepEqual(observed.gaps, stable ? [] : [id]);
+  assert.equal(observed.participants.length, stable ? 1 : 0);
+  assert.equal(statReads, mode === "persistent wrong PID" ? 1 : 4);
+  assert.equal(inspections, stable ? 3 : 2);
+  assert.equal(faults, stable ? 0 : 1);
+  if (!stable) assert.equal(f.held.size, 1, "only the command executable stays pinned after the rejected snapshot");
+  f.clock += 100; await f.tick();
+  const next = f.samples().at(-1).docker;
+  if (mode === "persistent wrong PID") assert.deepEqual(next.gaps, [id]);
+  else {
+    assert.deepEqual(next.gaps, []);
+    assert.equal(next.participants[0].kernel.processes.length, 1);
+  }
+  assert.equal(faults, stable ? 0 : 1, "a later sample neither clears nor repeats a fault");
+  listed = false; await f.finish();
+  if (stable) assert.equal(Object.hasOwn(f.terminal, "firstDockerGap"), false);
+  else assert.deepEqual(f.terminal.firstDockerGap, {
+    stage: mode === "startup transition" ? "process-identity-close" : "process-identity-open", code: "ERR_ASSERTION",
+  });
+  assert.ok(!JSON.stringify(f.terminal).includes("PRIVATE_STARTUP_NAME"));
+  assert.equal(f.terminal.observerFailures.count, 0);
   assert.equal(f.held.size, 0);
 });
 
