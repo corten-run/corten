@@ -1,5 +1,124 @@
 import { base, shadowing, skip, check, within, readWithin, steps, pollFor, cleanUp } from "./helpers.mjs";
 
+/** Elements with no end tag. */
+const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+/** Elements whose content is text up to their own end tag. */
+const RAW = new Set(["script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes"]);
+/** An attribute value as written, with html!'s escapes (and numeric references) read. @param {string} value */
+const attrValue = (value) =>
+  value.replace(/&(amp|lt|gt|quot|apos|#\d+|#[xX][0-9a-fA-F]+);/g, (whole, name) => {
+    const named = /** @type {Record<string, string>} */ ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" })[name];
+    if (named) return named;
+    const code = name[1] === "x" || name[1] === "X" ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+    return Number.isFinite(code) && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+  });
+
+/**
+ * The top-level elements of a patch, the ones the runtime walks once it has parsed it into a
+ * template's content (`apply` in corten.js): each one's tag, attributes (the first of a name, as
+ * the parser keeps) and where it starts. Comments, raw text and nested elements are skipped as a
+ * parser skips them. Null when the markup's tags do not open and close as written (an end tag that
+ * is not the open element's, an unclosed comment, element or raw text): this reader does not
+ * guess the end tags a browser would imply, so such markup is not read at all.
+ * @param {string} html
+ * @returns {{ tag: string, attrs: Map<string, string>, at: number }[] | null}
+ */
+function topLevel(html) {
+  /** @type {{ tag: string, attrs: Map<string, string>, at: number }[]} */
+  const top = [];
+  /** @type {string[]} */
+  const open = [];
+  let i = 0;
+  for (;;) {
+    const lt = html.indexOf("<", i);
+    if (lt < 0) return open.length ? null : top;
+    if (html.startsWith("<!--", lt)) {
+      const close = html.indexOf("-->", lt + 4);
+      if (close < 0) return null;
+      i = close + 3;
+    } else if (/^<[!?]/.test(html.slice(lt, lt + 2))) {
+      const close = html.indexOf(">", lt);
+      if (close < 0) return null;
+      i = close + 1;
+    } else if (/^<\/[a-z]/i.test(html.slice(lt, lt + 3))) {
+      const end = /^<\/([^\s/>]+)[^>]*>/.exec(html.slice(lt));
+      if (!end || open.pop() !== end[1]?.toLowerCase()) return null;
+      i = lt + end[0].length;
+    } else if (/^<[a-z]/i.test(html.slice(lt, lt + 2))) {
+      const name = /^<([^\s/>]+)/.exec(html.slice(lt));
+      const tag = /** @type {string} */ (name?.[1]).toLowerCase();
+      /** @type {Map<string, string>} */
+      const attrs = new Map();
+      let j = lt + 1 + tag.length;
+      let selfClosing = false;
+      for (;;) {
+        while (j < html.length && /[\s/]/.test(html.charAt(j))) {
+          selfClosing = html.charAt(j) === "/";
+          j++;
+        }
+        if (j >= html.length) return null;
+        if (html.charAt(j) === ">") break;
+        selfClosing = false;
+        const attr = /^[^\s/>][^\s/>=]*/.exec(html.slice(j));
+        const key = /** @type {string} */ (attr?.[0]).toLowerCase();
+        j += key.length;
+        while (/\s/.test(html.charAt(j))) j++;
+        let value = "";
+        if (html.charAt(j) === "=") {
+          j++;
+          while (/\s/.test(html.charAt(j))) j++;
+          const quote = html.charAt(j);
+          if (quote === '"' || quote === "'") {
+            const close = html.indexOf(quote, j + 1);
+            if (close < 0) return null;
+            value = html.slice(j + 1, close);
+            j = close + 1;
+          } else {
+            value = /^[^\s>]*/.exec(html.slice(j))?.[0] ?? "";
+            j += value.length;
+          }
+        }
+        if (!attrs.has(key)) attrs.set(key, attrValue(value));
+      }
+      i = j + 1;
+      if (open.length === 0) top.push({ tag, attrs, at: lt });
+      // A self-closing tag closes only in SVG or MathML; in HTML the slash is ignored.
+      const foreign = tag === "svg" || tag === "math" || open.includes("svg") || open.includes("math");
+      if (VOID.has(tag) || (selfClosing && foreign)) continue;
+      if (RAW.has(tag)) {
+        const end = new RegExp(`</${tag}[\\s/>]`, "i").exec(html.slice(i));
+        if (!end) return null;
+        i += end.index;
+      }
+      open.push(tag);
+    } else i = lt + 1;
+  }
+}
+
+/**
+ * Why `answer`, the answer to a part read of `address` (its URL), is not a patch that asks to be read
+ * again from that same address with `status` drawn, or null when it is: among its top-level
+ * elements, `status` starts one, and a `<template data-corten-read-again data-from>` (the tag
+ * `ReadAgain::from` writes, the last of them being the one the runtime keeps) asks again after
+ * whole seconds from an address that is `address`, as the runtime resolves it.
+ * @param {string} answer @param {string} address @param {string} status
+ */
+function readAgainFault(answer, address, status) {
+  const top = topLevel(answer);
+  if (!top) return "its answer's tags do not open and close as written";
+  if (!top.some((el) => answer.startsWith(status, el.at))) return `its answer draws no ${status} as one of its elements`;
+  const again = top.filter((el) => el.attrs.has("data-corten-read-again")).at(-1);
+  if (!again) return "its answer has no read-again tag among its elements";
+  const from = again.attrs.get("data-from");
+  if (again.tag !== "template" || from === undefined) return `its answer's read-again tag is a <${again.tag}>${from === undefined ? " without data-from" : ""}, not ReadAgain::from's template`;
+  if (!/^[1-9]\d*$/.test(again.attrs.get("data-corten-read-again") ?? "")) return "its answer's read-again tag names no whole seconds to wait";
+  const held = new URL(address);
+  const target = new URL(from, held);
+  held.hash = target.hash = "";
+  if (target.href !== held.href) return `its answer asks again from ${target.pathname}${target.search}, not the held read's ${held.pathname}${held.search}`;
+  return null;
+}
+
 export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
   // A page that waits for a write (ReadAgain) reads itself again until the write is in,
   // however it was reached: a full load, or the runtime's navigation (a link, or a data-patch
@@ -330,16 +449,20 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           // held read is answered as one that asks again (the server's answer while the write lands),
           // and no part read may come in the 2.2 s after that. The check needs at least one held read
           // answered so, its patch fulfilled, and every held read let go that way within 5 s: a read
-          // whose fetch or fulfill fails, whose answer is no read-again patch, or whose release does
-          // not settle fails it, saying which. Without a held read it fails too, since a part that has
-          // stopped says nothing about leaving it.
+          // whose fetch or fulfill fails, whose answer is no patch drawing `Saving...` with a
+          // ReadAgain::from template among its elements that asks again from the held read's own
+          // address (read as the runtime reads a patch, `readAgainFault`), or whose release does not
+          // settle fails it, saying which. A release that runs out aborts its read and settles its
+          // route callback then, and nothing answers that read after. Without a held read it fails
+          // too, since a part that has stopped says nothing about leaving it.
           /** The address of the page the case leaves, once its write is sent: the route takes no read before. @type {string | null} */
           let awayFrom = null;
           const awayReads = (/** @type {URL} */ u) => awayFrom !== null && u.pathname + u.search === awayFrom;
           /**
-           * Lets go of each part read the route holds, answering it as one that asks again: null
-           * once that answer is fulfilled, else what went wrong (the read is then aborted).
-           * @type {{ route: import("@playwright/test").Route, go: () => Promise<string | null> }[]}
+           * Lets go of each part read the route holds, answering it as one that asks again, within
+           * 5 s: null once that answer is fulfilled, else what went wrong (the read is then aborted).
+           * Its route callback has settled when this has.
+           * @type {{ release: () => Promise<string | null> }[]}
            */
           const owed = [];
           /** Set once the page has left, or the case ends: the route lets each read through at once. */
@@ -347,50 +470,58 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const holdPart = (/** @type {import("@playwright/test").Route} */ route) => {
             const request = route.request();
             if (gone || request.method() !== "GET" || request.headers()["corten"] !== "action") return route.fallback();
-            return new Promise((resolve) =>
+            return new Promise((settle) =>
               owed.push({
-                route,
-                go: async () => {
-                  let step = "its fetch";
-                  try {
-                    // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
-                    const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
-                    step = "reading its answer";
-                    const headers = res.headers();
-                    delete headers["content-encoding"];
-                    delete headers["content-length"];
-                    const body = await res.text();
-                    const landed = body.includes(savedLine) && !body.includes("data-corten-read-again");
-                    const answer = landed ? `${body.replace(savedLine, savingLine)}<template data-corten-read-again="1" data-from="${awayFrom}"></template>` : body;
-                    const patch = res.ok() && "corten-patch" in headers && answer.includes(savingLine) && answer.includes("data-corten-read-again");
-                    step = "its fulfill";
-                    await route.fulfill({ status: res.status(), headers, body: answer });
-                    return patch ? null : `its answer was no read-again patch (status ${res.status()}${"corten-patch" in headers ? "" : ", no corten-patch header"})`;
-                  } catch (error) {
-                    // The page that sent it has left, or the read was cancelled: it is aborted, and
-                    // not counted as answered.
-                    await route.abort().catch(() => {});
-                    return `${step} failed: ${String(/** @type {Error} */ (error)?.message ?? error).split("\n")[0]}`;
-                  } finally {
-                    resolve(undefined);
-                  }
+                release: () => {
+                  /** Set once the release has its outcome, in time or not: from then on nothing touches the route. */
+                  let over = false;
+                  const reply = async () => {
+                    let step = "its fetch";
+                    try {
+                      // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+                      const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
+                      step = "reading its answer";
+                      const headers = res.headers();
+                      delete headers["content-encoding"];
+                      delete headers["content-length"];
+                      const body = await res.text();
+                      const landed = body.includes(savedLine) && !body.includes("data-corten-read-again");
+                      const answer = landed ? `${body.replace(savedLine, savingLine)}<template data-corten-read-again="1" data-from="${awayFrom}"></template>` : body;
+                      const fault = !res.ok() || !("corten-patch" in headers) ? `its answer was no patch (status ${res.status()}${"corten-patch" in headers ? "" : ", no corten-patch header"})` : readAgainFault(answer, request.url(), savingLine);
+                      // Out of time: the read was aborted, and a late answer is no answer.
+                      if (over) return "its release did not settle within 5 s";
+                      step = "its fulfill";
+                      await route.fulfill({ status: res.status(), headers, body: answer });
+                      return fault;
+                    } catch (error) {
+                      // The page that sent it has left, or the read was cancelled: it is aborted, and
+                      // not counted as answered.
+                      if (!over) await route.abort().catch(() => {});
+                      return `${step} failed: ${String(/** @type {Error} */ (error)?.message ?? error).split("\n")[0]}`;
+                    }
+                  };
+                  return within(5000, "its release did not settle within 5 s", reply())
+                    .catch((/** @type {Error} */ error) => {
+                      // Its fetch, answer or fulfill never settled: the read is aborted and its
+                      // callback settles now, not when (if ever) that work ends.
+                      over = true;
+                      route.abort().catch(() => {});
+                      return error.message;
+                    })
+                    .finally(() => {
+                      over = true;
+                      settle(undefined);
+                    });
                 },
               }),
             );
           };
           /**
            * Lets go of every read held so far, each within 5 s: what became of each (null: answered
-           * as one that asks again). A read whose release does not settle is aborted.
+           * as one that asks again). A read whose release does not settle is aborted, and its route
+           * callback settles then all the same.
            */
-          const letGo = () =>
-            Promise.all(
-              owed.splice(0).map(({ route, go }) =>
-                within(5000, "its release did not settle within 5 s", go()).catch((/** @type {Error} */ error) => {
-                  route.abort().catch(() => {});
-                  return error.message;
-                }),
-              ),
-            );
+          const letGo = () => Promise.all(owed.splice(0).map(({ release }) => release()));
           // The held reads are let go and the route removed (bounded) however the case ends.
           try {
             await within(5000, "the leaving case's part route was not set within 5 s", page.route(awayReads, holdPart));
