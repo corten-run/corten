@@ -229,6 +229,19 @@ function candidates(group, app, baseline) {
     choices.at(-1).configuration = { ...baseline.configuration, server: "Uvicorn ASGI", command: choices.at(-1).change.command,
       workers: "one application process; Uvicorn loop/http auto selection must be captured", sourceRefs: [...baseline.configuration.sourceRefs, "bench/live/apps.mjs"] };
   }
+  if (app === "django" && group === "mixed-production") {
+    const context = appRoot(app);
+    candidate("django-granian-asgi", { scope: "dedicated Mixed Production only", buildProfile: "matched-asgi",
+      productionParity: "requires full native Mixed qualification before timing" }, [optionSources.granian], "source-present");
+    choices.at(-1).configuration = { ...baseline.configuration, server: "Granian ASGI HTTP/1",
+      workers: "one worker; one runtime thread; one runtime blocking thread; one Python blocking thread (start_mixed_asgi.py)",
+      command: ["sh", "-c", "python -m django migrate --noinput && exec python start_mixed_asgi.py"],
+      build: "matched Django build plus requirements-matched-asgi.txt", environment: { ...baseline.configuration.environment,
+        DJANGO_SETTINGS_MODULE: "itempage.mixed_asgi_settings" },
+      builds: { app: { context, dockerfile: `${context}/Dockerfile`, args: { PROFILE: "matched-asgi" } } },
+      sourceRefs: [...baseline.configuration.sourceRefs, ...["requirements-matched-asgi.txt", "start_mixed_asgi.py", "itempage/mixed_asgi.py",
+        "itempage/mixed_asgi_settings.py", "itempage/mixed_asgi_urls.py", "itempage/mixed_asgi_views.py"].map((path) => `${context}/${path}`)] };
+  }
   if (app === "fastapi") {
     candidate("fastapi-uvicorn-asyncio", { server: "Uvicorn", loop: "asyncio; explicit selection rather than auto", compiler: "CPython" }, [optionSources.uvicorn]);
     candidate("fastapi-uvicorn-uvloop", { server: "Uvicorn", loop: "uvloop; explicit selection rather than auto", compiler: "CPython" }, [optionSources.uvicorn]);

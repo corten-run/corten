@@ -120,8 +120,11 @@ finalization. Historical result paths, standalone commands and the archive layou
 `campaign-contract.mjs` retains the complete registry and hashes the actual nine source
 procedure files alongside all measured sources. The production map uses native defaults
 except the existing marketplace-short-window, explicit native-feed-measure for both live
-groups and new mixed-production-measure. Mixed adds --measure --profile matched as the
-native README specifies. The older mixed-measure remains the default-profile recipe,
+groups and mixed-production-measure in the legacy full campaign. Dedicated Mixed
+campaigns use `mixed-production-django-asgi`: the same `--measure --profile matched`,
+plus the fixed `--django-deployment django-granian-asgi` selection. The build and
+audit bind that deployment for both sources, without changing the measured workload
+or its gates. The older mixed-measure remains the default-profile recipe,
 unchanged. Numeric defaults come from native parsers, not new CLI constants. Dedicated
 client-heavy campaigns bind `client-heavy-comparison-v1` from the measured source; the
 legacy full campaign retains client-heavy's single-sample diagnostic recipe. Browser
@@ -398,6 +401,13 @@ or campaign readiness. The v2 native adapter/producer integration remains a sepa
 An authenticated monitored or offline-handoff campaign can take one additional host
 observation after official timing or untimed JSON preparation if the first-after
 inventory contains only new sleeping children of the same baseline `systemd-udevd`.
+Capture and replay use the same eligibility check: only the exact bound native
+invocation for the campaign's registered group, round and phase can carry a sealed
+clock. Fixture generators and helpers cannot carry one. The clock is optional;
+without it only the ordinary first-after boundary can prove cleanup.
+Live Delivery and Recoverable Live replay both censuses when a settled census
+is present. Both must match the committed phase seal and the verified lifetime;
+a supplied but invalid settlement cannot fall back to the first census.
 The last native command must have a verified sealed terminal lifetime, including
 proof that its accounting scope is empty, before the five-second wait begins. For
 official timing, each worker's Linux start ticks must place its birth strictly after
@@ -560,7 +570,9 @@ it does not accept either ordinal interchangeably. The plan and reservation must
 unchanged across replay, as must the phase's evidence tree.
 It checks the exact binding/invocation, campaign/phase/command, boot and time window, native
 manifest, positive terminal empty scope, observed browser renderer, inherited controls and
-empty Docker container boundaries. Core's phase/journal seals bind these retained bytes;
+empty Docker container boundaries. Before using either one or two censuses, the adapter
+replays the ordered campaign journal through the phase seal and checks that seal against
+the whole phase. The recorded command start and exit bind the lifetime it reads;
 the live controller separately establishes their execution origin and exclusive ownership.
 This composes actual host cleanup instead of requiring the native app to assert it again.
 An error-only failure with no retained target HTTP/control observation is incomplete, even

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync,
   rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +94,179 @@ test("real Linux controls have a required host job and cannot pass through fixtu
     "unshare --fork --pid --mount-proc", "# skipped 0", "# cancelled 0", "# fail 0", "--test-reporter=tap"])
     assert.ok(driver.includes(required), `native CI obligation missing: ${required}`);
   assert.ok(!driver.includes("continue-on-error") && !driver.includes("--privileged"));
+});
+
+const resourceProbeMocks = String.raw`
+  _owned=$(printf '%064d' 1)
+  _foreign=$(printf '%064d' 2)
+  _label=corten.json.resource-probe-attempt
+  _waits=0
+  _probed=0
+  _removed=0
+  timeout() {
+    [[ "$1" =~ ^--kill-after=([0-9]+)s$ ]] || return 98
+    local grace=$((BASH_REMATCH[1]))
+    [[ "$2" =~ ^([0-9]+)s$ ]] || return 98
+    printf 'budget:%d\n' "$((BASH_REMATCH[1] + grace))" >&2
+    _bound=$2
+    shift 2
+    case "$1" in docker|node) "$@" ;; *) return 98 ;; esac
+  }
+  sleep() { [[ "$*" == 1 ]] || return 98; _waits=$((_waits + 1)); printf 'budget:1\n' >&2; }
+  node() {
+    if [[ "$1" == -p ]]; then
+      [[ "$2" == 'require("node:crypto").randomUUID()' ]] || return 98
+      printf '%s\n' "$ATTEMPT"
+      return
+    fi
+    [[ "$#" == 2 && "$1" == bench/json-api/load-resource-probe.mjs && "$2" == "$_owned" ]] || return 98
+    _probed=1
+    printf 'probe:%s\n' "$2" >&2
+    [[ "$MODE" != probeFailed ]]
+  }
+  docker() {
+    [[ "$1" == --host && "$2" == unix:///var/run/docker.sock ]] || return 98
+    shift 2
+    case "$1" in
+      pull) ;;
+      create)
+        printf 'create\n' >&2
+        [[ "$*" == *" --label corten.json.resource-probe=1 --label $_label=$ATTEMPT "* ]] || return 98
+        case "$MODE" in
+          ok|probeFailed|removeFailed|ackInspectDelayed|cleanupDelayed|cleanupMismatch|cleanupDelayedMismatch|cleanupUnavailable|rmTimeout*)
+            printf '%s\n' "$_owned" ;;
+          foreignAck) printf '%s\n' "$_foreign" ;;
+          *) return 124 ;;
+        esac
+        ;;
+      ps)
+        if [[ "$*" == "ps --all --no-trunc --filter id=$_owned --format {{.ID}}" ]]; then
+          [[ "$_bound" == 2s ]] || return 98
+          printf 'census:%s\n' "$_owned" >&2
+          case "$MODE" in
+            rmTimeoutUnknown) return 124 ;;
+            rmTimeoutMalformed) printf '%s\n' "$_foreign" ;;
+            rmTimeoutBlank) printf '\n' ;;
+            rmTimeoutGone) : ;;
+            rmTimeoutRecheckGone) if [[ ! -e .removal-finished ]]; then printf '%s\n' "$_owned"; fi ;;
+            rmTimeoutRetryGone) if (( _removed == 1 )); then printf '%s\n' "$_owned"; fi ;;
+            *) printf '%s\n' "$_owned" ;;
+          esac
+          return 0
+        fi
+        [[ "$_bound" == 2s && "$*" == "ps --all --no-trunc --filter label=$_label=$ATTEMPT --format {{.ID}}" ]] || return 98
+        printf 'lookup\n' >&2
+        case "$MODE" in
+          lost) if (( _waits >= 2 )); then printf '%s\n' "$_owned"; fi ;;
+          absent) ;;
+          lookupFailed) return 124 ;;
+          short) printf '0123456789ab\n' ;;
+          multiple) printf '%s\n' "$_owned" "$_foreign" ;;
+          foreign) printf '%s\n' "$_foreign" ;;
+          changed) if (( _waits )); then printf '%s\n' "$_foreign"; else printf '%s\n' "$_owned"; fi ;;
+          ambiguousAfterRetry) if (( _waits )); then printf '%s\n' "$_owned" "$_foreign"; else printf '%s\n' "$_owned"; fi ;;
+          malformedAfterRetry) if (( _waits )); then printf '0123456789ab\n'; else printf '%s\n' "$_owned"; fi ;;
+          *) printf '%s\n' "$_owned" ;;
+        esac
+        ;;
+      container)
+        [[ "$_bound" == 3s && "$2" == inspect && "$3" == --format && "$4" == '{{.Id}} {{index .Config.Labels "corten.json.resource-probe"}} {{index .Config.Labels "corten.json.resource-probe-attempt"}}' ]] || return 98
+        printf 'inspect:%s\n' "$5" >&2
+        case "$MODE" in
+          inspectDelayed|ackInspectDelayed) if (( _waits < 3 )); then return 124; fi ;;
+          inspectUnavailable) return 124 ;;
+          cleanupDelayed|cleanupDelayedMismatch) if (( _probed && !_waits )); then return 124; fi ;;
+          cleanupUnavailable) if (( _probed )); then return 124; fi ;;
+          rmTimeoutBudget) if (( _probed && !_waits )); then return 124; fi ;;
+          rmTimeoutLate) if (( _probed && _waits < 3 )); then return 124; fi ;;
+          rmTimeoutRecheckUnavailable) if (( _removed )); then return 124; fi ;;
+          rmTimeoutRecheckGone) if (( _removed )); then : > .removal-finished; return 1; fi ;;
+          changed|ambiguousAfterRetry|malformedAfterRetry|wrongIdAfterRetry) if (( _waits == 0 )); then return 124; fi ;;
+        esac
+        if [[ "$MODE" == wrongId || "$MODE" == wrongIdAfterRetry ]]; then
+          printf '%s 1 %s\n' "$_foreign" "$ATTEMPT"
+        elif [[ "$5" == "$_foreign" ]] || { (( _probed )) && [[ "$MODE" == cleanupMismatch || "$MODE" == cleanupDelayedMismatch ]]; } ||
+          { (( _removed )) && [[ "$MODE" == rmTimeoutForeign ]]; }; then
+          printf '%s 1 foreign-attempt\n' "$5"
+        else
+          printf '%s 1 %s\n' "$_owned" "$ATTEMPT"
+        fi
+        ;;
+      rm)
+        printf 'remove:%s\n' "$4" >&2
+        [[ "$*" == "rm -f -v $_owned" && "$MODE" != removeFailed ]] || return 98
+        if (( !_removed )); then [[ "$_bound" == 10s ]] || return 98
+        else [[ "$_bound" == 4s ]] || return 98
+        fi
+        _removed=$((_removed + 1))
+        if [[ "$MODE" == rmTimeout* ]] && { (( _removed == 1 )) || [[ "$MODE" == rmTimeoutRetryGone || "$MODE" == rmTimeoutStill || "$MODE" == rmTimeoutBudget ]]; }; then
+          return 124
+        fi
+        ;;
+      *) return 98 ;;
+    esac
+  }
+`;
+const resourceProbeBash = process.env.CORTEN_TEST_BASH ?? (process.platform === "linux" ? "/bin/bash" : null);
+test("the synthetic JSON resource probe settles cleanup without removing foreign containers", { skip: !resourceProbeBash }, async (t) => {
+  const step = workflow.jobs.kernel.steps.find((s) => s.name === "Prove bracketed JSON resource reads on a synthetic Docker participant");
+  const owned = "1".padStart(64, "0"), foreign = "2".padStart(64, "0");
+  const inspect = `inspect:${owned}`, inspectForeign = `inspect:${foreign}`, remove = `remove:${owned}`, probe = `probe:${owned}`, census = `census:${owned}`;
+  const refused = "Synthetic JSON resource probe cleanup could not confirm one owned container";
+  const unresolved = "Synthetic JSON resource probe cleanup could not settle removal";
+  const fullSearch = Array(4).fill(["lookup", inspect]).flat();
+  const rmTimeout = [inspect, probe, inspect, remove, census];
+  const cases = [
+    ["ok", 0, [inspect, probe, inspect, remove]],
+    ["probeFailed", 1, [inspect, probe, inspect, remove]],
+    ["removeFailed", 1, [inspect, probe, inspect, remove]],
+    ["rmTimeoutGone", 0, rmTimeout],
+    ["rmTimeoutRetry", 0, [...rmTimeout, inspect, remove]],
+    ["rmTimeoutRetryGone", 0, [...rmTimeout, inspect, remove, census]],
+    ["rmTimeoutStill", 1, [...rmTimeout, inspect, remove, census, unresolved]],
+    ["rmTimeoutForeign", 1, [...rmTimeout, inspect, unresolved]],
+    ["rmTimeoutUnknown", 1, [...rmTimeout, unresolved]],
+    ["rmTimeoutMalformed", 1, [...rmTimeout, unresolved]],
+    ["rmTimeoutBlank", 1, [...rmTimeout, unresolved]],
+    ["rmTimeoutRecheckUnavailable", 1, [...rmTimeout, inspect, census, unresolved]],
+    ["rmTimeoutRecheckGone", 0, [...rmTimeout, inspect, census]],
+    ["rmTimeoutBudget", 1, [inspect, probe, inspect, inspect, remove, census, inspect, remove, census, unresolved], 173],
+    ["rmTimeoutLate", 1, [inspect, probe, ...Array(4).fill(inspect), remove, census, unresolved], 170],
+    ["cleanupDelayed", 0, [inspect, probe, inspect, inspect, remove], 154],
+    ["cleanupMismatch", 1, [inspect, probe, inspect, refused]],
+    ["cleanupDelayedMismatch", 1, [inspect, probe, inspect, inspect, refused]],
+    ["cleanupUnavailable", 1, [inspect, probe, ...Array(4).fill(inspect), refused], 154],
+    ["foreignAck", 1, [inspectForeign, refused]],
+    ["lost", 124, ["lookup", "lookup", "lookup", inspect, remove]],
+    ["inspectDelayed", 124, [...fullSearch, remove], 145],
+    ["ackInspectDelayed", 1, [inspect, ...Array(4).fill(inspect), remove], 134],
+    ["inspectUnavailable", 124, [...fullSearch, refused], 133],
+    ...["changed", "ambiguousAfterRetry", "malformedAfterRetry"].map((mode) => [mode, 124, ["lookup", inspect, "lookup", refused]]),
+    ["wrongIdAfterRetry", 124, ["lookup", inspect, "lookup", inspect, refused]],
+    ["absent", 124, [...Array(4).fill("lookup"), refused]],
+    ["lookupFailed", 124, [...Array(4).fill("lookup"), refused]],
+    ["short", 124, ["lookup", refused]],
+    ["multiple", 124, ["lookup", refused]],
+    ["foreign", 124, ["lookup", inspectForeign, refused]],
+    ["wrongId", 124, ["lookup", inspect, refused]],
+  ];
+  for (const [mode, status, trace, budget] of cases) {
+    await t.test(mode, () => {
+      const scratch = mode === "rmTimeoutRecheckGone" ? mkdtempSync(join(tmpdir(), "corten-resource-rm-")) : null;
+      if (scratch) t.after(() => rmSync(scratch, { recursive: true, force: true }));
+      const result = spawnSync(resourceProbeBash, ["-e", "-o", "pipefail", "-s"], {
+        input: resourceProbeMocks + step.run, cwd: scratch ?? root,
+        env: { ...process.env, MODE: mode, ATTEMPT: randomUUID() }, encoding: "utf8", timeout: 5000, windowsHide: true,
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, status, result.stderr);
+      const lines = result.stderr.trim().split(/\r?\n/), budgetLines = lines.filter((line) => line.startsWith("budget:"));
+      assert.deepEqual(lines.filter((line) => !line.startsWith("budget:")), ["create", ...trace]);
+      const boundedSeconds = budgetLines.reduce((sum, line) => sum + Number(line.slice(7)), 0);
+      assert.ok(boundedSeconds < 60 * step["timeout-minutes"], "no time left for the shell and UUID generation");
+      if (budget !== undefined) assert.equal(boundedSeconds, budget);
+    });
+  }
 });
 
 test("native driver generates the actual churn invocation under the same no-skip gates", () => {

@@ -11,13 +11,15 @@ import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, handoffCapture, handoffLocks, handoffRetirementPolicy,
-  interruptedFirstUpload, launchHostKey, offlineNeverStarted, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
+  failedExitOneCandidate, failedExitOnePolicy, failedExitOneScope, verifyFailedExitOneCustody, verifyFailedExitOneRetirement, interruptedFirstUpload,
+  launchHostKey, offlineNeverStarted, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckContinuationPeers, recheckCreateErroredAttempt, recheckIndexedLaunchCustody, recheckPostedCreate, recheckSetupAttempt } from "./fleet-verify.mjs";
+  recheckContinuationPeers, recheckCreateErroredAttempt, recheckExitOneRetirement, recheckIndexedLaunchCustody, recheckPostedCreate,
+  recheckSetupAttempt } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -144,15 +146,30 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
         const { stagedChildIntent } = await import("./fleet.mjs");
         if (saved.control?.monitor?.phase === "closed") {
           handoffLocks(local, holdingOperationLock);
-          const { grouped, capture, captureSha256 } = handoffCapture(local, saved);
-          recovery = { policy: handoffRetirementPolicy, measuredCommit: saved.commit, captureControllerCommit: capture.controllerCommit,
-            captureSha256, preservedReservationSha256: capture.reservationSha256, provider: saved.provider,
-            hostId: saved.id, ip: saved.ip, group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256,
-            evidenceSha256: saved.evidenceSha256, custodyArchiveSha256: capture.observation.archiveSha256,
-            custodyEvidenceSha256: capture.evidenceSha256, snapshotSha256: capture.observation.snapshotSha256,
-            launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
-            registrationSha256: saved.control.monitor.registrationSha256, sealSha256: grouped.terminal.sealSha256,
-            campaign: grouped.terminal.campaign, intent: stagedChildIntent(physicalRequest, saved), fleetSha256: saved.fleet.fleetSha256 };
+          if (failedExitOneCandidate(local, saved)) {
+            const absentOnly = saved.status === "retired";
+            const { grouped, launchIntentSha256, fleetManifestSha256, record } = absentOnly
+              ? verifyFailedExitOneRetirement(local, saved) : verifyFailedExitOneCustody(local, saved);
+            if (absentOnly) assert.equal(record.controllerCommit, head, "original exit-one retirement controller required");
+            const intent = stagedChildIntent(physicalRequest, saved);
+            assert.deepEqual(intent, { launch: launchIntentSha256 }, "original exit-one launch intent changed");
+            recovery = { policy: failedExitOnePolicy, operation: absentOnly ? "reconcile-absence-only" : "observe-terminal-and-retire",
+              measuredCommit: saved.commit, provider: saved.provider, hostId: saved.id,
+              ip: saved.ip, group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256,
+              launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
+              registrationSha256: saved.control.monitor.registrationSha256, sealSha256: grouped.terminal.sealSha256,
+              campaign: grouped.terminal.campaign, intent, fleetManifestSha256 };
+          } else {
+            const { grouped, capture, captureSha256 } = handoffCapture(local, saved);
+            recovery = { policy: handoffRetirementPolicy, measuredCommit: saved.commit, captureControllerCommit: capture.controllerCommit,
+              captureSha256, preservedReservationSha256: capture.reservationSha256, provider: saved.provider,
+              hostId: saved.id, ip: saved.ip, group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256,
+              evidenceSha256: saved.evidenceSha256, custodyArchiveSha256: capture.observation.archiveSha256,
+              custodyEvidenceSha256: capture.evidenceSha256, snapshotSha256: capture.observation.snapshotSha256,
+              launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
+              registrationSha256: saved.control.monitor.registrationSha256, sealSha256: grouped.terminal.sealSha256,
+              campaign: grouped.terminal.campaign, intent: stagedChildIntent(physicalRequest, saved), fleetSha256: saved.fleet.fleetSha256 };
+          }
         } else {
           const grouped = groupedPreplanFailure(local, saved);
           // A refused custody probe can append a settled collection ledger row
@@ -225,6 +242,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     return error;
   };
   try {
+  let checkExitOneDispatch;
   const run = async (...args) => {
     const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
     try { await controlCheckpoint(interrupted); } catch (error) {
@@ -236,8 +254,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       assert.ok(args[0] === "doctl" && args[1][2] === "delete" && args[4] !== undefined);
       // The controller's local custody must still match after this last await,
       // before the private worker receives the mutation.
-      guardDispatch();
+      if (guardDispatch() === false) return unsentDelete; // The local proof expired before worker dispatch.
     }
+    if (args[0] === "doctl" && args[1][2] === "create") checkExitOneDispatch?.();
     let result, failure;
     try { result = args[0] === "doctl" ? await providerRun(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
     // Hand custody back before cancellation: take the stream handle, record
@@ -280,7 +299,8 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   // too, by ID alone: a renamed or untagged droplet with that ID still refuses the create.
   const continuation = manifest?.single ? admission?.subject.continuation : undefined;
   const posted = [...continuation?.createFailures ?? [], ...continuation?.postedCreates ?? []];
-  const historicalIds = new Set([...unconfirmed, ...posted.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
+  const exitOneRetirements = continuation?.exitOneRetirements ?? [];
+  const historicalIds = new Set([...unconfirmed, ...exitOneRetirements, ...posted.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
     assert.equal(accountId, manifest.provider.accountId, "historical custody requires the same provider account");
     return full(id, /[1-9]\d*/, "historical custody requires a bound host ID");
   }));
@@ -321,9 +341,22 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
         // group's retry): a contradiction or custody change since admission refuses.
         for (const row of current.subject.continuation.postedCreates ?? []) recheckPostedCreate(row);
       }
+      if (beforeCreate !== "census") {
+        for (const row of exitOneRetirements) recheckExitOneRetirement(root, row);
+        // A continuation approval predating this binding cannot create beside
+        // an unbound r78 slot. Do not try to replay its archive from the child.
+        for (const slot of ["client-heavy", "client-heavy--r78"]) {
+          const prior = join(root, slot);
+          if (prior === current.fleetRoot || exitOneRetirements.some((row) => row.root === prior)
+              || !lstatSync(join(prior, "fleet-r78.json"), { throwIfNoEntry: false })) continue;
+          const { state } = readGroup(readFleet(prior, "r78", { priorSelection: true }), "client-heavy");
+          assert.ok(!failedExitOneScope(state) || !state.archiveSha256, "prior exit-one retirement custody is not bound; do not create");
+        }
+      }
       return currentPeers;
     }
   });
+  if (exitOneRetirements.length) checkExitOneDispatch = () => checkFleetAdmission("dispatch");
   checkFleetAdmission?.();
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
   assert.ok(!interrupted(), "cancelled before approval");
@@ -355,7 +388,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     // The approval hash excludes missing inputs, such as a bench install removed since the recheck.
     assert.deepEqual(locked.missing, [], "native campaign integration missing; do not allocate");
     checkFleetAdmission?.();
-    if (locked.subject.recovery?.policy === handoffRetirementPolicy) entered = true;
+    if ([handoffRetirementPolicy, failedExitOnePolicy].includes(locked.subject.recovery?.policy)) entered = true;
     return locked.subject;
   };
   const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch) => {
@@ -385,7 +418,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       reservationSha256: plan.subject.reservationSha256, knownHostsSha256: plan.subject.recovery.knownHostsSha256,
     } }), ...(options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
       recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256,
-        ...(options.r21MeasuredCheckout || ["grouped-preplan-failure-custody-only", handoffRetirementPolicy].includes(plan.subject.recovery?.policy)
+        ...(options.r21MeasuredCheckout || ["grouped-preplan-failure-custody-only", handoffRetirementPolicy, failedExitOnePolicy].includes(plan.subject.recovery?.policy)
           ? plan.subject.recovery : {}) },
     } : {}) });
   let result;
