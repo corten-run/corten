@@ -828,6 +828,35 @@ durable create intent. Even if identity is found, provisioning cannot begin with
 the exact completed create-action proof. A timed-out or unsettled mutation remains
 uncertain, retains locks and cannot take this recovery shortcut.
 
+### Isolate an unacknowledged create
+
+A single group whose only create has an unacknowledged response and no saved
+droplet or action ID may be isolated in its existing continuation root. This
+does not settle the POST, record deletion, release the child or fleet locks, or
+allow the failed group to retry. Its row stays `quarantined-create`, not verified
+or retryable. Other groups can continue only in the same provider account, and
+their approved create checks that a fresh complete account inventory contains
+neither the original name nor the original tag. This check is not proof the
+original POST never succeeded. If a match appears, stop and reconcile it; do
+not submit another create.
+
+The operator must stop dispatch to the root and positively account for the
+original local controller, worker and their descendants. A stale PID, a missing
+droplet or a fleet failure receipt alone is not that proof. Keep that evidence
+and the unchanged outer lock outside all the state roots. Use
+`unacknowledgedCreateBinding(readFleet(attemptRoot, round, { priorSelection: true }))`
+from `fleet-verify.mjs` to get a read-only binding of the existing state, intent,
+diagnostic and three retained operation locks. Have a separate reviewer check
+the operator evidence, the binding and the provider observation. Save
+`receipts/create-quarantine.json` exclusively in that attempt with exactly
+`{ schema: "benchmark-create-quarantine/v1", binding, localCustodyProofSha256 }`,
+where the digest names the retained proof. Only then archive and release the
+original outer continuation lock under the custody procedure below. Never clear
+the child locks through this route or copy the attempt to a fresh root. The
+binding and census do not replace the operator's process-tree proof.
+
+### Provider-errored create
+
 A create the provider accepts and then fails has its own terminal outcome
 ([#1689 Benchmark r21: catalog qualification droplet create errored before guest startup](https://github.com/corten-run/corten/issues/1689)).
 The launch records it only when four proofs hold. Two stages bound them. Within the

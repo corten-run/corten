@@ -5,7 +5,7 @@ import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fleetCreateMode, roundName, selection, stagedFleet, validateFleet } from "./cloud-contract.mjs";
-import { campaignOutcome, controllerState, full } from "./cloud-options.mjs";
+import { campaignOutcome, controllerState, full, providerDiagnostic } from "./cloud-options.mjs";
 import { livePeerLease, streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
@@ -241,6 +241,82 @@ export function readGroup(fleet, group) {
   }
   return { group, stateRoot, local, state, stateSha256: digest(bytes), outcome: present(join(local, "operation.lock")) ? "busy"
     : ["creating", "preparing", "starting", "running", "collected", "retired"].includes(state.status) ? "available" : "ambiguous" };
+}
+
+const createQuarantineFile = "create-quarantine.json";
+
+// Read-only candidate for an operator who has accounted for the entire local
+// controller tree. Dead lock owners alone do not prove that tree has settled.
+export function unacknowledgedCreateBinding(fleet) {
+  const { root, manifest, manifestSha256 } = fleet, { round, single } = manifest;
+  assert.ok(single, "create quarantine requires an independent attempt");
+  const { group } = single, { state, stateRoot, local, stateSha256 } = readGroup(fleet, group);
+  assert.ok(state?.status === "creating" && !state.id && !state.createPending && !state.createErrored && !state.createContradicted,
+    "create quarantine requires an unbound create without a posted ID");
+  assert.ok(!state.control || state.control.ledger.length === 0 && state.control.sealed.length === 0
+    && (!state.control.monitor || state.control.monitor.phase === "pending" && !state.control.monitor.registrationSha256),
+    "create quarantine cannot hide guest control");
+  assert.deepEqual(readdirSync(stateRoot).sort(), [".groups-launch.lock", `groups-${round}`]);
+  assert.deepEqual(readdirSync(local).sort(), ["operation.lock", "state.json"]);
+  const intent = readLaunchIntent(fleet), batch = reportBatch(fleet);
+  assert.ok(batch && batch !== "busy", "create quarantine requires the original dead batch owner");
+  const { pid, approvalSha256 } = batchLock(batch.bytes);
+  assert.equal(approvalSha256, intent.approvalSha256, "create quarantine requires the original batch approval");
+  const launchPath = join(stateRoot, ".groups-launch.lock"), operationPath = join(local, "operation.lock");
+  const launch = lockEvidence(launchPath), operation = lockEvidence(operationPath);
+  assert.deepEqual(JSON.parse(launch.bytes), { pid, round });
+  const owner = JSON.parse(operation.bytes);
+  assert.deepEqual(owner, { pid, at: owner.at });
+  assert.ok(Number.isFinite(Date.parse(owner.at)) && new Date(owner.at).toISOString() === owner.at
+    && Date.parse(owner.at) <= Date.parse(state.createIntentAt), "create quarantine requires original operation custody");
+  const dir = join(root, "receipts"); physical(dir);
+  const entries = readdirSync(dir).filter((file) => file !== createQuarantineFile);
+  assert.equal(entries.length, 1, "create quarantine requires exactly one original detach outcome");
+  assert.match(entries[0], new RegExp(`^detach-[a-f0-9]{16}-${group}\\.json$`));
+  const failureBytes = regular(join(dir, entries[0]), 4096), failure = JSON.parse(failureBytes);
+  const diagnostic = providerDiagnostic(failure.providerDiagnostic);
+  assert.equal(diagnostic?.code, "create-request", "create quarantine requires an unacknowledged POST diagnostic");
+  assert.deepEqual(failure, { group, outcome: "error", error: "group-operation-failed", uncertain: true,
+    providerDiagnostic: diagnostic, controllerStage: "provider-settlement" });
+  assert.ok(sameReportBatch(batch, reportBatch(fleet)) && sameChildLocks(local,
+    [{ ...launch, path: launchPath }, { ...operation, path: operationPath }]),
+    "create quarantine custody changed");
+  assert.equal(readGroup(fleet, group).stateSha256, stateSha256, "create quarantine state changed");
+  return { round, group, accountId: manifest.provider.accountId, manifestSha256, stateSha256, launchSha256: intent.sha256,
+    failureSha256: digest(failureBytes), batchLockSha256: batch.sha256, launchLockSha256: launch.sha256, operationLockSha256: operation.sha256 };
+}
+
+export function readCreateQuarantine(fleet) {
+  const dir = join(fleet.root, "receipts");
+  if (!fleet.manifest.single || !present(dir)) return;
+  physical(dir);
+  const path = join(dir, createQuarantineFile);
+  if (!present(path)) return;
+  const bytes = regular(path, 8192), record = JSON.parse(bytes), binding = unacknowledgedCreateBinding(fleet);
+  full(record.localCustodyProofSha256, /[a-f0-9]{64}/, "operator tree-custody proof digest required");
+  assert.deepEqual(record, { schema: "benchmark-create-quarantine/v1", binding, localCustodyProofSha256: record.localCustodyProofSha256 },
+    "create quarantine binding differs");
+  const { state } = readGroup(fleet, binding.group);
+  assert.equal(digest(regular(join(fleet.root, binding.group, `groups-${binding.round}`, "state.json"), 1024 * 1024)), binding.stateSha256,
+    "create quarantine state changed");
+  return { round: binding.round, group: binding.group, root: fleet.root, accountId: binding.accountId,
+    sha256: digest(bytes), nameSha256: digest(state.name), tagSha256: digest(state.tag) };
+}
+
+export function recheckCreateQuarantine(root, row, selection) {
+  assert.ok(dirname(row.root) === root && row.group !== selection.single.group
+    && row.accountId === selection.provider.accountId, "create quarantine permits only other groups in the saved account");
+  assert.deepEqual(readCreateQuarantine(readFleet(row.root, row.round, { priorSelection: true })), row, "create quarantine changed");
+}
+
+export function quarantineCensusAbsent(quarantined, rows) {
+  if (!quarantined.length) return true;
+  assert.ok(rows.every(({ name, tags }) => typeof name === "string" && name.length
+    && Array.isArray(tags) && tags.every((tag) => typeof tag === "string" && tag.length)), "create quarantine census rows incomplete");
+  return !rows.some(({ name, tags }) => {
+    const nameSha256 = digest(name), tagSha256s = new Set(tags.map(digest));
+    return quarantined.some((row) => row.nameSha256 === nameSha256 || tagSha256s.has(row.tagSha256));
+  });
 }
 
 // A running status without sealed bootstrap and monitor custody proves nothing.

@@ -11,7 +11,7 @@ import { full } from "./cloud-options.mjs";
 import { createContradiction, createErroredCustody, createErroredReceipt, createRecheckLock, setupEvidence, terminalSetupScript, verifyCreateErrored,
   exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement,
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
-import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readFleet, readGroup,
+import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readCreateQuarantine, readFleet, readGroup,
   postedContradiction, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
   verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
 
@@ -65,7 +65,7 @@ export function requireSetupRetryCommit(attempts, commit) {
   assert.ok(!attempts.some((row) => row.outcome === setupCensusOutcome && row.commit === commit),
     "retry after failed setup requires a different measured commit");
 }
-const acceptable = (row) => ["missing", "prepared", "verified", "running"].includes(row.outcome) || retryable(row);
+const acceptable = (row) => ["missing", "prepared", "verified", "running", "quarantined-create"].includes(row.outcome) || retryable(row);
 const unresolved = (row) => row.custodyUnresolved || row.outcome !== "known-result" && !acceptable(row) && !row.cleanupUnconfirmed;
 const manifestOnly = (fleet, entries = readdirSync(fleet.root)) =>
   entries.length === 1 && entries[0] === `fleet-${fleet.manifest.round}.json`;
@@ -167,7 +167,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
   // postedCreates is the census fence and the final-gate snapshot: every earlier
   // provider-errored attempt's posted droplet in any group, settled or contradicted
   // (also after its retirement), refuses a create on its account while it is listed.
-  const createFailures = [], postedCreates = [], exitOneRetirements = [];
+  const createFailures = [], postedCreates = [], exitOneRetirements = [], quarantinedCreates = [];
   const retainedLocks = [];
   const setupCensus = (fleet, saved, lock, launch) => {
     const { group, state, stateSha256 } = saved, { round, provider, single } = fleet.manifest;
@@ -305,6 +305,16 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
     }
   };
   const read = async (fleet, checkout, archives) => {
+    const quarantine = readCreateQuarantine(fleet);
+    if (quarantine) {
+      const { group, round, accountId } = quarantine, { manifest, manifestSha256 } = fleet;
+      assert.ok(!archives && attempts.has(group), "create quarantine is not a retained result");
+      needsCensus.add(accountId); quarantinedCreates.push(quarantine);
+      retainedLocks.push(() => assert.deepEqual(readCreateQuarantine(readFleet(fleet.root, round, { priorSelection: true })), quarantine,
+        "create quarantine changed"));
+      attempts.get(group).push({ group, round, commit: manifest.commit, manifestSha256, outcome: "quarantined-create", attemptRoot: fleet.root });
+      return;
+    }
     if (admittedGroup) return readAdmission(fleet, checkout, archives);
     const { manifest, manifestSha256 } = fleet, { round, commit } = manifest;
     const lock = reportBatch(fleet, processStart);
@@ -457,6 +467,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       ...(unconfirmed.length ? { unconfirmed } : {}),
       ...(createFailures.length ? { createFailures } : {}),
       ...(postedCreates.length ? { postedCreates } : {}),
+      ...(quarantinedCreates.length ? { quarantinedCreates } : {}),
       ...(exitOneRetirements.length ? { exitOneRetirements } : {}),
       ...(peers.length ? { peers: peers.map(({ proof }) => proof) } : {}) } };
   const subject = { indexSha256, verified: proofs.map(({ fleet, snapshot }) => ({ root: fleet.root, round: fleet.manifest.round,

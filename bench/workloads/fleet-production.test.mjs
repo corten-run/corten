@@ -18,7 +18,7 @@ import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, preloginUserData, reservation, savedLoadLayout, savedPlacement, tags, verifySshIngress } from "./cloud-contract.mjs";
-import { readFleet, recheckSetupAttempt, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { quarantineCensusAbsent, readFleet, recheckCreateQuarantine, recheckSetupAttempt, unacknowledgedCreateBinding, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { unitQuery } from "./cloud-options.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { createErroredReceipt, createErroredRecord, offlineNeverStarted, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
@@ -857,6 +857,73 @@ test("continuation appends authorized retries after no-create and retirement whi
   assert.equal(treeHash(oldSlot), oldTree);
   assert.equal(treeHash(retrySlot), retiredTree);
   assert.equal(fs.readFileSync(index, "utf8"), "[]");
+});
+
+test("a quarantined unacknowledged create is not a result or retry, but a different group can prepare", { timeout: 60000 }, async (t) => {
+  const p = fixture(t), group = "json-api", other = "hardening", round = "r19", slot = path.join(p.h.base, group);
+  fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
+  p.deps.inspect = () => { assert.fail("no collected evidence"); };
+  // This control exercises the admission and approval bytes, not Linux actor
+  // source replay; the failed child is a synthetic local controller below.
+  p.deps.plan = (options, deps) => productionPlan(options, { ...deps, async roleCheck(subject) {
+    assert.ok([group, other].includes(subject.group));
+    return [];
+  } });
+  const args = (which, name) => [which, "--continuation-root", p.h.base, "--group", name];
+  const prepare = (which, name) => fleetMain([...args(which, name), "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
+  assert.equal(await prepare(round, group), 3);
+  assert.equal(await fleetMain([...args(round, group), "--detach", "--print-approval"], p.deps), 3);
+  const approval = p.output.at(-1).approvalSha256, saved = readFleet(slot, round), fleet = saved.manifest;
+  const stateRoot = path.join(slot, group), local = path.join(stateRoot, "groups-r19"), at = new Date().toISOString();
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+  const pending = { ...reservation({ round, commit, token: fleet.jobs[0].token, group, fleet }), provider: fleet.provider,
+    fullGroupQualified: false, status: "creating", createIntentAt: at };
+  p.deps.main = async () => {
+    fs.mkdirSync(local, { recursive: true });
+    fs.writeFileSync(path.join(local, "state.json"), JSON.stringify(pending));
+    fs.writeFileSync(path.join(stateRoot, ".groups-launch.lock"), JSON.stringify({ pid: dead, round }));
+    fs.writeFileSync(path.join(local, "operation.lock"), JSON.stringify({ pid: dead, at }));
+    throw Object.assign(new Error("PRIVATE_MESSAGE"), { controlUncertain: true, controllerStage: "provider-settlement",
+      providerDiagnostic: { code: "create-request", detail: "request-error" } });
+  };
+  assert.equal(await fleetMain([...args(round, group), "--detach", "--approve-reviewed-merged-ready", approval], p.deps), 2);
+  delete p.deps.main;
+  const batch = path.join(slot, ".fleet-operation.lock"), outer = path.join(p.h.base, continuationLock);
+  fs.writeFileSync(batch, JSON.stringify({ ...JSON.parse(fs.readFileSync(batch)), pid: dead }));
+  await assert.rejects(prepare("r20", other), /EEXIST/);
+  fs.unlinkSync(outer); // synthetic operator's positive custody proof and archive, not a controller action
+  await assert.rejects(prepare("r20", other), (error) => error.code === "ESRCH" || error.message.includes("unresolved custody"));
+  const record = path.join(slot, "receipts", "create-quarantine.json");
+  const binding = unacknowledgedCreateBinding(readFleet(slot, round));
+  const proof = { schema: "benchmark-create-quarantine/v1", binding, localCustodyProofSha256: "4".repeat(64) };
+  fs.writeFileSync(record, JSON.stringify(proof));
+  const sealed = treeHash(slot);
+  const { report } = await inspectContinuation(p.h.base, p.deps);
+  assert.ok(report.eligibleToRun.includes(other));
+  assert.ok(!report.eligibleToRun.includes(group));
+  assert.equal(report.groups.find((row) => row.group === group).outcome, "quarantined-create");
+  await assert.rejects(prepare("r20", group), /never allocate again/);
+  assert.equal(await prepare("r20", other), 3);
+  const preview = await fleetMain([...args("r20", other), "--detach", "--print-approval"], p.deps);
+  assert.equal(preview, 3);
+  const [old] = p.output.at(-1).subject.continuation.quarantinedCreates;
+  assert.equal(old.sha256, fileHash(record)); assert.equal(old.group, group);
+  const nextFleet = readFleet(path.join(p.h.base, other), "r20").manifest;
+  recheckCreateQuarantine(p.h.base, old, nextFleet);
+  assert.throws(() => recheckCreateQuarantine(p.h.base, old, fleet), /only other groups/);
+  assert.throws(() => recheckCreateQuarantine(p.h.base, old, { ...nextFleet, provider: { accountId: "user:elsewhere" } }), /saved account/);
+  assert.equal(quarantineCensusAbsent([old], []), true);
+  assert.equal(quarantineCensusAbsent([old], [{ name: "unrelated", tags: ["production"] }]), true);
+  assert.equal(quarantineCensusAbsent([old], [{ name: pending.name, tags: [] }]), false);
+  assert.equal(quarantineCensusAbsent([old], [{ name: "renamed", tags: [pending.tag] }]), false);
+  assert.ok(!JSON.stringify(old).includes(pending.tag), "the next approval need not carry the old provider tag");
+  assert.throws(() => quarantineCensusAbsent([old], [{ name: "unrelated" }]), /census rows incomplete/);
+  assert.equal(treeHash(slot), sealed);
+  assert.equal(p.events().filter((row) => row.method === "POST").length, 0);
+  fs.writeFileSync(record, JSON.stringify({ ...proof, binding: { ...binding, stateSha256: "a".repeat(64) } }));
+  assert.throws(() => recheckCreateQuarantine(p.h.base, old, nextFleet), /quarantine binding differs/);
+  await assert.rejects(prepare("r21", other), /quarantine binding differs/);
 });
 
 test("continuation retries past a create that errored after its launch deadline once the operator released its custody and the child recheck settled it", { timeout: 60000 }, async (t) => {
