@@ -466,14 +466,17 @@ const springSettingsBody = `<settings xmlns="http://maven.apache.org/SETTINGS/1.
 
 /**
  * Spring's .mvn: maven.config's lines exactly (retries, the app's settings and strict checksums),
- * and settings that are an XML declaration, one comment that holds no markup, then exactly
- * `springSettingsBody`: one mirror, of Central only, at Google's URL, and nothing else.
+ * and settings that are an XML declaration, one comment of printable ASCII, tabs and newlines with
+ * no markup, no `--` and no closing `-` (so XML 1.0 reads it as one comment), then exactly
+ * `springSettingsBody`: one mirror, of Central only, at Google's URL, and nothing else. Only CRLF
+ * line ends are read as LF: a bare CR is kept, so it fails the comparison instead of being dropped
+ * from text an XML reader would see as a line break.
  */
 function checkSpringMaven(/** @type {string[]} */ config, /** @type {string} */ settings) {
   assert.deepEqual(config, springConfig, "Spring's maven.config changed: its retries, its settings or its strict checksums");
-  const text = settings.replace(/\r/g, "");
-  const head = /^<\?xml version="1\.0" encoding="UTF-8"\?>\n<!--([^<>]*)-->\n/.exec(text);
-  assert.ok(head && !head[1].includes("--"), "Spring's Maven settings do not start with their declaration and one plain comment");
+  const text = settings.replace(/\r\n/g, "\n");
+  const head = /^<\?xml version="1\.0" encoding="UTF-8"\?>\n<!--([\t\n\x20-\x3B=?-~]*)-->\n/.exec(text);
+  assert.ok(head && !head[1].includes("--") && !head[1].endsWith("-"), "Spring's Maven settings do not start with their declaration and one plain comment");
   assert.equal(text.slice(head[0].length), springSettingsBody,
     "Spring's Maven reaches Central other than through Google's mirror alone, or its settings declare more than its mirror");
 }
@@ -916,8 +919,8 @@ test("Spring's Maven bound checks refuse a zero, an unbounded or extra run, a bo
 
 test("Spring reaches Central only through Google's mirror, and fails a checksum mismatch", () => {
   const spring = join(repo, "bench/fullstack/apps/spring");
-  const config = readFileSync(join(spring, ".mvn/maven.config"), "utf8").replace(/\r/g, "");
-  const settings = readFileSync(join(spring, ".mvn/settings.xml"), "utf8").replace(/\r/g, "");
+  const config = readFileSync(join(spring, ".mvn/maven.config"), "utf8").replace(/\r\n/g, "\n");
+  const settings = readFileSync(join(spring, ".mvn/settings.xml"), "utf8").replace(/\r\n/g, "\n");
   const lines = (/** @type {string} */ text) => text.split("\n").filter(Boolean);
   checkSpringMaven(lines(config), settings);
   const mirror = settings.slice(settings.indexOf("    <mirror>"), settings.indexOf("</mirror>\n") + "</mirror>\n".length);
@@ -941,6 +944,11 @@ test("Spring reaches Central only through Google's mirror, and fails a checksum 
     ["<mirrorOf>central</mirrorOf>", "<mirrorOf>central</mirrorOf>\n      <blocked>true</blocked>"],
     ["<mirrorOf>central</mirrorOf>", "<mirrorOf>central</mirrorOf>\n      <mirrorOfLayouts>!default</mirrorOfLayouts>"],
     ["<mirrorOf>central</mirrorOf>", "<mirrorOf>central</mirrorOf>\n      <layout>legacy</layout>"],
+    ["<mirrorOf>central</mirrorOf>", "<mirrorOf>cent\rral</mirrorOf>"],
+    ["  <mirrors>\n", "  <mirrors>\r"],
+    ["<!--\n", "<!--\u0000\n"],
+    ["\n-->\n", "\n--->\n"],
+    ["\n-->\n", "\n -->\n<!-- x -->\n"],
   ])) {
     assert.ok(settings.includes(from), `Spring's Maven settings no longer have ${from.trim()}`);
     assert.throws(() => checkSpringMaven(lines(config), settings.replace(from, to)), /through Google's mirror alone|declaration and one plain comment/, `accepted ${to.trim()}`);
