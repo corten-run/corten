@@ -2062,9 +2062,31 @@ where
             let service = hyper_util::service::TowerToHyperService::new(data.service(connection));
             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
             let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
-            let closing = tokio::select! {
-                _ = conn.as_mut() => return,
-                closing = stop.wait_for(Option::is_some) => closing.ok().and_then(|closing| *closing),
+            // Shutdown is waited for once. That poll leaves this task's waker with the channel,
+            // which wakes it when shutdown begins or the server is gone; it is made outside the
+            // task's budget, since a wait the budget put off would have left no waker. After it, a
+            // wake (every read and write of the connection) asks only whether the channel has
+            // changed, one load, where polling the wait again took its lock each time. That is
+            // asked of a second receiver, since the wait borrows the first.
+            let changed = stop.clone();
+            let closing = {
+                let mut stopping = std::pin::pin!(tokio::task::coop::unconstrained(stop.wait_for(Option::is_some)));
+                let mut waits = false;
+                let stopped = std::future::poll_fn(|cx| {
+                    if conn.as_mut().poll(cx).is_ready() {
+                        return std::task::Poll::Ready(None);
+                    }
+                    // A channel whose sender is gone is an error here, and ends the wait.
+                    if waits && !changed.has_changed().unwrap_or(true) {
+                        return std::task::Poll::Pending;
+                    }
+                    waits = true;
+                    stopping.as_mut().poll(cx).map(|closing| Some(closing.ok().and_then(|closing| *closing)))
+                });
+                match stopped.await {
+                    Some(closing) => closing,
+                    None => return,
+                }
             };
             conn.as_mut().graceful_shutdown();
             // The server gone without a shutdown: close now.

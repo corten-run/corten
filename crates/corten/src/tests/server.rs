@@ -796,6 +796,180 @@ async fn a_server_dropped_without_a_shutdown_closes_its_connections() {
     tokio::time::timeout(Duration::from_secs(5), conn.read_to_end(&mut rest)).await.expect("closed at once").ok();
 }
 
+/// What `client` is sent until its connection closes, which it must within five seconds: well
+/// inside the grace the tests below give, so a connection held for the grace fails them.
+async fn sent_until_closed(client: &mut tokio::net::TcpStream, who: &str) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut rest = Vec::new();
+    let closed = tokio::time::timeout(Duration::from_secs(5), client.read_to_end(&mut rest)).await;
+    // A connection the server reset is closed too.
+    let _ = closed.unwrap_or_else(|_| panic!("{who}: not closed, after {:?}", String::from_utf8_lossy(&rest)));
+    String::from_utf8(rest).unwrap()
+}
+
+/// Shutdown reaches a connection whose task has woken many times since it began to wait for it
+/// (the task waits for it once, and asks at each wake only whether the word has changed): one
+/// idle after its requests closes at once, one that never sent a byte closes at once, and one
+/// whose handler is still at work answers, says that it closes, and closes, and only then is the
+/// server done. A server that is gone without a shutdown closes all three at once.
+#[tokio::test]
+async fn shutdown_reaches_a_connection_long_after_its_task_began_to_wait_for_it() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const GET: &[u8] = b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
+    for gone in [false, true] {
+        let (started, mut running) = tokio::sync::mpsc::channel::<()>(1);
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let slow = get({
+            let release = release.clone();
+            move || {
+                let (started, release) = (started.clone(), release.clone());
+                async move {
+                    let _ = started.send(()).await;
+                    release.notified().await;
+                    "late"
+                }
+            }
+        });
+        let routes = Table::new().route("/", get(|| async { "hi" })).route("/slow", slow);
+        // A grace no connection here may be held for: each closes because of what it is doing.
+        let app = App::new(Routes::from(routes)).shutdown_grace(Duration::from_secs(60));
+        let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+        let addr = listeners[0].local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let mut server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+            let _ = stopped.await;
+        }));
+        let mut idle = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut busy = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut piece = [0u8; 1024];
+        for _ in 0..40 {
+            for client in [&mut idle, &mut busy] {
+                client.write_all(GET).await.unwrap();
+                let mut answer = Vec::new();
+                while !answer.ends_with(b"hi") {
+                    let read = client.read(&mut piece).await.unwrap();
+                    assert!(read > 0, "closed after {:?}", String::from_utf8_lossy(&answer));
+                    answer.extend_from_slice(&piece[..read]);
+                }
+                assert!(answer.starts_with(b"HTTP/1.1 200"), "{:?}", String::from_utf8_lossy(&answer));
+            }
+        }
+        busy.write_all(b"GET /slow HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+        running.recv().await.expect("the slow handler runs");
+        if gone {
+            // The server's future is dropped where it waits, and the word of shutdown with it.
+            server.abort();
+            for (client, who) in [(&mut idle, "idle"), (&mut silent, "silent"), (&mut busy, "busy")] {
+                assert_eq!(sent_until_closed(client, who).await, "", "{who}: closed with nothing more, the server gone");
+            }
+            continue;
+        }
+        stop.send(()).unwrap();
+        for (client, who) in [(&mut idle, "idle"), (&mut silent, "silent")] {
+            assert_eq!(sent_until_closed(client, who).await, "", "{who}: closed with nothing more");
+        }
+        let waited = tokio::time::timeout(Duration::from_millis(200), &mut server).await;
+        assert!(waited.is_err(), "the server waits for the request still being answered");
+        release.notify_one();
+        let answer = sent_until_closed(&mut busy, "busy").await;
+        assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("late"), "the request in progress is answered: {answer}");
+        assert!(answer.contains("\r\nconnection: close\r\n"), "and says its connection closes: {answer}");
+        tokio::time::timeout(Duration::from_secs(5), server).await.expect("shutdown ends").unwrap().unwrap();
+    }
+}
+
+/// A connection hears of shutdown when its task had spent tokio's cooperative budget by the time
+/// it first waited for it: the wait is made outside the budget, since the task waits only once,
+/// and a wait the budget put off would have left the task nothing to be woken by. The step
+/// before HTTP spends the budget here, in the poll that ends it.
+#[tokio::test]
+async fn a_connection_whose_task_had_spent_its_budget_still_hears_of_shutdown() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let stepped = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let step = {
+        let stepped = stepped.clone();
+        move |tcp: tokio::net::TcpStream| {
+            let stepped = stepped.clone();
+            async move {
+                // Never pending: asked before each unit is taken.
+                while tokio::task::coop::has_budget_remaining() {
+                    tokio::task::coop::consume_budget().await;
+                }
+                stepped.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok::<_, std::convert::Infallible>((tcp, ()))
+            }
+        }
+    };
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(Table::new().route("/", get(|| async { "hi" })))).shutdown_grace(Duration::from_secs(60));
+    let server = tokio::spawn(crate::app::run(vec![listener], step, app, async {
+        let _ = stopped.await;
+    }));
+    let mut silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+    while stepped.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    // Its task has been polled again since, with a budget to read with, and waits for a request.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    stop.send(()).unwrap();
+    assert_eq!(sent_until_closed(&mut silent, "silent").await, "");
+    tokio::time::timeout(Duration::from_secs(5), server).await.expect("shutdown ends").unwrap().unwrap();
+}
+
+/// A connection whose step before HTTP ends in the poll shutdown begins in (one accepted as the
+/// server stops) is closed at once, whether or not shutdown had begun before its task first
+/// waited for it: one that sent nothing gets nothing, and one whose request had arrived is either
+/// closed unread or answered in full, never held or cut. (The task serves the connection before
+/// it asks about shutdown, so the request is answered; a `select!` in its place did either.)
+#[tokio::test]
+async fn a_connection_whose_step_ends_as_shutdown_begins_is_closed() {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let stepping = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let step = {
+        let (stepping, release) = (stepping.clone(), release.clone());
+        move |tcp: tokio::net::TcpStream| {
+            let (stepping, release) = (stepping.clone(), release.clone());
+            async move {
+                stepping.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                release.notified().await;
+                Ok::<_, std::convert::Infallible>((tcp, ()))
+            }
+        }
+    };
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(Table::new().route("/", get(|| async { "hi" })))).shutdown_grace(Duration::from_secs(60));
+    let server = tokio::spawn(crate::app::run(vec![listener], step, app, {
+        let release = release.clone();
+        async move {
+            let _ = stopped.await;
+            // In the poll that begins shutdown, before it does: both steps end, and each task is
+            // polled next with shutdown begun (the test's runtime has one thread).
+            release.notify_waiters();
+        }
+    }));
+    let mut silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut asked = tokio::net::TcpStream::connect(addr).await.unwrap();
+    asked.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    while stepping.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    // Both steps have been polled, and wait.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    stop.send(()).unwrap();
+    assert_eq!(sent_until_closed(&mut silent, "silent").await, "");
+    let answer = sent_until_closed(&mut asked, "asked").await;
+    assert!(
+        answer.is_empty() || (answer.starts_with("HTTP/1.1 200") && answer.ends_with("hi")),
+        "closed unread or answered in full: {answer}"
+    );
+    tokio::time::timeout(Duration::from_secs(5), server).await.expect("shutdown ends").unwrap().unwrap();
+}
+
 /// `App::send_timeout` holds on a switched connection too: a socket whose client stops reading
 /// has its route's write fail with `TimedOut`.
 #[tokio::test]
