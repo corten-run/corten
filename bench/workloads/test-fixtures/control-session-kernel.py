@@ -188,9 +188,9 @@ def read(path, limit=8 * 1024 * 1024):
     return value
 
 
-def row(pid, ppid, cg):
+def row(pid, ppid, cg, ticks=None):
     fields = ["0"] * 49
-    fields[0], fields[18] = str(ppid), str(pid * 100)
+    fields[0], fields[18] = str(ppid), str(pid * 100 if ticks is None else ticks)
     return {"pid": pid, "startTicks": fields[18], "cgroup": "0::" + cg + "\n",
             "stat": str(pid) + " (no-name-authority) S " + " ".join(fields) + "\n",
             "executable": {"device": "1", "inode": str(pid)}, "commandSha256": hashlib.sha256(str(pid).encode()).hexdigest()}
@@ -204,6 +204,7 @@ def proc(pid):
 
 rows[1] = row(1, 0, "/init.scope")
 rows[10] = row(10, 1, "/system.slice/ssh.service")
+listener = [10]
 
 
 class Sink(io.BytesIO):
@@ -275,7 +276,7 @@ class Child:
                 with patch.object(scope["os"], "getppid", lambda: timeout_pid), patch.object(sys, "argv", query_argv[1:]):
                     current["proof"] = query(root, argument["expected"])
             except (AssertionError, KeyError) as error:
-                assert mode not in ("setup-normal", "setup-drain-normal", "setup-drain-older", "setup-drain-kthread"), traceback.format_exc()
+                assert mode not in ("setup-normal", "setup-drain-normal", "setup-drain-older", "setup-drain-kthread", "setup-drain-unloaded"), traceback.format_exc()
                 current["rejected"] = True
                 current["reason"] = type(error).__name__ + ": " + str(error)
             finally:
@@ -327,6 +328,10 @@ def run(args, **kwargs):
         active = units[unit] in rows or (failed and mode == "setup-drain-active")
         values = {"Id": unit, "LoadState": "loaded", "ActiveState": "active" if active else "failed" if failed else "inactive",
                   "MainPID": str(units[unit]) if active else "0", "ControlPID": "0", "Job": "42" if mode == "setup-drain-queued" else ""}
+        if failed and mode == "setup-drain-controlpid": values["ControlPID"] = "77"
+        if failed and mode == "setup-drain-loaded-inactive": values["ActiveState"] = "inactive"
+        if failed and mode == "setup-drain-notfound-failed": values["LoadState"] = "not-found"
+        if failed and mode == "setup-drain-unloaded": values.update(LoadState="not-found", ActiveState="inactive")
         return types.SimpleNamespace(returncode=0, stdout="".join(k + "=" + v + "\n" for k, v in values.items()).encode())
     active = units[unit] in rows or mode == "watcher-alive"
     values = {"Id": unit, "LoadState": "loaded", "ActiveState": "active" if active else "inactive",
@@ -338,7 +343,7 @@ def run(args, **kwargs):
 
 
 def sockets(pid):
-    return {"500"} if pid == 10 else {"501"} if pid in rows and scope["parent"](rows[pid]) == 10 else set()
+    return {"500"} if pid == listener[0] else {"501"} if pid in rows and scope["parent"](rows[pid]) == listener[0] else set()
 
 
 tcp = [(["0:", "00000000:0016", "00000000:0000", "0A", "0", "0", "0", "0", "0", "500"],
@@ -435,7 +440,15 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
         local.pid = current["guardian"]
         ancestor = 100 + sequence * 10
         session = "/user.slice/user-0.slice/session-" + str(sequence + 7) + ".scope"
-        rows[ancestor] = row(ancestor, 10, "/system.slice/ssh.service")
+        # The SSH listener restarted after the failed session (same PID, later start), or a
+        # different, older listener serves the query. Neither served the failed session.
+        if not interactive and sequence == 2 and mode == "setup-drain-listener-restarted":
+            rows[10] = row(10, 1, "/system.slice/ssh.service", 20000)
+        if not interactive and sequence == 2 and mode == "setup-drain-listener-replaced":
+            rows.pop(10)
+            rows[11] = row(11, 1, "/system.slice/ssh.service")
+            listener[0] = 11
+        rows[ancestor] = row(ancestor, listener[0], "/system.slice/ssh.service")
         rows[current["guardian"]] = row(current["guardian"], ancestor, session)
         rows[current["child"]] = row(current["child"], current["guardian"], session)
         try:
@@ -479,6 +492,12 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
             errors.pop()
             if mode == "setup-drain-bytes": data[str(root / ("watch-failure-" + identifier + ".json"))] += b" "
             if mode == "setup-drain-result": del data[str(root / ("result-" + identifier + ".json"))]
+            if mode == "setup-drain-window":
+                # A start record whose deadline is still ahead of the query's clock.
+                start_path = str(root / ("start-" + identifier + ".json"))
+                start = json.loads(data[start_path])
+                start["deadlineMonoNs"] = str(10 ** 30)
+                data[start_path] = scope["encoded"](start)
             if mode != "setup-drain-chain": rows.pop(ancestor, None)
         if interactive:
             assert not errors, errors

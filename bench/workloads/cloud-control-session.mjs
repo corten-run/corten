@@ -135,7 +135,7 @@ const drainProofKeys = ["schema", "binding", "requests", "receipts", "watchers",
 // A failed watcher has no receipt. Its replacement is a later positive observation:
 // the exact recorded result, an inactive watcher unit and no observed process of the
 // session. It is a process observation only (see CLOUD.md for what it cannot see).
-function verifyDrainedSession(invocation, failure, entry, host, map, now) {
+function verifyDrainedSession(invocation, failure, entry, host, listener, map, now) {
   exact(entry, ["id", "failureSha256", "result", "start", "launcher", "registration", "watcher", "cgroupEvents", "scope"]);
   same([entry.id, entry.failureSha256], [failure.id, failure.failureSha256], "drained watcher differs");
   assert.equal(entry.id, invocation.id);
@@ -148,6 +148,9 @@ function verifyDrainedSession(invocation, failure, entry, host, map, now) {
   assert.equal(entry.start.unit, unit);
   const registration = verifyControlRegistration(invocation, entry.registration), { chain, scope } = registration.session;
   same(registration.host, host, "drained session boot differs");
+  // The live query's listener is exempt from the start-time check, so it must be the one that
+  // served this failed session (same PID and start time), which therefore predates it.
+  assert.equal(key(registration.listener), key(listener), "listener differs from a failed session");
   assert.equal(entry.start.child, chain.at(-1).pid); assert.equal(entry.start.guardian, chain.at(-2).pid);
   assert.equal(entry.start.connection, registration.socket.connection);
   const deadline = decimal(entry.start.deadlineMonoNs), released = decimal(entry.result.releasedMonoNs), completed = decimal(entry.result.completedMonoNs);
@@ -217,7 +220,7 @@ export function verifyControlSetupQuery(expected, proof) {
   for (const row of proof.requests.slice(0, -1)) if (failed.has(row.invocation.id)) {
     const index = failed.get(row.invocation.id);
     assert.equal(index, drainedIndex++, "drained watchers out of ledger order");
-    verifyDrainedSession(row.invocation, failures[index], proof.drained[index], host, map, now);
+    verifyDrainedSession(row.invocation, failures[index], proof.drained[index], host, registration.listener, map, now);
   }
   const command = (args) => createHash("sha256").update(args.join("\0") + "\0").digest("hex");
   const query = proof.query, timeout = proof.timeout;

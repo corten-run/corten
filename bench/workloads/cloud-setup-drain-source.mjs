@@ -168,7 +168,11 @@ def setup_drain_query(root, expected):
     # A failed session's process can leave both its scope and its parent (systemd-run --scope,
     # then reparenting to PID 1), so neither cgroup nor parentage finds it. Every process outside
     # the live query's own set must have started before the earliest failed session's first
-    # process. Later unrelated processes refuse too; that is accepted.
+    # process. Later unrelated processes refuse too; that is accepted. The live query's SSH
+    # listener is exempt below, so it must be the listener (PID and start time) that served
+    # every failed session, which therefore predates it.
+    for entry in drained:
+        assert key(entry["registration"]["listener"]) == key(registration["listener"]), "listener differs from a failed session"
     fence = min(int(p["startTicks"]) for entry in drained for p in entry["registration"]["session"]["chain"])
     for row in rows.values():
         if row["pid"] not in allowed and not kernel_thread(row):

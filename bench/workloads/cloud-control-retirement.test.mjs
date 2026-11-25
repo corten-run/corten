@@ -152,30 +152,51 @@ test("a failed bootstrap watcher retires only on a fresh drain proof of its exac
   assert.throws(() => setupEvidence(JSON.stringify({ ...observation, schema: "benchmark-failed-setup-host/v2" }), f.state, f.script, 1, now - 1, now, local));
   assert.throws(() => setupEvidence(JSON.stringify(observation), f.state, terminalSetupScript(f.state, 1, 2), 1, now - 1, now, local));
   const observer = drained.registration.observer, chain = drained.registration.session.chain;
-  for (const mutate of [
-    (p) => { p.drained[0].watcher.ActiveState = "active"; }, (p) => { p.drained[0].watcher.Job = "42"; },
-    (p) => { p.drained[0].watcher.MainPID = String(observer.pid); }, (p) => { p.drained[0].result.code = 1; },
-    (p) => { p.drained[0].result.transport = "lost"; }, (p) => { p.drained[0].failureSha256 = "f".repeat(64); },
-    (p) => { p.drained[0].scope.members = [999]; }, (p) => { p.drained[0].cgroupEvents = "populated 1\nfrozen 0\n"; },
-    (p) => { p.receipts[0] = p.receipts[1]; }, (p) => { p.drained = []; }, (p) => { p.schema = "benchmark-control-setup-query/v1"; },
-    (p) => { p.observation.processes.push(structuredClone(drained.registration.first.processes.find((q) => q.pid === chain.at(-1).pid))); },
-    (p) => { const row = structuredClone(p.observation.processes.find((q) => q.pid === 1)); row.pid = 999;
+  // A row with a failed session's identity, moved out of its scope and reparented to PID 1, so only
+  // the identity check and the start-time fence see it; the descendant row predates the fence.
+  const moved = (pid) => { const row = structuredClone(drained.registration.first.processes.find((q) => q.pid === pid));
+    row.cgroup = "0::/system.slice/cron.service\n"; row.stat = row.stat.replace(/\) S \d+ /, ") S 1 "); return row; };
+  for (const [mutate, pattern] of [
+    [(p) => { p.drained[0].watcher.ActiveState = "active"; }, /failed watcher still active or queued/],
+    [(p) => { p.drained[0].watcher.Job = "42"; }, /failed watcher still active or queued/],
+    [(p) => { p.drained[0].watcher.MainPID = String(observer.pid); }, /failed watcher still active or queued/],
+    [(p) => { p.drained[0].result.code = 1; }, /drained result differs from the ledger/],
+    [(p) => { p.drained[0].result.transport = "lost"; }, /uncertain transport cannot be drained/],
+    [(p) => { p.drained[0].failureSha256 = "f".repeat(64); }, /drained watcher differs/],
+    [(p) => { p.drained[0].scope.members = [999]; }, /drained session scope populated/],
+    [(p) => { p.drained[0].cgroupEvents = "populated 1\nfrozen 0\n"; }, /failed watcher cgroup populated/],
+    [(p) => { p.receipts[0] = p.receipts[1]; }, /failed watcher cannot carry a receipt/],
+    [(p) => { p.drained = []; }, /drained watcher proof required/],
+    [(p) => { p.schema = "benchmark-control-setup-query/v1"; }, /benchmark-control-setup-query\/v2/],
+    [(p) => { p.observation.processes.push(moved(chain.at(-1).pid)); }, /drained session process or descendant remains/],
+    [(p) => { p.observation.processes.push(moved(observer.pid)); }, /failed watcher process remains/],
+    [(p) => { const row = structuredClone(p.observation.processes.find((q) => q.pid === 1)); row.pid = 999;
       row.stat = row.stat.replace(/^1 \(no-name-authority\) S 0 /, `999 (no-name-authority) S ${chain.at(-1).pid} `); p.observation.processes.push(row); },
+    /drained session process or descendant remains/],
   ]) {
     const changed = structuredClone(observation); mutate(changed.control);
-    assert.throws(() => setupEvidence(JSON.stringify(changed), f.state, f.script, 1, now - 1, now, local));
+    assert.throws(() => setupEvidence(JSON.stringify(changed), f.state, f.script, 1, now - 1, now, local), pattern, String(pattern));
   }
   writeFileSync(join(custody, `watch-failure-${failed}.json`), '{"helperLine":1}\n');
   assert.throws(() => setupEvidence(JSON.stringify(observation), f.state, f.script, 1, now - 1, now, local));
 });
 
 test("the drain proof refuses residual sessions, live or queued watchers, changed results or failures and extra custody", () => {
+  // An unloaded watcher unit (not-found, inactive) is settled like a failed one.
+  const unloaded = fixture("setup-drain-unloaded", { drain: true });
+  assert.equal(unloaded.rejected, false, unloaded.reason); verifyControlSetupQuery(unloaded.expected, unloaded.proof);
+  assert.deepEqual([unloaded.proof.drained[0].watcher.LoadState, unloaded.proof.drained[0].watcher.ActiveState], ["not-found", "inactive"]);
   const cases = {
     "setup-drain-scope": /session scope populated/, "setup-drain-chain": /session process remains/,
     "setup-drain-descendant": /session descendant remains/, "setup-drain-active": /watcher unit still active or queued/,
     "setup-drain-queued": /watcher unit still active or queued/, "setup-drain-result": /^KeyError: .*result-/,
     "setup-drain-bytes": /watcher failure differs from the archive/, "setup-drain-extra-record": /unknown control custody member/,
     "setup-drain-stream": /unknown control custody member/, "setup-drain-escaped": /process started during or after a failed session/,
+    "setup-drain-window": /watcher window still open/, "setup-drain-controlpid": /watcher unit still active or queued/,
+    "setup-drain-loaded-inactive": /watcher unit still active or queued/, "setup-drain-notfound-failed": /watcher unit still active or queued/,
+    // The query's listener is exempt from the start-time fence: a restarted one (same PID, later
+    // start) or a different, older one did not serve the failed session and refuses.
+    "setup-drain-listener-restarted": /listener differs from a failed session/, "setup-drain-listener-replaced": /listener differs from a failed session/,
   };
   for (const [mode, reason] of Object.entries(cases)) {
     const f = fixture(mode, { drain: true });
@@ -252,6 +273,31 @@ test("a drain proof binds every record of the failed row to the host entries and
   refuses((p) => { delete p.executables; }, /unexpected control record fields/);
 });
 
+test("a drained session must fit its original window, a settled unit and the listener that served it", () => {
+  const f = fixture("setup-drain-normal", { drain: true });
+  const check = (mutate) => { const p = structuredClone(f.proof); mutate(p); return verifyControlSetupQuery(f.expected, p); };
+  const refuses = (mutate, pattern) => assert.throws(() => check(mutate), pattern, String(pattern));
+  const deadline = BigInt(f.proof.drained[0].start.deadlineMonoNs), span = BigInt(f.proof.drained[0].registration.invocation.deadlineMs) * 1000000n;
+  refuses((p) => { p.drained[0].result.completedMonoNs = String(deadline + 1n); }, /drained session outside its original window/);
+  refuses((p) => { p.drained[0].result.releasedMonoNs = String(deadline - span - 1n); }, /drained session outside its original window/);
+  for (const watcher of [{ ControlPID: "77" }, { LoadState: "loaded", ActiveState: "inactive" }, { LoadState: "not-found", ActiveState: "failed" }])
+    refuses((p) => { Object.assign(p.drained[0].watcher, watcher); }, /failed watcher still active or queued/);
+  check((p) => { Object.assign(p.drained[0].watcher, { LoadState: "not-found", ActiveState: "inactive" }); });
+  // The live listener is exempt from the start-time fence, so a restarted or different one refuses.
+  const listener = f.proof.registration.listener;
+  const restart = (p, ticks) => {
+    p.registration.listener.startTicks = ticks;
+    for (const rows of [p.registration.first.processes, p.observation.processes]) {
+      const row = rows.find((q) => q.pid === listener.pid), [head, tail] = row.stat.split(") "), fields = tail.split(" ");
+      fields[19] = ticks; Object.assign(row, { startTicks: ticks, stat: `${head}) ${fields.join(" ")}` });
+    }
+  };
+  assert.ok(BigInt(listener.startTicks) < 10000n);
+  check((p) => restart(p, listener.startTicks));
+  refuses((p) => restart(p, "20000"), /listener differs from a failed session/);
+  refuses((p) => restart(p, "900"), /listener differs from a failed session/);
+});
+
 // The drain query is a hand copy of the guardian's setup_query. Derive it from the current
 // guardian function plus only the known drain insertions, so a change to either side fails here.
 const pythonFunction = (source, name) => {
@@ -292,7 +338,11 @@ const drainEdits = [
   ["    entries, total = [], 0\n", `    # A failed session's process can leave both its scope and its parent (systemd-run --scope,
     # then reparenting to PID 1), so neither cgroup nor parentage finds it. Every process outside
     # the live query's own set must have started before the earliest failed session's first
-    # process. Later unrelated processes refuse too; that is accepted.
+    # process. Later unrelated processes refuse too; that is accepted. The live query's SSH
+    # listener is exempt below, so it must be the listener (PID and start time) that served
+    # every failed session, which therefore predates it.
+    for entry in drained:
+        assert key(entry["registration"]["listener"]) == key(registration["listener"]), "listener differs from a failed session"
     fence = min(int(p["startTicks"]) for entry in drained for p in entry["registration"]["session"]["chain"])
     for row in rows.values():
         if row["pid"] not in allowed and not kernel_thread(row):
@@ -316,8 +366,16 @@ test("setup_drain_query is the guardian's setup_query with only the known drain 
     derived = derived.replace(before, () => after);
   }
   assert.equal(pythonFunction(setupDrainSource, "setup_drain_query"), derived, "setup_drain_query drifted from setup_query");
-  // The guardian itself stays the hashed, unchanged source.
-  assert.ok(!guardianSource.includes("setup_drain_query") && !guardianSource.includes("DRAINED_RECORDS"));
+  // The guardian itself stays the hashed, unchanged source, and the drain source shadows none of
+  // its definitions: every top-level name the drain source defines is new to the namespace.
+  const topLevel = setupDrainSource.split("\n").filter((line) => line !== "" && !/^[\s#]/.test(line));
+  const defined = topLevel.map((line) => /^(?:(?:def|class) )?([A-Za-z_]\w*)\s*(?:\(|=(?!=))/.exec(line)?.[1]);
+  assert.ok(defined.every(Boolean), "unrecognized top-level drain statement");
+  assert.ok(defined.includes("setup_drain_query") && defined.includes("setup_drained_session"));
+  for (const name of defined) {
+    assert.ok(!guardianSource.includes(name), name);
+    assert.doesNotMatch(guardianSource, new RegExp(`^\\s*(?:(?:async\\s+)?def|class)\\s+${name}\\b|^\\s*${name}\\s*(?::[^=\\n]*)?=(?!=)`, "m"), name);
+  }
 });
 
 test("only a watcher record that cannot select the drain proof is a missing proof; a custody read failure keeps its own error", (t) => {
@@ -334,6 +392,10 @@ test("only a watcher record that cannot select the drain proof is a missing proo
   writeFileSync(receipt, "{}\n"); missing(f.state, /beside its receipt/); unlinkSync(receipt);
   const unknown = structuredClone(f.state); unknown.control.ledger[0].request.invocation.id = "e".repeat(32);
   missing(unknown, /outside the settled bootstrap ledger/);
+  // An unsettled row, or one whose code is not an integer, is not a settled bootstrap row either.
+  for (const change of [{ localTerminal: false }, { code: "0" }, { code: 0.5 }]) {
+    const row = structuredClone(f.state); Object.assign(row.control.ledger[0], change); missing(row, /outside the settled bootstrap ledger/);
+  }
   const ledgerless = structuredClone(f.state); delete ledgerless.control; missing(ledgerless, /without a control ledger/);
   assert.deepEqual(setupWatcherFailures(f.state, local), [{ id: failed, failureSha256: digest(deadlineFailure) }]);
   // A second link makes the bounded read of the record refuse.

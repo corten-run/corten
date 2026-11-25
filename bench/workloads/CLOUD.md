@@ -1207,8 +1207,12 @@ from its registration absent or empty; and no process with an identity from that
 session's chain or a parent among its PIDs. A process can leave both the scope
 and its parent (for example `systemd-run --scope`, then reparenting to PID 1),
 so every process outside the live query's own set must also have started before
-the earliest failed session's first process. Only kernel threads are exempt: the
-kernel-thread flag, kthreadd (PID 2) as parent and the root cgroup, all three.
+the earliest failed session's first process. That set is the live session's
+chain, its watcher, the query, its timeout and the SSH listener. The listener
+must be the same process (PID and start time) that served every failed session,
+so a listener restarted during or after a session, or a different one, refuses.
+Outside that set only kernel threads are exempt: the kernel-thread flag, kthreadd
+(PID 2) as parent and the root cgroup, all three.
 Every check of the ordinary query still applies, including
 the exact custody inventory, so a stream or unknown control file still refuses.
 The host and the verifier also bind each of the failed control's request, start,
@@ -1237,8 +1241,10 @@ session handed to a process that already existed (such as `dockerd` or a D-Bus
 service) or a thread added to an existing process.
 
 `setup-watcher-proof-missing` means an
-archived failure is not that deadline record, names an unknown or non-bootstrap
-control, or sits beside its own receipt; collection stops before any query. A
+archived failure is not that deadline record, there is no control ledger, the
+failure does not name exactly one bootstrap row in the ledger, that row is not
+settled (no local terminal) or its code is not an integer, or the failure sits
+beside its own receipt; collection stops before any query. A
 custody read failure (for example a non-physical control folder or a record that is
 not a regular file) is not reported with that stage: it keeps its own error, which
 the production wrapper reports as `controller-collect`, and also stops before any
