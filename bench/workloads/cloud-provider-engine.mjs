@@ -415,16 +415,16 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         let complete = Array.isArray(batch) && batch.length <= 200 && total === batch.length
           && (links === undefined || !!object(links)) && (pages === undefined || !!object(pages) && Object.keys(pages).length === 0);
         const rows = [], seen = new Set();
-        // Valid sightings survive an incomplete envelope or bad sibling row. An ID
-        // also stands on its own for the historical fence, unlike a name/tag match.
-        for (const d of Array.isArray(batch) ? batch.slice(0, 200) : []) {
+        // Traverse the bounded HTTP reply, not just the rows eligible to prove
+        // absence. An ID also stands on its own for the historical fence.
+        for (const d of Array.isArray(batch) ? batch : []) {
           if (!positive(d?.id)) { complete = false; continue; }
           if (seen.has(d.id)) complete = false;
           seen.add(d.id);
           const row = { id: d.id }; rows.push(row);
           if (text(d.name)) row.name = d.name;
-          if (Array.isArray(d.tags) && d.tags.length <= 256) row.tags = d.tags.filter(text);
-          if (row.name === undefined || row.tags === undefined || row.tags.length !== d.tags.length) {
+          if (Array.isArray(d.tags)) row.tags = d.tags.filter(text);
+          if (row.name === undefined || row.tags === undefined || d.tags.length > 256 || row.tags.length !== d.tags.length) {
             complete = false; continue;
           }
           // Preserve exactly the placement and public-address checks used by the

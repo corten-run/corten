@@ -866,7 +866,8 @@ test("continuation appends authorized retries after no-create and retirement whi
   assert.equal(fs.readFileSync(index, "utf8"), "[]");
 });
 
-for (const scenario of ["admission", "nonterminal sighting", "count-mismatch sighting", "malformed name sighting", "malformed tags sighting", "incomplete absence", "malformed absence",
+for (const scenario of ["admission", "nonterminal sighting", "count-mismatch sighting", "malformed name sighting", "malformed tags sighting",
+  "oversized array sighting", "oversized tags sighting", "incomplete absence", "malformed absence",
   "witnessed census", "absent census", "capacity", "historical ID"]) {
 test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, async (t) => {
   const mixed = scenario === "historical ID";
@@ -944,6 +945,12 @@ test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, asy
       const match = scenario === "malformed name sighting"
         ? { ...providerMatch, name: null, tags: [pending.tag] } : { ...providerMatch, tags: null };
       fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({ droplets: [match], meta: { total: 1 } }));
+    }
+    if (scenario === "oversized array sighting" || scenario === "oversized tags sighting") {
+      const rows = scenario === "oversized array sighting"
+        ? [...Array.from({ length: 200 }, (_, i) => ({ id: i + 1000, name: "other", tags: [] })), providerMatch]
+        : [{ ...providerMatch, name: "renamed", tags: [...Array(256).fill("other"), pending.tag] }];
+      fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({ droplets: rows, meta: { total: rows.length } }));
     }
     if (scenario === "incomplete absence" || scenario === "malformed absence")
       fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({

@@ -1337,9 +1337,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           const { rows: existing, complete } = quarantinePreCreate
             ? JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--pre-create-census", "--output", "json"])).stdout)
             : { rows: await list(), complete: true };
-          assert.ok(Array.isArray(existing) && (!quarantinePreCreate || existing.length <= 200
-            && existing.every((d) => Number.isSafeInteger(d?.id) && d.id > 0)), "invalid pre-create census");
-          const completeInventory = complete === true && (!quarantinePreCreate || existing.every((d) => typeof d.name === "string" && Array.isArray(d.tags))
+          assert.ok(Array.isArray(existing) && (!quarantinePreCreate
+            || existing.every((d) => Number.isSafeInteger(d?.id) && d.id > 0)), "invalid pre-create census");
+          const completeInventory = complete === true && (!quarantinePreCreate || existing.length <= 200
+            && existing.every((d) => typeof d.name === "string" && Array.isArray(d.tags) && d.tags.length <= 256)
             && new Set(existing.map(({ id }) => id)).size === existing.length);
           try { inspectPreCreateInventory?.(existing, completeInventory); }
           catch (error) { if (error.controlUncertain) preserveOperationLock = true; throw error; }

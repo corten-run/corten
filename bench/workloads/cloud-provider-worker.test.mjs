@@ -278,6 +278,13 @@ test("pre-create census worker preserves the census fields, refuses other modes 
       rows: [{ id: 123, name: "saved-name" }, { id: 124, tags: ["saved-tag"] }] });
     assert.deepEqual(h.state().calls.map(({ path }) => path), ["/v2/droplets?page=1&per_page=200"]);
   });
+  await t.test("a sighting beyond an absence bound is not discarded", async (t) => {
+    const h = harness(t, "list-oversized"), value = JSON.parse((await h.run(list)).stdout);
+    assert.equal(value.complete, false);
+    assert.equal(value.rows.length, 201);
+    assert.deepEqual(value.rows.at(-1), { id: 201, name: "saved-name", tags: [...Array(256).fill("other"), "saved-tag"] });
+    assert.deepEqual(h.state().calls.map(({ path }) => path), ["/v2/droplets?page=1&per_page=200"]);
+  });
   await t.test("no create mode", async (t) => {
     const h = harness(t, "success", undefined, undefined, undefined, null);
     await assert.rejects(h.run(list));
