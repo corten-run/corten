@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { checkFixture, convergenceLines, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, parseSaved, parseSteadyArgs, readDropped, readEvents, readWindows, ruleText, savedValue, soakArrivals, soakMemoryClock, soakSchema, summarizeSoak, timedWarmupVus, unlikeRound, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
+import { appBefore, appInstance, checkFixture, convergenceLines, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, intervalSchedule, parseSaved, parseSteadyArgs, readDropped, readEvents, readWindows, ruleText, savedValue, soakArrivals, soakMemoryClock, soakSchema, summarizeSoak, timedWarmupVus, unlikeRound, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
 import { savedPass } from "./steady-saved-fixture.mjs";
 import { cpuSettings, resultSchema, v5Schema } from "./run-contract.mjs";
 import { convergenceReport, soakReport, steadyReport } from "./steady-report.mjs";
@@ -11,6 +11,10 @@ const seconds = 15;
 // Windows from a list of throughputs, as readWindows returns them.
 const windows = (rps, p95 = () => 10, size = seconds) => rps.map((r, index) => ({ index, startSeconds: index * size, seconds: size, requests: r * size, failed: 0, rps: r, p95: r ? p95(index) : null, p99: r ? p95(index) * 2 : null }));
 const within = (window, fromSeconds, tailRps, previousRps, headRps) => ({ withinTolerance: true, window, fromSeconds, tailRps, previousRps, headRps });
+// A soak's arrivals per interval exactly on its fixed rate's schedule (150 requests/second by default).
+const onSchedule = (intervals = 30, size = 60, rate = 150) => intervalSchedule({ rate, seconds: intervals * size, windowSeconds: size });
+// The rate claim without its intervals, which tests compare separately.
+const rateTotals = ({ intervals, ...rest }) => rest;
 
 test("a pass that warms and then holds is within tolerance from the end of the window it reached its level in", () => {
   // The onset is window 3, which starts at 45 s and ends at 60 s: the reading gives its end.
@@ -270,7 +274,7 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   const w = windows([150, 150, 150, 150, 150, 150], (i) => 10 + i, 15);
   const memory = Array.from({ length: 360 }, (_, i) => ({ atSeconds: i / 4, mib: 100 + i / 10 }));
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
-  const base = { rate: 150, droppedIterations: 0, failedRequests: 0, windows: w, tail: 0, unrecorded: 0, requests: 13500, iterations: 13500, latencyMaxMs: 40, memory, before: held, after: held, events: [] };
+  const base = { rate: 150, droppedIterations: 0, failedRequests: 0, windows: w, tail: 0, unrecorded: 0, requests: 13500, iterations: 13500, latencyMaxMs: 40, memory, before: held, after: held, events: [], arrivals: onSchedule(6, 15) };
   const cell = summarizeSoak(base);
   assert.equal(cell.memory.samples, 360);
   assert.ok(Math.abs(cell.memory.startMiB - 102.95) < 1e-9 && Math.abs(cell.memory.endMiB - 132.95) < 1e-9 && Math.abs(cell.memory.growthMiB - 30) < 1e-9, JSON.stringify(cell.memory));
@@ -288,11 +292,17 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   assert.deepEqual(summarizeSoak({ ...base, memory: memory.slice(0, 10) }).memory, { samples: 10, unavailable: "no memory sample in the last interval", startMiB: null, endMiB: null, growthMiB: null, growthPct: null });
   assert.throws(() => summarizeSoak({ ...base, before: { ...held, restartCount: 1 } }), /backwards/);
   assert.throws(() => summarizeSoak({ ...base, before: { restartCount: 0, running: true, oomKilled: false } }), /needs id, startedAt/);
+  // Each side's snapshot is validated before any comparison: two missing counters, the same
+  // malformed or never-started StartedAt on both sides, or an app not running before the load.
+  for (const bad of [{ ...held, restartCount: undefined }, { ...held, startedAt: "yesterday" }, { ...held, startedAt: "0001-01-01T00:00:00Z" }])
+    assert.throws(() => summarizeSoak({ ...base, before: bad, after: bad }), /needs id, startedAt/);
+  for (const before of [{ ...held, running: false }, { ...held, oomKilled: true }])
+    assert.throws(() => summarizeSoak({ ...base, before, after: before }), /not running, or was OOM-killed, before the load/);
 
   const options = parseSteadyArgs(["soak", "w4", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
   const long = windows(Array(30).fill(150), (i) => (i === 29 ? 40 : 10), 60);
   const soakCell = (extra = {}) => ({ app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: long, tail: 0, unrecorded: 0, requests: 270000, iterations: 270000, latencyMaxMs: 90,
-    memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: i < 60 ? 50 : 80 })), before: held, after: held, events: [], ...extra }) });
+    memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: i < 60 ? 50 : 80 })), before: held, after: held, events: [], arrivals: onSchedule(), ...extra }) });
   const s = savedPass(options, [soakCell()], { commit: "d".repeat(40),
     admission: { round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: "bench/marketplace/results/w2/summary.json", selected: ["corten", "aspnet"], admitted: ["corten"] } });
   validateSoak(s);
@@ -343,18 +353,21 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   assert.equal(readDropped({ metrics: {} }), 0);
   const dropped = structuredClone(s);
   const behind = windows([...Array(29).fill(150), 149.5], (i) => (i === 29 ? 40 : 10), 60);
-  dropped.cells = [soakCell({ windows: behind, requests: 269970, iterations: 269970, droppedIterations: 31, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 50 })) })];
-  assert.deepEqual(dropped.cells[0].rate, { requested: 150, seconds: 1800, scheduled: 270001, requests: 269970, droppedIterations: 31, shortfall: 0, allowance: 151, held: false });
+  // The 31 dropped iterations never started: the last interval started 31 fewer than scheduled.
+  const droppedArrivals = onSchedule(); droppedArrivals[29] -= 31;
+  dropped.cells = [soakCell({ windows: behind, requests: 269970, iterations: 269970, droppedIterations: 31, arrivals: droppedArrivals, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 50 })) })];
+  assert.deepEqual(rateTotals(dropped.cells[0].rate), { requested: 150, seconds: 1800, scheduled: 270001, requests: 269970, droppedIterations: 31, shortfall: 0, allowance: 151, held: false });
+  assert.ok(dropped.cells[0].rate.intervals.every((i) => i.held), "each interval is within the allowance; the drops alone fail the rate");
   validateSoak(dropped);
   const droppedText = soakReport(dropped);
   assert.match(droppedText, /^\| corten \| fixture \| page \| not held \|/m);
-  assert.match(droppedText, /^corten fixture page: k6 recorded 269970 requests and dropped 31 iterations; the schedule has at most 270001 arrivals, so 0 are not accounted for \(allowance 151\)\.$/m);
+  assert.match(droppedText, /^corten fixture page: k6 recorded 269970 requests and dropped 31 iterations; the schedule has at most 270001 arrivals, so 0 are not accounted for \(allowance 151\)\. 30 of 30 intervals held the rate\.$/m);
   assert.match(droppedText, /^corten fixture page: the fixed 150 requests\/second was not held, so this is not a fixed-rate result/m);
   for (const [mutate, pattern] of [[(v) => { v.cells[0].rate.held = true; }, /rate/], [(v) => { v.cells[0].rate.requested = 20; }, /rate/],
     [(v) => { delete v.cells[0].rate; }, /a soak cell has fields its schema does not save, or lacks one it does/], [(v) => { v.cells[0].rate.met = true; }, /rate/]]) {
     const v = structuredClone(dropped); mutate(v); assert.throws(() => validateSoak(v), pattern);
   }
-  assert.throws(() => summarizeSoak({ rate: 150, windows: long, tail: 0, unrecorded: 0, memory: [], before: held, after: held, events: [] }), /dropped iterations/);
+  assert.throws(() => summarizeSoak({ rate: 150, windows: long, tail: 0, unrecorded: 0, memory: [], before: held, after: held, events: [], arrivals: onSchedule() }), /dropped iterations/);
   assert.throws(() => steadyReport({ schema: "marketplace-results/v6" }), /not a/);
 });
 
@@ -364,31 +377,78 @@ test("a soak says the fixed rate held only when k6's counts reconcile with the s
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
   const sparse = windows(Array(30).fill(1), () => 10, 60);
   const cell = summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: sparse, tail: 0, unrecorded: 0, requests: 1800, iterations: 1800, latencyMaxMs: 25,
-    memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 60 })), before: held, after: held, events: [] });
-  assert.deepEqual(cell.rate, { requested: 150, seconds: 1800, scheduled: 270001, requests: 1800, droppedIterations: 0, shortfall: 268201, allowance: 151, held: false });
+    memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 60 })), before: held, after: held, events: [], arrivals: Array(30).fill(60) });
+  assert.deepEqual(rateTotals(cell.rate), { requested: 150, seconds: 1800, scheduled: 270001, requests: 1800, droppedIterations: 0, shortfall: 268201, allowance: 151, held: false });
   const options = parseSteadyArgs(["soak", "w5", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
   const s = savedPass(options, [{ app: "corten", source: "fixture", target: "page", ...cell }], { commit: "d".repeat(40) });
   validateSoak(s);
   const text = soakReport(s);
   assert.match(text, /^\| corten \| fixture \| page \| not held \|/m);
-  assert.match(text, /^corten fixture page: k6 recorded 1800 requests and dropped 0 iterations; the schedule has at most 270001 arrivals, so 268201 are not accounted for \(allowance 151\)\.$/m);
+  assert.match(text, /^corten fixture page: k6 recorded 1800 requests and dropped 0 iterations; the schedule has at most 270001 arrivals, so 268201 are not accounted for \(allowance 151\)\. 0 of 30 intervals held the rate; not held: interval 0 from 0 s, 60 arrivals of 9001 scheduled; /m);
   assert.match(text, /the fixed 150 requests\/second was not held, so this is not a fixed-rate result/);
   assert.doesNotMatch(text, /\| held \|/);
   // A saved soak that claims the rate held is refused.
   const forged = structuredClone(s); forged.cells[0].rate.held = true;
   assert.throws(() => validateSoak(forged), /fixed-rate claim contradicts/);
   // Within the allowance it held; one arrival beyond it did not; more than the schedule is refused.
-  assert.equal(soakArrivals({ rate: 150, seconds: 1800, requests: 270001 - 151, droppedIterations: 0 }).held, true);
-  assert.equal(soakArrivals({ rate: 150, seconds: 1800, requests: 270001 - 152, droppedIterations: 0 }).held, false);
-  assert.equal(soakArrivals({ rate: 150, seconds: 1800, requests: 270000, droppedIterations: 1 }).held, false);
-  assert.throws(() => soakArrivals({ rate: 150, seconds: 1800, requests: 270001, droppedIterations: 1 }), /more requests and dropped iterations than the fixed rate schedules/);
+  const rate = { rate: 150, seconds: 1800, windowSeconds: 60 }, oneDropped = onSchedule(); oneDropped[29] -= 1;
+  assert.equal(soakArrivals({ ...rate, requests: 270001 - 151, droppedIterations: 0, arrivals: onSchedule() }).held, true);
+  assert.equal(soakArrivals({ ...rate, requests: 270001 - 152, droppedIterations: 0, arrivals: onSchedule() }).held, false);
+  assert.equal(soakArrivals({ ...rate, requests: 270000, droppedIterations: 1, arrivals: oneDropped }).held, false);
+  assert.throws(() => soakArrivals({ ...rate, requests: 270001, droppedIterations: 1, arrivals: onSchedule() }), /more requests and dropped iterations than the fixed rate schedules|arrivals per interval do not reconcile/);
+  // The schedule per interval adds up to the whole schedule, the boundary slot in the last interval.
+  assert.equal(onSchedule().reduce((a, b) => a + b, 0), 270001);
+  // Slot 0 at 0 s puts 9,001 in the first interval; 1,800 s is not a whole number of 6,666,666 ns
+  // ticks, so no boundary slot lands on the very end, and the last holds 9,000.
+  assert.deepEqual([onSchedule()[0], onSchedule()[1], onSchedule()[29]], [9001, 9000, 9000]);
+  // At 125 requests/second the tick is exactly 8 ms, so the boundary slot at 1,800 s goes to the last interval.
+  assert.deepEqual([onSchedule(30, 60, 125)[0], onSchedule(30, 60, 125)[29]], [7500, 7501]);
+  // Arrivals that do not reconcile with k6's requests and drops, or are not one count per interval, are refused.
+  for (const arrivals of [Array(30).fill(0), onSchedule().slice(1), [...onSchedule().slice(0, 29), "9001"], undefined])
+    assert.throws(() => soakArrivals({ ...rate, requests: 270000, droppedIterations: 0, arrivals }), /arrivals/);
+});
+
+test("a soak says held only when every interval sustained the fixed rate, and names those that did not", () => {
+  // All 270,000 requests arrived in the first minute: the totals match the schedule, the later 29
+  // intervals are empty, and the rate was not sustained.
+  const concentrated = [270001, ...Array(29).fill(0)];
+  const rate = soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: concentrated });
+  assert.deepEqual([rate.shortfall, rate.held], [1, false]);
+  assert.deepEqual(rate.intervals.filter((i) => !i.held).map((i) => i.index), Array.from({ length: 30 }, (_, i) => i));
+  // One interval short (a minute at half the rate, the next catching up) is named on its own.
+  const uneven = onSchedule(); uneven[10] -= 4500; uneven[11] += 4500;
+  assert.deepEqual(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: uneven }).intervals.filter((i) => !i.held).map((i) => i.index), [10, 11]);
+  // Within the allowance of one second's arrivals plus one, an interval held.
+  const edge = onSchedule(); edge[3] -= 151; edge[4] += 151;
+  assert.equal(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: edge }).held, true);
+
+  const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
+  const cell = (arrivals) => ({ app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows([270000 / 60, ...Array(29).fill(0)], () => 10, 60),
+    tail: 0, unrecorded: 0, requests: 270000, iterations: 270000, latencyMaxMs: 25, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 60 })), before: held, after: held, events: [], arrivals }) });
+  const options = parseSteadyArgs(["soak", "w9", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
+  const s = savedPass(options, [cell(concentrated)], { commit: "d".repeat(40) });
+  validateSoak(s);
+  const text = soakReport(s);
+  assert.match(text, /^\| corten \| fixture \| page \| not held \|/m);
+  assert.match(text, /0 of 30 intervals held the rate; not held: interval 0 from 0 s, 270001 arrivals of 9001 scheduled; interval 1 from 60 s, 0 arrivals of 9000 scheduled;/);
+  assert.match(text, /the fixed 150 requests\/second was not held, so this is not a fixed-rate result/);
+  assert.match(text, /"held" means the rate was sustained throughout/);
+  // A saved soak that claims it held, or forges an interval's claim or schedule, is refused: the reader recomputes them from the arrivals.
+  for (const mutate of [(v) => { v.cells[0].rate.held = true; }, (v) => { for (const i of v.cells[0].rate.intervals) i.held = true; }, (v) => { v.cells[0].rate.intervals[1].scheduled = 0; v.cells[0].rate.intervals[1].held = true; },
+    (v) => { v.cells[0].rate.intervals.pop(); }, (v) => { delete v.cells[0].rate.intervals; }])
+  { const v = structuredClone(s); mutate(v); assert.throws(() => validateSoak(v), /rate/); }
+  // A sustained soak reads held, with every interval held.
+  const steady = savedPass(options, [{ app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60),
+    tail: 0, unrecorded: 0, requests: 270000, iterations: 270000, latencyMaxMs: 25, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 60 })), before: held, after: held, events: [], arrivals: onSchedule() }) }], { commit: "d".repeat(40) });
+  assert.match(soakReport(steady), /^\| corten \| fixture \| page \| held \|/m);
+  assert.match(soakReport(steady), /30 of 30 intervals held the rate\.$/m);
 });
 
 test("memory that cannot be read leaves the restart, stop and OOM observations in place", () => {
   const before = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
   const after = { ...before, running: false, oomKilled: true };
   const w = windows(Array(30).fill(150), () => 10, 60);
-  const base = { rate: 150, droppedIterations: 0, failedRequests: 0, windows: w, tail: 0, unrecorded: 0, requests: 270000, iterations: 270000, latencyMaxMs: 25, before, after, events: [{ action: "oom", atSeconds: 900 }] };
+  const base = { rate: 150, droppedIterations: 0, failedRequests: 0, windows: w, tail: 0, unrecorded: 0, requests: 270000, iterations: 270000, latencyMaxMs: 25, before, after, events: [{ action: "oom", atSeconds: 900 }], arrivals: onSchedule() };
   // A zero sample (an app the kernel killed reads 0 B), and a sampler that failed outright.
   const zero = summarizeSoak({ ...base, memory: [{ atSeconds: 1, mib: 60 }, { atSeconds: 1799, mib: 0 }] });
   assert.deepEqual(zero.memory, { samples: 2, unavailable: "1 memory sample had no time or no positive size", startMiB: null, endMiB: null, growthMiB: null, growthPct: null });
@@ -411,8 +471,9 @@ test("the timed reporter lists every differing or missing input and never judges
   assert.throws(() => convergenceLines(likeRound(), ["corten"], null), /reads a convergence pass/);
   const lines = convergenceLines(likeRound(), ["corten", "aspnet"], convergencePass());
   assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v4, reading marketplace-tolerance\/v4\), measured at commit `c{40}`\. Host CPU: Synthetic test only\. One 32-user closed-loop pass .* after the timed round's cold start \(the app created, then started while a sidecar polls the target's path to its first 200\)\.$/);
-  assert.match(lines[1], /^The pass is like-for-like with this round on every input compared: commit, group, adapter images, .* startup timeout, memory limits, response encoding, .* a timed warmup with no failed request\.$/);
-  assert.match(lines[2], /^Tolerance reading marketplace-tolerance\/v4: a screening reading of throughput, not a certificate of steady state\./);
+  assert.equal(lines[1], "Coverage: the pass has a reading for every one of this round's 8 measured adapter, source and target cells.");
+  assert.match(lines[2], /^The pass is like-for-like with this round on every input compared: commit, group, adapter images, .* startup timeout, memory limits, response encoding, .* rotating page locales and a timed warmup with no failed request\.$/);
+  assert.match(lines[3], /^Tolerance reading marketplace-tolerance\/v4: a screening reading of throughput, not a certificate of steady state\./);
   assert.ok(lines.includes("Reading: aspnet api page: within the stated tolerance from the window ending at 90 s."));
   assert.ok(lines.includes("Reading: corten fixture json: within the stated tolerance from the window ending at 15 s."));
   const judged = (warmup) => `This report does not establish whether this round's ${warmup}s timed warmup was sufficient: the pass is a screening reading of throughput, and a timed warmup is set only by a separate reviewed change from a saved like-for-like pass.`;
@@ -462,8 +523,8 @@ test("the timed reporter lists every differing or missing input and never judges
   ];
   for (const [round, p, reason] of unlike) {
     const text = convergenceLines(round, ["corten"], p);
-    assert.match(text[1], /^The pass is not like-for-like with this round\. Differing or missing inputs: /);
-    assert.match(text[1], reason);
+    assert.match(text[2], /^The pass is not like-for-like with this round\. Differing or missing inputs: /);
+    assert.match(text[2], reason);
     assert.ok(text.some((l) => /^Reading: corten fixture page: /.test(l)), "the readings stay listed");
     assert.equal(text.at(-1), judged(90));
   }
@@ -471,8 +532,10 @@ test("the timed reporter lists every differing or missing input and never judges
   // know, so this is reached only through unlikeRound itself.
   assert.ok(unlikeRound(likeRound(90), ["corten"], { ...pass, startup: "another-start/v0" }).includes("the pass started each app another way than the timed round's cold start"));
   const missing = convergenceLines(likeRound(), ["corten", "drogon"], convergencePass());
-  assert.ok(missing.includes("No convergence pass for: drogon fixture page, drogon fixture json, drogon api page, drogon api json."));
-  assert.match(missing[1], /image IDs are not recorded on both sides for drogon/);
+  // Coverage is stated before any comparison, and inputs are compared for the cells with a reading only.
+  assert.equal(missing[1], "Coverage: the pass has a reading for 4 of this round's 8 measured adapter, source and target cells (corten fixture page, corten fixture json, corten api page, corten api json); no convergence pass for: drogon fixture page, drogon fixture json, drogon api page, drogon api json.");
+  assert.match(missing[2], /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: .* It says nothing about this round's other cells\.$/);
+  assert.ok(!missing.some((l) => /like-for-like with this round on every input/.test(l)), "never like-for-like with the whole round");
   const fallingOptions = parseSteadyArgs(["convergence", "w3", "--apps", "corten,aspnet", "--minutes", "5"], apps, groupApps);
   const falling = savedPass(fallingOptions, fallingOptions.sources.flatMap((source) => fallingOptions.apps.flatMap((app) => fallingOptions.targets.map((target) =>
     cellOf(app, source, target, Array.from({ length: 20 }, (_, i) => (app === "corten" && source === "fixture" && target === "page" ? 1500 - 25 * i : 1000)))))));
@@ -484,6 +547,39 @@ test("the timed reporter lists every differing or missing input and never judges
   assert.throws(() => convergenceLines(likeRound(), ["corten"], forged), /saved verdict differs/);
 });
 
+test("a pass is compared with a round only for the cells it has readings for, and like-for-like with the whole round only when it covers it", () => {
+  const judged = "This report does not establish whether this round's 90s timed warmup was sufficient: the pass is a screening reading of throughput, and a timed warmup is set only by a separate reviewed change from a saved like-for-like pass.";
+  // A JSON-only pass against a round whose metadata matches it on every input: it has no page
+  // reading, so it says nothing about page locales and is like-for-like with its own cells only.
+  const jsonOptions = parseSteadyArgs(["convergence", "w3", "--apps", "corten,aspnet", "--minutes", "3", "--targets", "json"], apps, groupApps);
+  const jsonOnly = savedPass(jsonOptions, jsonOptions.sources.flatMap((source) => jsonOptions.apps.flatMap((app) => [cellOf(app, source, "json", Array(12).fill(1000))])), { commit: "c".repeat(40) });
+  for (const round of [likeRound(90), { ...likeRound(90), schema: v5Schema }]) {
+    const lines = convergenceLines(round, ["corten", "aspnet"], jsonOnly);
+    assert.equal(lines[1], "Coverage: the pass has a reading for 4 of this round's 8 measured adapter, source and target cells (corten fixture json, corten api json, aspnet fixture json, aspnet api json); no convergence pass for: corten fixture page, corten api page, aspnet fixture page, aspnet api page.");
+    assert.match(lines[2], /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: .* the cold start before the load, a timed warmup with no failed request\. It says nothing about this round's other cells\.$/);
+    assert.ok(!lines.some((l) => /locale/.test(l)), lines.join("\n"));
+    assert.ok(!lines.some((l) => /like-for-like with this round on every input/.test(l)));
+    assert.equal(lines.at(-1), judged);
+  }
+  // A pass whose every cell failed has no reading: it is compared on no input and its failures are
+  // stated in the coverage line before anything else.
+  const allFailed = convergencePass();
+  allFailed.cells = allFailed.cells.map((c) => ({ app: c.app, source: c.source, target: c.target, failure: "load-exit", verdict: null }));
+  const failedLines = convergenceLines(likeRound(90), ["corten", "aspnet"], allFailed);
+  assert.equal(failedLines[1], "Coverage: the pass has a reading for 0 of this round's 8 measured adapter, source and target cells; no reading, the cell failed: corten fixture page, corten fixture json, corten api page, corten api json, aspnet fixture page, aspnet fixture json, aspnet api page, aspnet api json.");
+  assert.equal(failedLines[2], "No cell of this round has a reading in the pass, so the pass is not compared with this round on any input.");
+  // The closing line's "a saved like-for-like pass" is about how a warmup is set, not this pass.
+  assert.ok(!failedLines.slice(0, -1).some((l) => /like-for-like|locale|matched/.test(l)), failedLines.join("\n"));
+  assert.equal(failedLines.filter((l) => l.startsWith("Reading: ")).length, 8);
+  assert.equal(failedLines.at(-1), judged);
+  // One failed cell makes coverage partial even with every other cell read, and the failed cell's
+  // app is still compared for the cells of it that have a reading.
+  const oneFailed = convergencePass(); oneFailed.cells[0] = { app: "corten", source: "fixture", target: "page", failure: "load-exit", verdict: null };
+  const partial = convergenceLines(likeRound(90), ["corten", "aspnet"], oneFailed);
+  assert.match(partial[1], /^Coverage: the pass has a reading for 7 of this round's 8 .*; no reading, the cell failed: corten fixture page\.$/);
+  assert.match(partial[2], /^The pass is like-for-like with this round for its 7 cells with a reading only, on every input compared for them: .*rotating page locales and a timed warmup/);
+});
+
 test("a convergence cell refuses an app that stopped, restarted, was replaced or was OOM-killed", () => {
   const inspect = (o = {}) => ({ Id: "a".repeat(64), RestartCount: 0, ...o, State: { Running: true, OOMKilled: false, ExitCode: 0, StartedAt: "2026-11-20T00:00:00.000000001Z", ...o.State } });
   heldThrough(inspect(), inspect());
@@ -492,6 +588,17 @@ test("a convergence cell refuses an app that stopped, restarted, was replaced or
     inspect({ State: { StartedAt: "2026-11-20T00:01:00.000000001Z" } }), inspect({ Id: "b".repeat(64) })])
     assert.throws(() => heldThrough(inspect(), after), /stopped, restarted, was replaced or was OOM-killed/);
   assert.throws(() => heldThrough({ RestartCount: 0, State: { Running: true } }, inspect()), /instance before the load is not recorded/);
+  // Each snapshot is validated before they are compared: two missing counters, or the same malformed
+  // or never-started StartedAt on both sides, are not the same instance.
+  const noCount = inspect(); delete noCount.RestartCount;
+  for (const [snapshot, which] of [[noCount, "before"], [inspect({ RestartCount: "0" }), "before"], [inspect({ State: { StartedAt: "not a time" } }), "before"],
+    [inspect({ State: { StartedAt: "0001-01-01T00:00:00Z" } }), "before"], [inspect({ State: { StartedAt: "2026-13-45T00:00:00Z" } }), "before"], [inspect({ State: { Running: "true" } }), "before"]])
+    assert.throws(() => heldThrough(snapshot, structuredClone(snapshot)), new RegExp(`^AssertionError \\[ERR_ASSERTION\\]: the app's instance ${which} the load is not recorded as a container ID, a StartedAt time, a RestartCount and its running and OOM states$`));
+  assert.throws(() => heldThrough(inspect(), noCount), /instance after the load is not recorded/);
+  // The app must be running, and not OOM-killed, before the load.
+  for (const before of [inspect({ State: { Running: false } }), inspect({ State: { OOMKilled: true } })]) assert.throws(() => heldThrough(before, structuredClone(before)), /not running, or was OOM-killed, before the load/);
+  assert.deepEqual(appBefore(inspect()), { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00.000000001Z", restartCount: 0, running: true, oomKilled: false });
+  assert.deepEqual(appInstance(inspect({ State: { Running: false } }), "after").running, false);
   // steady-run.test.mjs shows the runner applying it to a cell whose app was OOM-killed or restarted under load.
 });
 
@@ -519,27 +626,42 @@ test("a value from outside the checkout is saved only when it matches its patter
   assert.throws(() => savedValue("hostname", "x"), /^AssertionError \[ERR_ASSERTION\]: unknown saved value kind$/);
 });
 
-test("every Docker event row must be an action and a time, or the stream is unavailable", () => {
+test("a soak's event stream covers the load only when it shows the marker's start before and after it, and every row is read", () => {
   const startedMs = Date.parse("2026-11-20T00:00:00Z"), at = (seconds) => String(BigInt(startedMs + seconds * 1000) * 1_000_000n);
-  assert.deepEqual(readEvents("", startedMs), []);
+  const app = "a".repeat(64), marker = "b".repeat(64), ids = { app, marker };
+  const row = (id, action, seconds) => `${id}|${action}|${at(seconds)}\n`;
+  const mark = (seconds) => row(marker, "start", seconds) + row(marker, "die", seconds + 0.1);
+  const read = (body) => readEvents(mark(-1) + body + mark(2000), startedMs, ids);
+  assert.deepEqual(read(""), []);
   // Rows that are not restart-relevant are read and dropped, with any detail.
-  assert.deepEqual(readEvents(`exec_start: sh -c true|${at(1)}\nhealth_status: healthy|${at(2)}\r\n`, startedMs), []);
-  assert.deepEqual(readEvents(`kill|${at(3)}\ndie|${at(3.5)}\nstart|${at(4)}\n`, startedMs), [{ action: "kill", atSeconds: 3 }, { action: "die", atSeconds: 3.5 }, { action: "start", atSeconds: 4 }]);
+  assert.deepEqual(read(row(app, "exec_start: sh -c true", 1) + row(app, "health_status: healthy", 2).replace("\n", "\r\n")), []);
+  assert.deepEqual(read(row(app, "kill", 3) + row(app, "die", 3.5) + row(app, "start", 4)), [{ action: "kill", atSeconds: 3 }, { action: "die", atSeconds: 3.5 }, { action: "start", atSeconds: 4 }]);
+  // App events after the second marker start are teardown, past the observation.
+  assert.deepEqual(readEvents(mark(-1) + mark(2000) + row(app, "kill", 2001) + row(app, "die", 2001), startedMs, ids), []);
+  // A response that looks clean but does not show both marker starts (a retrospective query whose
+  // buffer no longer held the first, a stream that started late, or one stopped early) does not
+  // cover the load, so it is not read as "no restart".
+  for (const text of ["", mark(2000), mark(-1), row(app, "exec_start: true", 1)]) {
+    assert.throws(() => readEvents(text, startedMs, ids), /^AssertionError \[ERR_ASSERTION\]: the event stream showed [01] of the marker's 2 starts, so it does not cover the soak$/, JSON.stringify(text));
+  }
   const canary = "leaked-canary";
-  for (const text of [`oom|NOT_A_TIMESTAMP\n`, `die|${at(1)}\n${canary}\n`, `${canary}|${at(1)}\n`, `die|-5\n`, `die|${at(1)}|${canary}\n`, `|${at(1)}\n`, `DIE|${at(1)}\n`]) {
-    assert.throws(() => readEvents(text, startedMs), (error) => {
-      assert.match(error.message, /^1 docker events row is not an action and a time/);
+  for (const text of [`${app}|oom|NOT_A_TIMESTAMP\n`, `${app}|die|${at(1)}\n${canary}\n`, `${app}|${canary}|${at(1)}\n`, `${app}|die|-5\n`, `${app}|die|${at(1)}|${canary}\n`, `${app}||${at(1)}\n`, `${app}|DIE|${at(1)}\n`,
+    // Another container's row, or a row with no ID, is not this soak's.
+    row("c".repeat(64), "die", 1), `die|${at(1)}\n`, row(`${canary}${"0".repeat(51)}`, "die", 1)]) {
+    assert.throws(() => read(text), (error) => {
+      assert.match(error.message, /^1 docker events row is not this soak's app or marker, an action and a time$/);
       assert.ok(!error.message.includes(canary) && !error.message.includes("NOT_A_TIMESTAMP"));
       return true;
     }, text);
   }
-  assert.throws(() => readEvents(`a|b\nc|d\n`, startedMs), /^AssertionError \[ERR_ASSERTION\]: 2 docker events rows are not an action and a time/);
-  assert.throws(() => readEvents(null, startedMs), /returned no text/);
-  assert.throws(() => readEvents("", Number.NaN), /StartedAt is not a time/);
+  assert.throws(() => read(`a|b\nc|d\n`), /^AssertionError \[ERR_ASSERTION\]: 2 docker events rows are not this soak's app or marker, an action and a time$/);
+  assert.throws(() => readEvents(null, startedMs, ids), /returned no text/);
+  assert.throws(() => readEvents("", Number.NaN, ids), /StartedAt is not a time/);
+  for (const bad of [{}, { app, marker: app }, { app: "x", marker }, { app, marker: `${marker}\n` }]) assert.throws(() => readEvents(mark(-1) + mark(2000), startedMs, bad), /by their container IDs/);
   // The three states of the stream are independent of the memory samples.
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
   const base = { rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60), tail: 0, unrecorded: 0, requests: 270000, iterations: 270000, latencyMaxMs: 25,
-    memory: null, before: held, after: held };
+    memory: null, before: held, after: held, arrivals: onSchedule() };
   assert.deepEqual(summarizeSoak({ ...base, events: null }).restarts, { restarted: null, restartCount: 0, replaced: false, eventStream: "unavailable", events: [], runningAtEnd: true, oomKilled: false });
   assert.deepEqual([summarizeSoak({ ...base, events: [] }).restarts.eventStream, summarizeSoak({ ...base, events: [] }).restarts.restarted], ["clean", false]);
   const oom = summarizeSoak({ ...base, events: null, after: { ...held, running: false, oomKilled: true } });
@@ -551,7 +673,7 @@ test("a saved pass's own text never reaches an error or a report: every field is
   const soakOptions = parseSteadyArgs(["soak", "w7", "--apps", "corten", "--targets", "page"], apps, groupApps);
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
   const soakCell = { app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60), tail: 0, unrecorded: 0,
-    requests: 270000, iterations: 270000, latencyMaxMs: 25, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 50 })), before: held, after: held, events: [{ action: "kill", atSeconds: 5 }] }) };
+    requests: 270000, iterations: 270000, latencyMaxMs: 25, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 50 })), before: held, after: held, events: [{ action: "kill", atSeconds: 5 }], arrivals: onSchedule() }) };
   const soak = savedPass(soakOptions, [soakCell, { app: "corten", source: "api", target: "page", failure: "cold-start" }],
     { admission: { round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: "bench/marketplace/results/w2/summary.json", selected: ["corten"], admitted: ["corten"] } });
   const convergence = convergencePass();
@@ -595,7 +717,7 @@ test("saved memory medians and growth must be numbers before the report does any
   const options = parseSteadyArgs(["soak", "w8", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
   const cell = { app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60), tail: 0, unrecorded: 0,
-    requests: 270000, iterations: 270000, latencyMaxMs: 25, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: i < 60 ? 10 : 20 })), before: held, after: held, events: [] }) };
+    requests: 270000, iterations: 270000, latencyMaxMs: 25, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: i < 60 ? 10 : 20 })), before: held, after: held, events: [], arrivals: onSchedule() }) };
   const s = savedPass(options, [cell]);
   assert.match(soakReport(s), /\| 10\.0 \| 20\.0 \| \+10\.0 MiB \(100\.0%\) \|/);
   for (const mutate of [(m) => { m.startMiB = "10"; m.endMiB = "20"; }, (m) => { m.startMiB = "10"; }, (m) => { m.growthMiB = "10"; }, (m) => { m.growthPct = "100"; },

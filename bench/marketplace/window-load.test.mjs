@@ -105,3 +105,22 @@ test("window-load.js counts a request that starts before a boundary and complete
   assert.deepEqual(read.windows.map((w) => [w.requests, w.failed]), [[1, 0], [1, 1]]);
   assert.equal(read.tail, 1);
 });
+
+test("window-load.js counts a fixed-rate iteration's arrival in the window it started in, and a closed loop counts none", async () => {
+  const { k6, script } = await load({ ...closed, MODE: "fixed", RATE: "150" });
+  // A request started 1 ms before the boundary completes 1 ms after it: its arrival is in window 0,
+  // its answer in window 1. A start the engine reads at the end of the last window (its own lag) is
+  // that window's arrival.
+  k6.latencyMs = 2;
+  for (const start of [1000, 14_999, 29_999, 30_000]) { k6.now = start; script.default(); k6.iteration++; }
+  const count = (name) => (k6.metrics.get(name)?.values ?? []).reduce((a, b) => a + b, 0);
+  assert.deepEqual([count("window_0_arrivals"), count("window_1_arrivals"), count("window_0_requests"), count("window_1_requests"), count("window_tail_requests")], [2, 2, 1, 1, 2]);
+  const read = readWindows(summaryExport(k6, 4), { windows: 2, windowSeconds: 15, arrivals: true });
+  assert.deepEqual(read.arrivals, [2, 2]);
+  // A closed-loop reader refuses arrivals it does not define, without naming them.
+  assert.throws(() => readWindows(summaryExport(k6, 4), { windows: 2, windowSeconds: 15 }), /^Error: 2 k6 window metrics are not among this pass's windows$/);
+  const looped = await load(closed);
+  looped.k6.now = 1000; looped.script.default();
+  assert.ok(![...looped.k6.metrics.keys()].some((name) => name.endsWith("_arrivals")), "a closed loop defines no arrival counter");
+  assert.equal(readWindows(summaryExport(looped.k6, 1), { windows: 2, windowSeconds: 15 }).arrivals, undefined);
+});

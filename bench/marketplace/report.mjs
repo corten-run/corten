@@ -234,18 +234,20 @@ export function validateSummary(s) {
  * A validated round as Markdown. `convergence(round, apps)` returns the lines stating a saved
  * convergence pass (steady-contract.mjs convergenceLines); without it the report says none was
  * provided to it (#1851). The CLI loads steady-contract.mjs only for --convergence, so validating
- * or reporting a round without a pass never imports it.
+ * or reporting a round without a pass never imports it. `hostCpu` prints a host's CPU model; the
+ * --convergence CLI passes one that prints only a model of the form a pass saves (savedText), and
+ * the default prints it as saved.
  * @param {object} s a saved round
- * @param {{convergence?: ((round: object, apps: string[]) => string[]) | null}} [options]
+ * @param {{convergence?: ((round: object, apps: string[]) => string[]) | null, hostCpu?: (cpu: string) => string}} [options]
  */
-export function report(s, { convergence = null } = {}) {
+export function report(s, { convergence = null, hostCpu = (text) => text } = {}) {
   validateSummary(s);
   const part = s.options.part, split = s.split;
   // A part's candidates are its share; a whole or merged round's are its group's.
   const candidates = part ? s.options.apps : groupApps(s.options.group);
   const apps = candidates.filter((a) => !s.options.group || admitted(s.apps[a]));
   const identity = roundIdentity(s.round);
-  const cpu = (host) => `${host.cpu} (online CPUs ${host.onlineCpus})`;
+  const cpu = (host) => `${hostCpu(host.cpu)} (online CPUs ${host.onlineCpus})`;
   const gate = split ? "Every measured adapter passes both sources and twelve browser profiles on its own droplet before that droplet's load."
     : "Every measured adapter passes both sources and twelve browser profiles before any load.";
   const lines = [`# Marketplace v2 ${s.round}${part ? ` part d${part.index} of ${part.of}` : split ? ` (split across ${split.droplets} droplets)` : ""}${identity.kind === "development" ? " (development)" : ""}`, "",
@@ -288,7 +290,7 @@ export function report(s, { convergence = null } = {}) {
   const rows = split ? split.parts.flatMap((p) => p.apps.filter((app) => app === splitSubject || admitted(s.apps[app])).map((app) => ({ app, a: app === splitSubject ? p.corten : s.apps[app],
     droplet: `${s.round}-d${p.index}`, at: `@${s.round}-d${p.index}`, corten: p.corten })))
     : apps.map((app) => ({ app, a: s.apps[app], droplet: null, at: "", corten: null }));
-  if (split) lines.push(...betweenLines(s, cell));
+  if (split) lines.push(...betweenLines(s, cell, hostCpu));
   const timedProfiles = s.measurement.profiles;
   for (const locale of new Set(timedProfiles.map((p) => p.locale))) {
     lines.push("", `## ${locale === "rotating" ? `Rotating pages (${locales.join("/")})` : locale ?? "Locale-neutral JSON"}`);
@@ -335,14 +337,14 @@ export function report(s, { convergence = null } = {}) {
   return lines.join("\n") + "\n";
 }
 // A split round's droplets, and how Corten's own numbers differ between them (#816).
-function betweenLines(s, cell) {
+function betweenLines(s, cell, hostCpu) {
   const { split } = s, check = betweenDroplets(s);
   const name = (index) => `${s.round}-d${index}`;
   const value = (c) => (c.range ? cell(c.range) : "-");
   const lines = ["", "## Between droplets", "",
     `This round ran on ${split.droplets} droplets started together. Each ran Corten beside its share of the group's candidates, and timed those it admitted, so each candidate's ratio to Corten uses the Corten on its own droplet. Compare candidates on different droplets by those ratios: their raw numbers also carry any difference between the droplets' machines. Only Corten runs on every droplet, so nothing here checks that a ratio carries from one droplet's machine to another's.`,
     "", "| Droplet | CPU | Online CPUs | Candidates |", "|---|---|---|---|",
-    ...split.parts.map((p) => `| ${name(p.index)} | ${p.host.cpu.replace(/\|/g, "\\|")} | ${p.host.onlineCpus} | ${p.apps.join(", ")} |`),
+    ...split.parts.map((p) => `| ${name(p.index)} | ${hostCpu(p.host.cpu).replace(/\|/g, "\\|")} | ${p.host.onlineCpus} | ${p.apps.join(", ")} |`),
     "", "Corten's own numbers on each droplet, for req/s and CPU us/request: median [min-max] over the passes. Two droplets whose ranges do not overlap differ by more than the noise, the rule this report uses for every range; that stage is flagged, and raw numbers of candidates on those droplets are not like for like there.",
     "", check.flagged.length ? `Flagged: ${check.flagged.length} of ${check.stages.length} stages (${[...new Set(check.flagged.map((r) => differText(r.differ)))].join("; ")}).` : `Flagged: none. Corten's numbers on no two droplets differ by more than the noise in any of the ${check.stages.length} stages.`,
     "", `| Profile | Phase | Metric |${split.parts.map((p) => ` d${p.index} |`).join("")} Flag |`, `|---|---|---|${split.parts.map(() => "---:|").join("")}---|`,
@@ -352,11 +354,18 @@ function betweenLines(s, cell) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   assert.ok(args.length === 1 || (args.length === 3 && args[1] === "--convergence"), "usage: node bench/marketplace/report.mjs summary.json [--convergence convergence-summary.json]");
-  let convergence = null;
-  if (args.length === 3) {
-    const { convergenceLines, parseSaved } = await import("./steady-contract.mjs");
+  if (args.length === 1) console.log(report(JSON.parse(readFileSync(args[0], "utf8"))));
+  else {
+    // With a pass, nothing read from either file reaches the output unless it validated or matches
+    // the pattern its kind is saved by: the round's JSON and validation errors are fixed messages
+    // (the default command prints the reason), and its CPU model prints only in a saved form.
+    const { convergenceLines, parseSaved, savedValue } = await import("./steady-contract.mjs");
     const pass = parseSaved(readFileSync(args[2], "utf8"));
-    convergence = (round, apps) => convergenceLines(round, apps, pass);
+    const text = readFileSync(args[0], "utf8");
+    let round;
+    try { round = JSON.parse(text); } catch { throw new Error("the saved round is not JSON"); }
+    try { validateSummary(round); } catch { throw new Error("the saved round does not validate; report.mjs without --convergence prints why"); }
+    const hostCpu = (cpu) => savedValue("cpu", cpu) ?? "not printed (not in the form a CPU model is saved in)";
+    console.log(report(round, { convergence: (r, apps) => convergenceLines(r, apps, pass), hostCpu }));
   }
-  console.log(report(JSON.parse(readFileSync(args[0], "utf8")), { convergence }));
 }

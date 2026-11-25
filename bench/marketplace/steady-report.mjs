@@ -53,20 +53,20 @@ export function soakReport(s) {
     const r = c.restarts, m = c.memory;
     const why = [r.restartCount ? `RestartCount +${r.restartCount}` : null, r.replaced ? "another instance (ID or StartedAt) at the end" : null, ...r.events.map((e) => `${e.action} at ${e.atSeconds.toFixed(0)} s`), r.runningAtEnd ? null : "not running at the end", r.oomKilled ? "OOM-killed" : null,
       r.eventStream === "unavailable" ? "event stream unavailable" : null];
-    const restarted = r.restarted === null ? "not established: the event stream was unavailable and nothing else showed a restart" : r.restarted ? `yes: ${why.filter(Boolean).join(", ")}` : "no";
+    const restarted = r.restarted === null ? "not established: the event stream was unavailable or did not cover the load, and nothing else showed a restart" : r.restarted ? `yes: ${why.filter(Boolean).join(", ")}` : "no";
     const growth = m.growthMiB === null ? "unavailable" : `${m.growthMiB >= 0 ? "+" : ""}${m.growthMiB.toFixed(1)} MiB (${m.growthPct.toFixed(1)}%)`;
     lines.push(`| ${c.app} | ${c.source} | ${c.target} | ${c.rate.held ? "held" : "not held"} | ${mib(m.startMiB)} | ${mib(m.endMiB)} | ${growth} | ${ms(c.p99.first)} / ${ms(c.p99.last)} / ${ms(c.p99.max)} | ${c.failedRequests} | ${restarted} |`);
   }
-  lines.push("", `Fixed rate: "held" means k6 dropped no iteration and recorded at least the schedule's floor(1e9 / rate) ns arrivals over the soak (${s.options.windows * s.options.windowSeconds} s, from slot 0) less one second of arrivals plus the boundary slot, the allowance for an iteration the engine's stop cut off. The counts below are k6's own.`);
+  lines.push("", `Fixed rate: "held" means the rate was sustained throughout: k6 dropped no iteration, recorded at least the schedule's floor(1e9 / rate) ns arrivals over the soak (${s.options.windows * s.options.windowSeconds} s, from slot 0) less the allowance of one second of arrivals plus the boundary slot (for an iteration the engine's stop cut off), and in every interval started a number of iterations, by the k6 engine's clock, within that allowance of the interval's own share of the schedule. A soak whose requests arrived early and left later intervals short did not hold it. The counts below are k6's own.`);
   for (const c of s.cells.filter((x) => x.failure === undefined)) {
-    const a = c.rate;
-    lines.push("", `${c.app} ${c.source} ${c.target}: k6 recorded ${a.requests} requests and dropped ${a.droppedIterations} iterations; the schedule has at most ${a.scheduled} arrivals, so ${a.shortfall} are not accounted for (allowance ${a.allowance}).`);
+    const a = c.rate, short = a.intervals.filter((i) => !i.held);
+    lines.push("", `${c.app} ${c.source} ${c.target}: k6 recorded ${a.requests} requests and dropped ${a.droppedIterations} iterations; the schedule has at most ${a.scheduled} arrivals, so ${a.shortfall} are not accounted for (allowance ${a.allowance}). ${a.intervals.length - short.length} of ${a.intervals.length} intervals held the rate${short.length ? `; not held: ${short.map((i) => `interval ${i.index} from ${i.startSeconds} s, ${i.arrivals} arrivals of ${i.scheduled} scheduled`).join("; ")}` : ""}.`);
   }
   for (const c of unmet) lines.push("", `${c.app} ${c.source} ${c.target}: the fixed ${o.rate} requests/second was not held, so this is not a fixed-rate result: its memory and p99 are under a lower or uneven load.`);
   for (const c of blind) lines.push("", `${c.app} ${c.source} ${c.target}: memory unavailable (${c.memory.unavailable}); its restart, stop and OOM observations are still reported.`);
-  lines.push("", "Memory and p99 are reported figures, not held or not held: no criterion is applied to them. \"Restarted\" is yes on any RestartCount increase, another instance at the end, a start, restart, die, kill or OOM event, or an app not running or OOM-killed at the end; no only when Docker's event stream was read and showed none of these; not established when that stream could not be read and nothing else showed one.");
+  lines.push("", "Memory and p99 are reported figures, not held or not held: no criterion is applied to them. \"Restarted\" is yes on any RestartCount increase, another instance at the end, a start, restart, die, kill or OOM event, or an app not running or OOM-killed at the end; no only when Docker's live event stream for the app, started before the load, was read in full, showed a marker container's starts before and after the load (so it covered the load), and showed none of these; not established when that stream could not be read or did not show that it covered the load, and nothing else showed a restart.");
   lines.push("", "## Intervals", "");
-  for (const c of s.cells) if (c.failure === undefined) lines.push(`${c.app} ${c.source} ${c.target} p99 ms by interval: ${c.windows.map((w) => ms(w.p99)).join(", ")}`, "");
+  for (const c of s.cells) if (c.failure === undefined) lines.push(`${c.app} ${c.source} ${c.target} p99 ms by interval: ${c.windows.map((w) => ms(w.p99)).join(", ")}`, "", `${c.app} ${c.source} ${c.target} arrivals by interval (scheduled): ${c.rate.intervals.map((i) => `${i.arrivals} (${i.scheduled})`).join(", ")}`, "");
   return lines.join("\n");
 }
 export function steadyReport(s) {

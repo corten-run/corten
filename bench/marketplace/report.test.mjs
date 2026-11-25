@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { apps, locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
@@ -638,11 +638,11 @@ test("the report states the convergence pass given to it, or that none was provi
   assert.match(text, judged);
   // The timed preamble says ranges "do not establish" a difference, and the closing line says this report does not
   // establish the warmup; every other convergence line is checked for a warmup conclusion.
-  const evidence = (t) => t.split("\n").filter((line) => /^(?:Convergence evidence|Tolerance reading|Reading|The pass is)/.test(line)).join("\n");
+  const evidence = (t) => t.split("\n").filter((line) => /^(?:Convergence evidence|Coverage|Tolerance reading|Reading|The pass is)/.test(line)).join("\n");
   assert.ok(evidence(text).length > 0);
   assert.doesNotMatch(evidence(text), /reaches|is shorter than|establish|sufficient|long enough to/);
   // Only the convergence lines differ: the timed tables are the same with or without evidence.
-  const strip = (t) => t.replace(/\n\n(?:Convergence evidence|Tolerance reading|Reading|The pass is|This report does not establish whether this round|No convergence)[^\n]*/g, "");
+  const strip = (t) => t.replace(/\n\n(?:Convergence evidence|Coverage|Tolerance reading|Reading|The pass is|This report does not establish whether this round|No cell)[^\n]*/g, "");
   assert.equal(strip(text), strip(none));
   const tampered = structuredClone(pass); tampered.cells[2].verdict.window = 0;
   assert.throws(() => report(s, { convergence: given(tampered) }), /saved verdict differs/);
@@ -658,18 +658,52 @@ test("the report states the convergence pass given to it, or that none was provi
   const kernelText = report(s, { convergence: given(otherKernel) });
   assert.match(kernelText, /^The pass is not like-for-like with this round\. Differing or missing inputs: the kernel release differs\.$/m);
   assert.ok(!kernelText.includes("canarykernel"));
-  // The replay's validateSummary closure must not load steady-contract.mjs: report.mjs imports it only on the --convergence CLI path.
-  const source = readFileSync(new URL("./report.mjs", import.meta.url), "utf8");
-  assert.doesNotMatch(source, /^import[^\n]*steady-contract/m);
-  assert.match(source, /await import\("\.\/steady-contract\.mjs"\)/);
   const dir = mkdtempSync(join(tmpdir(), "marketplace-report-")), round = join(dir, "round.json"), file = join(dir, "pass.json");
   try {
     writeFileSync(round, JSON.stringify(s)); writeFileSync(file, JSON.stringify(rebuilt));
     const cli = spawnSync(process.execPath, [fileURLToPath(new URL("./report.mjs", import.meta.url)), round, "--convergence", file], { encoding: "utf8" });
     assert.equal(cli.status, 0, cli.stderr);
+    // The round's CPU model is of the saved form, so the optional path prints it as the default does.
     assert.equal(cli.stdout, `${other}\n`);
     const plain = spawnSync(process.execPath, [fileURLToPath(new URL("./report.mjs", import.meta.url)), round], { encoding: "utf8" });
     assert.equal(plain.stdout, `${none}\n`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("validating or reporting a round without a pass never loads steady-contract.mjs", () => {
+  // The replay's validateSummary closure and the official report command must not load
+  // steady-contract.mjs: report.mjs imports it only on the --convergence CLI path. A resolve hook
+  // that refuses the module proves it, so moving the import to module scope fails here.
+  const s = grouped("production", "r21");
+  for (const app of ["nextjs", "fastapi", "express", "topcoat", "leptos"]) {
+    const probes = boundedQualificationProbes("api"); delete probes.page.headers["content-security-policy"];
+    Object.assign(s.apps[app], { runs: {}, phases: {} }).qualification.api = produceBoundedQualification(probes, "api");
+  }
+  validateSummary(s);
+  const dir = mkdtempSync(join(tmpdir(), "marketplace-report-")), round = join(dir, "round.json"), hook = join(dir, "refuse-steady.mjs");
+  const reportPath = fileURLToPath(new URL("./report.mjs", import.meta.url));
+  try {
+    writeFileSync(round, JSON.stringify(s));
+    writeFileSync(hook, `import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  const resolved = nextResolve(specifier, context);
+  if (new URL(resolved.url).pathname.endsWith("/steady-contract.mjs")) throw new Error("refused: steady-contract.mjs was loaded");
+  return resolved;
+} });
+`);
+    const hooked = (args, env = {}) => spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, ...args], { encoding: "utf8", env: { ...process.env, ...env } });
+    // The default report command: the same bytes as in-process, with the module refused.
+    const plain = hooked([reportPath, round]);
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.equal(plain.stdout, `${report(s)}\n`);
+    // validateSummary alone, as the replay imports it.
+    const validated = hooked(["--input-type=module", "-e", `import { readFileSync } from "node:fs"; import { validateSummary } from ${JSON.stringify(pathToFileURL(reportPath).href)}; validateSummary(JSON.parse(readFileSync(process.env.ROUND, "utf8"))); console.log("validated");`], { ROUND: round });
+    assert.equal(validated.status, 0, validated.stderr);
+    assert.equal(validated.stdout, "validated\n");
+    // Control: the hook does refuse the module when the --convergence path loads it.
+    const optional = hooked([reportPath, round, "--convergence", round]);
+    assert.notEqual(optional.status, 0);
+    assert.match(optional.stderr, /refused: steady-contract\.mjs was loaded/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -707,7 +741,7 @@ test("report.mjs --convergence prints no text it read from a saved pass or round
   const round = structuredClone(s); round.host.cpu = "Round CPU canaryround"; round.host.onlineCpus = "0-3";
   const differing = structuredClone(pass); differing.host = { ...differing.host, cpu: "Pass CPU canarypass", kernel: "6.8.0-canarypass", onlineCpus: "0-5" };
   const lines = convergenceLines(round, ["corten", "aspnet"], differing);
-  assert.match(lines[1], /the host CPU differs; the kernel release differs; the online CPU set differs/);
+  assert.match(lines[2], /the host CPU differs; the kernel release differs; the online CPU set differs/);
   assert.ok(!lines.slice(1).join("\n").includes("canary") && !lines.slice(1).join("\n").includes("0-3"), lines.join("\n"));
   // Through the CLI: a pass with text in its startup, and a file that is not JSON, are refused with fixed messages.
   const dir = mkdtempSync(join(tmpdir(), "marketplace-report-")), roundFile = join(dir, "round.json");
@@ -721,5 +755,40 @@ test("report.mjs --convergence prints no text it read from a saved pass or round
       assert.ok(r.stderr.includes(message), r.stderr);
       assert.ok(!r.stderr.includes("canary") && !r.stdout.includes("canary"), r.stderr);
     }
+    // Canaries in both files, end to end. A round whose CPU model is free text the round validator
+    // accepts: the default report prints it as saved (its bytes are unchanged), the optional path does not.
+    const roundCpu = structuredClone(s); roundCpu.host.cpu = `Synthetic <${canary}> | x`;
+    validateSummary(roundCpu);
+    const passFile = join(dir, "valid-pass.json"); writeFileSync(passFile, JSON.stringify(pass));
+    const run = (roundBytes, passPath = passFile, convergence = true) => {
+      const file = join(dir, "round-canary.json"); writeFileSync(file, roundBytes);
+      return spawnSync(process.execPath, [fileURLToPath(new URL("./report.mjs", import.meta.url)), file, ...(convergence ? ["--convergence", passPath] : [])], { encoding: "utf8" });
+    };
+    const plain = run(JSON.stringify(roundCpu), passFile, false);
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.equal(plain.stdout, `${report(roundCpu)}\n`);
+    assert.ok(plain.stdout.includes(canary), "the default path is unchanged");
+    const optional = run(JSON.stringify(roundCpu));
+    assert.equal(optional.status, 0, optional.stderr);
+    assert.ok(!optional.stdout.includes("canary") && !optional.stderr.includes("canary"), optional.stdout);
+    assert.match(optional.stdout, /^Commit: .* CPU: not printed \(not in the form a CPU model is saved in\) \(online CPUs 0-7\)\.$/m);
+    // The whole output is the round's report with that CPU text, and the pass's lines.
+    assert.equal(optional.stdout, `${report(roundCpu, { convergence: given(pass), hostCpu: () => "not printed (not in the form a CPU model is saved in)" })}\n`);
+    assert.match(optional.stdout, /^The pass is not like-for-like with this round\. Differing or missing inputs: .*the host CPU differs\.$/m);
+    // The same round with a pass that is refused, a round that is not JSON, and a round that fails
+    // validation on a canary value: each a fixed message, with no canary in either stream.
+    const passCanary = join(dir, "pass-canary.json"); writeFileSync(passCanary, JSON.stringify(started));
+    const badOnline = structuredClone(s); badOnline.host.onlineCpus = canary;
+    for (const [r, message] of [[run(JSON.stringify(roundCpu), passCanary), "a pass records how it started each app, by a known code"],
+      [run(`{"${canary}": `), "the saved round is not JSON"],
+      [run(JSON.stringify(badOnline)), "the saved round does not validate; report.mjs without --convergence prints why"]]) {
+      assert.notEqual(r.status, 0);
+      assert.ok(r.stderr.includes(message), r.stderr);
+      assert.ok(!r.stderr.includes("canary") && !r.stdout.includes("canary"), r.stderr);
+    }
+    // The default path still prints the validator's own reason for that round (unchanged behavior).
+    const reason = run(JSON.stringify(badOnline), passFile, false);
+    assert.notEqual(reason.status, 0);
+    assert.ok(reason.stderr.includes(canary), "the default path's error is unchanged");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

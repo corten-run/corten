@@ -39,8 +39,8 @@ import { validateMarketplace } from "./records.mjs";
 import { records } from "./fixtures.mjs";
 import { locales } from "./contract.mjs";
 import { ownedResources, reconcileWindow, runClock } from "./alert-probe-run.mjs";
-import { checkFixture, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell, savedOptions, savedValue,
-  soakMemoryClock, soakSchema, summarizeSoak, timedStartup, validateConvergence, validateSoak, verdictText, windowClock } from "./steady-contract.mjs";
+import { appBefore, appInstance, checkFixture, convergenceSchema, eventFormat, failureCodes, flattenPoint, flattenRule, heldThrough, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell,
+  savedOptions, savedValue, soakMemoryClock, soakSchema, summarizeSoak, timedStartup, validateConvergence, validateSoak, verdictText, windowClock } from "./steady-contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -62,7 +62,7 @@ const k6Metrics = new Set(["http_reqs", "http_req_duration", "http_req_duration{
   "data_sent", "data_received", "window_tail_requests"]);
 export function knownK6Metrics(summary) {
   assert.ok(summary && typeof summary.metrics === "object" && summary.metrics !== null && !Array.isArray(summary.metrics), "the k6 summary export has no metrics");
-  const unknown = Object.keys(summary.metrics).filter((name) => !k6Metrics.has(name) && !/^window_(0|[1-9]\d{0,2})_(requests|failed|duration)$/.test(name)).length;
+  const unknown = Object.keys(summary.metrics).filter((name) => !k6Metrics.has(name) && !/^window_(0|[1-9]\d{0,2})_(requests|failed|duration|arrivals)$/.test(name)).length;
   assert.equal(unknown, 0, `the k6 summary export has ${unknown} metric${unknown === 1 ? "" : "s"} this load does not define`);
   return summary;
 }
@@ -135,6 +135,73 @@ export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs 
   };
 }
 
+/**
+ * A soak's live Docker event stream for its app and a marker container, by their immutable IDs
+ * (steady-contract.mjs readEvents says why a live stream and what the marker shows). It runs from
+ * before the load to after it. marker(n) waits at most markerMs for the stream to show the marker's
+ * nth start, and fails at once if the stream has ended. stop() settles within boundMs whatever the
+ * client does, as memorySampler's does, keeps what the stream said in `file` (and its stderr in
+ * `file`.stderr), and returns that text, or throws if the client could not run, ended before it was
+ * stopped, wrote to stderr or held its pipes. A second stop() returns the first one's result.
+ */
+export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2000, boundMs = 5000, markerMs = 10_000 }) {
+  assert.ok(containerId.test(app) && containerId.test(marker), "the event stream follows immutable container IDs");
+  const child = run("docker", ["events", "--filter", "type=container", "--filter", `container=${app}`, "--filter", `container=${marker}`, "--format", eventFormat],
+    { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  const errors = [], waiting = [];
+  let text = "", buffer = "", stderr = "", starts = 0, stopping = false, closed = false, settled;
+  const release = (message) => { for (const w of waiting.splice(0)) { clearTimeout(w.timer); w.reject(new Error(message)); } };
+  child.stdout.on("data", (chunk) => {
+    const data = chunk.toString();
+    text += data; buffer += data;
+    for (let end; (end = buffer.indexOf("\n")) >= 0;) {
+      if (buffer.slice(0, end).replace(/\r$/, "").startsWith(`${marker}|start|`)) starts++;
+      buffer = buffer.slice(end + 1);
+    }
+    for (const w of [...waiting]) if (starts >= w.n) { clearTimeout(w.timer); waiting.splice(waiting.indexOf(w), 1); w.resolve(); }
+  });
+  child.stderr.on("data", (chunk) => { if (!stopping) stderr += chunk.toString(); });
+  child.on("error", (error) => { errors.push(`docker events could not run (${typeof error?.code === "string" && /^[A-Z0-9_]{1,32}$/.test(error.code) ? error.code : "error"})`); release("docker events could not run"); });
+  const done = new Promise((resolve) => child.on("close", (code) => {
+    closed = true;
+    if (!stopping) { errors.push(`docker events stopped early: ${code}`); release("docker events stopped before it showed the marker"); }
+    resolve(true);
+  }));
+  const signal = (name) => { try { child.kill(name); } catch {} };
+  return {
+    marker(n) {
+      if (starts >= n) return Promise.resolve();
+      if (closed || errors.length) return Promise.reject(new Error("docker events stopped before it showed the marker"));
+      return new Promise((resolve, reject) => {
+        const w = { n, resolve, reject };
+        w.timer = setTimeout(() => { waiting.splice(waiting.indexOf(w), 1); reject(new Error(`docker events did not show the marker's start ${n} within ${markerMs} ms`)); }, markerMs);
+        waiting.push(w);
+      });
+    },
+    stop() {
+      return settled ??= (async () => {
+        stopping = true;
+        release("the event stream was stopped");
+        if (!closed) signal("SIGTERM");
+        let kill, bound;
+        const ended = await Promise.race([done, new Promise((resolve) => {
+          kill = setTimeout(() => signal("SIGKILL"), graceMs);
+          bound = setTimeout(() => resolve(false), boundMs);
+        })]);
+        clearTimeout(kill); clearTimeout(bound);
+        if (!ended) {
+          errors.push(`docker events did not settle within ${boundMs} ms of stop; its pipes were released`);
+          child.stdout.destroy(); child.stderr.destroy(); child.unref?.();
+        }
+        writeFileSync(file, text);
+        if (stderr) { writeFileSync(`${file}.stderr`, stderr); errors.push(`docker events wrote to stderr (kept in ${basename(file)}.stderr)`); }
+        if (errors.length) throw Object.assign(new Error(errors.join("; ")), { errors });
+        return text;
+      })();
+    },
+  };
+}
+
 async function waitHealth(url, { timeout = 20_000, now = Date.now, sleep = (ms) => new Promise((done) => setTimeout(done, ms)) } = {}) {
   for (const deadline = now() + timeout; now() < deadline; await sleep(100)) {
     try { const response = await fetch(url, { signal: AbortSignal.timeout(1000) }); await response.text(); if (response.ok) return; } catch {}
@@ -156,7 +223,7 @@ const currentFixture = () => {
  * @param {(args: string[]) => Promise<string>} p.git
  */
 export async function runSteady({ options, folder, runId, docker, git, interrupted = () => false, env = process.env, clock = runClock(), window = reconcileWindow,
-  fixture = currentFixture, upstreamReady = waitHealth, spawnStats = spawn, statsBounds = {}, print = console.log }) {
+  fixture = currentFixture, upstreamReady = waitHealth, spawnStats = spawn, statsBounds = {}, spawnEvents = spawn, eventBounds = {}, print = console.log }) {
   const convergence = options.kind === "convergence";
   const seconds = options.minutes * 60;
   const cpus = cpuSettings(env);
@@ -218,7 +285,9 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     ...(options.group ? ["--ulimit", "nofile=65536:65536", "-e", `PROFILE=${boundedQualificationSettings.nativeProfile}`, "-e", `MAX_CONNECTIONS=${boundedQualificationSettings.maxConnections}`] : []), image];
   // Removes each of a cell's containers, every one attempted; one not removed is kept in `left`.
   const settle = async (ids, left) => { for (const id of ids) if (id && !(await owned.remove(id))) left.push(id); };
-  const state = (info) => ({ id: info.Id, startedAt: info.State.StartedAt, restartCount: info.RestartCount, running: info.State.Running, oomKilled: info.State.OOMKilled, exitCode: info.State.ExitCode });
+  // The app's inspect as a raw snapshot: the container receipt and its RestartCount, which the
+  // receipt does not keep and a pass compares.
+  const snapshot = (info) => ({ ...containerReceipt(info), restartCount: info.RestartCount ?? null });
   // run.mjs coldStart: the app is created, a sidecar waits for it, then the app starts and the
   // sidecar polls the target's own path until its first 200.
   async function coldStart(app, name, target, raw, left) {
@@ -251,13 +320,22 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   // returns or throws, every container it made has been removed or is listed in `left`.
   async function pass(cell, imageId, raw, left) {
     const name = `${runId}-${cell.app}`;
-    let sampler, app, k6;
+    let sampler, app, k6, marker, stream, streamError;
     try {
       app = await step("container", () => owned.container(appArgs(name, cell.source, imageId), name));
       await step("cold-start", () => coldStart(app, name, cell.target, raw, left));
       if (left.length) throw coded("unsettled", new Error("the cold sidecar was not removed"));
       const before = await step("container", () => owned.inspect(app));
-      retain(join(raw, "app-container.json"), containerReceipt(before));
+      retain(join(raw, "app-container.json"), snapshot(before));
+      // Its ID, StartedAt, RestartCount and states in their forms, and running, before anything is compared.
+      await step("container", () => appInstance(before, "before"));
+      await step("cold-start", () => appBefore(before));
+      if (!convergence) {
+        // The live event stream, listening before the load: the marker's first start shows it is.
+        marker = await step("container", () => owned.container(["--network", "none", ...cpus.load.args, "--memory", "64m", nodeImage, "true"], `${name}-marker`));
+        stream = eventStream({ app, marker, file: join(raw, "events.log"), spawn: spawnEvents, ...eventBounds });
+        try { await owned.start(marker); await stream.marker(1); } catch (e) { streamError = e; }
+      }
       const k6Env = ["-e", `BASE=http://${name}:8080`, "-e", `TARGET=${cell.target}`, ...(cell.target === "page" ? ["-e", "LOCALE=rotating"] : []),
         "-e", `MODE=${convergence ? "closed" : "fixed"}`, "-e", `WINDOWS=${options.windows}`, "-e", `WINDOW_SECONDS=${options.windowSeconds}`,
         ...(convergence ? ["-e", `VUS=${options.vus}`] : ["-e", `RATE=${options.rate}`])];
@@ -285,11 +363,11 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
         // rate must be its count over that clock, as validate.mjs requires of a timed phase.
         validateLoadExecution({ load: containerReceipt(loadInfo), summary: k6Summary, clock: parsed(readFileSync(join(raw, "load-clock.json"), "utf8"), "the k6 engine clock export"), start: phaseStartMs, end: clock.now(), seconds });
         // k6's aggregate: every request, including those answered during the graceful stop.
-        return { k6Summary, load: readLoadSummary(k6Summary), ...readWindows(k6Summary, options) };
+        return { k6Summary, load: readLoadSummary(k6Summary), ...readWindows(k6Summary, { windows: options.windows, windowSeconds: options.windowSeconds, arrivals: !convergence }) };
       });
-      const { k6Summary, load, windows, tail, unrecorded, requests, iterations, latencyMaxMs } = evidence;
+      const { k6Summary, load, windows, tail, unrecorded, requests, iterations, latencyMaxMs, arrivals } = evidence;
       const after = await step("container", () => owned.inspect(app));
-      retain(join(raw, "app-container-after.json"), containerReceipt(after));
+      retain(join(raw, "app-container-after.json"), snapshot(after));
       if (convergence) {
         // A failed answer can be faster than a served one, so throughput with failures says nothing
         // about warming: a failure anywhere, in a window or in the graceful stop, means no verdict.
@@ -306,24 +384,27 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       if (statsError) { keep("memory samples", statsError); log(`${cell.app} ${cell.source} ${cell.target}: memory samples failed: ${firstLine(statsError)}`); }
       const startedMs = Date.parse(loadInfo.State.StartedAt);
       const samples = statsError ? null : (stats?.samples?.[app] ?? []).map((s) => ({ atSeconds: (s.t - memoryOriginMs) / 1000, mib: s.mem }));
-      // Docker's event times and StartedAt are both the daemon's clock. A stream that cannot be read
-      // (the command fails, or any row is not an action and a time) is saved as unavailable, apart
-      // from the memory samples and the container states.
-      let events = null;
-      try {
-        const lines = await owned.docker(["events", "--since", String(phaseStartMs / 1000), "--until", String(Date.now() / 1000), "--filter", "type=container", "--filter", `container=${app}`, "--format", "{{.Action}}|{{.TimeNano}}"]);
-        writeFileSync(join(raw, "events.log"), lines);
-        events = readEvents(lines, startedMs);
-      } catch (e) { keep("docker events", e); log(`${cell.app} ${cell.source} ${cell.target}: Docker's event stream is unavailable: ${firstLine(e)}`); }
+      const end = await step("container", () => appInstance(after, "after"));
+      // The marker's second start, after the app's last inspect, shows the stream had delivered every
+      // app event published before it. Docker's event times and StartedAt are both the daemon's
+      // clock. A stream that failed, did not show both marker starts or has a row that is not this
+      // soak's app or marker, an action and a time is saved as unavailable, apart from the memory
+      // samples and the container states.
+      let events = null, text;
+      if (!streamError) { try { await owned.start(marker); await stream.marker(2); } catch (e) { streamError = e; } }
+      try { text = await stream.stop(); } catch (e) { streamError ??= e; }
+      if (!streamError) { try { events = readEvents(text, startedMs, { app, marker }); } catch (e) { streamError = e; } }
+      if (streamError) { keep("docker events", streamError); log(`${cell.app} ${cell.source} ${cell.target}: Docker's event stream is unavailable: ${firstLine(streamError)}`); }
       retain(join(raw, "events.json"), events);
-      Object.assign(cell, await step("load-evidence", () => summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory: samples, before: state(before), after: state(after), events, rate: options.rate,
-        droppedIterations: readDropped(k6Summary), failedRequests: load.failed })));
+      Object.assign(cell, await step("load-evidence", () => summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory: samples, before: appBefore(before), after: end, events, rate: options.rate,
+        droppedIterations: readDropped(k6Summary), failedRequests: load.failed, arrivals })));
       await step("load-evidence", () => reconcileCell(cell));
       return cell;
     } finally {
       if (sampler) { try { await sampler.stop(); } catch {} }
+      if (stream) { try { await stream.stop(); } catch {} }
       if (app) { try { writeFileSync(join(raw, "app.log"), await owned.logs(app)); } catch (e) { log(`${cell.app} ${cell.source} ${cell.target}: app log unavailable: ${e.message}`); } }
-      await settle([k6, app], left);
+      await settle([k6, marker, app], left);
     }
   }
   // The pinned k6 image's provenance (load-tool.mjs k6Provenance): its version is read from a
