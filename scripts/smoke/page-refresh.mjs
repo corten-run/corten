@@ -323,15 +323,24 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           );
           // Away while the part still owes a read: the runtime's navigation reaches a page still
           // saving, whose part reads are each held unanswered from then on, so the part cannot draw
-          // its last answer (`Saved.`) and stop on its own before the page leaves. Once the route
-          // holds a read with the page still saying `Saving...` (within 5 s), the page leaves by a
-          // link; then each held read is answered as one that asks again (the server's answer while
-          // the write lands), and no part read may come in the 2.2 s after that. Without a held read
-          // the check fails, since a part that has stopped says nothing about leaving it.
-          const awayUrl = await readWithin("the pending write's page", pending());
-          const awayFrom = new URL(awayUrl).pathname + new URL(awayUrl).search;
-          const awayReads = (/** @type {URL} */ u) => u.pathname + u.search === awayFrom;
-          /** Lets go of each part read the route holds, answering it as one that asks again. @type {(() => Promise<void>)[]} */
+          // its last answer (`Saved.`) and stop on its own before the page leaves. The write is sent
+          // only once the route is set (which can take up to 5 s), so the 1.5 s before it lands run
+          // from just before the navigation, not from before the route. Once the route holds a read
+          // with the page still saying `Saving...` (within 5 s), the page leaves by a link; then each
+          // held read is answered as one that asks again (the server's answer while the write lands),
+          // and no part read may come in the 2.2 s after that. The check needs at least one held read
+          // answered so, its patch fulfilled, and every held read let go that way within 5 s: a read
+          // whose fetch or fulfill fails, whose answer is no read-again patch, or whose release does
+          // not settle fails it, saying which. Without a held read it fails too, since a part that has
+          // stopped says nothing about leaving it.
+          /** The address of the page the case leaves, once its write is sent: the route takes no read before. @type {string | null} */
+          let awayFrom = null;
+          const awayReads = (/** @type {URL} */ u) => awayFrom !== null && u.pathname + u.search === awayFrom;
+          /**
+           * Lets go of each part read the route holds, answering it as one that asks again: null
+           * once that answer is fulfilled, else what went wrong (the read is then aborted).
+           * @type {{ route: import("@playwright/test").Route, go: () => Promise<string | null> }[]}
+           */
           const owed = [];
           /** Set once the page has left, or the case ends: the route lets each read through at once. */
           let gone = false;
@@ -339,34 +348,54 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             const request = route.request();
             if (gone || request.method() !== "GET" || request.headers()["corten"] !== "action") return route.fallback();
             return new Promise((resolve) =>
-              owed.push(async () => {
-                try {
-                  // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
-                  const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
-                  const headers = res.headers();
-                  delete headers["content-encoding"];
-                  delete headers["content-length"];
-                  const body = await res.text();
-                  const asks = body.includes(savedLine) && !body.includes("data-corten-read-again");
-                  await route.fulfill({
-                    status: res.status(),
-                    headers,
-                    body: asks ? `${body.replace(savedLine, savingLine)}<template data-corten-read-again="1" data-from="${awayFrom}"></template>` : body,
-                  });
-                } catch {
-                  // The page that sent it has left, or the read was cancelled: nothing to answer.
-                  await route.abort().catch(() => {});
-                } finally {
-                  resolve(undefined);
-                }
+              owed.push({
+                route,
+                go: async () => {
+                  let step = "its fetch";
+                  try {
+                    // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+                    const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
+                    step = "reading its answer";
+                    const headers = res.headers();
+                    delete headers["content-encoding"];
+                    delete headers["content-length"];
+                    const body = await res.text();
+                    const landed = body.includes(savedLine) && !body.includes("data-corten-read-again");
+                    const answer = landed ? `${body.replace(savedLine, savingLine)}<template data-corten-read-again="1" data-from="${awayFrom}"></template>` : body;
+                    const patch = res.ok() && "corten-patch" in headers && answer.includes(savingLine) && answer.includes("data-corten-read-again");
+                    step = "its fulfill";
+                    await route.fulfill({ status: res.status(), headers, body: answer });
+                    return patch ? null : `its answer was no read-again patch (status ${res.status()}${"corten-patch" in headers ? "" : ", no corten-patch header"})`;
+                  } catch (error) {
+                    // The page that sent it has left, or the read was cancelled: it is aborted, and
+                    // not counted as answered.
+                    await route.abort().catch(() => {});
+                    return `${step} failed: ${String(/** @type {Error} */ (error)?.message ?? error).split("\n")[0]}`;
+                  } finally {
+                    resolve(undefined);
+                  }
+                },
               }),
             );
           };
-          /** Lets go of every read held so far, each within 5 s. */
-          const letGo = () => Promise.allSettled(owed.splice(0).map((go) => within(5000, "a held part read was not let go within 5 s", go())));
+          /**
+           * Lets go of every read held so far, each within 5 s: what became of each (null: answered
+           * as one that asks again). A read whose release does not settle is aborted.
+           */
+          const letGo = () =>
+            Promise.all(
+              owed.splice(0).map(({ route, go }) =>
+                within(5000, "its release did not settle within 5 s", go()).catch((/** @type {Error} */ error) => {
+                  route.abort().catch(() => {});
+                  return error.message;
+                }),
+              ),
+            );
           // The held reads are let go and the route removed (bounded) however the case ends.
           try {
             await within(5000, "the leaving case's part route was not set within 5 s", page.route(awayReads, holdPart));
+            const awayUrl = await readWithin("the pending write's page", pending());
+            awayFrom = new URL(awayUrl).pathname + new URL(awayUrl).search;
             await goTo(awayUrl);
             /** The held reads and the status line, once the route holds one. */
             const owes = await pollFor(5000, async () => owed.length > 0 && { held: owed.length, status: await page.textContent("#alert-status") });
@@ -374,12 +403,14 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             await page.click('header a[href="/news"]');
             await page.waitForFunction(() => document.title === "News | Watchlist");
             gone = true;
-            await letGo();
+            const released = await letGo();
+            const delivered = released.filter((r) => r === null).length;
+            const failed = released.flatMap((r, i) => (r === null ? [] : [`held read ${i + 1}: ${r}`]));
             await page.waitForTimeout(2200);
             check(
               "navigating away stops a page's part reads",
-              !!owes && owes.status === "Saving..." && parts().length === left,
-              `${owes ? `${owes.held} part read held unanswered, the page saying ${owes.status}, as it left` : "no part read held within 5 s of reaching the page"}; ${parts().length - left} more reads`,
+              !!owes && owes.status === "Saving..." && delivered > 0 && failed.length === 0 && parts().length === left,
+              `${owes ? `${owes.held} part read held unanswered, the page saying ${owes.status}, as it left` : "no part read held within 5 s of reaching the page"}; ${delivered} of ${released.length} held reads answered as ones that ask again${failed.length ? ` (${failed.join("; ")})` : ""}; ${parts().length - left} more reads`,
             );
           } finally {
             gone = true;

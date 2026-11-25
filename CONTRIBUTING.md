@@ -338,11 +338,14 @@ page that does not get back stops the smoke, after the check's hold, listeners a
 route are removed.
 The check that navigating away abandons a held write requires that write to
 fail while it is still held, within five seconds of the page's leaving. The check that navigating
-away stops a page's part reads holds each part read of the page it reaches, so the part cannot draw
-`Saved.` and stop by itself first: it requires a read held within five seconds while the page still
-says `Saving...`, then leaves by a link, answers each held read as one that asks again, and requires
-no part read in the 2.2 s after; without a held read it fails, and its holds are let go and its
-route removed in a `finally`, each bounded to five seconds. The check of a navigation
+away stops a page's part reads sets its route before it starts the page's write, then holds each
+part read of the page it reaches, so the part cannot draw `Saved.` and stop by itself first: it
+requires a read held within five seconds while the page still says `Saving...`, then leaves by a
+link and answers each held read as one that asks again. It requires at least one such answer
+fulfilled, every held read let go that way within five seconds (a fetch or fulfill that fails, or a
+release that does not settle, fails it, saying which) and no part read in the 2.2 s after; without
+a held read it fails, and its holds are let go and its route removed in a `finally`, each bounded
+to five seconds. The check of a navigation
 during a patch's stylesheet load holds the one stylesheet the patch links until the runtime has
 read the navigation's answer, and requires that
 the page did not swap while it was held and that the browser requested it once while it was
