@@ -526,7 +526,9 @@ establish a general ranking.
       [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs) with target `page` or `json` and
       one repeat per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`).
       Use a fresh round name each time and tag each build in turn with the image name the script
-      expects. Otherwise, measure the affected route with an equivalent under-load test; an
+      expects (how the two targets are read under a plan that reads the change across placements
+      on a probe is said with the default band, below). Otherwise, measure the affected route
+      with an equivalent under-load test; an
       unaffected route does not count. Alternate the two release builds, verify the response bytes
       and headers before measuring, and report any failed requests.
 
@@ -666,6 +668,25 @@ establish a general ranking.
       move it. Each threshold a plan declared for a workload, its margin and a reduction, is
       tested on its own distance: one outside stays as one build read it, whatever a placement
       run then reads, and that run reads only those left inside.
+      One case is read otherwise, the catalog's `page` and `json`, since no tool reads the image
+      `count.mjs` starts across placements
+      ([design Choice 72](docs/design.md#choice-placement-runs)). Where a plan reads one or more
+      workloads across placements on a probe, each on the path the change touches (an unaffected
+      route does not count, as above), those workloads are what item 2 asks of the change's
+      cycles, held as the plan declares them and as this item says: no margin, A/A or placement
+      is loosened. `page` and `json` are still counted, once for that plan, with `count.mjs`:
+      one build of each side, declared in the plan before its first turn with its pairs and its
+      checks, and each bound reported with where its distance from +1% lands against the default
+      band as `main` prints it when the plan is declared. Outside the band binds, as above: a
+      distance above it is a miss, and one below it meets the margin. Inside is reported as
+      "inside the default band: not decided" and, for these two workloads under such a plan,
+      does not keep the pull request from passing. No win is claimed from either count. A count
+      is not taken again for its result, and one that fails (a failed request, a counter under
+      100%, too few pairs) returns to the maintainer; the author runs nothing again. Under a
+      plan that reads no such workload across placements on a probe, the two targets are held
+      as any other workload is, and inside does not pass. A plan declared before this case was
+      on `main` is read by the rule as it then stood, but for the four pull requests the Choice
+      names, whose plans go by the maintainer's decision it records.
       A workload with no single-build bound (a run that failed, too few pairs)
       does not pass, as before, and a control the plan declared keeps
       [design Choice 71](docs/design.md#choice-layout-floor)'s rule. Item 2's other requirements
