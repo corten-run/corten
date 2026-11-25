@@ -1389,14 +1389,12 @@ impl Missed {
         // A locale negotiated after the page set its headers is named now, so the key below
         // and the header the app sends agree. Under `corten dev` the answer is left as it is (the
         // app names it as the answer leaves, after its middleware, as it did with no store), and
-        // its head is counted as a release build counts it, from a copy named so: its names and
-        // bytes.
-        let mut named: Option<(usize, usize)> = None;
+        // its head is counted as a release build counts it, from a copy named so ([`NamedHead`]).
         if !language && signal.asked_language() {
             if TELL {
                 let mut headers = res.headers().clone();
                 crate::page::add_language(&mut headers);
-                named = Some((headers.keys_len(), head_bytes(headers.iter())));
+                let _ = signal.found::<NamedHead>().set(NamedHead(headers.keys_len(), head_bytes(headers.iter())));
             } else {
                 crate::page::add_language(res.headers_mut());
             }
@@ -1423,11 +1421,7 @@ impl Missed {
         if res.headers().contains_key(header::ETAG) {
             unkept!(Verdict::Tagged);
         }
-        let names = match named {
-            Some((names, _)) if TELL => names,
-            _ => res.headers().keys_len(),
-        };
-        if names > NAMES {
+        if named_head::<TELL>(signal).map_or_else(|| res.headers().keys_len(), |(names, _)| names) > NAMES {
             unkept!(Verdict::Names);
         }
         if self.nonce.as_ref().is_some_and(|slot| slot.taken().is_some()) {
@@ -1445,9 +1439,9 @@ impl Missed {
         if self.told.0.is_some() && length < BODY_FROM {
             unkept!(Verdict::Small(length));
         }
-        let head: usize = match named {
-            Some((_, bytes)) if TELL => bytes,
-            _ => head_bytes(res.headers().iter()),
+        let head: usize = match named_head::<TELL>(signal) {
+            Some((_, bytes)) => bytes,
+            None => head_bytes(res.headers().iter()),
         };
         // The URL is held once, by the entry: the map holds its hash.
         let sent = self.language.as_ref().filter(|_| language);
@@ -1548,6 +1542,23 @@ fn head_bytes(headers: http::header::Iter<'_, HeaderValue>) -> usize {
 /// here, for its lifetime, as `corten dev`'s copy of [`Missed::keep`] left it, for
 /// [`read_to_tell`] to say so once its body is read.
 struct ToRead(u64);
+
+/// Under `corten dev`, in the request's signal: the names and bytes of the head a release build
+/// counts for an answer whose locale was negotiated after the page set its headers, which that
+/// build names before it counts and `corten dev` leaves for the app to name as the answer leaves.
+/// Held in the signal rather than in [`Missed::keep`], so a release build's copy holds nothing
+/// more across its read of the body than it did.
+struct NamedHead(usize, usize);
+
+/// The head [`NamedHead`] counted, for `corten dev`'s copy of [`Missed::keep`]; none for a
+/// release build's.
+#[inline(always)]
+fn named_head<const TELL: bool>(signal: &crate::Signal) -> Option<(usize, usize)> {
+    if !TELL {
+        return None;
+    }
+    signal.found::<NamedHead>().get().map(|&NamedHead(names, bytes)| (names, bytes))
+}
 
 /// Under `corten dev`, `res` as `corten dev`'s copy of [`Missed::keep`] left it: one a release
 /// build would keep has its body read as that build reads it before it is said to be kept
