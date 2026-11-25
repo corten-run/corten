@@ -13,8 +13,7 @@ import { acknowledgedBootstrapSeal, guardianSha256, guardianSource } from "./clo
 import { verifyControlSetupQuery } from "./cloud-control-session.mjs";
 import { verifyControlWatcher } from "./isolated/control-admission.mjs";
 import { verifyStreamDrain, verifyStreamSeal } from "./isolated/control-stream.mjs";
-import { storageLimits } from "./isolated/host-durable-writer.mjs";
-import { processIdentity, processRecordKey } from "./isolated/host-lifetime.mjs";
+import { hostObservationBytes, processIdentity, processRecordKey } from "./isolated/host-observation.mjs";
 import { campaignRounds, jsonPreparationRound, nativeArtifactRoot } from "./registry.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { cancellationState, mixedDigest, mixedWait, originalMixedControls, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
@@ -313,7 +312,7 @@ function exitOneLifetime(directory, state, grouped, campaign, binding, pid, comm
     const samples = regular(join(directory, "samples.jsonl")), records = new Map();
     assert.ok(samples.at(-1) === 10 && Number.isSafeInteger(terminal.samples) && terminal.samples >= 3);
     // The writer's lifetime budget counts samples and each process record once.
-    let remaining = storageLimits.bytes - samples.length;
+    let remaining = hostObservationBytes - samples.length;
     function processRecord(key) {
       assert.ok(typeof key === "string" && key.length === 64 && /^[a-f0-9]{64}$/.test(key));
       if (!records.has(key)) {

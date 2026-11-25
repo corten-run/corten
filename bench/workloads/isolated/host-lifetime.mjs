@@ -6,7 +6,7 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSy
 import { join, posix } from "node:path";
 import { durable, readRegular, syncDirectory, tree } from "./evidence.mjs";
 import { hostDurableWriter } from "./host-durable-writer.mjs";
-import { hostTerminalClock, terminalClockPolicy } from "./host-observation.mjs";
+import { hostTerminalClock, processIdentity, processRecordKey, terminalClockPolicy } from "./host-observation.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { executableProofFailure, executableProofFailureMessage, executableReference, participantExecutables } from "./participant-executables.mjs";
 import { browserContainers } from "../../fullstack-browser/contract.mjs";
@@ -26,12 +26,7 @@ function observing(operation, action) {
     throw error;
   }
 }
-export function processIdentity(stat) {
-  const match = /^(\d+) \((.*)\) ([A-Za-z]) (.*)$/.exec(stat.trim());
-  assert.ok(match); const rest = match[4].split(" ");
-  assert.match(rest[18] ?? "", /^\d+$/);
-  return { pid: Number(match[1]), startTicks: rest[18], comm: match[2] };
-}
+export { processIdentity, processRecordKey };
 function groupPath(text) {
   const path = /^0::([^\n]+)\n?$/.exec(text)?.[1];
   assert.ok(path && posix.isAbsolute(path) && !path.split("/").includes("..")); return path;
@@ -545,12 +540,6 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       return tree(directory);
     },
   });
-}
-
-export function processRecordKey(p) {
-  return sha(serial({ ...processIdentity(p.stat), cgroup: p.cgroup,
-    ...(p.executableRef ? { executableRef: p.executableRef, executableIdentity: p.executableIdentity }
-      : { executableSha256: p.executableSha256 }), type: p.type }));
 }
 
 export function resolveParticipantExecutables(process, proof) {
