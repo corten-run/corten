@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync,
   rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +94,102 @@ test("real Linux controls have a required host job and cannot pass through fixtu
     "unshare --fork --pid --mount-proc", "# skipped 0", "# cancelled 0", "# fail 0", "--test-reporter=tap"])
     assert.ok(driver.includes(required), `native CI obligation missing: ${required}`);
   assert.ok(!driver.includes("continue-on-error") && !driver.includes("--privileged"));
+});
+
+const resourceProbeMocks = String.raw`
+  _owned=$(printf '%064d' 1)
+  _foreign=$(printf '%064d' 2)
+  _label=corten.json.resource-probe-attempt
+  _waits=0
+  timeout() {
+    [[ "$1" == --kill-after=* && "$2" =~ ^[0-9]+s$ ]] || return 98
+    _bound=$2
+    shift 2
+    case "$1" in docker|node) "$@" ;; *) return 98 ;; esac
+  }
+  sleep() { [[ "$*" == 1 ]] || return 98; _waits=$((_waits + 1)); }
+  node() {
+    if [[ "$1" == -p ]]; then
+      [[ "$2" == 'require("node:crypto").randomUUID()' ]] || return 98
+      printf '%s\n' "$ATTEMPT"
+      return
+    fi
+    [[ "$#" == 2 && "$1" == bench/json-api/load-resource-probe.mjs && "$2" == "$_owned" ]] || return 98
+    printf 'probe:%s\n' "$2" >&2
+    [[ "$MODE" != probeFailed ]]
+  }
+  docker() {
+    [[ "$1" == --host && "$2" == unix:///var/run/docker.sock ]] || return 98
+    shift 2
+    case "$1" in
+      pull) ;;
+      create)
+        printf 'create\n' >&2
+        [[ "$*" == *" --label corten.json.resource-probe=1 --label $_label=$ATTEMPT "* ]] || return 98
+        case "$MODE" in
+          ok|probeFailed|removeFailed) printf '%s\n' "$_owned" ;;
+          foreignAck) printf '%s\n' "$_foreign" ;;
+          *) return 124 ;;
+        esac
+        ;;
+      ps)
+        [[ "$_bound" == 2s && "$*" == "ps --all --no-trunc --filter label=$_label=$ATTEMPT --format {{.ID}}" ]] || return 98
+        printf 'lookup\n' >&2
+        case "$MODE" in
+          lost) if (( _waits >= 2 )); then printf '%s\n' "$_owned"; fi ;;
+          absent) ;;
+          lookupFailed) return 124 ;;
+          short) printf '0123456789ab\n' ;;
+          multiple) printf '%s\n' "$_owned" "$_foreign" ;;
+          foreign) printf '%s\n' "$_foreign" ;;
+          *) printf '%s\n' "$_owned" ;;
+        esac
+        ;;
+      container)
+        [[ "$_bound" == 3s && "$2" == inspect && "$3" == --format && "$4" == '{{.Id}} {{index .Config.Labels "corten.json.resource-probe"}} {{index .Config.Labels "corten.json.resource-probe-attempt"}}' ]] || return 98
+        printf 'inspect:%s\n' "$5" >&2
+        if [[ "$MODE" == wrongId ]]; then
+          printf '%s 1 %s\n' "$_foreign" "$ATTEMPT"
+        elif [[ "$5" == "$_foreign" ]]; then
+          printf '%s 1 foreign-attempt\n' "$_foreign"
+        else
+          printf '%s 1 %s\n' "$_owned" "$ATTEMPT"
+        fi
+        ;;
+      rm)
+        printf 'remove:%s\n' "$4" >&2
+        [[ "$_bound" == 10s && "$*" == "rm -f -v $_owned" && "$MODE" != removeFailed ]] || return 98
+        ;;
+      *) return 98 ;;
+    esac
+  }
+`;
+const resourceProbeBash = process.env.CORTEN_TEST_BASH ?? (process.platform === "linux" ? "/bin/bash" : null);
+test("the synthetic JSON resource probe cleans up a create whose acknowledgment was lost without removing foreign containers", { skip: !resourceProbeBash }, () => {
+  const step = workflow.jobs.kernel.steps.find((s) => s.name === "Prove bracketed JSON resource reads on a synthetic Docker participant");
+  const owned = "1".padStart(64, "0"), foreign = "2".padStart(64, "0");
+  const inspect = `inspect:${owned}`, inspectForeign = `inspect:${foreign}`, remove = `remove:${owned}`, probe = `probe:${owned}`;
+  const refused = "Synthetic JSON resource probe cleanup could not confirm one owned container";
+  const cases = [
+    ["ok", 0, [inspect, probe, inspect, remove]],
+    ["probeFailed", 1, [inspect, probe, inspect, remove]],
+    ["removeFailed", 1, [inspect, probe, inspect, remove]],
+    ["foreignAck", 1, [inspectForeign, "lookup", inspect, remove]],
+    ["lost", 124, ["lookup", "lookup", "lookup", inspect, remove]],
+    ["absent", 124, [...Array(4).fill("lookup"), refused]],
+    ["lookupFailed", 124, [...Array(4).fill("lookup"), refused]],
+    ["short", 124, ["lookup", refused]],
+    ["multiple", 124, ["lookup", refused]],
+    ["foreign", 124, ["lookup", inspectForeign, refused]],
+    ["wrongId", 124, ["lookup", inspect, refused]],
+  ];
+  for (const [mode, status, trace] of cases) {
+    const result = spawnSync(resourceProbeBash, ["-e", "-o", "pipefail", "-c", resourceProbeMocks + step.run],
+      { cwd: root, env: { ...process.env, MODE: mode, ATTEMPT: randomUUID() }, encoding: "utf8", timeout: 5000, windowsHide: true });
+    assert.ifError(result.error);
+    assert.equal(result.status, status, `${mode}: ${result.stderr}`);
+    assert.deepEqual(result.stderr.trim().split(/\r?\n/), ["create", ...trace], mode);
+  }
 });
 
 test("native driver generates the actual churn invocation under the same no-skip gates", () => {

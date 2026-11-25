@@ -298,8 +298,9 @@ than three passes only there; of two passes each number is the lower of its colu
 values, not a median. The stop is the app's only when the container stopped after the phase
 began, the CPU counter sidecar and, for the HTTP source, the upstream are the same running
 containers, Docker recorded no kill, stop or restart of the app, and nothing failed that the
-stop does not explain (only docker stats errors stamped after the app finished); otherwise the
-run fails.
+stop does not explain (only ordinary Docker stats errors stamped after the app finished); otherwise the
+run fails. A sampler deadline or a timeout waiting for the stats client's output pipes is a
+harness failure even after the app exits, both at collection and when replaying the receipt.
 Still failures: a phase with no k6 summary or in which no request succeeded, a 200 of the wrong
 content type (before a stop too), an app container that stopped during its cold start or before
 a phase began (after its first 200, before warmup or between phases), and any error answer

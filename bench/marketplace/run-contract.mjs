@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { aggregate as catalogAggregate, cpuSettings as catalogCpuSettings, parseArgs as catalogArgs, phases, sources } from "../catalog/contract.mjs";
 import { allApps } from "../fullstack/inventory.mjs";
 import { spread } from "../fullstack/passes.mjs";
+import { statsPipeReleaseMessage } from "../catalog/stats.mjs";
 import { locales } from "./contract.mjs";
 import { groupApps } from "./groups.mjs";
 const labels = {
@@ -238,9 +239,13 @@ export function* passPlan(passes, apps, profiles, runsOf) {
 
 // Steps of a load phase whose error the app's stop explains when the error came after the app
 // finished: its docker stats go with its container, and each stats error is stamped when it
-// happened. The stats sampler running past its deadline, the CPU counter read before the phase,
-// k6 failing to start or finish, a missing summary, or anything else does not.
+// happened. A sampler failure (deadline or held pipes), a CPU counter read before the phase,
+// k6 failing to start or finish, a missing summary, or anything else is not explained by a stop.
 const explainedSteps = new Set(["stats"]);
+export function statsPhaseErrors(error) {
+  if (!Array.isArray(error.errors)) return [{ step: "sampler", error, at: new Date().toISOString() }];
+  return error.errors.map((s) => ({ step: s.kind === undefined ? "stats" : "sampler", error: new Error(s.message), at: s.at }));
+}
 // Docker actions on the app container that mean something other than the app ended it: the
 // harness itself does none of these to the app during a phase (remove() runs after it).
 const outsideActions = new Set(["kill", "stop", "start", "restart", "pause", "unpause"]);
@@ -289,7 +294,10 @@ export function phaseEnd({ pass, phase, phaseStart, app, errors = [], sidecars, 
     assert.ok(!Number.isNaN(finished), "a stopped app container has no FinishedAt");
     assert.ok(finished >= start, `the app container stopped at ${app.FinishedAt}, before ${phase} began at ${phaseStart}: not under its load, so the round fails`);
   }
-  const unexplained = errors.find((e) => !(explainedSteps.has(e.step) && !/exceeded its deadline/.test(e.error?.message ?? "") && Date.parse(e.at) >= finished));
+  // Older receipts used "stats" for sampler faults too. Refuse legacy deadline and held-pipe
+  // diagnostics even when no dedicated "sampler" step was written.
+  const unexplained = errors.find((e) => !(explainedSteps.has(e.step) && e.error?.message !== statsPipeReleaseMessage
+    && !/exceeded its deadline/.test(e.error?.message ?? "") && Date.parse(e.at) >= finished));
   if (unexplained) throw unexplained.error;
   // A 200 of the wrong content type before the app stopped is still a parity failure.
   const kind = summary?.root_group?.checks?.["marketplace content type"];

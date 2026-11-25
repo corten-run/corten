@@ -240,6 +240,7 @@ test("a phase ends in the app's stop only when nothing else the phase depends on
     [{ errors: [error("k6", "docker create: exit 125")] }, /exit 125/],
     [{ errors: [error("summary", "no such file")] }, /no such file/],
     [{ errors: [error("stats", "stats sampler exceeded its deadline")] }, /deadline/],
+    [{ errors: [error("stats", "docker stats client pipes did not close within the stop grace")] }, /pipes did not close/],
     // a stats error from before the app finished, such as a sample that did not parse
     [{ errors: [error("stats", "Unexpected token } in JSON", before)] }, /Unexpected token/],
     // the sampler failing to stop or save, which carries no per-error time

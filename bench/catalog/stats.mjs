@@ -10,6 +10,7 @@ export function memoryMiB(value) {
   return Number(m[1]) * units[m[2]];
 }
 export const steadySampleWindow = (count) => [Math.floor(count * 0.15), Math.ceil(count * 0.95)];
+export const statsPipeReleaseMessage = "docker stats client pipes did not close within the stop grace";
 export function summarizeSamples(samples) {
   if (!samples.length) throw new Error("docker stats produced no samples");
   for (const s of samples) if (!Number.isFinite(s.mem) || !Number.isFinite(s.cpu)) throw new Error("invalid docker stats sample");
@@ -23,7 +24,7 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
   // Each error with when it happened: the marketplace runner tells one after an app's container
   // stopped from one before it (#1128). stop() throws them joined, as it always has.
   const errors = [];
-  const failed = (message) => errors.push({ message, at: new Date().toISOString() });
+  const failed = (message, kind) => errors.push({ message, at: new Date().toISOString(), kind });
   let buffer = "";
   let raw = "";
   let stopping = false;
@@ -64,7 +65,7 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
     release = setTimeout(() => {
       // An exited CLI can be reaped while descendants still hold its pipes.
       // Retain any captured bytes but never summarize truncated evidence.
-      failed("docker stats client pipes did not close within the stop grace");
+      failed(statsPipeReleaseMessage, "pipe-release-timeout");
       child.stdout.destroy(); child.stderr.destroy(); child.unref();
       settle();
     }, pipeGraceMs);

@@ -6,7 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterPhase, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, phases, readLoadSummary, readOutcome, resultSchema, sources, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { afterPhase, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, phases, readLoadSummary, readOutcome, resultSchema, sources, stageAggregate, statsPhaseErrors, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 import { locales, workload } from "./contract.mjs";
 import { admitted, boundedFeatureProfile, boundedQualificationSettings, validateActiveQualification } from "./feature-contract.mjs";
 import { validateMarketplace } from "./records.mjs";
@@ -190,10 +190,7 @@ async function load(name, target, phase, seconds, raw, pass) {
   finally {
     // Each stats error keeps the time it happened, so phaseEnd can tell one the app's stop caused.
     try { if (sampler) stats = await sampler.stop(); }
-    catch (e) {
-      if (Array.isArray(e.errors)) for (const s of e.errors) errors.push({ step: "stats", error: new Error(s.message), at: s.at });
-      else failed("sampler", e);
-    }
+    catch (e) { for (const fault of statsPhaseErrors(e)) errors.push(fault); }
   }
   try {
     let appReceipt;

@@ -126,17 +126,53 @@ jobs:
       - name: Prove bracketed JSON resource reads on a synthetic Docker participant
         timeout-minutes: 3
         run: |
-          docker_local() { timeout --kill-after=2s 45s docker --host unix:///var/run/docker.sock "$@"; }
+          docker_local() {
+            local limit=$1
+            shift
+            timeout --kill-after=2s "$limit" docker --host unix:///var/run/docker.sock "$@"
+          }
           image='node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067'
-          docker_local pull "$image"
-          id=$(docker_local create --pull=never --network none --cpus 1 --memory 128m \
-            --restart=no --label corten.json.resource-probe=1 --entrypoint node "$image" \
+          docker_local 45s pull "$image"
+          key=corten.json.resource-probe-attempt
+          attempt=$(node -p 'require("node:crypto").randomUUID()')
+          id=
+          owns() {
+            local candidate=$1 receipt
+            [[ "$candidate" =~ ^[a-f0-9]{64}$ ]] || return 1
+            receipt=$(docker_local 3s container inspect --format \
+              '{{.Id}} {{index .Config.Labels "corten.json.resource-probe"}} {{index .Config.Labels "corten.json.resource-probe-attempt"}}' "$candidate") || return 1
+            [[ "$receipt" == "$candidate 1 $attempt" ]]
+          }
+          cleanup() {
+            local candidate=$id found retry
+            if [[ -z "$candidate" ]]; then
+              # A timed-out create can reach the daemon without returning its ID. Allow
+              # it a bounded window to appear; only a single canonical candidate can pass.
+              for retry in 1 2 3 4; do
+                if found=$(docker_local 2s ps --all --no-trunc --filter "label=$key=$attempt" --format '{{.ID}}') && [[ -n "$found" ]]; then
+                  candidate=$found
+                  break
+                fi
+                if [[ "$retry" != 4 ]]; then sleep 1; fi
+              done
+            fi
+            if ! owns "$candidate"; then
+              echo 'Synthetic JSON resource probe cleanup could not confirm one owned container' >&2
+              return 1
+            fi
+            docker_local 10s rm -f -v "$candidate" >/dev/null
+          }
+          trap 'status=$?; trap - EXIT; if ! cleanup && (( status == 0 )); then status=1; fi; exit "$status"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          candidate=$(docker_local 45s create --pull=never --network none --cpus 1 --memory 128m \
+            --restart=no --label corten.json.resource-probe=1 --label "$key=$attempt" --entrypoint node "$image" \
             -e 'const mem = Buffer.alloc(8 * 1024 * 1024, 1);
                 const work = setInterval(() => {
                   const until = performance.now() + 10;
                   while (performance.now() < until) mem[0] ^= 1;
                 }, 100);
                 setTimeout(() => clearInterval(work), 9000);')
-          [[ "$id" =~ ^[a-f0-9]{64}$ ]]
-          trap 'docker_local rm -f -v "$id" >/dev/null || exit 1' EXIT
+          owns "$candidate"
+          id=$candidate
           timeout --kill-after=2s 30s node bench/json-api/load-resource-probe.mjs "$id"

@@ -388,6 +388,20 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   writeFileSync(join(folder, "summary.json"), JSON.stringify(s));
   assert.equal(validateSaved(args).complete, true);
   const original = readFileSync(path);
+  const postExitError = { step: "stats", error: "docker stats stopped early: 1", at: raw.app.state.FinishedAt };
+  raw.seen.errors = [postExitError];
+  writeFileSync(path, JSON.stringify(raw));
+  assert.equal(validateSaved(args).complete, true, "a legacy post-exit stats error is still waived");
+  raw.seen.errors = [{ ...postExitError, error: "docker stats client pipes did not close within the stop grace" }];
+  writeFileSync(path, JSON.stringify(raw));
+  assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
+    && /pipes did not close/.test(e.cause?.message));
+  raw.seen.errors = [{ ...postExitError, step: "sampler", error: "synthetic pipe-release fault" }];
+  writeFileSync(path, JSON.stringify(raw));
+  assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
+    && e.cause?.message === "synthetic pipe-release fault");
+  raw.seen.errors = [];
+  writeFileSync(path, original);
   for (const mutate of [
     (v) => { v.load.state.OOMKilled = true; v.load.state.ExitCode = 137; },
     (v) => { v.load.state.ExitCode = 1; },

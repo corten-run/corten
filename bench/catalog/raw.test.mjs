@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, linkSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,7 @@ import { composePhase } from "../workloads/isolated/composition.mjs";
 import { latestStableSchema } from "../workloads/latest-stable.mjs";
 import { loadSummary, timedFixture } from "./timed-fixture.mjs";
 import { failureClass, requestOutcome } from "./load-outcome.js";
+import { phaseEnd, statsPhaseErrors } from "../marketplace/run-contract.mjs";
 
 // Synthetic verifier fixtures, never measured performance or qualification receipts.
 function fixture(passes = 1) {
@@ -1119,10 +1120,24 @@ test("stats retains its raw prefix and fails when an exited client's pipes never
     stopping = sampler.stop();
     await assert.rejects(Promise.race([stopping, new Promise((_, reject) => {
       deadline = setTimeout(() => reject(new Error("test stop observation expired")), 400);
-    })]), /stats client pipes did not close/);
+    })]), (error) => {
+      assert.match(error.message, /stats client pipes did not close/);
+      assert.equal(error.errors[0].kind, "pipe-release-timeout");
+      const errors = statsPhaseErrors(error);
+      assert.deepEqual(errors.map((e) => e.step), ["sampler"]);
+      const at = Date.parse(errors[0].at);
+      const seen = { pass: 1, phase: "fixed", phaseStart: new Date(at - 5000).toISOString(),
+        app: { Running: false, OOMKilled: false, ExitCode: 1, FinishedAt: new Date(at - 1000).toISOString() } };
+      assert.deepEqual(phaseEnd({ ...seen, errors: statsPhaseErrors({ errors: [
+        { message: "docker stats stopped early: 1", at: errors[0].at },
+      ] }) }), { pass: 1, phase: "fixed", exitCode: 1, oomKilled: false });
+      assert.throws(() => phaseEnd({ ...seen, errors }), /pipes did not close/);
+      return true;
+    });
     assert.deepEqual(signals, [], "do not signal an already exited child");
     assert.ok(fake.stdout.destroyed && fake.stderr.destroyed && fake.unreferenced);
     assert.equal(readFileSync(path, "utf8"), prefix);
+    assert.equal(existsSync(`${path}.json`), false, "do not summarize a prefix even if it ends in a valid row");
   } finally {
     clearTimeout(deadline); fake.emit("close", 0); await stopping?.catch(() => {});
     fake.stdout.destroy(); fake.stderr.destroy();
