@@ -221,6 +221,12 @@ jobs:
         run: |
           docker run --rm --cpus 1 --memory 1g cb-catalog-django python -m django test itempage --verbosity 1
           docker run --rm --cpus 1 --memory 1g -e PROFILE=matched -e HOSTS=testserver cb-catalog-django python -m django test itempage --verbosity 1
+      - name: Probe Django Mixed ASGI and WSGI over loopback
+        if: matrix.app == 'django'
+        timeout-minutes: 10
+        run: |
+          docker build --build-arg PROFILE=matched-asgi -t cb-catalog-django-mixed-asgi bench/fullstack/apps/django
+          docker run --rm --init --network none --cpus 1 --memory 1g cb-catalog-django-mixed-asgi python -m unittest -v test_mixed_asgi_socket
       - name: Test native Spring alert persistence and source boundaries
         if: matrix.app == 'spring'
         run: |
