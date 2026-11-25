@@ -94,17 +94,32 @@ are no redirects, retries, early responses, or synthetic request headers. The
 ten-second bound covers the entire HTTP read; a page/form deadline returns a
 native 504 and cannot append an alert. The JSON route retains native JSON
 serialization and its generic 500 for read/parse failures. The page uses the
-same Django rendering, alert writes and session readback as WSGI. A write
-already in the synchronous ORM is not a rollback-on-disconnect promise.
+same Django template, formatters, ORM and session readback as WSGI. The
+candidate keeps its own render-and-write callback so WSGI's original callback
+and per-request calls remain unchanged. A write already in the synchronous
+ORM is not a rollback-on-disconnect promise.
 
-From this app directory, with the three requirements files installed, run
-`python -m unittest -v test_mixed_asgi_socket`. It runs both Granian CLI
-interfaces with temporary databases and actual caller and upstream sockets:
-three locale cases holding upstream headers, a held-body case, WSGI still
-pending at 500 ms, and ASGI closed at 500 ms. It also probes the ASGI deadline,
-gzip/security, CSRF, alert readback, JSON validation, fixture bypass, and
-matching localized HTML apart from the generated CSRF token. It does not run
-a browser or qualify the pinned Linux image.
+From this app directory, with the three requirements files installed, run:
+
+```sh
+python -m unittest -v test_mixed_asgi_socket.MixedAsgiSocketTests test_mixed_asgi_socket.SocketTimingTests
+```
+
+The fixture runs both Granian interfaces with temporary databases and real
+sockets. It measures from just before caller shutdown to the first upstream
+EOF/reset on the same monotonic clock: three held-header locale cases and a
+held-body case must close within 500 ms on ASGI and not on WSGI. For the 504
+case, the response and upstream close must both arrive between 9.75 and 10.75
+seconds, with at least nine body writes and no gap over two seconds up to
+closure, so an inactivity-only timeout cannot pass. It also checks native
+security, gzip, CSRF, alert readback, JSON validation, fixture bypass, and
+localized HTML equality apart from the generated CSRF token.
+
+The Catalog workflow's Django cell runs the named tests via `docker exec`
+inside the isolated ASGI image. The image runs its own default command;
+`ShippedAsgiSocketTests` checks cancellation and a migrated alert write against
+that running app on port 8080. These diagnostics do not qualify the Mixed
+workload or replace the browser and native production gates.
 
 Official selection is not wired. A later Mixed-only integration must:
 

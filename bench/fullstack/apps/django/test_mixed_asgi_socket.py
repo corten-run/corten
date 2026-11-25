@@ -1,4 +1,4 @@
-"""Small loopback fixture for both native Granian interfaces; no Docker or browser."""
+"""Loopback checks for both Granian interfaces and the running candidate image."""
 from contextlib import contextmanager
 import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +15,8 @@ from tempfile import TemporaryDirectory
 from threading import Event, Thread
 from time import monotonic, sleep
 import unittest
+from unittest.mock import patch
+from urllib.parse import urlsplit
 
 import requests
 
@@ -26,6 +28,8 @@ FIXTURE = APP / "itempage" / "marketplace_test_fixture.json"
 RECORD = json.loads(FIXTURE.read_text(encoding="utf-8"))["item_1"]
 LOCALES = ("en-US", "fr-FR", "de-DE")
 TRACE = "00-00000000000000000000000000000001-0000000000000001-01"
+CLEANUP_SECONDS = 0.5
+DEADLINE_LOW, DEADLINE_HIGH = 9.75, 10.75
 
 
 class HeldRead:
@@ -35,6 +39,9 @@ class HeldRead:
         self.started = Event()
         self.closed = Event()
         self.release = Event()
+        self.started_at = None
+        self.closed_at = None
+        self.body_writes = []
 
 
 class Upstream(BaseHTTPRequestHandler):
@@ -59,32 +66,40 @@ class Upstream(BaseHTTPRequestHandler):
             payload = json.dumps({**RECORD, "id": record_id}).encode()
         held = self.server.held.get(record_id)
         offset = 0
+        if held:
+            held.started_at = monotonic()
         if held and held.body:
             self.write_headers(payload)
             self.wfile.write(payload[:1])
+            held.body_writes.append(monotonic())
             offset = 1
         if held:
             held.started.set()
             next_byte = monotonic() + 1
+            dripping = held.drip
             while not held.release.is_set():
                 if select.select([self.connection], [], [], 0.025)[0]:
                     try:
-                        if self.connection.recv(1):
-                            raise AssertionError("unexpected bytes on held upstream request")
+                        data = self.connection.recv(1)
                     except ConnectionResetError:
-                        pass
+                        data = b""
+                    observed_at = monotonic()
+                    if data:
+                        raise AssertionError("unexpected bytes on held upstream request")
+                    held.closed_at = observed_at
                     held.closed.set()
                     self.close_connection = True
                     return
-                if held.drip and monotonic() >= next_byte and offset < len(payload) - 1:
+                if dripping and monotonic() >= next_byte and offset < len(payload) - 1:
                     try:
                         self.wfile.write(payload[offset:offset + 1])
                     except (BrokenPipeError, ConnectionResetError):
-                        held.closed.set()
-                        self.close_connection = True
-                        return
-                    offset += 1
-                    next_byte = monotonic() + 1
+                        # Stop writing, but record the first EOF/reset from recv above.
+                        dripping = False
+                    else:
+                        held.body_writes.append(monotonic())
+                        offset += 1
+                        next_byte = held.body_writes[-1] + 1
         if not (held and held.body):
             self.write_headers(payload)
         self.wfile.write(payload[offset:])
@@ -94,6 +109,19 @@ class Upstream(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
+
+
+def wait_until_ready(base, alive=lambda: True):
+    until = monotonic() + 10
+    while alive() and monotonic() < until:
+        try:
+            with requests.get(base + "/health/live", timeout=0.25) as ready:
+                if ready.status_code == 200:
+                    return True
+        except requests.RequestException:
+            pass
+        sleep(0.025)
+    return False
 
 
 @contextmanager
@@ -124,16 +152,7 @@ def native_app(asgi, upstream_port, *, fixture=False):
             child = subprocess.Popen([sys.executable, "-m", *argv], cwd=app, env=env,
                                      stdout=log, stderr=subprocess.STDOUT)
             try:
-                until = monotonic() + 10
-                while child.poll() is None and monotonic() < until:
-                    try:
-                        with requests.get(base + "/health/live", timeout=0.25) as ready:
-                            if ready.status_code == 200:
-                                break
-                    except requests.RequestException:
-                        pass
-                    sleep(0.025)
-                else:
+                if not wait_until_ready(base, lambda: child.poll() is None):
                     log.seek(0)
                     raise AssertionError(f"Granian did not become ready: {log.read().decode(errors='replace')}")
                 yield base, port
@@ -147,15 +166,60 @@ def native_app(asgi, upstream_port, *, fixture=False):
                 child.wait(timeout=10)
 
 
-class MixedAsgiSocketTests(unittest.TestCase):
-    def setUp(self):
-        self.upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+class SocketFixture(unittest.TestCase):
+    def start_upstream(self, port=0):
+        self.upstream = ThreadingHTTPServer(("127.0.0.1", port), Upstream)
         self.upstream.held = {}
         self.upstream.reads = []
         thread = Thread(target=self.upstream.serve_forever, daemon=True)
         self.addCleanup(self.upstream.server_close)
         self.addCleanup(self.upstream.shutdown)
         thread.start()
+
+    def close_elapsed(self, held, abort_at):
+        held.closed.wait(max(0, abort_at + CLEANUP_SECONDS - monotonic()))
+        observed_at = held.closed_at
+        if observed_at is None:
+            return None
+        elapsed = observed_at - abort_at
+        self.assertGreaterEqual(elapsed, 0, "upstream closed before the caller aborted")
+        return elapsed
+
+    def assert_abort(self, port, locale, record_id, *, body=False, expect_closed=True):
+        held = self.upstream.held[record_id] = HeldRead(body=body)
+        path = f"/marketplace/{locale}/{record_id}"
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
+                client.sendall(f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\ntraceparent: {TRACE}\r\n\r\n".encode())
+                self.assertTrue(held.started.wait(2), "upstream request did not start")
+                self.assertFalse(select.select([client], [], [], 0.05)[0], "early response before abort")
+                abort_at = monotonic()  # Before the shutdown syscall, not after a possible pause.
+                client.shutdown(socket.SHUT_RDWR)
+            elapsed = self.close_elapsed(held, abort_at)
+            observed = "not observed by the cutoff" if elapsed is None else f"{elapsed:.3f} s after abort"
+            print(f"{path}: upstream EOF/reset {observed} (expect within 0.500 s: {expect_closed})", flush=True)
+            self.assertEqual(elapsed is not None and elapsed <= CLEANUP_SECONDS, expect_closed,
+                             f"{path}: upstream EOF/reset at {elapsed!r} s after abort")
+        finally:
+            held.release.set()
+
+    def assert_whole_read_deadline(self, held, response_elapsed):
+        self.assertTrue(held.closed.wait(CLEANUP_SECONDS), "deadline did not close the held upstream")
+        self.assertIsNotNone(held.started_at)
+        self.assertIsNotNone(held.closed_at)
+        for name, elapsed in (("client response", response_elapsed),
+                              ("upstream close", held.closed_at - held.started_at)):
+            self.assertTrue(DEADLINE_LOW <= elapsed <= DEADLINE_HIGH,
+                            f"{name} at {elapsed:.3f} s, expected the ten-second whole-read deadline")
+        self.assertGreaterEqual(len(held.body_writes), 9, "too few successful trickle writes")
+        points = [*held.body_writes, held.closed_at]
+        for earlier, later in zip(points, points[1:]):
+            self.assertTrue(0 <= later - earlier <= 2, "trickle stalled before the upstream close")
+
+
+class MixedAsgiSocketTests(SocketFixture):
+    def setUp(self):
+        self.start_upstream()
 
     def test_abort_closes_real_upstream_only_under_asgi(self):
         wsgi_pages = {}
@@ -165,17 +229,7 @@ class MixedAsgiSocketTests(unittest.TestCase):
                 cases.append(("en-US", "held_body"))
                 for locale, record_id in cases:
                     with self.subTest(locale=locale, record_id=record_id):
-                        held = self.upstream.held[record_id] = HeldRead(body=record_id == "held_body")
-                        path = f"/marketplace/{locale}/{record_id}"
-                        try:
-                            with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
-                                client.sendall(f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\ntraceparent: {TRACE}\r\n\r\n".encode())
-                                self.assertTrue(held.started.wait(2), "upstream request did not start")
-                                self.assertFalse(select.select([client], [], [], 0.05)[0], "early response before abort")
-                                client.shutdown(socket.SHUT_RDWR)
-                            self.assertEqual(held.closed.wait(0.5), asgi)
-                        finally:
-                            held.release.set()
+                        self.assert_abort(port, locale, record_id, body=record_id == "held_body", expect_closed=asgi)
                     recovered = requests.get(base + "/api/marketplace/item_1", timeout=2)
                     self.assertEqual(recovered.json(), RECORD)
                 self.assertEqual(self.upstream.reads, [
@@ -221,9 +275,13 @@ class MixedAsgiSocketTests(unittest.TestCase):
             # A body byte every second defeats an inactivity-only timeout.
             held = self.upstream.held["deadline"] = HeldRead(body=True, drip=True)
             try:
+                start = monotonic()
                 response = client.post(base + "/marketplace/fr-FR/deadline", data=payload, timeout=13)
+                elapsed = monotonic() - start
                 self.assertTrue(held.started.is_set())
-                self.assertTrue(held.closed.wait(0.5), "deadline did not close the held upstream")
+                self.assert_whole_read_deadline(held, elapsed)
+                print(f"Whole read: response {elapsed:.3f} s, upstream close "
+                      f"{held.closed_at - held.started_at:.3f} s, {len(held.body_writes)} body writes", flush=True)
                 self.assertEqual((response.status_code, response.text), (504, "Record source timed out"))
                 self.assertEqual(client.get(base + "/api/alerts", timeout=3).json(), alerts.json())
                 self.assertEqual(self.upstream.reads[-2:], [("/marketplace/records/malformed", None), ("/marketplace/records/deadline", None)])
@@ -244,6 +302,62 @@ class MixedAsgiSocketTests(unittest.TestCase):
             self.assertIn("immutable", css.headers["Cache-Control"])
             self.assertEqual(requests.get(base + "/api/marketplace/item_1", timeout=3).json(), RECORD)
             self.assertEqual(self.upstream.reads, [])
+
+
+class ShippedAsgiSocketTests(SocketFixture):
+    def test_default_container_command_serves_and_cancels(self):
+        upstream = urlsplit(os.environ["API_BASE"])
+        self.assertEqual((upstream.scheme, upstream.hostname, upstream.path), ("http", "127.0.0.1", ""))
+        self.assertIsNotNone(upstream.port)
+        self.start_upstream(upstream.port)
+        base = "http://127.0.0.1:8080"
+        self.assertTrue(wait_until_ready(base), "the image's default command did not start the app")
+        self.assert_abort(8080, "en-US", "request_1")
+        self.assertEqual(self.upstream.reads, [("/marketplace/records/request_1", TRACE)])
+        # A write through the running server also requires the shipped migration to have run.
+        with requests.Session() as client:
+            path = base + "/marketplace/en-US/item_1"
+            self.assertEqual(client.get(path, timeout=3).status_code, 200)
+            form = {"email": "a@b", "target_price": "1.25", "csrfmiddlewaretoken": client.cookies["csrftoken"]}
+            self.assertEqual(client.post(path, data=form, timeout=3).status_code, 200)
+            self.assertEqual(client.get(base + "/api/alerts", timeout=3).json(),
+                             [{"item_id": "item_1", "email": "a@b", "target_minor": 125}])
+
+
+class SocketTimingTests(SocketFixture):
+    def test_scheduler_pause_does_not_reclassify_late_close(self):
+        held = HeldRead()
+        held.closed.set()
+        with patch(f"{__name__}.monotonic", return_value=102):
+            for observed_at, in_budget in ((100.25, True), (100.75, False)):
+                with self.subTest(observed_at=observed_at):
+                    held.closed_at = observed_at
+                    self.assertEqual(self.close_elapsed(held, 100) <= CLEANUP_SECONDS, in_budget)
+            held.closed_at = 99.75
+            with self.assertRaisesRegex(AssertionError, "before the caller aborted"):
+                self.close_elapsed(held, 100)
+
+    def test_whole_read_deadline_rejects_wrong_timer_and_missing_progress(self):
+        held = HeldRead(body=True, drip=True)
+        held.started_at = 100
+        held.closed_at = 110
+        held.closed.set()
+        held.body_writes = list(range(100, 110))
+        self.assert_whole_read_deadline(held, 10)
+        for elapsed in (9, 11):
+            with self.subTest(elapsed=elapsed):
+                with self.assertRaisesRegex(AssertionError, "client response"):
+                    self.assert_whole_read_deadline(held, elapsed)
+        held.closed_at = 111
+        with self.assertRaisesRegex(AssertionError, "upstream close"):
+            self.assert_whole_read_deadline(held, 10)
+        held.closed_at = 110
+        held.body_writes = [100]
+        with self.assertRaisesRegex(AssertionError, "too few"):
+            self.assert_whole_read_deadline(held, 10)
+        held.body_writes = [*range(100, 108), 107.5]
+        with self.assertRaisesRegex(AssertionError, "trickle stalled"):
+            self.assert_whole_read_deadline(held, 10)
 
 
 if __name__ == "__main__":

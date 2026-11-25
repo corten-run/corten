@@ -226,7 +226,12 @@ jobs:
         timeout-minutes: 10
         run: |
           docker build --build-arg PROFILE=matched-asgi -t cb-catalog-django-mixed-asgi bench/fullstack/apps/django
-          docker run --rm --init --network none --cpus 1 --memory 1g cb-catalog-django-mixed-asgi python -m unittest -v test_mixed_asgi_socket
+          container=$(docker run --detach --init --network none --cpus 1 --memory 1g \
+            -e API_BASE=http://127.0.0.1:18080 cb-catalog-django-mixed-asgi)
+          trap 'status=$?; if [ "$status" -ne 0 ]; then docker logs "$container" >&2 || true; fi; docker rm -fv "$container" >/dev/null' EXIT
+          docker exec "$container" python -m unittest -v \
+            test_mixed_asgi_socket.ShippedAsgiSocketTests.test_default_container_command_serves_and_cancels \
+            test_mixed_asgi_socket.MixedAsgiSocketTests test_mixed_asgi_socket.SocketTimingTests
       - name: Test native Spring alert persistence and source boundaries
         if: matrix.app == 'spring'
         run: |
