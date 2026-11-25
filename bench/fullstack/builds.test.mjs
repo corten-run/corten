@@ -303,8 +303,9 @@ const nextImageInstall = /^timeout --verbose --kill-after=10s 10m (npm ci --no-a
 const nextInstallInputs = ["WORKDIR /app", "ENV NEXT_TELEMETRY_DISABLED=1", "COPY package.json package-lock.json ./"];
 // Spring's image bounds each Maven run and logs each transfer (#1763); the recipe runs the same goals
 // and arguments with -q and without the bound. docker-rebuild.mjs times the image as written. Only
-// this wrapper and -q are equivalent: the kill grace, the bound and the arguments are captured.
-const springImageMaven = /^timeout --verbose --kill-after=(\d+[smh]?) (\d+[smh]?) mvn -B (.+)$/;
+// this wrapper and -q are equivalent: the kill grace, the bound and the arguments are captured. The
+// arguments are Maven's alone, with no shell operator, so the bound wraps the whole RUN.
+const springImageMaven = /^timeout --verbose --kill-after=(\d+[smh]?) (\d+[smh]?) mvn -B ([\w:.=-]+(?: [\w:.=-]+)*)$/;
 
 /** A Dockerfile command as the recipe runs it, past the image-only wrappers above. */
 const recipeCommandOf = (/** @type {string} */ name, /** @type {string} */ command) =>
@@ -334,34 +335,79 @@ test("Next.js bounds the locked image install before copying app source or build
 });
 
 // Maven's retries of a 429 or 503 are per request (.mvn/maven.config), and a cold Spring build makes
-// hundreds of them, so every Maven run in the image and in hosted CI also has a total budget that ends
-// inside its enclosing deadline, with time left to report the transfer it stopped on (#1763).
+// hundreds of them, so every Maven run in the image and in hosted CI also has its own positive bound,
+// which ends inside the image build or step that directly contains it, with time left to report the
+// transfer it stopped on (#1763). The parity job's total is bounded by its own timeout-minutes, not
+// by a sum of these.
 const springRetries = [
   "-Daether.transport.http.retryHandler.count=4",
   "-Daether.transport.http.retryHandler.interval=10000",
   "-Daether.transport.http.retryHandler.intervalMax=40000",
 ];
 const springInstallInputs = ["WORKDIR /src", "COPY pom.xml ./", "COPY .mvn ./.mvn"];
+const springTestBuild = "docker build --target build -t cb-spring-tests bench/fullstack/apps/spring";
+const springTestMaven = /^docker run --rm --cpus 2 --memory 2g --mount type=volume,source=cb-spring-m2,target=\/root\/\.m2 cb-spring-tests timeout --verbose --kill-after=(\d+[smh]?) (\d+[smh]?) mvn -B test$/;
+const springProofMaven = /^timeout --verbose --kill-after=(\d+[smh]?) "\$maven_seconds" mvn -B -f "\$project\/pom\.xml" "-Dtest=\$suite" -DfailIfNoTests=true test "\$@" \|\| status=1$/;
 
-/** Seconds in a timeout(1) duration: a number with an optional s, m or h. */
+// mvn as a command word, alone or by path, not the .mvn directory.
+const mavenCommand = /(^|[\s;&|(`/])mvn($|[\s;&|)`])/;
+
+/** Seconds in a timeout(1) duration: a number with an optional s, m or h, above zero (0 disables it). */
 function durationSeconds(/** @type {string} */ value) {
   const match = /^(\d+)([smh]?)$/.exec(value);
   assert.ok(match, `unexpected duration ${value}`);
-  return Number(match[1]) * ({ "": 1, s: 1, m: 60, h: 3600 })[/** @type {"" | "s" | "m" | "h"} */ (match[2])];
+  const seconds = Number(match[1]) * ({ "": 1, s: 1, m: 60, h: 3600 })[/** @type {"" | "s" | "m" | "h"} */ (match[2])];
+  assert.ok(seconds > 0, `duration ${value} is not positive, so it bounds nothing`);
+  return seconds;
+}
+
+/** A step's timeout-minutes, in seconds. */
+function stepSeconds(/** @type {{ "timeout-minutes"?: unknown }} */ step) {
+  const minutes = step["timeout-minutes"];
+  assert.ok(Number.isInteger(minutes) && Number(minutes) > 0, `step timeout-minutes ${minutes} is not a positive integer`);
+  return Number(minutes) * 60;
+}
+
+/**
+ * A shell script's commands as sh runs them: a comment line dropped (it never continues), a line
+ * ending in a backslash joined to the next, runs of spaces made one.
+ */
+function shellCommandsOf(/** @type {string} */ text) {
+  /** @type {string[]} */
+  const commands = [];
+  let continued = false;
+  for (const raw of text.replace(/\r/g, "").split("\n")) {
+    const line = raw.replace(/[ \t]+/g, " ").trim();
+    if (!continued && line.startsWith("#")) continue;
+    const body = line.endsWith("\\") ? line.slice(0, -1).trim() : line;
+    if (continued) commands[commands.length - 1] = `${commands.at(-1)} ${body}`.trim();
+    else commands.push(body);
+    continued = line.endsWith("\\");
+  }
+  return commands.filter(Boolean);
+}
+
+/**
+ * Spring's Maven runs in its Dockerfile, in order. Each RUN that names mvn is exactly one Maven
+ * command under a positive bound and kill grace, and together they are the recipe's commands one for
+ * one: none added, none missing.
+ * @param {string[]} runs the commands of the Dockerfile's RUN instructions
+ */
+function springMavenRuns(runs) {
+  const maven = runs.filter((run) => mavenCommand.test(run)).map((run) => {
+    const bounded = springImageMaven.exec(run);
+    assert.ok(bounded, `spring: its Dockerfile runs Maven outside one exact positive bound: ${run}`);
+    return { recipe: `mvn -q -B ${bounded[3]}`, seconds: durationSeconds(bounded[2]) + durationSeconds(bounded[1]) };
+  });
+  assert.deepEqual(maven.map((m) => m.recipe), [recipes.spring.deps, recipes.spring.build],
+    "spring: its Dockerfile runs Maven commands other than its recipe's, one for one and in order");
+  return maven;
 }
 
 /** Seconds Spring's image can spend in Maven: each RUN's bound plus its kill grace, as the Dockerfile has them. */
-function springMavenSeconds(/** @type {string[]} */ lines) {
-  const runs = lines.filter((line) => /^RUN .*\bmvn\b/.test(line));
-  assert.ok(runs.length, "Spring's image runs no Maven");
-  let seconds = 0;
-  for (const line of runs) {
-    const run = springImageMaven.exec(line.slice(4));
-    assert.ok(run, `Spring's image runs Maven without its bound: ${line}`);
-    seconds += durationSeconds(run[2]) + durationSeconds(run[1]);
-  }
-  return seconds;
-}
+const springMavenSeconds = (/** @type {string[]} */ lines) =>
+  springMavenRuns(lines.filter((line) => line.startsWith("RUN ")).map((line) => line.slice(4)))
+    .reduce((sum, run) => sum + run.seconds, 0);
 
 /** The longest a single request can wait between retries under Resolver 2's Apache transport. */
 function springRequestWaitSeconds(/** @type {string[]} */ lines) {
@@ -385,7 +431,57 @@ function checkSpringInstall(/** @type {string[]} */ lines) {
   assert.deepEqual(lines.slice(1, install), springInstallInputs, "expected only the Spring dependency inputs");
 }
 
-test("Spring bounds its Maven runs inside every enclosing deadline", () => {
+/** Seconds the native Spring test step can spend in Maven: the test stage's image build, then its one bounded test run. */
+function springTestStepSeconds(/** @type {{ run: string }} */ step, /** @type {number} */ imageSeconds) {
+  const commands = shellCommandsOf(step.run);
+  const maven = commands.filter((command) => mavenCommand.test(command));
+  assert.equal(maven.length, 1, "the native Spring test step runs Maven in one command");
+  const tests = springTestMaven.exec(maven[0]);
+  assert.ok(tests, `the native Spring tests run Maven outside one exact positive bound: ${maven[0]}`);
+  const builds = commands.filter((command) => command.startsWith("docker build "));
+  assert.deepEqual(builds, [springTestBuild], "the native Spring test step builds only the test stage");
+  assert.ok(commands.indexOf(springTestBuild) < commands.indexOf(maven[0]), "the native Spring test step builds before its tests");
+  return imageSeconds + durationSeconds(tests[2]) + durationSeconds(tests[1]);
+}
+
+/**
+ * The transport proof's Maven runs: how many, and each one's bound and kill grace. The bound is a
+ * variable, set once to a positive number before the first probe and read only by the one Maven
+ * command, so no later assignment, export or second setting can change it.
+ */
+function springProof(/** @type {string} */ script) {
+  const commands = shellCommandsOf(script);
+  const maven = commands.filter((command) => mavenCommand.test(command));
+  assert.equal(maven.length, 1, "the proof runs Maven in one command");
+  const run = springProofMaven.exec(maven[0]);
+  assert.ok(run, `the proof runs Maven outside its exact positive bound: ${maven[0]}`);
+  const settings = commands.filter((command) => command !== maven[0] && command.includes("maven_seconds"));
+  assert.equal(settings.length, 1, "the proof sets maven_seconds once and reads it only in its Maven command");
+  const bound = /^maven_seconds=(\d+)$/.exec(settings[0]);
+  assert.ok(bound, `the proof sets maven_seconds other than to a number: ${settings[0]}`);
+  const probes = commands.filter((command) => command.startsWith("run_probe "));
+  assert.equal(probes.length, 2, "the proof runs two probes");
+  assert.ok(commands.indexOf(settings[0]) < commands.indexOf(probes[0]), "the proof sets maven_seconds before its first probe");
+  return { runs: probes.length, bound: durationSeconds(bound[1]), seconds: durationSeconds(bound[1]) + durationSeconds(run[1]) };
+}
+
+/** The proof step runs Maven only through the proof script, never directly. */
+function checkSpringProofStep(/** @type {{ run: string }} */ step) {
+  const commands = shellCommandsOf(step.run);
+  assert.deepEqual(commands.filter((command) => mavenCommand.test(command)), [], "the proof step runs Maven outside the proof script");
+  assert.ok(commands.includes("exec sh /proof/run.sh /src /evidence"), "the proof step runs the proof script");
+}
+
+/** The parity job's Spring test and proof steps. */
+function springSteps(/** @type {string} */ workflowText) {
+  const steps = parseYaml(workflowText).jobs.parity.steps;
+  const testStep = steps.find((/** @type {{ name?: string }} */ step) => step.name === "Test native Spring alert persistence and source boundaries");
+  const proofStep = steps.find((/** @type {{ id?: string }} */ step) => step.id === "spring_proof");
+  assert.ok(testStep && proofStep, "the parity job has the Spring test and proof steps");
+  return { testStep, proofStep };
+}
+
+test("Spring bounds each Maven run inside the image build or step that contains it", () => {
   const spring = join(repo, "bench/fullstack/apps/spring");
   const lines = instructionsOf(readFileSync(join(spring, "Dockerfile"), "utf8"));
   checkSpringInstall(lines);
@@ -393,7 +489,6 @@ test("Spring bounds its Maven runs inside every enclosing deadline", () => {
   assert.throws(() => checkSpringInstall(lines.map((line) => line.replace(" mvn -B dependency:go-offline", " mvn -B -q dependency:go-offline"))), /exact bounded Spring/);
   // Every Maven run in the image is bounded; the budget below is the sum of what the Dockerfile sets.
   const image = springMavenSeconds(lines);
-  assert.throws(() => springMavenSeconds(lines.map((line) => line.replace(/^RUN timeout \S+ \S+ \S+ (mvn -B package )/, "RUN $1"))), /without its bound/);
 
   const config = readFileSync(join(spring, ".mvn/maven.config"), "utf8").split("\n").filter(Boolean);
   assert.deepEqual(config, springRetries, "Spring's Maven retry budget changed");
@@ -409,37 +504,84 @@ test("Spring bounds its Maven runs inside every enclosing deadline", () => {
     assert.ok(image + 30 * 60 <= Number(build[1]) * Number(build[2]), `${runner}: Spring's bounded Maven runs leave under 30 minutes of its build`);
   }
 
-  // The transport proof: two Maven runs, each with its own budget, inside the step.
-  const workflow = parseYaml(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
-  const steps = workflow.jobs.parity.steps;
-  const proofStep = steps.find((/** @type {{ id?: string }} */ step) => step.id === "spring_proof");
-  const proof = readFileSync(join(spring, "transport-proof/run.sh"), "utf8");
-  const proofSeconds = Number(/^maven_seconds=(\d+)$/m.exec(proof)?.[1]);
-  const maven = proof.split("\n").filter((line) => /(^|\s)mvn\s/.test(line));
-  assert.equal(maven.length, 1, "the proof runs Maven in one place");
-  const proofGrace = /^timeout --verbose --kill-after=(\d+[smh]?) "\$maven_seconds" mvn -B /.exec(maven[0].trim());
-  assert.ok(proofGrace, "the proof's Maven run is bounded");
-  const proofRun = proofSeconds + durationSeconds(proofGrace[1]);
-  assert.equal(proof.split("\n").filter((line) => /^run_probe /.test(line)).length, 2);
-  assert.ok(request < proofSeconds, "one throttled request fits a proof run");
-  assert.ok(2 * proofRun + 2 * 60 <= proofStep["timeout-minutes"] * 60, "both proof runs and two minutes to report fit the step");
+  const { testStep, proofStep } = springSteps(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
+  // The native test step builds the test stage (both of the image's Maven runs) and runs the tests,
+  // so their bounds stop before the step's own, with a minute left for pulling images.
+  assert.ok(springTestStepSeconds(testStep, image) + 60 <= stepSeconds(testStep), "the native test step outlasts its build's and tests' Maven bounds");
+
+  // The transport proof: two Maven runs, each with its own bound, and two minutes to report, inside the step.
+  checkSpringProofStep(proofStep);
+  const proof = springProof(readFileSync(join(spring, "transport-proof/run.sh"), "utf8"));
+  assert.ok(request < proof.bound, "one throttled request fits a proof run");
+  assert.ok(proof.runs * proof.seconds + 2 * 60 <= stepSeconds(proofStep), "both proof runs and two minutes to report fit the step");
 
   // The proof starts from the native tests' Maven repository, so it does not fetch theirs again.
-  const testStep = steps.find((/** @type {{ name?: string }} */ step) => step.name === "Test native Spring alert persistence and source boundaries");
   const volume = "type=volume,source=cb-spring-m2,target=/root/.m2";
   assert.ok(testStep.run.includes(`--mount ${volume}`) && proofStep.run.includes(`--mount ${volume}`));
-  const tests = /cb-spring-tests timeout --verbose --kill-after=(\d+[smh]?) (\d+[smh]?) mvn -B test\n/.exec(testStep.run);
-  assert.ok(tests, "the native Spring tests have a bounded Maven run");
-  // That step builds the test stage (both of the image's Maven runs) and runs the tests under its own
-  // cap, so their bounds stop first, with a minute left for pulling images.
-  const testSeconds = durationSeconds(tests[2]) + durationSeconds(tests[1]);
-  assert.ok(image + testSeconds + 60 <= testStep["timeout-minutes"] * 60, "the native test step outlasts its build's and tests' Maven bounds");
+});
 
-  // The job: at worst Maven in both runners' image builds (catalog and marketplace, if each misses
-  // Docker's cache) runs to its bounds, and the native test and proof steps run to their caps, with
-  // 15 minutes of the job left for everything else (about five minutes when hosted).
-  const worst = 2 * image + testStep["timeout-minutes"] * 60 + proofStep["timeout-minutes"] * 60;
-  assert.ok(worst + 15 * 60 <= workflow.jobs.parity["timeout-minutes"] * 60, "Spring's bounded Maven runs fit the parity job");
+test("Spring's Maven bound checks refuse a zero, an unbounded or extra run, a bound in a comment and a reassigned bound", () => {
+  const spring = join(repo, "bench/fullstack/apps/spring");
+  const dockerfile = readFileSync(join(spring, "Dockerfile"), "utf8").replace(/\r/g, "");
+  const runsOf = (/** @type {string} */ text) => instructionsOf(text).filter((line) => line.startsWith("RUN ")).map((line) => line.slice(4));
+  const pkg = "RUN timeout --verbose --kill-after=10s 3m mvn -B package -DskipTests";
+  const offline = "RUN timeout --verbose --kill-after=10s 15m mvn -B dependency:go-offline";
+  springMavenRuns(runsOf(dockerfile));
+  for (const [from, to, refusal] of /** @type {[string, string, RegExp][]} */ ([
+    ["15m mvn -B dependency:go-offline", "0m mvn -B dependency:go-offline", /not positive/],
+    ["--kill-after=10s 3m", "--kill-after=0s 3m", /not positive/],
+    [pkg, `${pkg} && mvn -q -B package -DskipTests`, /outside one exact positive bound/],
+    [pkg, `${pkg}; mvn -q -B package -DskipTests`, /outside one exact positive bound/],
+    [pkg, "RUN mvn -q -B package -DskipTests", /outside one exact positive bound/],
+    [offline, `# ${offline}\nRUN mvn -B dependency:go-offline`, /outside one exact positive bound/],
+    [pkg, `${pkg}\n${pkg}`, /one for one/],
+    [`${pkg}\n`, "", /one for one/],
+    [pkg, "RUN timeout --verbose --kill-after=10s 3m mvn -B -o package -DskipTests", /one for one/],
+  ])) {
+    assert.ok(dockerfile.includes(from), `Spring's Dockerfile no longer has ${from}`);
+    assert.throws(() => springMavenRuns(runsOf(dockerfile.replace(from, to))), refusal, `accepted ${to}`);
+  }
+
+  const workflow = readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8").replace(/\r/g, "");
+  const image = springMavenSeconds(instructionsOf(dockerfile));
+  const tests = "            cb-spring-tests timeout --verbose --kill-after=10s 10m mvn -B test\n";
+  springTestStepSeconds(springSteps(workflow).testStep, image);
+  for (const [to, refusal] of /** @type {[string, RegExp][]} */ ([
+    [`            cb-spring-tests mvn -B test\n          # ${tests.trim()}\n`, /outside one exact positive bound/],
+    ["            cb-spring-tests timeout --verbose --kill-after=10s 0 mvn -B test\n", /not positive/],
+    ["            cb-spring-tests timeout --verbose --kill-after=0s 10m mvn -B test\n", /not positive/],
+    ["            cb-spring-tests timeout --verbose --kill-after=10s 10m mvn -B test # timeout 1m\n", /outside one exact positive bound/],
+    [`${tests}          docker run --rm cb-spring-tests mvn -B test\n`, /in one command/],
+  ])) {
+    assert.ok(workflow.includes(tests), "the native Spring test command moved");
+    assert.throws(() => springTestStepSeconds(springSteps(workflow.replace(tests, to)).testStep, image), refusal, `accepted ${to}`);
+  }
+  const proofExec = "                exec sh /proof/run.sh /src /evidence\n";
+  checkSpringProofStep(springSteps(workflow).proofStep);
+  assert.ok(workflow.includes(proofExec), "the proof step's script call moved");
+  assert.throws(() => checkSpringProofStep(springSteps(workflow.replace(proofExec, `                mvn -B verify\n${proofExec}`)).proofStep),
+    /outside the proof script/);
+
+  const script = readFileSync(join(spring, "transport-proof/run.sh"), "utf8").replace(/\r/g, "");
+  const proofMaven = '    timeout --verbose --kill-after=10s "$maven_seconds" mvn -B -f "$project/pom.xml" "-Dtest=$suite" -DfailIfNoTests=true test "$@" || status=1\n';
+  const assignment = "maven_seconds=270\n";
+  assert.deepEqual(springProof(script), { runs: 2, bound: 270, seconds: 280 });
+  for (const [from, to, refusal] of /** @type {[string, string, RegExp][]} */ ([
+    [assignment, "maven_seconds=0\n", /not positive/],
+    [proofMaven, proofMaven.replace("--kill-after=10s", "--kill-after=0s"), /not positive/],
+    [assignment, `${assignment}maven_seconds=5000\n`, /sets maven_seconds once/],
+    [assignment, `${assignment}${assignment}`, /sets maven_seconds once/],
+    [assignment, `${assignment}export maven_seconds=5000\n`, /sets maven_seconds once/],
+    [proofMaven, `    maven_seconds=5000\n${proofMaven}`, /sets maven_seconds once/],
+    [assignment, "maven_seconds=$((270 * 20))\n", /other than to a number/],
+    [proofMaven, `    # ${proofMaven.trim()}\n    mvn -B -f "$project/pom.xml" "-Dtest=$suite" -DfailIfNoTests=true test "$@" || status=1\n`, /outside its exact positive bound/],
+    [proofMaven, `    # ${proofMaven.trim()}\n    mvn \\\n      -B -f "$project/pom.xml" "-Dtest=$suite" -DfailIfNoTests=true test "$@" || status=1\n`, /outside its exact positive bound/],
+    [proofMaven, proofMaven.replace("|| status=1", "|| status=1 # 270 s"), /outside its exact positive bound/],
+    [proofMaven, `${proofMaven}    mvn -B -f "$project/pom.xml" dependency:tree\n`, /in one command/],
+  ])) {
+    assert.ok(script.includes(from), `the proof no longer has ${from.trim()}`);
+    assert.throws(() => springProof(script.replace(from, to)), refusal, `accepted ${to.trim()}`);
+  }
 });
 
 test("only exact production pruning after a build is packaging, never a recipe step", () => {
@@ -473,6 +615,8 @@ test("card-market's recipe fetches and builds locked, as its image does", () => 
  * @param {ReturnType<typeof stagesOf>} stages
  */
 function assertRecipeRuns(name, r, stages) {
+  // Spring's Maven commands are the recipe's one for one, each under its own bound (#1763).
+  if (name === "spring") springMavenRuns(stages.flatMap((s) => s.run));
   // Packaging after the build (copying the output aside) and the shared cache's touch, which this
   // benchmark has no use for; every other command of the deps and build stages is the recipe's.
   const packaging = [/^mkdir -p \/out$/, /^cp (-r )?\S+ \/out\/\S+$/, /^chmod 644 /, /^find \. -name target -prune -o -type f -exec touch \{\} \+$/];
@@ -490,17 +634,23 @@ function assertRecipeRuns(name, r, stages) {
 }
 
 test("Spring's image runs its recipe's Maven goals and arguments, past only the bound and -q", () => {
-  const text = readFileSync(join(repo, dockerfileOf("spring")), "utf8");
+  const text = readFileSync(join(repo, dockerfileOf("spring")), "utf8").replace(/\r/g, "");
   assertRecipeRuns("spring", recipes.spring, stagesOf("spring", text));
-  for (const [from, to] of [
-    ["mvn -B dependency:go-offline", "mvn -B dependency:resolve -DexcludeTransitive=true"],
-    ["mvn -B dependency:go-offline", "mvn -B dependency:go-offline -DexcludeTransitive=true"],
-    ["mvn -B package -DskipTests", "mvn -B package"],
-    ["mvn -B package -DskipTests", "mvn -B -o package -DskipTests"],
-    ["timeout --verbose --kill-after=10s 15m mvn -B", "timeout 15m mvn -B"],
-  ]) {
+  const pkg = "RUN timeout --verbose --kill-after=10s 3m mvn -B package -DskipTests";
+  for (const [from, to, refusal] of /** @type {[string, string, RegExp][]} */ ([
+    ["mvn -B dependency:go-offline", "mvn -B dependency:resolve -DexcludeTransitive=true", /its Dockerfile (runs|does not run)/],
+    ["mvn -B dependency:go-offline", "mvn -B dependency:go-offline -DexcludeTransitive=true", /its Dockerfile (runs|does not run)/],
+    ["mvn -B package -DskipTests", "mvn -B package", /its Dockerfile (runs|does not run)/],
+    ["mvn -B package -DskipTests", "mvn -B -o package -DskipTests", /its Dockerfile (runs|does not run)/],
+    ["timeout --verbose --kill-after=10s 15m mvn -B", "timeout 15m mvn -B", /its Dockerfile (runs|does not run)/],
+    ["15m mvn -B", "0m mvn -B", /not positive/],
+    ["--kill-after=10s 3m", "--kill-after=0s 3m", /not positive/],
+    [pkg, `${pkg} && mvn -q -B package -DskipTests`, /its Dockerfile runs Maven outside one exact positive bound/],
+    [pkg, `${pkg}\n${pkg}`, /its Dockerfile runs Maven commands other than its recipe's/],
+    [`${pkg}\n`, "", /its Dockerfile runs Maven commands other than its recipe's/],
+  ])) {
     assert.ok(text.includes(from), `Spring's Dockerfile no longer runs ${from}`);
-    assert.throws(() => assertRecipeRuns("spring", recipes.spring, stagesOf("spring", text.replace(from, to))), /its Dockerfile (runs|does not run)/, `accepted ${to}`);
+    assert.throws(() => assertRecipeRuns("spring", recipes.spring, stagesOf("spring", text.replace(from, to))), refusal, `accepted ${to}`);
   }
 });
 

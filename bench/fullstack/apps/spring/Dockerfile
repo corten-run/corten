@@ -4,7 +4,8 @@ COPY pom.xml ./
 # .mvn/maven.config retries each 429 or 503 from Maven Central a bounded number of times (#1763).
 # Each Maven run below also has a total bound, inside the image build's hour, and logs each
 # transfer so a stopped build names the one in flight. It changes how dependencies are fetched,
-# never which; package fetches nothing once go-offline has run.
+# never which. package stays online: two cold local builds saw it fetch nothing after go-offline,
+# in 41 and 59 s, so its 3-minute bound is provisional; its margin on a hosted runner is unmeasured.
 COPY .mvn ./.mvn
 RUN timeout --verbose --kill-after=10s 15m mvn -B dependency:go-offline
 COPY src ./src
