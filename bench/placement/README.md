@@ -245,8 +245,9 @@ counters at 100% and the refusal of one under it, the answers of every placement
 unpadded binary, a masked header that does differ between two starts, and the probe's source
 and each build's environment reaching the results.
 
-One dry run of the kit is kept, read for nothing, under the tag `evidence/placement-kit`. Its
-results were written by the kit at `88c4e26cd`, before a run's results held the list of files
-the plan names by path: the `report.mjs` of that commit reads them, and this one refuses them,
-as it refuses any results without that list. No results written by the kit as it is now are
-kept, and what changed since that dry run has not run on a host with `perf` and `wrk`.
+Two dry runs of the kit are kept, each read for nothing. The results under the tag
+`evidence/placement-kit-2` were written by the kit at `2839ccda6`, on a host with `perf` and
+`wrk`, and `node report.mjs` reads them. Those under `evidence/placement-kit` were written by
+the kit at `88c4e26cd`, before a run's results held the list of files the plan names by path:
+the `report.mjs` of that commit reads them, and this one refuses them, as it refuses any
+results without that list.

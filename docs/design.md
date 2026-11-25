@@ -10240,7 +10240,12 @@ rules something out.
     6.12.117, rustc 1.100.0 with LLD 23.1.5): `e2d0c464e` against itself through a pilot part
     and a gated part of 6 placements each, and that commit against head `498291116` linked with
     second pads and checked, nothing started, its plans and results at `16406ee3e` (tag
-    `evidence/placement-kit`).
+    `evidence/placement-kit`); 2026-11-25 (UTC), `bench/placement` as it is at `2839ccda6` run
+    again as a dry run, read for nothing, on a host of that model and kernel: `e2d0c464e`
+    against itself through a pilot part and a gated part of 6 placements each, the selftest's
+    seven cases, and a 30-placement A/A declared as a test of the kit, from which `plan.mjs`
+    sized a gated part's K with nothing of that part built, its plans and results at
+    `dcdab6d92` (tag `evidence/placement-kit-2`).
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
