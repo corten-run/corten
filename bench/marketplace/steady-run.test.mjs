@@ -113,8 +113,14 @@ function fakeDocker({ exportFor, withhold = () => false, failRemove = () => fals
       case "ps": { const f = filterOf(args); return [...containers.values()].filter((c) => (f.startsWith("id=") ? c.id === f.slice(3) : matches(c.labels, f))).map((c) => c.id).join("\n"); }
       case "start": {
         // A marker start moves the clock on a millisecond, as Docker's own calls take time: a real
-        // second start is strictly after the load's FinishedAt, which readEvents requires.
-        if (rest[0] !== "-a") { const c = get(rest[0]); if (c.kind === "marker") state.offset += 1; c.state = { Running: c.kind !== "marker", OOMKilled: false, ExitCode: 0, StartedAt: iso() }; state.emit(c.id, "start"); if (c.kind === "marker") state.emit(c.id, "die"); return c.id; }
+        // second start is strictly after the load's FinishedAt, and its exit strictly after that
+        // start, which readEvents requires.
+        if (rest[0] !== "-a") {
+          const c = get(rest[0]); if (c.kind === "marker") state.offset += 1;
+          c.state = { Running: c.kind !== "marker", OOMKilled: false, ExitCode: 0, StartedAt: iso() }; state.emit(c.id, "start");
+          if (c.kind === "marker") { state.offset += 1; state.emit(c.id, "die"); }
+          return c.id;
+        }
         const c = get(rest[1]);
         if (c.kind === "host") { c.state = { Running: false, OOMKilled: false, ExitCode: 0, StartedAt: iso() }; return "6.8.0-test\nmodel name\t: Synthetic CPU\n0-7"; }
         if (c.kind === "version") { assert.deepEqual(c.args.slice(-2), [k6ImageId, "version"]); c.state = { Running: false, OOMKilled: false, ExitCode: 0, StartedAt: iso() }; return "k6 v2.4.0 (commit/0000000, go1.24, linux/amd64)"; }
@@ -357,9 +363,11 @@ test("a load container that cannot be removed still has its app removed, and no 
  * `drop(row, index)` withholds it; it closes when signalled unless `holds`. A row `late(row)`
  * picks is held back: once the client has written the marker's second start, it writes nothing for
  * `lateMs`, then the held rows and every row published meanwhile, in that order, so an event
- * from the load reaches the reader in a later chunk than that start.
+ * from the load reaches the reader in a later chunk than that start. `rewrite(row)` gives the rows
+ * written in place of a published one (by default the row itself), so a test can copy, restamp or
+ * drop one; the rows written for the marker's second start all go out before that pause.
  */
-function eventsClient(fake, { drop = () => false, holds = false, late = () => false, lateMs = 30 } = {}) {
+function eventsClient(fake, { drop = () => false, holds = false, late = () => false, lateMs = 30, rewrite = (row) => [row] } = {}) {
   const spawned = [];
   const spawn = (binary, args) => {
     const child = new EventEmitter();
@@ -374,11 +382,13 @@ function eventsClient(fake, { drop = () => false, holds = false, late = () => fa
     const held = [], queued = [];
     const write = (row) => { if (!child.ended) child.stdout.write(`${row}\n`); };
     fake.listeners.push((id, action, nanos) => {
-      const row = `${id}|${action}|${nanos}`;
-      if (child.ended || !ids.includes(id) || drop(row, index++)) return;
-      if (late(row)) { held.push(row); return; }
-      if (pausing) { queued.push(row); return; }
-      write(row);
+      const published = `${id}|${action}|${nanos}`;
+      if (child.ended || !ids.includes(id) || drop(published, index++)) return;
+      for (const row of rewrite(published)) {
+        if (late(row)) held.push(row);
+        else if (pausing) queued.push(row);
+        else write(row);
+      }
       // The marker is the second ID the client filters on.
       if (id === ids[1] && action === "start" && ++starts === 2 && held.length) {
         pausing = true;
@@ -602,10 +612,10 @@ test("an adapter or upstream image ID that is not a canonical Docker ID fails it
 test("a soak reads restarts from a live event stream only when it shows it covered the load; a clean-looking stream without that is not a no", async (t) => {
   const folder = folderOf(t);
   const options = parseSteadyArgs(["soak", "t12", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps);
-  const soak = async (name, { drop, late, spawnEvents, ...extra } = {}) => {
+  const soak = async (name, { drop, late, rewrite, spawnEvents, ...extra } = {}) => {
     let tick = 0;
     const fake = fakeDocker({ exportFor: () => soakExport(), clockMs: 1_800_000, loadMs: 50, ...extra });
-    const client = eventsClient(fake, { drop, late });
+    const client = eventsClient(fake, { drop, late, rewrite });
     const stats = statsClient({ delayMs: 10, rows: (args) => Array.from({ length: 180 }, () => ({ ID: args.at(-1), Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" })) });
     const s = await run(fake, options, folder(name), { spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ }, spawnEvents: spawnEvents ?? client.spawn });
     assert.equal(s.complete, true, JSON.stringify([s.failures, s.cells]));
@@ -652,7 +662,31 @@ test("a soak reads restarts from a live event stream only when it shows it cover
   assert.match(errorsOf(folder("late")), /docker events: Error: docker events did not show the marker's start 1 within 200 ms/);
   assert.match(errorsOf(folder("no-end")), /docker events: Error: docker events did not show the marker's start 2 within 200 ms/);
   // Both marker starts but no row after the second: the stream is not read as clean.
-  assert.match(errorsOf(folder("no-fence")), /docker events: Error: docker events did not show a marker row after its second start within 200 ms/);
+  assert.match(errorsOf(folder("no-fence")), /docker events: Error: docker events did not show the marker's exit after its second start within 200 ms/);
+  // The fence is the second start's own exit, stamped later than that start. A kill during the load,
+  // delivered in a later chunk than the marker's second start and the row right after it, where that
+  // row is a copy of the second start (its real exit comes after the kill) or a die stamped after the
+  // load finished but before that start (with no real exit): neither is the fence, so the runner does
+  // not stop there and the reader does not take it for one. Taking either for the fence stopped the
+  // stream before the kill and read the soak as clean; it reads not established.
+  // Only the marker starts: the app is started before the stream runs.
+  const secondStart = () => { let starts = 0; return (row) => row.split("|")[1] === "start" && ++starts === 2; };
+  const copiedStart = () => { const second = secondStart(); return (row) => (second(row) ? [row, row] : [row]); };
+  const earlyDie = () => {
+    const second = secondStart();
+    let after = false;
+    return (row) => {
+      const [id, action, nanos] = row.split("|");
+      if (second(row)) { after = true; return [row, `${id}|die|${BigInt(nanos) - 1n}`]; }
+      return after && action === "die" ? [] : [row];
+    };
+  };
+  for (const [name, rewrite] of [["copied-start", copiedStart()], ["early-die", earlyDie()]]) {
+    const { s, r } = await soak(name, { duringLoad: inLoad, late: (row) => row.includes("|kill|"), rewrite });
+    assert.deepEqual([r.eventStream, r.events, r.restarted], ["unavailable", [], null], name);
+    assert.match(steadyReport(s), /\| not established: the event stream was unavailable or did not cover the load, and nothing else showed a restart \|$/m, name);
+    assert.match(errorsOf(folder(name)), /docker events: Error: docker events showed a marker row after its second start that is not that start's exit stamped later than it/, name);
+  }
   // A row that is not an action and a time makes the whole stream unavailable, and is not saved.
   const odd = await soak("malformed", { duringLoad: (state) => state.emit(state.app().id, "Leaked Canary") });
   assert.deepEqual([odd.r.eventStream, odd.r.restarted], ["unavailable", null]);

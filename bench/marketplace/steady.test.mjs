@@ -222,6 +222,12 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
   assert.match(text, /This pass sets no timed warmup: a timed warmup is set only by a separate reviewed change from a saved pass that is like-for-like with the rounds it applies to .* It ran the timed warmup's 32 users\./);
   assert.match(text, /Tolerance reading marketplace-tolerance\/v4: a screening reading of throughput, not a certificate of steady state\./);
   assert.match(text, /has no reading\./);
+  // Its API-source cells are listed, and the report says they are not compared with a timed round,
+  // as report.mjs --convergence does; a pass without the API source does not say it.
+  assert.match(text, /^An API-source cell's reading is listed, but it is not compared with a timed round \(report\.mjs --convergence lists it as not compared\): .* nothing shows that the cell's requests reached the upstream\.$/m);
+  const fixtureOnly = structuredClone(s); fixtureOnly.options.sources = ["fixture"]; fixtureOnly.cells = fixtureOnly.cells.filter((c) => c.source === "fixture");
+  fixtureOnly.cleanup.created = fixtureOnly.cleanup.removed = 4 + fixtureOnly.cells.length * 3;
+  assert.doesNotMatch(convergenceReport(fixtureOnly), /API-source/);
   assert.doesNotMatch(text, /Supported timed warmup|flattened|reaches/);
   const explore = structuredClone(s); explore.options.vus = 64;
   assert.match(convergenceReport(explore), /It ran 64 users, not the timed warmup's 32, so it is exploration and is not like-for-like with any timed round\./);
@@ -254,7 +260,7 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.cleanup.failures = 1; }, /cleanup failed/],
     [(v) => { v.cleanup.complete = false; }, /cleanup is not confirmed complete/],
     [(v) => { v.cleanup.remaining.containers = ["a".repeat(64)]; }, /cleanup is not confirmed complete/],
-    [(v) => { v.cleanup.unacknowledged = [{ name: "x-k6", label: "l", outcome: "unconfirmed" }]; }, /cleanup is not confirmed complete/],
+    [(v) => { v.cleanup.unacknowledged = [{ name: "x-k6", label: "l", outcome: "unconfirmed" }]; }, /create Docker did not acknowledge/],
     [(v) => { delete v.cleanup; }, /cleanup is not confirmed complete/],
     // Complete, with counts that do not show every acknowledged create removed by its ID: none or
     // one fewer removed, one counted as recovered instead, or more removed than were created.
@@ -265,8 +271,15 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     // Six created, seven removed, none recovered, and one unacknowledged create marked removed: an
     // unacknowledged create is accounted only by a recovered resource.
     [(v) => { Object.assign(v.cleanup, { created: 6, removed: 7, recovered: 0, unacknowledged: [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }] }); }, /acknowledged creates were not each confirmed removed/],
-    [(v) => { v.cleanup.unacknowledged = [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }]; }, /^Error: a pass whose recovered resources are not its unacknowledged creates is not evidence$/],
-    [(v) => { Object.assign(v.cleanup, { created: 28, removed: 28, recovered: 1 }); }, /recovered resources are not its unacknowledged creates/],
+    // A complete pass has no create Docker did not acknowledge and recovered nothing by its label: the
+    // runner ends the pass at a cell whose create was not acknowledged, even when teardown recovers
+    // it. Every expected create acknowledged plus two recovered attempts, one recovered attempt with
+    // its record, a record without a recovery, or a recovery without a record: each is refused.
+    [(v) => { Object.assign(v.cleanup, { recovered: 2, unacknowledged: [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }, { name: "x-k6", label: "a.b=x-2", outcome: "removed" }] }); },
+      /^Error: a pass with a create Docker did not acknowledge, or a resource recovered by its label, is not evidence$/],
+    [(v) => { Object.assign(v.cleanup, { recovered: 1, unacknowledged: [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }] }); }, /create Docker did not acknowledge, or a resource recovered by its label/],
+    [(v) => { v.cleanup.unacknowledged = [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }]; }, /create Docker did not acknowledge, or a resource recovered by its label/],
+    [(v) => { Object.assign(v.cleanup, { created: 28, removed: 28, recovered: 1 }); }, /create Docker did not acknowledge, or a resource recovered by its label/],
     // Counts that agree with each other but not with the cells: measured cells with no create at all,
     // or one fewer or more than the eight measured cells and the pass made.
     [(v) => { Object.assign(v.cleanup, { created: 0, removed: 0, recovered: 0 }); }, /^Error: a pass's creates are not the ones its cells imply$/],
@@ -281,12 +294,10 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.cells[0].latencyMaxMs = null; }, /aggregate latency maximum/],
     [(v) => { v.schema = "marketplace-convergence/v3"; }, /not a marketplace-convergence\/v4 result/],
   ]) { const v = structuredClone(s); mutate(v); assert.throws(() => validateConvergence(v), pattern); }
-  // Every acknowledged create removed (four for the pass and three for each of its eight cells), and
-  // an unacknowledged one recovered, reads.
-  assert.deepEqual([s.cleanup.created, s.cleanup.removed, s.cleanup.recovered], [28, 28, 0]);
-  for (const cleanup of [{ created: 28, removed: 28, recovered: 0 }, { created: 28, removed: 28, recovered: 1, unacknowledged: [{ name: "x-k6", label: "a.b=x-1", outcome: "removed" }] }]) {
-    const v = structuredClone(s); Object.assign(v.cleanup, cleanup); validateConvergence(v);
-  }
+  // Every acknowledged create removed (four for the pass and three for each of its eight cells), with
+  // none unacknowledged and nothing recovered, reads.
+  assert.deepEqual([s.cleanup.created, s.cleanup.removed, s.cleanup.recovered, s.cleanup.unacknowledged], [28, 28, 0, []]);
+  validateConvergence(structuredClone(s));
   // A complete pass whose cells failed stays reportable: each such cell reads "no reading", with the
   // text of its failure code.
   const failed = structuredClone(s);
@@ -810,10 +821,23 @@ test("a soak's two marker starts must be distinct and bracket the load: one at o
   assert.deepEqual(readEvents(start(0) + start(1801) + row(marker, "die", 1801.1), ids), []);
   // Without the fence, a marker row after the second start stamped after the load finished, the
   // stream does not show the client delivered what came before that start: not read.
-  const unfenced = /^AssertionError \[ERR_ASSERTION\]: the event stream shows no marker row after its second start and after the load finished, so it does not show the client delivered what came before that start$/;
+  const unfenced = /^AssertionError \[ERR_ASSERTION\]: the event stream's next marker row after its second start is not that start's exit stamped later than it, so it does not show the client delivered what came before that start$/;
   assert.throws(() => readEvents(start(-1) + start(1801), ids), unfenced);
   assert.throws(() => readEvents(start(-1) + start(1801) + row(app, "kill", 900), ids), unfenced);
   assert.throws(() => readEvents(start(-1) + start(1801) + row(marker, "die", 1799), ids), unfenced);
+  // The fence is the second start's own exit, its die stamped strictly later than that start: a copy
+  // of the second start is not it, with or without the real exit after it, nor is a die stamped after
+  // the load finished but at or before the second start. Each would otherwise read a kill-free stream
+  // as clean; here a kill during the load, delivered after the second start, is what is at stake.
+  const kill = row(app, "kill", 900);
+  for (const [name, text] of [["copy of the second start", start(-1) + start(1801) + start(1801) + kill],
+    ["copy of the second start, then its exit", start(-1) + start(1801) + start(1801) + kill + row(marker, "die", 1801.1)],
+    ["die after the load, before the second start", start(-1) + start(1801) + row(marker, "die", 1800.5) + kill],
+    ["die at the second start", start(-1) + start(1801) + row(marker, "die", 1801) + kill]]) {
+    assert.throws(() => readEvents(text, ids), unfenced, name);
+  }
+  // The same kill before the real exit is the load's.
+  assert.deepEqual(readEvents(start(-1) + start(1801) + kill + row(marker, "die", 1801.1), ids), [{ action: "kill", atSeconds: 900 }]);
   const before = /^AssertionError \[ERR_ASSERTION\]: the marker's first start in the event stream is not at or before the load's start, so it does not show the stream was listening when the load began$/;
   const after = /^AssertionError \[ERR_ASSERTION\]: the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load$/;
   // Two identical pre-load rows and then a die during the load: two starts, but no second witness,
@@ -865,7 +889,10 @@ test("a soak keeps an app event stamped inside the load wherever the stream put 
   assert.deepEqual(readEvents(row(marker, "start", 500n) + row(marker, "start", 1801n * s) + fence, startPrecise), []);
   // The fence is compared to the nanosecond too: a marker row 1 ns before the precise FinishedAt,
   // though after the second start in the stream, is not it.
-  assert.throws(() => readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 900_001n) + row(marker, "die", 1800n * s + 899_999n), precise), /shows no marker row after its second start and after the load finished/);
+  assert.throws(() => readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 900_001n) + row(marker, "die", 1800n * s + 899_999n), precise), /next marker row after its second start is not that start's exit stamped later than it/);
+  // And to the second start's nanosecond: a die stamped at it is not later; 1 ns after it is.
+  assert.throws(() => readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 900_001n) + row(marker, "die", 1800n * s + 900_001n), precise), /not that start's exit stamped later than it/);
+  assert.deepEqual(readEvents(row(marker, "start", -s) + row(marker, "start", 1800n * s + 900_001n) + row(marker, "die", 1800n * s + 900_002n), precise), []);
 });
 
 test("a saved pass's own text never reaches an error or a report: every field is refused unless it validates", () => {
@@ -911,6 +938,34 @@ test("a saved pass's own text never reaches an error or a report: every field is
     }
   }
   assert.ok(checked > 400, `${checked} mutations`);
+});
+
+test("a saved pass names only adapters and groups this checkout has, and never prints an invented one", () => {
+  // A syntactically valid name, so only the inventory check can refuse it.
+  const invented = "leaked-adapter";
+  assert.ok(!apps.includes(invented));
+  const rename = (v) => {
+    v.options.apps = v.options.apps.map((a) => (a === "aspnet" ? invented : a));
+    v.images = Object.fromEntries(Object.entries(v.images).map(([a, id]) => [a === "aspnet" ? invented : a, id]));
+    for (const c of v.cells) if (c.app === "aspnet") c.app = invented;
+  };
+  const s = convergencePass();
+  for (const [what, mutate, pattern] of [
+    ["an adapter", rename, /^the pass's options: adapters \(each one this checkout's adapter inventory has\)$/],
+    ["a group", (v) => { v.options.group = "leaked-group"; }, /^the pass's options: kind, name, build or group \(a group this checkout has\)$/],
+    ["an adapter selected for admission", (v) => { v.admission = { round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: null, selected: ["corten", "aspnet", invented], admitted: ["corten", "aspnet"] }; },
+      /^the pass's admission$/],
+  ]) {
+    const v = structuredClone(s); mutate(v);
+    for (const read of [validateConvergence, steadyReport, (x) => convergenceLines(likeRound(), ["corten", "aspnet"], x)]) {
+      assert.throws(() => read(v), (error) => { assert.match(error.message, pattern, what); assert.ok(!error.message.includes("leaked"), what); return true; }, what);
+    }
+  }
+  // The same pass with the checkout's own names, a group it has, and an admission of them, reads.
+  const admitted = structuredClone(s);
+  admitted.admission = { round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: null, selected: ["corten", "aspnet"], admitted: ["corten", "aspnet"] };
+  validateConvergence(admitted);
+  assert.match(steadyReport(admitted), /^Adapters: those timed round w2 .* admitted, of corten, aspnet\.$/m);
 });
 
 test("saved memory medians and growth must be numbers before the report does any arithmetic", () => {

@@ -139,9 +139,11 @@ export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs 
  * A soak's live Docker event stream for its app and a marker container, by their immutable IDs
  * (steady-contract.mjs readEvents says why a live stream and what the marker shows). It runs from
  * before the load to after it. marker(n) waits at most markerMs for the stream to show the marker's
- * nth start, and fails at once if the stream has ended; fence() waits the same way for a marker row
- * after its second start (its exit), so rows the client delivers after that start are read before
- * the stream is stopped (readEvents requires the fence). stop() settles within boundMs whatever the
+ * nth start, and fails at once if the stream has ended; fence() waits the same way for the marker's
+ * next row after its second start, and resolves only when that row is the start's own exit (its die)
+ * stamped later than the start, so rows the client delivers after that start are read before the
+ * stream is stopped. Any other row there (a copy of the start, a die stamped at or before it) fails
+ * it at once, as readEvents refuses it. stop() settles within boundMs whatever the
  * client does, as memorySampler's does, keeps what the stream said in `file` (and its stderr in
  * `file`.stderr), and returns that text, or throws if the client could not run, ended before it was
  * stopped, wrote to stderr or held its pipes. A second stop() returns the first one's result.
@@ -151,14 +153,21 @@ export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2
   const child = run("docker", ["events", "--filter", "type=container", "--filter", `container=${app}`, "--filter", `container=${marker}`, "--format", eventFormat],
     { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   const errors = [], waiting = [];
-  let text = "", buffer = "", stderr = "", starts = 0, fenced = false, stopping = false, closed = false, settled;
+  // second: the second start's nanoseconds (null when its time is not one); fenced: null until the
+  // marker's next row after that start decides it, then whether it was that start's later exit.
+  let text = "", buffer = "", stderr = "", starts = 0, second = null, fenced = null, stopping = false, closed = false, settled;
   const release = (message) => { for (const w of waiting.splice(0)) { clearTimeout(w.timer); w.reject(new Error(message)); } };
   child.stdout.on("data", (chunk) => {
     const data = chunk.toString();
     text += data; buffer += data;
     for (let end; (end = buffer.indexOf("\n")) >= 0;) {
       const line = buffer.slice(0, end).replace(/\r$/, "");
-      if (line.startsWith(`${marker}|`)) { if (starts >= 2) fenced = true; else if (line.startsWith(`${marker}|start|`)) starts++; }
+      if (line.startsWith(`${marker}|`)) {
+        const rest = line.slice(marker.length + 1), cut = rest.lastIndexOf("|"), action = cut < 0 ? rest : rest.slice(0, cut), nanos = cut < 0 ? "" : rest.slice(cut + 1);
+        const at = /^[1-9]\d{0,19}$/.test(nanos) ? BigInt(nanos) : null;
+        if (starts >= 2) fenced ??= action === "die" && at !== null && second !== null && at > second;
+        else if (action === "start" && ++starts === 2) second = at;
+      }
       buffer = buffer.slice(end + 1);
     }
     for (const w of [...waiting]) if (w.ready()) { clearTimeout(w.timer); waiting.splice(waiting.indexOf(w), 1); w.resolve(); }
@@ -182,7 +191,10 @@ export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2
   };
   return {
     marker: (n) => wait(() => starts >= n, `the marker's start ${n}`),
-    fence: () => wait(() => fenced, "a marker row after its second start"),
+    fence: async () => {
+      await wait(() => fenced !== null, "the marker's exit after its second start");
+      if (!fenced) throw new Error("docker events showed a marker row after its second start that is not that start's exit stamped later than it");
+    },
     stop() {
       return settled ??= (async () => {
         stopping = true;

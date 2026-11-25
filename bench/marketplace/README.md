@@ -189,10 +189,12 @@ owner label is checked; teardown also removes, by ID, anything else carrying the
 A create whose ID Docker did not return is looked for by its own label for a bounded time; if
 nothing turns up its cleanup is reported unconfirmed and the pass is incomplete. Cleanup is complete
 only when every create Docker acknowledged is among the resources confirmed removed by its ID. A
-saved pass is refused, whatever its `complete` flag says, unless its removed count equals its
-acknowledged creates and its recovered count equals its unacknowledged creates (an acknowledged
-create is removed by its ID; one Docker did not acknowledge can only be found by its label and
-recovered), and unless its acknowledged creates are the ones its cells imply: four for the pass
+create Docker did not acknowledge ends the pass at the step that made it, even when teardown finds
+it by its label and removes it, so the pass is incomplete; the record of it stays in `cleanup.json`
+and in that summary, for diagnosis. A saved pass is refused, whatever its `complete` flag says,
+unless its removed count equals its acknowledged creates (each is removed by its ID), it has no
+unacknowledged create and recovered nothing by its label, and its acknowledged creates are the
+ones its cells imply: four for the pass
 (host probe, k6 version probe, network, upstream) and, for each cell, three (app, cold-start
 sidecar, k6) or a soak's four (with the event marker), all of them for a measured cell and at most
 that many for a failed one (`passCreates` and `cellCreates`). Each cell's
@@ -264,7 +266,9 @@ value from Docker, the host or k6 that matched a strict pattern: 64-hex image ID
 version `N.N.N`, a kernel release, an online CPU set, a Docker server version and a CPU model of
 letters, digits, single spaces and `( ) . , @ / + -` up to 96 characters. A value that does not
 match is saved as null (not recorded), or, where the pass depends on it (an image ID, the k6
-version), fails that step. A failure is saved only as a code (`failureCodes`), and how a pass
+version), fails that step. Adapter names (the pass's adapters and those it selected for
+admission) must be ones this checkout's adapter inventory has, and a group one of its groups; the
+readers refuse any other name without quoting it. A failure is saved only as a code (`failureCodes`), and how a pass
 started each app as a code (`startups`); the readers refuse any other field, value or code, with a
 fixed message that never quotes the file, and print a code only as its text. Docker's, the host's
 and k6's own output, and each failure's message, stay in the raw files beside the summary
@@ -298,9 +302,12 @@ happened; the pass does not use one. Instead it starts the marker once the strea
 load, and again after the app's last inspect: the stream delivers events in the order the daemon
 publishes them, so a stream that shows both marker starts was listening before the load began and
 had delivered every app event published before it ended. The client hands rows over in chunks,
-so the runner does not stop it at the second start's row: it reads on until the fence, a later
-marker row (the marker's exit) stamped after the load's FinishedAt, and a stream without the fence
-is unavailable. An app event the client delivers after the second start and before the fence is
+so the runner does not stop it at the second start's row: it reads on until the fence, the
+marker's next row after that start, which must be that start's own exit (its `die`) stamped
+strictly later than the start, and so after the load's FinishedAt. A stream without the fence is
+unavailable, and so is one whose next marker row there is anything else (a copy of the second
+start, or a `die` stamped after the load finished but at or before that start): the runner does not
+stop at such a row, and the reader does not take it for the fence. An app event the client delivers after the second start and before the fence is
 read like any other. This still relies on the client delivering rows in the daemon's order up to
 the fence. Two start rows alone do not show that (two
 copies of the first would read as both), so the first two marker starts are witnesses that must
@@ -313,7 +320,7 @@ load's whenever it is stamped at or before FinishedAt, even if the stream delive
 second marker start (an OOM kill stamped 15 s into the load reads as a restart, never clean); only
 an app event both after the second marker start and stamped after FinishedAt is teardown. The stream is saved
 as one of three states: unavailable (the stream failed, did not show both marker starts and the
-fence within its bound, had witnesses that do not bracket the load, or had a row that was not the app's or the
+fence within its bound, showed another marker row where the fence belongs, had witnesses that do not bracket the load, or had a row that was not the app's or the
 marker's ID, an action and a nanosecond time, so none of its rows is used), clean (read, covering the load, with no start, restart, die, kill or OOM event) or seen
 (with those events). "Restarted" is yes on any sign of a restart, no only when the stream was
 clean and nothing else showed one, and not established when the stream was unavailable and
@@ -354,7 +361,8 @@ refused.
 No report concludes that a timed warmup is long enough. A timed warmup is set only by a separate
 reviewed change to the droplet contract, made from a saved pass that is like-for-like with the
 rounds it will time. `steady-report.mjs` prints each cell's reading and that the pass sets no
-warmup. `report.mjs <summary.json> --convergence <pass>/summary.json` first states which of the round's
+warmup, and, for a pass with the API source, that an API-source cell's reading is not compared with
+a timed round (below). `report.mjs <summary.json> --convergence <pass>/summary.json` first states which of the round's
 measured adapter, source and target cells the pass has a reading for, which failed, which the
 tolerance reading itself gave none for (a zero last-60 s median: listed with that explanation, not
 counted as coverage), which are API-source cells it does not compare and which it lacks, then

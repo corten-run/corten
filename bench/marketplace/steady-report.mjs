@@ -24,6 +24,7 @@ export function convergenceReport(s) {
     `One ${o.vus}-user closed loop of ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s windows.`,
     `Tolerance reading ${flattenRule.name}: ${ruleText}`,
     "A cell with any failed request, in a window or in k6's aggregate count (which includes the graceful stop), has no reading.",
+    ...(o.sources.includes("api") ? ["An API-source cell's reading is listed, but it is not compared with a timed round (report.mjs --convergence lists it as not compared): a timed round's replay requires the upstream's own answer counts to cover its API requests, and a pass records no such count, so nothing shows that the cell's requests reached the upstream."] : []),
     "", "| Adapter | Source | Target | Reading | Tail req/s | Failed requests |", "|---|---|---|---|---:|---:|"];
   for (const c of s.cells) {
     if (c.failure !== undefined) { lines.push(`| ${c.app} | ${c.source} | ${c.target} | no reading: the cell failed (${failureCodes[c.failure]}) | - | - |`); continue; }

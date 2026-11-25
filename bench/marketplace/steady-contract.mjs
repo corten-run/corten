@@ -4,7 +4,8 @@
 // steady-report.mjs and report.mjs read what they saved.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cpuSettings, resultSchema, timedProfilesFor } from "./run-contract.mjs";
+import { cpuSettings, inventory, resultSchema, timedProfilesFor } from "./run-contract.mjs";
+import { groupNames } from "./groups.mjs";
 
 // v4: summary.json is an allowlist. Every saved field is defined by the checkout (a fixed code or
 // text), a validated number, or a value that matches a strict pattern (savedText); the readers
@@ -264,10 +265,12 @@ export const eventFormat = "{{.Actor.ID}}|{{.Action}}|{{.TimeNano}}";
  * FinishedAt is the latest daemon time before it, and the pass starts the marker the second time
  * only once that inspect has returned. Nor does the second start's row alone show that the client
  * had delivered what came before it: a client can hand the rows over in chunks, and the runner
- * once stopped reading at that row. So the stream must also show the fence, a later marker row
- * (its exit) stamped after the load's FinishedAt, which the runner waits for before it stops the
- * client; an app event delivered after the second start and before the fence is read like any
- * other. This relies on the client delivering rows in the daemon's order up to the fence; a stream
+ * once stopped reading at that row. So the stream must also show the fence: the marker's next row
+ * after its second start must be that start's own exit, its die, stamped strictly later than the
+ * second start (and so after the load's FinishedAt), and the runner waits for it before it stops the
+ * client. Any other marker row there (a copy of the second start, or a die stamped at or before that
+ * start) is not the fence, and the stream is not read. An app event delivered after the second start
+ * and before the fence is read like any other. This relies on the client delivering rows in the daemon's order up to the fence; a stream
  * without the fence is not read at all. Every row must be one of the two container IDs, an action
  * (lowercase letters and underscores, optionally followed by ": " and detail, as health_status and
  * exec_start are) and a time in nanoseconds. One row that is not, fewer than two marker starts, or
@@ -295,8 +298,9 @@ export function readEvents(text, { app, marker, startedAt, finishedAt } = {}) {
     if (first <= 0 || last <= first || (id !== app && id !== marker) || !/^[a-z_]{1,32}(: .*)?$/.test(action) || !/^[1-9]\d{0,19}$/.test(nanos)) { unreadable++; continue; }
     const name = action.split(":", 1)[0], at = BigInt(nanos);
     if (id === marker) {
-      // The first marker row after the second start, whatever its action, is the fence.
-      if (witnesses.length >= 2) fence ??= at;
+      // The first marker row after the second start decides the fence: the second start's own exit,
+      // stamped later than that start, or nothing (false) whatever comes after it.
+      if (witnesses.length >= 2) fence ??= action === "die" && at > witnesses[1] ? at : false;
       else if (name === "start") witnesses.push(at);
       continue;
     }
@@ -310,7 +314,7 @@ export function readEvents(text, { app, marker, startedAt, finishedAt } = {}) {
   const [before, after] = witnesses;
   assert.ok(before <= startNs, "the marker's first start in the event stream is not at or before the load's start, so it does not show the stream was listening when the load began");
   assert.ok(after > before && after > finishNs, "the marker's second start in the event stream is not a later start than the first and after the load finished, so it does not show the stream covered the load");
-  assert.ok(fence !== null && fence > finishNs, "the event stream shows no marker row after its second start and after the load finished, so it does not show the client delivered what came before that start");
+  assert.ok(typeof fence === "bigint" && fence > after && fence > finishNs, "the event stream's next marker row after its second start is not that start's exit stamped later than it, so it does not show the client delivered what came before that start");
   return events;
 }
 const restartActions = Object.freeze(["start", "restart", "die", "oom", "kill"]);
@@ -496,12 +500,15 @@ function fields(value, required, where, optional = []) {
 const nullable = (kind, value, message) => assert.ok(value === null || matches(kind, value), message);
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
 const nonNegative = (value) => Number.isSafeInteger(value) && value >= 0;
+// The adapters and groups this checkout has (steady.mjs passes the same inventory to
+// parseSteadyArgs): a saved name outside them is refused, never printed.
+const adapter = (name) => typeof name === "string" && Object.hasOwn(inventory, name);
 // The saved options: parseSteadyArgs's bounds again, so every option a report prints is checked.
 function optionsEvidence(o, kind) {
   fields(o, ["kind", "name", "build", "group", "apps", "minutes", "windowSeconds", "windows", "vus", "rate", "targets", "sources", "startupTimeout", "labels"], "the pass's options");
-  assert.ok(o.kind === kind && matches("name", o.name) && typeof o.build === "boolean" && (o.group === null || matches("name", o.group)), "the pass's options: kind, name, build or group");
+  assert.ok(o.kind === kind && matches("name", o.name) && typeof o.build === "boolean" && (o.group === null || groupNames.includes(o.group)), "the pass's options: kind, name, build or group (a group this checkout has)");
   for (const key of ["apps", "sources", "targets"]) assert.ok(Array.isArray(o[key]) && o[key].length > 0, `a pass names at least one of its ${key}`);
-  assert.ok(o.apps.every((a) => matches("name", a)) && new Set(o.apps).size === o.apps.length, "the pass's options: adapters");
+  assert.ok(o.apps.every(adapter) && new Set(o.apps).size === o.apps.length, "the pass's options: adapters (each one this checkout's adapter inventory has)");
   assert.ok(o.targets.every((t) => steadyTargets.includes(t)) && new Set(o.targets).size === o.targets.length && o.sources.every((t) => steadySources.includes(t)) && new Set(o.sources).size === o.sources.length, "the pass's options: sources and targets");
   const convergence = kind === "convergence";
   const within = (value, min, max) => Number.isSafeInteger(value) && value >= min && value <= max;
@@ -521,24 +528,24 @@ function passEvidence(s, schema) {
   assert.equal(s.dirty, false, "a pass measures a clean checkout");
   assert.equal(s.complete, true, "an incomplete pass is not evidence");
   assert.deepEqual(s.failures, [], "a pass with a suite failure is not evidence");
-  // Cleanup must be confirmed: no failure, nothing left with the owner label, every create Docker
-  // acknowledged confirmed removed, and every create it did not acknowledge found and removed
-  // (cleanup.json keeps the whole record).
+  // Cleanup must be confirmed: no failure, nothing left with the owner label and every create Docker
+  // acknowledged confirmed removed (cleanup.json keeps the whole record).
   const k = s.cleanup;
   assert.ok(k?.complete === true && Array.isArray(k.remaining?.containers) && Array.isArray(k.remaining?.networks) && k.remaining.containers.length === 0 && k.remaining.networks.length === 0
-    && Array.isArray(k.unacknowledged) && k.unacknowledged.every((a) => a?.outcome === "removed"), "a pass whose cleanup is not confirmed complete is not evidence");
+    && Array.isArray(k.unacknowledged), "a pass whose cleanup is not confirmed complete is not evidence");
   assert.ok(k.failures === 0, "a pass whose cleanup failed is not evidence");
   fields(k, ["complete", "remaining", "created", "removed", "recovered", "failures", "unacknowledged"], "the pass's cleanup");
   fields(k.remaining, ["containers", "networks"], "the pass's remaining resources");
   assert.ok([k.created, k.removed, k.recovered].every(nonNegative), "the pass's cleanup counts");
   // The identity ownedResources keeps (alert-probe-run.mjs), which the runner checks by ID: an
-  // acknowledged create is removed by its ID, so it is counted as removed, never recovered; a create
-  // Docker did not acknowledge can only be found by its own label and removed as recovered. So
-  // removed equals created (fewer is a removal not confirmed, more is a resource no create made) and
-  // recovered equals the unacknowledged creates, whatever `complete` says.
+  // acknowledged create is removed by its ID, so it is counted as removed, never recovered. So
+  // removed equals created (fewer is a removal not confirmed, more is a resource no create made),
+  // whatever `complete` says. A create Docker did not acknowledge can only be found by its own label
+  // and removed as recovered, and the runner ends the pass at the step that made it (a cell's makes
+  // it unsettled), even when teardown recovers it: a complete pass has none, and recovered nothing.
+  // The record of one stays in an incomplete pass's summary and in cleanup.json, for diagnosis.
   assert.ok(k.removed === k.created, "a pass whose acknowledged creates were not each confirmed removed is not evidence");
-  assert.ok(k.recovered === k.unacknowledged.length, "a pass whose recovered resources are not its unacknowledged creates is not evidence");
-  for (const a of k.unacknowledged) { fields(a, ["name", "label", "outcome"], "an unacknowledged create"); nullable("runId", a.name, "an unacknowledged create's name"); nullable("attemptLabel", a.label, "an unacknowledged create's label"); }
+  assert.ok(k.unacknowledged.length === 0 && k.recovered === 0, "a pass with a create Docker did not acknowledge, or a resource recovered by its label, is not evidence");
   assert.ok(matches("time", s.startedAt) && matches("time", s.finishedAt) && Date.parse(s.finishedAt) >= Date.parse(s.startedAt), "a pass records its window");
   const host = s.host;
   fields(host, ["platform", "release", "node", "docker", "kernel", "cpu", "onlineCpus"], "the pass's host");
@@ -570,7 +577,7 @@ function passEvidence(s, schema) {
     const a = s.admission;
     fields(a, ["round", "commit", "summarySha256", "path", "selected", "admitted"], "the pass's admission");
     assert.ok(matches("round", a.round) && matches("commit", a.commit) && matches("sha256", a.summarySha256) && (a.path === null || matches("path", a.path))
-      && [a.selected, a.admitted].every((list) => Array.isArray(list) && list.every((x) => matches("name", x))) && o.apps.every((x) => a.selected.includes(x) && a.admitted.includes(x)), "the pass's admission");
+      && [a.selected, a.admitted].every((list) => Array.isArray(list) && list.every((x) => matches("name", x))) && a.selected.every(adapter) && o.apps.every((x) => a.selected.includes(x) && a.admitted.includes(x)), "the pass's admission");
   }
   fields(s, ["schema", "name", "runId", "options", ...(kind === "convergence" ? ["rule"] : []), "startedAt", "finishedAt", "complete", "failures", "cleanup", "cells", "admission", "startup",
     "host", "scope", "measurement", "commit", "finishedCommit", "dirty", "fixtureSha256", "images", "tools"], "the pass");
