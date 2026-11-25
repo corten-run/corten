@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { convergenceLines, convergenceSchema, flattenPoint, flattenRule, parseSteadyArgs, readWindows, soakSchema, summarizeSoak, supportedWarmup, validateConvergence, validateSoak } from "./steady-contract.mjs";
+import { readFileSync } from "node:fs";
+import { checkFixture, convergenceLines, convergenceSchema, flattenPoint, flattenRule, parseSteadyArgs, readWindows, soakSchema, summarizeSoak, supportedWarmup, validateConvergence, validateSoak } from "./steady-contract.mjs";
 import { convergenceReport, soakReport, steadyReport } from "./steady-report.mjs";
 import { groupApps } from "./groups.mjs";
 import { apps } from "./contract.mjs";
@@ -85,6 +86,30 @@ test("steady.mjs options keep convergence and soak apart and bound each", () => 
     [["convergence", "w3", "--group", "production", "--apps", "corten"], /cannot be combined/], [["convergence", "W3"], /pass name/],
     [["timed", "w3"], /usage/], [["convergence", "w3", "--apps", "nope"], /subset/], [["convergence", "w3", "--minutes", "5", "--minutes", "6"], /duplicate/],
   ]) assert.throws(() => parseSteadyArgs(args, inventory, groupApps), pattern);
+});
+
+test("caller labels go on every resource and cannot take the ownership key", () => {
+  const c = parseSteadyArgs(["convergence", "w3", "--apps", "corten", "--label", "agent.owner=codex", "--label", "agent.task=i1851"], apps, groupApps);
+  assert.deepEqual(c.labels, ["agent.owner=codex", "agent.task=i1851"]);
+  assert.deepEqual(parseSteadyArgs(["soak", "w4", "--apps", "corten"], apps, groupApps).labels, []);
+  for (const [value, pattern] of [["run.corten.marketplace=x", /reserved/], ["run.corten.marketplace.commit=x", /reserved/], ["agent.owner", /KEY=VALUE/], ["a b=c", /KEY=VALUE/]])
+    assert.throws(() => parseSteadyArgs(["convergence", "w3", "--label", value], apps, groupApps), pattern);
+  assert.throws(() => parseSteadyArgs(["convergence", "w3", "--label", "a=1", "--label", "a=2"], apps, groupApps), /duplicate --label a/);
+  // steady.mjs puts the same arguments on every container it creates, its network and the k6 probe.
+  const source = readFileSync(new URL("./steady.mjs", import.meta.url), "utf8");
+  assert.match(source, /docker\(\[args\[0\], "--name", name, \.\.\.ownerArgs,/);
+  assert.match(source, /describeK6\(docker, ownerArgs,/);
+  assert.match(source, /\["network", "create", \.\.\.ownerArgs, network\]/);
+  assert.doesNotMatch(source, /agent\.owner/);
+});
+
+test("a pass refuses a missing or stale fixture and records the one it mounts", () => {
+  const generated = { item_1: { id: "item_1" } }, identity = (v) => v;
+  const bytes = Buffer.from(JSON.stringify(generated));
+  assert.match(checkFixture(bytes, generated, identity), /^[a-f0-9]{64}$/);
+  assert.throws(() => checkFixture(null, generated, identity), /fixture is missing/);
+  assert.throws(() => checkFixture(Buffer.from(JSON.stringify({ item_1: { id: "item_2" } })), generated, identity), /stale/);
+  assert.throws(() => checkFixture(bytes, generated, () => { throw new Error("invalid marketplace record"); }), /invalid marketplace record/);
 });
 
 function convergencePass({ commit = "c".repeat(40), cells } = {}) {

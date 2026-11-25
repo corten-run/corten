@@ -175,7 +175,10 @@ readiness request and one long k6 pass (`window-load.js`: the timed requests and
 each answer counted in the window it completed in). `--admitted-from <round>/summary.json`
 measures only the adapters that saved timed round admitted; without it every selected adapter
 runs and the report says admission was not checked. `--minutes`, `--window` (convergence),
-`--interval` (soak), `--vus`, `--rate`, `--targets` and `--sources` change the defaults. Results
+`--interval` (soak), `--vus`, `--rate`, `--targets` and `--sources` change the defaults;
+`--label key=value` (repeatable) adds a label to every container and network the pass creates,
+beside its ownership label. Like a timed round, a pass refuses to start without the current
+generated fixture (`node bench/marketplace/fixtures.mjs`). Results
 go to `results/convergence/<name>/` and `results/soak/<name>/`, outside Git like other raw output.
 For the production group's seven candidates a convergence pass is 28 five-minute passes, about
 two and a half hours with container starts, plus image builds (estimated, not measured); it

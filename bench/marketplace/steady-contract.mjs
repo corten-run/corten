@@ -3,6 +3,7 @@
 // reporter says about them. Pure: no Docker, k6, files or clock. steady.mjs runs the passes;
 // steady-report.mjs and report.mjs read what they saved.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 export const convergenceSchema = "marketplace-convergence/v1";
 export const soakSchema = "marketplace-soak/v1";
@@ -35,6 +36,21 @@ export const flattenRule = Object.freeze({ name: "marketplace-flatten/v1", toler
 export const convergenceDefaults = Object.freeze({ minutes: 5, windowSeconds: 15, vus: 64, targets: steadyTargets, sources: steadySources, startupTimeout: 120 });
 export const soakDefaults = Object.freeze({ minutes: 30, windowSeconds: 60, rate: 150, targets: Object.freeze(["page"]), sources: steadySources, startupTimeout: 120 });
 const maxWindows = 360;
+/** The label steady.mjs owns its containers and networks by (run.mjs uses the same key). */
+export const ownerLabelKey = "run.corten.marketplace";
+/**
+ * The marketplace fixture an app container mounts must be the one fixtures.mjs generates now, as
+ * run.mjs requires for a timed round: a stale or missing fixture fails before any container starts.
+ * @param {Buffer | null} bytes the fixture file, or null when it does not exist
+ * @param {unknown} generated records() from fixtures.mjs
+ * @param {(value: unknown) => unknown} validate validateMarketplace from records.mjs
+ * @returns {string} the fixture's SHA-256
+ */
+export function checkFixture(bytes, generated, validate) {
+  assert.ok(bytes, "the marketplace fixture is missing: run node bench/marketplace/fixtures.mjs");
+  assert.deepEqual(validate(JSON.parse(bytes)), generated, "generated fixture is stale: run node bench/marketplace/fixtures.mjs");
+  return createHash("sha256").update(bytes).digest("hex");
+}
 
 const integer = (value, min, max, name) => {
   assert.ok(Number.isSafeInteger(value) && value >= min && value <= max, `${name} must be an integer from ${min} to ${max}`);
@@ -48,7 +64,10 @@ const list = (value, allowed, name) => {
 /**
  * node bench/marketplace/steady.mjs <convergence|soak> <name> [--group g | --apps a,b] [--build]
  *   [--minutes m] [--window s | --interval s] [--vus n] [--rate n] [--targets page,json]
- *   [--sources fixture,api] [--startup-timeout s] [--admitted-from summary.json]
+ *   [--sources fixture,api] [--startup-timeout s] [--admitted-from summary.json] [--label key=value ...]
+ * Each --label goes on every container and network the pass creates, beside its ownership label.
+ * Docker keeps a key's last value, so a caller label in the run.corten.marketplace namespace would
+ * take a resource out of the pass's ownership checks: those keys are refused here, before Docker.
  * @param {string[]} args
  * @param {string[]} inventory the adapters that may be named
  * @param {(group: string) => string[]} groupApps
@@ -60,11 +79,11 @@ export function parseSteadyArgs(args, inventory, groupApps) {
   const defaults = kind === "convergence" ? convergenceDefaults : soakDefaults;
   const options = { kind, name, build: false, group: undefined, apps: null, minutes: defaults.minutes, windowSeconds: defaults.windowSeconds,
     vus: kind === "convergence" ? defaults.vus : null, rate: kind === "soak" ? defaults.rate : null, targets: [...defaults.targets], sources: [...defaults.sources],
-    startupTimeout: defaults.startupTimeout, admittedFrom: null };
+    startupTimeout: defaults.startupTimeout, admittedFrom: null, labels: [] };
   const seen = new Set();
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i];
-    assert.ok(!seen.has(flag), `duplicate option ${flag}`); seen.add(flag);
+    assert.ok(flag === "--label" || !seen.has(flag), `duplicate option ${flag}`); seen.add(flag);
     if (flag === "--build") { options.build = true; continue; }
     const value = rest[++i];
     assert.ok(value !== undefined && !value.startsWith("--"), `${flag} needs a value`);
@@ -81,6 +100,13 @@ export function parseSteadyArgs(args, inventory, groupApps) {
       case "--sources": options.sources = list(value, steadySources, "--sources"); break;
       case "--startup-timeout": options.startupTimeout = integer(number, 1, 600, "--startup-timeout"); break;
       case "--admitted-from": options.admittedFrom = value; break;
+      case "--label": {
+        const key = /^([\w.-]+)=[\w.:/-]*$/.exec(value)?.[1];
+        assert.ok(key, `--label takes KEY=VALUE, not ${value}`);
+        assert.ok(key !== ownerLabelKey && !key.startsWith(`${ownerLabelKey}.`), `--label ${key} is reserved for the pass's ownership labels`);
+        assert.ok(!options.labels.some((l) => l.startsWith(`${key}=`)), `duplicate --label ${key}`);
+        options.labels.push(value); break;
+      }
       default: assert.fail(`unknown option ${flag}`);
     }
   }

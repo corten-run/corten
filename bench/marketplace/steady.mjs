@@ -25,7 +25,9 @@ import { sampleStats } from "../catalog/stats.mjs";
 import { containerReceipt, imageReceipt, nodeImage } from "./raw-contract.mjs";
 import { retainLoadEvidence } from "./load-evidence.mjs";
 import { describeK6, k6Image } from "../load-tool.mjs";
-import { convergenceSchema, flattenPoint, flattenRule, parseSteadyArgs, readWindows, soakSchema, summarizeSoak } from "./steady-contract.mjs";
+import { validateMarketplace } from "./records.mjs";
+import { records } from "./fixtures.mjs";
+import { checkFixture, convergenceSchema, flattenPoint, flattenRule, ownerLabelKey, parseSteadyArgs, readWindows, soakSchema, summarizeSoak } from "./steady-contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -36,7 +38,9 @@ const seconds = options.minutes * 60;
 const cpus = cpuSettings(process.env);
 const runId = `marketplace-${options.kind}-${options.name}-${randomBytes(5).toString("hex")}`;
 const network = `${runId}-net`;
-const label = "run.corten.marketplace";
+const label = ownerLabelKey;
+// The ownership label and the caller's --label pairs, on every container and network the pass creates.
+const ownerArgs = ["--label", `${label}=${runId}`, ...options.labels.flatMap((l) => ["--label", l])];
 const folder = join(here, "results", options.kind, options.name);
 mkdirSync(dirname(folder), { recursive: true });
 // Atomic reservation: an earlier pass of the same name is never overwritten.
@@ -61,7 +65,7 @@ const docker = (args, opts) => command("docker", args, opts);
 const inspect = async (name, cleanup = false) => JSON.parse(await docker(["inspect", name], { cleanup }))[0];
 const owned = async (args, name) => {
   active.add(name);
-  await docker([args[0], "--name", name, "--label", `${label}=${runId}`, ...args.slice(1)]);
+  await docker([args[0], "--name", name, ...ownerArgs, ...args.slice(1)]);
   const info = await inspect(name);
   created.push({ kind: "container", id: info.Id, name });
   for (const m of info.Mounts.filter((m) => m.Type === "volume")) {
@@ -173,6 +177,10 @@ try {
   summary.commit = await command("git", ["rev-parse", "HEAD"]);
   summary.dirty = (await command("git", ["status", "--porcelain", "--untracked-files=normal"])).length > 0;
   assert.ok(!summary.dirty, "a convergence or soak pass requires a clean committed checkout");
+  // The fixture every app container mounts, checked as run.mjs checks it before a timed round.
+  let fixture = null;
+  try { fixture = readFileSync(join(fixtureDir, "marketplace.json")); } catch (e) { if (e.code !== "ENOENT") throw e; }
+  summary.fixtureSha256 = checkFixture(fixture, records(), validateMarketplace);
   summary.host.docker = await docker(["version", "--format", "{{.Server.Version}}"]);
   summary.host.node = process.version;
   const hostProbe = `${runId}-host`;
@@ -213,8 +221,8 @@ try {
   }
   retain(join(folder, "images.json"), images);
   save();
-  summary.tools = { k6: await describeK6(docker, ["--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`], { pullLog: join(folder, "pull-k6.log") }) };
-  await docker(["network", "create", "--label", `${label}=${runId}`, network]);
+  summary.tools = { k6: await describeK6(docker, ownerArgs, { pullLog: join(folder, "pull-k6.log") }) };
+  await docker(["network", "create", ...ownerArgs, network]);
   const networkInfo = JSON.parse(await docker(["network", "inspect", network]))[0];
   created.push({ kind: "network", id: networkInfo.Id, name: network });
   await owned(["run", "-d", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
