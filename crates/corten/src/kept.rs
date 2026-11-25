@@ -269,7 +269,11 @@ pub enum Shape {
 /// release build gives the answer as it is ([`Missed::drew_key`]), and one decided by the answer
 /// from [`Missed::keep`], whose copy for `corten dev` (`TELL`) records each in the request's
 /// signal ([`Verdict::found`]). `Kept`, or `Unread`, comes from the body of an answer a release
-/// build would keep as it is read, where that build reads it whole ([`tell_read`]). What a request alone decides (a
+/// build would keep, as `corten dev` reads it ([`tell_read`]): that build reads it whole before
+/// the answer leaves, within the route's deadline, and `corten dev` only as it is sent, after, so
+/// of a body it reads that way each says what `corten dev` saw and leaves what that build does
+/// with the body to that read: a slow body may meet the deadline there, and one that fails
+/// after the request's signal ends may read whole there. What a request alone decides (a
 /// cookie, a navigation, a write) is not said: the page's verdict is for the request that shows
 /// nothing about who asks. Nor is a full store, which the store under `corten dev`, holding
 /// nothing, never is: `Kept` says the answer may be kept, not that it is. Public in a private
@@ -278,6 +282,9 @@ pub enum Shape {
 pub enum Verdict {
     Kept {
         lifetime: u64,
+        /// Its body was read under `corten dev` as it was sent, after its route answered, not
+        /// held whole: a release build keeps it if it reads it whole within the route's deadline.
+        read: bool,
     },
     /// The app keeps no answers: its bound is 0 (`crate::App::kept_answers`).
     Off,
@@ -319,7 +326,8 @@ pub enum Verdict {
         bound: usize,
     },
     Written,
-    /// Its body, of a known size, could not be read whole: a release build answers `500`.
+    /// Its body, of a known size, failed as `corten dev` read it, after its route answered. A
+    /// release build reads it before then, so what it does with it is not known here.
     Unread,
 }
 
@@ -378,9 +386,18 @@ impl Verdict {
         if told.load(Ordering::Relaxed) & bit != 0 || told.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
             return;
         }
+        // Of a body read as it was sent, what `corten dev` saw, and no more: a release build reads it
+        // before the answer leaves, under the route's deadline and before the request's signal
+        // ends, where it may be slower or read otherwise.
         match self {
-            Verdict::Kept { lifetime } => tracing::info!(
+            Verdict::Kept { lifetime, read: false } => tracing::info!(
                 "corten: {path} is Public, and a release build would keep its answer for {lifetime} s while its store has room, given in its handler's place to each GET that shows nothing about who asks (under corten dev its handler makes every answer)"
+            ),
+            Verdict::Kept { lifetime, read: true } => tracing::info!(
+                "corten: {path} is Public, and a release build would keep its answer for {lifetime} s while its store has room if it reads the body whole within the route's deadline, given in its handler's place to each GET that shows nothing about who asks (a release build reads the body before the answer leaves; corten dev read it whole only as it was sent, after the route answered, and its handler makes every answer)"
+            ),
+            Verdict::Unread => tracing::warn!(
+                "corten: {path} is Public, and its body, of a known size, failed as corten dev read it, after the route answered: a release build reads it before the answer leaves, within the route's deadline, and keeps the answer only if the body reads whole there"
             ),
             _ => tracing::warn!("corten: {path} is Public, but a release build does not keep its answer: {}", self.why()),
         }
@@ -389,7 +406,7 @@ impl Verdict {
     /// Why it is not kept, and what to change, for an author.
     fn why(self) -> String {
         match self {
-            Verdict::Kept { .. } => String::new(),
+            Verdict::Kept { .. } | Verdict::Unread => String::new(),
             Verdict::Off => "the app keeps no answers, since its bound is 0 (App::kept_answers(0)); give it a bound to have answers kept".into(),
             Verdict::Unkeyed => "its handler takes an input the kept answer's key does not cover (an extractor of the app's own, an Option, Json, an Upload, LiveSince or Since, or a Form before its last argument), so it runs for every request; read what the URL gives with Params or Uri instead".into(),
             Verdict::NotWhole => "its answer is neither a page nor a whole body (a stream, a relay, a feed or a status alone), so its handler runs for every request".into(),
@@ -414,7 +431,6 @@ impl Verdict {
             Verdict::Empty => "its body is empty".into(),
             Verdict::Large { size, bound } => format!("it takes {size} bytes, more than an eighth of the {bound} the app keeps (App::kept_answers); raise the bound to have it kept"),
             Verdict::Written => "a write to its path went through while its handler read, so it may show what was there before; the next answer may be kept".into(),
-            Verdict::Unread => "its body, of a known size, could not be read whole (reading it failed), so a release build answers 500 in its place".into(),
         }
     }
 }
@@ -1578,28 +1594,32 @@ fn named_head<const TELL: bool>(signal: &crate::Signal) -> Option<(usize, usize)
 }
 
 /// Under `corten dev`, `res` as `corten dev`'s copy of [`Missed::keep`] left it, with `tell` given
-/// what a release build does with an answer it would keep once it reads the body: keeps it
-/// ([`Verdict::Kept`]), or, where reading fails, answers `500` ([`Verdict::Unread`]). The body is
-/// not read here: a body held whole, which a release build takes without reading, is kept now;
-/// any other is watched as whatever reads it next (the app's middleware, the client) pulls each
-/// frame, and told when it ends or fails, so the answer, its frames, its trailers and when each
-/// comes are as they are with no store. One dropped before its end (the client left) is told
-/// nothing. Any other answer is as it was, and `tell` is not called.
+/// what becomes of the body of an answer a release build would keep once it reads it. The body
+/// is not read here: a body held whole, which a release build takes without reading, is kept
+/// now ([`Verdict::Kept`], not `read`); any other is watched as whatever reads it next (the
+/// app's middleware, the client) pulls each frame, and told when it ends ([`Verdict::Kept`],
+/// `read`) or fails ([`Verdict::Unread`]), so the answer, its frames, its trailers and when each
+/// comes are as they are with no store. That is what `corten dev` saw, not what a release build
+/// does: it reads the body before the answer leaves, within the route's deadline and before the
+/// request's signal ends (`crate::signal::follow` ends it as an answer of a known size leaves),
+/// so a body that is slow, or reads otherwise once the signal has ended, may fare otherwise
+/// there. One dropped before its end (the client left) is told nothing. Any other answer is as
+/// it was, and `tell` is not called.
 pub(crate) fn tell_read<F>(res: Response, signal: &crate::Signal, tell: F) -> Response
 where
     F: FnOnce(Verdict) + Send + Unpin + 'static,
 {
     let Some(&ToRead(lifetime)) = signal.found::<ToRead>().get() else { return res };
-    let kept = Verdict::Kept { lifetime };
     if res.body().is_whole() {
-        tell(kept);
+        tell(Verdict::Kept { lifetime, read: false });
         return res;
     }
+    let kept = Verdict::Kept { lifetime, read: true };
     res.map(|body| Body::new(Reading { body, kept, tell: Some(tell) }))
 }
 
 /// Under `corten dev`, the body of an answer a release build would keep once it reads it
-/// ([`tell_read`]): its frames as they come, and, when it ends, what that build does with it.
+/// ([`tell_read`]): its frames as they come, and, when it ends, how it ended as `corten dev` read it.
 struct Reading<F> {
     body: Body,
     kept: Verdict,
@@ -1616,8 +1636,8 @@ impl<F: FnOnce(Verdict) + Unpin> http_body::Body for Reading<F> {
     ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
         let this = self.get_mut();
         let frame = std::task::ready!(std::pin::Pin::new(&mut this.body).poll_frame(cx));
-        // A release build reads to the end (`crate::body::to_bytes`), and answers `500` if a frame
-        // fails on the way.
+        // Read to its end, or failed, here: a release build reads it to the end
+        // (`crate::body::to_bytes`) before the answer leaves, which may end otherwise.
         let verdict = match &frame {
             None => Some(this.kept),
             Some(Err(_)) => Some(Verdict::Unread),

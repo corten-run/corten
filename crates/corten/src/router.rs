@@ -252,7 +252,7 @@ impl Endpoint for Telling {
                     verdict.tell(&path, &told);
                     res
                 }
-                // One a release build would keep: said as its body is read, where that build reads it.
+                // One a release build would keep: what becomes of its body as it is read here is said.
                 (None, Some(signal)) => crate::kept::tell_read(res, signal, move |verdict| verdict.tell(&path, &told)),
                 (None, None) => res,
             }

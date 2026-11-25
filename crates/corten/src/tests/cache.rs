@@ -2330,9 +2330,7 @@ async fn corten_dev_says_whether_a_public_answer_is_kept_and_why_not() {
             .route("/plain", typed(move |req: Req| async move { req.test_page("Plain", home()) }).0)
     };
     let lines = Lines(std::sync::Arc::default());
-    let writer = lines.clone();
-    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
-    let _logging = tracing::subscriber::set_default(subscriber);
+    let _logging = log_to(&lines);
     // What one request logged.
     let logged = |router: Router, uri: &'static str, headers: &'static [(&'static str, &'static str)]| {
         let lines = lines.clone();
@@ -2462,9 +2460,10 @@ impl http_body::Body for Failing {
 }
 
 /// A `Public` page whose body, of a known size, fails when read is answered `500` by a release
-/// build, which reads it to keep it, and kept by none. Under `corten dev` the log says so, and not
-/// that it is kept, and the answer leaves as it does with no store (`kept_answers(0)`), its body
-/// failing as it did.
+/// build, which reads it to keep it, and kept by none. Under `corten dev` the log says the body
+/// failed as it read it, and not that it is kept, nor what a release build answers, which reads it
+/// before the answer leaves; the answer leaves as it does with no store (`kept_answers(0)`), its
+/// body failing as it did.
 #[cfg(feature = "log")]
 #[tokio::test]
 async fn corten_dev_says_a_body_that_cannot_be_read_is_not_kept() {
@@ -2491,17 +2490,12 @@ async fn corten_dev_says_a_body_that_cannot_be_read_is_not_kept() {
         (parts.status, parts.headers, body.collect().await.is_ok())
     };
     let lines = Lines(std::sync::Arc::default());
-    let writer = lines.clone();
-    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
-    let _logging = tracing::subscriber::set_default(subscriber);
+    let _logging = log_to(&lines);
     let dev = App::new(Routes::from(routes())).dev(true).router();
     let (status, headers, read) = answer(dev).await;
     let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
-    assert!(
-        text.contains("corten: / is Public, but a release build does not keep its answer: its body, of a known size, could not be read whole"),
-        "{text}"
-    );
-    assert!(!text.contains("would keep"), "{text}");
+    assert!(text.contains(&format!("corten: / {UNREAD}")), "{text}");
+    assert!(!text.contains("would keep") && !text.contains("does not keep") && !text.contains("500"), "{text}");
     let unkept = App::new(Routes::from(routes())).kept_answers(0).dev(true).router();
     assert_eq!((status, headers, read), answer(unkept).await, "as with no store");
     let release = App::new(Routes::from(routes())).dev(false).router();
@@ -2607,9 +2601,7 @@ async fn corten_dev_says_what_it_would_keep_as_the_body_is_read() {
             .route("/draws", typed(body(2, None, true)).0)
     };
     let lines = Lines(std::sync::Arc::default());
-    let writer = lines.clone();
-    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
-    let _logging = tracing::subscriber::set_default(subscriber);
+    let _logging = log_to(&lines);
     let text = || String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
     // Its status and headers, said before its body is read, then its frames, and what was said
     // once they were read.
@@ -2622,11 +2614,7 @@ async fn corten_dev_says_what_it_would_keep_as_the_body_is_read() {
         let frames = frames_of(body).await;
         (parts.status, parts.headers, frames, before, text())
     };
-    for (uri, said) in [
-        ("/fails", "is Public, but a release build does not keep its answer: its body, of a known size, could not be read whole"),
-        ("/trailers", "is Public, and a release build would keep its answer for 60 s"),
-        ("/draws", "is Public, and a release build would keep its answer for 60 s"),
-    ] {
+    for (uri, said) in [("/fails", UNREAD), ("/trailers", KEPT_IF_READ), ("/draws", KEPT_IF_READ)] {
         let dev = App::new(Routes::from(routes())).dev(true).router();
         let (status, headers, frames, before, after) = answer(dev, uri).await;
         assert!(!before.contains("is Public"), "{uri}: nothing said before the body is read: {before}");
@@ -2688,9 +2676,7 @@ async fn corten_dev_does_not_hold_a_slow_body() {
         }
     });
     let lines = Lines(std::sync::Arc::default());
-    let writer = lines.clone();
-    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
-    let _logging = tracing::subscriber::set_default(subscriber);
+    let _logging = log_to(&lines);
     let text = || String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
     let dev = App::new(Routes::from(Table::new().route("/slow", route.0))).dev(true).router();
     let wait = Duration::from_secs(10);
@@ -2704,7 +2690,130 @@ async fn corten_dev_does_not_hold_a_slow_body() {
     open.send(()).unwrap();
     let (rest, _, failed) = frames_of(body).await;
     assert!(rest.len() == 1 && !failed, "{rest:?}");
-    assert!(text().contains("corten: /slow is Public, and a release build would keep its answer for 60 s"), "{}", text());
+    assert!(text().contains(&format!("corten: /slow {KEPT_IF_READ}")), "{}", text());
+}
+
+/// What `corten dev` says of a body it read as it was sent and that read whole.
+#[cfg(feature = "log")]
+const KEPT_IF_READ: &str =
+    "is Public, and a release build would keep its answer for 60 s while its store has room if it reads the body whole within the route's deadline";
+
+/// What `corten dev` says of a body that failed as it read it.
+#[cfg(feature = "log")]
+const UNREAD: &str = "is Public, and its body, of a known size, failed as corten dev read it, after the route answered: a release build reads it before the answer leaves, within the route's deadline, and keeps the answer only if the body reads whole there";
+
+/// A body of a known size: `piece`, then `piece` again once `wait` ends, or, if `signal` is
+/// given, `piece` while it has not ended and a failure once it has.
+struct Late {
+    piece: Option<bytes::Bytes>,
+    rest: u8,
+    wait: std::pin::Pin<Box<tokio::time::Sleep>>,
+    signal: Option<crate::Signal>,
+}
+
+impl http_body::Body for Late {
+    type Data = bytes::Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<bytes::Bytes>, Self::Error>>> {
+        let this = self.get_mut();
+        if this.signal.as_ref().is_some_and(crate::Signal::is_aborted) {
+            return std::task::Poll::Ready(Some(Err(std::io::Error::other("the request's signal ended"))));
+        }
+        if this.rest == 0 {
+            return std::task::Poll::Ready(None);
+        }
+        if this.rest == 1 {
+            std::task::ready!(std::future::Future::poll(this.wait.as_mut(), cx));
+        }
+        this.rest -= 1;
+        std::task::Poll::Ready(this.piece.clone().map(|piece| Ok(http_body::Frame::data(piece))))
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        let length = self.piece.as_ref().map_or(0, |piece| piece.len() as u64);
+        http_body::SizeHint::with_exact(length * u64::from(self.rest))
+    }
+}
+
+/// Under `corten dev` a body read as it is sent, after its route answered, is said as `corten dev`
+/// saw it, not as a release build fares with it, which reads it before the answer leaves. A body
+/// slower than the route's deadline is answered `503` by a release build and not kept, and
+/// `corten dev`, which read it whole, says it is kept only if that build reads it within the
+/// deadline. A body that fails once the request's signal has ended (it ends as an answer of a
+/// known size leaves) reads whole in a release build, which keeps it, and `corten dev`, where it
+/// failed, says so without saying what that build answers.
+#[cfg(feature = "log")]
+#[tokio::test]
+async fn corten_dev_says_of_a_body_it_reads_only_what_it_saw() {
+    use crate::route::get as typed;
+    let piece = bytes::Bytes::from("l".repeat(600));
+    let routes = move || {
+        let (slow, ended) = (piece.clone(), piece.clone());
+        Table::new()
+            .route(
+                "/slow",
+                typed(move |req: Req| {
+                    let wait = Box::pin(tokio::time::sleep(Duration::from_millis(300)));
+                    let body = Late { piece: Some(slow.clone()), rest: 2, wait, signal: None };
+                    async move {
+                        let page = req.test_page_for("Slow", html! { <p>"slow"</p> }).map(|mut page| {
+                            *page.0.body_mut() = Body::new(body);
+                            page
+                        });
+                        Public::new(Duration::from_secs(60), page)
+                    }
+                })
+                .0,
+            )
+            .route(
+                "/ended",
+                typed(move |req: Req| {
+                    let wait = Box::pin(tokio::time::sleep(Duration::ZERO));
+                    let body = Late { piece: Some(ended.clone()), rest: 2, wait, signal: Some(req.signal().clone()) };
+                    async move {
+                        let page = req.test_page_for("Ended", html! { <p>"ended"</p> }).map(|mut page| {
+                            *page.0.body_mut() = Body::new(body);
+                            page
+                        });
+                        Public::new(Duration::from_secs(60), page)
+                    }
+                })
+                .0,
+            )
+    };
+    let deadline = Duration::from_millis(50);
+    let lines = Lines(std::sync::Arc::default());
+    let _logging = log_to(&lines);
+    let text = || String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
+    // Its status, whether its body read whole, and what was said once it was read.
+    let answer = |router: Router, uri: &'static str| async move {
+        let res = router.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+        let (status, (_, _, failed)) = (res.status(), frames_of(res.into_body()).await);
+        (status, !failed, text())
+    };
+    let dev = App::new(Routes::from(routes())).deadline(deadline).dev(true).router();
+    let (status, whole, said) = answer(dev.clone(), "/slow").await;
+    assert!(status == StatusCode::OK && whole, "under corten dev the body is read after the deadline's wait");
+    assert!(said.contains(&format!("corten: /slow {KEPT_IF_READ}")), "{said}");
+    let (status, whole, said) = answer(dev, "/ended").await;
+    assert!(status == StatusCode::OK && !whole, "under corten dev the signal ended before the body was read");
+    assert!(said.contains(&format!("corten: /ended {UNREAD}")), "{said}");
+    assert!(!said.contains("does not keep") && !said.contains("500"), "no status a release build answers: {said}");
+    // A release build reads each before the answer leaves: the slow one past its deadline, the
+    // other whole, while the signal stands.
+    let release = App::new(Routes::from(routes())).deadline(deadline).dev(false).router();
+    for _ in 0..2 {
+        let (status, headers, _) = fetch(&release, "GET", "/slow", &[]).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!headers.contains_key(header::AGE));
+    }
+    let (status, _, _) = fetch(&release, "GET", "/ended", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(fetch(&release, "GET", "/ended", &[]).await.1.contains_key(header::AGE), "a release build keeps it");
 }
 
 /// Under `corten dev` the answer the app's middleware sees after its handler is the one it saw

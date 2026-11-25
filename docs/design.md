@@ -7716,12 +7716,18 @@ rules something out.
     a page that is not kept looks the same from outside save for a missing `Age`, so without it
     an author first met the difference in production. It says no more than that the answer may be
     kept: the store under `corten dev` is never full, and a full one keeps only a URL asked for
-    before, so that the answer is kept, or given again, is not promised. It says so only as the
-    body ends, since a body of an exact size that fails to be read is answered `500` there and
-    not kept; the body is not read to say it, which would hold it from the middleware, drop its
-    trailers and what came before a failure and keep a slow one from the client, but watched as
-    whatever reads it next pulls each frame (one held whole, which a release build takes without
-    reading, at once), and one dropped before its end says nothing. The reasons come from the code
+    before, so that the answer is kept, or given again, is not promised. Of a body not held whole
+    it says so only as the body ends; the body is not read to say it, which would hold it from the
+    middleware, drop its trailers and what came before a failure and keep a slow one from the
+    client, but watched as whatever reads it next pulls each frame (one held whole, which a
+    release build takes without reading, at once), and one dropped before its end says nothing.
+    That watch is passive, so it says only what `corten dev` saw: a release build reads the body
+    before the answer leaves, within the route's deadline and before the request's signal ends,
+    and `corten dev` after, so a body that read whole is said to be kept if that build reads it
+    whole within its deadline (a slow one may not be), and one that failed is said to have failed
+    as `corten dev` read it, with no status that build answers (one that fails only once the
+    signal has ended reads whole there). Reading it the release way under `corten dev` would tell
+    more and change the answer the app's middleware and the client see. The reasons come from the code
     that decides, not from a second list of its rules, which could drift from what the build does.
     That code is compiled twice, the route's and its answer's checks alike (`Keeping` and
     `Missed::keep`, by a `TELL` parameter): `corten dev`'s copy records each refusal, a drawn

@@ -1609,10 +1609,16 @@ The reasons come from the code that decides what a release build keeps, which ru
 `corten dev` with a store that keeps nothing and gives nothing (writes are counted as a release
 build counts them), so they cannot say other than that build does. That an answer would be kept
 says it may be, not that it is: the store under `corten dev` holds nothing, so it is never full,
-and a full one keeps the answer for a URL only when that URL was asked for before (below). It is
-said as the answer's body ends, not before, since a body that fails partway is not kept (a release
-build answers `500` in its place); the body still reaches your middleware and the browser as it
-comes, trailers and all. A
+and a full one keeps the answer for a URL only when that URL was asked for before (below). A
+page's body is held whole, so its verdict is said as the answer leaves. Any other body of a known
+size is said as it ends, not before, and it still reaches your middleware and the browser as it
+comes, trailers and all. That verdict is what `corten dev` saw as the body was sent, after the
+route answered: a release build reads the body before the answer leaves, within the route's
+deadline, and keeps it only if it reads whole there. So "would keep its answer ... if it reads
+the body whole within the route's deadline" means a slow body may still miss it, and a body that
+failed under `corten dev` is said to have failed as `corten dev` read it, without a status a
+release build would answer, since one that fails only once the request's signal has ended
+(`Abort::Responded`, as the answer leaves) reads whole in a release build. A
 reason the route's type decides (its handler's inputs, an answer that is neither a page nor a
 whole body, `unstaged`) is said for any `GET`; one a middleware decides before the handler (a
 caller it read, a URL it
