@@ -286,9 +286,20 @@ impl Policy {
         self
     }
 
-    /// Another origin allowed to send writes with the user's cookies (`https://admin.example.com`).
+    /// Another origin allowed to send writes with the user's cookies (`https://admin.example.com`):
+    /// `http` or `https`, a host (a name, an IPv4 address or a bracketed IPv6 one) and a port
+    /// when it is not the scheme's default. A write is let through when its `Origin` is this
+    /// origin as a browser writes it there (RFC 6454): the scheme and host lowercase, and a
+    /// default port (`:443` for `https`, `:80` for `http`) and a trailing `/` left out, so
+    /// `https://Admin.example.com:443/` is `https://admin.example.com`. Anything else, which no
+    /// `Origin` could ever equal (no scheme, a path, a query, a user, a wildcard, a list), is a
+    /// startup panic:
+    ///
+    /// ```should_panic
+    /// corten::security::Policy::new().allow_origin("https://*.example.com");
+    /// ```
     pub fn allow_origin(mut self, origin: &str) -> Self {
-        self.allowed_origins.push(origin.trim_end_matches('/').to_ascii_lowercase());
+        self.allowed_origins.push(allowed_origin("Policy::allow_origin", origin));
         self
     }
 
@@ -1645,6 +1656,75 @@ pub(crate) fn on_host<'a>(origin: &'a str, host: &str) -> Option<(&'static str, 
     bare(scheme, at).eq_ignore_ascii_case(bare(scheme, host)).then_some((scheme, at))
 }
 
+/// `origin`, a setting naming another origin ([`Policy::allow_origin`],
+/// [`crate::Api::allow_origin`]), as a browser writes it in `Origin`, which a request's is
+/// compared with as it is; a startup panic naming `setting` when it is not one origin.
+pub(crate) fn allowed_origin(setting: &str, origin: &str) -> String {
+    let Some(serialized) = serialize_origin(origin) else {
+        panic!(
+            "corten: {setting} takes one origin, http or https and a host with an optional port, like https://partner.example (no path, query, user, wildcard or list), not {origin:?}"
+        )
+    };
+    serialized
+}
+
+/// `origin` serialized as RFC 6454 section 6.1 and the URL Standard's origin serializer write it:
+/// `http` or `https`, `://`, the host and `:port` unless the port is the scheme's default.
+/// The scheme and a name are lowercased, an address written in its standard form and the port as
+/// a number, and one trailing `/` is allowed. `None` for anything else: another scheme, no host,
+/// a user, a path, a query, a fragment, a name with other than letters, digits, `-` and `.`,
+/// a name ending in a number that is not an IPv4 address, or a port that is not one.
+fn serialize_origin(origin: &str) -> Option<String> {
+    let origin = origin.strip_suffix('/').unwrap_or(origin);
+    let (scheme, at) = origin.split_once("://")?;
+    let scheme = if scheme.eq_ignore_ascii_case("https") {
+        "https"
+    } else if scheme.eq_ignore_ascii_case("http") {
+        "http"
+    } else {
+        return None;
+    };
+    let (host, port) = split_port(at);
+    let host = match host.strip_prefix('[') {
+        Some(address) => {
+            let address: std::net::Ipv6Addr = address.strip_suffix(']')?.parse().ok()?;
+            match address.to_ipv4_mapped() {
+                // Rust writes these `::ffff:1.2.3.4`; the URL Standard writes every piece in hex.
+                Some(_) => {
+                    let pieces = address.segments();
+                    format!("[::ffff:{:x}:{:x}]", pieces[6], pieces[7])
+                }
+                None => format!("[{address}]"),
+            }
+        }
+        None => {
+            let name = host.to_ascii_lowercase();
+            let labels = name.strip_suffix('.').unwrap_or(&name);
+            if labels.split('.').any(|label| label.is_empty() || !label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')) {
+                return None;
+            }
+            // A name whose last label is a number is an IPv4 address to a browser.
+            if labels.rsplit('.').next().is_some_and(|last| last.bytes().all(|b| b.is_ascii_digit())) {
+                labels.parse::<std::net::Ipv4Addr>().ok()?.to_string()
+            } else {
+                name
+            }
+        }
+    };
+    let port = match port {
+        None => None,
+        Some(port) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+            let port: u16 = port.parse().ok()?;
+            (port != if scheme == "https" { 443 } else { 80 }).then_some(port)
+        }
+        Some(_) => return None,
+    };
+    Some(match port {
+        Some(port) => format!("{scheme}://{host}:{port}"),
+        None => format!("{scheme}://{host}"),
+    })
+}
+
 /// Whether `at` (`host[:port]`) is loopback, which a browser counts as secure over plain `http`:
 /// `localhost`, a name under it, `127.0.0.0/8` or `[::1]`.
 pub(crate) fn loopback(at: &str) -> bool {
@@ -2362,6 +2442,126 @@ mod tests {
             &headers(&[("sec-fetch-site", "same-site"), ("origin", "https://admin.example.com"), ("host", "a.com")])
         ));
         assert!(p.same_origin(&post, &headers(&[])), "native apps and agents send neither header");
+    }
+
+    #[test]
+    fn an_allowed_origin_is_kept_as_a_browser_writes_it_in_origin() {
+        for (setting, serialized) in [
+            ("https://admin.example.com", "https://admin.example.com"),
+            ("https://admin.example.com/", "https://admin.example.com"),
+            ("HTTPS://Admin.Example.COM", "https://admin.example.com"),
+            ("https://admin.example.com:443", "https://admin.example.com"),
+            ("http://admin.example.com:80", "http://admin.example.com"),
+            ("http://admin.example.com:443", "http://admin.example.com:443"),
+            ("https://admin.example.com:80", "https://admin.example.com:80"),
+            ("https://a.example:8443", "https://a.example:8443"),
+            ("https://a.example:08443/", "https://a.example:8443"),
+            ("https://a.example.", "https://a.example."),
+            ("http://localhost:3000", "http://localhost:3000"),
+            ("http://192.168.1.5", "http://192.168.1.5"),
+            ("http://192.168.1.5.:8080", "http://192.168.1.5:8080"),
+            ("https://[::1]", "https://[::1]"),
+            ("https://[::1]:443", "https://[::1]"),
+            ("http://[2001:DB8:0:0:0:0:0:1]:8080", "http://[2001:db8::1]:8080"),
+            ("http://[::ffff:192.168.1.5]", "http://[::ffff:c0a8:105]"),
+        ] {
+            assert_eq!(serialize_origin(setting).as_deref(), Some(serialized), "{setting}");
+        }
+        for bad in [
+            "",
+            "*",
+            "admin.example.com",
+            "//admin.example.com",
+            "https://",
+            "https:///",
+            "https://admin.example.com/app",
+            "https://admin.example.com//",
+            "https://*.example.com",
+            "https://u@admin.example.com",
+            "https://u:p@admin.example.com",
+            "https://admin.example.com?x",
+            "https://admin.example.com#x",
+            "https://admin.example.com,https://b.example",
+            "https://admin.example.com https://b.example",
+            " https://admin.example.com",
+            "https://admin example.com",
+            "ftp://admin.example.com",
+            "ws://admin.example.com",
+            "capacitor://localhost",
+            "null",
+            "https://admin..example.com",
+            "https://.admin.example.com",
+            "https://admin_x.example.com",
+            "https://b\u{fc}cher.example",
+            "https://1.2.3",
+            "https://999.1.1.1",
+            "https://admin.example.com:",
+            "https://admin.example.com:+443",
+            "https://admin.example.com:65536",
+            "https://admin.example.com:44a",
+            "https://[::1",
+            "https://[::1]x",
+            "https://[::1]:",
+            "https://[fe80::1%25eth0]",
+            "https://[1.2.3.4]",
+            "https://::1",
+        ] {
+            assert_eq!(serialize_origin(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Policy::allow_origin takes one origin")]
+    fn an_allowed_origin_has_a_scheme() {
+        let _ = Policy::new().allow_origin("admin.example.com");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Policy::allow_origin takes one origin")]
+    fn an_allowed_origin_has_no_path() {
+        let _ = Policy::new().allow_origin("https://admin.example.com/app");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Policy::allow_origin takes one origin")]
+    fn an_allowed_origin_is_no_wildcard() {
+        let _ = Policy::new().allow_origin("https://*.example.com");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Policy::allow_origin takes one origin")]
+    fn an_allowed_origin_has_no_user() {
+        let _ = Policy::new().allow_origin("https://u@admin.example.com");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Policy::allow_origin takes one origin")]
+    fn an_allowed_origin_has_no_query() {
+        let _ = Policy::new().allow_origin("https://admin.example.com?x");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Policy::allow_origin takes one origin")]
+    fn an_allowed_origin_is_http_or_https() {
+        let _ = Policy::new().allow_origin("capacitor://localhost");
+    }
+
+    /// An allowed origin written with its default port matches the `Origin` a browser sends,
+    /// which never has one; another port is kept and must match.
+    #[test]
+    fn an_allowed_origin_with_its_default_port_lets_its_writes_through() {
+        let post = Method::POST;
+        let from = |policy: &Policy, origin: &'static str| {
+            policy.same_origin(&post, &headers(&[("origin", origin), ("sec-fetch-site", "cross-site"), ("host", "app.example")]))
+        };
+        let default_port = Policy::new().allow_origin("https://admin.example.com:443");
+        assert!(from(&default_port, "https://admin.example.com"));
+        assert!(!from(&default_port, "https://admin.example.com:8443"));
+        let other_port = Policy::new().allow_origin("https://a.example:8443");
+        assert!(from(&other_port, "https://a.example:8443"));
+        assert!(!from(&other_port, "https://a.example"));
+        let ipv6 = Policy::new().allow_origin("http://[::1]:3000");
+        assert!(from(&ipv6, "http://[::1]:3000"));
     }
 
     /// A write with no `Sec-Fetch-Site` is held to its whole origin against `Host`: under hsts

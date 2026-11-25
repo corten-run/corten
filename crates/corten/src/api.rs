@@ -404,15 +404,12 @@ impl<P: Prefix> Api<P> {
     /// `Access-Control-Allow-Origin` itself if a site reads it): the app's pages still refuse
     /// writes from it. The site
     /// authenticates with a token: a write from it that carries cookies is refused, and no
-    /// `Access-Control-Allow-Credentials` is sent.
+    /// `Access-Control-Allow-Credentials` is sent. It takes an origin as
+    /// [`crate::security::Policy::allow_origin`] does, and keeps it as a browser writes it in
+    /// `Origin` (`https://partner.example:443/` is `https://partner.example`); anything else is
+    /// a startup panic.
     pub fn allow_origin(mut self, origin: &str) -> Self {
-        let origin = origin.trim_end_matches('/').to_ascii_lowercase();
-        let host = origin.split_once("://").map_or("", |(_, rest)| rest);
-        assert!(
-            !host.is_empty() && !host.contains(['/', '*', ',', ' ']),
-            "corten: an allowed origin is a scheme and a host, like https://partner.example: {origin:?}"
-        );
-        self.origins.push(origin);
+        self.origins.push(crate::security::allowed_origin("Api::allow_origin", origin));
         self
     }
 }
@@ -781,9 +778,36 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a scheme and a host")]
+    #[should_panic(expected = "corten: Api::allow_origin takes one origin")]
     fn an_allowed_origin_is_one_origin() {
         let _ = Api::<ApiRoot>::new().allow_origin("*");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Api::allow_origin takes one origin")]
+    fn an_allowed_origin_has_no_user() {
+        let _ = Api::<ApiRoot>::new().allow_origin("https://u@partner.example");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Api::allow_origin takes one origin")]
+    fn an_allowed_origin_has_no_query() {
+        let _ = Api::<ApiRoot>::new().allow_origin("https://partner.example?x");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Api::allow_origin takes one origin")]
+    fn an_allowed_origin_is_http_or_https() {
+        let _ = Api::<ApiRoot>::new().allow_origin("capacitor://localhost");
+    }
+
+    #[test]
+    fn an_allowed_origin_is_kept_as_a_browser_sends_it() {
+        let api = Api::<ApiRoot>::new()
+            .allow_origin("HTTPS://Partner.Example:443/")
+            .allow_origin("https://a.example:8443")
+            .allow_origin("http://[::1]:80");
+        assert_eq!(api.origins, ["https://partner.example", "https://a.example:8443", "http://[::1]"]);
     }
 
     #[test]

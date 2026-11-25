@@ -707,6 +707,36 @@ async fn an_allowed_origin_may_call_the_api_from_the_browser_but_not_post_the_pa
     assert_eq!(res.headers()["content-type"], "application/problem+json");
 }
 
+/// `Api::allow_origin` keeps an origin as a browser writes it in `Origin`, so one written with
+/// its default port still lets that site's writes and preflights through.
+#[tokio::test]
+async fn an_allowed_origin_written_with_its_default_port_matches_the_browsers_origin() {
+    let router = api_app(|api| api.allow_origin("https://partner.example:443"));
+    let res = router
+        .clone()
+        .oneshot(
+            Request::post("/api/post")
+                .header("origin", "https://partner.example")
+                .header("sec-fetch-site", "cross-site")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["access-control-allow-origin"], "https://partner.example");
+    let preflight = Request::builder()
+        .method("OPTIONS")
+        .uri("/api/post")
+        .header("origin", "https://partner.example")
+        .header("access-control-request-method", "POST")
+        .body(Body::empty())
+        .unwrap();
+    let res = router.oneshot(preflight).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(res.headers()["access-control-allow-origin"], "https://partner.example");
+}
+
 #[tokio::test]
 async fn an_api_at_the_root_makes_the_whole_app_json() {
     let router =
