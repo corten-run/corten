@@ -148,6 +148,7 @@ const resourceProbeMocks = String.raw`
             rmTimeoutMalformed) printf '%s\n' "$_foreign" ;;
             rmTimeoutBlank) printf '\n' ;;
             rmTimeoutGone) : ;;
+            rmTimeoutRecheckGone) if [[ ! -e .removal-finished ]]; then printf '%s\n' "$_owned"; fi ;;
             rmTimeoutRetryGone) if (( _removed == 1 )); then printf '%s\n' "$_owned"; fi ;;
             *) printf '%s\n' "$_owned" ;;
           esac
@@ -179,6 +180,7 @@ const resourceProbeMocks = String.raw`
           rmTimeoutBudget) if (( _probed && !_waits )); then return 124; fi ;;
           rmTimeoutLate) if (( _probed && _waits < 3 )); then return 124; fi ;;
           rmTimeoutRecheckUnavailable) if (( _removed )); then return 124; fi ;;
+          rmTimeoutRecheckGone) if (( _removed )); then : > .removal-finished; return 1; fi ;;
           changed|ambiguousAfterRetry|malformedAfterRetry|wrongIdAfterRetry) if (( _waits == 0 )); then return 124; fi ;;
         esac
         if [[ "$MODE" == wrongId || "$MODE" == wrongIdAfterRetry ]]; then
@@ -226,7 +228,8 @@ test("the synthetic JSON resource probe settles cleanup without removing foreign
     ["rmTimeoutUnknown", 1, [...rmTimeout, unresolved]],
     ["rmTimeoutMalformed", 1, [...rmTimeout, unresolved]],
     ["rmTimeoutBlank", 1, [...rmTimeout, unresolved]],
-    ["rmTimeoutRecheckUnavailable", 1, [...rmTimeout, inspect, unresolved]],
+    ["rmTimeoutRecheckUnavailable", 1, [...rmTimeout, inspect, census, unresolved]],
+    ["rmTimeoutRecheckGone", 0, [...rmTimeout, inspect, census]],
     ["rmTimeoutBudget", 1, [inspect, probe, inspect, inspect, remove, census, inspect, remove, census, unresolved], 173],
     ["rmTimeoutLate", 1, [inspect, probe, ...Array(4).fill(inspect), remove, census, unresolved], 170],
     ["cleanupDelayed", 0, [inspect, probe, inspect, inspect, remove], 154],
@@ -249,8 +252,10 @@ test("the synthetic JSON resource probe settles cleanup without removing foreign
   ];
   for (const [mode, status, trace, budget] of cases) {
     await t.test(mode, () => {
+      const scratch = mode === "rmTimeoutRecheckGone" ? mkdtempSync(join(tmpdir(), "corten-resource-rm-")) : null;
+      if (scratch) t.after(() => rmSync(scratch, { recursive: true, force: true }));
       const result = spawnSync(resourceProbeBash, ["-e", "-o", "pipefail", "-s"], {
-        input: resourceProbeMocks + step.run, cwd: root,
+        input: resourceProbeMocks + step.run, cwd: scratch ?? root,
         env: { ...process.env, MODE: mode, ATTEMPT: randomUUID() }, encoding: "utf8", timeout: 5000, windowsHide: true,
       });
       assert.ifError(result.error);

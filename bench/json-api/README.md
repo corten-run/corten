@@ -191,7 +191,9 @@ within its cleanup budget. It searches by the unique attempt label only if creat
 returned no usable ID, and refuses removal on an ownership mismatch. If removal
 times out, a successful exact-ID census can prove absence. If the container is
 still listed, cleanup may retry once after rechecking ownership, only when the
-earlier inspection left enough budget. It fails on unresolved removal.
+earlier inspection left enough budget. If the ownership recheck is unavailable,
+one final exact-ID census can confirm absence without sending another removal.
+The job fails on unresolved removal.
 
 Every load phase retains host start/end clocks and k6's measured `testRunDurationMs` via
 [`handleSummary`](https://grafana.com/docs/k6/latest/results-output/end-of-test/custom-summary/).

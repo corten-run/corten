@@ -300,9 +300,9 @@ began, the CPU counter sidecar and, for the HTTP source, the upstream are the sa
 containers, Docker recorded no kill, stop or restart of the app, and no phase step failed.
 An ordinary app exit does not require samples after the exit. It does require clean sampler
 shutdown when sampling was active: even a zero client exit before the requested stop, any
-client stderr, an incomplete record, or a sampler deadline fails the phase. Replay likewise
-refuses a recorded fault even if its timestamp follows the app exit; older receipts that
-flattened these errors do not prove their cause.
+client stderr, an incomplete record, or a sampler deadline fails the phase. Replay refuses
+recorded faults and rechecks complete Docker rows and the matching sample summary even when
+the app stopped. Only phases that did not start a sampler (warmup) need neither file.
 Still failures: a phase with no k6 summary or in which no request succeeded, a 200 of the wrong
 content type (before a stop too), an app container that stopped during its cold start or before
 a phase began (after its first 200, before warmup or between phases), and any error answer

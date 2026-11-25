@@ -386,7 +386,34 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   for (const p of ["fixed", "sat64", "sat256"]) a.phases["api-neutral-json"][p] = stageAggregate(runs, p, 3);
   writeFileSync(path, JSON.stringify(raw)); writeFileSync(join(folder, base, "sat64-cpu.json"), "{}");
   writeFileSync(join(folder, "summary.json"), JSON.stringify(s));
-  assert.equal(validateSaved(args).complete, true);
+  const log = join(folder, base, "sat64-stats.log"), statsPath = `${log}.json`;
+  const stats = JSON.parse(readFileSync(statsPath, "utf8"));
+  const names = Object.keys(stats.samples);
+  for (const name of names) {
+    stats.samples[name] = stats.samples[name].slice(0, 1);
+    assert.ok(stats.samples[name][0].t < Date.parse(raw.app.state.FinishedAt));
+    stats.summary[name] = summarizeSamples(stats.samples[name]);
+  }
+  const rows = readFileSync(log, "utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+  const cleanLog = names.map((name) => JSON.stringify(rows.find((row) => row.Name === name))).join("\n") + "\n";
+  const cleanStats = JSON.stringify(stats);
+  writeFileSync(log, cleanLog); writeFileSync(statsPath, cleanStats);
+  assert.equal(validateSaved(args).complete, true, "a stopped phase needs no samples after the app exited");
+  for (const [label, expected, edit] of [
+    ["truncated tail with missing summary", /truncated stats log/, () => { writeFileSync(log, cleanLog + '{"Name":'); unlinkSync(statsPath); }],
+    ["truncated tail with intact summary", /truncated stats log/, () => writeFileSync(log, cleanLog + '{"Name":')],
+    ["missing summary despite a complete log", /ENOENT:.*sat64-stats\.log\.json/, () => unlinkSync(statsPath)],
+    ["summary disagrees with the sampled prefix", /stats aggregate differs/, () => {
+      const wrong = structuredClone(stats); wrong.summary[names[0]].samples++;
+      writeFileSync(statsPath, JSON.stringify(wrong));
+    }],
+  ]) await t.test(label, () => {
+    try {
+      edit();
+      assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID" && expected.test(e.cause?.message));
+    }
+    finally { writeFileSync(log, cleanLog); writeFileSync(statsPath, cleanStats); }
+  });
   const original = readFileSync(path);
   const postExitError = { step: "stats", error: "docker stats stopped early: 1", at: raw.app.state.FinishedAt };
   raw.seen.errors = [{ ...postExitError, error: "docker stats client pipes did not close within the stop grace" }];
@@ -439,6 +466,16 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   raw.upstreamReads.after.answers[503] = 1; writeFileSync(path, JSON.stringify(raw)); invalid(() => validateSaved(args));
   delete raw.upstreamReads.after.answers[503]; raw.seen.events = [{ action: "kill", ms: Date.parse(raw.app.state.FinishedAt) }];
   writeFileSync(path, JSON.stringify(raw)); invalid(() => validateSaved(args));
+
+  const warmupPath = join(folder, base, "warmup-receipt.json"), warmup = JSON.parse(readFileSync(warmupPath, "utf8"));
+  const finished = new Date(Date.parse(warmup.seen.phaseStart) + 5000).toISOString();
+  warmup.app.state = { ...raw.app.state, FinishedAt: finished }; warmup.seen.app = warmup.app.state;
+  warmup.seen.sidecars = raw.seen.sidecars; warmup.seen.events = [{ action: "oom", ms: Date.parse(finished) }];
+  run.stopped.phase = "warmup";
+  delete run.warmup; delete run.phases.fixed;
+  for (const p of ["fixed", "sat64", "sat256"]) a.phases["api-neutral-json"][p] = stageAggregate(runs, p, 3);
+  writeFileSync(warmupPath, JSON.stringify(warmup)); writeFileSync(join(folder, "summary.json"), JSON.stringify(s));
+  assert.equal(validateSaved(args).complete, true, "a stopped warmup did not start a sampler");
 });
 
 test("source lookup ignores inherited Git redirects/config and never admits an absent local object", () => {

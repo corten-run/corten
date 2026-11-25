@@ -164,8 +164,13 @@ jobs:
             # The full retry fits only after either of the first two ownership attempts:
             # 131s before teardown, then at most 11+12+4+5+6+4=42s for an acknowledged ID.
             # A lost create does not run the probe, so its label search also fits.
-            if (( status == 1 && try <= 2 )) && owns "$candidate"; then
-              if docker_local 4s rm -f -v "$candidate" >/dev/null || absent "$candidate"; then return 0; fi
+            if (( status == 1 && try <= 2 )); then
+              if owns "$candidate"; then
+                if docker_local 4s rm -f -v "$candidate" >/dev/null || absent "$candidate"; then return 0; fi
+              elif (( $? == 2 )) && absent "$candidate"; then
+                # The first removal may have finished between the list and inspect.
+                return 0
+              fi
             fi
             echo 'Synthetic JSON resource probe cleanup could not settle removal' >&2
             return 1

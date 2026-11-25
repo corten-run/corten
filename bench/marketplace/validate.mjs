@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { posix } from "node:path";
-import { memoryMiB, summarizeSamples } from "../catalog/stats.mjs";
+import { memoryMiB, parseStatsSample, summarizeSamples } from "../catalog/stats.mjs";
 import { records } from "./fixtures.mjs";
 import { admitted } from "./feature-contract.mjs";
 import { qualificationValidator, validateSummary } from "./report.mjs";
@@ -312,45 +312,56 @@ function replay({ folder, round, commit }) {
           assert.ok(raw.seen.events.every((e) => Number.isFinite(e.ms) && e.ms >= start && e.ms <= end), "Docker stop events are outside the phase window");
           const sidecars = [raw.cpu, ...(profile.source === "api" ? [raw.upstream] : [])];
           assert.deepEqual(raw.seen.sidecars, sidecars.map((c) => ({ name: c.name, startedAt: c.state.StartedAt, state: c.state })), "stop sidecar identities/state differ from runtime receipts");
-          break;
         }
-        const metrics = readOutcome(k6Summary);
-        if (phase !== "warmup") {
-          const counters = rawCounters; exactKeys(counters, participants);
-          const sampled = files.json(`${base}/${phase}-stats.log.json`); exactKeys(sampled.samples, participants); exactKeys(sampled.summary, participants);
+        const metrics = stop ? null : readOutcome(k6Summary);
+        if (participants.length) {
+          // Even an app stop needs the two artifacts that only a successful
+          // sampler stop writes together. It never needs full-phase coverage.
+          if (!stop) exactKeys(rawCounters, participants);
           const history = Object.fromEntries(participants.map((n) => [n, []]));
           const statsText = files.text(`${base}/${phase}-stats.log`);
           assert.ok(statsText.endsWith("\n"), "truncated stats log");
           for (const line of statsText.split("\n").map((s) => s.trim()).filter(Boolean)) {
-            const p = JSON.parse(line); assert.ok(Object.hasOwn(history, p.Name), "unexpected stats participant");
-            assert.match(p.CPUPerc, /^\d+(?:\.\d+)?%$/);
-            // Docker reports one logical CPU as 100%, rounded to two decimals.
-            // Samples can burst beyond quota; only the whole host is a bound.
-            const cpu = parseFloat(p.CPUPerc);
-            assert.ok(Number.isFinite(cpu) && cpu <= onlineCpus.size * 100 + 0.005, "sampled CPU exceeds physical host capacity");
-            assert.ok(history[p.Name].length < maxStatsSamples, "stats log exceeds sample bound");
-            const c = p.Name === coldApp.name ? raw.app : raw.upstream, parts = p.MemUsage.split("/");
-            assert.equal(parts.length, 2, "memory display missing its limit");
-            const usage = displayedMemory(parts[0]), limit = displayedMemory(parts[1]), expected = c.memoryBytes / 2 ** 20;
-            assert.ok(Math.abs(limit.mib - expected) <= limit.rounding + 1e-12, "memory display limit differs from container");
-            assert.ok(usage.mib <= expected + usage.rounding + 1e-12, "memory sample exceeds container limit");
-            history[p.Name].push({ cpu, mem: usage.mib });
+            const { name, cpu, mem, cpuDisplay, memory } = parseStatsSample(line);
+            assert.ok(Object.hasOwn(history, name), "unexpected stats participant");
+            assert.ok(history[name].length < maxStatsSamples, "stats log exceeds sample bound");
+            if (!stop) {
+              assert.match(cpuDisplay, /^\d+(?:\.\d+)?%$/);
+              // Docker reports one logical CPU as 100%, rounded to two decimals.
+              // Samples can burst beyond quota; only the whole host is a bound.
+              assert.ok(Number.isFinite(cpu) && cpu <= onlineCpus.size * 100 + 0.005, "sampled CPU exceeds physical host capacity");
+              const c = name === coldApp.name ? raw.app : raw.upstream;
+              assert.equal(memory.length, 2, "memory display missing its limit");
+              const usage = displayedMemory(memory[0]), limit = displayedMemory(memory[1]), expected = c.memoryBytes / 2 ** 20;
+              assert.ok(Math.abs(limit.mib - expected) <= limit.rounding + 1e-12, "memory display limit differs from container");
+              assert.ok(usage.mib <= expected + usage.rounding + 1e-12, "memory sample exceeds container limit");
+            }
+            history[name].push({ cpu, mem });
           }
+          const sampled = files.json(`${base}/${phase}-stats.log.json`); exactKeys(sampled.samples, participants); exactKeys(sampled.summary, participants);
           const stats = {};
           for (const name of participants) {
             const samples = sampled.samples[name];
             assert.ok(Array.isArray(samples) && samples.length > 0 && samples.length <= maxStatsSamples, "invalid/bounded stats history required");
             assert.deepEqual(samples.map(({ cpu, mem }) => ({ cpu, mem })), history[name], "stats history differs from raw Docker samples");
             let last = start;
-            for (const p of samples) { assert.ok(Number.isSafeInteger(p.t) && p.t >= last && p.t <= end && p.cpu >= 0 && p.mem > 0, "invalid stats clock/value"); last = p.t; }
-            assert.ok(samples.at(-1).t - samples[0].t >= Math.max(0, s.options.duration - 5) * 1000, "truncated stats coverage");
+            for (const p of samples) {
+              assert.ok(Number.isSafeInteger(p.t) && p.t >= last && p.t <= end && (stop || p.cpu >= 0 && p.mem > 0), "invalid stats clock/value");
+              last = p.t;
+            }
             stats[name] = summarizeSamples(samples); assert.deepEqual(sampled.summary[name], stats[name], "stats aggregate differs from raw history");
-            const usec = raw.after[name] - raw.before[name]; assert.deepEqual(counters[name], { usec }, "CPU delta differs from raw counters");
-            stats[name].cpuUsec = usec;
+            if (!stop) {
+              assert.ok(samples.at(-1).t - samples[0].t >= Math.max(0, s.options.duration - 5) * 1000, "truncated stats coverage");
+              const usec = raw.after[name] - raw.before[name]; assert.deepEqual(rawCounters[name], { usec }, "CPU delta differs from raw counters");
+              stats[name].cpuUsec = usec;
+            }
           }
-          const up = profile.source === "api" ? { ...stats[upstream.name], highCpu: stats[upstream.name].cpuAvgPct >= 80, interpretation: upstreamInterpretation } : null;
-          Object.assign(metrics, stats[coldApp.name], { perCpuSecond: metrics.requests / (stats[coldApp.name].cpuUsec / 1e6), upstream: up });
+          if (metrics) {
+            const up = profile.source === "api" ? { ...stats[upstream.name], highCpu: stats[upstream.name].cpuAvgPct >= 80, interpretation: upstreamInterpretation } : null;
+            Object.assign(metrics, stats[coldApp.name], { perCpuSecond: metrics.requests / (stats[coldApp.name].cpuUsec / 1e6), upstream: up });
+          }
         }
+        if (stop) break;
         assert.deepEqual(phase === "warmup" ? run.warmup : run.phases[phase], metrics, "summary metrics differ from raw k6/counters/history");
       }
     }

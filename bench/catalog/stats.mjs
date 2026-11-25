@@ -17,6 +17,11 @@ export const statsInfrastructure = Object.freeze({
   "client-process": "docker stats client process failed",
   "client-stderr": "docker stats client wrote to stderr",
 });
+export function parseStatsSample(line) {
+  const { Name: name, CPUPerc: cpuDisplay, MemUsage } = JSON.parse(line);
+  const memory = MemUsage.split("/");
+  return { name, cpuDisplay, memory, cpu: parseFloat(cpuDisplay), mem: memoryMiB(memory[0]) };
+}
 export function summarizeSamples(samples) {
   if (!samples.length) throw new Error("docker stats produced no samples");
   for (const s of samples) if (!Number.isFinite(s.mem) || !Number.isFinite(s.cpu)) throw new Error("invalid docker stats sample");
@@ -45,9 +50,9 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
       buffer = buffer.slice(end + 1);
       if (!line) continue;
       try {
-        const s = JSON.parse(line);
-        if (!samples[s.Name]) throw new Error(`unexpected stats container ${s.Name}`);
-        samples[s.Name].push({ t: Date.now(), cpu: parseFloat(s.CPUPerc), mem: memoryMiB(s.MemUsage.split("/")[0]) });
+        const { name, cpu, mem } = parseStatsSample(line);
+        if (!Object.hasOwn(samples, name)) throw new Error(`unexpected stats container ${name}`);
+        samples[name].push({ t: Date.now(), cpu, mem });
       } catch (e) { observed(e.message); }
     }
   });
