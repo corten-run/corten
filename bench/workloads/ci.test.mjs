@@ -102,6 +102,7 @@ const resourceProbeMocks = String.raw`
   _label=corten.json.resource-probe-attempt
   _waits=0
   _probed=0
+  _removed=0
   timeout() {
     [[ "$1" =~ ^--kill-after=([0-9]+)s$ ]] || return 98
     local grace=$((BASH_REMATCH[1]))
@@ -132,13 +133,26 @@ const resourceProbeMocks = String.raw`
         printf 'create\n' >&2
         [[ "$*" == *" --label corten.json.resource-probe=1 --label $_label=$ATTEMPT "* ]] || return 98
         case "$MODE" in
-          ok|probeFailed|removeFailed|ackInspectDelayed|cleanupDelayed|cleanupMismatch|cleanupDelayedMismatch|cleanupUnavailable)
+          ok|probeFailed|removeFailed|ackInspectDelayed|cleanupDelayed|cleanupMismatch|cleanupDelayedMismatch|cleanupUnavailable|rmTimeout*)
             printf '%s\n' "$_owned" ;;
           foreignAck) printf '%s\n' "$_foreign" ;;
           *) return 124 ;;
         esac
         ;;
       ps)
+        if [[ "$*" == "ps --all --no-trunc --filter id=$_owned --format {{.ID}}" ]]; then
+          [[ "$_bound" == 2s ]] || return 98
+          printf 'census:%s\n' "$_owned" >&2
+          case "$MODE" in
+            rmTimeoutUnknown) return 124 ;;
+            rmTimeoutMalformed) printf '%s\n' "$_foreign" ;;
+            rmTimeoutBlank) printf '\n' ;;
+            rmTimeoutGone) : ;;
+            rmTimeoutRetryGone) if (( _removed == 1 )); then printf '%s\n' "$_owned"; fi ;;
+            *) printf '%s\n' "$_owned" ;;
+          esac
+          return 0
+        fi
         [[ "$_bound" == 2s && "$*" == "ps --all --no-trunc --filter label=$_label=$ATTEMPT --format {{.ID}}" ]] || return 98
         printf 'lookup\n' >&2
         case "$MODE" in
@@ -162,11 +176,15 @@ const resourceProbeMocks = String.raw`
           inspectUnavailable) return 124 ;;
           cleanupDelayed|cleanupDelayedMismatch) if (( _probed && !_waits )); then return 124; fi ;;
           cleanupUnavailable) if (( _probed )); then return 124; fi ;;
+          rmTimeoutBudget) if (( _probed && !_waits )); then return 124; fi ;;
+          rmTimeoutLate) if (( _probed && _waits < 3 )); then return 124; fi ;;
+          rmTimeoutRecheckUnavailable) if (( _removed )); then return 124; fi ;;
           changed|ambiguousAfterRetry|malformedAfterRetry|wrongIdAfterRetry) if (( _waits == 0 )); then return 124; fi ;;
         esac
         if [[ "$MODE" == wrongId || "$MODE" == wrongIdAfterRetry ]]; then
           printf '%s 1 %s\n' "$_foreign" "$ATTEMPT"
-        elif [[ "$5" == "$_foreign" ]] || { (( _probed )) && [[ "$MODE" == cleanupMismatch || "$MODE" == cleanupDelayedMismatch ]]; }; then
+        elif [[ "$5" == "$_foreign" ]] || { (( _probed )) && [[ "$MODE" == cleanupMismatch || "$MODE" == cleanupDelayedMismatch ]]; } ||
+          { (( _removed )) && [[ "$MODE" == rmTimeoutForeign ]]; }; then
           printf '%s 1 foreign-attempt\n' "$5"
         else
           printf '%s 1 %s\n' "$_owned" "$ATTEMPT"
@@ -174,7 +192,14 @@ const resourceProbeMocks = String.raw`
         ;;
       rm)
         printf 'remove:%s\n' "$4" >&2
-        [[ "$_bound" == 10s && "$*" == "rm -f -v $_owned" && "$MODE" != removeFailed ]] || return 98
+        [[ "$*" == "rm -f -v $_owned" && "$MODE" != removeFailed ]] || return 98
+        if (( !_removed )); then [[ "$_bound" == 10s ]] || return 98
+        else [[ "$_bound" == 4s ]] || return 98
+        fi
+        _removed=$((_removed + 1))
+        if [[ "$MODE" == rmTimeout* ]] && { (( _removed == 1 )) || [[ "$MODE" == rmTimeoutRetryGone || "$MODE" == rmTimeoutStill || "$MODE" == rmTimeoutBudget ]]; }; then
+          return 124
+        fi
         ;;
       *) return 98 ;;
     esac
@@ -184,13 +209,26 @@ const resourceProbeBash = process.env.CORTEN_TEST_BASH ?? (process.platform === 
 test("the synthetic JSON resource probe settles cleanup without removing foreign containers", { skip: !resourceProbeBash }, async (t) => {
   const step = workflow.jobs.kernel.steps.find((s) => s.name === "Prove bracketed JSON resource reads on a synthetic Docker participant");
   const owned = "1".padStart(64, "0"), foreign = "2".padStart(64, "0");
-  const inspect = `inspect:${owned}`, inspectForeign = `inspect:${foreign}`, remove = `remove:${owned}`, probe = `probe:${owned}`;
+  const inspect = `inspect:${owned}`, inspectForeign = `inspect:${foreign}`, remove = `remove:${owned}`, probe = `probe:${owned}`, census = `census:${owned}`;
   const refused = "Synthetic JSON resource probe cleanup could not confirm one owned container";
+  const unresolved = "Synthetic JSON resource probe cleanup could not settle removal";
   const fullSearch = Array(4).fill(["lookup", inspect]).flat();
+  const rmTimeout = [inspect, probe, inspect, remove, census];
   const cases = [
     ["ok", 0, [inspect, probe, inspect, remove]],
     ["probeFailed", 1, [inspect, probe, inspect, remove]],
     ["removeFailed", 1, [inspect, probe, inspect, remove]],
+    ["rmTimeoutGone", 0, rmTimeout],
+    ["rmTimeoutRetry", 0, [...rmTimeout, inspect, remove]],
+    ["rmTimeoutRetryGone", 0, [...rmTimeout, inspect, remove, census]],
+    ["rmTimeoutStill", 1, [...rmTimeout, inspect, remove, census, unresolved]],
+    ["rmTimeoutForeign", 1, [...rmTimeout, inspect, unresolved]],
+    ["rmTimeoutUnknown", 1, [...rmTimeout, unresolved]],
+    ["rmTimeoutMalformed", 1, [...rmTimeout, unresolved]],
+    ["rmTimeoutBlank", 1, [...rmTimeout, unresolved]],
+    ["rmTimeoutRecheckUnavailable", 1, [...rmTimeout, inspect, unresolved]],
+    ["rmTimeoutBudget", 1, [inspect, probe, inspect, inspect, remove, census, inspect, remove, census, unresolved], 173],
+    ["rmTimeoutLate", 1, [inspect, probe, ...Array(4).fill(inspect), remove, census, unresolved], 170],
     ["cleanupDelayed", 0, [inspect, probe, inspect, inspect, remove], 154],
     ["cleanupMismatch", 1, [inspect, probe, inspect, refused]],
     ["cleanupDelayedMismatch", 1, [inspect, probe, inspect, inspect, refused]],
@@ -211,8 +249,10 @@ test("the synthetic JSON resource probe settles cleanup without removing foreign
   ];
   for (const [mode, status, trace, budget] of cases) {
     await t.test(mode, () => {
-      const result = spawnSync(resourceProbeBash, ["-e", "-o", "pipefail", "-c", resourceProbeMocks + step.run],
-        { cwd: root, env: { ...process.env, MODE: mode, ATTEMPT: randomUUID() }, encoding: "utf8", timeout: 5000, windowsHide: true });
+      const result = spawnSync(resourceProbeBash, ["-e", "-o", "pipefail", "-s"], {
+        input: resourceProbeMocks + step.run, cwd: root,
+        env: { ...process.env, MODE: mode, ATTEMPT: randomUUID() }, encoding: "utf8", timeout: 5000, windowsHide: true,
+      });
       assert.ifError(result.error);
       assert.equal(result.status, status, result.stderr);
       const lines = result.stderr.trim().split(/\r?\n/), budgetLines = lines.filter((line) => line.startsWith("budget:"));

@@ -188,7 +188,7 @@ async function load(name, target, phase, seconds, raw, pass) {
     await docker(["start", "-a", container], { timeout: (seconds + 25) * 1000, file: join(raw, `${phase}.log`) });
   } catch (e) { failed(step, e); }
   finally {
-    // Each stats error keeps the time it happened, so phaseEnd can tell one the app's stop caused.
+    // Retain sampler failures even when the app itself stopped under load.
     try { if (sampler) stats = await sampler.stop(); }
     catch (e) { for (const fault of statsPhaseErrors(e)) errors.push(fault); }
   }
@@ -204,7 +204,7 @@ async function load(name, target, phase, seconds, raw, pass) {
         const lines = await docker(["events", "--since", String(phaseStartMs / 1000), "--until", String(Date.now() / 1000), "--filter", "type=container", "--filter", `container=${name}`, "--format", "{{.Action}}|{{.TimeNano}}"]);
         return lines.split("\n").filter(Boolean).map((line) => ({ action: line.slice(0, line.lastIndexOf("|")), ms: Number(line.slice(line.lastIndexOf("|") + 1)) / 1e6 })).filter((e) => e.ms >= phaseStartMs);
       },
-    }, (e) => log(`${name} ${phase}: ${e.step} failed as the app stopped: ${String(e.error?.message ?? e.error).split("\n")[0]}`));
+    }, (e) => log(`${name} ${phase}: ${e.step} failed in a phase with an app stop: ${String(e.error?.message ?? e.error).split("\n")[0]}`));
     const counters = Object.fromEntries(samples.filter((n) => before[n] !== undefined && after[n] !== undefined).map((n) => { assert.ok(after[n] >= before[n], "CPU counter moved backwards"); return [n, { usec: after[n] - before[n] }]; }));
     writeFileSync(join(raw, `${phase}-cpu.json`), JSON.stringify(counters, null, 2));
     const upstreamReads = reads ? { before: reads, after: await upstreamCounters() } : null;

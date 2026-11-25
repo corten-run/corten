@@ -148,6 +148,28 @@ jobs:
             echo 'Synthetic JSON resource probe cleanup could not confirm one owned container' >&2
             return 1
           }
+          absent() {
+            local rows
+            # Keep the output boundary so even a blank or extra row is not proof.
+            rows=$(docker_local 2s ps --all --no-trunc --filter "id=$1" --format '{{.ID}}' && printf '.') || return 2
+            if [[ "$rows" == . ]]; then return 0; fi
+            [[ "$rows" == "$1"$'\n.' ]] && return 1
+            return 2
+          }
+          remove_owned() {
+            local candidate=$1 try=$2 status
+            if docker_local 10s rm -f -v "$candidate" >/dev/null; then return 0; else status=$?; fi
+            if (( status != 124 && status != 137 )); then return "$status"; fi
+            if absent "$candidate"; then return 0; else status=$?; fi
+            # The full retry fits only after either of the first two ownership attempts:
+            # 131s before teardown, then at most 11+12+4+5+6+4=42s for an acknowledged ID.
+            # A lost create does not run the probe, so its label search also fits.
+            if (( status == 1 && try <= 2 )) && owns "$candidate"; then
+              if docker_local 4s rm -f -v "$candidate" >/dev/null || absent "$candidate"; then return 0; fi
+            fi
+            echo 'Synthetic JSON resource probe cleanup could not settle removal' >&2
+            return 1
+          }
           cleanup() {
             local found pending= retry
             # Four attempts and three sleeps: at most 39s even with label lookup.
@@ -162,7 +184,7 @@ jobs:
                 [[ -z "$pending" || "$pending" == "$found" ]] || break
                 pending=$found
                 if owns "$found"; then
-                  docker_local 10s rm -f -v "$found" >/dev/null
+                  remove_owned "$found" "$retry"
                   return $?
                 elif (( $? != 2 )); then
                   break

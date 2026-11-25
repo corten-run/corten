@@ -237,10 +237,8 @@ export function* passPlan(passes, apps, profiles, runsOf) {
   }
 }
 
-// Steps of a load phase whose error the app's stop explains when the error came after the app
-// finished: its docker stats go with its container, and each stats error is stamped when it
-// happened. A sampler infrastructure failure, a CPU counter read before the phase,
-// k6 failing to start or finish, a missing summary, or anything else is not explained by a stop.
+// An app stop does not explain a sampler fault. Stderr, incomplete output and
+// an unexpected client exit cannot establish why the stats stream failed.
 const statsFaultMessage = (kind) => typeof kind === "string" && Object.hasOwn(statsInfrastructure, kind)
   ? statsInfrastructure[kind]
   : "docker stats sampler infrastructure failed";
@@ -308,16 +306,14 @@ export function phaseEnd({ pass, phase, phaseStart, app, errors = [], sidecars, 
   // before warmup, or between two phases, did not stop under this phase's load, and an outside
   // kill then is not in the phase's events. Both clocks are the Docker host's (run.mjs runs there).
   // An exited container says when by FinishedAt; one still running after an OOM kill only by
-  // Docker's oom event, and its time explains no error.
-  let finished = Infinity;
+  // Docker's oom event.
   if (stop.exitCode === null) assert.ok(events.some((e) => e.action === "oom"), `the app container was OOM-killed with no oom event since ${phase} began: not shown to be under its load, so the round fails`);
   else {
-    finished = Date.parse(app.FinishedAt);
+    const finished = Date.parse(app.FinishedAt);
     assert.ok(!Number.isNaN(finished), "a stopped app container has no FinishedAt");
     assert.ok(finished >= start, `the app container stopped at ${app.FinishedAt}, before ${phase} began at ${phaseStart}: not under its load, so the round fails`);
   }
-  const unexplained = errors.find((e) => !(e.step === "stats" && !statsDiagnostic(e) && Date.parse(e.at) >= finished));
-  if (unexplained) throw phaseFailure(unexplained);
+  if (errors.length) throw phaseFailure(errors[0]);
   // A 200 of the wrong content type before the app stopped is still a parity failure.
   const kind = summary?.root_group?.checks?.["marketplace content type"];
   assert.ok(!kind?.fails, `a 200 had the wrong content type under load before the app stopped (${kind?.fails}): a parity failure, not an outcome`);

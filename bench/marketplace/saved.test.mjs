@@ -389,9 +389,6 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   assert.equal(validateSaved(args).complete, true);
   const original = readFileSync(path);
   const postExitError = { step: "stats", error: "docker stats stopped early: 1", at: raw.app.state.FinishedAt };
-  raw.seen.errors = [postExitError];
-  writeFileSync(path, JSON.stringify(raw));
-  assert.equal(validateSaved(args).complete, true, "a legacy post-exit stats error is still waived");
   raw.seen.errors = [{ ...postExitError, error: "docker stats client pipes did not close within the stop grace" }];
   writeFileSync(path, JSON.stringify(raw));
   assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
@@ -413,13 +410,18 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
     assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
       && e.cause?.message === expected && !e.message.includes("synthetic-private-process-detail"), `${step}: ${kind ?? error}`);
   }
-  for (const message of ["docker stats client signal failed", "docker stats client process failed"]) {
-    await t.test(`untagged stats infrastructure: ${message}`, () => {
+  for (const message of ["docker stats client signal failed", "docker stats client process failed",
+    "unexpected EOF\n", "error during connect: connection refused\n", postExitError.error]) {
+    await t.test(`untagged stats fault: ${message.trim()}`, () => {
       raw.seen.errors = [{ ...postExitError, error: message }];
       writeFileSync(path, JSON.stringify(raw));
       assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID" && e.cause?.message === message);
     });
   }
+  raw.seen.errors = [{ ...postExitError, step: "sampler", kind: "client-stderr", error: "docker stats client wrote to stderr" }];
+  writeFileSync(path, JSON.stringify(raw));
+  assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
+    && e.cause?.message === "docker stats client wrote to stderr");
   raw.seen.errors = [];
   writeFileSync(path, original);
   for (const mutate of [

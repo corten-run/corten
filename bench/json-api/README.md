@@ -188,7 +188,10 @@ the observed sample and interval counts, positive CPU and memory, and
 headroom for k6 in an official run or qualifies historical results.
 Hosted probe teardown retries an unavailable inspect of the same full container ID
 within its cleanup budget. It searches by the unique attempt label only if create
-returned no usable ID, and refuses removal on an ownership mismatch.
+returned no usable ID, and refuses removal on an ownership mismatch. If removal
+times out, a successful exact-ID census can prove absence. If the container is
+still listed, cleanup may retry once after rechecking ownership, only when the
+earlier inspection left enough budget. It fails on unresolved removal.
 
 Every load phase retains host start/end clocks and k6's measured `testRunDurationMs` via
 [`handleSummary`](https://grafana.com/docs/k6/latest/results-output/end-of-test/custom-summary/).

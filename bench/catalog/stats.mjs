@@ -15,6 +15,7 @@ export const statsInfrastructure = Object.freeze({
   "pipe-release-timeout": "docker stats client pipes did not close within the stop grace",
   "shutdown-signal": "docker stats client signal failed",
   "client-process": "docker stats client process failed",
+  "client-stderr": "docker stats client wrote to stderr",
 });
 export function summarizeSamples(samples) {
   if (!samples.length) throw new Error("docker stats produced no samples");
@@ -26,15 +27,14 @@ export function summarizeSamples(samples) {
 export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGraceMs = 5000 } = {}) {
   const child = spawn("docker", ["stats", "--format", "{{json .}}", ...names], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   const samples = Object.fromEntries(names.map((n) => [n, []]));
-  // Each error with when it happened: the marketplace runner tells one after an app's container
-  // stopped from one before it (#1128). stop() throws them joined, as it always has.
+  // Retain the failure kind and observation time, not the Docker client's stderr text.
   const errors = [];
   const record = (kind, message) => errors.push({ message, at: new Date().toISOString(), kind });
   const observed = (message) => record("stats", message);
   const infrastructure = (kind) => record(kind, statsInfrastructure[kind]);
   let buffer = "";
   let raw = "";
-  let stopping = false;
+  let stderrSeen = false, termSent = false, forced = false;
   child.stdout.on("data", (chunk) => {
     const data = chunk.toString().replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
     raw += data;
@@ -51,21 +51,34 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
       } catch (e) { observed(e.message); }
     }
   });
-  child.stderr.on("data", (chunk) => { if (!stopping) observed(chunk.toString()); });
+  child.stderr.on("data", (chunk) => {
+    if (!stderrSeen && chunk.length) {
+      stderrSeen = true;
+      infrastructure("client-stderr");
+    }
+  });
   child.on("error", (error) => infrastructure(error.syscall === "kill" ? "shutdown-signal" : "client-process"));
   let closed = false, exited = false, settle, escalation, release;
   const done = new Promise((resolve) => { settle = resolve; });
   child.once("exit", () => { exited = true; });
-  child.once("close", (code) => {
+  child.once("close", (code, signal) => {
     closed = true;
     clearTimeout(escalation); clearTimeout(release);
-    if (!stopping) observed(`docker stats stopped early: ${code}`);
+    // A requested SIGTERM may be handled by the CLI (0 or 128 + SIGTERM), or
+    // reported as a signal by Node. An unrequested exit, even 0, proves nothing.
+    const terminated = code === null && signal === "SIGTERM";
+    const handled = signal == null && (code === 0 || code === 143);
+    if (!termSent || forced || !(terminated || handled)) infrastructure("client-process");
     settle();
   });
   const signal = (name) => {
     if (closed || exited) return;
-    // false without an error means the process may already have exited.
-    try { child.kill(name); } catch { infrastructure("shutdown-signal"); }
+    try {
+      if (child.kill(name)) {
+        if (name === "SIGTERM") termSent = true;
+        else forced = true;
+      }
+    } catch { infrastructure("shutdown-signal"); }
   };
   const terminate = () => {
     if (closed || release !== undefined) return;
@@ -82,7 +95,6 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
   const timer = setTimeout(() => { infrastructure("deadline"); terminate(); }, seconds * 1000);
   return {
     async stop() {
-      stopping = true;
       clearTimeout(timer);
       terminate();
       await done;

@@ -297,11 +297,12 @@ app's and profile's results; the report marks each stage that lost a pass
 than three passes only there; of two passes each number is the lower of its column's two
 values, not a median. The stop is the app's only when the container stopped after the phase
 began, the CPU counter sidecar and, for the HTTP source, the upstream are the same running
-containers, Docker recorded no kill, stop or restart of the app, and nothing failed that the
-stop does not explain (only ordinary Docker stats errors stamped after the app finished); otherwise the
-run fails. A sampler deadline, a timeout waiting for the stats client's output pipes, or a
-failure spawning or signalling the stats client is a harness failure even after the app
-exits, both at collection and when replaying the receipt.
+containers, Docker recorded no kill, stop or restart of the app, and no phase step failed.
+An ordinary app exit does not require samples after the exit. It does require clean sampler
+shutdown when sampling was active: even a zero client exit before the requested stop, any
+client stderr, an incomplete record, or a sampler deadline fails the phase. Replay likewise
+refuses a recorded fault even if its timestamp follows the app exit; older receipts that
+flattened these errors do not prove their cause.
 Still failures: a phase with no k6 summary or in which no request succeeded, a 200 of the wrong
 content type (before a stop too), an app container that stopped during its cold start or before
 a phase began (after its first 200, before warmup or between phases), and any error answer
