@@ -133,7 +133,8 @@ const drainedRecords = ["request", "start", "launcher", "registration", "result"
 const drainProofKeys = ["schema", "binding", "requests", "receipts", "watchers", "drained", "registration", "start", "launcher", "watcher",
   "query", "timeout", "executables", "observation", "entries", "custody"];
 // A failed watcher has no receipt. Its replacement is a later positive observation:
-// the exact recorded result, an inactive watcher unit and an absent session.
+// the exact recorded result, an inactive watcher unit and no observed process of the
+// session. It is a process observation only (see CLOUD.md for what it cannot see).
 function verifyDrainedSession(invocation, failure, entry, host, map, now) {
   exact(entry, ["id", "failureSha256", "result", "start", "launcher", "registration", "watcher", "cgroupEvents", "scope"]);
   same([entry.id, entry.failureSha256], [failure.id, failure.failureSha256], "drained watcher differs");

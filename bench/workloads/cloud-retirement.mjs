@@ -1264,6 +1264,12 @@ const deadlineLines = guardianSource.split("\n").flatMap((line, i) =>
 assert.equal(deadlineLines.length, 1, "guardian drainage deadline line changed");
 export const watcherDeadlineFailure = `{"helperLine":${deadlineLines[0]}}\n`;
 
+// Only these refusals mean an archived watcher failure cannot select the drain proof.
+// A custody read failure (a non-physical folder, an unreadable record) keeps its own
+// error and is not reported as a missing proof.
+export class SetupWatcherProofMissing extends Error {}
+const proofMissing = (ok, message) => { if (!ok) throw new SetupWatcherProofMissing(message); };
+
 // An archived watch-failure names an earlier bootstrap control whose watcher stopped
 // before its receipt. Each must be exactly one settled bootstrap ledger row without an
 // archived receipt, and must be the deadline expiry above. The record is diagnostic:
@@ -1276,13 +1282,14 @@ export function setupWatcherFailures(state, local) {
   for (const name of names) {
     const id = /^watch-failure-([a-f0-9]{32})\.json$/.exec(name)?.[1];
     if (!id) continue;
-    assert.ok(state.control, "watcher failure without a control ledger");
+    proofMissing(state.control, "watcher failure without a control ledger");
     const rows = state.control.ledger.filter((row) => row.request.invocation.id === id);
-    assert.ok(rows.length === 1 && rows[0].request.epoch === "bootstrap" && rows[0].localTerminal === true && Number.isInteger(rows[0].code),
+    proofMissing(rows.length === 1 && rows[0].request.epoch === "bootstrap" && rows[0].localTerminal === true && Number.isInteger(rows[0].code),
       "watcher failure outside the settled bootstrap ledger");
-    assert.ok(!names.includes(`receipt-${id}.json`), "watcher failure beside its receipt");
-    const bytes = regular(join(custody, name), 4096);
-    assert.ok(bytes.equals(Buffer.from(watcherDeadlineFailure)), "watcher failure is not a drainage deadline expiry");
+    proofMissing(!names.includes(`receipt-${id}.json`), "watcher failure beside its receipt");
+    // The same bound as the custody comparison, so an oversized record is a different record, not a read failure.
+    const bytes = regular(join(custody, name), 8 * 1024 * 1024);
+    proofMissing(bytes.equals(Buffer.from(watcherDeadlineFailure)), "watcher failure is not a drainage deadline expiry");
     failures.push({ sequence: rows[0].request.sequence, id, failureSha256: digest(bytes) });
   }
   return failures.sort((a, b) => a.sequence - b.sequence).map(({ id, failureSha256 }) => ({ id, failureSha256 }));

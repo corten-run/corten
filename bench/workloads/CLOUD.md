@@ -1180,9 +1180,9 @@ from its registration absent or empty; and no process with an identity from that
 session's chain or a parent among its PIDs. A process can leave both the scope
 and its parent (for example `systemd-run --scope`, then reparenting to PID 1),
 so every process outside the live query's own set must also have started before
-the earliest failed session's first process; only kernel threads under kthreadd
-are exempt. A later unrelated process, such as a service the setup job started,
-therefore refuses too. Every check of the ordinary query still applies, including
+the earliest failed session's first process. Only kernel threads are exempt: the
+kernel-thread flag, kthreadd (PID 2) as parent and the root cgroup, all three.
+Every check of the ordinary query still applies, including
 the exact custody inventory, so a stream or unknown control file still refuses.
 The host and the verifier also bind each of the failed control's request, start,
 launcher, registration, result and failure records to the copied custody, which
@@ -1192,9 +1192,30 @@ retirement compares with the archive. Its receipt is
 `benchmark-control-setup-query/v2` with exact top-level fields). A query with no
 archived failure keeps its previous bytes and schemas, so saved receipts replay
 unchanged. The proof adds no write: the failure, archive and exit stay as they
-were, and it never qualifies the group. `setup-watcher-proof-missing` means an
+were, and it never qualifies the group.
+
+The drain proof is narrow. It can settle only a setup job that failed before it
+started Docker, with the guardian's exact deadline record archived, and that left
+no process running that started during or after the failed session. Once
+`bootstrap_stage=docker-install` installs Docker, `dockerd` and `containerd` keep
+running (the job later also runs `systemctl enable --now docker`), so a failure
+from then on refuses, as does an earlier stage that leaves any process behind. A
+timer or other short-lived service that happens to run at query time (for example
+`apt-daily` or `fwupd-refresh`, before the job disables them) refuses too. A
+refusal is not retried: the query's refusal is recorded in the ledger, every later
+collect stops with `setup-host-proof-refused` before another query, and the host
+is then handled as it was before this proof existed, by the operator cleanup
+below. The proof covers processes that were started. It cannot see work the
+session handed to a process that already existed (such as `dockerd` or a D-Bus
+service) or a thread added to an existing process.
+
+`setup-watcher-proof-missing` means an
 archived failure is not that deadline record, names an unknown or non-bootstrap
-control, or sits beside its own receipt; collection stops before any query. After
+control, or sits beside its own receipt; collection stops before any query. A
+custody read failure (for example a non-physical control folder or a record that is
+not a regular file) is not reported with that stage: it keeps its own error, which
+the production wrapper reports as `controller-collect`, and also stops before any
+query. After
 monitor registration the drain proof is never used: an archived watcher failure
 refuses with the same stage before any query, because stream state may exist on
 the host. `setup-host-proof-refused`

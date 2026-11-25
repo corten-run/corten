@@ -16,7 +16,7 @@ import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-s
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
   handoffLocks, handoffRetirementPolicy, pinHandoffRetirement, verifyHandoffCustody,
-  interruptedFirstUpload, settledBootstrap, setupWatcherFailures, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
+  interruptedFirstUpload, settledBootstrap, SetupWatcherProofMissing, setupWatcherFailures, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
   verifyUnusedEvidence, createErroredBytes, createErroredCustody, createErroredReceipt, createErroredRecord, createRecheckLock, pendingCreateErroredReceipt,
   verifyCreateErrored, offlineNeverStarted, createContradiction, contradictionStages, createReappeared, createReappearedWitness, publicationStages } from "./cloud-retirement.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
@@ -944,8 +944,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const checkSetupCustody = (exit) => {
     // An archived watcher failure is never a receipt. It selects the separate drain
     // proof only when every failure names a settled bootstrap row without a receipt.
+    // A custody read failure is not a missing proof: it keeps its own error, which the
+    // production wrapper reports as controller-collect, and still stops before any query.
     let failures;
-    try { failures = setupWatcherFailures(state, local); } catch { refuseSetup("setup-watcher-proof-missing"); }
+    try { failures = setupWatcherFailures(state, local); }
+    catch (error) { if (error instanceof SetupWatcherProofMissing) refuseSetup("setup-watcher-proof-missing"); throw error; }
     // An acknowledged refusal is not a missing result. Do not append more
     // controls on restart or treat the refusal as permission to retire.
     const rows = state.control.ledger, last = rows.at(-1);

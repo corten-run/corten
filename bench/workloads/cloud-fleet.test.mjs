@@ -9,7 +9,7 @@ import * as contract from "./cloud-contract.mjs";
 import { host as catalogHost } from "../catalog/droplet-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
 import { accountId, archive, campaign, commit, context, harness, metadata, subject, syntheticDelivery, syntheticInspection, syntheticPlacement } from "./cloud-fixtures.mjs";
-import { campaignOutcome, controllerState, parseDropletArgs } from "./cloud-options.mjs";
+import { campaignOutcome, controllerFailure, controllerState, parseDropletArgs } from "./cloud-options.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { digest } from "./cloud-local.mjs";
 import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
@@ -552,6 +552,35 @@ test("failed pre-registration cleanup preserves the archive and stops on missing
     assert.equal(lockHeld, cancelled || mode === "lost-result"); assert.equal(existsSync(lock), lockHeld);
     assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
   }
+});
+
+// Only a watcher record that cannot select the drain proof is setup-watcher-proof-missing.
+// A custody read failure keeps its own error (production reports controller-collect) and
+// still stops before any query or deletion.
+test("a failed pre-registration custody read is not reported as a missing watcher proof, including on restart", async (t) => {
+  const { h, options } = configured(t);
+  h.flags.hook = (bin, a) => { if (bin === "ssh" && a.at(-1).startsWith("systemctl show") && h.units === 1) h.flags.active = false; };
+  await assert.rejects(h.task({}, options).launch(), /ended before common bootstrap/);
+  h.flags.hook = undefined;
+  const first = h.saved().control.ledger[0].request.invocation.id;
+  // A folder where the failure record belongs: the archive is valid, but there is no record to read.
+  h.setArchive(archive([...metadata(), { name: "control/" }, { name: `control/watch-failure-${first}.json/` }]));
+  let queries = 0;
+  const run = (bin, args, ...rest) => {
+    if (bin === "ssh" && args.at(-1).includes("<<'CORTEN_FAILED_SETUP_HOST'")) queries++;
+    return h.run(bin, args, ...rest);
+  };
+  const refused = async () => {
+    const error = await h.task({ run }).collect().then(() => undefined, (e) => e);
+    assert.match(error?.message, /bounded regular unlinked file required/);
+    assert.equal(error.controllerStage, undefined); assert.equal(controllerFailure(error), undefined);
+  };
+  await refused();
+  const saved = h.saved(), calls = h.calls.length;
+  assert.ok(saved.archiveSha256 && saved.evidenceSha256); assert.equal(saved.retirement, undefined); assert.equal(saved.deletionIntentAt, undefined);
+  await refused();
+  assert.equal(queries, 0); assert.equal(h.calls.length, calls); assert.deepEqual(h.saved(), saved);
+  assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
 });
 
 test("a nonterminal later group retains ordinary running admission", async (t) => {

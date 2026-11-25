@@ -1,7 +1,7 @@
 // Fixed production source with synthetic kernel observations only. No host operations.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -10,7 +10,7 @@ import { digest } from "./cloud-local.mjs";
 import { controlRequest, guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { verifyControlSetupQuery } from "./cloud-control-session.mjs";
 import { remoteFiles } from "./cloud-remote.mjs";
-import { setupEvidence, setupWatcherFailures, terminalSetupScript, watcherDeadlineFailure } from "./cloud-retirement.mjs";
+import { SetupWatcherProofMissing, setupEvidence, setupWatcherFailures, terminalSetupScript, watcherDeadlineFailure } from "./cloud-retirement.mjs";
 import setupDrainSource from "./cloud-setup-drain-source.mjs";
 
 // The guardian records only this line when a watcher misses its drainage deadline.
@@ -188,7 +188,7 @@ test("the drain proof refuses residual sessions, live or queued watchers, change
   assert.equal(legacy.rejected, true); assert.match(legacy.reason, /^KeyError: .*receipt-/);
 });
 
-test("the drain proof refuses any process that started with or after the failed session, wherever it moved", () => {
+test("the drain proof refuses a non-kernel process outside the query's set that started with or after the failed session, wherever it moved", () => {
   // The kernel fixture gives each process startTicks = pid * 100. The failed session's first
   // process is PID 100, so the fence is 10000.
   for (const mode of ["setup-drain-older", "setup-drain-kthread"]) {
@@ -250,4 +250,98 @@ test("a drain proof binds every record of the failed row to the host entries and
   refuses((p) => { p.drained[0].scope = { ...p.drained[0].scope, exists: true, events: ["populated 0\n"] }; }, /drained session scope populated/);
   refuses((p) => { p.extra = true; }, /unexpected control record fields/);
   refuses((p) => { delete p.executables; }, /unexpected control record fields/);
+});
+
+// The drain query is a hand copy of the guardian's setup_query. Derive it from the current
+// guardian function plus only the known drain insertions, so a change to either side fails here.
+const pythonFunction = (source, name) => {
+  const lines = source.split("\n"), start = lines.indexOf(`def ${name}(root, expected):`);
+  assert.ok(start >= 0 && lines.lastIndexOf(`def ${name}(root, expected):`) === start, name);
+  let end = start + 1;
+  while (end < lines.length && (lines[end] === "" || lines[end].startsWith(" "))) end++;
+  while (lines[end - 1] === "") end--;
+  return lines.slice(start, end).join("\n") + "\n";
+};
+const drainEdits = [
+  // Drain insertions: the expected failures, a drained entry per failed row, and none left over.
+  ["def setup_query(root, expected):\n", `def setup_drain_query(root, expected):
+    # setup_query, except that each expected failed watcher gets setup_drained_session
+    # instead of its missing receipt. Every other check and the order stay the same.
+    failures = expected["watcherFailures"]
+    assert isinstance(failures, list) and 0 < len(failures) <= len(expected["requests"])
+    failed = {failure["id"]: failure for failure in failures}
+    assert len(failed) == len(failures)
+`],
+  ["    receipts, watchers = [], []\n", "    receipts, watchers, drained = [], [], []\n"],
+  [`        names = ("request", "start", "launcher", "registration") + (() if sequence == len(requests) else ("result", "receipt"))
+`, `        failure = failed.pop(invocation["id"], None)
+        assert failure is None or (sequence < len(requests) and request["epoch"] == "bootstrap"), "drain expectation differs"
+        names = ("request", "start", "launcher", "registration") + (() if sequence == len(requests)
+                                                                    else ("result", "watch-failure") if failure else ("result", "receipt"))
+`],
+  ["        if sequence < len(requests):\n", `        if failure:
+            receipts.append(None)
+            watchers.append(None)
+            drained.append(setup_drained_session(root, request, failure))
+        elif sequence < len(requests):
+`],
+  ["            watchers.append(terminal)\n", `            watchers.append(terminal)
+    assert not failed, "drain expectation differs"
+`],
+  // Start-time check: nothing outside the live query's set started with or after a failed session.
+  ["    entries, total = [], 0\n", `    # A failed session's process can leave both its scope and its parent (systemd-run --scope,
+    # then reparenting to PID 1), so neither cgroup nor parentage finds it. Every process outside
+    # the live query's own set must have started before the earliest failed session's first
+    # process. Later unrelated processes refuse too; that is accepted.
+    fence = min(int(p["startTicks"]) for entry in drained for p in entry["registration"]["session"]["chain"])
+    for row in rows.values():
+        if row["pid"] not in allowed and not kernel_thread(row):
+            assert int(row["startTicks"]) < fence, "process started during or after a failed session"
+    entries, total = [], 0
+`],
+  // Six-record custody check for every failed row.
+  [`    assert {p["name"] for p in copied} >= {"helper.py", "binding.json"}
+`, `    assert {p["name"] for p in copied} >= {"helper.py", "binding.json"}
+    assert {name + "-" + failure["id"] + ".json" for failure in failures for name in DRAINED_RECORDS} <= {p["name"] for p in copied}, "failed watcher record missing from custody"
+`],
+  // v2 schema with the drained entries.
+  [`"benchmark-control-setup-query/v1"`, `"benchmark-control-setup-query/v2"`],
+  [`"receipts": receipts, "watchers": watchers, "registration"`, `"receipts": receipts, "watchers": watchers, "drained": drained, "registration"`],
+];
+
+test("setup_drain_query is the guardian's setup_query with only the known drain insertions", () => {
+  let derived = pythonFunction(guardianSource, "setup_query");
+  for (const [before, after] of drainEdits) {
+    assert.equal(derived.split(before).length, 2, `setup_query no longer has exactly one: ${before.trim().slice(0, 80)}`);
+    derived = derived.replace(before, () => after);
+  }
+  assert.equal(pythonFunction(setupDrainSource, "setup_drain_query"), derived, "setup_drain_query drifted from setup_query");
+  // The guardian itself stays the hashed, unchanged source.
+  assert.ok(!guardianSource.includes("setup_drain_query") && !guardianSource.includes("DRAINED_RECORDS"));
+});
+
+test("only a watcher record that cannot select the drain proof is a missing proof; a custody read failure keeps its own error", (t) => {
+  const f = fixture("setup-drain-normal", { drain: true }), failed = f.expected.watcherFailures[0].id;
+  const { local, custody } = custodyFolder(t, f), path = join(custody, `watch-failure-${failed}.json`);
+  const missing = (state, pattern) => assert.throws(() => setupWatcherFailures(state, local),
+    (error) => error instanceof SetupWatcherProofMissing && pattern.test(error.message));
+  const unreadable = (state, at, pattern) => assert.throws(() => setupWatcherFailures(state, at),
+    (error) => !(error instanceof SetupWatcherProofMissing) && pattern.test(error.message));
+  writeFileSync(path, '{"helperLine":0}\n'); missing(f.state, /not a drainage deadline expiry/);
+  writeFileSync(path, Buffer.alloc(5000, 0x20)); missing(f.state, /not a drainage deadline expiry/);
+  writeFileSync(path, deadlineFailure);
+  const receipt = join(custody, `receipt-${failed}.json`);
+  writeFileSync(receipt, "{}\n"); missing(f.state, /beside its receipt/); unlinkSync(receipt);
+  const unknown = structuredClone(f.state); unknown.control.ledger[0].request.invocation.id = "e".repeat(32);
+  missing(unknown, /outside the settled bootstrap ledger/);
+  const ledgerless = structuredClone(f.state); delete ledgerless.control; missing(ledgerless, /without a control ledger/);
+  assert.deepEqual(setupWatcherFailures(f.state, local), [{ id: failed, failureSha256: digest(deadlineFailure) }]);
+  // A second link makes the bounded read of the record refuse.
+  const link = join(local, "linked-watch-failure.json"); linkSync(path, link);
+  unreadable(f.state, local, /bounded regular unlinked file required/); unlinkSync(link);
+  // A non-physical custody path refuses with no watcher failure to read.
+  const other = mkdtempSync(join(tmpdir(), "owned-control-retirement-"));
+  t.after(() => { assert.ok(other.startsWith(join(tmpdir(), "owned-control-retirement-"))); rmSync(other, { recursive: true, force: true }); });
+  mkdirSync(join(other, f.state.evidence)); writeFileSync(join(other, f.state.evidence, "control"), "not a folder\n");
+  unreadable(f.state, other, /physical directory required/);
 });
