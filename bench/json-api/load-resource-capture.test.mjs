@@ -60,8 +60,9 @@ test("disappearance defers to the exact terminal receipt; no required slot or ot
     await new Promise(setImmediate);
     const result = await f.capture.stop();
     assert.deepEqual(f.ids, [id], "no race against an intermediate Docker status");
-    assert.equal(finalizeLoadResourceCapture(result, terminal()).rows.length, 2);
-    assert.equal(finalizeLoadResourceCapture(result, terminal({ exitCode: 99 })).rows.length, 2);
+    assert.equal(finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(3000), exitCode: 99 })).rows.length, 2);
+    assert.throws(() => finalizeLoadResourceCapture(result, terminal()), (error) => error === fault,
+      "an exit inside the failed read's first millisecond is not proven to precede it");
     for (const ms of [2999, 3000]) assert.equal(finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(ms) })).rows.length, 2);
     for (const ms of [3001, 3900]) {
       assert.throws(() => finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(ms) })),
@@ -77,6 +78,28 @@ test("disappearance defers to the exact terminal receipt; no required slot or ot
   const result = await fault.capture.stop();
   assert.throws(() => finalizeLoadResourceCapture(result, terminal()), /untrusted memory counter/);
   assert.deepEqual(fault.ids, [id]);
+});
+
+test("a later exit during unwind or a wall-clock step cannot excuse disappearance", async () => {
+  const fault = Object.assign(new Error("synthetic process vanished"), { code: "ENOENT" });
+  for (const jump of [false, true]) {
+    let wall = epoch, mono = 0, ended = false;
+    const f = startLoadResourceCapture({ id, now: () => wall, monotonic: () => mono,
+      async wait(ms) { wall += ms; mono += ms; if (jump && mono === 3000) wall += 200; },
+      async inspect() { return info("running"); },
+      acquire({ sequence }) {
+        if (sequence < 2) return { sequence };
+        ended = true; wall += 500; mono += 500;
+        throw fault;
+      },
+    });
+    await new Promise(setImmediate);
+    const result = await f.stop();
+    assert.ok(ended);
+    assert.equal(result.capture.rows.length, 2);
+    assert.throws(() => finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(jump ? 3100 : 3400) })),
+      jump ? /clock discontinuity/ : (error) => error === fault);
+  }
 });
 
 test("a successfully read partial slot with a bracket crossing the exact finish is omitted only from that slot", async () => {

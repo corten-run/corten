@@ -36,6 +36,7 @@ export async function run(args) {
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
   const log = (line) => { const text = `${new Date().toISOString()} ${line}`; console.log(text); appendFileSync(join(folder, "run.log"), `${text}\n`); };
   const fail = (app, key, stage, error) => { summary.failures.push({ app, key, stage, error: error.stack ?? String(error) }); log(`${app ?? "suite"} ${key ?? ""}: ${stage}: ${error.message}`); save(); };
+  const cleanupFailure = (resource) => (error) => { summary.cleanupFailures.push({ resource, error: error.message }); };
   const active = new Set(), upstreams = {}, fixtureDirs = {}, mount = ["-v", `${join(repo, "bench")}:/bench:ro`];
   const write = artifacts.writer(folder), loadArtifact = artifacts.reader(folder);
   const inspect = async (name, cleanup = false) => JSON.parse(await docker(["inspect", name], { cleanup }))[0];
@@ -118,12 +119,12 @@ export async function run(args) {
     const config = c.loadConfig(options, stage), k6 = `${runId}-k6`, up = upstreams[profile.payload].name;
     const names = [name, ...(profile.source === "api" ? [up] : [])], roles = ["app", ...(profile.source === "api" ? ["upstream"] : [])];
     const statsPath = join(folder, path, `${stage}-stats.log`), context = c.runtimeContext(summary, profile);
-    try {
+    return phaseCapture.withPhaseCleanup(async () => {
       await own(["create", "--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount,
         "-e", `BASE=http://${name}:8080`, "-e", `PAYLOAD=${profile.payload}`, "-e", `DURATION=${config.seconds}s`, "-e", `MODE=${config.mode}`,
         "-e", `RATE=${config.rate}`, "-e", `VUS=${config.vus}`, ...(config.mode === "fixed" ? ["-e", "JSON_PROTOTYPE_OUTPUT=/tmp"] : []),
         summary.tools.k6.imageId, ...c.timedLoadCommand(config)], k6);
-      return await phaseCapture.capturePhase({ folder, path, stage, config, expected, options, tools: summary.tools, context, priorTailUnobserved,
+      return phaseCapture.capturePhase({ folder, path, stage, config, expected, options, tools: summary.tools, context, priorTailUnobserved,
         native: loadArtifact(summary.apps[expected.app].checks[profile.key].native), io: {
           write, reads: () => upstreamSnapshot(profile.payload),
           execute: (opts) => docker(["start", "-a", k6], opts),
@@ -146,7 +147,7 @@ export async function run(args) {
             return rows[0];
           } }),
         } });
-    } finally { await remove(k6); }
+    }, () => remove(k6), cleanupFailure(k6));
   }
   try {
     save(); summary.commit = await command("git", ["rev-parse", "HEAD"]); summary.dirty = Boolean(await command("git", ["status", "--porcelain"]));
@@ -247,23 +248,28 @@ export async function run(args) {
         const path = `${app}/${profile.key}/p${pass}`; mkdirSync(join(folder, path));
         const result = { pass, identity: expected, complete: false, phases: {} }; entry.runs[profile.key].push(result);
         try {
-          result.cold = await cold(name, profile, expected.imageId, expected, path);
-          try { result.warmup = await phase(name, profile, expected, "warmup", path); }
-          catch (error) { if (error.phase) result.warmup = error.phase; throw error; }
-          let priorTailUnobserved = false;
-          for (const stage of c.phases) {
-            try { result.phases[stage] = await phase(name, profile, expected, stage, path, priorTailUnobserved); }
-            catch (error) { if (error.phase) result.phases[stage] = error.phase; throw error; }
-            priorTailUnobserved ||= result.phases[stage].metrics.counts.timeout > 0;
-            save();
-          }
+          await phaseCapture.withPhaseCleanup(async () => {
+            result.cold = await cold(name, profile, expected.imageId, expected, path);
+            try { result.warmup = await phase(name, profile, expected, "warmup", path); }
+            catch (error) { if (error.phase) result.warmup = error.phase; throw error; }
+            let priorTailUnobserved = false;
+            for (const stage of c.phases) {
+              try { result.phases[stage] = await phase(name, profile, expected, stage, path, priorTailUnobserved); }
+              catch (error) { if (error.phase) result.phases[stage] = error.phase; throw error; }
+              priorTailUnobserved ||= result.phases[stage].metrics.counts.timeout > 0;
+              save();
+            }
+          }, async () => {
+            try { writeFileSync(join(folder, path, "app.log"), await docker(["logs", name])); } catch {}
+            let readsBeforeStop, beforeStopAt;
+            await phaseCapture.withPhaseCleanup(async () => {
+              readsBeforeStop = await apiReads(profile.payload); beforeStopAt = Date.now();
+            }, () => remove(name), cleanupFailure(`${name} removal`));
+            result.tail = write(`${path}/tail.json`, { beforeStopAt, before: readsBeforeStop, after: await apiReads(profile.payload), afterStopAt: Date.now() });
+          }, cleanupFailure(name));
           result.complete = true;
         } catch (error) { result.failed = error.message; throw error; }
         finally {
-          try { writeFileSync(join(folder, path, "app.log"), await docker(["logs", name])); } catch {}
-          const readsBeforeStop = await apiReads(profile.payload), beforeStopAt = Date.now();
-          await remove(name);
-          result.tail = write(`${path}/tail.json`, { beforeStopAt, before: readsBeforeStop, after: await apiReads(profile.payload), afterStopAt: Date.now() });
           for (const stage of c.phases) entry.aggregates[profile.key][stage] = { ...c.aggregate(entry.runs[profile.key].filter((r) => r.phases[stage]?.metrics).map((r) => r.phases[stage].metrics)), asked: options.passes };
           entry.projections[profile.key] = outcomes.timedCaseProjection(entry.runs[profile.key].map((r) => ({ pass: r.pass,
             phases: Object.fromEntries(c.phases.filter((p) => r.phases[p]?.metrics).map((p) => [p, r.phases[p].metrics])) })), options.passes);

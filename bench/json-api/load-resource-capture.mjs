@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { timestampNs } from "./fixed-stream.mjs";
-import { acquireLoadResources, LoadResourceLifetimeEnded, loadResourceCaptureSchema, loadResourceFirstSlot, loadResourcePeriodMs } from "./load-resource-proof.mjs";
+import { acquireLoadResources, clockDelta, LoadResourceLifetimeEnded, loadResourceCaptureSchema, loadResourceFirstSlot, loadResourcePeriodMs } from "./load-resource-proof.mjs";
 
 const maxRows = 360;
 const msNs = (ms) => BigInt(ms) * 1_000_000n;
@@ -21,12 +21,13 @@ export function startLoadResourceCapture({ id, inspect, acquire = acquireLoadRes
   assert.ok(typeof id === "string" && /^[a-f0-9]{64}$/.test(id), "load resource capture requires an exact container ID");
   const controller = new AbortController(), { signal } = controller;
   const capture = { schema: loadResourceCaptureSchema, live: null, rows: [] };
+  const clock = () => ({ at: now(), monotonic: monotonic() });
   async function waitUnlessStopped(ms) {
     try { await wait(ms, signal); }
     catch (error) { if (!signal.aborted || error?.name !== "AbortError") throw error; }
   }
   async function collect() {
-    const deadline = monotonic() + 25_000;
+    const initial = clock(), deadline = initial.monotonic + 25_000;
     while (!signal.aborted && monotonic() < deadline) {
       const state = stateOf(await inspect(id), id);
       if (state.Status === "running" && state.Running === true && state.ExitCode === 0 && Number.isSafeInteger(state.Pid) && state.Pid > 0) {
@@ -43,13 +44,15 @@ export function startLoadResourceCapture({ id, inspect, acquire = acquireLoadRes
       let remaining;
       while (!signal.aborted && (remaining = slot - now()) > 0) await waitUnlessStopped(remaining);
       if (signal.aborted) break;
-      const begin = now();
-      assert.ok(sequence < maxRows && begin < slot + loadResourcePeriodMs, "missing or excess scheduled load acquisition");
+      const begin = clock();
+      assert.ok(sequence < maxRows && begin.at < slot + loadResourcePeriodMs, "missing or excess scheduled load acquisition");
       let row;
       try { row = acquire({ id, pid: capture.live.pid, sequence }); }
       catch (error) {
         if (error?.code !== "ENOENT" && !(error instanceof LoadResourceLifetimeEnded)) throw error;
-        return { capture, ending: { sequence, begin, end: now(), error } };
+        clockDelta(initial, begin);
+        clockDelta(begin, clock());
+        return { capture, ending: { sequence, begin: begin.at, error } };
       }
       capture.rows.push(row);
     }
@@ -81,11 +84,11 @@ export function finalizeLoadResourceCapture({ capture, ending, error }, terminal
   const slot = firstAt + full * loadResourcePeriodMs;
   if (ending) {
     const attemptedSlot = firstAt + ending.sequence * loadResourcePeriodMs;
-    // Only excuse a disappearance once all full slots were captured and the
-    // exit was already observable in the failed read's whole-ms bracket.
+    // Failure time is unknown: unwinding may outlive the container. Only a
+    // terminal timestamp no later than the lower bound of read start suffices.
     if (ending.sequence < full || ending.sequence > full + Number(partial) || capture.rows.length !== ending.sequence
       || ending.begin < attemptedSlot || ending.begin >= attemptedSlot + loadResourcePeriodMs
-      || ending.end < ending.begin || finished >= msNs(ending.end + 1)) throw ending.error;
+      || finished > msNs(ending.begin)) throw ending.error;
   }
   const tail = capture.rows.at(-1);
   // A genuine read in the terminal partial slot can round past the recorded

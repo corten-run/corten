@@ -18,11 +18,24 @@ function bounded(file, cap) {
     return bytes.subarray(0, length);
   } finally { closeSync(fd); }
 }
+export async function withPhaseCleanup(run, cleanup, recordCleanupFailure) {
+  let failed = false;
+  try { return await run(); }
+  catch (error) { failed = true; throw error; }
+  finally {
+    try { await cleanup(); }
+    catch (error) {
+      recordCleanupFailure(error);
+      if (!failed) throw error;
+    }
+  }
+}
+
 export async function capturePhase({ folder, path, stage, config, expected, options, tools, context, native, priorTailUnobserved = false, io }) {
   const raw = { schema: timedPhaseSchema, identity: expected, phase: stage, config,
     tools: { nodeImageId: tools.node.imageId, k6ImageId: tools.k6.imageId }, captureErrors: [], priorTailUnobserved };
   const prefix = `${path}/${stage}`, output = join(folder, `${prefix}-events.jsonl`), log = join(folder, `${prefix}-stderr.jsonl`);
-  let sampler, loadSampler, loadResult, loadEnding, countersBefore, failure, stream;
+  let sampler, loadSampler, loadResult, loadEnding, countersBefore, failure, sampleFailure, stream;
   const sampleErrors = [];
   const firstLine = (error) => String(error?.message ?? error).split("\n", 1)[0].slice(0, 512);
   async function joinSamplers() {
@@ -82,7 +95,10 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
       raw.files.stdout = { path: `${prefix}-events.jsonl`, bytes: 0, sha256: sha256(bytes) };
     }
     if (failure) throw failure;
-    if (sampleErrors.length) throw new Error(sampleErrors[0]);
+    if (sampleErrors.length) {
+      sampleFailure = new Error(sampleErrors[0]);
+      throw sampleFailure;
+    }
     const metrics = deriveProductionPhase(raw, expected, stage, options, tools, context, { stream, native, priorTailUnobserved });
     return { raw: io.write(`${prefix}.json`, raw), metrics };
   } catch (error) {
@@ -93,9 +109,13 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
     if (cause) raw.captureErrors.push(cause);
     if (loadEnding) sampleErrors.push(firstLine(loadEnding));
     raw.captureErrors.push(...sampleErrors);
-    if (error !== failure && !sampleErrors.includes(error.message)) raw.captureErrors.push(error.message);
+    if (error !== failure && error !== sampleFailure) raw.captureErrors.push(firstLine(error));
     const thrown = cause ? new Error(cause) : error;
-    thrown.phase = { raw: io.write(`${prefix}.json`, raw), metrics: null };
+    try { thrown.phase = { raw: io.write(`${prefix}.json`, raw), metrics: null }; }
+    catch (writeError) {
+      throw new AggregateError([thrown, writeError],
+        [...raw.captureErrors, `phase receipt write: ${firstLine(writeError)}`].join("; "), { cause: thrown });
+    }
     throw thrown;
   } finally { if (sampler || loadSampler) await joinSamplers(); }
 }

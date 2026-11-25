@@ -130,7 +130,7 @@ export function acquireLoadResources({ id, pid, sequence }, source = linux) {
   return row;
 }
 
-function clockDelta(a, b) {
+export function clockDelta(a, b) {
   for (const clock of [a, b]) assert.ok(natural(clock?.at) && Number.isFinite(clock.monotonic) && clock.monotonic >= 0, "load acquisition clock missing");
   const wall = b.at - a.at, monotonic = b.monotonic - a.monotonic;
   // Checks clock consistency, not lifetime or coverage tolerance. Date.now floors to milliseconds.

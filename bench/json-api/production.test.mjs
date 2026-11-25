@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { gateFunctionalFixture, productionFixture, phaseFixture } from './production-fixtures.mjs';
 import { deriveProductionPhase } from './production.mjs';
-import { capturePhase } from './phase.mjs';
+import { capturePhase, withPhaseCleanup } from './phase.mjs';
 import { readFixedStreamSync } from './fixed-stream.mjs';
 import { loadResourceCaptureSchema } from './load-resource-proof.mjs';
 import { writer, reader } from './artifacts.mjs';
@@ -291,4 +291,39 @@ test('a terminal read failure retains known and unresolved load sampler faults',
     assert.equal(result.command.exit.code, f.command.exit.code);
     assert.deepEqual(result.captureErrors, [(fault.error ?? fault.ending.error).message, 'terminal counters failed']);
   }
+});
+
+test('a cleanup failure cannot replace a phase receipt, but still fails an otherwise successful phase', async () => {
+  const captured = Object.assign(new Error('capture failure'), { phase: { raw: { path: 'saved.json' }, metrics: null } });
+  const cleanup = new Error('owned load removal failed'), recorded = [];
+  const remove = async () => { throw cleanup; };
+  const record = (error) => recorded.push(error);
+  await assert.rejects(withPhaseCleanup(async () => { throw captured; }, remove, record), (error) => error === captured);
+  await assert.rejects(withPhaseCleanup(async () => true, remove, record), (error) => error === cleanup);
+  assert.deepEqual(recorded, [cleanup, cleanup]);
+  assert.equal(await withPhaseCleanup(async () => 'passed', async () => {}, record), 'passed');
+});
+
+test('distinct matching fault text and a failed receipt write preserve every causal error', async (t) => {
+  const folder = mkdtempSync(join(tmpdir(), 'json-receipt-write-fault-'));
+  t.after(() => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true, force: true }); });
+  mkdirSync(join(folder, 'fault'));
+  const options = { duration: 1, warmup: 1, rate: 3 }, loadId = 'a'.repeat(64), saveFault = new Error('no space to save');
+  let counters = 0, saved;
+  const io = {
+    async observe() { return { participants: { load: { containerId: loadId } } }; },
+    async counters() { if (counters++) throw new Error('read failed'); return {}; },
+    sample() { return { async stop() { return {}; } }; },
+    sampleLoad() { return { async stop() { return { capture: {}, error: new Error('read failed') }; } }; },
+    async execute() { throw new Error('native clock expired'); },
+    write(file, raw) { saved = raw; throw saveFault; },
+  };
+  await assert.rejects(capturePhase({ folder, path: 'fault', stage: 'sat64', config: loadConfig(options, 'sat64'),
+    expected: {}, options, tools: { node: {}, k6: {} }, context: {}, io }), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors[1], saveFault);
+    assert.deepEqual(saved.captureErrors, ['native command: native clock expired', 'read failed', 'read failed']);
+    assert.match(error.message, /native clock expired; read failed; read failed; phase receipt write: no space to save/);
+    return true;
+  });
 });
