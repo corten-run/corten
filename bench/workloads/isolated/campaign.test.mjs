@@ -26,6 +26,10 @@ import { liveActorCpus, liveApplication } from "./native-roles.mjs";
 import * as controlAdmission from "./control-admission.mjs";
 import { guardianSource } from "../cloud-control-runtime.mjs";
 import { fixtureGitEnv } from "../../../scripts/fixture-git.mjs";
+import { deploymentSha256 } from "../deployments.mjs";
+import { isolatedLiveCapture, isolatedLiveLifetime } from "./test-fixtures/live-campaign.mjs";
+import { registration as controlRegistration } from "../test-fixtures/control-stream-fixture.mjs";
+import { streamHash } from "./control-stream.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
@@ -33,7 +37,7 @@ let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observat
 let lifetimeStartup;
 let lifetimeRun;
 let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSecondWorker, settleSurvives, settleNativeFails;
-let liveOutput, compilerScratch;
+let liveOutput, liveRoundTrip, compilerScratch;
 let auditClock, offlinePrep;
 const hourNs = 3600n * 1000000000n;
 const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true, env: fixtureGitEnv() });
@@ -119,6 +123,12 @@ mock.module("./host-observation.mjs", { namedExports: {
   sampleAuditClock: () => ({ ...auditClock }),
   observeHost(_apparatus, retainUdev = false) {
     observations++;
+    if (liveRoundTrip) {
+      const value = udevHost(observations, retainUdev), { capture, offlineClock } = liveRoundTrip;
+      value.at = new Date(observations < 3 ? capture.start - 10 : capture.end + (observations === 4 ? 5010 : 5)).toISOString();
+      if (retainUdev && offlineClock) value.offlineMonoNs = offlineClock[observations];
+      return value;
+    }
     if (offlinePrep && retainUdev) {
       const value = offlinePrep.settled ? udevHost(observations) : host();
       return { ...value, offlineMonoNs: offlinePrep[["", "before", "after", "settled"][observations - 1]] };
@@ -135,7 +145,9 @@ mock.module("./host-observation.mjs", { namedExports: {
   },
 } });
 mock.module("./host-lifetime.mjs", { exports: {
+  ...actualLifetime,
   beginLifetime(args) {
+    if (liveRoundTrip) return isolatedLiveLifetime(liveRoundTrip.capture, args, liveRoundTrip.clock);
     if (lifetimeRun) {
       const run = lifetimeRun;
       return actualLifetime.beginLifetime(args).then((observer) => {
@@ -165,17 +177,29 @@ mock.module("./host-lifetime.mjs", { exports: {
     return startup.gate.then(() => { if (startup.failure) throw new Error("PRIVATE_SETUP_FAILURE"); return observer; });
   },
   inspectLifetime(binding, invocation, directory, expected) {
-    if (lifetimeRun) return actualLifetime.inspectLifetime(binding, invocation, directory, expected);
+    if (lifetimeRun || liveRoundTrip) return actualLifetime.inspectLifetime(binding, invocation, directory, expected);
     const { terminalClock, ...checks } = JSON.parse(readFileSync(join(directory, "terminal.json")));
     if (replayLifetimeFailure === expected.command) checks.accounting = false;
     const complete = Object.values(checks).every(Boolean);
     return { status: complete ? "verified" : "blocked", cleanupComplete: complete, checks,
       context: { bootId: host().bootId }, manifestSha256: evidence.tree(directory).sha256, terminalClock };
   },
-  composeHostProof() { return { resources: mode === "complete" ? "verified" : "blocked", cleanupComplete: mode === "complete" }; },
+  composeHostProof(...args) {
+    if (liveRoundTrip) return actualLifetime.composeHostProof(...args);
+    return { resources: mode === "complete" ? "verified" : "blocked", cleanupComplete: mode === "complete" };
+  },
 } });
 mock.module("./native-replay.mjs", { exports: { ...nativeReplay,
   async inspectNative(binding, native) {
+    if (liveRoundTrip) {
+      if (!liveRoundTrip.nativeReads.length) {
+        const events = fs.readdirSync(dirname(dirname(native))).filter((name) => /^\d{5}-/.test(name)).sort();
+        assert.match(events.at(-1), /-phase-sealed\.json$/, "live inspection must run on the writer's phase-sealed prefix");
+      }
+      const result = await nativeReplay.inspectNative(binding, native);
+      liveRoundTrip.nativeReads.push(result);
+      return result;
+    }
     evidence.tree(native);
     if (mode === "complete") return completeNative(binding);
     return { status: "blocked", attemptComplete: false, cleanupComplete: false, resources: "blocked",
@@ -211,6 +235,12 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
   assert.ok(!invocation[0].endsWith("report.mjs"), "never run a report against producer tree");
   const child = fakeChild((child) => {
     if (lifetimeRun) { lifetimeRun.started = true; lifetimeRun.start(); return; }
+    if (liveRoundTrip) {
+      const { capture, output } = liveRoundTrip;
+      assert.deepEqual(invocation, capture.binding.execution.invocation.argv);
+      mkdirSync(dirname(output), { recursive: true }); renameSync(capture.folder, output);
+      child.close(1); return;
+    }
     const native = !invocation[0].endsWith("fixtures.mjs");
     const finish = () => {
       if (compilerScratch) {
@@ -248,6 +278,7 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
     };
     if (mode === "pending") { release = finish; pendingStarted(); } else finish();
   });
+  if (liveRoundTrip) child.pid = 4242;
   if (lifetimeRun) {
     const run = lifetimeRun, send = child.send.bind(child);
     child.pid = 4242; run.child = child;
@@ -272,7 +303,7 @@ const { replaySealedPhase } = await import("./campaign-journal.mjs");
 let round = 100;
 function setup(policy = () => true) {
   admittedHost = null; admittedApparatus = null; controlWindows = []; settleAbort = null; settleSecondWorker = false;
-  liveOutput = null; compilerScratch = null; offlinePrep = null;
+  liveOutput = null; liveRoundTrip = null; compilerScratch = null; offlinePrep = null;
   round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null; lifetimeRun = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
@@ -341,22 +372,41 @@ test("v4 live campaign retains actual bootstrap proof before baseline and bracke
     "rehashed journal/collection cannot substitute for watcher termination");
 });
 
-async function offlineCampaign(t, group, packets = 2, settle = false) {
+function syntheticBootstrap(t) {
   t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
     { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024 });
+  assert.equal(result.error, undefined);
   assert.equal(result.status, 0, result.stderr);
-  const { binding, admission } = JSON.parse(result.stdout), s = setupGroup(group);
-  controlledRound(s.plan); admittedHost = admission.host;
-  const closed = BigInt(admission.closedMonoNs), after = closed + 6n * hourNs;
-  if (group === "json-api") {
-    offlinePrep = { before: String(closed + 5n * hourNs), after: String(after),
-      ...(settle ? { terminal: String(after - 1n), settled: String(after + BigInt(actualHost.udevSettleMs) * 1000000n) } : {}) };
-    settleWorkerTicks = "10400"; settleSurvives = false;
-  }
-  auditClock = { bootId: admittedHost.bootId, monoNs: offlinePrep?.settled ?? offlinePrep?.after ?? admission.closedMonoNs };
-  s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2" }, load: { cpuset: "3-7" } };
+  return JSON.parse(result.stdout);
+}
+
+function monitoredSettlementControl(proof, cpus, events) {
+  const { binding, admission } = proof;
+  admittedApparatus = { ...structuredClone(controlRegistration), binding, host: admission.host };
+  admission.apparatus = admittedApparatus;
+  admission.apparatusSample = { host: admission.host, monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener };
+  const stream = { registration: admittedApparatus, check() { events.push("check"); },
+    open(observed) { assert.deepEqual(observed, cpus); events.push("open"); },
+    close() { events.push("close"); }, async seal() {
+      events.push("seal"); return { schema: "benchmark-control-stream-seal/v1", registration: admittedApparatus,
+        observations: Array.from({ length: 21 }, (_, i) => ({ sequence: i + 1,
+          monoNs: String(2000000 + i * 250500000), registrationSha256: streamHash(admittedApparatus) })),
+        sealedMonoNs: "5016000000",
+        lease: { id: admittedApparatus.id, host: admission.host, expiresMonoNs: "15000000000" } };
+    } };
+  return { binding, admission, stream };
+}
+
+function writeSettlementDrain(handle) {
+  const drain = { schema: "benchmark-control-stream-drain/v1", id: admittedApparatus.id, registrationSha256: streamHash(admittedApparatus),
+    host: admittedHost, monoNs: "5017000000", identitiesAbsent: true, listener: admittedApparatus.listener,
+    scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] };
+  writeFileSync(join(handle.directory, "control-stream-drain.json"), JSON.stringify(drain));
+}
+
+function fakeOfflineFenceCommands(t, binding, packets, commandCount = 2) {
   const table = "corten_bench_native", tcpMatch = { match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 22 } };
   const policy = { nftables: [
     { metainfo: { json_schema_version: 1 } },
@@ -373,7 +423,7 @@ async function offlineCampaign(t, group, packets = 2, settle = false) {
     if (program === "/usr/bin/python3") {
       const op = args.at(-2);
       assert.ok(["window-open", "window-close"].includes(op));
-      assert.equal(calls.length, op === "window-open" ? 0 : 2);
+      assert.equal(calls.length, op === "window-open" ? 0 : commandCount);
       assert.equal(args.at(-1), binding.token);
       events.push(op);
     } else {
@@ -388,6 +438,21 @@ async function offlineCampaign(t, group, packets = 2, settle = false) {
     return { status: 0, stdout: JSON.stringify(policy) };
   });
   syncBuiltinESMExports();
+  return events;
+}
+
+async function offlineCampaign(t, group, packets = 2, settle = false) {
+  const { binding, admission } = syntheticBootstrap(t), s = setupGroup(group);
+  controlledRound(s.plan); admittedHost = admission.host;
+  const closed = BigInt(admission.closedMonoNs), after = closed + 6n * hourNs;
+  if (group === "json-api") {
+    offlinePrep = { before: String(closed + 5n * hourNs), after: String(after),
+      ...(settle ? { terminal: String(after - 1n), settled: String(after + BigInt(actualHost.udevSettleMs) * 1000000n) } : {}) };
+    settleWorkerTicks = "10400"; settleSurvives = false;
+  }
+  auditClock = { bootId: admittedHost.bootId, monoNs: offlinePrep?.settled ?? offlinePrep?.after ?? admission.closedMonoNs };
+  s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2" }, load: { cpuset: "3-7" } };
+  const events = fakeOfflineFenceCommands(t, binding, packets);
   const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding, admission, offlineHandoff: true } });
   return { ...s, binding, admission, events, handle, collection: join(handle.directory, "collection-manifest.json"),
     validate: () => validateSavedCampaign({ folder: root, round: "r21", commit: s.plan.commit }) };
@@ -447,6 +512,46 @@ test("offline timed phase with zero denied probes remains eligible for ordinary 
   assert.equal(saved.status, "verified", JSON.stringify(saved));
   assert.deepEqual(saved.offlineIngress, [{ group: "localized-marketplace", phase: "timing", packets: 0, bytes: 0 }]);
 });
+
+for (const group of ["live-delivery", "recoverable-live"]) for (const offline of [false, true]) {
+  test(`isolated Live round trip: ${group} ${offline ? "offline" : "monitored"}`, async (t) => {
+    const { campaign, plan } = setupGroup(group), proof = syntheticBootstrap(t);
+    plan.round = proof.binding.round;
+    const capture = await isolatedLiveCapture(t, group, campaignRounds(plan.round)[group]);
+    const output = join(temporary, `native-r${round}`, group);
+    capture.binding.validation = { artifactRoot: relative(repo, output).replaceAll("\\", "/") };
+    capture.binding.latestStable = plan.bindings[0].latestStable;
+    plan.bindings[0] = capture.binding;
+    delete plan.campaignSha256; plan.campaignSha256 = deploymentSha256(plan);
+    admittedHost = proof.admission.host;
+    settleWorkerTicks = "10601"; settleSurvives = false;
+    const boot = offline ? BigInt(proof.admission.closedMonoNs) : 0n;
+    const clock = { ...udevClock(), monoNs: String(boot + 4000000n) };
+    const events = [], control = offline ? { ...proof, offlineHandoff: true } : monitoredSettlementControl(proof, liveActorCpus, events);
+    const offlineClock = offline ? [0n, 0n, 2000000n, 5000000n, 5015000000n].map((offset) => String(boot + offset)) : null;
+    if (offline) fakeOfflineFenceCommands(t, proof.binding, 0, 1);
+    liveRoundTrip = { capture, output, clock, offlineClock, nativeReads: [] };
+    const handle = await campaign.begin(plan, { stateRoot: "/bench/campaign", control });
+    controlWindows.directory = handle.directory; controlWindows.phase = `00-${group}-timing`;
+    const status = await campaign.advance(handle);
+    assert.equal(status.state, "finished"); assert.equal(status.executionVersion, offline ? 6 : 5);
+    assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, [{ pid: 62274, startTicks: "10601" }]);
+    assert.deepEqual(liveRoundTrip.nativeReads.map(({ status, resources, cleanupComplete }) => [status, resources, cleanupComplete]),
+      [["failed", "verified", true]], "synthetic target failures must not prevent a complete, isolated cleanup proof");
+    assert.equal(status.outcomes[0].outcome, "native-validated");
+    if (!offline) writeSettlementDrain(handle);
+    writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(campaign.collect(handle)));
+    const saved = await validateSavedCampaign({ folder: root, round: plan.round, commit: plan.commit });
+    assert.equal(saved.status, "verified", JSON.stringify(saved));
+    assert.equal(saved.collectionIntegrity, "manifest-verified");
+    assert.deepEqual(saved.groups[0].appOutcomes, status.outcomes[0].appOutcomes);
+    assert.ok(saved.groups[0].appOutcomes.every(({ outcome, comparisonEligible }) => outcome === "failed" && !comparisonEligible));
+    assert.deepEqual(liveRoundTrip.nativeReads.map(({ resources, cleanupComplete }) => [resources, cleanupComplete]),
+      [["verified", true], ["verified", true]], "both live prefix and saved archive must use real isolated replay");
+    if (offline) assert.deepEqual(saved.offlineIngress, [{ group, phase: "timing", packets: 0, bytes: 0 }]);
+    else assert.deepEqual(events.filter((kind) => kind !== "check"), ["open", "close", "seal"]);
+  });
+}
 
 test("offline audit cannot start before the guest has closed bootstrap", async (t) => {
   const { campaign, handle, admission } = await offlineCampaign(t, "mixed-production");
@@ -1314,12 +1419,7 @@ for (const [group, scenario] of [
   ["json-api", "settles"], ["json-api", "aborts"], ["json-api", "worker survives"],
   ["live-delivery", "settles"], ["live-delivery", "worker survives"], ["live-delivery", "worker born during timing"],
 ]) test(`v5 ${group} udev settlement: ${scenario}`, async (t) => {
-  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
-  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-  const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
-    { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024, windowsHide: true });
-  assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
-  const proof = JSON.parse(result.stdout), s = setupGroup(group); controlledRound(s.plan); admittedHost = proof.admission.host;
+  const proof = syntheticBootstrap(t), s = setupGroup(group); controlledRound(s.plan); admittedHost = proof.admission.host;
   const jsonPreparation = group === "json-api";
   const live = group === "live-delivery";
   const bornDuringTiming = scenario === "worker born during timing";
@@ -1328,28 +1428,14 @@ for (const [group, scenario] of [
   settleSurvives = scenario === "worker survives";
   settleNativeFails = scenario === "native failure";
   mode = "udev-settle";
-  const { registration: fixture } = await import("../test-fixtures/control-stream-fixture.mjs");
-  const { streamHash } = await import("./control-stream.mjs");
-  const { deploymentSha256 } = await import("../deployments.mjs");
-  admittedApparatus = { ...structuredClone(fixture), binding: proof.binding, host: proof.admission.host };
-  proof.admission.apparatus = admittedApparatus;
-  proof.admission.apparatusSample = { host: admittedHost, monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener };
   const binding = s.plan.bindings[0];
   const cpus = live ? liveActorCpus : { app: "1", api: "2-3", load: "4-7" };
   if (live) {
     Object.assign(binding.resources, { actorCpus: liveActorCpus, app: liveApplication });
     binding.execution.effectiveOptions = { isolated: true };
   } else binding.resources.expectedCpus = Object.fromEntries(Object.entries(cpus).map(([role, cpuset]) => [role, { cpuset }]));
-  const calls = [], stream = { registration: admittedApparatus, check() { calls.push("check"); },
-    open(observed) { assert.deepEqual(observed, cpus); calls.push("open"); },
-    close() { calls.push("close"); }, async seal() {
-      calls.push("seal"); return { schema: "benchmark-control-stream-seal/v1", registration: admittedApparatus,
-        observations: Array.from({ length: 21 }, (_, i) => ({ sequence: i + 1,
-          monoNs: String(2000000 + i * 250500000), registrationSha256: streamHash(admittedApparatus) })),
-        sealedMonoNs: "5016000000",
-        lease: { id: admittedApparatus.id, host: admittedHost, expiresMonoNs: "15000000000" } };
-    } };
-  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding: proof.binding, admission: proof.admission, stream } });
+  const calls = [], control = monitoredSettlementControl(proof, cpus, calls);
+  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control });
   controlWindows.directory = handle.directory; controlWindows.phase = `00-${group}-${jsonPreparation ? "prepare" : "timing"}`;
   if (scenario === "aborts") settleAbort = new AbortController();
   const advanced = await s.campaign.advance(handle, { signal: settleAbort?.signal }).catch((error) => error);
@@ -1420,10 +1506,7 @@ for (const [group, scenario] of [
     assert.ok(!events.includes("review-needed") && existsSync(join(handle.directory, "control-stream-seal.json")));
   }
   assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, udevWorkers());
-  const drain = { schema: "benchmark-control-stream-drain/v1", id: admittedApparatus.id, registrationSha256: streamHash(admittedApparatus),
-    host: admittedHost, monoNs: "5017000000", identitiesAbsent: true, listener: admittedApparatus.listener,
-    scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] };
-  writeFileSync(join(handle.directory, "control-stream-drain.json"), JSON.stringify(drain));
+  writeSettlementDrain(handle);
   writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(handle)));
   const inspected = await validateSavedCampaign(request);
   assert.notEqual(inspected.status, "invalid");
