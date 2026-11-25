@@ -442,8 +442,8 @@ test("exit-one custody derives the old native digest without extra payload reads
   const nativeRoot = join(campaignRoot, `${state.round}-0123456789abcdef`, "00-client-heavy-timing", "native");
   const path = join(nativeRoot, "failure.txt"), size = lstatSync(path).size;
   const expected = [treeHash(campaignRoot), treeHash(nativeRoot), treeHash(controlRoot)];
-  for (const pin of [false, true]) {
-    let member, bytes = 0;
+  for (const { pin, drift } of [{ pin: false }, { pin: true }, { pin: false, drift: true }]) {
+    let member, bytes = 0, closes = 0;
     const { openSync, readSync, closeSync } = fs;
     const open = t.mock.method(fs, "openSync", function (file, ...args) {
       const fd = openSync(file, ...args);
@@ -456,22 +456,31 @@ test("exit-one custody derives the old native digest without extra payload reads
       return count;
     });
     const close = t.mock.method(fs, "closeSync", function (fd) {
-      if (fd === member) member = undefined;
-      return closeSync(fd);
+      const watched = fd === member;
+      const result = closeSync(fd);
+      if (watched) {
+        member = undefined;
+        // Mark a change immediately after the independent manifest member read.
+        if (++closes === 2 && drift) utimesSync(path, 946684800, 946684800);
+      }
+      return result;
     });
     syncBuiltinESMExports();
     const started = performance.now();
     let proof;
     try {
-      proof = verifyFailedExitOneCustody(h.local, state, { pin });
-      proof.assertCustody();
+      const verify = () => verifyFailedExitOneCustody(h.local, state, { pin });
+      if (drift) assert.throws(verify, /local handoff custody changed: extraction/);
+      else { proof = verify(); proof.assertCustody(); }
     } finally {
       for (const mock of [open, read, close]) mock.mock.restore();
       syncBuiltinESMExports();
     }
-    t.diagnostic(`pin=${pin} native member=${size} B; read=${bytes} B in ${(performance.now() - started).toFixed(1)} ms`);
-    assert.deepEqual([proof.hashes.campaign, proof.hashes.native, proof.hashes.control], expected);
-    assert.equal(proof.hashes.empty, false);
+    t.diagnostic(`pin=${pin} drift=${!!drift} native member=${size} B; read=${bytes} B in ${(performance.now() - started).toFixed(1)} ms`);
+    if (proof) {
+      assert.deepEqual([proof.hashes.campaign, proof.hashes.native, proof.hashes.control], expected);
+      assert.equal(proof.hashes.empty, false);
+    }
     // One pass for the wrapper and another for the separate collection manifest.
     assert.equal(bytes, 2 * size);
   }
