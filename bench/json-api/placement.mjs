@@ -1,5 +1,6 @@
-// Opt-in c-16 placement for the JSON API group (issue 2057). The fleet and campaign can
-// select it; run.mjs and report.mjs do not read it yet, so a run still uses the default.
+// Opt-in c-16 placement for the JSON API group (issue 2057). An independent json-api fleet
+// saved with it passes JSON_API_LOAD_LAYOUT to run.mjs, which records it; report.mjs replays
+// it. Without the selector every reader and writer keeps the default placement and bytes.
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { cpuSettings as catalogCpus } from "../catalog/contract.mjs";
@@ -43,6 +44,7 @@ export function runnerPlacement(env, logicalCpus) {
 function generatorPlacement(cpus) {
   return { coldProbe: { ...coldProbeBudget }, loadSampler: budget(cpus.load) };
 }
+export const c16Generator = Object.freeze(generatorPlacement(placementCpus(c16Env)));
 
 // Docker arguments for the cold probe: the default load set, or 4-7 under the c-16 layout.
 export function coldProbeCpus(measurement) {

@@ -51,8 +51,8 @@ export function phaseFixture(phase, responses = ["ok", "ok", "ok"], offset = 0, 
 
 // `fault` makes one phase's native command time out as process.mjs reports it, saved as
 // run.mjs saves it. `cells` limits timing to "app/key" cells so multi-pass controls stay small.
-export async function productionFixture(folder, { failure, fault, passes = 1, cells, commit } = {}) {
-  const f = result(["--duration", "1", "--warmup", "1", "--rate", "3"], { artifacts: new ByteStore(), commit }), s = f.summary;
+export async function productionFixture(folder, { failure, fault, passes = 1, cells, commit, placement } = {}) {
+  const f = result(["--duration", "1", "--warmup", "1", "--rate", "3"], { artifacts: new ByteStore(), commit, ...(placement ? { placement } : {}) }), s = f.summary;
   s.schema = timedSchema; s.producer = producerProvenance(); s.options.passes = passes;
   s.finishedAt = "2026-11-18T00:00:00Z";
   const { timingPlan } = await import("./contract.mjs"); s.timingPlan = timingPlan(s.options);

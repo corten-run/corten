@@ -1,10 +1,12 @@
 // The opted-in JSON API c-16 placement (issue 2057) in the fleet, its reservation and job.
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import * as contract from "./cloud-contract.mjs";
 import { digest } from "./cloud-local.mjs";
-import { remoteFiles } from "./cloud-remote.mjs";
+import { accountId, commit, context, harness, syntheticPlacement } from "./cloud-fixtures.mjs";
+import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { parseFleetArgs } from "./fleet.mjs";
 import { groupNames } from "./registry.mjs";
 
@@ -108,4 +110,53 @@ test("the fleet command selects the layout only at single-group json-api prepara
     [...marketplace, "--load-layout", layout], [...prepare, "--load-layout"], [...prepare, "--load-layout", layout, "--load-layout", layout],
     ["r90", "--detach", "--fleet-root", resolve("work/fleet-test"), "--load-layout", layout]])
     assert.throws(() => parseFleetArgs(args));
+});
+
+// A single opted-in json-api offline handoff against the fake provider. No real provider is contacted.
+function fakeLaunch(t, placement) {
+  const h = harness(t, { active: true, ...(placement ? { placement } : {}) });
+  const values = { ...input("json-api"), round: "r21", commit, provider: { accountId, context } };
+  const fleet = contract.fleetPlan(values, at, "sfo3", { stagedPlacement: true,
+    single: { group: "json-api", indexSha256: "1".repeat(64), checkout: h.repo, offlineHandoff: true, loadLayout: layout } });
+  const path = join(h.temp, "json-c16-fleet.json");
+  writeFileSync(path, JSON.stringify(fleet));
+  const run = (bin, args, timeout, allowed, expiry, registration) => {
+    if (bin === "ssh" && args.at(-1) === bootstrapReadScript + "\ncat /proc/sys/kernel/random/boot_id")
+      return { status: 0, stdout: `${JSON.stringify(bootstrapMarker(h.saved()))}\n12345678-90ab-cdef-1234-567890abcdef\n` };
+    return h.run(bin, args, timeout, allowed, expiry, registration);
+  };
+  const options = { collect: undefined, detach: true, commit, sshKey: "42", accountId, context, group: "json-api", fleet: path };
+  const creates = () => h.calls.filter((call) => call[0] === "doctl" && call[3] === "create");
+  const catalogs = () => h.calls.filter((call) => call[0] === "doctl" && call[2] === "placement");
+  return { h, fleet, creates, catalogs, launch: () => h.task({ run, checkFleetAdmission: () => [] }, options).launch() };
+}
+
+test("an opted-in json-api launch posts one c-16/sfo2 create with the layout's pinned job", async (t) => {
+  const f = fakeLaunch(t), { h } = f;
+  await f.launch();
+  assert.equal(h.creates, 1);
+  const [create] = f.creates(), flag = (name) => create[create.indexOf(name) + 1];
+  assert.equal(flag("--size"), "c-16"); assert.equal(flag("--region"), "sfo2"); assert.equal(flag("--image"), contract.host.image);
+  // The provider catalog was checked for c-16/sfo2 before the create.
+  assert.ok(f.catalogs().length >= 1 && h.calls.indexOf(f.catalogs()[0]) < h.calls.indexOf(create));
+  const saved = h.saved();
+  assert.deepEqual(saved.host, c16); assert.equal(contract.savedLoadLayout(saved), layout); assert.deepEqual(saved.fleet, f.fleet);
+  const job = readFileSync(join(h.local, "job.sh"), "utf8");
+  assert.equal(job, remoteFiles(saved)["job.sh"]);
+  assert.ok(job.includes(`--group 'json-api' --load-layout '${layout}'\n`)); assert.match(job, /test "\$\(nproc\)" -ge 16\n/);
+});
+
+test("an opted-in json-api launch refuses before any create intent or POST when c-16/sfo2 is not offered", async (t) => {
+  const unavailable = syntheticPlacement(); unavailable.sizes[1].available = false;
+  const elsewhere = syntheticPlacement(); elsewhere.sizes[1].regions = ["sfo3"];
+  elsewhere.regions = elsewhere.regions.map((row) => ({ ...row, sizes: row.slug === "sfo3" ? [...row.sizes, "c-16"] : row.sizes.filter((size) => size !== "c-16") }));
+  const absent = syntheticPlacement(); absent.sizes.pop(); absent.regions = absent.regions.map((row) => ({ ...row, sizes: row.sizes.filter((size) => size !== "c-16") }));
+  for (const placement of [unavailable, elsewhere, absent]) {
+    const f = fakeLaunch(t, placement), { h } = f;
+    await assert.rejects(f.launch(), /fleet placement not advertised: c-16\/sfo2|missing or invalid fleet catalog entry: c-16/);
+    assert.ok(f.catalogs().length >= 1, "the refusal comes from the provider catalog check");
+    assert.equal(h.creates, 0); assert.deepEqual(f.creates(), []);
+    assert.equal(h.saved().status, "reserved"); assert.equal(h.saved().createIntentAt, undefined);
+    assert.deepEqual(h.saved().host, c16);
+  }
 });

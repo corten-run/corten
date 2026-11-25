@@ -145,7 +145,7 @@ a host with fewer than 16 logical CPUs before any container starts. Without the
 selector the CPU settings are exactly the default contract's. Catalog's
 `--load-layout c16-generator-v1` stays catalog-only.
 
-A result is to record its placement explicitly: `measurement.cpus` keeps each
+A result records its placement explicitly: `measurement.cpus` keeps each
 role's quota and cpuset as it does today, and an opt-in result adds
 `measurement.loadLayout: "json-c16-generator-v1"` and
 `measurement.generatorPlacement`, with the cold probe at
@@ -171,12 +171,18 @@ advertised. The campaign binding requests the four `c16Env` variables and expect
 the c-16 CPUs. A fleet, reservation or job without the marker, including every
 saved one, keeps its exact bytes.
 
-The native runner does not read the layout yet: `bench/json-api/run.mjs`,
-`report.mjs` and the JSON evidence and staging checks still apply the default
-contract. Until they do, an opted-in run would give k6 quota 4 on CPUs 4-15 and then
-fail the binding's CPU evidence check (quota 12 expected), so it cannot produce a
-qualified result. Do not launch one until that wiring is reviewed and merged. Do not compare JSON API
-timings across the two placements.
+`bench/json-api/run.mjs` reads the four variables the binding requests, records the
+layout, runs k6 at quota 12 on 4-15 and keeps the cold probe and CPU counter reader
+on 4-7. `report.mjs`, the isolated JSON evidence check and JSON staging each require
+the recorded `measurement.loadLayout` to equal the layout the binding requested, so a
+default result cannot satisfy a c-16 binding and a c-16 result cannot satisfy a default
+one. Native campaign replay captures `bench/json-api/placement.mjs` as a named member
+of the measured source closure. A measured commit that predates it replays under its
+own closure list, which never names the file.
+
+This is apparatus placement for future runs, not a measured speedup and not a fix for
+the upstream constraint above. Do not compare JSON API timings across the two
+placements, and do not rerun saved groups only to adopt it.
 
 A fleet binds the complete current registry to one dedicated host per group. The
 hosts run in parallel; contenders and phases within a group retain their native

@@ -123,6 +123,34 @@ CPU/memory samples. New load-generator samples read the live container's cgroup 
 Each payload's upstream is one Node process; its CPU limit does not imply parallelism.
 Low app utilization or a busy upstream can limit throughput, not establish app capacity.
 
+#### Opt-in c-16 load placement
+
+[#2057 JSON API r67 has insufficient apparatus headroom during fast adapters' warmups](https://github.com/corten-run/corten/issues/2057)
+found k6 at its headroom bound during warmup on a `c-8`. `placement.mjs` defines an
+opt-in layout, `JSON_API_LOAD_LAYOUT=json-c16-generator-v1`, for a 16-CPU host. It
+requires exactly `JSON_API_APP_CPUS=1`, `JSON_API_API_CPUS=2-3` and
+`JSON_API_LOAD_CPUS=4-15`, and the runner refuses it before creating a result folder
+on a host with fewer than 16 logical CPUs. Only k6 changes: quota 12 on CPUs 4-15.
+The app (quota 1 on CPU 1) and the upstream (quota 2 on CPUs 2-3) keep their pins and
+quotas. The untimed cold probe and the CPU counter reader stay on CPUs 4-7 at quota 4.
+The load resource sampler accounts for all twelve k6 CPUs.
+
+The summary records the layout explicitly: `measurement.loadLayout` and
+`measurement.generatorPlacement` (cold probe `{ quota: 4, cpuset: "4-7" }`, load
+sampler `{ quota: 12, cpuset: "4-15" }`), beside the usual `measurement.cpus`. The
+report accepts a quota-12 load only with that marker and both exact records, checks
+the cold probe's participant receipts against the recorded 4-7 budget, and prints a
+fixed line naming the layout. An unmarked summary is the default placement, replayed
+exactly as before; neither field is ever written without the selector.
+
+No headroom fence changes. The load bound remains below 80% of k6's quota per
+allocated core, which is 320% on the default and 960% on c-16. The single-process
+upstream bounds stay below 80% of one core, sampled and counted. The layout changes
+apparatus placement for future runs only. It does not by itself resolve the separate
+upstream peak seen in the Corten API warmups, it is not a measured speedup, and
+timings from the two placements are not comparable. How a fleet selects it is in
+[CLOUD.md](../workloads/CLOUD.md#json-api-c-16-placement-opt-in).
+
 #### Load resource acquisition
 
 [#2056 JSON API r67 rejects 91 timing attempts on late load-resource rows](https://github.com/corten-run/corten/issues/2056)
