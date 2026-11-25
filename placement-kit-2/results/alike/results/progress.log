@@ -1,0 +1,3 @@
+== run ed264232-1b9f-44b1-a308-6b768dfb3f01: pilot plain, plan 141d88c77cc96f419950dc6d494eb74821a8300a7f755653c636093641c5bd98; verify start 13:30:32
+RUN-ENDED verify-failed: a placement does not answer as its unpadded binary, or the plan's mask does not hold (results/verify.log)
+ALL-DONE

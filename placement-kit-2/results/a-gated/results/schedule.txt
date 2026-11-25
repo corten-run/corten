@@ -1,0 +1,12 @@
+1 aa-plain 3
+2 change-plain 3
+3 change-plain 5
+4 aa-plain 5
+5 aa-plain 1
+6 change-plain 1
+7 change-plain 2
+8 aa-plain 2
+9 aa-plain 4
+10 change-plain 4
+11 change-plain 6
+12 aa-plain 6

@@ -1,0 +1,14 @@
+## pair w1 base
+0,,cycles:u,1000000000,100.00,,
+0,,cycles:k,1000000000,100.00,,
+0,,instructions:u,1000000000,100.00,,
+0,,L1-icache-load-misses:u,1000000000,100.00,,
+Running 1s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.01ms    1.54ms  25.83ms   98.95%
+    Req/Sec    36.52k     6.11k   61.77k    90.48%
+  76170 requests in 1.10s, 519.24MB read
+Requests/sec:  69256.91
+Transfer/sec:    472.11MB
+RESULT 76170 0 0 0 0 0

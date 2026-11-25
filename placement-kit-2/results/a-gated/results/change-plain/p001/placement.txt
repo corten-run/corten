@@ -1,0 +1,8 @@
+comparison change-plain placement 1 workload plain
+A base-p320 2887877dbbd5c67ef2d6cc56aba5f34eeeda3ff455b740ed457d160831fa2279
+B head-p320 2887877dbbd5c67ef2d6cc56aba5f34eeeda3ff455b740ed457d160831fa2279
+run d03f131a-2dcd-4088-902b-166555650bad
+plan 92e3750eb702f886441586dc04df767c2d4e77d721d6b2719d32293827dc4a1c
+seq 6
+started 2026-11-25T13:27:30Z
+ended 2026-11-25T13:27:39Z

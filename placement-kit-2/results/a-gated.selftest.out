@@ -1,0 +1,9 @@
+answers: a wrong answer stopped the placement before any turn (exit 1, no counts file): turns: plain: A and B answer differently
+failed: a turn with failed requests recorded nothing (exit 1, 0 rows): turns: plain: errors in pair w1 base: requests 79001, connect 0, read 0, write 0, status 79001, timeout 0
+limit: a placement past its time limit was stopped (exit 124), with no recorded pair and no server left
+map: base-p320: a second pad of 8 bytes refused (a second pad of 8 bytes is not one of 16, 32, 48, 64); of the four sizes, 48 put .data where the rule says and passed the map check; 16 32 64 did not and were refused (with 64: .data begins 32 bytes into a 64-byte line, not 16, the unpadded link's offset plus the first pad's size)
+map: head-p320: a second pad of 8 bytes refused (a second pad of 8 bytes is not one of 16, 32, 48, 64); of the four sizes, 48 put .data where the rule says and passed the map check; 16 32 64 did not and were refused (with 64: .data begins 32 bytes into a 64-byte line, not 16, the unpadded link's offset plus the first pad's size)
+inputs: build.sh built nothing for a probe with Cargo.toml edited, with a symbolic link added, and with the list edited; run.sh refused a list edited after the build with no results directory made, and a probe's copy edited after the build before any server was started
+refusals: run.sh refused a work directory that holds results, binaries built for another part, and a host of another CPU model than the A/A's, each before it made a results directory
+zero: with every counter reported as 0, run.sh ended perf-preflight-failed before any server was started, and a turn failed with no row recorded (exit 1): unusable counter cycles:u in pair w1 base (not a count above zero)
+SELFTEST-OK

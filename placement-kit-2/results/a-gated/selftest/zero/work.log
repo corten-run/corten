@@ -1,0 +1,6 @@
+0,,cycles:u,1000000000,100.00,,
+0,,cycles:k,1000000000,100.00,,
+0,,instructions:u,1000000000,100.00,,
+0,,L1-icache-load-misses:u,1000000000,100.00,,
+RUN-ENDED perf-preflight-failed: perf cannot count cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u, each above zero and at 100%, here (results/preflight/counts.perf)
+ALL-DONE

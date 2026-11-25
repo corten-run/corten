@@ -1,0 +1,64 @@
+{
+  "plan": 1,
+  "name": "placement-kit-sizing-test",
+  "base": "e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc",
+  "head": "e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc",
+  "probe": {
+    "dir": "probe",
+    "tree": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "README.md",
+      "crates",
+      "docs"
+    ],
+    "toolchain": "1.100.0",
+    "env": {
+      "ZSTD_SYS_USE_PKG_CONFIG": "1"
+    },
+    "build": "cargo build --release",
+    "binary": "release/probe",
+    "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:65536 PROBE_ALLOCATOR=jemalloc $BIN $PORT plain"
+  },
+  "host": {
+    "cpuModel": null,
+    "cpus": {
+      "server": 2,
+      "load": [
+        4,
+        5
+      ],
+      "driver": 7
+    }
+  },
+  "load": {
+    "threads": 2,
+    "connections": 64,
+    "seconds": 2
+  },
+  "R": 4,
+  "placementSeconds": 600,
+  "pilot": {
+    "K": 30,
+    "why": "a test of the kit and not a pilot of anything: the fewest placements the kit takes for a pilot, so that its sizing code runs on a host"
+  },
+  "workloads": [
+    {
+      "name": "plain",
+      "declared": "A TEST OF THE KIT, NOT A READING. GET /private to the example probe, main against itself: a pilot-shaped A/A run only so that pilot.mjs and plan.mjs --sized-from run on a host on real counts. No figure it gives is a measurement of anything, and no K it gives is a K of any plan.",
+      "request": {
+        "path": "/private",
+        "headers": []
+      },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112401,
+      "reads": [
+        "margin"
+      ],
+      "reduction": null,
+      "recordsSpread": false
+    }
+  ]
+}

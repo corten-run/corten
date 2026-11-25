@@ -1,0 +1,10 @@
+plan placement-kit-sizing-test, sha256 af43b9a13aafbe4157984ac08b271eacab0b7e113a900027279317ff73619d40: base e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc, head e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc
+pilot plain: K = 30 placements, R = 4 recorded pairs each after one that is not, 2 s turns; comparisons pilot-plain
+a pilot: an A/A of the base read only for the spread of its placement medians, to size K; it reads no threshold
+the bound is the 20th smallest of the 30 placement medians, the lower bound the 11th; the order is drawn from seed 2026112401
+pads p (base and head in the change, the A/A's first side): 320 15120 25824 40624 10304 21008 35808 5552 20288 30992 736 15536 26176 36880 10720 21424 36160 5904 16608 31408 1088 15888 26592 37296 11072 21776 36576 6320 16960 31760
+pads q (the A/A's second side): 22848 12160 38336 27648 12880 2192 32464 17680 7008 33184 22496 11808 38000 27312 12528 1840 32064 17280 6592 32768 22096 11408 37584 26896 16224 1440 31712 16928 6256 36528
+60 distinct sizes from 320 to 40624 bytes; p by 64-byte-line phase (0, 16, 32, 48): 8, 8, 7, 7, by quarter of a page: 8, 7, 8, 7; q: 8, 8, 8, 6 and 7, 7, 8, 8
+the pairs: 16 ordered combinations of the line phases of p and q; q - p mod 4096 takes 30 distinct values, 8, 8, 7, 7 by quarter of a page (at least 3 asked in each)
+inputs: sha256 48bed34b7444dd0836ace5f3eb43f3626b02d1cc8462fd61b5e8e12763df8878 over the 3 files the plan names by path (the probe's, the request script), each listed with its own
+written: /root/placement-kit-dry/w/t-pilot/plan

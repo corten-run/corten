@@ -1,0 +1,36 @@
+== run 010ff976-c449-4c2c-b4d4-f048a8d8e243: pilot plain, plan af43b9a13aafbe4157984ac08b271eacab0b7e113a900027279317ff73619d40; verify start 13:31:36
+verify: 60 placements answer as their unpadded binary
+== turns start 13:31:49; 30 placements to run
+1 pilot-plain p030 ok 13:32:14
+2 pilot-plain p009 ok 13:32:39
+3 pilot-plain p029 ok 13:33:04
+4 pilot-plain p018 ok 13:33:28
+5 pilot-plain p015 ok 13:33:53
+6 pilot-plain p007 ok 13:34:18
+7 pilot-plain p011 ok 13:34:42
+8 pilot-plain p026 ok 13:35:07
+9 pilot-plain p025 ok 13:35:32
+10 pilot-plain p019 ok 13:35:56
+11 pilot-plain p012 ok 13:36:21
+12 pilot-plain p021 ok 13:36:46
+13 pilot-plain p027 ok 13:37:11
+14 pilot-plain p022 ok 13:37:35
+15 pilot-plain p014 ok 13:38:00
+16 pilot-plain p020 ok 13:38:25
+17 pilot-plain p006 ok 13:38:49
+18 pilot-plain p001 ok 13:39:14
+19 pilot-plain p013 ok 13:39:39
+20 pilot-plain p002 ok 13:40:04
+21 pilot-plain p010 ok 13:40:29
+22 pilot-plain p017 ok 13:40:54
+23 pilot-plain p024 ok 13:41:19
+24 pilot-plain p003 ok 13:41:44
+25 pilot-plain p005 ok 13:42:08
+26 pilot-plain p016 ok 13:42:33
+27 pilot-plain p004 ok 13:42:58
+28 pilot-plain p008 ok 13:43:23
+29 pilot-plain p023 ok 13:43:48
+30 pilot-plain p028 ok 13:44:12
+failed (their comparison has no bound; nothing is run again): none
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

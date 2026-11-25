@@ -1,0 +1,45 @@
+kit: 2839ccda65041b5026e1c59ff152a7b866f9bd88; commits in the checkout: 2839ccda65041b5026e1c59ff152a7b866f9bd88 e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc; changed files in it: 0
+started 2026-11-25T13:23:21Z; load 0.02 0.03 0.00
+== (a) main against itself, a dry run: the pilot part, pilot.mjs, the gated part with --sized-from, report.mjs again
+13:23:21 a-pilot.plan: exit 0: written: /root/placement-kit-dry/w/a-pilot/plan
+13:24:09 a-pilot.build: exit 0: BUILD-DONE
+13:25:07 a-pilot.run: exit 0: ALL-DONE
+13:25:07 a-pilot.sizes: exit 1: a dry run sizes nothing
+13:25:07 a-gated.plan: exit 0: written: /root/placement-kit-dry/w/a-gated/plan
+13:26:40 a-gated.build: exit 0: BUILD-DONE
+13:28:33 a-gated.run: exit 0: ALL-DONE
+13:28:33 a-gated.report: exit 0: 
+report.mjs again on the gated results: the same page, byte for byte
+== (c) the selftest, every case
+13:28:47 a-gated.selftest: exit 0: SELFTEST-OK
+== ranged: a masked header with a range that differs between two starts, through verify.sh; nothing turned
+13:28:48 ranged.plan: exit 0: written: /root/placement-kit-dry/w/ranged/plan
+13:29:35 ranged.build: exit 0: BUILD-DONE
+13:29:43 ranged.verify: exit 0: verify: 12 placements answer as their unpadded binary
+== alike: a masked header with a range that two starts send alike (run.sh must end verify-failed, exit 1)
+13:29:44 alike.plan: exit 0: written: /root/placement-kit-dry/w/alike/plan
+13:30:31 alike.build: exit 0: BUILD-DONE
+13:30:32 alike.run: exit 1: ALL-DONE
+== undeclared: a plan that does not name full commits (plan.mjs must exit 1)
+13:30:33 undeclared.plan: exit 1:   head: a full commit id. A plan that does not name the commits it reads, the change's base and head, is not declared (CONTRIBUTING.md, Pull requests, item 2)
+== (t) not a dry run and not a reading: a pilot-shaped A/A, so that the sizing code runs on real counts
+13:30:33 t-pilot.plan: exit 0: written: /root/placement-kit-dry/w/t-pilot/plan
+13:31:35 t-pilot.build: exit 0: BUILD-DONE
+13:48:35 t-pilot.run: exit 0: ALL-DONE
+13:48:37 t-pilot.at30: exit 1: K = 30: failing draws of 200000 (seed 1983) against at most 10000: normal 125569 (the 20th), smoothed 104716 (the 20th): does not pass; the plan takes no K the models do not allow
+13:53:01 t-gated.plan: exit 0: written: /root/placement-kit-dry/w/t-gated/plan
+the K given as a number: 93
+13:53:07 n-gated.plan: exit 0: written: /root/placement-kit-dry/w/n-gated/plan
+t-gated: SIZED_MODEL is this host's model name as run.sh reads it, byte for byte: Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz
+n-gated: SIZED_MODEL is this host's model name as run.sh reads it, byte for byte: Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz
+t-gated and n-gated are resolved at most: build.sh and run.sh were not run on them (0 bin or results directories under them)
+== what (a)'s gated results hold of each path a run goes through
+the servers' environment (verify/server-env.txt), names alone: BIN HOME PATH PORT
+the allocator each started server reported, over every turn's server log:      96 ALLOCATOR jemalloc
+turns recorded: 72 in the turn logs, 48 rows of counts, 0 of their values not above zero
+the probe as built, kept in the results: 2 files; sha256sum -c plan/inputs.sha256 there: passes
+each build's environment in the results: build-base.env build-head.env, 18 lines, of which CFLAGS, RUSTFLAGS or MALLOC_CONF: 0
+cargo's config files outside the probe (host.txt): none
+turns under the directories that must hold none (ranged, t-gated, n-gated): 0 turns in their logs, 0 rows of counts
+DRY-RUN-DONE
+ended 2026-11-25T13:53:07Z

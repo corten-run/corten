@@ -1,0 +1,4 @@
+sizing from pilot-plain of run 010ff976-c449-4c2c-b4d4-f048a8d8e243 (plan af43b9a13aafbe4157984ac08b271eacab0b7e113a900027279317ff73619d40): 30 of 30 placements read, R = 4
+eligible: yes (every placement read with all its pairs: yes; lag-1 autocorrelation r1 -4.1e-2, p 0.967; Spearman's correlation with run order rho 0.096, p 0.612; zero inside -0.59% to +0.69%, the 11th to the 20th sorted median: yes)
+placement medians: standard deviation 2.09%; Shapiro-Wilk p 0.506, Anderson-Darling p 0.495; models kept: normal and smoothed
+K = 30: failing draws of 200000 (seed 1983) against at most 10000: normal 125569 (the 20th), smoothed 104716 (the 20th): does not pass; the plan takes no K the models do not allow

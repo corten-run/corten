@@ -1,0 +1,5 @@
+answers: same
+turns: plain: unusable counter cycles:u in pair w1 base (not a count above zero): 0,,cycles:u,1000000000,100.00,,
+0,,cycles:k,1000000000,100.00,,
+0,,instructions:u,1000000000,100.00,,
+0,,L1-icache-load-misses:u,1000000000,100.00,,

@@ -1,0 +1,5 @@
+DRY RUN: K=6; a test of the scripts, read for nothing
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+probe/Cargo.toml: FAILED
+sha256sum: WARNING: 1 computed checksum did NOT match
+build: the probe, the request script or the expected answer is not what plan.mjs resolved (plan/inputs.sha256)

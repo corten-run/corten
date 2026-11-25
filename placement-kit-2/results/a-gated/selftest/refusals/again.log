@@ -1,0 +1,2 @@
+RUN-ENDED refused: /root/placement-kit-dry/w/a-gated/selftest/refusals/again/results already holds a run's results, and a part is run once: no placement is rerun, replaced or dropped for its result. Keep them; only results whose progress.log has no 'turns start' line turned nothing
+ALL-DONE

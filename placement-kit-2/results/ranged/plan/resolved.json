@@ -1,0 +1,193 @@
+{
+ "name": "placement-kit-dry-ranged",
+ "part": "pilot",
+ "workload": "plain",
+ "dry": {
+  "K": 6,
+  "R": 2,
+  "seconds": 1
+ },
+ "K": 6,
+ "declaredK": 100,
+ "sizedFrom": null,
+ "R": 2,
+ "seconds": 1,
+ "seed": 2026112401,
+ "rank": 6,
+ "lowerRank": 1,
+ "P": [
+  320,
+  15120,
+  25824,
+  40624,
+  10304,
+  21008
+ ],
+ "Q": [
+  22848,
+  12160,
+  38336,
+  27648,
+  12880,
+  2192
+ ],
+ "coverage": {
+  "P": {
+   "line": [
+    2,
+    2,
+    1,
+    1
+   ],
+   "pageQuarters": [
+    2,
+    1,
+    2,
+    1
+   ],
+   "pages": [
+    1,
+    0,
+    1,
+    1,
+    0,
+    1,
+    1,
+    0,
+    0,
+    1
+   ],
+   "min": 320,
+   "max": 40624
+  },
+  "Q": {
+   "line": [
+    4,
+    2,
+    0,
+    0
+   ],
+   "pageQuarters": [
+    1,
+    1,
+    2,
+    2
+   ],
+   "pages": [
+    1,
+    0,
+    1,
+    1,
+    0,
+    1,
+    1,
+    0,
+    0,
+    1
+   ],
+   "min": 2192,
+   "max": 38336
+  },
+  "linePairCombos": 6,
+  "diffs": [
+   2048,
+   1136,
+   224,
+   3408,
+   2576,
+   1664
+  ],
+  "distinctDiffs": 6,
+  "diffQuarters": [
+   1,
+   2,
+   2,
+   1
+  ]
+ },
+ "sides": [
+  "base"
+ ],
+ "comparisons": [
+  "pilot-plain"
+ ],
+ "schedule": [
+  {
+   "seq": 1,
+   "comparison": "pilot-plain",
+   "i": 3
+  },
+  {
+   "seq": 2,
+   "comparison": "pilot-plain",
+   "i": 5
+  },
+  {
+   "seq": 3,
+   "comparison": "pilot-plain",
+   "i": 1
+  },
+  {
+   "seq": 4,
+   "comparison": "pilot-plain",
+   "i": 2
+  },
+  {
+   "seq": 5,
+   "comparison": "pilot-plain",
+   "i": 4
+  },
+  {
+   "seq": 6,
+   "comparison": "pilot-plain",
+   "i": 6
+  }
+ ],
+ "base": "e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc",
+ "head": "e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc",
+ "reduction": null,
+ "reads": [
+  "margin"
+ ],
+ "recordsSpread": false,
+ "declared": "A test of the kit, read for nothing: GET /private to the example probe behind a stand-in that adds an age header whose value differs from start to start, so that verify.sh meets a masked header with a range.",
+ "plan": "28d07e967950e067297c4166f7bf8e84811d0cdc9f1ae262674b89428c6328ba",
+ "inputs": "48bed34b7444dd0836ace5f3eb43f3626b02d1cc8462fd61b5e8e12763df8878",
+ "sized": null,
+ "request": {
+  "path": "/private",
+  "headers": []
+ },
+ "start": "node /root/placement-kit-dry/ev/ranged/front.mjs $BIN $PORT",
+ "load": {
+  "threads": 2,
+  "connections": 64,
+  "seconds": 3
+ },
+ "mask": [
+  {
+   "header": "age",
+   "range": [
+    0,
+    7
+   ]
+  }
+ ],
+ "build": "cargo build --release",
+ "env": {
+  "ZSTD_SYS_USE_PKG_CONFIG": "1"
+ },
+ "host": {
+  "cpuModel": null,
+  "cpus": {
+   "server": 2,
+   "load": [
+    4,
+    5
+   ],
+   "driver": 7
+  }
+ },
+ "status": 200,
+ "placementSeconds": 600
+}

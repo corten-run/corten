@@ -1,0 +1,373 @@
+{
+ "name": "placement-kit-sizing-test",
+ "part": "pilot",
+ "workload": "plain",
+ "dry": null,
+ "K": 30,
+ "declaredK": 30,
+ "sizedFrom": null,
+ "R": 4,
+ "seconds": 2,
+ "seed": 2026112401,
+ "rank": 20,
+ "lowerRank": 11,
+ "P": [
+  320,
+  15120,
+  25824,
+  40624,
+  10304,
+  21008,
+  35808,
+  5552,
+  20288,
+  30992,
+  736,
+  15536,
+  26176,
+  36880,
+  10720,
+  21424,
+  36160,
+  5904,
+  16608,
+  31408,
+  1088,
+  15888,
+  26592,
+  37296,
+  11072,
+  21776,
+  36576,
+  6320,
+  16960,
+  31760
+ ],
+ "Q": [
+  22848,
+  12160,
+  38336,
+  27648,
+  12880,
+  2192,
+  32464,
+  17680,
+  7008,
+  33184,
+  22496,
+  11808,
+  38000,
+  27312,
+  12528,
+  1840,
+  32064,
+  17280,
+  6592,
+  32768,
+  22096,
+  11408,
+  37584,
+  26896,
+  16224,
+  1440,
+  31712,
+  16928,
+  6256,
+  36528
+ ],
+ "coverage": {
+  "P": {
+   "line": [
+    8,
+    8,
+    7,
+    7
+   ],
+   "pageQuarters": [
+    8,
+    7,
+    8,
+    7
+   ],
+   "pages": [
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3
+   ],
+   "min": 320,
+   "max": 40624
+  },
+  "Q": {
+   "line": [
+    8,
+    8,
+    8,
+    6
+   ],
+   "pageQuarters": [
+    7,
+    7,
+    8,
+    8
+   ],
+   "pages": [
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3
+   ],
+   "min": 1440,
+   "max": 38336
+  },
+  "linePairCombos": 16,
+  "diffs": [
+   2048,
+   1136,
+   224,
+   3408,
+   2576,
+   1664,
+   752,
+   3936,
+   3104,
+   2192,
+   1280,
+   368,
+   3632,
+   2720,
+   1808,
+   896,
+   0,
+   3184,
+   2272,
+   1360,
+   528,
+   3712,
+   2800,
+   1888,
+   1056,
+   144,
+   3328,
+   2416,
+   1584,
+   672
+  ],
+  "distinctDiffs": 30,
+  "diffQuarters": [
+   8,
+   8,
+   7,
+   7
+  ]
+ },
+ "sides": [
+  "base"
+ ],
+ "comparisons": [
+  "pilot-plain"
+ ],
+ "schedule": [
+  {
+   "seq": 1,
+   "comparison": "pilot-plain",
+   "i": 30
+  },
+  {
+   "seq": 2,
+   "comparison": "pilot-plain",
+   "i": 9
+  },
+  {
+   "seq": 3,
+   "comparison": "pilot-plain",
+   "i": 29
+  },
+  {
+   "seq": 4,
+   "comparison": "pilot-plain",
+   "i": 18
+  },
+  {
+   "seq": 5,
+   "comparison": "pilot-plain",
+   "i": 15
+  },
+  {
+   "seq": 6,
+   "comparison": "pilot-plain",
+   "i": 7
+  },
+  {
+   "seq": 7,
+   "comparison": "pilot-plain",
+   "i": 11
+  },
+  {
+   "seq": 8,
+   "comparison": "pilot-plain",
+   "i": 26
+  },
+  {
+   "seq": 9,
+   "comparison": "pilot-plain",
+   "i": 25
+  },
+  {
+   "seq": 10,
+   "comparison": "pilot-plain",
+   "i": 19
+  },
+  {
+   "seq": 11,
+   "comparison": "pilot-plain",
+   "i": 12
+  },
+  {
+   "seq": 12,
+   "comparison": "pilot-plain",
+   "i": 21
+  },
+  {
+   "seq": 13,
+   "comparison": "pilot-plain",
+   "i": 27
+  },
+  {
+   "seq": 14,
+   "comparison": "pilot-plain",
+   "i": 22
+  },
+  {
+   "seq": 15,
+   "comparison": "pilot-plain",
+   "i": 14
+  },
+  {
+   "seq": 16,
+   "comparison": "pilot-plain",
+   "i": 20
+  },
+  {
+   "seq": 17,
+   "comparison": "pilot-plain",
+   "i": 6
+  },
+  {
+   "seq": 18,
+   "comparison": "pilot-plain",
+   "i": 1
+  },
+  {
+   "seq": 19,
+   "comparison": "pilot-plain",
+   "i": 13
+  },
+  {
+   "seq": 20,
+   "comparison": "pilot-plain",
+   "i": 2
+  },
+  {
+   "seq": 21,
+   "comparison": "pilot-plain",
+   "i": 10
+  },
+  {
+   "seq": 22,
+   "comparison": "pilot-plain",
+   "i": 17
+  },
+  {
+   "seq": 23,
+   "comparison": "pilot-plain",
+   "i": 24
+  },
+  {
+   "seq": 24,
+   "comparison": "pilot-plain",
+   "i": 3
+  },
+  {
+   "seq": 25,
+   "comparison": "pilot-plain",
+   "i": 5
+  },
+  {
+   "seq": 26,
+   "comparison": "pilot-plain",
+   "i": 16
+  },
+  {
+   "seq": 27,
+   "comparison": "pilot-plain",
+   "i": 4
+  },
+  {
+   "seq": 28,
+   "comparison": "pilot-plain",
+   "i": 8
+  },
+  {
+   "seq": 29,
+   "comparison": "pilot-plain",
+   "i": 23
+  },
+  {
+   "seq": 30,
+   "comparison": "pilot-plain",
+   "i": 28
+  }
+ ],
+ "base": "e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc",
+ "head": "e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc",
+ "reduction": null,
+ "reads": [
+  "margin"
+ ],
+ "recordsSpread": false,
+ "declared": "A TEST OF THE KIT, NOT A READING. GET /private to the example probe, main against itself: a pilot-shaped A/A run only so that pilot.mjs and plan.mjs --sized-from run on a host on real counts. No figure it gives is a measurement of anything, and no K it gives is a K of any plan.",
+ "plan": "af43b9a13aafbe4157984ac08b271eacab0b7e113a900027279317ff73619d40",
+ "inputs": "48bed34b7444dd0836ace5f3eb43f3626b02d1cc8462fd61b5e8e12763df8878",
+ "sized": null,
+ "request": {
+  "path": "/private",
+  "headers": []
+ },
+ "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:65536 PROBE_ALLOCATOR=jemalloc $BIN $PORT plain",
+ "load": {
+  "threads": 2,
+  "connections": 64,
+  "seconds": 2
+ },
+ "mask": [],
+ "build": "cargo build --release",
+ "env": {
+  "ZSTD_SYS_USE_PKG_CONFIG": "1"
+ },
+ "host": {
+  "cpuModel": null,
+  "cpus": {
+   "server": 2,
+   "load": [
+    4,
+    5
+   ],
+   "driver": 7
+  }
+ },
+ "status": 200,
+ "placementSeconds": 600
+}
