@@ -1993,6 +1993,28 @@ impl Closing {
     }
 }
 
+/// The waker a connection's wait for shutdown is polled with: it notes that the wait was woken
+/// and wakes the connection's task, which polls the wait again only then. Whatever a poll of the
+/// wait did to be polled again, it did with this waker: left it with the channel, which wakes it
+/// when shutdown begins or the server is gone, or woke it itself to be polled again soon (tokio
+/// does when the task's budget is spent, and when a task dump polls the task). So the task does
+/// not rest on which of those a poll did.
+struct Heard {
+    woken: std::sync::atomic::AtomicBool,
+    task: std::task::Waker,
+}
+
+impl std::task::Wake for Heard {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.woken.store(true, std::sync::atomic::Ordering::Release);
+        self.task.wake_by_ref();
+    }
+}
+
 /// Accepts connections on `listener` and serves each until `stop` holds a [`Closing`]; then
 /// stops accepting, lets each connection finish the request it is in (an idle one closes) until
 /// the time it gives that connection, closes those still open then, and returns once all have
@@ -2062,26 +2084,29 @@ where
             let service = hyper_util::service::TowerToHyperService::new(data.service(connection));
             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
             let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
-            // Shutdown is waited for once. That poll leaves this task's waker with the channel,
-            // which wakes it when shutdown begins or the server is gone; it is made outside the
-            // task's budget, since a wait the budget put off would have left no waker. After it, a
-            // wake (every read and write of the connection) asks only whether the channel has
-            // changed, one load, where polling the wait again took its lock each time. That is
-            // asked of a second receiver, since the wait borrows the first.
-            let changed = stop.clone();
+            // The wait for shutdown has a waker of its own ([`Heard`]) and is polled only when
+            // that waker has fired, and at first. So a wake of the task for the connection (every
+            // read and write) asks only whether it has, one load, where polling the wait again
+            // took a lock every connection on every thread shares: the mutex of one of the lists
+            // the channel keeps its waiters in. The task is spawned above, so the waker it is
+            // polled with here is its own for as long as it runs.
             let closing = {
-                let mut stopping = std::pin::pin!(tokio::task::coop::unconstrained(stop.wait_for(Option::is_some)));
-                let mut waits = false;
+                let task = std::future::poll_fn(|cx| std::task::Poll::Ready(cx.waker().clone())).await;
+                let heard = Arc::new(Heard { woken: std::sync::atomic::AtomicBool::new(true), task });
+                let waker = std::task::Waker::from(heard.clone());
+                let mut stopping = std::pin::pin!(stop.wait_for(Option::is_some));
                 let stopped = std::future::poll_fn(|cx| {
                     if conn.as_mut().poll(cx).is_ready() {
                         return std::task::Poll::Ready(None);
                     }
-                    // A channel whose sender is gone is an error here, and ends the wait.
-                    if waits && !changed.has_changed().unwrap_or(true) {
+                    if !heard.woken.load(std::sync::atomic::Ordering::Acquire) {
                         return std::task::Poll::Pending;
                     }
-                    waits = true;
-                    stopping.as_mut().poll(cx).map(|closing| Some(closing.ok().and_then(|closing| *closing)))
+                    // Cleared before the poll, so a wake during it or after it is kept.
+                    heard.woken.store(false, std::sync::atomic::Ordering::Release);
+                    let mut cx = std::task::Context::from_waker(&waker);
+                    // A channel whose sender is gone is an error here, and ends the wait.
+                    stopping.as_mut().poll(&mut cx).map(|closing| Some(closing.ok().and_then(|closing| *closing)))
                 });
                 match stopped.await {
                     Some(closing) => closing,

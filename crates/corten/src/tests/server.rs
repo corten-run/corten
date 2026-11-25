@@ -808,15 +808,29 @@ async fn sent_until_closed(client: &mut tokio::net::TcpStream, who: &str) -> Str
 }
 
 /// Shutdown reaches a connection whose task has woken many times since it began to wait for it
-/// (the task waits for it once, and asks at each wake only whether the word has changed): one
-/// idle after its requests closes at once, one that never sent a byte closes at once, and one
-/// whose handler is still at work answers, says that it closes, and closes, and only then is the
-/// server done. A server that is gone without a shutdown closes all three at once.
+/// (the task polls its wait again only when the wait's own waker has fired, and asks at each
+/// wake only whether it has): one idle after its requests closes at once, one that never sent a
+/// byte closes at once, and one whose handler is still at work answers, says that it closes, and
+/// closes, and only then is the server done. A server that is gone without a shutdown closes all
+/// three at once.
 #[tokio::test]
 async fn shutdown_reaches_a_connection_long_after_its_task_began_to_wait_for_it() {
+    long_waiting_connections_hear_of_shutdown(1).await;
+}
+
+/// The same where `serve` runs, on a runtime of several threads: the word of shutdown is sent
+/// from one thread while the connections' tasks are polled on others.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shutdown_reaches_such_a_connection_whose_task_runs_on_another_thread() {
+    long_waiting_connections_hear_of_shutdown(8).await;
+}
+
+/// `rounds` servers stopped and as many dropped, each with three connections as the two tests
+/// above say.
+async fn long_waiting_connections_hear_of_shutdown(rounds: usize) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     const GET: &[u8] = b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
-    for gone in [false, true] {
+    for gone in [false, true].repeat(rounds) {
         let (started, mut running) = tokio::sync::mpsc::channel::<()>(1);
         let release = std::sync::Arc::new(tokio::sync::Notify::new());
         let slow = get({
@@ -880,9 +894,10 @@ async fn shutdown_reaches_a_connection_long_after_its_task_began_to_wait_for_it(
 }
 
 /// A connection hears of shutdown when its task had spent tokio's cooperative budget by the time
-/// it first waited for it: the wait is made outside the budget, since the task waits only once,
-/// and a wait the budget put off would have left the task nothing to be woken by. The step
-/// before HTTP spends the budget here, in the poll that ends it.
+/// it first waited for it. A wait the budget puts off leaves its waker with no one: it wakes
+/// that waker itself, to be polled again, so the task must poll the wait again when the wait's
+/// own waker fires, and not only when the channel has something to say. The step before HTTP
+/// spends the budget here, in the poll that ends it.
 #[tokio::test]
 async fn a_connection_whose_task_had_spent_its_budget_still_hears_of_shutdown() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -921,8 +936,8 @@ async fn a_connection_whose_task_had_spent_its_budget_still_hears_of_shutdown() 
 /// A connection whose step before HTTP ends in the poll shutdown begins in (one accepted as the
 /// server stops) is closed at once, whether or not shutdown had begun before its task first
 /// waited for it: one that sent nothing gets nothing, and one whose request had arrived is either
-/// closed unread or answered in full, never held or cut. (The task serves the connection before
-/// it asks about shutdown, so the request is answered; a `select!` in its place did either.)
+/// closed unread or answered in full, never held or cut. Which of the two is not promised, and
+/// this test holds neither.
 #[tokio::test]
 async fn a_connection_whose_step_ends_as_shutdown_begins_is_closed() {
     use tokio::io::AsyncWriteExt;
