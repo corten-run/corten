@@ -14,7 +14,7 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
     ? { url: stub, shortCircuit: true } : next(specifier, context);
 } });
 mock.module(stub, { exports: { inspectJson: () => ({ attemptComplete: true, outcomes: [] }) } });
-const { inspectEvidence } = await import("./evidence.mjs");
+const { inspectEvidence, verifyJsonProducer } = await import("./evidence.mjs");
 const { producerProvenance } = await import("../../json-api/production.mjs");
 
 test("JSON v2 producer assets must match the bound commit even when local producer hashes are coherent", (t) => {
@@ -30,6 +30,12 @@ test("JSON v2 producer assets must match the bound commit even when local produc
       files: Object.entries(producer.sources).map(([name, sha256]) => ({ path: `bench/json-api/${name}`, sha256 })) } };
   const save = () => writeFileSync(join(folder, "summary.json"), JSON.stringify(summary));
   save(); assert.equal(inspectEvidence(binding, folder).attemptComplete, true);
+  const scheduled = producerProvenance("json-api-producer/v3");
+  const withSchedule = structuredClone(binding);
+  withSchedule.sources.files = Object.entries(scheduled.sources).map(([name, sha256]) => ({ path: `bench/json-api/${name}`, sha256 }));
+  verifyJsonProducer(withSchedule, { ...summary, producer: scheduled });
+  assert.throws(() => verifyJsonProducer(withSchedule, summary), /cannot downgrade/);
+  assert.throws(() => verifyJsonProducer(binding, { ...summary, producer: scheduled }), /missing from bound commit/);
   for (const mutate of [
     (value) => { value.sources.files[0].sha256 = createHash("sha256").update("different committed producer").digest("hex"); },
     (value) => { value.sources.files.pop(); },

@@ -118,16 +118,18 @@ report rejects a missing or changed schedule. A saved plan alone is not executio
 CPU quotas are app 1, load 4, upstream 2 cores; memory limits are app 1 GiB, load 2 GiB,
 each upstream 512 MiB. `JSON_API_APP_CPUS`, `JSON_API_LOAD_CPUS`, `JSON_API_API_CPUS` optionally
 pin disjoint CPU sets. Legacy tier/subset and catalog CPU selectors cannot change this group.
-The CPU sidecar reads cgroup v2 counters. Docker stats provide raw CPU/memory samples.
+The CPU sidecar reads cgroup v2 counters. Docker stats provide app and upstream
+CPU/memory samples. New load-generator samples read the live container's cgroup directly.
 Each payload's upstream is one Node process; its CPU limit does not imply parallelism.
 Low app utilization or a busy upstream can limit throughput, not establish app capacity.
 
-#### Stand-alone load resource acquisition probe
+#### Load resource acquisition
 
 [#2056 JSON API r67 rejects 91 timing attempts on late load-resource rows](https://github.com/corten-run/corten/issues/2056)
-has a prototype for the load container only. It is **not** called by the benchmark,
-does not change runner or replay inputs, and does not reclassify saved r67 rows.
-Run it on the Linux Docker host itself, in the daemon's host PID/cgroup namespaces
+tracks why the JSON API runner now brackets load-generator samples. The producer is
+`json-api-producer/v3`; older producer evidence keeps its original rules, and the
+change does not reclassify saved r67 rows. Run on the Linux Docker host itself,
+in the daemon's host PID/cgroup namespaces
 with the full cgroup v2 mount. A Docker socket mounted into a build container does
 not provide those namespaces. Live Docker inspection by exact container ID is the
 PID authority; replay never opens a path from saved data. The read-only sampler
@@ -138,9 +140,13 @@ privileged process migration or mount manipulation. It cannot see between-read s
 
 Host timestamps bracket all kernel reads, not stdout arrival. The upper bound
 includes the complete final millisecond and must fit in Docker's nanosecond
-lifetime, with no grace. Every declared one-second slot must have exactly one
-complete acquisition, with the existing five-second bound on both edges and all
-gaps. CPU is the upper bound on percent of a core: the difference in cgroup
+lifetime, with no grace. Slots start one second after the rounded-up Docker start
+timestamp. Replay derives the schedule from the exact lifetime and requires a
+complete acquisition for each full slot. A final partial slot can contribute a
+sample only if the entire acquisition fits. The existing five-second bound applies
+at both edges and across gaps. At least two observations are needed for a timed
+phase to qualify; a very short diagnostic run may end too early to prove headroom.
+CPU is the upper bound on percent of a core: the difference in cgroup
 `usage_usec` divided by the shortest possible elapsed interval (times 100 after
 unit conversion). The first observation anchors CPU without inventing a value
 and still supplies memory. This is not Docker's host CPU-counter/online-CPU
@@ -152,13 +158,13 @@ below 80% of quota for load headroom. No missing read is skipped.
 
 After approval for one disposable host probe, set `PROBE_IMAGE_ID` to a locally
 present immutable Node image ID. This short synthetic process has no network and
-does not run a benchmark. Start it and invoke the probe immediately. The probe
-only inspects and waits for that container; capture it by ID and keep it until the
-terminal inspection finishes. Then remove only that synthetic container.
+does not run a benchmark. Create it without starting it. The probe checks its
+identity and limits, starts it by ID and joins the same sampler the runner uses.
+Then remove only that synthetic container.
 
 ```sh
 docker_local() { docker --host unix:///var/run/docker.sock "$@"; }
-id=$(docker_local run -d --pull=never --network none --cpus 1 --memory 128m \
+id=$(docker_local create --pull=never --network none --cpus 1 --memory 128m \
   --restart=no --label corten.json.resource-probe=1 --entrypoint node "${PROBE_IMAGE_ID:?}" \
   -e 'const mem = Buffer.alloc(8 * 1024 * 1024, 1);
       const work = setInterval(() => {
@@ -169,11 +175,10 @@ id=$(docker_local run -d --pull=never --network none --cpus 1 --memory 128m \
 timeout --kill-after=2s 30s node bench/json-api/load-resource-probe.mjs "$id"
 ```
 
-The probe replays all six reads after exit plus 120 ms. Success prints six samples,
-five CPU intervals, positive CPU and memory, and `loadHasHeadroom: true`. The
-experiment must succeed on the intended Linux setup before the prototype can
-inform an official sampler change. Neither this probe nor the fake tests establish
-timing equivalence or qualify saved results.
+The probe replays the captured schedule after exit plus 120 ms. Success prints
+the observed sample and interval counts, positive CPU and memory, and
+`loadHasHeadroom: true`. Neither this synthetic probe nor fake tests establishes
+headroom for k6 in an official run or qualifies historical results.
 
 Every load phase retains host start/end clocks and k6's measured `testRunDurationMs` via
 [`handleSummary`](https://grafana.com/docs/k6/latest/results-output/end-of-test/custom-summary/).
@@ -240,6 +245,8 @@ New `run.mjs` captures use `json-api-results/v2`. The reader explicitly dispatch
 that schema; the standalone reader keeps historical v1 readable with its original
 exact fixed-offer and zero-error checks. Current isolated campaigns require v2 evidence;
 a self-declared v1 schema cannot bypass the producer-to-measured-commit join.
+The current producer binds the load sampler and its replay source to the measured
+commit. That commit cannot fall back to the legacy Docker-stats load policy.
 Thresholds, rates, VUs, durations, budgets,
 the full nine-app/four-profile roster and pass rotation are unchanged.
 

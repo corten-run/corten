@@ -139,5 +139,4 @@ jobs:
                 setTimeout(() => clearInterval(work), 9000);')
           [[ "$id" =~ ^[a-f0-9]{64}$ ]]
           trap 'docker_local rm -f -v "$id" >/dev/null || exit 1' EXIT
-          docker_local start "$id" >/dev/null
           timeout --kill-after=2s 30s node bench/json-api/load-resource-probe.mjs "$id"

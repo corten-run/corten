@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { inspectJson, renderJson } from './report.mjs';
-import { descriptor, runtimeContext, loadConfig, deriveLoad, timingPlan } from './contract.mjs';
+import { descriptor, runtimeContext, loadConfig, deriveLoad, timingPlan, scheduledProducerSchema } from './contract.mjs';
 import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
@@ -9,6 +9,7 @@ import { gateFunctionalFixture, productionFixture, phaseFixture } from './produc
 import { deriveProductionPhase } from './production.mjs';
 import { capturePhase } from './phase.mjs';
 import { readFixedStreamSync } from './fixed-stream.mjs';
+import { loadResourceCaptureSchema } from './load-resource-proof.mjs';
 import { writer, reader } from './artifacts.mjs';
 import { timedCaseProjection } from './timed-outcomes.mjs';
 import { replayTimedRun, verifyAggregates } from './evidence.mjs';
@@ -73,6 +74,40 @@ test('production full official matrix retains normal99, continues and independen
     const busy = structuredClone(raw); mutate(busy); const observed = derive(busy);
     assert.equal(observed.observationComplete, false); assert.equal(observed.targetOutcome, null);
   }
+  // Preserve the fixed stream but give this synthetic wrapper a longer
+  // lifetime so multiple independently required load slots fit inside it.
+  const scheduled = structuredClone(raw), start = scheduled.command.clock.startedAt, finish = start + 4500;
+  const live = scheduled.after.liveness.load;
+  live.finishedAt = new Date(finish).toISOString();
+  scheduled.command.clock.finishedAt = finish;
+  scheduled.after.at = finish + 10;
+  scheduled.settledAt = finish + 20;
+  delete scheduled.samples.load;
+  const participant = { pid: 42, processObject: '1:2', startTicks: '1234', path: `/system.slice/docker-${live.containerId}.scope`,
+    mount: '36 27 0:29 / /sys/fs/cgroup rw - cgroup2 cgroup rw', groupObject: '3:4', populated: true };
+  scheduled.loadResources = { schema: loadResourceCaptureSchema, live: { id: live.containerId, pid: 42, startedAt: live.startedAt },
+    rows: Array.from({ length: 3 }, (_, sequence) => {
+      const at = start + 1050 + sequence * 1000;
+      return { sequence, begin: { at, monotonic: at - start }, end: { at, monotonic: at - start },
+        before: participant, after: participant, usageUsec: sequence * 100000, memoryCurrent: 9 * 2 ** 20, inactiveFile: 2 ** 20 };
+    }) };
+  const deriveScheduled = (r) => deriveProductionPhase(r, run.identity, 'fixed', f.summary.options, f.summary.tools,
+    { ...context, producerSchema: scheduledProducerSchema }, { native, stream });
+  const updated = deriveScheduled(scheduled), legacy = derive(raw);
+  assert.equal(updated.failed, legacy.failed);
+  assert.equal(updated.cpuUsec, legacy.cpuUsec);
+  assert.equal(updated.apparatus.load.memMaxBytes, 8 * 2 ** 20);
+  assert.equal(updated.apparatus.load.loadHasHeadroom, true);
+  assert.throws(() => derive(scheduled), /apparatus resource samples/);
+  assert.throws(() => deriveScheduled(raw), /apparatus resource samples/);
+  for (const [mutate, message] of [
+    [(r) => delete r.loadResources, /load resource evidence differs/],
+    [(r) => r.loadResources.rows.pop(), /scheduled load resource coverage/],
+    [(r) => r.loadResources.live.startedAt = new Date(start + 1000).toISOString(), /live resource observation differs/],
+  ]) { const bad = structuredClone(scheduled); mutate(bad); assert.throws(() => deriveScheduled(bad), message); }
+  const busy = structuredClone(scheduled);
+  busy.loadResources.rows[1].usageUsec = busy.loadResources.rows[2].usageUsec = 3_200_000;
+  assert.ok(deriveScheduled(busy).incompleteReasons.includes('load-generator-with-added-stock-output-lacks-observed-headroom'));
   const historicalAudit = structuredClone(native); historicalAudit.receipt.schema = 'json-api-native-audit/v1';
   for (const key of ['atMostOneUpstreamFetch', 'noTransportRetries', 'noBackgroundUpstream', 'responseAfterUpstreamCompletion']) delete historicalAudit.receipt.verified[key];
   delete historicalAudit.receipt.transportSourceFiles;
@@ -167,4 +202,30 @@ test('production capture saves abnormal, I/O and bad99 evidence before rejecting
       return true;
     });
   }
+});
+
+test('phase joins both samplers before saving a native command failure', async (t) => {
+  const folder = mkdtempSync(join(tmpdir(), 'json-load-join-'));
+  t.after(() => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true, force: true }); });
+  mkdirSync(join(folder, 'joined'));
+  const options = { duration: 1, warmup: 1, rate: 3 }, loadId = 'a'.repeat(64);
+  const commandFailure = new Error('command deadline\ncommand stderr is not a receipt field');
+  let result, appStopped = false, loadStopped = false;
+  const sampled = { schema: loadResourceCaptureSchema, live: null, rows: [] };
+  const io = {
+    async observe() { return { participants: { load: { containerId: loadId } } }; },
+    async counters() { return {}; },
+    sample() { return { async stop() { appStopped = true; throw new Error('app stats failed'); } }; },
+    sampleLoad(id) { assert.equal(id, loadId); return { async stop() { loadStopped = true; return sampled; } }; },
+    async execute() { throw commandFailure; },
+    write(path, raw) {
+      assert.ok(appStopped && loadStopped);
+      result = raw;
+      return { path };
+    },
+  };
+  await assert.rejects(capturePhase({ folder, path: 'joined', stage: 'sat64', config: loadConfig(options, 'sat64'),
+    expected: {}, options, tools: { node: {}, k6: {} }, context: {}, io }), /^Error: native command: command deadline$/);
+  assert.deepEqual(result.captureErrors, ['native command: command deadline', 'app stats failed']);
+  assert.equal(result.loadResources, sampled);
 });

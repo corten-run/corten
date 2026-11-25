@@ -21,20 +21,29 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
   const raw = { schema: timedPhaseSchema, identity: expected, phase: stage, config,
     tools: { nodeImageId: tools.node.imageId, k6ImageId: tools.k6.imageId }, captureErrors: [], priorTailUnobserved };
   const prefix = `${path}/${stage}`, output = join(folder, `${prefix}-events.jsonl`), log = join(folder, `${prefix}-stderr.jsonl`);
-  let sampler, samples, countersBefore, failure, stream;
+  let sampler, loadSampler, countersBefore, failure, stream;
+  async function joinSamplers() {
+    const active = [sampler, loadSampler]; sampler = loadSampler = undefined;
+    const results = await Promise.allSettled(active.map(async (s) => s?.stop()));
+    if (active[0] && results[0].status === "fulfilled") raw.samples = results[0].value;
+    if (active[1] && results[1].status === "fulfilled") raw.loadResources = results[1].value;
+    const failed = results.filter((result) => result.status === "rejected");
+    if (failed.length) throw new Error(failed.map(({ reason }) => String(reason?.message ?? reason).split("\n", 1)[0].slice(0, 512)).join("; "));
+  }
   try {
     const free = statfsSync(folder);
     assert.ok(free.bavail * free.bsize >= captureLimits.bytes + 16 * 2 ** 20, "insufficient bounded phase disk reserve");
     writeFileSync(output, "", { flag: "wx" }); writeFileSync(log, "", { flag: "wx" });
     raw.before = await io.observe(); countersBefore = await io.counters();
     sampler = io.sample();
-    try { raw.command = await io.execute({ observeExit: true, stdoutFile: output, stderrFile: log,
+    try {
+      loadSampler = io.sampleLoad?.(raw.before.participants.load.containerId);
+      raw.command = await io.execute({ observeExit: true, stdoutFile: output, stderrFile: log,
       maxStdoutBytes: config.mode === "fixed" ? captureLimits.bytes : captureLimits.auxiliaryBytes, maxStderrBytes: captureLimits.stderrBytes,
       timeout: (config.seconds + 25) * 1000 }); }
     catch (error) { failure = error; raw.command = { exit: error.exit ?? null, clock: error.clock ?? null, ioErrors: error.ioErrors ?? [error.message] }; }
-    finally { const active = sampler; sampler = undefined; samples = await active.stop(); }
+    finally { await joinSamplers(); }
     const countersAfter = await io.counters(); raw.after = await io.observe();
-    raw.samples = samples;
     raw.counters = Object.fromEntries(Object.keys(countersBefore).map((role) => [role, { before: countersBefore[role], after: countersAfter[role] }]));
     const settled = await io.reads();
     raw.upstreamReads = { before: raw.before.upstreamReads, after: raw.after.upstreamReads, settled: settled.upstreamReads };
@@ -71,5 +80,5 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
     const thrown = cause ? new Error(cause) : error;
     thrown.phase = { raw: io.write(`${prefix}.json`, raw), metrics: null };
     throw thrown;
-  } finally { if (sampler) await sampler.stop(); }
+  } finally { if (sampler || loadSampler) await joinSamplers(); }
 }

@@ -6,6 +6,7 @@ import { hostname, platform, release } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { commands } from "./process.mjs";
+import { startLoadResourceCapture } from "./load-resource-capture.mjs";
 import { describeK6 } from "../load-tool.mjs";
 
 export async function run(args) {
@@ -26,7 +27,7 @@ export async function run(args) {
   const runId = `json-api-${options.round}-${randomBytes(5).toString("hex")}`, network = `${runId}-net`, label = "run.corten.json-api";
   const processIO = commands(repo), command = processIO.command;
   const docker = (args, opts) => command("docker", args, opts);
-  const summary = { schema: c.timedSchema, producer: production.producerProvenance(), group, options, timingPlan: c.timingPlan(options), round: options.round, runId, startedAt: new Date().toISOString(), complete: false, attemptComplete: false, checksPassed: false,
+  const summary = { schema: c.timedSchema, producer: production.producerProvenance(c.scheduledProducerSchema), group, options, timingPlan: c.timingPlan(options), round: options.round, runId, startedAt: new Date().toISOString(), complete: false, attemptComplete: false, checksPassed: false,
     failures: [], cleanupFailures: [], fixtures: {}, tools: {}, host: { hostname: hostname(), platform: platform(), release: release(), node: process.version, checkout: repo.replaceAll("\\", "/") },
     measurement: { cpus, encoding: "identity", fixedRate: options.rate, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
       loadMemoryBytes: 2 ** 31, nativeProfile: group.nativeProfile, phases: ["warmup", ...c.phases] },
@@ -135,10 +136,15 @@ export async function run(args) {
               liveness: { app: production.life(app), upstream: production.life(upstream), load: production.life(load) }, ...await upstreamSnapshot(profile.payload) };
           },
           sample() {
-            const all = { app: name, upstream: up, load: k6 }, sampler = stats.sampleStats(Object.values(all), statsPath, config.seconds + 35);
+            const all = { app: name, upstream: up }, sampler = stats.sampleStats(Object.values(all), statsPath, config.seconds + 35);
             return { async stop() { await sampler.stop(); const samples = JSON.parse(readFileSync(`${statsPath}.json`, "utf8")).samples;
               return Object.fromEntries(Object.entries(all).map(([role, id]) => [role, samples[id]])); } };
           },
+          sampleLoad: (id) => startLoadResourceCapture({ id, async inspect(exactId) {
+            const rows = JSON.parse(await docker(["container", "inspect", exactId], { timeout: 2000 }));
+            assert.ok(rows.length === 1, "expected one exact load container");
+            return rows[0];
+          } }),
         } });
     } finally { await remove(k6); }
   }

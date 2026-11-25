@@ -10,7 +10,8 @@ import { inspectCatalog } from "../../catalog/report.mjs";
 import { groupDescriptor } from "../../catalog/group.mjs";
 import { reader } from "../../json-api/artifacts.mjs";
 import { inspectJson } from "../../json-api/report.mjs";
-import { producerSources } from "../../json-api/production.mjs";
+import { producerSourceNames } from "../../json-api/production.mjs";
+import { scheduledProducerSchema } from "../../json-api/contract.mjs";
 import { timedSummarySchema } from "../../json-api/timed-outcomes.mjs";
 import { validateSummary } from "../../marketplace/report.mjs";
 import { admitted, boundedFeatureProfile } from "../../marketplace/feature-contract.mjs";
@@ -155,14 +156,16 @@ export function copyEvidence(source, destination) {
 
 export function verifyJsonProducer(binding, summary) {
   assert.equal(summary.schema, timedSummarySchema, "current JSON campaign requires v2 evidence");
-  assert.equal(summary.producer?.schema, "json-api-producer/v2");
-  assert.deepEqual(Object.keys(summary.producer.sources).sort(), [...producerSources].sort(), "JSON producer inventory differs");
+  const names = producerSourceNames(summary.producer?.schema);
+  assert.deepEqual(Object.keys(summary.producer.sources).sort(), [...names].sort(), "JSON producer inventory differs");
   assert.equal(binding.sources?.commit, binding.request.commit, "JSON producer commit differs");
   const files = binding.sources.files;
   assert.ok(Array.isArray(files), "JSON bound sources missing");
   const sources = new Map(files.map((row) => [row.path, row.sha256]));
   assert.equal(sources.size, files.length, "duplicate bound source");
-  for (const name of producerSources) {
+  if (sources.has("bench/json-api/load-resource-capture.mjs")) assert.ok(summary.producer.schema === scheduledProducerSchema,
+    "JSON producer cannot downgrade the bound load-resource capture");
+  for (const name of names) {
     const path = `bench/json-api/${name}`;
     assert.ok(sources.has(path), "JSON producer missing from bound commit");
     assert.match(summary.producer.sources[name], /^[a-f0-9]{64}$/);

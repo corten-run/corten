@@ -10,6 +10,7 @@ import { summarizeSamples } from "../catalog/stats.mjs";
 export { aggregate, phases };
 export const schema = "json-api-results/v1";
 export const timedSchema = "json-api-results/v2";
+export const scheduledProducerSchema = "json-api-producer/v3";
 export const timedReceiptSchema = "json-api-native-audit/v2";
 export const auditBundleSchemas = Object.freeze(["json-api-native-audits/v1", "json-api-native-audits/v2"]);
 export const receiptSchema = "json-api-native-audit/v1";
@@ -114,7 +115,7 @@ export function runtimeContext(summary, profile) {
     apiBase: `http://${summary.runId}-${p.path}-api:8080`, startupTimeout: summary.options.startupTimeout,
     nodeImageId: summary.tools?.node?.imageId, k6ImageId: summary.tools?.k6?.imageId,
     toolExecutions: summary.toolExecutions, ...(summary.schema === timedSchema ? { timed: true,
-      runStartedAt: summary.startedAt, runFinishedAt: summary.finishedAt } : {}),
+      runStartedAt: summary.startedAt, runFinishedAt: summary.finishedAt, producerSchema: summary.producer?.schema } : {}),
     appExecutions: Object.fromEntries(Object.entries(summary.apps ?? {}).map(([app, entry]) => [app, entry.images?.[profile.payload]?.execution])) };
 }
 function observedConfiguration(info, expected, context, role) {

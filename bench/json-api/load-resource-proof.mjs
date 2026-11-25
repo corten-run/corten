@@ -1,4 +1,4 @@
-// Standalone prototype. The official sampler and saved-result reader do not use this.
+// Bracket load resource reads and replay them against the exact Docker lifetime.
 import assert from "node:assert/strict";
 import { closeSync, constants, fstatSync, openSync, readSync, statfsSync } from "node:fs";
 import { timestampNs } from "./fixed-stream.mjs";
