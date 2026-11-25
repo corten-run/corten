@@ -19,7 +19,7 @@ export const rawSchema = "catalog-saved-evidence/v2";
 export const upstreamImage = "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067";
 export const checkerImage = `mcr.microsoft.com/playwright:v${JSON.parse(readFileSync(new URL("../../package.json", import.meta.url))).devDependencies["@playwright/test"]}-noble`;
 /** The tool and field names run.mjs writes in tools.json. */
-const toolFields = ["upstream", "checker", "k6", "image", "imageId", "execution", "Entrypoint", "Cmd", ...k6Fields];
+const toolFields = ["upstream", "checker", "k6", "k6Execution", "image", "imageId", "execution", "isolation", "Entrypoint", "Cmd", ...k6Fields];
 export function imageCommandEvidence(image) {
   assert.ok(image?.Config && typeof image.Config === "object" && !Array.isArray(image.Config), "image configuration missing");
   return { Entrypoint: image.Config.Entrypoint ?? null, Cmd: image.Config.Cmd ?? null };
