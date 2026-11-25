@@ -61,12 +61,19 @@ they do not guarantee a finish by 7 am or establish small differences without re
 No saved evidence shows that each adapter, the JIT runtimes in particular, had stopped changing
 by the end of the 10-second warmup, or that any app's memory and tail latency hold over
 longer runs. The [convergence and soak passes](../bench/marketplace/README.md#convergence-and-soak-passes)
-collect that evidence outside the nightly, and the timed warmup is to be set from a saved
-convergence pass that is like-for-like with the round: the same commit, adapter images, fixture,
-upstream and k6 images, CPU settings, host CPU, kernel and online CPUs, the warmup's 32 users and
-the same cold start. A new commit or a rebuilt image of any measured adapter needs a new pass, as
-does a runtime or framework version change. None has been saved yet, so these results make no claim
-either way about warmth.
+collect that evidence outside the nightly. A convergence pass gives each cell a screening reading
+of throughput, not a certificate of steady state: within a stated tolerance from a named window
+to the end (every window within 10% of the tail median, three-window medians within 5%, trend
+within 5%), or not within it at the end. Oscillation or drift inside those bounds reads as within
+tolerance, a last-window shift under 10% is not detected, the onset is resolved to one window, and
+readings at different window lengths are not comparable. No report concludes from a pass that a
+timed warmup is long enough: the timed warmup is set only by a separate reviewed change from a
+saved pass that is like-for-like with the rounds it will time (the same commit, adapter images,
+fixture, upstream and k6 images, CPU settings, host CPU, kernel and online CPUs, startup timeout,
+memory limits, encoding, the warmup's 32 users and the same cold start). An adapter change or
+rebuild (a new commit or image of any measured adapter) needs a new pass, as does a runtime or
+framework version change. None has been saved yet, so these results make no claim either way
+about warmth.
 Build times, instructions, bytes and interactive timing are not measured by this suite yet.
 The older measurements below remain historical evidence for their own workloads, not v2
 results. The nonlocalized [catalog](../bench/catalog/README.md) remains an optional, separate

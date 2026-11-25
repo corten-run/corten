@@ -189,53 +189,67 @@ nothing turns up its cleanup is reported unconfirmed and the pass is incomplete.
 containers are removed before the next cell starts; a cell that leaves one behind ends the pass.
 For the production group's seven candidates a convergence pass is 28 five-minute passes, about
 two and a half hours with container starts, plus image builds (estimated, not measured). A pass
-establishes a round's warmup only for the inputs it ran (below), so any change to them needs a new
-pass: a new commit or rebuilt image of any measured adapter, as well as a runtime or framework
-version, a new fixture, upstream or k6 image, or another host, kernel or CPU setting.
+describes only the inputs it ran (below), so any change to them needs a new pass: an adapter change
+or rebuild (a new commit or image of any measured adapter), a runtime or framework version, a new
+fixture, upstream or k6 image, or another host, kernel or CPU setting.
 
-A convergence pass keeps each window's throughput, p95 and p99, and applies one stated rule
-(`flattenRule` in [steady-contract.mjs](steady-contract.mjs)), counted in seconds so the window length
-does not change it (`--window` must divide 60). The tail is the median throughput of the last
-60 s. The 60 s before it, or the first 60 s, more than 5% above the tail: not shown steady, slower
-at the end; a pass that got slower is never flattened. Otherwise the steady run is the longest final
-stretch in which every window's own throughput stays within 10% of the tail and every three-window
-median within 5%, on either side. The adapter flattened at the first window of that run that is
-itself within 5% of the tail, leaves at least 60 s to the end, and from which the least-squares line
-through the remaining windows changes by at most 5% of the tail. Without one the report says the
-adapter was not shown steady: at the end (the run is shorter than 60 s and the tail is more than 5%
-above the 60 s before it, or the run still climbs), for less than 60 s, or slower at the end.
-The variation it tolerates is therefore: any single window up to 10% from the tail, any three
-consecutive windows' median up to 5%, and a drift of up to 5% across the steady run. One window
-further off (a pause, a periodic stall, one window in four at half speed) ends the steady run where
-it falls; a median does not hide it. 5% and 10% are stated choices, not derived from measured noise:
-wide enough that a window's sampling noise is not read as change, narrow enough that a runtime still
-moving by more than a twentieth is not called steady; they are to be revisited once saved passes show
+A convergence pass keeps each window's throughput, p95 and p99, and gives each cell one tolerance
+reading (`flattenRule`, `marketplace-tolerance/v4`, in [steady-contract.mjs](steady-contract.mjs),
+which states the steps). It is a screening reading of throughput, not a certificate of steady
+state. Its spans are in seconds (`--window` must divide 60). The tail is the median throughput of
+the last 60 s. If the 60 s before it or the first 60 s ran more than 5% above the tail, the reading
+is "not within tolerance at the end: lower at the end". Otherwise it reads "within the stated
+tolerance from the window ending at N s" when, from that window to the end and for at least 60 s,
+every window is within 10% of the tail median, every three-window median within 5%, and the
+least-squares line through those windows changes by at most 5% of the tail; the onset window must
+itself be within 5% of the tail. Otherwise it reads "not within tolerance at the end": higher at
+the end, lower at the end, or within it for less than 60 s.
+
+What the reading does not detect, by construction (each case is pinned in `steady.test.mjs`):
+
+1. Oscillation or drift inside those bounds reads as within tolerance. 920, 1000, 1080, 1000
+   repeated five times in 15 s windows reads within tolerance from the window ending at 30 s, and a
+   steady climb from 1000 to 1076 over 20 windows from the window ending at 105 s.
+2. A shift of under 10% in the last window is not detected: nineteen windows at 1000 then one at
+   1090 reads within tolerance from the window ending at 15 s, because the tail median is unchanged.
+3. A pass that started faster reads as lower at the end even if it then held: four windows at 1100
+   then sixteen at 1000 is not within tolerance.
+4. The onset is resolved to one window and given as that window's end, so a 15 s window never reads
+   under 15 s; readings at different window lengths are not comparable.
+
+5% and 10% are stated choices, not derived from measured noise; revisit them once saved passes show
 the window-to-window spread on the measurement host. A cell with any failed request, in a window or
 in k6's aggregate count (which includes answers completed during the graceful stop), or whose app
-stopped, restarted or was OOM-killed, gets no verdict, and a saved pass with one is refused when
-read. A soak reports memory at the start and the end (the median sample in the first and last
-interval), p99 per interval, failed requests (in its intervals and in k6's aggregate) and any
-restart, stop or OOM kill.
-If k6 dropped iterations, the fixed rate was not met: the soak report says so and does not present
-that cell as a fixed-rate result.
+stopped, restarted, was replaced (another container ID or StartedAt) or was OOM-killed, gets no
+reading, and a saved pass with one is refused when read. k6's engine clock is checked as a timed
+phase's is (`validateLoadExecution`). A saved pass is also refused if it finished at another commit,
+if its cleanup failed or is not confirmed complete, if its window totals do not add up to k6's
+request count, or if it has no adapters, sources or targets.
 
-The timed warmup is to be set from a saved convergence pass: `steady-report.mjs` prints the
-shortest warmup the pass supports, the latest flatten window's start over every adapter, source
-and target, or none if any never flattened. Changing the nightly's `--warmup` is its own reviewed
-change to the droplet contract. `report.mjs <summary.json> --convergence <pass>/summary.json`
-states which pass a round's report used and each measured adapter's flatten window. It says
-whether the round's warmup reaches the slowest only when the pass is like-for-like with the round:
-the same commit and group, the same image ID for every measured adapter (the pass records them as
-the round does), the same fixture hash, upstream and k6 image IDs, the same CPU quotas and pinning,
-the same host CPU model, kernel release and online CPU set, the timed warmup's 32 users, the same
-cold start before the load, and a round whose page warmup rotated locales as the pass does (results
-schema v6; earlier rounds warmed one locale per profile). A pass that differs in any of these, or a
-pass or round that does not record one of them, gets its flatten times printed as context only,
-with the differences, and the report says the pass does not establish that round's warmup. `--vus`
-other than 32 is for exploration. Without `--convergence`
-the report says no convergence pass was provided to it, as it does for every saved round today. No
-convergence pass has been saved for any round, so nothing here says whether any adapter is warm
-after 10 seconds.
+A soak reports memory at the start and the end (the median sample in the first and last memory
+interval), p99 per latency interval, failed requests (in its intervals and in k6's aggregate) and
+any restart, replacement, stop or OOM kill. Latency intervals start at the k6 engine's start; memory
+samples are stamped on the workstation clock from the moment the load's `docker start` was issued,
+in intervals of their own of the same length, which lead the latency intervals by the load
+container's startup; restart events use the Docker daemon's clock. The report states both clocks.
+If k6 dropped iterations, the fixed rate was not met: the soak report says so and does not present
+that cell as a fixed-rate result. A saved soak whose p99, restart or state claims contradict its
+counters is refused.
+
+No report concludes that a timed warmup is long enough. A timed warmup is set only by a separate
+reviewed change to the droplet contract, made from a saved pass that is like-for-like with the
+rounds it will time. `steady-report.mjs` prints each cell's reading and that the pass sets no
+warmup. `report.mjs <summary.json> --convergence <pass>/summary.json` prints, per measured cell,
+the pass's reading and whether the pass is like-for-like with the round, listing every input that
+differs or that either side does not record: the commit and group, the image ID of every measured
+adapter, the fixture hash, the upstream and k6 image IDs, the CPU quota and pinning for each role
+(an unpinned side counts as missing), the host CPU model, kernel release and online CPU set, the
+startup timeout, the app and upstream memory limits, the response encoding, the timed warmup's 32
+users, the cold start before the load, a page warmup that rotated locales (results schema v6), and
+a timed warmup with no failed request (a round whose warmup had failures is not comparable).
+`--vus` other than 32 is for exploration. Without `--convergence` the report says no convergence
+pass was provided to it. No convergence pass has been saved for any round, so nothing here says
+whether any adapter is warm after 10 seconds.
 
 ### Splitting a round across droplets
 
