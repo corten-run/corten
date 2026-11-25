@@ -401,12 +401,15 @@ function shellCommandsOf(/** @type {string} */ text) {
   const commands = [];
   let continued = false;
   for (const raw of text.replace(/\r/g, "").split("\n")) {
+    // A backslash continues the line only as its last character, as in the shell: one followed by a
+    // space escapes the space and ends the command there.
+    const joins = raw.endsWith("\\");
     const line = raw.replace(/[ \t]+/g, " ").trim();
     if (!continued && line.startsWith("#")) continue;
-    const body = line.endsWith("\\") ? line.slice(0, -1).trim() : line;
+    const body = joins ? line.slice(0, -1).trim() : line;
     if (continued) commands[commands.length - 1] = `${commands.at(-1)} ${body}`.trim();
     else commands.push(body);
-    continued = line.endsWith("\\");
+    continued = joins;
   }
   return commands.filter(Boolean);
 }
@@ -601,18 +604,23 @@ function buildDeadlineIs(/** @type {string} */ source, /** @type {typeof otherSp
  * Whether a parity step's `if` runs it for Spring, for the forms catalog.yml uses: `always()`,
  * `matrix.app == '<app>'` (or `!=`) and `contains(fromJSON('[...]'), matrix.app)`, joined by `&&`.
  * A matrix term false for Spring decides the condition; any other form fails rather than guess.
- * Names compare as Actions compares strings, ignoring case, so `!= 'Spring'` skips Spring.
+ * Names compare as Actions compares strings, ignoring case, so `!= 'Spring'` skips Spring. An `||`
+ * outside parentheses and quotes fails, since then a false term no longer decides the condition.
  */
 function runsForSpring(/** @type {string | undefined} */ condition) {
   if (condition === undefined) return true;
   /** @type {string[]} */
   const terms = [];
-  let depth = 0, from = 0;
+  let depth = 0, from = 0, quoted = false;
   for (let i = 0; i < condition.length; i++) {
-    if (condition[i] === "(") depth += 1;
+    if (condition[i] === "'") quoted = !quoted;
+    else if (quoted) continue;
+    else if (condition[i] === "(") depth += 1;
     else if (condition[i] === ")") depth -= 1;
+    else if (depth === 0 && condition.startsWith("||", i)) assert.fail(`cannot tell whether a parity step runs for Spring: if: ${condition}`);
     else if (depth === 0 && condition.startsWith(" && ", i)) { terms.push(condition.slice(from, i)); from = i + 4; }
   }
+  assert.ok(depth === 0 && !quoted, `cannot tell whether a parity step runs for Spring: if: ${condition}`);
   terms.push(condition.slice(from));
   /** @type {string[]} */
   const unknown = [];
@@ -646,7 +654,9 @@ function springParity(/** @type {string} */ workflowText, /** @type {number} */ 
   for (const step of builds) {
     if (step["timeout-minutes"] !== undefined) assert.ok(imageSeconds <= stepSeconds(step), `${step.name}: its timeout stops before the image's Maven runs can`);
   }
-  const own = steps.filter((step) => step.if !== undefined && !builds.includes(step));
+  // A step with its own condition or its own timeout is counted at that timeout; one with neither
+  // runs inside the time the sum leaves for the rest of the job.
+  const own = steps.filter((step) => (step.if !== undefined || step["timeout-minutes"] !== undefined) && !builds.includes(step));
   assert.ok(own.some((step) => step.name === springTestStepName) && own.some((step) => step.id === "spring_proof"),
     "the parity job runs Spring's test and proof steps for Spring");
   const spent = own.reduce((sum, step) => sum + stepSeconds(step), 0) + builds.length * imageSeconds;
@@ -827,6 +837,8 @@ test("Spring bounds each Maven run inside the image build or step that contains 
     [proofIf, proofIf.replace("matrix.app == 'spring'", "contains(fromJSON('[\"gin\"]'), matrix.app)"), /runs Spring's test and proof steps/],
     [catalogBuild, catalogBuild.replace("\n        run:", "\n        timeout-minutes: 15\n        run:"), /stops before the image's Maven runs can/],
     [catalogBuild, catalogBuild.replace("\n        run:", "\n        if: matrix.app == 'spring' || matrix.app == 'gin'\n        run:"), /cannot tell whether/],
+    [catalogBuild, catalogBuild.replace("\n        run:", "\n        if: matrix.app == 'gin' && always() || matrix.app == 'spring'\n        run:"), /cannot tell whether/],
+    [springTestIf, `      - name: Extra\n        timeout-minutes: 20\n        run: "true"\n${springTestIf}`, /do not cover Spring's/],
   ])) assert.throws(() => springParity(workflowText.replace(from, to), image), refusal, `accepted ${to}`);
 
   // The transport proof: two Maven runs, each with its own bound, and two minutes to report, inside the step.
@@ -881,6 +893,10 @@ test("Spring's Maven bound checks refuse a zero, an unbounded or extra run, a bo
     assert.ok(workflow.includes(tests), "the native Spring test command moved");
     assert.throws(() => springTestStepSeconds(springSteps(workflow.replace(tests, to)).testStep, image), refusal, `accepted ${to}`);
   }
+  // A space after the backslash ends the command there in the shell, so the image is a separate command.
+  const joined = `target=/root/.m2 \\\n${tests}`;
+  assert.ok(workflow.includes(joined), "the native Spring test command's continuation moved");
+  assert.throws(() => springTestStepSeconds(springSteps(workflow.replace(joined, `target=/root/.m2 \\ \n${tests}`)).testStep, image), /outside one exact positive bound|only its test-stage build, then its bounded tests/);
   const proofExec = "                exec sh /proof/run.sh /src /evidence\n";
   checkSpringProofStep(springSteps(workflow).proofStep);
   assert.ok(workflow.includes(proofExec), "the proof step's script call moved");
