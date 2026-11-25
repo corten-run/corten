@@ -10466,17 +10466,16 @@ rules something out.
     opaque origin, written `null`. Yet the pages of an app's webview and of a browser extension
     send their own scheme in `Origin`: `capacitor://localhost` from Capacitor on iOS, which may not
     serve its pages as `https`, `tauri://localhost` from Tauri on macOS, Linux and iOS,
-    `chrome-extension://<id>` and, from a Firefox extension without host permission for the site,
-    `moz-extension://<uuid>` (one with it sends `null`; Firefox's UUID is random per browser
-    instance, so one entry names one install of a Firefox extension, not the extension for every
-    user). So a scheme RFC 3986 allows (a letter, then letters, digits, `+`,
+    `chrome-extension://<id>` and `moz-extension://<uuid>` from extensions (Firefox's UUID is
+    random per browser instance, so one entry names one install of a Firefox extension, not the
+    extension for every user). So a scheme RFC 3986 allows (a letter, then letters, digits, `+`,
     `-` and `.`) is kept as `scheme://host[:port]`, lowercased, with any port written, since no
     default is known for it. The schemes no `Origin` carries refuse to start, naming the scheme
-    and why: a `data:` page sends `null`, and so does a browser's `file:` page, while a webview
-    that sends `file://` (Electron) sends it for every local file, so it names no one app (an
-    Electron app that needs an origin registers a standard scheme); a `blob:`, `javascript:` or `about:` document
-    has the origin of the page that made it; and no page is served from `ws`, `wss` or `ftp`
-    (a WebSocket request carries its page's origin), so an entry for one could only be a mistake.
+    and why: a `data:` page sends `null`, and so does a browser's `file:` page, while Electron,
+    which can send `file://` from one, sends it for every local file, so it names no one app (an
+    Electron app that needs an origin registers a standard scheme); a `blob:`, `javascript:` or
+    `about:` document has the origin of the page that made it; and no page is served from `ws`,
+    `wss` or `ftp` (a WebSocket request carries its page's origin), so an entry for one could only be a mistake.
     For every scheme a user, a path beyond one trailing `/`, a query, a fragment, `*`, a list, an
     empty host and `null` refuse to start, and a name is ASCII letters, digits, `-`, `_` and `.`:
     a browser sends a Unicode name in its `xn--` form, and `_` as it is.
@@ -10491,18 +10490,21 @@ rules something out.
 
     Not chosen: refusing every scheme but `http` and `https`, which refuses at startup the
     webview and extension clients an `Api` served before; matching `null`, which every sandboxed
-    frame and a browser's `file:` page sends; keeping `ftp`, `ws` and `wss` as the tuple origins the URL
-    Standard gives them, which no `Origin` ever equals, so the entry is dead and hides a mistyped
+    frame and a browser's `file:` page sends; keeping `ftp`, `ws` and `wss` as the tuple origins
+    the URL Standard gives them, which no `Origin` ever equals, so the entry is dead and hides a mistyped
     page origin; and a scheme's own rules (a default port, a host form), which nothing standard
     gives for these.
 
     Stands on: platform (Capacitor on iOS serves its pages from `capacitor://localhost` by default,
     with its configured `server.hostname` in place of `localhost`; Tauri serves them from
     `tauri://localhost` on macOS, Linux and iOS; Chromium sends `chrome-extension://<id>` on an
-    extension's `POST`; Firefox sends `moz-extension://<uuid>` on the `fetch` of an extension
-    without host permission for the site and, since Firefox 85 (Mozilla bug 1685570), `null` on one
-    with it, an open privacy bug (Mozilla bug 1405971) whose two changes to `null` everywhere were
-    backed out for breaking CORS; Electron's `file://` pages may send `Origin: file://`; and MDN says that UUID is generated for every browser instance; the URL Standard's origin
+    extension's `POST`; Firefox sends `moz-extension://<uuid>` on an extension's `fetch`, an
+    open privacy bug (Mozilla bug 1405971) whose two changes to `null` were backed out for breaking
+    CORS, and Firefox 85's `null` from an extension with host permission was a regression fixed
+    in 86 and 87 (Mozilla bug 1685570); MDN says that UUID is generated for every browser instance;
+    Electron may send `Origin: file://` from a page loaded from a file (electron/electron issue
+    6859 for an XHR, better-auth/better-auth issue 7793 in 2026) and `null` on a `fetch` `POST`
+    (electron/electron issue 7931); the URL Standard's origin
     of an unknown scheme is opaque and serializes as `null`, of a `blob:` URL its inner URL's,
     and of `ws`, `wss` and `ftp` a tuple; RFC 6454 section 6.1 writes `http` and `https`
     origins); bet (a webview's cookies are its own app's, since each app's storage is its own on
@@ -10520,7 +10522,8 @@ rules something out.
     Last checked: 2026-11-25, Ionic's CORS guide, Capacitor's configuration reference
     (`server.hostname`, `iosScheme`), Tauri 2's webview reference, a chromium-extensions thread on
     a background `POST`'s `Origin`, the URL Standard's origin section (updated 19 November
-    2026), Mozilla bug 1405971 (open, last updated November 2026) and MDN's
+    2026), Mozilla bugs 1405971 (open, last updated November 2026) and 1685570 (fixed in 86 and
+    87), electron/electron issues 6859 and 7931, better-auth/better-auth issue 7793 and MDN's
     `web_accessible_resources` page, read at `49b6e79eb`.
 
 ## Rules
