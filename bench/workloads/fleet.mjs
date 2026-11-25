@@ -489,7 +489,8 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
     if (options.detach || options["admit-remaining"]) {
       const { manifest } = repeated.fleet;
       await readPlacement(manifest.provider, placement, repeated.subject.remainingRegion ?? manifest.host.region,
-        { remainingOnly: repeated.subject.action === "admit-remaining", staged: true, group: manifest.single?.group });
+        { remainingOnly: repeated.subject.action === "admit-remaining", staged: true, group: manifest.single?.group,
+          ...(manifest.single?.loadLayout ? { loadLayout: manifest.single.loadLayout } : {}) });
       assert.equal(readFleet(root, options.round).manifestSha256, repeated.fleet.manifestSha256, "fleet-manifest-changed");
       assert.deepEqual(rootRecords(repeated.fleet), repeated.subject.records, "fleet-records-changed");
       assert.equal(regular(lock, 1024 * 1024).toString(), owner, "fleet-lock-changed");

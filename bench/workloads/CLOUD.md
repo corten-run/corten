@@ -173,12 +173,16 @@ saved one, keeps its exact bytes.
 
 `bench/json-api/run.mjs` reads the four variables the binding requests, records the
 layout, runs k6 at quota 12 on 4-15 and keeps the cold probe and CPU counter reader
-on 4-7. `report.mjs`, the isolated JSON evidence check and JSON staging each require
-the recorded `measurement.loadLayout` to equal the layout the binding requested, so a
-default result cannot satisfy a c-16 binding and a c-16 result cannot satisfy a default
-one. Native campaign replay captures `bench/json-api/placement.mjs` as a named member
-of the measured source closure. A measured commit that predates it replays under its
-own closure list, which never names the file.
+on 4-7. The isolated JSON evidence check (`isolated/evidence.mjs`) and JSON staging
+(`isolated/json-staging.mjs`) each require the recorded `measurement.loadLayout` to
+equal the layout the binding requested, so a default result cannot satisfy a c-16
+binding and a c-16 result cannot satisfy a default one. `bench/json-api/report.mjs`
+has no binding to compare with. It checks the summary against itself: a quota-12 load
+is accepted only with the marker, and the recorded CPUs and `generatorPlacement` must
+equal that layout's exact values. Native campaign replay captures
+`bench/json-api/placement.mjs` as a named member of the measured source closure. A
+measured commit that predates it replays under its own closure list, which never
+names the file.
 
 This is apparatus placement for future runs, not a measured speedup and not a fix for
 the upstream constraint above. Do not compare JSON API timings across the two

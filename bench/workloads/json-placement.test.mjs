@@ -1,13 +1,14 @@
 // The opted-in JSON API c-16 placement (issue 2057) in the fleet, its reservation and job.
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import * as contract from "./cloud-contract.mjs";
 import { digest } from "./cloud-local.mjs";
-import { accountId, commit, context, harness, syntheticPlacement } from "./cloud-fixtures.mjs";
+import { accountId, commit, context, harness, syntheticCatalogProvider, syntheticPlacement } from "./cloud-fixtures.mjs";
+import { productionPlan } from "./cloud-production.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
-import { parseFleetArgs } from "./fleet.mjs";
+import { fleetMain, fleetWorkerPaths, parseFleetArgs } from "./fleet.mjs";
 import { groupNames } from "./registry.mjs";
 
 const at = "2026-11-25T00:00:00.000Z", layout = "json-c16-generator-v1", c16 = { ...contract.host, size: "c-16", region: "sfo2" };
@@ -159,4 +160,65 @@ test("an opted-in json-api launch refuses before any create intent or POST when 
     assert.equal(h.saved().status, "reserved"); assert.equal(h.saved().createIntentAt, undefined);
     assert.deepEqual(h.saved().host, c16);
   }
+});
+
+// The fleet's own --detach step for an independent json-api group: preparation, approval and the final
+// placement recheck before the launch intent, against a fake provider catalog. The child is stubbed, so
+// nothing can be created; the catalog the fleet reads at detach is the only thing a case changes.
+const fleetSources = new Map(fleetWorkerPaths.map((file) => [file, readFileSync(resolve(file), "utf8").replaceAll("\r\n", "\n")]));
+function fleetDetach(t, { loadLayout } = {}) {
+  const h = harness(t), output = [], children = [], catalogReads = [];
+  let offered = syntheticPlacement();
+  writeFileSync(join(h.base, "index.json"), "[]");
+  const deps = { repo: h.repo, write: (value) => output.push(JSON.parse(value)),
+    spawn: (binary, argv) => {
+      assert.equal(binary, "git", "the fleet parent has no provider boundary of its own");
+      if (argv[0] === "show") return { status: 0, stdout: fleetSources.get(argv[1].slice(41)) };
+      return h.run(binary, argv, 60000);
+    },
+    plan: (options, planDeps) => productionPlan(options, { ...planDeps, roleCheck: () => [] }),
+    catalogProvider: syntheticCatalogProvider(() => offered, catalogReads),
+    main: async (args) => { children.push(args); return 2; } };
+  const args = ["r21", "--continuation-root", h.base, "--group", "json-api"], root = join(h.base, "json-api");
+  return { h, root, output, children, catalogReads, intent: () => existsSync(join(root, "launch-intent.json")),
+    async prepare() {
+      assert.equal(await fleetMain([...args, "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId,
+        "--context", context, ...(loadLayout ? ["--load-layout", loadLayout] : [])], deps), 3);
+      assert.equal(await fleetMain([...args, "--detach", "--print-approval"], deps), 3, JSON.stringify(output.at(-1)));
+      return output.at(-1).approvalSha256;
+    },
+    detach(approval, catalog) {
+      offered = catalog;
+      return fleetMain([...args, "--detach", "--approve-reviewed-merged-ready", approval], deps);
+    } };
+}
+const c8Nowhere = () => syntheticPlacement([]);
+const c16Withdrawn = () => { const catalog = syntheticPlacement(); catalog.sizes[1].available = false; return catalog; };
+
+test("the fleet's last placement check before an opted-in json-api launch intent reads c-16/sfo2, not the default c-8", async (t) => {
+  // c-8 is offered nowhere at detach; the opted-in job needs only c-16/sfo2, so it proceeds.
+  const wide = fleetDetach(t, { loadLayout: layout }), approval = await wide.prepare(), before = wide.catalogReads.length;
+  assert.equal(await wide.detach(approval, c8Nowhere()), 2, JSON.stringify(wide.output.at(-1)));
+  assert.ok(wide.catalogReads.length > before, "detach read the provider catalog again");
+  assert.equal(wide.children.length, 1); assert.ok(wide.intent());
+  const saved = JSON.parse(readFileSync(join(wide.root, "launch-intent.json"), "utf8"));
+  assert.equal(saved.subject.fleet.single.loadLayout, layout); assert.deepEqual(saved.subject.fleet.jobs[0].host, c16);
+  // c-16/sfo2 withdrawn at detach: refuse before the launch intent, so no child exists to POST.
+  const gone = fleetDetach(t, { loadLayout: layout }), again = await gone.prepare();
+  await assert.rejects(gone.detach(again, c16Withdrawn()), /fleet placement not advertised: c-16\/sfo2/);
+  assert.deepEqual(gone.children, []); assert.equal(gone.intent(), false); assert.equal(gone.h.creates, 0);
+});
+
+test("without the marker the fleet's last placement check before a json-api launch intent still reads c-8 at the reserved region", async (t) => {
+  // A withdrawn c-16 does not block the default c-8 host.
+  const narrow = fleetDetach(t), approval = await narrow.prepare();
+  assert.equal(await narrow.detach(approval, c16Withdrawn()), 2, JSON.stringify(narrow.output.at(-1)));
+  assert.equal(narrow.children.length, 1); assert.ok(narrow.intent());
+  const saved = JSON.parse(readFileSync(join(narrow.root, "launch-intent.json"), "utf8"));
+  assert.equal(Object.hasOwn(saved.subject.fleet.single, "loadLayout"), false); assert.equal(saved.subject.fleet.jobs[0].host, undefined);
+  assert.equal(saved.subject.fleet.host.region, contract.host.region);
+  // c-8 withdrawn at the reserved region refuses before the launch intent, as before.
+  const blocked = fleetDetach(t), again = await blocked.prepare();
+  await assert.rejects(blocked.detach(again, c8Nowhere()), /reserved fleet placement not advertised: c-8\/sfo3/);
+  assert.deepEqual(blocked.children, []); assert.equal(blocked.intent(), false); assert.equal(blocked.h.creates, 0);
 });

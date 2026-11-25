@@ -132,8 +132,9 @@ requires exactly `JSON_API_APP_CPUS=1`, `JSON_API_API_CPUS=2-3` and
 `JSON_API_LOAD_CPUS=4-15`, and the runner refuses it before creating a result folder
 on a host with fewer than 16 logical CPUs. Only k6 changes: quota 12 on CPUs 4-15.
 The app (quota 1 on CPU 1) and the upstream (quota 2 on CPUs 2-3) keep their pins and
-quotas. The untimed cold probe and the CPU counter reader stay on CPUs 4-7 at quota 4.
-The load resource sampler accounts for all twelve k6 CPUs.
+quotas. The untimed cold probe stays on CPUs 4-7 at quota 4, and the CPU counter
+reader runs at one CPU (`--cpus 1`) on the same CPUs 4-7. The load resource sampler
+accounts for all twelve k6 CPUs.
 
 The summary records the layout explicitly: `measurement.loadLayout` and
 `measurement.generatorPlacement` (cold probe `{ quota: 4, cpuset: "4-7" }`, load
